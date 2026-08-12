@@ -8,7 +8,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
-import PartCatalogBrowser, { type BrowsePart } from '@/components/PartCatalogBrowser';
+import PartCatalogBrowser, { type BrowsePart, type KitWithMembers } from '@/components/PartCatalogBrowser';
 import PhoneInput from '@/components/PhoneInput';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
@@ -407,6 +407,61 @@ export default function EstimatesPage() {
     setPartSearch('');
     setPartResults([]);
     partSearchRef.current?.focus();
+  };
+
+  // ── Packages (N4-B): explode a kit template into ordinary lines ──
+  // Each member arrives as a normal item line, so inventory downstream is
+  // untouched machinery: members commit on SO conversion and decrement on
+  // invoice, exactly like hand-picked parts. The package itself never
+  // reaches NetSuite.
+  const addKitLines = (kit: KitWithMembers) => {
+    setLines(prev => [...prev, ...kit.members.map(m => ({
+      key: genKey(),
+      part_id: m.part.id,
+      netsuite_item_id: m.part.netsuite_id,
+      item_number: m.part.item_number,
+      description: m.part.display_name || m.part.marketing_description || m.part.description || m.part.item_number,
+      quantity: m.quantity,
+      unit_price: m.part.sales_price || 0,
+      labor_hours: m.part.labor_hours || 0,
+      is_custom: false,
+      catalog: m.part.catalog || undefined,
+      purchase_price: m.part.purchase_price,
+      avg_install_cost: m.part.avg_install_cost,
+    }))]);
+  };
+
+  // Reverse direction: this estimate's catalog lines become a reusable
+  // template. Quantities merge per part; custom lines can't travel.
+  const saveLinesAsPackage = async () => {
+    const eligible = lines.filter(l => l.part_id && !l.is_custom);
+    if (eligible.length === 0) return;
+    const name = await dialog.prompt(
+      `Save ${eligible.length} catalog line${eligible.length !== 1 ? 's' : ''} as a reusable package?`,
+      '',
+      { placeholder: 'e.g. Contractor Package — Transit 148', confirmLabel: 'Save package' },
+    );
+    if (!name?.trim()) return;
+
+    const byPart = new Map<string, number>();
+    for (const l of eligible) byPart.set(l.part_id!, (byPart.get(l.part_id!) || 0) + (l.quantity || 1));
+
+    const { data: kit, error } = await supabase
+      .from('part_kits')
+      .insert({ name: name.trim(), created_by: user?.id || null })
+      .select('id')
+      .single();
+    if (error || !kit) { await dialog.alert(`Package save failed: ${error?.message || 'unknown error'}`); return; }
+    const items = [...byPart.entries()].map(([partId, qty], idx) => ({ kit_id: kit.id, part_id: partId, quantity: qty, sort_order: idx }));
+    const { error: itemsErr } = await supabase.from('part_kit_items').insert(items);
+    if (itemsErr) { await dialog.alert(`Package save failed: ${itemsErr.message}`); return; }
+
+    const skipped = lines.length - eligible.length;
+    await dialog.alert(
+      `Package "${name.trim()}" saved with ${items.length} part${items.length !== 1 ? 's' : ''}.` +
+      (skipped > 0 ? ` ${skipped} custom line${skipped !== 1 ? 's' : ''} skipped (no catalog part).` : '') +
+      ' Find it under Browse Catalog → Packages.',
+    );
   };
 
   // ── Add custom line ──
@@ -1381,6 +1436,16 @@ export default function EstimatesPage() {
             >
               🗂 Browse Catalog
             </button>
+            {lines.some(l => l.part_id && !l.is_custom) && (
+              <button
+                type="button"
+                onClick={saveLinesAsPackage}
+                title="Save this estimate's catalog lines as a reusable package (Browse Catalog → Packages)"
+                style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                📦 Save as Package
+              </button>
+            )}
             {partResults.length > 0 && (
               <div style={{
                 position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
@@ -2117,6 +2182,7 @@ export default function EstimatesPage() {
         open={showCatalogBrowser}
         onClose={() => setShowCatalogBrowser(false)}
         isAdmin={isAdmin}
+        onAddKit={addKitLines}
         onAdd={(p: BrowsePart) => addPartLine({
           id: p.id,
           netsuite_id: p.netsuite_id || '',

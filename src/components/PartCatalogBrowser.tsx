@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { storage } from '@/lib/storage';
+import { createClient } from '@/lib/supabase-browser';
 
 /**
  * The Ranger-Design-style catalog browser (roadmap N4-A): a faceted,
@@ -39,14 +40,29 @@ export interface BrowsePart {
 
 interface Category { id: string; name: string; sort_order: number }
 
+/** A package template (part_kits) with its members resolved to live parts. */
+export interface KitWithMembers {
+  id: string;
+  name: string;
+  description: string | null;
+  vehicle_label: string | null;
+  image_path: string | null;
+  members: { part: BrowsePart; quantity: number }[];
+  totalPrice: number;
+  totalLabor: number;
+}
+
 const money = (v: number | null | undefined) =>
   v || v === 0 ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2 })}` : '—';
 
-export default function PartCatalogBrowser({ open, onClose, onAdd, isAdmin, variant = 'modal' }: {
+export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isAdmin, variant = 'modal' }: {
   open: boolean;
   onClose?: () => void;
   /** When set (estimate builder), cards and the record modal get an Add button. */
   onAdd?: (part: BrowsePart) => void;
+  /** When set, package cards get an Add button that explodes the kit's
+   *  members into the estimate (quantities included). */
+  onAddKit?: (kit: KitWithMembers) => void;
   isAdmin: boolean;
   /** 'modal' floats over the page; 'inline' renders the same browser as a
    *  page section (the /parts Visual Catalog view). */
@@ -68,8 +84,57 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, isAdmin, vari
   const [busyPart, setBusyPart] = useState<string | null>(null);
   // The part whose record modal is open (click a card to view it).
   const [detail, setDetail] = useState<BrowsePart | null>(null);
+  // Package templates (part_kits) with members resolved — loaded once per open.
+  const [kits, setKits] = useState<KitWithMembers[] | null>(null);
+  const [addedKits, setAddedKits] = useState<Record<string, number>>({});
   const photoInputRef = useRef<HTMLInputElement>(null);
   const photoTargetRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!open || kits !== null) return;
+    const supabase = createClient();
+    (async () => {
+      try {
+        const { data: kitRows } = await supabase
+          .from('part_kits')
+          .select('id, name, description, vehicle_label, image_path, part_kit_items(part_id, quantity, sort_order)')
+          .eq('active', true)
+          .order('name');
+        const rows = kitRows || [];
+        const partIds = [...new Set(rows.flatMap((k: any) => (k.part_kit_items || []).map((i: any) => i.part_id)))];
+        const partsById = new Map<string, BrowsePart>();
+        for (let i = 0; i < partIds.length; i += 200) {
+          const { data: ps } = await supabase
+            .from('netsuite_parts')
+            .select('id, netsuite_id, item_number, display_name, description, marketing_description, catalog, item_type, vendor, sales_price, purchase_price, avg_install_cost, labor_hours, quantity_available, product_category_id, image_path')
+            .in('id', partIds.slice(i, i + 200))
+            .eq('is_active', true);
+          for (const p of ps || []) partsById.set(p.id, p as BrowsePart);
+        }
+        setKits(rows.map((k: any) => {
+          const members = (k.part_kit_items || [])
+            .sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+            .map((i: any) => ({ part: partsById.get(i.part_id), quantity: Number(i.quantity) || 1 }))
+            .filter((m: any) => m.part);
+          return {
+            id: k.id, name: k.name, description: k.description, vehicle_label: k.vehicle_label,
+            image_path: k.image_path,
+            members,
+            totalPrice: members.reduce((s: number, m: any) => s + (m.part.sales_price || 0) * m.quantity, 0),
+            totalLabor: members.reduce((s: number, m: any) => s + (m.part.labor_hours || 0) * m.quantity, 0),
+          };
+        }).filter((k: KitWithMembers) => k.members.length > 0));
+      } catch {
+        setKits([]);
+      }
+    })();
+  }, [open, kits]);
+
+  const deleteKit = async (kit: KitWithMembers) => {
+    const supabase = createClient();
+    await supabase.from('part_kits').update({ active: false, updated_at: new Date().toISOString() }).eq('id', kit.id);
+    setKits(prev => (prev || []).filter(k => k.id !== kit.id));
+  };
 
   const buildUrl = useCallback((p: number) => {
     const params = new URLSearchParams();
@@ -252,6 +317,61 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, isAdmin, vari
 
         {/* Card grid */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '14px' }}>
+          {/* Packages strip — Ranger-style bundles that explode into estimate
+              lines. Hidden while searching so results stay focused. */}
+          {kits && kits.length > 0 && !q.trim() && (
+            <div style={{ marginBottom: '14px' }}>
+              <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-muted)', marginBottom: '6px' }}>📦 Packages</div>
+              <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '4px' }}>
+                {kits.map(k => {
+                  const photo = k.image_path || k.members.find(m => m.part.image_path)?.part.image_path || null;
+                  return (
+                    <div key={k.id} style={{ minWidth: '230px', maxWidth: '230px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+                      <div style={{ height: '110px', background: 'var(--subtle-bg, rgba(128,128,128,0.08))', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+                        {photo ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={imageUrl(photo)} alt={k.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        ) : (
+                          <span style={{ fontSize: '30px', opacity: 0.35 }}>📦</span>
+                        )}
+                        {isAdmin && (
+                          <button
+                            onClick={() => deleteKit(k)}
+                            title="Remove this package (parts are untouched)"
+                            style={{ position: 'absolute', top: '6px', right: '6px', padding: '2px 7px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '11px', cursor: 'pointer', color: 'var(--text-muted)' }}
+                          >✕</button>
+                        )}
+                      </div>
+                      <div style={{ padding: '10px', display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
+                        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.3 }}>{k.name}</div>
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                          {k.vehicle_label ? `${k.vehicle_label} · ` : ''}{k.members.length} part{k.members.length !== 1 ? 's' : ''}
+                          {k.totalLabor > 0 ? ` · ${k.totalLabor}h labor` : ''}
+                        </div>
+                        {k.description && (
+                          <div style={{ fontSize: '10px', color: 'var(--text-secondary)', lineHeight: 1.35, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{k.description}</div>
+                        )}
+                        <span style={{ flex: 1 }} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{money(k.totalPrice)}</span>
+                          <span style={{ flex: 1 }} />
+                          {onAddKit && (
+                            <button
+                              onClick={() => { onAddKit(k); setAddedKits(prev => ({ ...prev, [k.id]: (prev[k.id] || 0) + 1 })); }}
+                              style={{ padding: '5px 12px', borderRadius: '8px', border: 'none', background: addedKits[k.id] ? 'rgba(34,197,94,0.15)' : 'var(--accent, #2563eb)', color: addedKits[k.id] ? '#22c55e' : '#fff', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
+                            >
+                              {addedKits[k.id] ? `✓ ×${addedKits[k.id]}` : `+ Add ${k.members.length} lines`}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {!loading && parts.length === 0 && (
             <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>No parts match these filters.</div>
           )}
