@@ -12,6 +12,8 @@ import PartCatalogBrowser, { type BrowsePart, type KitWithMembers } from '@/comp
 import PhoneInput from '@/components/PhoneInput';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
+import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
+import { resolvePlatform } from '@/lib/vin-platform';
 import { deepLinks } from '@/lib/deep-links';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 
@@ -164,6 +166,32 @@ export default function EstimatesPage() {
   // K5: vehicle identity — prints on the estimate document, pushes to
   // NetSuite's VIN field, and feeds the Shop Board's Arriving row.
   const [vin, setVin] = useState('');
+  // N4-B2 phase 2: VIN → vehicle platform, resolved client-side so the
+  // catalog browser opens pre-filtered to what fits this vehicle.
+  const [vinVehicle, setVinVehicle] = useState<{ id: string; label: string; wheelbase: string | null; roof: string | null } | null>(null);
+
+  useEffect(() => {
+    if (!isValidVIN(vin)) { setVinVehicle(null); return; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const decoded = await decodeVIN(vin);
+        const res = resolvePlatform({ make: decoded?.make, model: decoded?.model }, vin);
+        if (cancelled || !res.platformKey) { if (!cancelled) setVinVehicle(null); return; }
+        const { data: plat } = await supabase
+          .from('vehicle_platforms')
+          .select('id, label')
+          .eq('key', res.platformKey)
+          .eq('active', true)
+          .maybeSingle();
+        if (!cancelled) setVinVehicle(plat ? { id: plat.id, label: plat.label, wheelbase: res.wheelbase, roof: res.roof } : null);
+      } catch {
+        if (!cancelled) setVinVehicle(null);
+      }
+    }, 600);
+    return () => { cancelled = true; clearTimeout(t); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- decode purely from vin
+  }, [vin]);
   const [unitNumber, setUnitNumber] = useState('');
   // N4-A: the visual faceted catalog browser (Ranger-style pick-from-list).
   const [showCatalogBrowser, setShowCatalogBrowser] = useState(false);
@@ -1337,6 +1365,14 @@ export default function EstimatesPage() {
             maxLength={17}
             placeholder="Full 17 or last 8 — prints on the estimate"
           />
+          {vinVehicle && (
+            <div style={{ marginTop: '4px', fontSize: '11px', fontWeight: 700, color: '#34d399' }}>
+              🚐 {vinVehicle.label}
+              {vinVehicle.wheelbase ? ` · ${vinVehicle.wheelbase}" WB` : ''}
+              {vinVehicle.roof ? ` · ${vinVehicle.roof} roof` : ''}
+              <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> — catalog will filter to this vehicle</span>
+            </div>
+          )}
         </div>
         <div>
           <div style={labelStyle}>Unit / Fleet #</div>
@@ -2214,6 +2250,7 @@ export default function EstimatesPage() {
         open={showCatalogBrowser}
         onClose={() => setShowCatalogBrowser(false)}
         isAdmin={isAdmin}
+        initialPlatformId={vinVehicle?.id}
         onAddKit={addKitLines}
         onAdd={(p: BrowsePart) => addPartLine({
           id: p.id,
