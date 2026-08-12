@@ -47,6 +47,8 @@ export interface KitWithMembers {
   description: string | null;
   vehicle_label: string | null;
   image_path: string | null;
+  /** Assembly overhead beyond the members' own labor hours. */
+  labor_adder_hours: number;
   members: { part: BrowsePart; quantity: number }[];
   totalPrice: number;
   totalLabor: number;
@@ -97,7 +99,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
       try {
         const { data: kitRows } = await supabase
           .from('part_kits')
-          .select('id, name, description, vehicle_label, image_path, part_kit_items(part_id, quantity, sort_order)')
+          .select('id, name, description, vehicle_label, image_path, labor_adder_hours, part_kit_items(part_id, quantity, sort_order)')
           .eq('active', true)
           .order('name');
         const rows = kitRows || [];
@@ -116,12 +118,14 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
             .sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
             .map((i: any) => ({ part: partsById.get(i.part_id), quantity: Number(i.quantity) || 1 }))
             .filter((m: any) => m.part);
+          const laborAdder = Number(k.labor_adder_hours) || 0;
           return {
             id: k.id, name: k.name, description: k.description, vehicle_label: k.vehicle_label,
             image_path: k.image_path,
+            labor_adder_hours: laborAdder,
             members,
             totalPrice: members.reduce((s: number, m: any) => s + (m.part.sales_price || 0) * m.quantity, 0),
-            totalLabor: members.reduce((s: number, m: any) => s + (m.part.labor_hours || 0) * m.quantity, 0),
+            totalLabor: members.reduce((s: number, m: any) => s + (m.part.labor_hours || 0) * m.quantity, 0) + laborAdder,
           };
         }).filter((k: KitWithMembers) => k.members.length > 0));
       } catch {

@@ -415,7 +415,7 @@ export default function EstimatesPage() {
   // invoice, exactly like hand-picked parts. The package itself never
   // reaches NetSuite.
   const addKitLines = (kit: KitWithMembers) => {
-    setLines(prev => [...prev, ...kit.members.map(m => ({
+    const memberLines = kit.members.map(m => ({
       key: genKey(),
       part_id: m.part.id,
       netsuite_item_id: m.part.netsuite_id,
@@ -428,7 +428,21 @@ export default function EstimatesPage() {
       catalog: m.part.catalog || undefined,
       purchase_price: m.part.purchase_price,
       avg_install_cost: m.part.avg_install_cost,
-    }))]);
+    }));
+    // Package-level assembly overhead rides as its own visible, editable
+    // zero-price line — labor beyond what the member parts carry.
+    const adderLine = kit.labor_adder_hours > 0 ? [{
+      key: genKey(),
+      part_id: null,
+      netsuite_item_id: null,
+      item_number: '',
+      description: `${kit.name} — assembly labor`,
+      quantity: 1,
+      unit_price: 0,
+      labor_hours: kit.labor_adder_hours,
+      is_custom: true,
+    }] : [];
+    setLines(prev => [...prev, ...memberLines, ...adderLine]);
   };
 
   // Reverse direction: this estimate's catalog lines become a reusable
@@ -442,13 +456,31 @@ export default function EstimatesPage() {
       { placeholder: 'e.g. Contractor Package — Transit 148', confirmLabel: 'Save package' },
     );
     if (!name?.trim()) return;
+    const vehicleLabel = await dialog.prompt(
+      'Vehicle (optional — shown on the package card):',
+      '',
+      { placeholder: 'e.g. Transit 148 MR — blank to skip', confirmLabel: 'Next' },
+    );
+    if (vehicleLabel === null) return; // cancelled
+    const adderRaw = await dialog.prompt(
+      'Extra assembly labor hours for the package as a whole (beyond the lines’ own labor)?',
+      '0',
+      { confirmLabel: 'Save package' },
+    );
+    if (adderRaw === null) return; // cancelled
+    const laborAdder = Math.max(0, parseFloat(adderRaw) || 0);
 
     const byPart = new Map<string, number>();
     for (const l of eligible) byPart.set(l.part_id!, (byPart.get(l.part_id!) || 0) + (l.quantity || 1));
 
     const { data: kit, error } = await supabase
       .from('part_kits')
-      .insert({ name: name.trim(), created_by: user?.id || null })
+      .insert({
+        name: name.trim(),
+        vehicle_label: vehicleLabel.trim() || null,
+        labor_adder_hours: laborAdder,
+        created_by: user?.id || null,
+      })
       .select('id')
       .single();
     if (error || !kit) { await dialog.alert(`Package save failed: ${error?.message || 'unknown error'}`); return; }
