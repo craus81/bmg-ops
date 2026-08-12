@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolvePlatform } from './vin-platform';
+import { resolvePlatform, matchQualifiersToConfig } from './vin-platform';
 
 describe('resolvePlatform', () => {
   it('maps models to platforms with make disambiguation', () => {
@@ -13,17 +13,60 @@ describe('resolvePlatform', () => {
     expect(resolvePlatform({ make: 'HONDA', model: 'Civic' }).platformKey).toBeNull();
   });
 
-  it('reads Transit roof + wheelbase from VIN positions 5-7', () => {
-    const r = resolvePlatform({ make: 'FORD', model: 'Transit' }, '1FTBE2CM5PKA12345'.slice(0, 4) + 'E2C' + '5PKA123456');
-    expect(r.roof).toBe('medium');
-    expect(r.wheelbase).toBe('148');
+  it('reads Transit roof + wheelbase from the VIN body code (positions 5-7)', () => {
+    // R1C = van, medium roof, 130" WB (Craig's real-world VIN family)
+    const r1c = resolvePlatform({ make: 'FORD', model: 'Transit' }, '1FTBR1C89RKB58750');
+    expect(r1c.roof).toBe('medium');
+    expect(r1c.wheelbase).toBe('130');
+    // R2X = van, high roof, 148"
+    const r2x = resolvePlatform({ make: 'FORD', model: 'Transit' }, '1FTBR2X84PKA30462');
+    expect(r2x.roof).toBe('high');
+    expect(r2x.wheelbase).toBe('148');
+    // R3X = van, high roof, 148" EL
+    expect(resolvePlatform({ make: 'FORD', model: 'Transit' }, '1FTBR3X84PKA30462').wheelbase).toBe('148 EL');
+    // R1Y = van, low roof, 130"
+    expect(resolvePlatform({ make: 'FORD', model: 'Transit' }, '1FTYR1Y84PKA30462').roof).toBe('low');
+    // Unknown body code → ask, never guess
     const unknown = resolvePlatform({ make: 'FORD', model: 'Transit' }, '1FTBZZZM5PKA12345');
-    expect(unknown.roof).toBeNull(); // unknown body code → ask, never guess
+    expect(unknown.roof).toBeNull();
+    expect(unknown.wheelbase).toBeNull();
   });
 
   it('reads Sprinter wheelbase from VIN positions 5-6; roof stays null', () => {
     const r = resolvePlatform({ make: 'MERCEDES-BENZ', model: 'Sprinter' }, 'W1W4E8VY5PT123456'.slice(0, 4) + 'E8' + 'VY5PT123456');
     expect(r.wheelbase).toBe('170');
     expect(r.roof).toBeNull();
+  });
+});
+
+describe('matchQualifiersToConfig', () => {
+  const truckConfig = { cabs: ['Regular', 'SuperCab', 'SuperCrew'], beds: ['5.5', '6.5', '8'] };
+
+  it('matches wheelbase inches to a unique configured label', () => {
+    expect(matchQualifiersToConfig({ wheelBaseIn: '117.9' }, { wheelbases: ['118', '136', '159', '159 EXT'] }).wheelbase).toBe('118');
+    // 159 vs 159 EXT share the wheelbase → ambiguous, stays null
+    expect(matchQualifiersToConfig({ wheelBaseIn: '159.2' }, { wheelbases: ['118', '136', '159', '159 EXT'] }).wheelbase).toBeNull();
+    // Way off any option → null
+    expect(matchQualifiersToConfig({ wheelBaseIn: '200' }, { wheelbases: ['118', '136'] }).wheelbase).toBeNull();
+  });
+
+  it('matches bed length inches to feet labels', () => {
+    expect(matchQualifiersToConfig({ bedLengthIn: '78.9' }, truckConfig).bed).toBe('6.5');
+    expect(matchQualifiersToConfig({ bedLengthIn: '97.6' }, truckConfig).bed).toBe('8');
+  });
+
+  it('maps vPIC cab families to configured cab labels, refusing ambiguity', () => {
+    expect(matchQualifiersToConfig({ cabType: 'Crew/ Super Crew/ Crew Max' }, truckConfig).cab).toBe('SuperCrew');
+    expect(matchQualifiersToConfig({ cabType: 'Extra/Super/Quad/Double/King/Extended' }, truckConfig).cab).toBe('SuperCab');
+    expect(matchQualifiersToConfig({ cabType: 'Regular' }, truckConfig).cab).toBe('Regular');
+    // Ram HD: Crew and Mega are both vPIC crew-family → ambiguous
+    expect(matchQualifiersToConfig({ cabType: 'Crew/ Super Crew/ Crew Max' }, { cabs: ['Regular', 'Crew', 'Mega'] }).cab).toBeNull();
+    // Tacoma: XtraCab and Double are both vPIC extended-family → ambiguous
+    expect(matchQualifiersToConfig({ cabType: 'Extra/Super/Quad/Double/King/Extended' }, { cabs: ['XtraCab', 'Double'] }).cab).toBeNull();
+  });
+
+  it('returns all-null on missing config or decode fields', () => {
+    expect(matchQualifiersToConfig({}, truckConfig)).toEqual({ wheelbase: null, cab: null, bed: null });
+    expect(matchQualifiersToConfig({ wheelBaseIn: '148' }, null)).toEqual({ wheelbase: null, cab: null, bed: null });
   });
 });

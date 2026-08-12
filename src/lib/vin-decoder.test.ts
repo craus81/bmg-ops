@@ -32,7 +32,8 @@ describe('decodeVIN — NHTSA API path', () => {
         Results: [{
           ModelYear: '2023', Make: 'FORD', Model: 'Transit', Trim: 'Base',
           BodyClass: 'Van', DriveType: 'RWD', FuelTypePrimary: 'Gasoline',
-          Doors: '4', GVWR: 'Class 2E',
+          Doors: '4', GVWR: 'Class 2E', Series: 'Transit-250',
+          WheelBaseShort: '147.8', BedLengthIN: '', BodyCabType: '',
         }],
       }), { status: 200 })
     ));
@@ -40,7 +41,8 @@ describe('decodeVIN — NHTSA API path', () => {
     expect(await decodeVIN('1FTBW3XM5PKA12345')).toEqual({
       year: '2023', make: 'FORD', model: 'Transit', trim: 'Base',
       bodyClass: 'Van', driveType: 'RWD', fuelType: 'Gasoline',
-      doors: '4', gvwr: 'Class 2E',
+      doors: '4', gvwr: 'Class 2E', series: 'Transit-250',
+      wheelBaseIn: '147.8', bedLengthIn: '', cabType: '',
     });
   });
 });
