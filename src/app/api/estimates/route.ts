@@ -39,9 +39,17 @@ const UpsertEstimateSchema = z.object({
   delivery_preferences: z.string().max(2000).optional().nullable(),
   internal_notes: z.string().max(5000).optional().nullable(),
   // K5: header VIN (full 17 or a partial, matching the scanner's tolerance)
-  // and the customer's fleet unit number.
+  // and the customer's unit/stock number.
   vin: z.string().max(32).optional().nullable(),
   unit_number: z.string().max(60).optional().nullable(),
+  // N4-B2 phase 3: the vehicle lives on the estimate whether or not a VIN
+  // exists — platform + year + the qualifiers that gate fitment.
+  vehicle_platform_id: z.string().uuid().optional().nullable(),
+  vehicle_year: z.string().max(8).optional().nullable(),
+  vehicle_wheelbase: z.string().max(40).optional().nullable(),
+  vehicle_roof: z.string().max(40).optional().nullable(),
+  vehicle_cab: z.string().max(40).optional().nullable(),
+  vehicle_bed: z.string().max(40).optional().nullable(),
 });
 
 const DeleteSchema = z.object({ id: z.string().uuid() });
@@ -108,6 +116,8 @@ export async function POST(req: NextRequest) {
     install_instructions, on_site_contact_name, on_site_contact_phone,
     delivery_preferences, internal_notes,
     vin, unit_number,
+    vehicle_platform_id, vehicle_year, vehicle_wheelbase,
+    vehicle_roof, vehicle_cab, vehicle_bed,
   } = parsed.data;
 
   try {
@@ -177,6 +187,12 @@ export async function POST(req: NextRequest) {
           internal_notes: internal_notes || null,
           vin: normalizedVin,
           unit_number: normalizedUnit,
+          vehicle_platform_id: vehicle_platform_id || null,
+          vehicle_year: vehicle_year?.trim() || null,
+          vehicle_wheelbase: vehicle_wheelbase?.trim() || null,
+          vehicle_roof: vehicle_roof?.trim() || null,
+          vehicle_cab: vehicle_cab?.trim() || null,
+          vehicle_bed: vehicle_bed?.trim() || null,
           updated_at: new Date().toISOString(),
         })
         .eq('id', id);
@@ -240,6 +256,12 @@ export async function POST(req: NextRequest) {
           internal_notes: internal_notes || null,
           vin: normalizedVin,
           unit_number: normalizedUnit,
+          vehicle_platform_id: vehicle_platform_id || null,
+          vehicle_year: vehicle_year?.trim() || null,
+          vehicle_wheelbase: vehicle_wheelbase?.trim() || null,
+          vehicle_roof: vehicle_roof?.trim() || null,
+          vehicle_cab: vehicle_cab?.trim() || null,
+          vehicle_bed: vehicle_bed?.trim() || null,
           created_by: created_by || null,
         })
         .select()

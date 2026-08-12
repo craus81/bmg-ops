@@ -9,7 +9,6 @@ import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
 import PartCatalogBrowser, { type BrowsePart, type KitWithMembers } from '@/components/PartCatalogBrowser';
-import PhoneInput from '@/components/PhoneInput';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
@@ -101,6 +100,30 @@ interface Estimate {
   updated_at: string;
   vin: string | null;
   unit_number: string | null;
+  vehicle_platform_id: string | null;
+  vehicle_year: string | null;
+  vehicle_wheelbase: string | null;
+  vehicle_roof: string | null;
+  vehicle_cab: string | null;
+  vehicle_bed: string | null;
+}
+
+// Allowed qualifier options per platform, from vehicle_platforms.config —
+// a select only renders when its platform actually has options for it.
+interface PlatformConfig {
+  wheelbases?: string[];
+  roofs?: string[];
+  cabs?: string[];
+  beds?: string[];
+}
+
+interface VehiclePlatform {
+  id: string;
+  key: string;
+  label: string;
+  body_type: 'van' | 'truck' | 'other';
+  sort_order: number;
+  config: PlatformConfig | null;
 }
 
 interface Customer {
@@ -166,28 +189,70 @@ export default function EstimatesPage() {
   // K5: vehicle identity — prints on the estimate document, pushes to
   // NetSuite's VIN field, and feeds the Shop Board's Arriving row.
   const [vin, setVin] = useState('');
-  // N4-B2 phase 2: VIN → vehicle platform, resolved client-side so the
-  // catalog browser opens pre-filtered to what fits this vehicle.
-  const [vinVehicle, setVinVehicle] = useState<{ id: string; label: string; wheelbase: string | null; roof: string | null } | null>(null);
+  // N4-B2 phase 3: the vehicle LIVES on the estimate whether or not a VIN
+  // exists — platform (make+model), year, and the qualifiers that gate
+  // fitment: roof/wheelbase for vans, cab/bed for trucks. Selects cascade
+  // from vehicle_platforms.config so only options that exist for the chosen
+  // platform are offered; a VIN decode auto-fills what it can.
+  const [platforms, setPlatforms] = useState<VehiclePlatform[]>([]);
+  const [vehiclePlatformId, setVehiclePlatformId] = useState<string | null>(null);
+  const [vehicleYear, setVehicleYear] = useState('');
+  const [vehicleWheelbase, setVehicleWheelbase] = useState('');
+  const [vehicleRoof, setVehicleRoof] = useState('');
+  const [vehicleCab, setVehicleCab] = useState('');
+  const [vehicleBed, setVehicleBed] = useState('');
+  const selectedPlatform = platforms.find(p => p.id === vehiclePlatformId) || null;
+  const platformConfig: PlatformConfig = selectedPlatform?.config || {};
 
   useEffect(() => {
-    if (!isValidVIN(vin)) { setVinVehicle(null); return; }
+    let cancelled = false;
+    supabase
+      .from('vehicle_platforms')
+      .select('id, key, label, body_type, sort_order, config')
+      .eq('active', true)
+      .order('sort_order')
+      .then(({ data }: { data: VehiclePlatform[] | null }) => { if (!cancelled && data) setPlatforms(data); });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- platform vocabulary loads once
+  }, []);
+
+  // Manual platform switch: keep qualifier values the new platform also
+  // offers (same roof label etc.), drop the ones it doesn't.
+  const pickPlatform = (id: string | null) => {
+    setVehiclePlatformId(id);
+    const cfg: PlatformConfig = platforms.find(p => p.id === id)?.config || {};
+    setVehicleWheelbase(prev => (cfg.wheelbases || []).includes(prev) ? prev : '');
+    setVehicleRoof(prev => (cfg.roofs || []).includes(prev) ? prev : '');
+    setVehicleCab(prev => (cfg.cabs || []).includes(prev) ? prev : '');
+    setVehicleBed(prev => (cfg.beds || []).includes(prev) ? prev : '');
+  };
+
+  useEffect(() => {
+    if (!isValidVIN(vin)) return;
     let cancelled = false;
     const t = setTimeout(async () => {
       try {
         const decoded = await decodeVIN(vin);
         const res = resolvePlatform({ make: decoded?.make, model: decoded?.model }, vin);
-        if (cancelled || !res.platformKey) { if (!cancelled) setVinVehicle(null); return; }
+        if (cancelled) return;
+        if (decoded?.year) setVehicleYear(decoded.year);
+        if (!res.platformKey) return;
         const { data: plat } = await supabase
           .from('vehicle_platforms')
-          .select('id, label')
+          .select('id, config')
           .eq('key', res.platformKey)
           .eq('active', true)
           .maybeSingle();
-        if (!cancelled) setVinVehicle(plat ? { id: plat.id, label: plat.label, wheelbase: res.wheelbase, roof: res.roof } : null);
-      } catch {
-        if (!cancelled) setVinVehicle(null);
-      }
+        if (cancelled || !plat) return;
+        const cfg: PlatformConfig = plat.config || {};
+        setVehiclePlatformId(plat.id);
+        // Fill only what the VIN actually encodes; a hand-picked qualifier
+        // survives the decode unless it doesn't exist on this platform.
+        setVehicleWheelbase(prev => res.wheelbase || ((cfg.wheelbases || []).includes(prev) ? prev : ''));
+        setVehicleRoof(prev => res.roof || ((cfg.roofs || []).includes(prev) ? prev : ''));
+        setVehicleCab(prev => (cfg.cabs || []).includes(prev) ? prev : '');
+        setVehicleBed(prev => (cfg.beds || []).includes(prev) ? prev : '');
+      } catch { /* decode is best-effort — the selects work by hand */ }
     }, 600);
     return () => { cancelled = true; clearTimeout(t); };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- decode purely from vin
@@ -600,6 +665,12 @@ export default function EstimatesPage() {
         internal_notes: internalNotes,
         vin,
         unit_number: unitNumber,
+        vehicle_platform_id: vehiclePlatformId,
+        vehicle_year: vehicleYear,
+        vehicle_wheelbase: vehicleWheelbase,
+        vehicle_roof: vehicleRoof,
+        vehicle_cab: vehicleCab,
+        vehicle_bed: vehicleBed,
         line_items: lines.map(l => ({
           part_id: l.part_id,
           netsuite_item_id: l.netsuite_item_id,
@@ -871,6 +942,12 @@ export default function EstimatesPage() {
     setLaborOverride(est.labor_hours_override);
     setVin(est.vin || '');
     setUnitNumber(est.unit_number || '');
+    setVehiclePlatformId(est.vehicle_platform_id || null);
+    setVehicleYear(est.vehicle_year || '');
+    setVehicleWheelbase(est.vehicle_wheelbase || '');
+    setVehicleRoof(est.vehicle_roof || '');
+    setVehicleCab(est.vehicle_cab || '');
+    setVehicleBed(est.vehicle_bed || '');
 
     // Load install context + line items + customer defaults in parallel
     const [{ data: fullEst }, { data: lineData }] = await Promise.all([
@@ -1022,6 +1099,12 @@ export default function EstimatesPage() {
     setCustResults([]);
     setVin('');
     setUnitNumber('');
+    setVehiclePlatformId(null);
+    setVehicleYear('');
+    setVehicleWheelbase('');
+    setVehicleRoof('');
+    setVehicleCab('');
+    setVehicleBed('');
     setInstallInstructions('');
     setOnSiteContactName('');
     setOnSiteContactPhone('');
@@ -1035,23 +1118,15 @@ export default function EstimatesPage() {
     setGraphicsPickerResults([]);
   };
 
-  // Prefill install_instructions from the customer's delivery_instructions
-  // when a customer is picked on a NEW estimate (don't clobber existing
-  // values on edit or when the sales rep has already typed something).
+  // Load customer defaults when a customer is picked on a NEW estimate —
+  // feeds the tax-exempt prefill and the "Edit defaults" editor. (This used
+  // to also copy delivery_instructions into install_instructions; that field
+  // left the builder with the Install Context section, 2026-08-12.)
   useEffect(() => {
     if (editingId) return;
     if (!customerId) return;
-    loadCustomerDefaults(customerId).then(() => {
-      setInstallInstructions(prev => prev || '');
-    });
+    loadCustomerDefaults(customerId);
   }, [customerId, editingId, loadCustomerDefaults]);
-
-  useEffect(() => {
-    if (customerDefaults?.delivery_instructions && !installInstructions && !editingId) {
-      setInstallInstructions(customerDefaults.delivery_instructions);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [customerDefaults, editingId]);
 
   // Prefill the tax-exempt flag from the customer default on a NEW estimate
   // (existing estimates keep whatever was saved on them).
@@ -1354,8 +1429,10 @@ export default function EstimatesPage() {
         </div>
       </div>
 
-      {/* ── Vehicle (K5) — prints on the estimate + pushes to the NS VIN field ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '8px', marginBottom: '12px' }}>
+      {/* ── Vehicle (K5 + N4-B2) — identity prints on the estimate + pushes
+          to the NS VIN field; platform/qualifiers gate the catalog browser.
+          A VIN auto-fills what it encodes, but every field works by hand. ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '8px', marginBottom: '8px' }}>
         <div>
           <div style={labelStyle}>VIN</div>
           <input
@@ -1363,102 +1440,128 @@ export default function EstimatesPage() {
             value={vin}
             onChange={e => setVin(e.target.value.toUpperCase())}
             maxLength={17}
-            placeholder="Full 17 or last 8 — prints on the estimate"
+            placeholder="Full 17 auto-fills the vehicle below — prints on the estimate"
           />
-          {vinVehicle && (
-            <div style={{ marginTop: '4px', fontSize: '11px', fontWeight: 700, color: '#34d399' }}>
-              🚐 {vinVehicle.label}
-              {vinVehicle.wheelbase ? ` · ${vinVehicle.wheelbase}" WB` : ''}
-              {vinVehicle.roof ? ` · ${vinVehicle.roof} roof` : ''}
-              <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> — catalog will filter to this vehicle</span>
-            </div>
-          )}
         </div>
         <div>
-          <div style={labelStyle}>Unit / Fleet #</div>
+          <div style={labelStyle}>Unit/Stock #</div>
           <input
             style={inputStyle}
             value={unitNumber}
             onChange={e => setUnitNumber(e.target.value)}
-            placeholder="Customer's unit #"
+            placeholder="Customer's unit or stock #"
           />
         </div>
       </div>
-
-      {/* ── INSTALL CONTEXT (T1.6) ── */}
-      <details style={{
-        marginBottom: '12px', padding: '10px 12px', borderRadius: '10px',
-        background: 'var(--subtle-bg, #f8fafc)', border: '1px solid var(--border)',
-      }} open={!!(installInstructions || onSiteContactName || onSiteContactPhone || deliveryPreferences || internalNotes)}>
-        <summary style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary, #475569)' }}>
-          Install Context
-          {customerDefaults?.delivery_instructions && !installInstructions && !editingId && (
-            <span style={{ marginLeft: '8px', fontSize: '10px', fontWeight: 700, color: 'var(--accent, #2563eb)' }}>
-              · prefilled from customer defaults
-            </span>
-          )}
-        </summary>
-        <div style={{ marginTop: '10px', display: 'grid', gap: '8px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-            <div>
-              <div style={labelStyle}>On-site Contact Name</div>
-              <input
-                style={inputStyle}
-                value={onSiteContactName}
-                onChange={e => setOnSiteContactName(e.target.value)}
-                placeholder="Name"
-              />
-            </div>
-            <div>
-              <div style={labelStyle}>On-site Contact Phone</div>
-              <PhoneInput
-                style={inputStyle}
-                value={onSiteContactPhone}
-                onChange={v => setOnSiteContactPhone(v)}
-                placeholder="(555) 555-5555"
-              />
-            </div>
-          </div>
-          <div>
-            <div style={labelStyle}>Install Instructions</div>
-            <textarea
-              style={{ ...inputStyle, minHeight: '52px', resize: 'vertical', fontFamily: 'inherit' }}
-              value={installInstructions}
-              onChange={e => setInstallInstructions(e.target.value)}
-              placeholder="Any job-specific install notes the installer needs"
-            />
-          </div>
-          <div>
-            <div style={labelStyle}>Delivery Preferences</div>
-            <input
-              style={inputStyle}
-              value={deliveryPreferences}
-              onChange={e => setDeliveryPreferences(e.target.value)}
-              placeholder="Dock hours, shipping method, etc."
-            />
-          </div>
-          <div id="est-notes-field">
-            <div style={labelStyle}>Internal Notes (ops-only)</div>
-            <MentionTextArea
-              style={{ ...inputStyle, minHeight: '40px', resize: 'vertical', fontFamily: 'inherit' }}
-              value={internalNotes}
-              onChange={setInternalNotes}
-              placeholder="Not shown to the customer — @ tags a teammate"
-            />
-          </div>
-          {customerId && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>
-              <span>Customer-wide defaults:</span>
-              <span>{customerDefaults?.delivery_instructions ? '✓ set' : '(none)'}</span>
-              <button
-                type="button"
-                onClick={() => setEditingCustomerDefaults(true)}
-                style={{ padding: '3px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
-              >Edit defaults</button>
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '8px', marginBottom: '12px' }}>
+        <div>
+          <div style={labelStyle}>Vehicle (Make & Model)</div>
+          <select
+            style={inputStyle}
+            value={vehiclePlatformId || ''}
+            onChange={e => pickPlatform(e.target.value || null)}
+          >
+            <option value="">— select vehicle —</option>
+            <optgroup label="Vans">
+              {platforms.filter(p => p.body_type === 'van').map(p => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Trucks">
+              {platforms.filter(p => p.body_type === 'truck').map(p => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </optgroup>
+            {platforms.some(p => p.body_type === 'other') && (
+              <optgroup label="Other">
+                {platforms.filter(p => p.body_type === 'other').map(p => (
+                  <option key={p.id} value={p.id}>{p.label}</option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+          {selectedPlatform && (
+            <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+              🚐 Browse Catalog will filter to parts that fit the {selectedPlatform.label}
             </div>
           )}
         </div>
-      </details>
+        <div>
+          <div style={labelStyle}>Year</div>
+          <input
+            style={inputStyle}
+            value={vehicleYear}
+            onChange={e => setVehicleYear(e.target.value.replace(/\D/g, ''))}
+            maxLength={4}
+            inputMode="numeric"
+            placeholder="e.g. 2025"
+          />
+        </div>
+      </div>
+      {selectedPlatform && (platformConfig.roofs || platformConfig.wheelbases || platformConfig.cabs || platformConfig.beds) && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '8px', marginBottom: '12px' }}>
+          {platformConfig.roofs && platformConfig.roofs.length > 0 && (
+            <div>
+              <div style={labelStyle}>Roof Height</div>
+              <select style={inputStyle} value={vehicleRoof} onChange={e => setVehicleRoof(e.target.value)}>
+                <option value="">— roof —</option>
+                {platformConfig.roofs.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+          )}
+          {platformConfig.wheelbases && platformConfig.wheelbases.length > 0 && (
+            <div>
+              <div style={labelStyle}>Wheelbase</div>
+              <select style={inputStyle} value={vehicleWheelbase} onChange={e => setVehicleWheelbase(e.target.value)}>
+                <option value="">— wheelbase —</option>
+                {platformConfig.wheelbases.map(w => <option key={w} value={w}>{/^\d/.test(w) ? `${w}"` : w}</option>)}
+              </select>
+            </div>
+          )}
+          {platformConfig.cabs && platformConfig.cabs.length > 0 && (
+            <div>
+              <div style={labelStyle}>Cab Size</div>
+              <select style={inputStyle} value={vehicleCab} onChange={e => setVehicleCab(e.target.value)}>
+                <option value="">— cab —</option>
+                {platformConfig.cabs.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+          )}
+          {platformConfig.beds && platformConfig.beds.length > 0 && (
+            <div>
+              <div style={labelStyle}>Bed Length</div>
+              <select style={inputStyle} value={vehicleBed} onChange={e => setVehicleBed(e.target.value)}>
+                <option value="">— bed —</option>
+                {platformConfig.beds.map(b => <option key={b} value={b}>{b}&apos;</option>)}
+              </select>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Internal notes — the surviving piece of the old Install Context
+          section (removed 2026-08-12; the retired fields still round-trip
+          through load + save so existing estimates keep their data). ── */}
+      <div id="est-notes-field" style={{ marginBottom: '12px' }}>
+        <div style={labelStyle}>Internal Notes (ops-only)</div>
+        <MentionTextArea
+          style={{ ...inputStyle, minHeight: '40px', resize: 'vertical', fontFamily: 'inherit' }}
+          value={internalNotes}
+          onChange={setInternalNotes}
+          placeholder="Not shown to the customer — @ tags a teammate"
+        />
+        {customerId && (
+          <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>
+            <span>Customer-wide defaults:</span>
+            <span>{customerDefaults?.delivery_instructions ? '✓ set' : '(none)'}</span>
+            <button
+              type="button"
+              onClick={() => setEditingCustomerDefaults(true)}
+              style={{ padding: '3px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+            >Edit defaults</button>
+          </div>
+        )}
+      </div>
 
       {/* Customer defaults modal */}
       {editingCustomerDefaults && customerId && (
@@ -2250,7 +2353,7 @@ export default function EstimatesPage() {
         open={showCatalogBrowser}
         onClose={() => setShowCatalogBrowser(false)}
         isAdmin={isAdmin}
-        initialPlatformId={vinVehicle?.id}
+        initialPlatformId={vehiclePlatformId || undefined}
         onAddKit={addKitLines}
         onAdd={(p: BrowsePart) => addPartLine({
           id: p.id,
