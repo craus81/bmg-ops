@@ -74,6 +74,10 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
   const [categoryId, setCategoryId] = useState('');
   const [vendor, setVendor] = useState('');
   const [catalog, setCatalog] = useState('');
+  const [platformId, setPlatformId] = useState('');
+  const [platforms, setPlatforms] = useState<{ id: string; key: string; label: string; body_type: string }[]>([]);
+  const [autoTagging, setAutoTagging] = useState(false);
+  const [autoTagNote, setAutoTagNote] = useState('');
   const [sort, setSort] = useState<'name' | 'price_asc' | 'price_desc'>('name');
   const [parts, setParts] = useState<BrowsePart[]>([]);
   const [total, setTotal] = useState(0);
@@ -147,10 +151,11 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
     else if (categoryId) params.set('categoryId', categoryId);
     if (vendor) params.set('vendor', vendor);
     if (catalog) params.set('catalog', catalog);
+    if (platformId) params.set('platformId', platformId);
     if (sort !== 'name') params.set('sort', sort);
     if (p > 0) params.set('page', String(p));
     return `/api/parts/browse?${params.toString()}`;
-  }, [q, categoryId, vendor, catalog, sort]);
+  }, [q, categoryId, vendor, catalog, platformId, sort]);
 
   useEffect(() => {
     if (!open) return;
@@ -165,6 +170,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
           setPage(0);
           if (d.categories) setCategories(d.categories);
           if (d.vendors) setVendors(d.vendors);
+          if (d.platforms) setPlatforms(d.platforms);
         }
       } finally {
         setLoading(false);
@@ -285,6 +291,49 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                 <button onClick={addCategory} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', color: 'var(--text-primary)' }}>+</button>
               </div>
             )}
+          </div>
+          <div>
+            <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-muted)', marginBottom: '4px' }}>Vehicle</div>
+            <select value={platformId} onChange={e => setPlatformId(e.target.value)} style={selStyle}>
+              <option value="">All vehicles</option>
+              {platforms.filter(p => p.body_type === 'van').length > 0 && (
+                <optgroup label="Vans">
+                  {platforms.filter(p => p.body_type === 'van').map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                </optgroup>
+              )}
+              {platforms.filter(p => p.body_type === 'truck').length > 0 && (
+                <optgroup label="Trucks">
+                  {platforms.filter(p => p.body_type === 'truck').map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                </optgroup>
+              )}
+            </select>
+            {isAdmin && (
+              <button
+                onClick={async () => {
+                  setAutoTagging(true);
+                  setAutoTagNote('');
+                  try {
+                    const res = await fetch('/api/parts/fitment', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ mode: 'auto-tag' }),
+                    });
+                    const d = await res.json().catch(() => ({}));
+                    setAutoTagNote(res.ok ? `${d.taggedParts} parts tagged across ${Object.keys(d.perPlatform || {}).length} vehicles` : (d.error || 'failed'));
+                  } catch {
+                    setAutoTagNote('failed');
+                  } finally {
+                    setAutoTagging(false);
+                  }
+                }}
+                disabled={autoTagging}
+                title="Scan part names/descriptions for vehicle names (Transit, ProMaster, F-150…) and tag fitment automatically"
+                style={{ marginTop: '6px', width: '100%', padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '10px', fontWeight: 700, cursor: 'pointer', color: 'var(--text-secondary)' }}
+              >
+                {autoTagging ? 'Tagging…' : '🚐 Auto-tag from descriptions'}
+              </button>
+            )}
+            {autoTagNote && <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '3px' }}>{autoTagNote}</div>}
           </div>
           <div>
             <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-muted)', marginBottom: '4px' }}>Vendor</div>
