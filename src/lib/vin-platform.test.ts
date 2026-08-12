@@ -34,17 +34,20 @@ describe('resolvePlatform', () => {
     expect(unknown.wheelbase).toBeNull();
   });
 
-  it('refuses to apply the legacy Transit body table to MY2025+ VINs', () => {
-    // Ford revised the body codes for MY2025 — a 2026 R1C is NOT a
-    // medium/130 (that combo died with MY2023). Craig's real 2026 VIN.
+  it('decodes MY2025+ Transit VINs only from the confirmed new-scheme table', () => {
+    // Ford revised the body codes for MY2025: R1C is now a medium/148
+    // (Craig's real 2026 van, confirmed in the shop) — NOT the legacy
+    // medium/130 that combo died with MY2023.
     const my2026 = resolvePlatform({ make: 'FORD', model: 'Transit', year: '2026' }, '1FTBR1C82TKA17431');
     expect(my2026.platformKey).toBe('transit');
-    expect(my2026.roof).toBeNull();
-    expect(my2026.wheelbase).toBeNull();
-    // Same gate from VIN position 10 alone (T = 2026) when no year decoded
-    const noYear = resolvePlatform({ make: 'FORD', model: 'Transit' }, '1FTBR1C82TKA17431');
-    expect(noYear.roof).toBeNull();
-    expect(noYear.wheelbase).toBeNull();
+    expect(my2026.roof).toBe('medium');
+    expect(my2026.wheelbase).toBe('148');
+    // Same result from VIN position 10 alone (T = 2026) when no year decoded
+    expect(resolvePlatform({ make: 'FORD', model: 'Transit' }, '1FTBR1C82TKA17431').wheelbase).toBe('148');
+    // A 2025+ code not yet confirmed → null, never the legacy meaning
+    const unconfirmed = resolvePlatform({ make: 'FORD', model: 'Transit', year: '2026' }, '1FTBR2X82TKA17431');
+    expect(unconfirmed.roof).toBeNull();
+    expect(unconfirmed.wheelbase).toBeNull();
   });
 
   it('reads Sprinter wheelbase from VIN positions 5-6; roof stays null', () => {

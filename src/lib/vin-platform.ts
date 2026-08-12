@@ -37,8 +37,13 @@ const TRANSIT_ROOF: Record<string, 'low' | 'medium' | 'high'> = {
 };
 // VIN position 10 chars for MY2015-2024 — the years the legacy table covers.
 const TRANSIT_LEGACY_YEAR_CHARS = 'FGHJKLMNPR';
-// MY2025+ body codes, added only as confirmed against real vans.
-const TRANSIT_BODY_2025: Record<string, { roof: PlatformResolution['roof']; wheelbase: string | null }> = {};
+// MY2025+ body codes, added only as confirmed against real vans. Note the
+// digit no longer tracks wheelbase the old way (legacy R1C was a 130) —
+// don't infer unlisted codes from the legacy pattern.
+const TRANSIT_BODY_2025: Record<string, { roof: PlatformResolution['roof']; wheelbase: string | null }> = {
+  // Craig's 2026 T-250, VIN 1FTBR1C82TKA17431 — confirmed in the shop.
+  R1C: { roof: 'medium', wheelbase: '148' },
+};
 
 function transitBody(
   v: string,
