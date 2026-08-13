@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
 import { requireAuth } from '@/lib/api-auth';
-import { sendEmail, buildNotificationEmail } from '@/lib/resend';
+import { sendEmailDetailed, buildNotificationEmail } from '@/lib/resend';
+import { deepLinks } from '@/lib/deep-links';
 import { sendSMS } from '@/lib/sms-provider';
 import { validateBody, z } from '@/lib/validate';
-import { deepLinks } from '@/lib/deep-links';
 
 export const dynamic = 'force-dynamic';
 
@@ -175,13 +175,15 @@ export async function POST(req: NextRequest) {
           portalUrl,
           'View order status',
         );
-        const ok = await sendEmail(
+        const { ok, id: resendId } = await sendEmailDetailed(
           contactEmail,
           `[BMG Fleet] Your graphics are ready for pickup — ${jobLabel}`,
           html,
           undefined,
           undefined,
           auth.user?.email || undefined,
+          undefined,
+          { kind: 'pickup_notice', sentBy: auth.user?.id, contextUrl: deepLinks.graphicsJob(jobId) },
         );
         dispatch.email = { target: contactEmail, ok };
         if (threadId) {
@@ -191,6 +193,9 @@ export async function POST(req: NextRequest) {
             channel: 'email',
             body: emailBody,
             provider_name: 'resend',
+            // The Resend id lets the delivery webhook flip this thread
+            // message to delivered/failed.
+            external_provider_sid: ok ? resendId : null,
             sent_by: auth.user.id,
             delivery_status: ok ? 'sent' : 'failed',
           });

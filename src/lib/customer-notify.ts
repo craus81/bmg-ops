@@ -10,7 +10,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { sendEmail } from './resend';
+import { sendEmailDetailed } from './resend';
 import { sendSMS } from './sms-provider';
 
 type Service = SupabaseClient<any, any, any>;
@@ -139,7 +139,11 @@ export async function notifyCustomerByName(
   let emailed = false;
   if (email) {
     try {
-      emailed = await sendEmail(email, input.emailSubject, input.emailHtml, undefined, undefined, input.replyTo || undefined);
+      const { ok, id: resendId } = await sendEmailDetailed(
+        email, input.emailSubject, input.emailHtml, undefined, undefined, input.replyTo || undefined, undefined,
+        { kind: 'customer_notify' },
+      );
+      emailed = ok;
       if (threadId) {
         await service.from('customer_messages').insert({
           thread_id: threadId,
@@ -147,6 +151,9 @@ export async function notifyCustomerByName(
           channel: 'email',
           body: input.messageBody,
           provider_name: 'resend',
+          // The Resend id lets the delivery webhook flip this thread
+          // message to delivered/failed.
+          external_provider_sid: ok ? resendId : null,
           delivery_status: emailed ? 'sent' : 'failed',
         });
       }

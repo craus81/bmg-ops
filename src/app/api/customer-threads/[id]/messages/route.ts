@@ -103,7 +103,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ error: 'Contact has no email address' }, { status: 400 });
     }
     try {
-      const { sendEmail, buildNotificationEmail } = await import('@/lib/resend');
+      const { sendEmailDetailed, buildNotificationEmail } = await import('@/lib/resend');
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
       const html = buildNotificationEmail(
         'Message from BMG Fleet',
@@ -111,7 +111,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         appUrl,
         'Open'
       );
-      const ok = await sendEmail(contact.email, '[BMG Fleet] Message', html, undefined, undefined, auth.user?.email || undefined);
+      // The Resend id rides on the message row (external_provider_sid) so
+      // the delivery webhook can flip this thread message to
+      // delivered/failed — same as SMS already does.
+      const { ok, id: resendId } = await sendEmailDetailed(
+        contact.email, '[BMG Fleet] Message', html, undefined, undefined, auth.user?.email || undefined, undefined,
+        { kind: 'customer_thread', sentBy: auth.user?.id },
+      );
+      if (ok && resendId) providerSid = resendId;
       deliveryStatus = ok ? 'sent' : 'failed';
       providerName = 'resend';
     } catch (err: any) {

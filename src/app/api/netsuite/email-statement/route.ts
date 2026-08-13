@@ -5,6 +5,7 @@ import { safeIntId, SqlSafeError } from '@/lib/sql-safe';
 import { fetchStatementInvoices, type StatementInvoice, type StatementScope } from '@/lib/financials-data';
 import { getNetSuitePdf } from '@/lib/netsuite';
 import { sendEmailDetailed } from '@/lib/resend';
+import { deepLinks } from '@/lib/deep-links';
 import { r2PublicUrl } from '@/lib/r2';
 
 export const dynamic = 'force-dynamic';
@@ -214,7 +215,11 @@ export async function POST(req: NextRequest) {
     // Standard compose behavior: replies reach the sender (the from address
     // has no mailbox), and bcc-me copies the send to their inbox.
     const bcc = body?.bccSelf === true && auth.user?.email ? [auth.user.email] : undefined;
-    const result = await sendEmailDetailed(recipients, subject, html, undefined, attachments, auth.user?.email || undefined, bcc);
+    const result = await sendEmailDetailed(
+      recipients, subject, html, undefined, attachments, auth.user?.email || undefined, bcc,
+      // ns-<id> routes to the customer record even when no CRM row exists.
+      { kind: 'statement', sentBy: auth.user?.id, contextUrl: deepLinks.prospect(`ns-${customerId}`) },
+    );
     if (!result.ok) {
       return NextResponse.json({ error: 'Email send failed' }, { status: 502 });
     }

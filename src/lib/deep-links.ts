@@ -83,6 +83,10 @@ export const deepLinks = {
   customerPortal: () => '/customer/dashboard',
   /** System health dashboard (checks are keyed by sync type, not record ids). */
   systemHealth: () => '/admin/system-health',
+  /** System health's Email delivery section — flashes one email_log row.
+   *  The bounce-alert fallback when a send has no record context_url. */
+  emailDelivery: (logId?: string | null) =>
+    `/admin/system-health${logId ? `?email=${logId}` : ''}`,
   /** In-app PDF viewer tab. Use this instead of linking a new tab straight at
    *  PDF bytes: a raw-PDF tab has no app chrome and no working Back button,
    *  so it strands whoever opened it (field bug: opening a PO PDF mid-import).

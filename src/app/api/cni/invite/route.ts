@@ -193,7 +193,9 @@ export async function POST(req: NextRequest) {
         buildCniInviteEmailHtml(fullName, email.toLowerCase().trim(), password, inviteLink),
         undefined,
         undefined,
-        auth.user?.email || undefined
+        auth.user?.email || undefined,
+        undefined,
+        { kind: 'invite', sentBy: auth.user?.id }
       );
     } catch (emailErr: any) {
       console.warn('CNI invite email failed:', emailErr.message);

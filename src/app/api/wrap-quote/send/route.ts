@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { sendEmail } from '@/lib/resend';
+import { deepLinks } from '@/lib/deep-links';
 import { validateBody, z } from '@/lib/validate';
 import { r2Get, r2PublicUrl } from '@/lib/r2';
 import { getNetSuitePdf } from '@/lib/netsuite';
@@ -344,7 +345,10 @@ export async function POST(req: NextRequest) {
   // Replies route to the staff member who sent the quote — the from
   // address has no mailbox, so without this a customer reply bounces.
   const bcc = parsed.data.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
-  const ok = await sendEmail(to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl, flags, message, approveUrl), undefined, attachments, auth.user?.email || undefined, bcc);
+  const ok = await sendEmail(
+    to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl, flags, message, approveUrl), undefined, attachments, auth.user?.email || undefined, bcc,
+    { kind: 'wrap_quote', sentBy: auth.user?.id, contextUrl: deepLinks.wrapQuote(quote.id) },
+  );
   if (!ok) {
     return NextResponse.json({ error: 'Email send failed (is Resend configured?)' }, { status: 502 });
   }

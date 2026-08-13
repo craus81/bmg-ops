@@ -15,6 +15,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { generateToken } from './magic-link-approval';
 import { sendEmail, buildNotificationEmail } from './resend';
+import { deepLinks } from './deep-links';
 import { sendSMS } from './sms-provider';
 import { r2Get } from './r2';
 
@@ -256,6 +257,7 @@ export async function sendProofApproval(
         emailAttachments.length > 0 ? emailAttachments : undefined,
         opts.actorEmail || undefined,
         bcc.length > 0 ? bcc : undefined,
+        { kind: 'proof_approval', sentBy: opts.actorId || null, contextUrl: deepLinks.graphicsJob(jobId) },
       );
       dispatch.email = { target: emailList.join(', '), ok, attachments: emailAttachments.length, bcc: bcc.length > 0 ? bcc.join(', ') : undefined };
     } catch (err: any) {

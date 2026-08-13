@@ -104,7 +104,9 @@ export async function POST(req: NextRequest) {
         buildCniReinviteEmailHtml(fullName || 'there', inviteLink),
         undefined,
         undefined,
-        auth.user?.email || undefined
+        auth.user?.email || undefined,
+        undefined,
+        { kind: 'invite', sentBy: auth.user?.id }
       );
     } catch (emailErr: any) {
       console.warn('CNI resend invite email failed:', emailErr.message);

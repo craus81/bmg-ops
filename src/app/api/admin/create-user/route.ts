@@ -155,7 +155,12 @@ export async function POST(req: NextRequest) {
         emailSent = await sendEmail(
           email,
           'Welcome to FleetSuite — Your Account is Ready',
-          buildInviteEmailHtml(fullName, email, password, inviteLink)
+          buildInviteEmailHtml(fullName, email, password, inviteLink),
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          { kind: 'invite', sentBy: auth.user?.id }
         );
       } catch (emailErr: any) {
         console.warn('Invite email failed:', emailErr.message);
