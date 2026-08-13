@@ -43,7 +43,7 @@ interface ImportProfile {
   discovered_urls: string[] | null;
   discovered_at: string | null;
   last_run_at: string | null;
-  last_run_stats: { pages: number; matched: number; imagesSaved: number; descriptionsSaved: number; vendorsSet: number } | null;
+  last_run_stats: { pages: number; matched: number; imagesSaved: number; descriptionsSaved: number; vendorsSet: number; fitmentTagged?: number } | null;
 }
 
 const BATCH = 25;
@@ -201,6 +201,8 @@ export default function ImportVendorAssetsPage() {
   const [imagesSaved, setImagesSaved] = useState(0);
   const [descriptionsSaved, setDescriptionsSaved] = useState(0);
   const [vendorsTagged, setVendorsTagged] = useState(0);
+  // N4-B2: fitment tags harvested from the vendor's pages this run.
+  const [fitmentTagged, setFitmentTagged] = useState(0);
   // The vendor tag active for the CURRENT/most recent run — captured when
   // Import is clicked, so the progress line can show "0 tagged" (tagging is
   // on, nothing tagged yet) vs nothing at all (no tag was set for this run).
@@ -304,6 +306,7 @@ export default function ImportVendorAssetsPage() {
     let descriptions = opts.nearMatch ? descriptionsSaved : 0;
     let matched = opts.nearMatch ? matchedCount : 0;
     let vendors = opts.nearMatch ? vendorsTagged : 0;
+    let fitTags = opts.nearMatch ? fitmentTagged : 0;
     const retried = new Set(urlList);
     const failed: RunRow[] = opts.nearMatch ? failures.filter(f => !retried.has(f.url)) : [];
     if (!opts.nearMatch) {
@@ -311,6 +314,7 @@ export default function ImportVendorAssetsPage() {
       setDescriptionsSaved(0);
       setMatchedCount(0);
       setVendorsTagged(0);
+      setFitmentTagged(0);
       setFailures([]);
       setRanTotal(urlList.length);
       setRunTagName(setVendorName.trim());
@@ -330,6 +334,7 @@ export default function ImportVendorAssetsPage() {
         images += d.imagesSaved || 0;
         descriptions += d.descriptionsSaved || 0;
         vendors += d.vendorsSet || 0;
+        fitTags += d.fitmentTagged || 0;
         for (const r of (d.results || []) as RunRow[]) {
           if (r.ok) matched += r.matched ?? 1; // family pages can match several parts
           else failed.push(r);
@@ -342,6 +347,7 @@ export default function ImportVendorAssetsPage() {
       setDescriptionsSaved(descriptions);
       setMatchedCount(matched);
       setVendorsTagged(vendors);
+      setFitmentTagged(fitTags);
       setFailures([...failed]);
     }
     setRunning(false);
@@ -356,6 +362,7 @@ export default function ImportVendorAssetsPage() {
           lastRunStats: {
             pages: opts.nearMatch ? ranTotal : urlList.length,
             matched, imagesSaved: images, descriptionsSaved: descriptions, vendorsSet: vendors,
+            fitmentTagged: fitTags,
           },
         }),
       }).then(() => loadProfiles()).catch(() => {});
@@ -607,7 +614,7 @@ export default function ImportVendorAssetsPage() {
         {progress && (
           <div style={{ marginTop: 12 }}>
             <div style={{ fontSize: 12, marginBottom: 6 }}>
-              {progress.done} / {progress.total} pages · {matchedCount} parts matched · {imagesSaved} photos · {descriptionsSaved} descriptions
+              {progress.done} / {progress.total} pages · {matchedCount} parts matched · {imagesSaved} photos · {descriptionsSaved} descriptions · {fitmentTagged} vehicle tags
               {runTagName ? ` · ${vendorsTagged} tagged "${runTagName}"` : ' · vendor tagging OFF'}
             </div>
             <div style={{ height: 8, background: theme.progressTrack, borderRadius: 4, overflow: 'hidden' }}>
@@ -617,7 +624,7 @@ export default function ImportVendorAssetsPage() {
         )}
         {!running && ranTotal > 0 && (
           <div style={{ marginTop: 12, fontSize: 14 }}>
-            Done — <strong>{matchedCount}</strong> catalog part{matchedCount !== 1 ? 's' : ''} matched across {ranTotal.toLocaleString()} pages · <strong>{imagesSaved}</strong> photos and <strong>{descriptionsSaved}</strong> descriptions saved{runTagName ? <> · <strong>{vendorsTagged}</strong> part{vendorsTagged !== 1 ? 's' : ''} tagged &quot;{runTagName}&quot;</> : <> · <strong>no vendor tag was set for this run</strong></>}.
+            Done — <strong>{matchedCount}</strong> catalog part{matchedCount !== 1 ? 's' : ''} matched across {ranTotal.toLocaleString()} pages · <strong>{imagesSaved}</strong> photos and <strong>{descriptionsSaved}</strong> descriptions saved · <strong>{fitmentTagged}</strong> vehicle fitment tag{fitmentTagged !== 1 ? 's' : ''} harvested{runTagName ? <> · <strong>{vendorsTagged}</strong> part{vendorsTagged !== 1 ? 's' : ''} tagged &quot;{runTagName}&quot;</> : <> · <strong>no vendor tag was set for this run</strong></>}.
             <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 4 }}>
               Unmatched pages are normal — vendors list plenty of products we don&apos;t carry. Open the estimate builder&apos;s Browse Catalog to see the results.
             </div>
