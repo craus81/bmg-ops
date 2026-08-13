@@ -51,6 +51,19 @@ const ROOF_PATTERNS: { label: string; re: RegExp }[] = [
 ];
 
 /**
+ * The wheelbase tags a vehicle with wheelbase `wb` accepts parts under:
+ * the exact label plus its bare number. A "148 EL" van takes "148"-tagged
+ * parts (same axle spacing, longer rear body), but a plain 148 does NOT
+ * accept "148 EL"-only parts. NULL-tagged parts always fit and are
+ * handled by the caller.
+ */
+export function wheelbaseAccepts(wb: string): string[] {
+  const label = wb.trim();
+  const bare = label.split(/\s+/)[0];
+  return bare && bare !== label ? [label, bare] : [label];
+}
+
+/**
  * Detect platform fitment tags in free text. Returns at most one hit per
  * platform, with wheelbase/roof qualifiers when the text carries them.
  */

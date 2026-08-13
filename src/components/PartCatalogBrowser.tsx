@@ -57,7 +57,7 @@ export interface KitWithMembers {
 const money = (v: number | null | undefined) =>
   v || v === 0 ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2 })}` : '—';
 
-export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isAdmin, variant = 'modal', initialPlatformId }: {
+export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isAdmin, variant = 'modal', initialPlatformId, initialWheelbase, initialRoof }: {
   open: boolean;
   onClose?: () => void;
   /** When set (estimate builder), cards and the record modal get an Add button. */
@@ -72,13 +72,19 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
   /** Pre-select the Vehicle filter on open (estimate VIN resolution) —
    *  the user can still change it in the rail. */
   initialPlatformId?: string;
+  /** Pre-select the qualifier filters on open (the estimate's stored
+   *  vehicle wheelbase/roof) — only meaningful alongside a platform. */
+  initialWheelbase?: string;
+  initialRoof?: string;
 }) {
   const [q, setQ] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [vendor, setVendor] = useState('');
   const [catalog, setCatalog] = useState('');
   const [platformId, setPlatformId] = useState('');
-  const [platforms, setPlatforms] = useState<{ id: string; key: string; label: string; body_type: string }[]>([]);
+  const [wheelbase, setWheelbase] = useState('');
+  const [roof, setRoof] = useState('');
+  const [platforms, setPlatforms] = useState<{ id: string; key: string; label: string; body_type: string; config?: { wheelbases?: string[]; roofs?: string[] } | null }[]>([]);
   const [autoTagging, setAutoTagging] = useState(false);
   const [autoTagNote, setAutoTagNote] = useState('');
   const [sort, setSort] = useState<'name' | 'price_asc' | 'price_desc'>('name');
@@ -99,11 +105,14 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
   const photoInputRef = useRef<HTMLInputElement>(null);
   const photoTargetRef = useRef<string | null>(null);
 
-  // Estimate VIN resolution pre-selects the vehicle each time the modal
-  // opens; the rail select stays fully changeable during the session.
+  // The estimate's stored vehicle pre-selects the filters each time the
+  // modal opens; the rail selects stay fully changeable during the session.
   useEffect(() => {
-    if (open && initialPlatformId !== undefined) setPlatformId(initialPlatformId || '');
-  }, [open, initialPlatformId]);
+    if (!open) return;
+    if (initialPlatformId !== undefined) setPlatformId(initialPlatformId || '');
+    if (initialWheelbase !== undefined) setWheelbase(initialWheelbase || '');
+    if (initialRoof !== undefined) setRoof(initialRoof || '');
+  }, [open, initialPlatformId, initialWheelbase, initialRoof]);
 
   useEffect(() => {
     if (!open || kits !== null) return;
@@ -160,11 +169,15 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
     else if (categoryId) params.set('categoryId', categoryId);
     if (vendor) params.set('vendor', vendor);
     if (catalog) params.set('catalog', catalog);
-    if (platformId) params.set('platformId', platformId);
+    if (platformId) {
+      params.set('platformId', platformId);
+      if (wheelbase) params.set('wheelbase', wheelbase);
+      if (roof) params.set('roof', roof);
+    }
     if (sort !== 'name') params.set('sort', sort);
     if (p > 0) params.set('page', String(p));
     return `/api/parts/browse?${params.toString()}`;
-  }, [q, categoryId, vendor, catalog, platformId, sort]);
+  }, [q, categoryId, vendor, catalog, platformId, wheelbase, roof, sort]);
 
   useEffect(() => {
     if (!open) return;
@@ -303,7 +316,11 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
           </div>
           <div>
             <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-muted)', marginBottom: '4px' }}>Vehicle</div>
-            <select value={platformId} onChange={e => setPlatformId(e.target.value)} style={selStyle}>
+            <select
+              value={platformId}
+              onChange={e => { setPlatformId(e.target.value); setWheelbase(''); setRoof(''); }}
+              style={selStyle}
+            >
               <option value="">All vehicles</option>
               {platforms.filter(p => p.body_type === 'van').length > 0 && (
                 <optgroup label="Vans">
@@ -316,6 +333,29 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                 </optgroup>
               )}
             </select>
+            {/* Qualifier narrowing — rendered only when the selected platform
+                has options. Parts tagged without a qualifier (fit the whole
+                platform) always pass, so narrowing never hides generics. */}
+            {(() => {
+              const cfg = platforms.find(p => p.id === platformId)?.config;
+              if (!platformId || !cfg) return null;
+              return (
+                <>
+                  {(cfg.roofs?.length || 0) > 0 && (
+                    <select value={roof} onChange={e => setRoof(e.target.value)} style={{ ...selStyle, marginTop: '6px' }}>
+                      <option value="">Any roof</option>
+                      {cfg.roofs!.map(r => <option key={r} value={r}>{r} roof</option>)}
+                    </select>
+                  )}
+                  {(cfg.wheelbases?.length || 0) > 0 && (
+                    <select value={wheelbase} onChange={e => setWheelbase(e.target.value)} style={{ ...selStyle, marginTop: '6px' }}>
+                      <option value="">Any wheelbase</option>
+                      {cfg.wheelbases!.map(w => <option key={w} value={w}>{/^\d/.test(w) ? `${w}" WB` : w}</option>)}
+                    </select>
+                  )}
+                </>
+              );
+            })()}
             {isAdmin && (
               <button
                 onClick={async () => {

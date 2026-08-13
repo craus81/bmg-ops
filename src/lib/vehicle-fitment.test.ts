@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { detectFitment } from './vehicle-fitment';
+import { detectFitment, wheelbaseAccepts } from './vehicle-fitment';
 
 const keys = (t: string) => detectFitment(t).map(h => h.platformKey);
 
@@ -46,5 +46,14 @@ describe('detectFitment (ordering traps + qualifiers)', () => {
   it('returns nothing for vehicle-free text', () => {
     expect(detectFitment('Aluminum shelf divider 12in')).toEqual([]);
     expect(detectFitment(null)).toEqual([]);
+  });
+});
+
+describe('wheelbaseAccepts', () => {
+  it('extended bodies accept their bare-number tags, not vice versa', () => {
+    expect(wheelbaseAccepts('148 EL')).toEqual(['148 EL', '148']);
+    expect(wheelbaseAccepts('159 EXT')).toEqual(['159 EXT', '159']);
+    expect(wheelbaseAccepts('148')).toEqual(['148']);
+    expect(wheelbaseAccepts('SWB')).toEqual(['SWB']);
   });
 });

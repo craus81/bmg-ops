@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateSearchParams, z } from '@/lib/validate';
+import { wheelbaseAccepts } from '@/lib/vehicle-fitment';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,6 +21,12 @@ const Schema = z.object({
   catalog: z.enum(['upfit', 'graphics']).optional(),
   /** N4-B2: only parts with a fitment row for this vehicle platform. */
   platformId: z.string().uuid().optional(),
+  /** Qualifier narrowing (only with platformId): a part passes when it has
+   *  a fitment row whose qualifier is NULL (fits whole platform) or matches.
+   *  Values are option labels from vehicle_platforms.config — the charset
+   *  is restricted because they're spliced into a PostgREST or() filter. */
+  wheelbase: z.string().trim().max(20).regex(/^[A-Za-z0-9 .-]+$/).optional(),
+  roof: z.string().trim().max(20).regex(/^[A-Za-z0-9 .-]+$/).optional(),
   sort: z.enum(['name', 'price_asc', 'price_desc']).optional(),
   page: z.coerce.number().int().min(0).max(500).optional(),
 });
@@ -37,7 +44,7 @@ export async function GET(req: NextRequest) {
 
   const parsed = validateSearchParams(req, Schema);
   if (parsed.error) return parsed.error;
-  const { q, categoryId, uncategorized, vendor, catalog, platformId, sort, page } = parsed.data;
+  const { q, categoryId, uncategorized, vendor, catalog, platformId, wheelbase, roof, sort, page } = parsed.data;
 
   try {
     // A vehicle filter needs an inner join to part_fitment; without one the
@@ -47,7 +54,19 @@ export async function GET(req: NextRequest) {
       .from('netsuite_parts')
       .select(platformId ? `${baseColumns}, part_fitment!inner(platform_id)` : baseColumns, { count: 'exact' })
       .eq('is_active', true);
-    if (platformId) query = query.eq('part_fitment.platform_id', platformId);
+    if (platformId) {
+      query = query.eq('part_fitment.platform_id', platformId);
+      // Qualifier narrowing: the part needs at least one fitment row for
+      // this platform whose qualifier is NULL (fits the whole platform) or
+      // matches the vehicle. The !inner join drops parts with no such row.
+      if (roof) {
+        query = query.or(`roof_label.is.null,roof_label.eq."${roof}"`, { foreignTable: 'part_fitment' });
+      }
+      if (wheelbase) {
+        const accepts = wheelbaseAccepts(wheelbase).map(w => `wheelbase_label.eq."${w}"`);
+        query = query.or(['wheelbase_label.is.null', ...accepts].join(','), { foreignTable: 'part_fitment' });
+      }
+    }
 
     if (q) {
       const s = q.replace(/[%_,()]/g, ' ').trim();
@@ -73,7 +92,7 @@ export async function GET(req: NextRequest) {
     // though the table isn't.
     let categories: { id: string; name: string; sort_order: number }[] | null = null;
     let vendors: string[] | null = null;
-    let platforms: { id: string; key: string; label: string; body_type: string }[] | null = null;
+    let platforms: { id: string; key: string; label: string; body_type: string; config: Record<string, string[]> | null }[] | null = null;
     if (!page) {
       const { data: cats } = await supabase
         .from('product_categories')
@@ -85,7 +104,7 @@ export async function GET(req: NextRequest) {
 
       const { data: plats } = await supabase
         .from('vehicle_platforms')
-        .select('id, key, label, body_type')
+        .select('id, key, label, body_type, config')
         .eq('active', true)
         .order('sort_order');
       platforms = plats || [];
