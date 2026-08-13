@@ -49,12 +49,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const { data: estimate, error: eErr } = await supabase
     .from('estimates')
-    .select('*')
+    .select('*, vehicle_platforms(label)')
     .eq('id', params.id)
     .single();
   if (eErr || !estimate) {
     return NextResponse.json({ error: 'Estimate not found' }, { status: 404 });
   }
+  // Flatten the platform label for the document's vehicle line.
+  (estimate as any).vehicle_platform_label = (estimate as any).vehicle_platforms?.label || null;
   if (estimate.customer_approved) {
     return NextResponse.json({ error: 'Already approved' }, { status: 409 });
   }

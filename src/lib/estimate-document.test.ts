@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderEstimateDocument } from './estimate-document';
+import { renderEstimateDocument, vehicleDescription } from './estimate-document';
 
 // The estimate document is the legal record the customer approves — the
 // send-for-approval email and the frozen signed snapshot both come from this
@@ -42,5 +42,35 @@ describe('renderEstimateDocument vehicle identity (K5)', () => {
     expect(html).not.toContain('<script>x</script>');
     expect(html).toContain('&lt;script&gt;');
     expect(html).toContain('A&amp;B');
+  });
+
+  it('prints the stored vehicle description ahead of VIN/unit (N4-B2)', () => {
+    const html = renderEstimateDocument(
+      {
+        ...baseEst,
+        vin: '1FTBR1C82TKA17431', unit_number: '402',
+        vehicle_year: '2026', vehicle_platform_label: 'Ford Transit',
+        vehicle_roof: 'medium', vehicle_wheelbase: '148',
+      },
+      []
+    );
+    expect(html).toContain('2026 Ford Transit · medium roof · 148&quot; WB &middot; VIN 1FTBR1C82TKA17431 &middot; Unit 402');
+  });
+});
+
+describe('vehicleDescription', () => {
+  it('composes year + platform + qualifiers, skipping blanks', () => {
+    expect(vehicleDescription({
+      vehicle_year: '2026', vehicle_platform_label: 'Ford Transit',
+      vehicle_roof: 'medium', vehicle_wheelbase: '148',
+    })).toBe('2026 Ford Transit · medium roof · 148" WB');
+    expect(vehicleDescription({
+      vehicle_platform_label: 'Ford Transit Connect', vehicle_wheelbase: 'SWB',
+    })).toBe('Ford Transit Connect · SWB');
+    expect(vehicleDescription({
+      vehicle_year: '2025', vehicle_platform_label: 'Ford F-150',
+      vehicle_cab: 'SuperCrew', vehicle_bed: '5.5',
+    })).toBe("2025 Ford F-150 · SuperCrew cab · 5.5' bed");
+    expect(vehicleDescription({ vin: '1FTBR1C82TKA17431' })).toBe('');
   });
 });
