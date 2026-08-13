@@ -57,6 +57,14 @@ export interface KitWithMembers {
 const money = (v: number | null | undefined) =>
   v || v === 0 ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2 })}` : '—';
 
+interface FitmentRow {
+  id: string;
+  platform_id: string;
+  wheelbase_label: string | null;
+  roof_label: string | null;
+  source: string; // 'description' (auto-tag) | 'vendor_site' | 'manual'
+}
+
 export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isAdmin, variant = 'modal', initialPlatformId, initialWheelbase, initialRoof }: {
   open: boolean;
   onClose?: () => void;
@@ -100,6 +108,13 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
   const [busyPart, setBusyPart] = useState<string | null>(null);
   // The part whose record modal is open (click a card to view it).
   const [detail, setDetail] = useState<BrowsePart | null>(null);
+  // Fitment tags on the open part record (N4-B2): everyone sees them;
+  // admins prune bad auto-tags and add manual ones (source='manual').
+  const [fitment, setFitment] = useState<FitmentRow[] | null>(null);
+  const [fitPlatformId, setFitPlatformId] = useState('');
+  const [fitWheelbase, setFitWheelbase] = useState('');
+  const [fitRoof, setFitRoof] = useState('');
+  const [fitBusy, setFitBusy] = useState(false);
   // Package templates (part_kits) with members resolved — loaded once per open.
   const [kits, setKits] = useState<KitWithMembers[] | null>(null);
   const [addedKits, setAddedKits] = useState<Record<string, number>>({});
@@ -107,6 +122,48 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
   const photoTargetRef = useRef<string | null>(null);
   const platformPhotoInputRef = useRef<HTMLInputElement>(null);
   const platformPhotoTargetRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!detail) { setFitment(null); setFitPlatformId(''); setFitWheelbase(''); setFitRoof(''); return; }
+    let cancelled = false;
+    const supabase = createClient();
+    supabase
+      .from('part_fitment')
+      .select('id, platform_id, wheelbase_label, roof_label, source')
+      .eq('part_id', detail.id)
+      .then(({ data }: { data: FitmentRow[] | null }) => { if (!cancelled) setFitment(data || []); });
+    return () => { cancelled = true; };
+  }, [detail]);
+
+  const addFitment = async () => {
+    if (!detail || !fitPlatformId) return;
+    setFitBusy(true);
+    try {
+      const supabase = createClient();
+      const { data: u } = await supabase.auth.getUser();
+      const { data, error } = await supabase
+        .from('part_fitment')
+        .insert({
+          part_id: detail.id, platform_id: fitPlatformId,
+          wheelbase_label: fitWheelbase || null, roof_label: fitRoof || null,
+          source: 'manual', created_by: u?.user?.id || null,
+        })
+        .select('id, platform_id, wheelbase_label, roof_label, source')
+        .single();
+      // A unique-index conflict means the tag already exists — nothing to add.
+      if (!error && data) setFitment(prev => [...(prev || []), data as FitmentRow]);
+    } finally {
+      setFitBusy(false);
+      setFitWheelbase('');
+      setFitRoof('');
+    }
+  };
+
+  const removeFitment = async (rowId: string) => {
+    const supabase = createClient();
+    const { error } = await supabase.from('part_fitment').delete().eq('id', rowId);
+    if (!error) setFitment(prev => (prev || []).filter(r => r.id !== rowId));
+  };
 
   // The estimate's stored vehicle pre-selects the filters each time the
   // modal opens; the rail selects stay fully changeable during the session.
@@ -738,6 +795,78 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                 <RecordFact label="Qty Available" value={detail.quantity_available != null ? String(detail.quantity_available) : '—'} />
                 {isAdmin && <RecordFact label="Purchase Price" value={money(detail.purchase_price)} />}
                 {isAdmin && detail.avg_install_cost != null && <RecordFact label="Avg Installer Cost" value={money(detail.avg_install_cost)} />}
+              </div>
+
+              {/* Fits — vehicle fitment tags. These drive the catalog's
+                  vehicle narrowing, so pruning a wrong auto-tag here fixes
+                  the browse results everywhere. */}
+              <div>
+                <div style={{ fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text-muted)', marginBottom: '4px' }}>Fits</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
+                  {(fitment || []).map(f => {
+                    const plat = platforms.find(p => p.id === f.platform_id);
+                    const srcIcon = f.source === 'manual' ? '👤' : f.source === 'vendor_site' ? '🌐' : '🏷';
+                    return (
+                      <span key={f.id} style={{ ...chip, display: 'inline-flex', alignItems: 'center', gap: '5px' }} title={`Tag source: ${f.source === 'manual' ? 'added by hand' : f.source === 'vendor_site' ? 'vendor website' : 'part description auto-tag'}`}>
+                        <span>{srcIcon}</span>
+                        <span>
+                          {plat?.label || 'Unknown vehicle'}
+                          {f.roof_label ? ` · ${f.roof_label} roof` : ''}
+                          {f.wheelbase_label ? ` · ${/^\d/.test(f.wheelbase_label) ? `${f.wheelbase_label}"` : f.wheelbase_label}` : ''}
+                        </span>
+                        {isAdmin && (
+                          <button
+                            onClick={() => removeFitment(f.id)}
+                            title="Remove this fitment tag"
+                            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '11px', padding: 0, lineHeight: 1 }}
+                          >✕</button>
+                        )}
+                      </span>
+                    );
+                  })}
+                  {fitment !== null && fitment.length === 0 && (
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No vehicle tags — shows for every vehicle filter</span>
+                  )}
+                </div>
+                {isAdmin && (() => {
+                  const cfg = platforms.find(p => p.id === fitPlatformId)?.config;
+                  return (
+                    <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                      <select
+                        value={fitPlatformId}
+                        onChange={e => { setFitPlatformId(e.target.value); setFitWheelbase(''); setFitRoof(''); }}
+                        style={{ ...selStyle, width: 'auto', minWidth: '170px' }}
+                      >
+                        <option value="">+ Add vehicle…</option>
+                        <optgroup label="Vans">
+                          {platforms.filter(p => p.body_type === 'van').map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                        </optgroup>
+                        <optgroup label="Trucks">
+                          {platforms.filter(p => p.body_type === 'truck').map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                        </optgroup>
+                      </select>
+                      {fitPlatformId && (cfg?.roofs?.length || 0) > 0 && (
+                        <select value={fitRoof} onChange={e => setFitRoof(e.target.value)} style={{ ...selStyle, width: 'auto' }}>
+                          <option value="">any roof</option>
+                          {cfg!.roofs!.map(r => <option key={r} value={r}>{r} roof</option>)}
+                        </select>
+                      )}
+                      {fitPlatformId && (cfg?.wheelbases?.length || 0) > 0 && (
+                        <select value={fitWheelbase} onChange={e => setFitWheelbase(e.target.value)} style={{ ...selStyle, width: 'auto' }}>
+                          <option value="">any wheelbase</option>
+                          {cfg!.wheelbases!.map(w => <option key={w} value={w}>{/^\d/.test(w) ? `${w}" WB` : w}</option>)}
+                        </select>
+                      )}
+                      {fitPlatformId && (
+                        <button
+                          onClick={addFitment}
+                          disabled={fitBusy}
+                          style={{ padding: '6px 14px', borderRadius: '7px', border: 'none', background: 'var(--accent, #2563eb)', color: '#fff', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
+                        >{fitBusy ? 'Adding…' : 'Add'}</button>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               {isAdmin && (
