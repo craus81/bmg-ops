@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { generateToken } from '@/lib/magic-link-approval';
-import { sendEmail } from '@/lib/resend';
+import { sendEmailDetailed } from '@/lib/resend';
 import { sendSMS } from '@/lib/sms-provider';
 import { renderEstimateDocument } from '@/lib/estimate-document';
 import { r2PublicUrl } from '@/lib/r2';
@@ -176,8 +176,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     });
     const bcc = body.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
     try {
-      const ok = await sendEmail(emailList, subject, html, undefined, undefined, auth.user?.email || undefined, bcc);
+      const { ok, id: resendId } = await sendEmailDetailed(emailList, subject, html, undefined, undefined, auth.user?.email || undefined, bcc);
       dispatch.email = { target: emailList.join(', '), ok, bcc: bcc ? bcc.join(', ') : undefined };
+      // Delivery tracking (same scheme as invoice emails): store the Resend
+      // message id so the webhook can update this estimate's delivery state,
+      // and reset the state for this fresh send. A failed hand-off to Resend
+      // is recorded as 'failed' immediately — no webhook will ever come.
+      // Best-effort: a logging failure never turns a sent email into an error.
+      const { error: trackErr } = await supabase
+        .from('estimates')
+        .update({
+          approval_email_id: ok ? resendId : null,
+          approval_email_to: emailList,
+          approval_email_status: ok ? 'sent' : 'failed',
+          approval_email_detail: ok ? null : 'The email could not be handed to the delivery service',
+          approval_email_updated_at: new Date().toISOString(),
+        })
+        .eq('id', estimate.id);
+      if (trackErr) console.error('estimate email tracking update failed:', trackErr.message);
     } catch (err: any) {
       dispatch.email = { target: emailList.join(', '), ok: false, error: err?.message };
     }
