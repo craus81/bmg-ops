@@ -92,7 +92,8 @@ export async function GET(req: NextRequest) {
     // though the table isn't.
     let categories: { id: string; name: string; sort_order: number }[] | null = null;
     let vendors: string[] | null = null;
-    let platforms: { id: string; key: string; label: string; body_type: string; config: Record<string, string[]> | null }[] | null = null;
+    let platforms: { id: string; key: string; label: string; body_type: string; image_path: string | null; config: Record<string, string[]> | null }[] | null = null;
+    let platformCounts: Record<string, number> | null = null;
     if (!page) {
       const { data: cats } = await supabase
         .from('product_categories')
@@ -104,10 +105,29 @@ export async function GET(req: NextRequest) {
 
       const { data: plats } = await supabase
         .from('vehicle_platforms')
-        .select('id, key, label, body_type, config')
+        .select('id, key, label, body_type, image_path, config')
         .eq('active', true)
         .order('sort_order');
       platforms = plats || [];
+
+      // Distinct tagged parts per platform for the vehicle-card badges —
+      // paged walk per CLAUDE.md (part_fitment grows with tagging). May
+      // count a since-deactivated part; fine for a badge.
+      const partsByPlatform = new Map<string, Set<string>>();
+      for (let offset = 0; offset < 20_000; offset += 1000) {
+        const { data: rows } = await supabase
+          .from('part_fitment')
+          .select('platform_id, part_id')
+          .order('id')
+          .range(offset, offset + 999);
+        for (const r of rows || []) {
+          if (!partsByPlatform.has(r.platform_id)) partsByPlatform.set(r.platform_id, new Set());
+          partsByPlatform.get(r.platform_id)!.add(r.part_id);
+        }
+        if (!rows || rows.length < 1000) break;
+      }
+      platformCounts = {};
+      for (const [pid, set] of partsByPlatform) platformCounts[pid] = set.size;
 
       const seen = new Set<string>();
       for (let offset = 0; offset < 20_000; offset += 1000) {
@@ -132,6 +152,7 @@ export async function GET(req: NextRequest) {
       ...(categories ? { categories } : {}),
       ...(vendors ? { vendors } : {}),
       ...(platforms ? { platforms } : {}),
+      ...(platformCounts ? { platformCounts } : {}),
     });
   } catch (err: any) {
     return NextResponse.json({ error: err.message || 'Browse failed' }, { status: 500 });
