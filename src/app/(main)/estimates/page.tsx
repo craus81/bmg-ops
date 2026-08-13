@@ -1565,6 +1565,8 @@ export default function EstimatesPage() {
           {selectedPlatform && (
             <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
               🚐 Browse Catalog will filter to parts that fit the {selectedPlatform.label}
+              {vehicleRoof ? ` · ${vehicleRoof} roof` : ''}
+              {vehicleWheelbase ? ` · ${/^\d/.test(vehicleWheelbase) ? `${vehicleWheelbase}" WB` : vehicleWheelbase}` : ''}
             </div>
           )}
         </div>
@@ -2436,6 +2438,8 @@ export default function EstimatesPage() {
         onClose={() => setShowCatalogBrowser(false)}
         isAdmin={isAdmin}
         initialPlatformId={vehiclePlatformId || undefined}
+        initialWheelbase={vehicleWheelbase || undefined}
+        initialRoof={vehicleRoof || undefined}
         onAddKit={addKitLines}
         onAdd={(p: BrowsePart) => addPartLine({
           id: p.id,
