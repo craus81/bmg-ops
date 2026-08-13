@@ -36,6 +36,7 @@ const RunStatsSchema = z.object({
     imagesSaved: z.number().int().min(0),
     descriptionsSaved: z.number().int().min(0),
     vendorsSet: z.number().int().min(0),
+    fitmentTagged: z.number().int().min(0).optional(),
   }),
 });
 

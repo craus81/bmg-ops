@@ -10,6 +10,7 @@ import {
   extractPaginationLinks, originVariants, skuCandidatesFromUrl, ensureScheme,
   nearMatchSkuToPart, SITEMAP_CANDIDATES,
 } from '@/lib/vendor-catalog-import';
+import { detectFitment } from '@/lib/vehicle-fitment';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -324,6 +325,15 @@ export async function POST(req: NextRequest) {
     let descriptionsSaved = 0;
     let vendorsSet = 0;
 
+    // N4-B2: vendor pages name the vehicles a part fits ("Fits Transit 130"
+    // and 148" WB", masterack ?vehicle= slugs, Ranger per-vehicle pages) —
+    // harvest fitment tags for matched parts. Advisory, source='vendor_site',
+    // deduped in-memory and upserted once after the page loop.
+    const { data: platRows } = await supabase
+      .from('vehicle_platforms').select('id, key').eq('active', true);
+    const platformIdByKey = new Map<string, string>((platRows || []).map((p: any) => [p.key, p.id]));
+    const fitmentRows = new Map<string, { part_id: string; platform_id: string; wheelbase_label: string | null; roof_label: string | null; source: string }>();
+
     for (const url of body.urls) {
       try {
         const html = await fetchText(url);
@@ -433,6 +443,24 @@ export async function POST(req: NextRequest) {
             if (error) throw new Error(error.message);
           }
         }
+        // Harvest vehicle fitment from the page: URL slug + product name +
+        // description all carry vehicle signals.
+        const fitHits = detectFitment([url, product.name, product.description].filter(Boolean).join(' '));
+        for (const hit of fitHits) {
+          const platformId = platformIdByKey.get(hit.platformKey);
+          if (!platformId) continue;
+          imported.push(`fits→${hit.platformKey}`);
+          for (const partId of inScopeIds) {
+            const key = `${partId}|${platformId}|${hit.wheelbase || ''}|${hit.roof || ''}`;
+            if (!fitmentRows.has(key)) {
+              fitmentRows.set(key, {
+                part_id: partId, platform_id: platformId,
+                wheelbase_label: hit.wheelbase, roof_label: hit.roof,
+                source: 'vendor_site',
+              });
+            }
+          }
+        }
         results.push({ url, ok: true, partId: inScopeIds[0], sku: product.sku, matched: inScopeIds.length, imported });
       } catch (err: any) {
         results.push({ url, ok: false, error: err?.message || 'fetch failed' });
@@ -441,7 +469,27 @@ export async function POST(req: NextRequest) {
       await sleep(700);
     }
 
-    return NextResponse.json({ results, imagesSaved, descriptionsSaved, vendorsSet });
+    // Upsert harvested fitment; the COALESCE unique index makes re-runs
+    // no-ops, and (as in the auto-tag sweep) its conflicts aren't
+    // addressable via onConflict columns — fall back to per-row inserts.
+    let fitmentTagged = 0;
+    const fitRows = [...fitmentRows.values()];
+    for (let i = 0; i < fitRows.length; i += 500) {
+      const chunk = fitRows.slice(i, i + 500);
+      const { error: insErr, count } = await supabase
+        .from('part_fitment')
+        .upsert(chunk, { onConflict: 'part_id,platform_id,wheelbase_label,roof_label', ignoreDuplicates: true, count: 'exact' });
+      if (insErr) {
+        for (const r of chunk) {
+          const { error: oneErr } = await supabase.from('part_fitment').insert(r);
+          if (!oneErr) fitmentTagged++;
+        }
+      } else {
+        fitmentTagged += count ?? chunk.length;
+      }
+    }
+
+    return NextResponse.json({ results, imagesSaved, descriptionsSaved, vendorsSet, fitmentTagged });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message || 'Import failed' }, { status: 500 });
   }
