@@ -75,7 +75,8 @@ export async function sendEmailDetailed(
   htmlBody: string,
   textBody?: string,
   attachments?: Attachment[],
-  replyTo?: string | string[]
+  replyTo?: string | string[],
+  bcc?: string | string[]
 ): Promise<{ ok: boolean; id: string | null }> {
   if (!resend) {
     console.warn('Resend not configured — skipping email send');
@@ -86,6 +87,8 @@ export async function sendEmailDetailed(
     replyTo && (typeof replyTo === 'string' ? replyTo.trim() : replyTo.length > 0)
       ? replyTo
       : defaultReplyTo || undefined;
+  const effectiveBcc =
+    bcc && (typeof bcc === 'string' ? bcc.trim() : bcc.length > 0) ? bcc : undefined;
 
   try {
     return await enqueueSend(async () => {
@@ -99,6 +102,7 @@ export async function sendEmailDetailed(
           // entity escape mechanism, so armoring can't help it there.
           text: textBody || htmlBody.replace(/<[^>]*>/g, ''),
           ...(effectiveReplyTo ? { replyTo: effectiveReplyTo } : {}),
+          ...(effectiveBcc ? { bcc: effectiveBcc } : {}),
           ...(attachments && attachments.length > 0 ? { attachments } : {}),
         });
         lastSendAt = Date.now();
@@ -130,16 +134,39 @@ export async function sendEmail(
   htmlBody: string,
   textBody?: string,
   attachments?: Attachment[],
-  replyTo?: string | string[]
+  replyTo?: string | string[],
+  bcc?: string | string[]
 ): Promise<boolean> {
-  const { ok } = await sendEmailDetailed(to, subject, htmlBody, textBody, attachments, replyTo);
+  const { ok } = await sendEmailDetailed(to, subject, htmlBody, textBody, attachments, replyTo, bcc);
   return ok;
 }
 
 /**
- * Build a styled HTML email body for BMG Fleet notifications
+ * Build a styled HTML email body for BMG Fleet notifications.
+ *
+ * opts (all optional, used by the customer-email compose standard):
+ *   note            — personal message from the sender, rendered as its own
+ *                     block above the body (newlines preserved)
+ *   attachmentNames — listed under the body so recipients know what's attached
+ *   ctaNote         — small line under the CTA button (e.g. link expiry)
  */
-export function buildNotificationEmail(title: string, body: string, ctaUrl?: string, ctaLabel?: string): string {
+export function buildNotificationEmail(
+  title: string,
+  body: string,
+  ctaUrl?: string,
+  ctaLabel?: string,
+  opts?: { note?: string; attachmentNames?: string[]; ctaNote?: string },
+): string {
+  const noteHtml = opts?.note?.trim()
+    ? `
+        <div style="font-size:14px;color:#dbe4ee;line-height:1.6;background:#0f1923;border:1px solid #1e2d3d;border-radius:10px;padding:12px 14px;margin-bottom:14px;">${escapeHtml(opts.note.trim()).replace(/\n/g, '<br>')}</div>`
+    : '';
+  const attachmentsHtml = opts?.attachmentNames && opts.attachmentNames.length > 0
+    ? `
+        <div style="margin-top:14px;font-size:12px;color:#8899aa;">
+          <span style="font-weight:700;color:#dbe4ee;">Attached:</span> ${opts.attachmentNames.map(n => escapeHtml(n)).join(', ')}
+        </div>`
+    : '';
   return `
 <!DOCTYPE html>
 <html>
@@ -153,12 +180,13 @@ export function buildNotificationEmail(title: string, body: string, ctaUrl?: str
       </div>
       <!-- Body -->
       <div style="padding:24px;">
-        <div style="font-size:16px;font-weight:800;color:#f5f8fc;margin-bottom:8px;">${escapeHtml(title)}</div>
+        <div style="font-size:16px;font-weight:800;color:#f5f8fc;margin-bottom:8px;">${escapeHtml(title)}</div>${noteHtml}
         <div style="font-size:14px;color:#8899aa;line-height:1.5;">${escapeHtml(body)}</div>
         ${ctaUrl ? `
         <div style="margin-top:20px;">
           <a href="${ctaUrl}" style="display:inline-block;padding:12px 24px;background:#3b82f6;color:#fff;font-weight:800;font-size:13px;border-radius:10px;text-decoration:none;">${escapeHtml(ctaLabel || 'Open in App')}</a>
         </div>` : ''}
+        ${opts?.ctaNote ? `<div style="margin-top:8px;font-size:11px;color:#8899aa;">${escapeHtml(opts.ctaNote)}</div>` : ''}${attachmentsHtml}
       </div>
       <!-- Footer -->
       <div style="padding:16px 24px;border-top:1px solid #1e2d3d;text-align:center;">

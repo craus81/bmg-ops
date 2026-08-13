@@ -182,7 +182,10 @@ export async function POST(req: NextRequest) {
 
     const html = statementEmailHtml(customerName, invoices, scope, rangeNote, lh, body?.customBody, attachNote);
     const subject = `Statement — ${customerName} — ${new Date().toLocaleDateString('en-US')}`;
-    const result = await sendEmailDetailed(recipients, subject, html, undefined, attachments);
+    // Standard compose behavior: replies reach the sender (the from address
+    // has no mailbox), and bcc-me copies the send to their inbox.
+    const bcc = body?.bccSelf === true && auth.user?.email ? [auth.user.email] : undefined;
+    const result = await sendEmailDetailed(recipients, subject, html, undefined, attachments, auth.user?.email || undefined, bcc);
     if (!result.ok) {
       return NextResponse.json({ error: 'Email send failed' }, { status: 502 });
     }

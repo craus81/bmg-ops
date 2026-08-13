@@ -17,6 +17,10 @@ const supabase = createClient(
 
 const SendForApprovalSchema = z.object({
   email: z.string().email().max(254).optional().nullable(),
+  // Standard compose fields (docs/customer-email-standard.md): editable
+  // multi-recipient To and bcc-the-sender.
+  emails: z.array(z.string().email().max(254)).max(20).optional(),
+  bccSelf: z.boolean().optional().default(false),
   phone: z.string().trim().max(40).optional().nullable(),
   expiryDays: z.number().int().positive().max(365).optional(),
   // Personal note rendered at the top of the estimate email (plain text,
@@ -61,9 +65,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: 'Already approved' }, { status: 409 });
   }
 
-  // Resolve delivery targets
+  // Resolve delivery targets. Explicit compose recipients win; otherwise
+  // fall back to the customer's primary contact / synced profile.
   let email: string | null = body.email || null;
   let phone: string | null = body.phone || null;
+  const composeEmails = (body.emails || []).map(e => e.trim()).filter(Boolean);
 
   if (!email || !phone) {
     let customerId: string | null = estimate.customer_id || null;
@@ -92,7 +98,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
   }
 
-  if (!email && !phone && !body.preview) {
+  const emailList: string[] = composeEmails.length > 0 ? composeEmails : (email ? [email] : []);
+
+  if (emailList.length === 0 && !phone && !body.preview) {
     return NextResponse.json({ error: 'No email or phone on file for this customer. Add a contact first.' }, { status: 400 });
   }
 
@@ -128,7 +136,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       ctaLabel: 'Review & Approve',
       ctaNote: `A unique, secure link is generated when you send. It expires in ${expiryDays} days.`,
     });
-    return NextResponse.json({ preview: true, to: email, subject, html });
+    return NextResponse.json({ preview: true, to: emailList.join(', ') || null, subject, html });
   }
 
   // Mint a fresh token — rotating on resend invalidates prior links.
@@ -153,8 +161,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const dispatch: Record<string, any> = { email: null, sms: null };
 
-  if (email) {
-    const link = `${appUrl}/approve/estimate/${token}?via=email${email ? `&to=${encodeURIComponent(email)}` : ''}`;
+  if (emailList.length > 0) {
+    const link = `${appUrl}/approve/estimate/${token}?via=email&to=${encodeURIComponent(emailList[0])}`;
     // The real estimate document, not a notification card: the old email
     // carried a one-line summary and no quantities, rates, or line totals
     // at all — the fields customers kept asking about.
@@ -166,11 +174,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       ctaLabel: 'Review & Approve',
       ctaNote: `This link expires in ${expiryDays} days.`,
     });
+    const bcc = body.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
     try {
-      const ok = await sendEmail(email, subject, html, undefined, undefined, auth.user?.email || undefined);
-      dispatch.email = { target: email, ok };
+      const ok = await sendEmail(emailList, subject, html, undefined, undefined, auth.user?.email || undefined, bcc);
+      dispatch.email = { target: emailList.join(', '), ok, bcc: bcc ? bcc.join(', ') : undefined };
     } catch (err: any) {
-      dispatch.email = { target: email, ok: false, error: err?.message };
+      dispatch.email = { target: emailList.join(', '), ok: false, error: err?.message };
     }
   }
 

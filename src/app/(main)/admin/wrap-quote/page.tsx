@@ -352,6 +352,10 @@ export default function WrapQuotePage() {
   const [emailModal, setEmailModal] = useState(false);
   const [emailQuoteId, setEmailQuoteId] = useState<string | null>(null);
   const [emailMessage, setEmailMessage] = useState('');
+  // Standard compose fields: editable recipients (prefilled from the quote's
+  // customer email + cc on the first preview) and bcc-me.
+  const [emailTo, setEmailTo] = useState('');
+  const [emailBccSelf, setEmailBccSelf] = useState(false);
   const [attachInclude, setAttachInclude] = useState<Record<string, boolean>>({});
   const [emailPreview, setEmailPreview] = useState<{ to: string[]; subject: string; html: string; attachments: string[] } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -1340,11 +1344,17 @@ export default function WrapQuotePage() {
     return data.id;
   };
 
+  // Recipient field → validated address list (comma/semicolon separated).
+  const parseEmailTo = (input: string): string[] =>
+    [...new Set(input.split(/[,;\s]+/).map(e => e.trim().toLowerCase()).filter(e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)))];
+
   // Ask the send route for a dry-run render of the email using the current
-  // message + attachment selection. Returns true when the preview loaded.
-  const fetchEmailPreview = async (id: string, msg: string, include: Record<string, boolean>) => {
+  // message + recipients + attachment selection. Returns true when the
+  // preview loaded.
+  const fetchEmailPreview = async (id: string, msg: string, include: Record<string, boolean>, toOverride?: string) => {
     setPreviewLoading(true);
     try {
+      const emails = parseEmailTo(toOverride ?? emailTo);
       const res = await apiFetch('/api/wrap-quote/send', {
         method: 'POST',
         body: JSON.stringify({
@@ -1352,6 +1362,7 @@ export default function WrapQuotePage() {
           include: sendInclude,
           preview: true,
           message: msg.trim() || undefined,
+          emails: emails.length > 0 ? emails : undefined,
           attachmentPaths: attachments.filter(a => include[a.path] !== false).map(a => a.path),
         }),
       });
@@ -1361,6 +1372,11 @@ export default function WrapQuotePage() {
         return false;
       }
       setEmailPreview(data);
+      // First preview resolves the quote's stored recipients — surface them
+      // in the editable To field so the sender sees what they can change.
+      if (emails.length === 0 && Array.isArray(data.to) && data.to.length > 0) {
+        setEmailTo(data.to.join(', '));
+      }
       return true;
     } catch (e: any) {
       await dialog.alert(`Preview failed: ${e.message}`);
@@ -1389,10 +1405,12 @@ export default function WrapQuotePage() {
       if (!id) return;
       setEmailQuoteId(id);
       setEmailMessage('');
+      setEmailTo('');
+      setEmailBccSelf(false);
       const include: Record<string, boolean> = {};
       for (const a of attachments) include[a.path] = true;
       setAttachInclude(include);
-      if (await fetchEmailPreview(id, '', include)) setEmailModal(true);
+      if (await fetchEmailPreview(id, '', include, '')) setEmailModal(true);
     } finally {
       setSending(false);
     }
@@ -1400,6 +1418,11 @@ export default function WrapQuotePage() {
 
   const sendQuoteEmail = async () => {
     if (!emailQuoteId) return;
+    const emails = parseEmailTo(emailTo);
+    if (emails.length === 0) {
+      await dialog.alert('Enter at least one valid recipient email address.');
+      return;
+    }
     const coverageOnly = !sendInclude.pricing && !sendInclude.netsuitePdf;
     setSending(true);
     try {
@@ -1409,21 +1432,24 @@ export default function WrapQuotePage() {
           quoteId: emailQuoteId,
           include: sendInclude,
           message: emailMessage.trim() || undefined,
+          emails,
+          bccSelf: emailBccSelf,
           attachmentPaths: attachments.filter(a => attachInclude[a.path] !== false).map(a => a.path),
         }),
       });
       const data = await res.json();
+      const sentTo = emails.join(', ');
       if (!res.ok || !data.success) {
         await dialog.alert(`Email failed: ${data.error || 'Unknown error'}`);
       } else if (coverageOnly) {
         // The quote itself hasn't gone out — keep everything in place so
         // the real quote can still be sent after the customer sees coverage.
         setEmailModal(false);
-        await dialog.alert(`Coverage picture emailed to ${customer.email}`);
+        await dialog.alert(`Coverage picture emailed to ${sentTo}`);
         await loadAll();
       } else {
         setEmailModal(false);
-        await dialog.alert(`Quote emailed to ${customer.email}`);
+        await dialog.alert(`Quote emailed to ${sentTo}`);
         resetAfterSend();
         await loadAll();
         setTab('history');
@@ -3221,9 +3247,29 @@ export default function WrapQuotePage() {
             boxShadow: '0 8px 30px rgba(0,0,0,0.3)',
           }}>
             <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>Review Email Before Sending</div>
+            <div>
+              <div style={labelStyle}>To — separate multiple addresses with commas</div>
+              <input
+                type="text"
+                value={emailTo}
+                onChange={e => setEmailTo(e.target.value)}
+                onBlur={() => { if (emailQuoteId) fetchEmailPreview(emailQuoteId, emailMessage, attachInclude); }}
+                placeholder="customer@company.com, ap@company.com"
+                style={inputStyle}
+              />
+            </div>
+            {user?.email && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer', width: 'fit-content' }}>
+                <input
+                  type="checkbox"
+                  checked={emailBccSelf}
+                  onChange={e => setEmailBccSelf(e.target.checked)}
+                  style={{ accentColor: '#3b82f6' }}
+                />
+                Bcc me a copy ({user.email})
+              </label>
+            )}
             <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              <b style={{ color: 'var(--text-secondary)' }}>To:</b> {(emailPreview?.to || []).join(', ')}
-              <span style={{ margin: '0 6px' }}>·</span>
               <b style={{ color: 'var(--text-secondary)' }}>Subject:</b> {emailPreview?.subject}
             </div>
             <div>
