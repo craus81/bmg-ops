@@ -34,6 +34,7 @@ import DropboxProofSearch from '@/components/DropboxProofSearch';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import PhoneInput from '@/components/PhoneInput';
 import { exportProspectPDF } from '@/lib/prospect-pdf';
+import { deepLinks } from '@/lib/deep-links';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import { usd2 } from '@/lib/financials-print';
 import { exportStatementPDF } from '@/lib/statement-pdf';
@@ -1424,6 +1425,13 @@ export default function CustomerRecordPage() {
           {!prospect && customer && (
             <button onClick={addToCrm} disabled={addingToCrm} title="Create a record for this NetSuite customer so contacts, deals, and activity can be tracked here" style={btnSm}>
               {addingToCrm ? 'Adding…' : '+ Add Record'}
+            </button>
+          )}
+          {customer && !isVendor && (
+            <button onClick={() => router.push(deepLinks.newEstimate(customer.id))}
+              title="Start a new estimate with this customer pre-selected"
+              style={{ ...btnSm, color: '#22c55e' }}>
+              + New Estimate
             </button>
           )}
           {(prospect?.netsuite_id || customer) && !stError && (
