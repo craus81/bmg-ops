@@ -25,10 +25,21 @@ Per change:
    (`mcp__github__create_pull_request`) summarizing the change, and
    **always subscribe** (`mcp__github__subscribe_pr_activity`) — respond
    to review comments / fix CI failures as events arrive, no need to ask.
-4. **One fresh branch per PR — never reuse a branch across PRs.** PRs are
-   squash-merged, so a reused branch still carries its old individual
-   commits and collides with `main`'s squashed version on the next PR (a
-   guaranteed merge conflict). Every change gets a new `claude/<topic>`.
+4. **One fresh branch per PR.** GitHub auto-deletes head branches when
+   their PR merges ("Automatically delete head branches" is ON, enabled
+   2026-08-13), so after a merge the same branch name is free again —
+   the next push creates a brand-new branch from your synced `main`,
+   which is exactly the fresh-branch-per-PR this rule wants. Sessions
+   pinned to one `claude/<name>` branch can simply recreate it after
+   each merge: `git checkout -B claude/<name> origin/main`. Escape
+   hatch, only if a merged branch still exists on the remote (it
+   predates auto-delete, or deletion was skipped): do NOT force-push
+   over it or delete it from a session — repo rules reject force-pushes
+   (GH013) and the session git proxy 403s deletions. Instead cut your
+   branch from `origin/main`, `git merge` the stale remote branch into
+   it (its content is identical to the squash already on `main`, so it
+   merges clean), and push — the push fast-forwards and the PR diff
+   stays exactly your new change.
 5. **After a PR merges, resync local `main` to the remote** before the
    next change: `git fetch origin main` then `git checkout main && git
    merge --ff-only origin/main` (or `git reset --hard origin/main` if it
