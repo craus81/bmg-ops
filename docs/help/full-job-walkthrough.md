@@ -23,18 +23,21 @@ logo and phone number on the outside. You exchange business cards.
 
 1. Open BMG Fleet on your laptop and click **Customers** in the bottom nav
    (or go to `/admin/prospects`).
-2. Click **+ New** to add a prospect.
+2. Click **+ New** to add the client — or **Scan Card** and let it read
+   Sara's business card for you.
 3. Fill in:
    - **Company**: Acme Plumbing
-   - **Lead source**: Maryland Heights Chamber of Commerce (or whichever
-     option fits — you can also pick "Other" and type in your own)
+   - **Contact**: Sara's name, email, and phone (prefilled if you
+     scanned the card)
    - **Notes**: "Met Sara at chamber mixer 4/30. 8 new Transit vans,
      plumber upfit + wrap. Sounded ready to move."
-4. Click **Create Prospect**.
-5. On the new row, click **+ Add** under **Contacts** and add Sara's
-   email + phone.
-6. (Optional) Click **🔥 Mark Hot** if she's high priority — that
-   raises this prospect on your dashboard.
+4. Click **Create Customer** — or **Create + Start Estimate** if you
+   want to start quoting on the spot. Either way the customer is also
+   created in NetSuite automatically.
+5. The record page opens, with Sara already saved under **Contacts**
+   (add more people there with **+ Add**).
+6. (Optional) Click **Mark Hot** if she's high priority — that raises
+   this customer on your dashboard.
 
 You've now got Acme Plumbing tracked. The **Sales Pipeline** widget on
 your home dashboard counts them in your open lead count.
