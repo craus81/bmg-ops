@@ -433,6 +433,36 @@ export default function EstimatesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
+  // ?new=1[&customer=<customers.id>] (deepLinks.newEstimate) opens the
+  // builder on a fresh estimate, pre-selecting the customer when one is
+  // given — the straight path from entering a new client to quoting them.
+  // One-shot: ?id= (an existing-estimate deep link) always wins over ?new=.
+  const handledNewParam = useRef(false);
+  useEffect(() => {
+    if (loading || handledNewParam.current) return;
+    if (searchParams.get('new') !== '1' || searchParams.get('id')) return;
+    handledNewParam.current = true;
+    resetBuilder();
+    setView('builder');
+    const custId = searchParams.get('customer');
+    if (!custId) return;
+    (async () => {
+      const { data } = await supabase
+        .from('customers')
+        .select('id, netsuite_id, company_name, entity_id')
+        .eq('id', custId)
+        .maybeSingle();
+      // No match (bad/stale id) degrades to a blank builder — the customer
+      // search is right there.
+      if (data) {
+        setCustomerId(data.id);
+        setCustomerName(data.company_name || data.entity_id || '');
+        setCustomerNsId(data.netsuite_id);
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: apply once after load
+  }, [loading, searchParams]);
+
   // `silent` skips the `loading` toggle so mid-session refreshes (after a
   // Save/Sync/Convert) don't unmount the builder behind the full-page spinner.
   const loadEstimates = async (silent: boolean = false) => {

@@ -35,6 +35,11 @@ export const deepLinks = {
    *  scroll-flashes the Internal Notes field (estimate-note mentions). */
   estimate: (estimateId: string, opts?: { flashNotes?: boolean }) =>
     `/estimates?id=${estimateId}${opts?.flashNotes ? '&note=field' : ''}`,
+  /** Estimates page — opens the builder on a fresh estimate, optionally
+   *  pre-selecting a customer (local customers.id). The straight path from
+   *  entering a new client to quoting them. */
+  newEstimate: (customerId?: string | null) =>
+    `/estimates?new=1${customerId ? `&customer=${customerId}` : ''}`,
   /** Wrap-quote list — opens that quote (page reads ?id=). */
   wrapQuote: (quoteId: string) => `/admin/wrap-quote?id=${quoteId}`,
   /** AP queue — jumps to the vendor invoice's status tab and highlights it. */

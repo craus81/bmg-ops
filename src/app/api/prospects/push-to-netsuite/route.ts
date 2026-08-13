@@ -86,11 +86,41 @@ export async function POST(req: NextRequest) {
       })
       .eq('id', prospectId);
 
+    // Mirror into the local customers table (same shape as the customer
+    // sync) so the new customer is immediately linkable — the estimate
+    // builder's customer search reads this table, and waiting on the next
+    // NetSuite sync left just-entered clients unpickable.
+    const addressLine = [
+      prospect.address,
+      [prospect.city, prospect.state].filter(Boolean).join(', '),
+      prospect.zip,
+    ].filter(Boolean).join(', ');
+    const { data: local, error: upsertErr } = await supabase
+      .from('customers')
+      .upsert({
+        netsuite_id: result.customerId,
+        netsuite_url: result.netsuiteUrl || null,
+        company_name: prospect.company_name,
+        entity_id: result.entityId || '',
+        email: prospect.email || null,
+        phone: prospect.phone || null,
+        address: addressLine || null,
+        active: true,
+      }, { onConflict: 'netsuite_id' })
+      .select('id')
+      .single();
+    if (upsertErr) {
+      // The NetSuite record exists — don't fail the create; the next
+      // customer sync heals the local mirror.
+      console.error('push-to-netsuite local customer upsert failed:', upsertErr.message);
+    }
+
     return NextResponse.json({
       success: true,
       customerId: result.customerId,
       entityId: result.entityId,
       netsuiteUrl: result.netsuiteUrl,
+      localCustomerId: local?.id || null,
     });
   } catch (error: any) {
     console.error('Push to NetSuite error:', error);
