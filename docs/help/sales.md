@@ -27,22 +27,26 @@ that customer pre-selected.
 
 ---
 
-## Mark a prospect "Hot"
+## Mark a customer "Hot"
 
-1. Open the prospect's row in **Customers**.
-2. Tap **Mark Hot**.
+1. Tap the customer's row in **Customers** to open their record.
+2. Tap **Mark Hot** in the header.
 
-The flame icon shows up. Hot prospects rise on your dashboard.
+The flame icon shows up. Hot customers rise on your dashboard.
 
 ---
 
-## Move a prospect through the pipeline
+## Track a deal through the pipeline
 
-1. Open **Customers**.
-2. On the prospect row, find the **Stage** dropdown.
-3. Pick **Lead → Quoted → Negotiating → Won** (or **Lost**).
+Pipeline stages live on **deals**, on the customer's record page:
 
-Stage just tracks where you are in the conversation. It doesn't change
+1. Tap the customer's row in **Customers** to open their record.
+2. Under **Deals**, tap **+ Add** and give the deal a title (and a
+   value, if you have one).
+3. On the deal's row, tap the stage you're at:
+   **Lead → Quoted → Negotiating → Won** (or **Lost**).
+
+Stages feed the Sales band on your dashboard. They don't change
 anything else in the app.
 
 ---
@@ -52,8 +56,10 @@ anything else in the app.
 1. Tap **Estimates** in the bottom nav.
 2. Tap the **+** button.
 3. Type the customer's name and pick them from the list.
-   - Don't see them? Tap **+ Create New Customer**, fill in name and
-     billing info, save.
+   - Don't see them? They haven't been entered yet — go to
+     **Customers → + New** and use **Create + Start Estimate** (see
+     "Add a new client" above), which lands you right back here with
+     the new customer selected.
 4. Type an **Estimate Title** (anything that makes sense to you).
 5. Tap **+ Add Line Item** for each part or labor entry.
    - Search by part number or name to pull from the catalog.
@@ -129,12 +135,15 @@ work email, so when the customer hits Reply, their reply lands in
 ## Resend an approval link
 
 1. Open the estimate.
-2. Tap **Resend Approval Link**.
-3. Pick a channel.
-4. Confirm.
+2. Tap **Send to Customer for Approval** again — the same compose
+   screen opens, so you can fix the address or add a note.
+3. Tap **Send**.
 
-A fresh link goes out. The old one still works until it expires (30
-days from when it was sent).
+A fresh link goes out and **the old links stop working immediately** —
+resending rotates the secure link on purpose, so only the newest email
+can approve the estimate. If a customer says their link doesn't work,
+don't troubleshoot the old email; just resend and have them use the
+new one.
 
 ---
 
@@ -169,13 +178,16 @@ fields. You can still override per-estimate.
 
 ---
 
-## Convert a prospect to a real customer
+## When a customer isn't in NetSuite yet
 
-1. Open the prospect in **Customers**.
-2. Tap **Convert to Customer**.
+There is no separate "convert to customer" step anymore — every record
+you create is pushed to NetSuite as a customer automatically, the
+moment you create it.
 
-The customer record is created and any estimates / threads transfer
-over. The prospect moves to the **Converted** tab.
+If that automatic push failed, the record shows a **Not in NetSuite
+yet** badge. Open the record and tap **Add to NetSuite** to retry.
+Clear this before quoting — estimates can't push to NetSuite without
+the link.
 
 ---
 

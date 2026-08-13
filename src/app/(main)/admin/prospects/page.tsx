@@ -323,8 +323,43 @@ export default function ProspectsPage() {
     if (!form.company_name.trim() || saving) return;
     setSaving(true);
     const isVendor = form.record_type === 'vendor';
+    const name = form.company_name.trim();
+
+    // Duplicate guard (same rule as wrap-quote's create-customer): a
+    // same-named record created again becomes a second NetSuite customer
+    // that splits spend history, statements, and estimate search. Match CRM
+    // rows of the same type, and — for customers — the synced NetSuite
+    // mirror, which can hold customers that have no CRM row at all.
+    const existingProspect = prospects.find(p =>
+      (p.record_type === 'vendor') === isVendor &&
+      p.company_name.trim().toLowerCase() === name.toLowerCase()) || null;
+    let existingLabel = existingProspect?.company_name || null;
+    let existingUrl = existingProspect ? `/admin/prospects/${existingProspect.id}` : null;
+    if (!existingUrl && !isVendor) {
+      const escaped = name.replace(/[\\%_]/g, '\\$&');
+      const { data: cust } = await supabase
+        .from('customers')
+        .select('netsuite_id, company_name')
+        .ilike('company_name', escaped)
+        .limit(1)
+        .maybeSingle();
+      if (cust?.netsuite_id) {
+        existingLabel = cust.company_name || name;
+        existingUrl = `/admin/prospects/ns-${cust.netsuite_id}`;
+      }
+    }
+    if (existingUrl) {
+      setSaving(false);
+      const open = await dialog.confirm(
+        `"${existingLabel}" already exists${!existingProspect ? ' in NetSuite' : ''}.${isVendor ? '' : ' Creating it again would make a duplicate NetSuite customer that splits spend history and statements.'}\n\nOpen the existing record instead? If this really is a different company, go back and adjust the name (e.g. add the city).`,
+        { confirmLabel: 'Open Existing', cancelLabel: 'Go Back' },
+      );
+      if (open) router.push(existingUrl);
+      return;
+    }
+
     const { data, error } = await supabase.from('prospects')
-      .insert({ ...form, company_name: form.company_name.trim(), location_count: form.location_count || 1, created_by: user?.id })
+      .insert({ ...form, company_name: name, location_count: form.location_count || 1, created_by: user?.id })
       .select().single();
     if (error || !data) {
       setSaving(false);
