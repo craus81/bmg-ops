@@ -8,6 +8,7 @@ import { logAudit } from '@/lib/audit';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { syncShopInboundForSalesOrder } from '@/lib/shop-inbound';
+import { vehicleDescription } from '@/lib/estimate-document';
 
 const ConvertSchema = z.object({
   estimateId: z.string().uuid(),
@@ -53,13 +54,15 @@ export async function POST(req: NextRequest) {
     // Load estimate with line items
     const { data: estimate, error: estError } = await supabase
       .from('estimates')
-      .select('*, estimate_line_items(*)')
+      .select('*, estimate_line_items(*), vehicle_platforms(label)')
       .eq('id', estimateId)
       .single();
 
     if (estError || !estimate) {
       return NextResponse.json({ error: 'Estimate not found' }, { status: 404 });
     }
+    // Flatten the platform label for the memo's vehicle line.
+    (estimate as any).vehicle_platform_label = (estimate as any).vehicle_platforms?.label || null;
 
     // Check if already converted
     if (estimate.netsuite_so_id) {
@@ -202,6 +205,10 @@ export async function POST(req: NextRequest) {
     if (estimate.title) memoParts.push(estimate.title.trim());
     if (estimate.notes?.trim()) memoParts.push(estimate.notes.trim());
     const ctxLines: string[] = [];
+    // Vehicle identity (N4-B2): the VIN gets its own NS field below, but the
+    // human description (platform · roof · WB) only survives in the memo.
+    const vehicle = vehicleDescription(estimate);
+    if (vehicle) ctxLines.push(`Vehicle: ${vehicle}`);
     if (estimate.install_instructions?.trim()) ctxLines.push(`Install: ${estimate.install_instructions.trim()}`);
     if (estimate.delivery_preferences?.trim()) ctxLines.push(`Delivery: ${estimate.delivery_preferences.trim()}`);
     const onSite = [estimate.on_site_contact_name, estimate.on_site_contact_phone].filter(Boolean).join(' ');

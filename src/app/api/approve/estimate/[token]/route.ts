@@ -32,10 +32,12 @@ const supabase = createClient(
 async function loadEstimateByToken(token: string) {
   const { data: estimate, error } = await supabase
     .from('estimates')
-    .select('*')
+    .select('*, vehicle_platforms(label)')
     .eq('approval_token', token)
     .maybeSingle();
   if (error || !estimate) return { estimate: null, lines: [] as any[], error: error?.message || 'not_found' };
+  // Flatten the platform label for the document's vehicle line.
+  (estimate as any).vehicle_platform_label = (estimate as any).vehicle_platforms?.label || null;
   const { data: lines } = await supabase
     .from('estimate_line_items')
     .select('*')

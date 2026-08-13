@@ -26,6 +26,24 @@ export function escHtml(s: string | number | null | undefined): string {
 
 const money = (n: any) => `$${Number(n || 0).toFixed(2)}`;
 
+/**
+ * One-line vehicle description from the estimate's stored vehicle fields
+ * (N4-B2 phase 3): "2026 Ford Transit · medium roof · 148" WB". Callers
+ * hydrate `vehicle_platform_label` from vehicle_platforms — the estimate
+ * row itself only stores the FK. Also the line pushed into NetSuite memos.
+ */
+export function vehicleDescription(est: any): string {
+  const name = [est.vehicle_year, est.vehicle_platform_label].filter(Boolean).join(' ');
+  const wb = est.vehicle_wheelbase;
+  return [
+    name || null,
+    est.vehicle_roof ? `${est.vehicle_roof} roof` : null,
+    wb ? (/^\d/.test(wb) ? `${wb}" WB` : wb) : null,
+    est.vehicle_cab ? `${est.vehicle_cab} cab` : null,
+    est.vehicle_bed ? `${est.vehicle_bed}' bed` : null,
+  ].filter(Boolean).join(' · ');
+}
+
 export interface EstimateDocumentCompany {
   name?: string | null;
   address?: string | null;
@@ -94,7 +112,8 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
         <div style="font-size:22px;font-weight:800;color:#111827;">Estimate #${escHtml(est.estimate_number)}</div>
         ${est.title ? `<div style="font-size:13px;color:#6b7280;margin-top:2px;">${escHtml(est.title)}</div>` : ''}
         <div style="font-size:13px;color:#6b7280;margin-top:2px;">Prepared for ${escHtml(est.customer_name || 'you')}</div>
-        ${(est.vin || est.unit_number) ? `<div style="font-size:12px;color:#374151;margin-top:6px;font-weight:600;">${[
+        ${(vehicleDescription(est) || est.vin || est.unit_number) ? `<div style="font-size:12px;color:#374151;margin-top:6px;font-weight:600;">${[
+          escHtml(vehicleDescription(est)),
           est.vin ? `VIN ${escHtml(est.vin)}` : '',
           est.unit_number ? `Unit ${escHtml(est.unit_number)}` : '',
         ].filter(Boolean).join(' &middot; ')}</div>` : ''}

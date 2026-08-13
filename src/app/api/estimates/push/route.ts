@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { vehicleDescription } from '@/lib/estimate-document';
 
 export const dynamic = 'force-dynamic';
 
@@ -259,13 +260,15 @@ export async function POST(req: NextRequest) {
     // Load estimate
     const { data: estimate, error: estErr } = await supabase
       .from('estimates')
-      .select('*')
+      .select('*, vehicle_platforms(label)')
       .eq('id', estimateId)
       .single();
 
     if (estErr || !estimate) {
       return NextResponse.json({ error: 'Estimate not found' }, { status: 404 });
     }
+    // Flatten the platform label for the memo's vehicle line.
+    (estimate as any).vehicle_platform_label = (estimate as any).vehicle_platforms?.label || null;
 
     const isUpdate = !!estimate.netsuite_estimate_id;
 
@@ -357,7 +360,9 @@ export async function POST(req: NextRequest) {
     }
 
     const config = getNetSuiteConfig();
-    const memo = [estimate.title, estimate.notes].filter(Boolean).join(' — ');
+    // Vehicle first — it's what the shop scans the printed NS estimate for.
+    const memo = [vehicleDescription(estimate), estimate.title, estimate.notes]
+      .filter(Boolean).join(' — ');
 
     if (isUpdate) {
       // ── UPDATE existing NetSuite estimate via PATCH ──
