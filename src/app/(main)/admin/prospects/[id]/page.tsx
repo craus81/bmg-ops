@@ -1021,12 +1021,36 @@ export default function CustomerRecordPage() {
   };
 
   // Statement email goes through the standard compose screen (editable
-  // recipients prefilled from billing emails, bcc-me, personal note). No
-  // live preview yet — the statement route has no preview mode.
+  // recipients prefilled from billing emails, bcc-me, personal note, live
+  // preview of the exact statement email).
   const emailStatement = () => {
     const nsId = prospect?.netsuite_id || customer?.netsuite_id;
     if (!nsId || emailingSt) return;
     setStEmailOpen(true);
+  };
+
+  const fetchStatementPreview = async (fields: EmailComposeFields) => {
+    const nsId = prospect?.netsuite_id || customer?.netsuite_id;
+    if (!nsId) return { error: 'Not linked to a NetSuite customer' };
+    try {
+      const res = await fetch('/api/netsuite/email-statement', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          preview: true,
+          customerId: nsId,
+          recipients: fields.emails,
+          customBody: fields.message || undefined,
+          scope: stScope,
+          from: stFrom || undefined,
+          to: stTo || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.preview) return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      return { error: data.error || 'Unknown error' };
+    } catch {
+      return { error: 'Network error — please try again.' };
+    }
   };
 
   const sendStatementEmail = async (fields: EmailComposeFields): Promise<{ ok: boolean }> => {
@@ -2273,6 +2297,7 @@ export default function CustomerRecordPage() {
           sendLabel="Send Statement"
           messagePlaceholder="Optional note — shown above the statement table…"
           initialTo={(prospect?.billing_emails?.length ? prospect.billing_emails.join(', ') : '') || prospect?.email || customer?.email || ''}
+          fetchPreview={fetchStatementPreview}
           onSend={sendStatementEmail}
           onClose={() => setStEmailOpen(false)}
         />
