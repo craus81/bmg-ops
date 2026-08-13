@@ -84,7 +84,8 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
   const [platformId, setPlatformId] = useState('');
   const [wheelbase, setWheelbase] = useState('');
   const [roof, setRoof] = useState('');
-  const [platforms, setPlatforms] = useState<{ id: string; key: string; label: string; body_type: string; config?: { wheelbases?: string[]; roofs?: string[] } | null }[]>([]);
+  const [platforms, setPlatforms] = useState<{ id: string; key: string; label: string; body_type: string; image_path?: string | null; config?: { wheelbases?: string[]; roofs?: string[] } | null }[]>([]);
+  const [platformCounts, setPlatformCounts] = useState<Record<string, number>>({});
   const [autoTagging, setAutoTagging] = useState(false);
   const [autoTagNote, setAutoTagNote] = useState('');
   const [sort, setSort] = useState<'name' | 'price_asc' | 'price_desc'>('name');
@@ -104,6 +105,8 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
   const [addedKits, setAddedKits] = useState<Record<string, number>>({});
   const photoInputRef = useRef<HTMLInputElement>(null);
   const photoTargetRef = useRef<string | null>(null);
+  const platformPhotoInputRef = useRef<HTMLInputElement>(null);
+  const platformPhotoTargetRef = useRef<string | null>(null);
 
   // The estimate's stored vehicle pre-selects the filters each time the
   // modal opens; the rail selects stay fully changeable during the session.
@@ -193,6 +196,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
           if (d.categories) setCategories(d.categories);
           if (d.vendors) setVendors(d.vendors);
           if (d.platforms) setPlatforms(d.platforms);
+          if (d.platformCounts) setPlatformCounts(d.platformCounts);
         }
       } finally {
         setLoading(false);
@@ -248,6 +252,18 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
     } finally {
       setBusyPart(null);
     }
+  };
+
+  // Vehicle-card photo: straight to storage + a direct row update — staff
+  // RLS on vehicle_platforms allows it, no API route needed.
+  const uploadPlatformPhoto = async (targetId: string, file: File) => {
+    const supabase = createClient();
+    const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+    const path = `vehicle-platforms/${targetId}/card-${Date.now()}.${ext}`;
+    const { error } = await storage.from('photos').upload(path, file, { contentType: file.type });
+    if (error) return;
+    const { error: upErr } = await supabase.from('vehicle_platforms').update({ image_path: path }).eq('id', targetId);
+    if (!upErr) setPlatforms(prev => prev.map(p => p.id === targetId ? { ...p, image_path: path } : p));
   };
 
   const addCategory = async () => {
@@ -419,6 +435,83 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
 
         {/* Card grid */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '14px' }}>
+          {/* Shop by Vehicle — Ranger-style card picker (Craig's screenshots):
+              pick the van/truck first, browse only what fits it. Hidden once
+              a vehicle is chosen or while searching. */}
+          {!platformId && !q.trim() && platforms.length > 0 && (
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-muted)', marginBottom: '6px' }}>🚐 Shop by Vehicle</div>
+              {(['van', 'truck'] as const).map(bt => {
+                const group = platforms.filter(p => p.body_type === bt);
+                if (group.length === 0) return null;
+                return (
+                  <div key={bt} style={{ marginBottom: '10px' }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', margin: '4px 0' }}>{bt === 'van' ? 'Vans' : 'Trucks'}</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '8px' }}>
+                      {group.map(p => (
+                        <div
+                          key={p.id}
+                          onClick={() => { setPlatformId(p.id); setWheelbase(''); setRoof(''); }}
+                          title={`Show parts that fit the ${p.label}`}
+                          style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden', cursor: 'pointer', display: 'flex', flexDirection: 'column' }}
+                        >
+                          <div style={{ height: '84px', background: 'var(--subtle-bg, rgba(128,128,128,0.08))', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+                            {p.image_path ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={imageUrl(p.image_path)} alt={p.label} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            ) : (
+                              <span style={{ fontSize: '34px', opacity: 0.4 }}>{bt === 'van' ? '🚐' : '🛻'}</span>
+                            )}
+                            {isAdmin && (
+                              <button
+                                onClick={e => { e.stopPropagation(); platformPhotoTargetRef.current = p.id; platformPhotoInputRef.current?.click(); }}
+                                title="Upload vehicle photo"
+                                style={{ position: 'absolute', bottom: '5px', right: '5px', padding: '2px 7px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '11px', cursor: 'pointer', color: 'var(--text-muted)' }}
+                              >📷</button>
+                            )}
+                          </div>
+                          <div style={{ padding: '8px 10px' }}>
+                            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.25 }}>{p.label}</div>
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                              {platformCounts[p.id] ? `${platformCounts[p.id].toLocaleString()} parts` : 'no tagged parts yet'}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Selected-vehicle bar — the picker's return path. */}
+          {platformId && (() => {
+            const plat = platforms.find(p => p.id === platformId);
+            if (!plat) return null;
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px', padding: '8px 12px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '10px' }}>
+                {plat.image_path ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={imageUrl(plat.image_path)} alt={plat.label} style={{ width: '42px', height: '30px', objectFit: 'cover', borderRadius: '6px' }} />
+                ) : (
+                  <span style={{ fontSize: '20px' }}>{plat.body_type === 'truck' ? '🛻' : '🚐'}</span>
+                )}
+                <div>
+                  <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{plat.label}</div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                    showing parts that fit{roof ? ` · ${roof} roof` : ''}{wheelbase ? ` · ${/^\d/.test(wheelbase) ? `${wheelbase}" WB` : wheelbase}` : ''}
+                  </div>
+                </div>
+                <span style={{ flex: 1 }} />
+                <button
+                  onClick={() => { setPlatformId(''); setWheelbase(''); setRoof(''); }}
+                  style={{ padding: '5px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '11px', fontWeight: 700, cursor: 'pointer', color: 'var(--text-secondary)' }}
+                >✕ All vehicles</button>
+              </div>
+            );
+          })()}
+
           {/* Packages strip — Ranger-style bundles that explode into estimate
               lines. Hidden while searching so results stay focused. */}
           {kits && kits.length > 0 && !q.trim() && (
@@ -562,6 +655,20 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
           )}
         </div>
       </div>
+
+      {/* Hidden input for vehicle-card photo uploads */}
+      <input
+        ref={platformPhotoInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={async e => {
+          const f = e.target.files?.[0];
+          e.target.value = '';
+          const target = platformPhotoTargetRef.current;
+          if (f && target) await uploadPlatformPhoto(target, f);
+        }}
+      />
 
       {/* Shared hidden input for photo uploads (cards + record modal) */}
       <input
