@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getNetSuitePdf, suiteqlQuery } from '@/lib/netsuite';
 import { sendEmailDetailed, buildInvoiceEmail } from '@/lib/resend';
+import { deepLinks } from '@/lib/deep-links';
 import { requireRole } from '@/lib/api-auth';
 import { safeStringLiteral, SqlSafeError } from '@/lib/sql-safe';
 import { validateBody, z } from '@/lib/validate';
@@ -200,7 +201,12 @@ export async function POST(req: NextRequest) {
 
     // Bcc-me: skipped on test sends — those already land in the sender's inbox.
     const bcc = bccSelf && !testSend && auth.user?.email ? [auth.user.email] : undefined;
-    const { ok: sent, id: resendId } = await sendEmailDetailed(recipients, subject, html, undefined, attachments, auth.user?.email || undefined, bcc);
+    const { ok: sent, id: resendId } = await sendEmailDetailed(
+      recipients, subject, html, undefined, attachments, auth.user?.email || undefined, bcc,
+      // A single-invoice send deep-links that invoice on the Sent tab; a
+      // multi-invoice send links the tab itself (a true digest).
+      { kind: 'invoice', sentBy: auth.user?.id, contextUrl: deepLinks.invoicesSent(invoiceNumbers.length === 1 ? invoiceNumbers[0] : null) },
+    );
 
     if (!sent) {
       return NextResponse.json({ error: 'Failed to send email' }, { status: 500 });

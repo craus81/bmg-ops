@@ -105,12 +105,14 @@ work email, so when the customer hits Reply, their reply lands in
   with the send date stamped on it.
 - Turn on **Bcc me** when composing and the exact email that went to
   the customer arrives in your own inbox too.
-- Delivery is tracked end-to-end on the big flows: an estimate shows
-  its approval email's status right in the builder (sent → delivered,
-  or bounced), with a red **✉ Bounced** badge on the estimate list —
-  and you get a push notification if it bounces, so a typo'd address
-  can't sit unnoticed. Invoice emails show the same tracking on the
-  Invoices page's **Sent** tab, with bounce alerts going to finance.
+- Delivery is tracked end-to-end on **every** email the app sends. If
+  an email you sent bounces, fails, or gets flagged as spam, you get a
+  push notification naming the recipient and the reason — a typo'd
+  address can't sit unnoticed. Estimates show their approval email's
+  status right in the builder (with a red **✉ Bounced** badge on the
+  list), invoice emails show delivery on the Invoices **Sent** tab
+  (bounces alert finance), and admins can see every send's status
+  under **Admin → System Health → Email delivery**.
 
 **What happens when the customer responds?** Two different paths:
 

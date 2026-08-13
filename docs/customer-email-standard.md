@@ -57,8 +57,33 @@ on every send, not just estimates.
 | Customer threads (`customer-threads`) | Chat-style thread | Deliberately not a compose modal (it's a running conversation). Reply-To = sender is in place. |
 | Invites (CNI/admin), reminder crons, digests, notify-pickup | Exempt | Automated/transactional — nobody is composing. Reply-To falls back to `RESEND_REPLY_TO_EMAIL`. |
 
+## Delivery tracking (all flows, automatic)
+
+Every email — composed or automated — is logged to `email_log` by the
+send layer itself (`sendEmailDetailed`), and the Resend webhook
+(`/api/webhooks/resend`) updates each row's delivery state
+(sent → delivered, or bounced/complained/failed). On a bounce:
+
+- **Composed sends** (a `sentBy` user on the log row) push an alert to
+  that sender — "your email died, fix the address and resend" — unless a
+  specialized handler already alerted (invoices → finance, estimates →
+  the sales targets).
+- **Automated sends** (crons, digests, notifications) alert nobody;
+  they surface on **Admin → System Health → Email delivery**, which
+  lists the last 100 sends with real status and a problems-only filter.
+- **Customer-thread messages** also carry the Resend id on their
+  `customer_messages` row, so the inbox shows delivered/failed per
+  message (same as SMS).
+
+Callers pass an `EmailMeta` as `sendEmail`/`sendEmailDetailed`'s last
+argument: `{ kind, sentBy, contextUrl }` — kind is a flow slug for the
+admin view, sentBy routes the bounce alert, contextUrl deep-links the
+record (falls back to the log row on System Health). Sends without meta
+still log, tagged `other`.
+
 ## For every new feature
 
 Adding any "email the customer/vendor" action means: use
 `EmailComposeModal`, implement the API contract above (including
-`preview`), pass Reply-To + bcc, and add the flow to the table here.
+`preview`), pass Reply-To + bcc + an `EmailMeta` (kind, sentBy,
+contextUrl), and add the flow to the table here.

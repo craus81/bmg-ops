@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { generateToken } from '@/lib/magic-link-approval';
 import { sendEmailDetailed } from '@/lib/resend';
+import { deepLinks } from '@/lib/deep-links';
 import { sendSMS } from '@/lib/sms-provider';
 import { renderEstimateDocument } from '@/lib/estimate-document';
 import { r2PublicUrl } from '@/lib/r2';
@@ -176,7 +177,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     });
     const bcc = body.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
     try {
-      const { ok, id: resendId } = await sendEmailDetailed(emailList, subject, html, undefined, undefined, auth.user?.email || undefined, bcc);
+      const { ok, id: resendId } = await sendEmailDetailed(
+        emailList, subject, html, undefined, undefined, auth.user?.email || undefined, bcc,
+        { kind: 'estimate_approval', sentBy: auth.user?.id, contextUrl: deepLinks.estimate(estimate.id) },
+      );
       dispatch.email = { target: emailList.join(', '), ok, bcc: bcc ? bcc.join(', ') : undefined };
       // Delivery tracking (same scheme as invoice emails): store the Resend
       // message id so the webhook can update this estimate's delivery state,

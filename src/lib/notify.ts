@@ -377,7 +377,11 @@ async function sendViaEmail(payload: NotifyPayload): Promise<boolean> {
       payload.messageContext ? 'Open Chat' : 'Open in App'
     );
 
-    return await sendEmail(profile.email, subject, html);
+    return await sendEmail(
+      profile.email, subject, html, undefined, undefined, undefined, undefined,
+      // The notification's own deep link doubles as the email-log context.
+      { kind: 'staff_notification', contextUrl: payload.url || null },
+    );
   } catch {
     return false;
   }

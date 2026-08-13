@@ -84,7 +84,12 @@ export async function POST(req: NextRequest) {
               BMG Fleet Graphics &amp; Upfitting
             </div>
           </div>
-        `
+        `,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { kind: 'invite', sentBy: auth.user?.id }
       );
     } catch (emailErr: any) {
       console.warn('Resend invite email failed:', emailErr.message);
