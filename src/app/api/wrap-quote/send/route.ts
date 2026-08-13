@@ -34,6 +34,11 @@ const SendSchema = z.object({
   // Personal note rendered at the top of the email body (plain text,
   // newlines preserved).
   message: z.string().trim().max(5000).optional(),
+  // Standard compose fields (docs/customer-email-standard.md): recipient
+  // overrides (win over the quote's stored customer email + cc) and
+  // bcc-the-sender.
+  emails: z.array(z.string().email().max(254)).max(20).optional(),
+  bccSelf: z.boolean().optional().default(false),
   // Subset of the quote's stored attachments to send, by path. Omitted =
   // send them all (the pre-selection behavior).
   attachmentPaths: z.array(z.string().min(1).max(500)).max(50).optional(),
@@ -222,12 +227,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'This quote isn\'t in NetSuite yet — use "Create Quote in NetSuite" first.' }, { status: 400 });
   }
 
-  const email = (quote.customer?.email || '').trim();
+  // Compose-screen recipients win; the quote's stored customer email + cc
+  // are the default.
+  const overrideEmails = (parsed.data.emails || []).map(e => e.trim()).filter(Boolean);
+  const email = overrideEmails[0] || (quote.customer?.email || '').trim();
   if (!email) {
     return NextResponse.json({ error: 'Quote has no customer email' }, { status: 400 });
   }
   const cc = (quote.customer?.email_cc || '').trim();
-  const to = cc ? [email, cc] : email;
+  const to = overrideEmails.length > 0 ? overrideEmails : (cc ? [email, cc] : email);
 
   // Tokenized "Review & Accept" link — same magic-link machinery as estimate
   // approval. Coverage-only sends carry no pricing, so nothing to accept.
@@ -288,7 +296,7 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({
       preview: true,
-      to: cc ? [email, cc] : [email],
+      to: Array.isArray(to) ? to : [to],
       subject,
       html: buildQuoteHtml(quote, company, diagramUrl, logoUrl, flags, message, approveUrl),
       attachments: names,
@@ -335,7 +343,8 @@ export async function POST(req: NextRequest) {
 
   // Replies route to the staff member who sent the quote — the from
   // address has no mailbox, so without this a customer reply bounces.
-  const ok = await sendEmail(to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl, flags, message, approveUrl), undefined, attachments, auth.user?.email || undefined);
+  const bcc = parsed.data.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
+  const ok = await sendEmail(to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl, flags, message, approveUrl), undefined, attachments, auth.user?.email || undefined, bcc);
   if (!ok) {
     return NextResponse.json({ error: 'Email send failed (is Resend configured?)' }, { status: 502 });
   }

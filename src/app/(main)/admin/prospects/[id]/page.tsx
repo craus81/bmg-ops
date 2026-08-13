@@ -31,6 +31,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
+import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import PhoneInput from '@/components/PhoneInput';
 import { exportProspectPDF } from '@/lib/prospect-pdf';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
@@ -1019,28 +1020,43 @@ export default function CustomerRecordPage() {
     }
   };
 
-  const emailStatement = async () => {
+  // Statement email goes through the standard compose screen (editable
+  // recipients prefilled from billing emails, bcc-me, personal note). No
+  // live preview yet — the statement route has no preview mode.
+  const emailStatement = () => {
     const nsId = prospect?.netsuite_id || customer?.netsuite_id;
     if (!nsId || emailingSt) return;
-    const prefill = (prospect?.billing_emails?.length ? prospect.billing_emails.join(', ') : '') || prospect?.email || customer?.email || '';
-    const input = await dialog.prompt('Email this statement to (comma-separated):', prefill, { title: 'Email statement', confirmLabel: 'Send' });
-    if (input === null) return;
-    const recipients = input.split(',').map(s => s.trim()).filter(Boolean);
-    if (recipients.length === 0) return;
+    setStEmailOpen(true);
+  };
+
+  const sendStatementEmail = async (fields: EmailComposeFields): Promise<{ ok: boolean }> => {
+    const nsId = prospect?.netsuite_id || customer?.netsuite_id;
+    if (!nsId) return { ok: false };
     setEmailingSt(true);
     try {
       const res = await fetch('/api/netsuite/email-statement', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerId: nsId, recipients, scope: stScope, from: stFrom || undefined, to: stTo || undefined }),
+        body: JSON.stringify({
+          customerId: nsId,
+          recipients: fields.emails,
+          customBody: fields.message || undefined,
+          bccSelf: fields.bccSelf,
+          scope: stScope,
+          from: stFrom || undefined,
+          to: stTo || undefined,
+        }),
       });
       const body = await res.json();
       if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
       await dialog.alert(`Statement sent to ${body.sent.join(', ')} with ${body.attached} invoice PDF${body.attached === 1 ? '' : 's'} attached.${body.failedAttachments?.length ? `\n\nPDFs unavailable for: ${body.failedAttachments.join(', ')}` : ''}`);
       setStModalOpen(false);
+      setEmailingSt(false);
+      return { ok: true };
     } catch (err: any) {
       await dialog.alert(`Could not send the statement: ${err?.message || 'unknown error'}`);
+      setEmailingSt(false);
+      return { ok: false };
     }
-    setEmailingSt(false);
   };
 
   const loadNsProfile = async (nsId: string) => {
@@ -1251,6 +1267,8 @@ export default function CustomerRecordPage() {
   const [stFrom, setStFrom] = useState('');
   const [stTo, setStTo] = useState('');
   const [stWorking, setStWorking] = useState(false);
+  // Standard compose screen for the statement email
+  const [stEmailOpen, setStEmailOpen] = useState(false);
 
   const fetchStatementData = async (): Promise<StatementInvoice[]> => {
     const nsId = prospect?.netsuite_id || customer?.netsuite_id;
@@ -2244,6 +2262,20 @@ export default function CustomerRecordPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Statement email — standard compose screen. Recipients prefill from
+          saved billing emails; the invoice-PDF attachments are chosen by the
+          statement scope above, not per-file. */}
+      {stEmailOpen && (
+        <EmailComposeModal
+          title={`Email Statement — ${prospect?.company_name || customer?.company_name || ''}`}
+          sendLabel="Send Statement"
+          messagePlaceholder="Optional note — shown above the statement table…"
+          initialTo={(prospect?.billing_emails?.length ? prospect.billing_emails.join(', ') : '') || prospect?.email || customer?.email || ''}
+          onSend={sendStatementEmail}
+          onClose={() => setStEmailOpen(false)}
+        />
       )}
 
       {/* Assign parent / leasing company (K1) — the manual link that wins

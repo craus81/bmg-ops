@@ -153,6 +153,31 @@ describe('sendEmail', () => {
     expect(sendMock.mock.calls[0][0]).toMatchObject({ replyTo: 'sales@bmgfleet.com' });
   });
 
+  it('passes bcc through to Resend', async () => {
+    const sendEmail = await loadSendEmail();
+    sendMock.mockResolvedValue({ error: null });
+
+    const result = sendEmail('a@example.com', 'Subject', '<p>Hi</p>', undefined, undefined, undefined, 'cgeorge@bmgfleet.com');
+    await vi.runAllTimersAsync();
+
+    expect(await result).toBe(true);
+    expect(sendMock.mock.calls[0][0]).toMatchObject({ bcc: 'cgeorge@bmgfleet.com' });
+  });
+
+  it('omits bcc when not given or blank', async () => {
+    const sendEmail = await loadSendEmail();
+    sendMock.mockResolvedValue({ error: null });
+
+    const first = sendEmail('a@example.com', 'Subject', '<p>Hi</p>');
+    const second = sendEmail('b@example.com', 'Subject', '<p>Hi</p>', undefined, undefined, undefined, '  ');
+    await vi.runAllTimersAsync();
+
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+    expect(sendMock.mock.calls[0][0]).not.toHaveProperty('bcc');
+    expect(sendMock.mock.calls[1][0]).not.toHaveProperty('bcc');
+  });
+
   it('a failed send does not block queued sends behind it', async () => {
     const sendEmail = await loadSendEmail();
     sendMock

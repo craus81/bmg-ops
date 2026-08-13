@@ -73,6 +73,16 @@ they tell you to go back to auto-shipping.
   and pass the built url at the call site. This came from a field bug
   ("New for you" clicks going to the page, or nowhere).
 
+- **Every customer/vendor email goes through the standard compose
+  screen** — see `docs/customer-email-standard.md`. Any feature where
+  staff email someone outside the company must open
+  `src/components/EmailComposeModal.tsx` (editable multi-recipient To,
+  Bcc-me, personal message, attachments with size cap, live server
+  preview), with the API accepting `emails[]`/`bccSelf`/`message`/
+  `preview` and setting Reply-To to the sender. No bare send buttons, no
+  `dialog.prompt` recipients. Update the doc's flow table when adding a
+  flow.
+
 - **Supabase reads silently cap at 1000 rows** (PostgREST default —
   `.limit(N > 1000)` does NOT raise it). Any read of a table that can
   grow unboundedly (netsuite_parts, scan_logs, po/invoice line items,
