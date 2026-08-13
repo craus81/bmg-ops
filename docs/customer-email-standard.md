@@ -49,7 +49,7 @@ on every send, not just estimates.
 
 | Flow | Compose screen | Notes |
 | --- | --- | --- |
-| Estimate approval (`/estimates`) | `EmailComposeModal` | Full standard. Approval doc is the email body; no attachments section (estimates carry no files). |
+| Estimate approval (`/estimates`) | `EmailComposeModal` | Full standard. Approval doc is the email body; no attachments section (estimates carry no files). Delivery tracked on the estimate (Resend webhook → `approval_email_status`); a bounce alerts the sales side. |
 | Graphics proof approval (`/graphics/[id]`) | `EmailComposeModal` | Full standard + proof-file picker in the intro slot; attachments from `graphics_job_files`. SMS still rides along when a phone is on file. |
 | Invoice emails (`EmailInvoicesModal`) | Own modal, fits the standard | Multi-To, message, bcc-me, invoice-PDF attachments with verify + view, test-send, delivery tracking. Migrate to the shared component if it's ever rebuilt. |
 | Wrap quote (`/admin/wrap-quote`) | Own modal, fits the standard | Editable To (prefills customer email + cc), bcc-me, message, per-attachment toggles, live preview. |

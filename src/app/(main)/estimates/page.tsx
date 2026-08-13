@@ -95,6 +95,12 @@ interface Estimate {
   netsuite_estimate_number: string | null;
   netsuite_so_id: string | null;
   netsuite_so_number: string | null;
+  // Delivery state of the LATEST approval email (Resend webhook — same
+  // scheme as invoice emails). null = never emailed / pre-tracking sends.
+  approval_email_status: string | null;
+  approval_email_detail: string | null;
+  approval_email_to: string[] | null;
+  approval_email_updated_at: string | null;
   pushed_at: string | null;
   created_by: string | null;
   created_at: string;
@@ -1369,6 +1375,15 @@ export default function EstimatesPage() {
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
+                      {['bounced', 'failed', 'complained'].includes(est.approval_email_status || '') && (
+                        <div title={`The approval email did not reach the customer${est.approval_email_detail ? ` — ${est.approval_email_detail}` : ''}. Open the estimate to resend.`} style={{
+                          padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                          background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)',
+                          color: '#ef4444', whiteSpace: 'nowrap',
+                        }}>
+                          ✉ Bounced
+                        </div>
+                      )}
                       {est.netsuite_estimate_id && (
                         <button
                           onClick={async (e) => {
@@ -2351,6 +2366,37 @@ export default function EstimatesPage() {
             {sendingForApproval ? 'Sending...' : 'Send to Customer for Approval'}
           </button>
         )}
+
+        {/* Delivery state of the latest approval email (Resend webhook).
+            A bounce used to be invisible — the app said "sent" while the
+            customer never saw the estimate. */}
+        {editingId && (() => {
+          const est = estimates.find(e => e.id === editingId);
+          const st = est?.approval_email_status;
+          if (!est || !st) return null;
+          const to = (est.approval_email_to || []).join(', ');
+          const when = est.approval_email_updated_at ? new Date(est.approval_email_updated_at).toLocaleString() : null;
+          const bad = ['bounced', 'failed', 'complained'].includes(st);
+          const meta = bad
+            ? {
+                color: '#ef4444', bg: 'rgba(239,68,68,0.08)', border: 'rgba(239,68,68,0.25)',
+                text: `⚠ Approval email ${st === 'complained' ? 'marked as spam' : st === 'failed' ? 'failed' : 'bounced'}${to ? ` (${to})` : ''} — the customer did not get it.${est.approval_email_detail ? ` ${est.approval_email_detail}.` : ''} Fix the address and resend.`,
+              }
+            : st === 'delivered'
+              ? { color: '#22c55e', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.2)', text: `✓ Approval email delivered${to ? ` to ${to}` : ''}` }
+              : st === 'delivery_delayed'
+                ? { color: '#f59e0b', bg: 'rgba(251,191,36,0.08)', border: 'rgba(251,191,36,0.25)', text: `Approval email delayed — the receiving server is retrying${to ? ` (${to})` : ''}` }
+                : { color: 'var(--text-muted)', bg: 'var(--subtle-bg)', border: 'var(--border)', text: `Approval email sent${to ? ` to ${to}` : ''} — awaiting delivery confirmation` };
+          return (
+            <div style={{
+              width: '100%', padding: '8px 12px', borderRadius: '10px', textAlign: 'center',
+              background: meta.bg, border: `1px solid ${meta.border}`,
+              fontSize: '11px', fontWeight: 700, color: meta.color,
+            }}>
+              {meta.text}{when ? <span style={{ fontWeight: 400 }}> · {when}</span> : null}
+            </div>
+          );
+        })()}
 
         {/* Convert to Sales Order — gated on customer approval; admins can
             override with a recorded reason (phone/email/PO approvals). */}
