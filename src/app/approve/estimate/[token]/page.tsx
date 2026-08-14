@@ -138,11 +138,31 @@ export default function EstimateApprovalPage() {
             {lines.map((l: any) => (
               <tr key={l.id} style={{ borderTop: '1px solid #e2e8f0' }}>
                 <td style={{ padding: '8px 0', color: '#0f172a' }}>
-                  <div style={{ fontWeight: 600 }}>{l.item_number || l.description || 'Item'}</div>
-                  {l.description && l.description !== l.item_number && (
-                    <div style={{ fontSize: '12px', color: '#475569' }}>{l.description}</div>
-                  )}
-                  {l.notes && <div style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic' }}>{l.notes}</div>}
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+                    {l.image_url && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={l.image_url}
+                        alt={l.item_number || 'Product'}
+                        style={{ width: '56px', height: '56px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #e2e8f0', flexShrink: 0 }}
+                      />
+                    )}
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 600 }}>{l.item_number || l.description || 'Item'}</div>
+                      {l.description && l.description !== l.item_number && (
+                        <div style={{ fontSize: '12px', color: '#475569' }}>{l.description}</div>
+                      )}
+                      {l.notes && <div style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic' }}>{l.notes}</div>}
+                      {l.product_url && (
+                        <a
+                          href={l.product_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ fontSize: '11px', color: '#2563eb', textDecoration: 'underline' }}
+                        >View product ↗</a>
+                      )}
+                    </div>
+                  </div>
                 </td>
                 <td style={{ padding: '8px 0', textAlign: 'right' }}>{l.quantity}</td>
                 <td style={{ padding: '8px 0', textAlign: 'right' }}>${Number(l.unit_price).toFixed(2)}</td>

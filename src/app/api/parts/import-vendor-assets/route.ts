@@ -89,7 +89,7 @@ async function fetchText(url: string, maxBytes = 2_000_000): Promise<string> {
   return buf.toString('utf8');
 }
 
-interface MappedPart { item_number: string; vendor: string | null; is_active: boolean; image_path: string | null; marketing_description: string | null }
+interface MappedPart { item_number: string; vendor: string | null; is_active: boolean; image_path: string | null; marketing_description: string | null; product_url: string | null }
 
 /**
  * SKU lookup (id per skuKeys of item_number) over the WHOLE catalog —
@@ -105,7 +105,7 @@ interface MappedPart { item_number: string; vendor: string | null; is_active: bo
 async function buildPartMap(vendor?: string) {
   const { data: rows, error } = await fetchAllRows<any>((from, to) => supabase
     .from('netsuite_parts')
-    .select('id, item_number, vendor, is_active, image_path, marketing_description')
+    .select('id, item_number, vendor, is_active, image_path, marketing_description, product_url')
     .not('item_number', 'is', null)
     .order('id')
     .range(from, to));
@@ -429,6 +429,11 @@ export async function POST(req: NextRequest) {
             updates.marketing_description = product.description;
             imported.push(`description→${part.item_number}`);
             descriptionsSaved++;
+          }
+          // The page we matched this SKU on IS the vendor product page —
+          // capture it so the enhanced estimate can link "View product".
+          if (body.overwrite || !part.product_url) {
+            updates.product_url = url;
           }
           // Fill-blank only — a NetSuite-provided vendor is never replaced.
           // (Both sync paths preserve this assignment while NetSuite's
