@@ -77,9 +77,14 @@ function CompanyNameField({ value, onChange, companies, inputStyle }: {
   );
 }
 
-function rowErrors(r: Row, isRfid: boolean): string[] {
+function rowErrors(r: Row, isRfid: boolean, allowPartialVin: boolean): string[] {
   const errs: string[] = [];
-  if (!looksLikeVin(r.vin)) errs.push('VIN');
+  // Invoice-extracted rows accept partial VINs (installers usually list the
+  // last 6-8) — same ≥5-char bar as logScan and the vendor-invoice flow.
+  const vinValid = allowPartialVin
+    ? r.vin.replace(/[^A-Z0-9]/gi, '').length >= 5
+    : looksLikeVin(r.vin);
+  if (!vinValid) errs.push('VIN');
   if (isRfid) {
     if (!validateSerial(r.serialNumber)) errs.push('SN');
     if (!validateImei(r.imei)) errs.push('IMEI');
@@ -103,6 +108,15 @@ export default function ImportInstallsPage() {
 
   const [raw, setRaw] = useState('');
   const [parsed, setParsed] = useState<ParseOutcome | null>(null);
+  // Where the parsed rows came from: a spreadsheet/paste, or AI extraction
+  // of an installer's invoice — invoice rows get the relaxed VIN rule.
+  const [source, setSource] = useState<'sheet' | 'invoice'>('sheet');
+  // What the AI read off the invoice besides the VINs, shown for cross-checking.
+  const [invoiceMeta, setInvoiceMeta] = useState<{
+    vendorName: string | null; invoiceNumber: string | null; invoiceDate: string | null;
+    totalAmount: number | null; notes: string | null;
+  } | null>(null);
+  const [extracting, setExtracting] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [parsingFile, setParsingFile] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -169,18 +183,107 @@ export default function ImportInstallsPage() {
       // RFID device fields are required when any part this row will log is
       // the Verizon RFID part (its own override, or the run's list).
       const rowParts = [r.partNumber?.trim() || partsList[0] || '', ...partsList.slice(1)];
-      return { ...r, errors: rowErrors(r, rowParts.some(isVerizonRfidPart)) };
+      return { ...r, errors: rowErrors(r, rowParts.some(isVerizonRfidPart), source === 'invoice') };
     }),
-    [parsed, partsList],
+    [parsed, partsList, source],
   );
   const valid = validated.filter((r) => r.errors.length === 0);
   const canImport = companyName.trim().length > 0 && partsList.length > 0 && valid.length > 0 && !importing;
 
+  // Same ceiling as the Scan Log vendor tab: Vercel rejects request bodies
+  // over ~4.5MB, so base64 file content must stay well under that.
+  const MAX_EXTRACT_BYTES = 3.5 * 1024 * 1024;
+  const INVOICE_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+
+  // Vendor-invoice extraction (the /admin/scans Vendor Invoices flow): the AI
+  // reads the installer's invoice PDF/photo and the VIN lines become import
+  // rows — vendor name prefills the company, per-line parts ride along.
+  async function handleInvoiceFile(file: File) {
+    const mediaType = file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : '');
+    if (mediaType !== 'application/pdf' && !INVOICE_IMAGE_TYPES.has(mediaType)) {
+      await dialog.alert('That image format can’t be read by the AI — upload the invoice as a PDF or a JPG/PNG photo.');
+      return;
+    }
+    if (file.size > MAX_EXTRACT_BYTES) {
+      await dialog.alert(`That file is too large for AI extraction (${(file.size / 1048576).toFixed(1)}MB, limit ~3.5MB). Use a smaller photo, or put the VINs in a spreadsheet instead.`);
+      return;
+    }
+    setExtracting(true);
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(',')[1]);
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsDataURL(file);
+      });
+      const res = await fetch('/api/vendor-invoices/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileBase64: base64, mediaType }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.data) throw new Error(data.error || `AI extraction failed (${res.status})`);
+      const d = data.data;
+      const rows: Row[] = (d.lines || []).map((l: any) => ({
+        vin: l.vin || '',
+        serialNumber: '', imei: '', iccid: '',
+        vehicleYear: '', vehicleMake: '', vehicleModel: '', unitNumber: '',
+        partNumber: l.part_number || '',
+      }));
+      if (rows.length === 0) {
+        await dialog.alert('The AI read the invoice but found no VINs on it — paste or upload the vehicle list separately.');
+        return;
+      }
+      setParsed({ rows, mode: 'header' });
+      setSource('invoice');
+      setFileName(file.name);
+      setResult(null);
+      setInvoiceMeta({
+        vendorName: d.vendor_name || null,
+        invoiceNumber: d.invoice_number || null,
+        invoiceDate: d.invoice_date || null,
+        totalAmount: typeof d.total_amount === 'number' ? d.total_amount : null,
+        notes: d.notes || null,
+      });
+      // Vendor → company: an existing company's canonical spelling wins so the
+      // import doesn't split history on a variant; an unknown name lands as
+      // typed and the typeahead flags it.
+      if (!companyName.trim() && d.vendor_name) {
+        const match = companies.find((c) => c.name.toLowerCase() === String(d.vendor_name).trim().toLowerCase());
+        setCompanyName(match?.name || String(d.vendor_name).trim());
+      }
+      // Part: replace the untouched RFID default with the invoice's own most
+      // common part, so a non-RFID invoice doesn't demand device serials on
+      // every row. An admin-edited part field is never overridden.
+      if (partNumber === VERIZON_RFID_PART && partDescription === 'Verizon RFID Install') {
+        const counts = new Map<string, number>();
+        for (const l of d.lines || []) if (l.part_number) counts.set(l.part_number, (counts.get(l.part_number) || 0) + 1);
+        const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+        if (top) {
+          setPartNumber(top[0]);
+          const desc = (d.lines || []).find((l: any) => l.part_number === top[0] && l.description)?.description;
+          setPartDescription(desc ? String(desc) : '');
+        }
+      }
+    } catch (e: any) {
+      await dialog.alert(e?.message || 'Could not read that invoice.');
+    } finally {
+      setExtracting(false);
+    }
+  }
+
   async function handleFile(file: File) {
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    if (ext === 'pdf' || (file.type || '').startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif'].includes(ext)) {
+      await handleInvoiceFile(file);
+      return;
+    }
     setParsingFile(true);
     try {
       const outcome = await parseSpreadsheetFile(file);
       setParsed(outcome);
+      setSource('sheet');
+      setInvoiceMeta(null);
       setFileName(file.name);
       setResult(null);
     } catch (e: any) {
@@ -191,6 +294,8 @@ export default function ImportInstallsPage() {
 
   function parseRaw() {
     setParsed(parsePastedText(raw));
+    setSource('sheet');
+    setInvoiceMeta(null);
     setFileName(null);
     setResult(null);
   }
@@ -341,9 +446,10 @@ export default function ImportInstallsPage() {
     <div style={{ maxWidth: 1040, margin: '0 auto', padding: 16, color: theme.textPrimary }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Import Installs</h1>
       <p style={{ color: theme.textSecondary, fontSize: 14, marginBottom: 16 }}>
-        Bulk-load vehicle installs from a spreadsheet and credit them to a CNI installer. Each row becomes an
-        install record (in the scan log, ready for reporting and invoicing). Upload the file below — include a
-        header row with <strong>VIN, SN, IMEI, CCID</strong> (year / make / model / unit optional).
+        Bulk-load vehicle installs from a spreadsheet <strong>or an installer&apos;s invoice</strong> and credit them
+        to a CNI installer. Each row becomes an install record (in the scan log, ready for reporting and invoicing).
+        Spreadsheets need a header row with <strong>VIN, SN, IMEI, CCID</strong> (year / make / model / unit optional);
+        for an invoice PDF or photo, the AI pulls the VINs, parts, and vendor off the document for review.
       </p>
 
       <div style={{ ...card, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
@@ -422,11 +528,11 @@ export default function ImportInstallsPage() {
       </div>
 
       <div style={card}>
-        <label style={label}>Upload the spreadsheet (.xlsx, .csv, .tsv)</label>
+        <label style={label}>Upload a spreadsheet (.xlsx, .csv, .tsv) or an installer invoice (PDF / photo)</label>
         <input
           ref={fileInputRef}
           type="file"
-          accept=".xlsx,.xlsm,.csv,.tsv,.txt"
+          accept=".xlsx,.xlsm,.csv,.tsv,.txt,.pdf,image/*"
           style={{ display: 'none' }}
           onChange={(e) => {
             const f = e.target.files?.[0];
@@ -436,7 +542,7 @@ export default function ImportInstallsPage() {
         />
         <button
           onClick={() => fileInputRef.current?.click()}
-          disabled={parsingFile}
+          disabled={parsingFile || extracting}
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={(e) => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files?.[0]; if (f) handleFile(f); }}
@@ -447,7 +553,10 @@ export default function ImportInstallsPage() {
             color: fileName ? theme.textPrimary : theme.textSecondary,
           }}
         >
-          {parsingFile ? 'Reading…' : fileName ? `${fileName} — click to replace` : 'Drop the spreadsheet here, or click to choose'}
+          {extracting ? 'Reading the invoice with AI — takes a few seconds…'
+            : parsingFile ? 'Reading…'
+            : fileName ? `${fileName} — click to replace`
+            : 'Drop a spreadsheet or invoice here, or click to choose'}
         </button>
 
         <div style={{ margin: '14px 0 8px', display: 'flex', alignItems: 'center', gap: 10, color: theme.textMuted, fontSize: 12 }}>
@@ -479,6 +588,26 @@ export default function ImportInstallsPage() {
           )}
         </div>
       </div>
+
+      {invoiceMeta && parsed && (
+        <div style={card}>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>
+            Read from invoice{invoiceMeta.invoiceNumber ? ` #${invoiceMeta.invoiceNumber}` : ''}{invoiceMeta.vendorName ? ` — ${invoiceMeta.vendorName}` : ''}
+          </div>
+          <div style={{ fontSize: 12, color: theme.textSecondary }}>
+            {invoiceMeta.invoiceDate ? `Dated ${invoiceMeta.invoiceDate} · ` : ''}
+            {invoiceMeta.totalAmount != null ? `Invoice total $${invoiceMeta.totalAmount.toFixed(2)} · ` : ''}
+            {parsed.rows.length} vehicle{parsed.rows.length !== 1 ? 's' : ''} extracted — check the VINs against the
+            document before importing (partial VINs are fine; the last 6–8 characters match the vehicle).
+            {' '}Importing creates the install records and pay credits only — to get the invoice itself into the
+            payment pipeline, record it on{' '}
+            <a href="/admin/scans?tab=vendor" style={{ color: theme.orange, fontWeight: 600 }}>Scan Log → Vendor Invoices</a>.
+          </div>
+          {invoiceMeta.notes && (
+            <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 4 }}>AI notes: {invoiceMeta.notes}</div>
+          )}
+        </div>
+      )}
 
       {parsed && validated.length > 0 && (
         <>
