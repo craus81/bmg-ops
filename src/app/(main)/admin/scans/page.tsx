@@ -1117,19 +1117,19 @@ export default function AdminScansPage() {
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', flexWrap: 'wrap' }}>
         {([
-          { id: 'ready' as ViewTab, label: `Ready to Export (${readyToExport.length})`, color: '#22c55e' },
-          { id: 'waiting' as ViewTab, label: `Waiting for PO (${waitingForPO.length})`, color: '#f59e0b' },
-          { id: 'exported' as ViewTab, label: `Exported (${exported.length})`, color: '#60a5fa' },
-          { id: 'archived' as ViewTab, label: `Archived (${archivedScans.length})`, color: '#94a3b8' },
-          { id: 'all' as ViewTab, label: `All Scans (${allScans.length})`, color: '#06b6d4' },
-          { id: 'bulk' as ViewTab, label: 'Bulk Upload', color: '#a78bfa' },
-          { id: 'vendor' as ViewTab, label: 'Vendor Invoices', color: '#f472b6' },
+          { id: 'ready' as ViewTab, label: `Ready to Export (${readyToExport.length})` },
+          { id: 'waiting' as ViewTab, label: `Waiting for PO (${waitingForPO.length})` },
+          { id: 'exported' as ViewTab, label: `Exported (${exported.length})` },
+          { id: 'archived' as ViewTab, label: `Archived (${archivedScans.length})` },
+          { id: 'all' as ViewTab, label: `All Scans (${allScans.length})` },
+          { id: 'bulk' as ViewTab, label: 'Bulk Upload' },
+          { id: 'vendor' as ViewTab, label: 'Vendor Invoices' },
         ]).map(t => (
           <button key={t.id} onClick={() => { setTab(t.id); setSelectedScans(new Set()); setExpandedGroups(new Set()); }} style={{
             padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
             background: tab === t.id ? 'var(--tab-active-bg)' : 'transparent',
             border: tab === t.id ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
-            color: tab === t.id ? t.color : 'var(--text-muted)',
+            color: tab === t.id ? 'var(--tab-active-color)' : 'var(--text-muted)',
           }}>{t.label}</button>
         ))}
       </div>
@@ -1224,7 +1224,7 @@ export default function AdminScansPage() {
               cursor: tabScans.length === 0 ? 'default' : 'pointer', opacity: tabScans.length === 0 ? 0.5 : 1,
             }}
           >
-            ⬇ CSV ({tabScans.length})
+            Export CSV ({tabScans.length})
           </button>
         </div>
       )}
@@ -1285,7 +1285,7 @@ export default function AdminScansPage() {
           {selectedScans.size === tabScans.length && tabScans.length > 0 ? 'Deselect All' : `Select All (${tabScans.length})`}
         </button>
         {tab === 'waiting' && waitingForPO.length > 0 && (
-          <button onClick={runAutoMatch} disabled={matching} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', cursor: 'pointer' }}>
+          <button onClick={runAutoMatch} disabled={matching} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
             {matching ? 'Matching...' : 'Try Auto-Match POs'}
           </button>
         )}
@@ -1307,10 +1307,10 @@ export default function AdminScansPage() {
             <button onClick={exportCSV} disabled={exporting} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: 'pointer' }}>
               {exporting ? 'Exporting...' : `Download CSV (${selectedScans.size})`}
             </button>
-            <button onClick={archiveExported} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', cursor: 'pointer' }}>
+            <button onClick={archiveExported} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
               Archive {selectedScans.size}
             </button>
-            <button onClick={unexportScans} title="Move back to the Ready/Waiting queues — the scans count as uninvoiced work again" style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(251,146,60,0.1)', border: '1px solid rgba(251,146,60,0.25)', color: '#fb923c', cursor: 'pointer' }}>
+            <button onClick={unexportScans} title="Move back to the Ready/Waiting queues — the scans count as uninvoiced work again" style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
               Un-export {selectedScans.size}
             </button>
           </>
@@ -1535,7 +1535,7 @@ export default function AdminScansPage() {
               const override = locationBillingOverride(allLocations.find(l => l.id === bulkLocation)?.name);
               if (!override) return null;
               return (
-                <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '12px', background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.25)', fontSize: '11px', fontWeight: 700, color: '#a78bfa' }}>
+                <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '12px', background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)', fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)' }}>
                   All scans will be billed to {override} (location override)
                 </div>
               );
@@ -1895,9 +1895,9 @@ export default function AdminScansPage() {
             <DropZone accept="image/*,.pdf" multiple={false} disabled={scanningWorksheet} onFiles={files => scanWorksheetFile(files[0])}>
             <label style={{
               padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-              background: scanningWorksheet ? 'rgba(167,139,250,0.15)' : 'rgba(167,139,250,0.08)',
-              border: '1px solid rgba(167,139,250,0.25)',
-              color: '#a78bfa', cursor: scanningWorksheet ? 'default' : 'pointer',
+              background: scanningWorksheet ? 'var(--card-hover)' : 'var(--subtle-bg)',
+              border: '1px solid var(--border-strong)',
+              color: 'var(--text-secondary)', cursor: scanningWorksheet ? 'default' : 'pointer',
               opacity: scanningWorksheet ? 0.6 : 1,
             }}>
               {scanningWorksheet ? 'Scanning...' : 'Scan Worksheet (OCR)'}
@@ -1921,7 +1921,7 @@ export default function AdminScansPage() {
             </button>
           </div>
           {worksheetNotes && (
-            <div style={{ marginTop: '10px', padding: '10px 14px', borderRadius: '8px', background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.2)', color: '#a78bfa', fontSize: '12px', fontWeight: 600, whiteSpace: 'pre-wrap' }}>
+            <div style={{ marginTop: '10px', padding: '10px 14px', borderRadius: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)', fontSize: '12px', fontWeight: 600, whiteSpace: 'pre-wrap' }}>
               {worksheetNotes}
             </div>
           )}
@@ -2248,7 +2248,7 @@ export default function AdminScansPage() {
                                       onClick={e => e.stopPropagation()}
                                       style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e', textDecoration: 'none' }}
                                     >
-                                      📷{photosByScanId[scan.id].length > 1 ? ` ${photosByScanId[scan.id].length}` : ''}
+                                      {photosByScanId[scan.id].length} photo{photosByScanId[scan.id].length !== 1 ? 's' : ''}
                                     </a>
                                   )}
                                   {scan.install_cost != null && (
@@ -3200,7 +3200,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
                 border: '2px dashed rgba(244,114,182,0.4)', background: extracting ? 'rgba(244,114,182,0.1)' : 'rgba(244,114,182,0.04)',
                 color: '#f472b6', fontSize: '13px', fontWeight: 700, cursor: extracting ? 'default' : 'pointer',
               }}>
-                {extracting ? 'Reading invoice…' : '📄 Upload Vendor Invoice (AI extract)'}
+                {extracting ? 'Reading invoice…' : 'Upload Vendor Invoice (AI extract)'}
                 <input type="file" accept="application/pdf,image/*" disabled={extracting} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) handleInvoiceFile(f); }} style={{ display: 'none' }} />
               </label>
             </DropZone>
@@ -3218,7 +3218,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
       {review && (
         <div style={{ background: 'var(--card)', border: '1px solid rgba(244,114,182,0.3)', borderRadius: '14px', padding: '16px', marginBottom: '14px' }}>
           <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '12px' }}>
-            Review Vendor Invoice{stagedFile ? <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)', marginLeft: '8px' }}>📎 {stagedFile.fileName}</span> : null}
+            Review Vendor Invoice{stagedFile ? <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)', marginLeft: '8px' }}>{stagedFile.fileName}</span> : null}
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
@@ -3423,7 +3423,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
                           disabled={mirroringPart}
                           style={{ display: 'block', width: '100%', padding: '7px 9px', textAlign: 'left', border: 'none', background: 'rgba(96,165,250,0.06)', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#60a5fa', opacity: mirroringPart ? 0.6 : 1 }}
                         >
-                          {mirroringPart ? 'Checking NetSuite…' : `🔍 Not in catalog — check NetSuite for "${defaultPartSearch.trim()}"`}
+                          {mirroringPart ? 'Checking NetSuite…' : `Not in catalog — check NetSuite for "${defaultPartSearch.trim()}"`}
                         </button>
                       </div>
                     );
@@ -3564,7 +3564,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
                             disabled={mirroringPart}
                             style={{ display: 'block', width: '100%', padding: '7px 9px', textAlign: 'left', border: 'none', background: 'rgba(96,165,250,0.06)', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#60a5fa', opacity: mirroringPart ? 0.6 : 1 }}
                           >
-                            {mirroringPart ? 'Checking NetSuite…' : `🔍 Not in catalog — check NetSuite for "${applyPartSearch.trim()}"`}
+                            {mirroringPart ? 'Checking NetSuite…' : `Not in catalog — check NetSuite for "${applyPartSearch.trim()}"`}
                           </button>
                         )}
                       </div>
@@ -3663,7 +3663,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
                           disabled={mirroringPart}
                           style={{ display: 'block', width: '100%', padding: '7px 9px', textAlign: 'left', border: 'none', background: 'rgba(96,165,250,0.06)', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#60a5fa', opacity: mirroringPart ? 0.6 : 1 }}
                         >
-                          {mirroringPart ? 'Checking NetSuite…' : `🔍 Not in catalog — check NetSuite for "${line.partNumber.trim()}"`}
+                          {mirroringPart ? 'Checking NetSuite…' : `Not in catalog — check NetSuite for "${line.partNumber.trim()}"`}
                         </button>
                       )}
                     </div>
@@ -3785,7 +3785,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
                     target="_blank" rel="noreferrer"
                     style={{ padding: '3px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', textDecoration: 'none', flexShrink: 0 }}
                   >
-                    📄 File
+                    File
                   </a>
                 )}
                 {canDelete && (

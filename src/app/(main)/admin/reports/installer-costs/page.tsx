@@ -154,7 +154,7 @@ export default function InstallerCostsReportPage() {
         </button>
         {data && data.lines.length > 0 && (
           <button onClick={exportCsv} style={{ padding: '9px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: 'pointer' }}>
-            ⬇ Export CSV ({data.lines.length})
+            Export CSV ({data.lines.length})
           </button>
         )}
       </div>

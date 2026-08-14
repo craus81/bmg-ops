@@ -83,7 +83,7 @@ export default function SwipeToDelete({ onDelete, confirmMessage, children }: Sw
             onClick={handleDelete}
             style={{ background: 'none', border: 'none', color: '#fff', fontWeight: 800, fontSize: '12px', padding: '8px 12px', cursor: 'pointer' }}
           >
-            🗑 Delete
+            Delete
           </button>
         </div>
       )}
@@ -117,7 +117,7 @@ export default function SwipeToDelete({ onDelete, confirmMessage, children }: Sw
             pointerEvents: hovered ? 'auto' : 'none',
           }}
         >
-          🗑
+          ✕
         </button>
       )}
     </div>

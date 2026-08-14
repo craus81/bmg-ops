@@ -2165,8 +2165,8 @@ export default function POsPage() {
                 <option value="all">All ({poFilterCounts.all})</option>
                 <option value="billing">⚠ Billing needs attention ({poFilterCounts.billing})</option>
                 <option value="not_invoiced">⚠ Fulfilled, not invoiced ({poFilterCounts.not_invoiced})</option>
-                <option value="notes">💬 Has notes ({poFilterCounts.notes})</option>
-                <option value="has_gfx">🎨 Has graphics job ({poFilterCounts.has_gfx})</option>
+                <option value="notes">Has notes ({poFilterCounts.notes})</option>
+                <option value="has_gfx">Has graphics job ({poFilterCounts.has_gfx})</option>
                 <option value="no_gfx">No graphics job ({poFilterCounts.no_gfx})</option>
               </select>
               <FilterLabel>Customer</FilterLabel>
@@ -3323,12 +3323,12 @@ export default function POsPage() {
                                   title={jobs.map(j => `${j.job_number || j.id.slice(0, 8)} — ${GRAPHICS_STATUS_LABELS[j.status] || j.status}`).join('\n')}
                                   style={{ cursor: 'pointer', fontWeight: 700, color: '#a78bfa', fontSize: '12px' }}
                                 >
-                                  🎨{jobs.length > 1 ? ` ×${jobs.length}` : ''}
+                                  GFX{jobs.length > 1 ? ` ×${jobs.length}` : ''}
                                 </span>
                               )}
                               {noteCount > 0 && (
                                 <span style={{ color: '#fbbf24', fontWeight: 700, fontSize: '11px' }} title={`${noteCount} note${noteCount !== 1 ? 's' : ''}`}>
-                                  💬 {noteCount}
+                                  {noteCount} note{noteCount !== 1 ? 's' : ''}
                                 </span>
                               )}
                               {checkStatus === 'attention' && (

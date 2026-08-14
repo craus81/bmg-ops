@@ -359,7 +359,7 @@ export default function InvoiceLocationsPage() {
                         title="Open the invoice PDF"
                         style={{ background: 'none', border: 'none', padding: 0, color: theme.orange, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline', whiteSpace: 'nowrap' }}
                       >
-                        {inv.invoiceNumber || inv.invoiceId} {pdfLoadingId === inv.invoiceId ? '…' : '📄'}
+                        {inv.invoiceNumber || inv.invoiceId} {pdfLoadingId === inv.invoiceId ? '…' : '↗'}
                       </button>
                     </td>
                     <td style={{ ...td, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: theme.textSecondary }} title={inv.memo || ''}>

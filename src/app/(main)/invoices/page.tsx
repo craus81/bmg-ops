@@ -593,15 +593,15 @@ export default function InvoicingHubPage() {
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', flexWrap: 'wrap' }}>
         {([
-          { id: 'graphics' as HubTab, label: `Graphics Jobs (${doneJobs.length})`, color: '#22c55e' },
-          { id: 'scans' as HubTab, label: `Scanned Vehicles (${scanGroups.length})`, color: '#fbbf24' },
-          { id: 'sent' as HubTab, label: `Invoiced (${sentInvoices.length})`, color: '#60a5fa' },
+          { id: 'graphics' as HubTab, label: `Graphics Jobs (${doneJobs.length})` },
+          { id: 'scans' as HubTab, label: `Scanned Vehicles (${scanGroups.length})` },
+          { id: 'sent' as HubTab, label: `Invoiced (${sentInvoices.length})` },
         ]).map(t => (
           <button key={t.id} onClick={() => { setTab(t.id); setSearch(''); }} style={{
             padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
             background: tab === t.id ? 'var(--tab-active-bg)' : 'transparent',
             border: tab === t.id ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
-            color: tab === t.id ? t.color : 'var(--text-muted)',
+            color: tab === t.id ? 'var(--tab-active-color)' : 'var(--text-muted)',
           }}>{t.label}</button>
         ))}
       </div>

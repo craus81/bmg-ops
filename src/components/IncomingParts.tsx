@@ -6,7 +6,7 @@
  * arrival timeline using the ship/ETA dates the email scan writes onto each
  * PO, and cross-referenced against on-hand stock and what's reserved to
  * other jobs. Parts where stock + what's coming still won't cover job
- * reservations are flagged 🔴 short and surfaced in the summary + a filter.
+ * reservations are flagged short and surfaced in the summary + a filter.
  *
  * All three inputs are Supabase tables read here client-side (staff RLS),
  * the same join the Inventory page runs — reoriented around "what's arriving

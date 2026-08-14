@@ -201,11 +201,11 @@ export default function ShopArrivals() {
     <div style={{ background: 'var(--card)', border: `1px solid ${overdue.length > 0 ? 'rgba(239,68,68,0.4)' : 'var(--border)'}`, borderRadius: '14px', marginBottom: '14px', padding: '12px 14px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
         <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>
-          🚚 Arriving{counts ? <span style={{ color: overdue.length > 0 ? '#ef4444' : 'var(--text-muted)', fontWeight: 700 }}> — {counts}</span> : <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}> — nothing scheduled</span>}
+          Arriving{counts ? <span style={{ color: overdue.length > 0 ? '#ef4444' : 'var(--text-muted)', fontWeight: 700 }}> — {counts}</span> : <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}> — nothing scheduled</span>}
         </span>
         <span style={{ display: 'flex', gap: '6px' }}>
           <button onClick={() => setView(v => v === 'list' ? 'calendar' : 'list')} style={{ padding: '5px 10px', borderRadius: '7px', background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)', fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}>
-            {view === 'list' ? '📅 Calendar' : '☰ List'}
+            {view === 'list' ? 'Calendar' : 'List'}
           </button>
           <button onClick={() => setShowAdd(s => !s)} style={{ padding: '5px 10px', borderRadius: '7px', background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.4)', color: '#60a5fa', fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}>
             + Expected
