@@ -284,7 +284,7 @@ export default function CniVendorIdsPage() {
                       border: '1px solid var(--border)', cursor: 'pointer', whiteSpace: 'nowrap',
                     }}
                   >
-                    🔍
+                    Search
                   </button>
                   {dirty && (
                     <button

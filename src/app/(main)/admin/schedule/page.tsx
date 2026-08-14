@@ -543,8 +543,8 @@ export default function SchedulePage() {
                         {ev.subtitle && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '1px' }}>{ev.subtitle}</div>}
                         <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                           {ev.time && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{fmt12h(ev.time)}</span>}
-                          {(ev.noteCount || 0) > 0 && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>💬 {ev.noteCount}</span>}
-                          {(ev.fileCount || 0) > 0 && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>📎 {ev.fileCount}</span>}
+                          {(ev.noteCount || 0) > 0 && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{ev.noteCount} note{(ev.noteCount || 0) !== 1 ? 's' : ''}</span>}
+                          {(ev.fileCount || 0) > 0 && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{ev.fileCount} file{(ev.fileCount || 0) !== 1 ? 's' : ''}</span>}
                         </div>
                       </div>
                     ))}
@@ -697,7 +697,7 @@ export default function SchedulePage() {
               {cardFiles.map(f => (
                 <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--subtle-bg)', border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '6px 10px' }}>
                   <a href={fileUrl(f)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, fontSize: '12px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    📎 {f.file_name}
+                    {f.file_name}
                   </a>
                   <button onClick={() => deleteCardFile(f)} title="Delete file" style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '12px', fontWeight: 700 }}>✕</button>
                 </div>

@@ -937,7 +937,7 @@ export default function PoRecordPage() {
           </span>
           {cityLabel && (
             <span title={shipToText || undefined} style={{ fontSize: '11px', fontWeight: 800, color: '#22d3ee', background: 'rgba(34,211,238,0.1)', border: '1px solid rgba(34,211,238,0.3)', padding: '1px 8px', borderRadius: '10px', whiteSpace: 'nowrap', maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              📍 {cityLabel}
+              {cityLabel}
             </span>
           )}
           {gfxJobs.length > 0 && (
@@ -946,7 +946,7 @@ export default function PoRecordPage() {
               title={gfxJobs.map(j => `${j.job_number || j.id.slice(0, 8)} — ${GRAPHICS_STATUS_LABELS[j.status] || j.status}`).join('\n')}
               style={{ fontSize: '11px', fontWeight: 800, color: '#a78bfa', background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.3)', padding: '1px 8px', borderRadius: '10px', whiteSpace: 'nowrap', cursor: 'pointer' }}
             >
-              🎨 GFX{gfxJobs.length > 1 ? ` ×${gfxJobs.length}` : ''}
+              GFX{gfxJobs.length > 1 ? ` ×${gfxJobs.length}` : ''}
             </span>
           )}
         </div>
@@ -1060,7 +1060,7 @@ export default function PoRecordPage() {
           {shipToText ? (
             <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', whiteSpace: 'pre-line' }}>{shipToText}</div>
           ) : (
-            <div style={{ fontSize: '12px', color: '#fbbf24', fontWeight: 600 }}>📍 No location on this PO — set one via Edit PO.</div>
+            <div style={{ fontSize: '12px', color: '#fbbf24', fontWeight: 600 }}>No location on this PO — set one via Edit PO.</div>
           )}
         </div>
 
@@ -1366,7 +1366,7 @@ export default function PoRecordPage() {
                     title="Open the invoice PDF"
                     style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(52,211,153,0.12)', border: '1px solid rgba(52,211,153,0.35)', color: '#34d399', cursor: 'pointer', whiteSpace: 'nowrap' }}
                   >
-                    📄 PDF
+                    PDF
                   </button>
                 </div>
               </div>
@@ -1458,7 +1458,6 @@ export default function PoRecordPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {poFiles.map(f => (
               <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 9px', borderRadius: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
-                <span style={{ fontSize: '14px' }}>📄</span>
                 <button
                   type="button"
                   onClick={() => setPdfPreview({ url: fileUrl(f.storage_path), name: f.file_name })}

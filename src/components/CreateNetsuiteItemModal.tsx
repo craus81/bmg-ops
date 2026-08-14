@@ -132,7 +132,7 @@ export function CreateNetsuiteItemModal({
           border: '1px solid rgba(34,197,94,0.4)', boxShadow: '0 16px 60px rgba(0,0,0,0.3)', margin: 'auto 0',
         }}>
           <div style={{ padding: '20px 18px 14px', textAlign: 'center' }}>
-            <div style={{ fontSize: '34px', lineHeight: 1 }}>✅</div>
+            <div style={{ fontSize: '30px', lineHeight: 1, color: '#22c55e', fontWeight: 800 }}>✓</div>
             <div style={{ fontSize: '16px', fontWeight: 800, color: '#22c55e', marginTop: '8px' }}>
               {done.alreadyExists ? 'Already in NetSuite' : 'Part Created in NetSuite'}
             </div>

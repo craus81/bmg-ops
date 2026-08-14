@@ -210,13 +210,13 @@ export default function ApQueuePage() {
   };
 
   const byStatus = (s: ApTab) => invoices.filter(i => i.status === s);
-  const tabDefs: { id: ApTab; label: string; color: string }[] = [
-    { id: 'submitted', label: `Awaiting Approval (${byStatus('submitted').length})`, color: '#fbbf24' },
-    { id: 'approved', label: `Ready to Bill (${byStatus('approved').length})`, color: '#22c55e' },
-    { id: 'billed', label: `Awaiting Payment (${byStatus('billed').length})`, color: '#60a5fa' },
-    { id: 'paid', label: 'Paid', color: '#4ade80' },
-    { id: 'rejected', label: `Rejected (${byStatus('rejected').length})`, color: '#ef4444' },
-    { id: 'recorded', label: `Not Submitted (${byStatus('recorded').length})`, color: '#94a3b8' },
+  const tabDefs: { id: ApTab; label: string }[] = [
+    { id: 'submitted', label: `Awaiting Approval (${byStatus('submitted').length})` },
+    { id: 'approved', label: `Ready to Bill (${byStatus('approved').length})` },
+    { id: 'billed', label: `Awaiting Payment (${byStatus('billed').length})` },
+    { id: 'paid', label: 'Paid' },
+    { id: 'rejected', label: `Rejected (${byStatus('rejected').length})` },
+    { id: 'recorded', label: `Not Submitted (${byStatus('recorded').length})` },
   ];
   const visible = byStatus(tab);
 
@@ -248,7 +248,7 @@ export default function ApQueuePage() {
             background: 'var(--card)', border: `1px solid ${oldest >= 14 ? 'rgba(239,68,68,0.35)' : oldest >= 7 ? 'rgba(251,191,36,0.35)' : 'var(--border)'}`,
             fontSize: '12px', color: 'var(--text-muted)',
           }}>
-            <span><strong style={{ color: 'var(--text-primary)' }}>{unpaid.length}</strong> unpaid · <strong style={{ color: '#f472b6' }}>{fmtMoney(total)}</strong> owed</span>
+            <span><strong style={{ color: 'var(--text-primary)' }}>{unpaid.length}</strong> unpaid · <strong style={{ color: 'var(--text-primary)' }}>{fmtMoney(total)}</strong> owed</span>
             <span>oldest waiting <strong style={{ color: ageColor(oldest) }}>{oldest} day{oldest !== 1 ? 's' : ''}</strong></span>
             {stale > 0 && <span style={{ color: '#fbbf24', fontWeight: 700 }}>{stale} over a week old</span>}
           </div>
@@ -261,7 +261,7 @@ export default function ApQueuePage() {
             padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
             background: tab === t.id ? 'var(--tab-active-bg)' : 'transparent',
             border: tab === t.id ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
-            color: tab === t.id ? t.color : 'var(--text-muted)', cursor: 'pointer',
+            color: tab === t.id ? 'var(--tab-active-color)' : 'var(--text-muted)', cursor: 'pointer',
           }}>{t.label}</button>
         ))}
       </div>
@@ -350,7 +350,7 @@ export default function ApQueuePage() {
                       href={storage.from('invoices').getPublicUrl(inv.storage_path).data.publicUrl}
                       target="_blank" rel="noreferrer"
                       style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', textDecoration: 'none' }}
-                    >📄 Invoice</a>
+                    >Invoice</a>
                   )}
                   {['recorded', 'submitted', 'approved', 'rejected'].includes(inv.status) && (
                     <button disabled={isBusy} onClick={() => setEditing(inv)} title="Edit invoice details — fix the vendor link, dates, or amount"
@@ -397,7 +397,7 @@ export default function ApQueuePage() {
                   )}
                   {inv.status === 'billed' && (
                     <button disabled={isBusy} onClick={() => act(inv.id, { action: 'mark_paid' }, `Mark the ${inv.vendor_name} invoice (${fmtMoney(amount)}) as paid?`)} style={{ padding: '7px 14px', borderRadius: '7px', fontSize: '11px', fontWeight: 800, background: '#4ade80', color: '#0b3018', border: 'none', cursor: 'pointer', opacity: isBusy ? 0.6 : 1 }}>
-                      💵 Mark Paid
+                      Mark Paid
                     </button>
                   )}
                   {inv.status === 'rejected' && (

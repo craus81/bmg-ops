@@ -896,7 +896,7 @@ export default function GraphicsJobRecordPage() {
               title="Track on ups.com"
               style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(96,165,250,0.1)', color: '#60a5fa', fontWeight: 700, textDecoration: 'none' }}
             >
-              📦 {job.tracking_number}
+              {job.tracking_number}
             </a>
           )}
           {job.ship_to && (
@@ -1549,7 +1549,7 @@ export default function GraphicsJobRecordPage() {
                   border: '1px solid rgba(96,165,250,0.3)',
                   color: '#60a5fa', textDecoration: 'none',
                 }}
-              >⬇ Download all ({jobFiles.length})</a>
+              >Download all ({jobFiles.length})</a>
             )}
           </div>
           {jobFiles.length > 0 && (
@@ -1559,7 +1559,6 @@ export default function GraphicsJobRecordPage() {
                 const isPdf = f.file_type === 'application/pdf';
                 return (
                   <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '8px', background: 'var(--subtle-bg)' }}>
-                    <span style={{ fontSize: '14px', flexShrink: 0 }}>{isImage ? '🖼️' : isPdf ? '📄' : '📎'}</span>
                     <a
                       href={getFileUrl(f)}
                       target="_blank"
@@ -1586,7 +1585,6 @@ export default function GraphicsJobRecordPage() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 {poFiles.map(f => (
                   <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '8px', background: 'rgba(96,165,250,0.06)', border: '1px dashed rgba(96,165,250,0.3)' }}>
-                    <span style={{ fontSize: '14px', flexShrink: 0 }}>📄</span>
                     <a
                       href={getFileUrl(f)}
                       target="_blank"

@@ -490,7 +490,7 @@ export default function PartsPage() {
   // NetSuite. If the item still lives in NetSuite, a later sync may re-add it.
   const deletePart = async (part: Part) => {
     if (!(await dialog.confirm(
-      `Delete "${part.item_number}" from FleetSuite?\n\n` +
+      `Remove "${part.item_number}" from the catalog?\n\n` +
       `This removes it from this app only — NetSuite is not changed. If the item ` +
       `still exists in NetSuite, a future sync may re-add it.`,
       { confirmLabel: 'Delete', destructive: true },
@@ -804,7 +804,7 @@ export default function PartsPage() {
         borderRadius: '12px', marginBottom: '10px',
       }}>
         {([
-          { id: 'gallery' as const, label: '🗂 Visual Catalog', desc: 'Photos, categories, browse' },
+          { id: 'gallery' as const, label: 'Visual Catalog', desc: 'Photos, categories, browse' },
           { id: 'list' as const, label: '≡ Ops List', desc: 'Prices, labor, stats, files' },
         ]).map((tab) => (
           <button
@@ -1335,12 +1335,12 @@ export default function PartsPage() {
                               flex: 1, padding: '6px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                               background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
                               color: proofSearch?.partId === part.id && proofSearch.source === 'email' ? '#ea4335' : 'var(--text-secondary)', cursor: 'pointer',
-                            }}>{proofSearch?.partId === part.id && proofSearch.source === 'email' ? '✕ Close Email' : '🔎 Search Email'}</button>
+                            }}>{proofSearch?.partId === part.id && proofSearch.source === 'email' ? '✕ Close Email' : 'Search Email'}</button>
                             <button onClick={() => setProofSearch(prev => prev?.partId === part.id && prev.source === 'dropbox' ? null : { partId: part.id, source: 'dropbox' })} style={{
                               flex: 1, padding: '6px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                               background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
                               color: proofSearch?.partId === part.id && proofSearch.source === 'dropbox' ? '#0061fe' : 'var(--text-secondary)', cursor: 'pointer',
-                            }}>{proofSearch?.partId === part.id && proofSearch.source === 'dropbox' ? '✕ Close Dropbox' : '🔎 Search Dropbox'}</button>
+                            }}>{proofSearch?.partId === part.id && proofSearch.source === 'dropbox' ? '✕ Close Dropbox' : 'Search Dropbox'}</button>
                           </div>
                           {proofSearch?.partId === part.id && proofSearch.source === 'email' && (
                             <div style={{ marginTop: '6px' }}>
@@ -1425,7 +1425,7 @@ export default function PartsPage() {
                           opacity: deletingId === part.id ? 0.6 : 1,
                         }}
                       >
-                        {deletingId === part.id ? 'Deleting…' : '🗑  Delete from FleetSuite'}
+                        {deletingId === part.id ? 'Deleting…' : 'Remove from Catalog'}
                       </button>
                     )}
                   </div>

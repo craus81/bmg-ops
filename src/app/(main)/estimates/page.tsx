@@ -1617,7 +1617,7 @@ export default function EstimatesPage() {
           </select>
           {selectedPlatform && (
             <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
-              🚐 Browse Catalog will filter to parts that fit the {selectedPlatform.label}
+              Browse Catalog will filter to parts that fit the {selectedPlatform.label}
               {vehicleRoof ? ` · ${vehicleRoof} roof` : ''}
               {vehicleWheelbase ? ` · ${/^\d/.test(vehicleWheelbase) ? `${vehicleWheelbase}" WB` : vehicleWheelbase}` : ''}
             </div>
@@ -1742,7 +1742,7 @@ export default function EstimatesPage() {
               title="Browse the catalog by category and vendor, with photos"
               style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
             >
-              🗂 Browse Catalog
+              Browse Catalog
             </button>
             {lines.some(l => l.part_id && !l.is_custom) && (
               <button
@@ -1751,7 +1751,7 @@ export default function EstimatesPage() {
                 title="Save this estimate's catalog lines as a reusable package (Browse Catalog → Packages)"
                 style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
               >
-                📦 Save as Package
+                Save as Package
               </button>
             )}
             {partResults.length > 0 && (
@@ -2449,7 +2449,7 @@ export default function EstimatesPage() {
               opacity: deleting ? 0.5 : 1,
             }}
           >
-            {deleting ? 'Deleting...' : isPushed ? '🗑️ Delete Estimate (Supabase + NetSuite)' : '🗑️ Delete Estimate'}
+            {deleting ? 'Deleting...' : isPushed ? 'Delete Estimate (also deletes in NetSuite)' : 'Delete Estimate'}
           </button>
         )}
       </div>

@@ -222,7 +222,7 @@ export default function InvoiceReconciliationPage() {
           {/* ── 1. Amount mismatches — the actionable list ── */}
           {sectionTitle('Amount mismatches', mismatches.length)}
           {mismatches.length === 0 ? (
-            <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Every matched invoice agrees within $1. 🎉</div>
+            <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Every matched invoice agrees within $1.</div>
           ) : (
             <div style={{ overflowX: 'auto', borderRadius: '12px', border: '1px solid var(--border)', background: 'var(--card)' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>

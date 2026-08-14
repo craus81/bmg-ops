@@ -106,7 +106,7 @@ export default function RecordChanges({ table, recordId }: { table: string; reco
           fontSize: '12px', fontWeight: 800, textAlign: 'left',
         }}
       >
-        <span>🕐 Changes</span>
+        <span>Changes</span>
         {rows !== null && (
           <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)' }}>
             {rows.length === 0 ? 'none recorded' : `${rows.length}${rows.length === 100 ? '+' : ''} entr${rows.length === 1 ? 'y' : 'ies'}`}

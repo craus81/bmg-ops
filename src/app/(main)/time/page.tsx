@@ -365,14 +365,14 @@ function ClockScreen() {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '320px', margin: '0 auto' }}>
         {clockStatus === 'out' && (
-          <button onClick={doClockIn} style={{ ...bigBtnStyle('#059669'), padding: '20px', fontSize: '18px', boxShadow: '0 4px 16px rgba(5,150,105,0.25)' }}>🟢 Clock In</button>
+          <button onClick={doClockIn} style={{ ...bigBtnStyle('#059669'), padding: '20px', fontSize: '18px', boxShadow: '0 4px 16px rgba(5,150,105,0.25)' }}>Clock In</button>
         )}
         {clockStatus === 'in' && (<>
-          <button onClick={doStartBreak} style={{ ...bigBtnStyle('#d97706'), padding: '16px', fontSize: '16px', boxShadow: '0 4px 16px rgba(217,119,6,0.25)' }}>🍔 Start Lunch Break</button>
-          <button onClick={doClockOut} style={{ ...bigBtnStyle('#dc2626'), padding: '16px', fontSize: '16px', boxShadow: '0 4px 16px rgba(220,38,38,0.25)' }}>🔴 Clock Out</button>
+          <button onClick={doStartBreak} style={{ ...bigBtnStyle('#d97706'), padding: '16px', fontSize: '16px', boxShadow: '0 4px 16px rgba(217,119,6,0.25)' }}>Start Lunch Break</button>
+          <button onClick={doClockOut} style={{ ...bigBtnStyle('#dc2626'), padding: '16px', fontSize: '16px', boxShadow: '0 4px 16px rgba(220,38,38,0.25)' }}>Clock Out</button>
         </>)}
         {clockStatus === 'break' && (<>
-          <button onClick={doEndBreak} style={{ ...bigBtnStyle('#059669'), padding: '18px', fontSize: '17px', boxShadow: '0 4px 16px rgba(5,150,105,0.25)' }}>✅ End Break</button>
+          <button onClick={doEndBreak} style={{ ...bigBtnStyle('#059669'), padding: '18px', fontSize: '17px', boxShadow: '0 4px 16px rgba(5,150,105,0.25)' }}>End Break</button>
           {breakStartTime && <div style={{ fontSize: '12px', color: theme.warning, marginTop: '4px' }}>Break started at {fmtClock(new Date(breakStartTime))}</div>}
         </>)}
       </div>

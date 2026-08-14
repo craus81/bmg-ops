@@ -111,17 +111,6 @@ const STATUSES = [
   { key: 'cancelled', label: 'Cancelled', color: '#6b7280' },
 ];
 
-const NOTE_ICONS: Record<string, string> = {
-  note: '📝',
-  status_change: '🔄',
-  estimate: '📋',
-  sales_order: '🧾',
-  parts_order: '📦',
-  schedule: '📅',
-  checkin: '🚗',
-  completion: '✅',
-};
-
 export default function UpfitProjectsPage() {
   const { user, isAdmin } = useAuth();
   const supabase = createClient();
@@ -1159,7 +1148,6 @@ export default function UpfitProjectsPage() {
               <div key={n.id} id={`upnote-${n.id}`} style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '10px 12px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span>{NOTE_ICONS[n.note_type] || '📝'}</span>
                     <span style={{ fontSize: '11px', fontWeight: 600, color: theme.textSecondary }}>{n.profiles?.full_name || profiles[n.created_by || ''] || 'System'}</span>
                   </div>
                   <span style={{ fontSize: '10px', color: theme.textMuted }}>{fmtTime(n.created_at)}</span>

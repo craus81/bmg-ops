@@ -414,7 +414,7 @@ export default function InstallerProfilePage() {
                         target="_blank" rel="noreferrer"
                         style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}
                       >
-                        📄 View
+                        View
                       </a>
                     )}
                     <label style={{

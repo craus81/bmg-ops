@@ -177,7 +177,6 @@ export default function CniOnboardingPage() {
           background: '#161f2b', border: '1px solid rgba(255,255,255,0.06)',
           borderRadius: '20px', padding: '40px 24px',
         }}>
-          <div style={{ fontSize: '48px', marginBottom: '16px' }}>🎉</div>
           <div style={{ fontSize: '22px', fontWeight: 800, color: '#f5f8fc', marginBottom: '8px' }}>
             You&apos;re All Set!
           </div>

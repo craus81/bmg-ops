@@ -196,7 +196,7 @@ export default function FinancialsDashboard() {
           <div style={card}>
             <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: '4px' }}>Top overdue accounts</div>
             {ar.topOverdue.length === 0 ? (
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '16px 0', textAlign: 'center' }}>Nothing past due 🎉</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '16px 0', textAlign: 'center' }}>Nothing past due</div>
             ) : (
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <tbody>

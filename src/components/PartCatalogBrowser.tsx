@@ -452,7 +452,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                 title="Scan part names/descriptions for vehicle names (Transit, ProMaster, F-150…) and tag fitment automatically"
                 style={{ marginTop: '6px', width: '100%', padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '10px', fontWeight: 700, cursor: 'pointer', color: 'var(--text-secondary)' }}
               >
-                {autoTagging ? 'Tagging…' : '🚐 Auto-tag from descriptions'}
+                {autoTagging ? 'Tagging…' : 'Auto-tag from descriptions'}
               </button>
             )}
             {autoTagNote && <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '3px' }}>{autoTagNote}</div>}
@@ -485,7 +485,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
               href="/admin/import-vendor-assets"
               style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent, #2563eb)', textDecoration: 'none', marginTop: 'auto' }}
             >
-              ⬇ Import photos &amp; descriptions from a vendor site…
+              Import photos &amp; descriptions from a vendor site…
             </a>
           )}
         </div>
@@ -497,7 +497,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
               a vehicle is chosen or while searching. */}
           {!platformId && !q.trim() && platforms.length > 0 && (
             <div style={{ marginBottom: '16px' }}>
-              <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-muted)', marginBottom: '6px' }}>🚐 Shop by Vehicle</div>
+              <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-muted)', marginBottom: '6px' }}>Shop by Vehicle</div>
               {(['van', 'truck'] as const).map(bt => {
                 const group = platforms.filter(p => p.body_type === bt);
                 if (group.length === 0) return null;
@@ -517,14 +517,14 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                               // eslint-disable-next-line @next/next/no-img-element
                               <img src={imageUrl(p.image_path)} alt={p.label} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                             ) : (
-                              <span style={{ fontSize: '34px', opacity: 0.4 }}>{bt === 'van' ? '🚐' : '🛻'}</span>
+                              <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', opacity: 0.7 }}>No photo</span>
                             )}
                             {isAdmin && (
                               <button
                                 onClick={e => { e.stopPropagation(); platformPhotoTargetRef.current = p.id; platformPhotoInputRef.current?.click(); }}
                                 title="Upload vehicle photo"
                                 style={{ position: 'absolute', bottom: '5px', right: '5px', padding: '2px 7px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '11px', cursor: 'pointer', color: 'var(--text-muted)' }}
-                              >📷</button>
+                              >Photo</button>
                             )}
                           </div>
                           <div style={{ padding: '8px 10px' }}>
@@ -552,7 +552,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={imageUrl(plat.image_path)} alt={plat.label} style={{ width: '42px', height: '30px', objectFit: 'cover', borderRadius: '6px' }} />
                 ) : (
-                  <span style={{ fontSize: '20px' }}>{plat.body_type === 'truck' ? '🛻' : '🚐'}</span>
+                  <span style={{ width: '42px', height: '30px', borderRadius: '6px', background: 'var(--subtle-bg)', border: '1px solid var(--border)', flexShrink: 0 }} />
                 )}
                 <div>
                   <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{plat.label}</div>
@@ -573,7 +573,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
               lines. Hidden while searching so results stay focused. */}
           {kits && kits.length > 0 && !q.trim() && (
             <div style={{ marginBottom: '14px' }}>
-              <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-muted)', marginBottom: '6px' }}>📦 Packages</div>
+              <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-muted)', marginBottom: '6px' }}>Packages</div>
               <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '4px' }}>
                 {kits.map(k => {
                   const photo = k.image_path || k.members.find(m => m.part.image_path)?.part.image_path || null;
@@ -584,7 +584,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={imageUrl(photo)} alt={k.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         ) : (
-                          <span style={{ fontSize: '30px', opacity: 0.35 }}>📦</span>
+                          <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', opacity: 0.7 }}>No photo</span>
                         )}
                         {isAdmin && (
                           <button
@@ -639,7 +639,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={imageUrl(p.image_path)} alt={p.display_name || p.item_number} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                   ) : (
-                    <span style={{ fontSize: '28px', opacity: 0.35 }}>🧰</span>
+                    <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', opacity: 0.7 }}>No photo</span>
                   )}
                   {isAdmin && (
                     <button
@@ -647,7 +647,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                       disabled={busyPart === p.id}
                       title="Upload product photo"
                       style={{ position: 'absolute', bottom: '6px', right: '6px', padding: '3px 7px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '11px', cursor: 'pointer' }}
-                    >📷</button>
+                    >Photo</button>
                   )}
                 </div>
                 <div style={{ padding: '10px', display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
@@ -762,14 +762,14 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={imageUrl(detail.image_path)} alt={detail.display_name || detail.item_number} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
                 ) : (
-                  <span style={{ fontSize: '42px', opacity: 0.35 }}>🧰</span>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', opacity: 0.7 }}>No photo</span>
                 )}
                 {isAdmin && (
                   <button
                     onClick={() => { photoTargetRef.current = detail.id; photoInputRef.current?.click(); }}
                     disabled={busyPart === detail.id}
                     style={{ position: 'absolute', bottom: '8px', right: '8px', padding: '5px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '11px', fontWeight: 700, cursor: 'pointer', color: 'var(--text-primary)' }}
-                  >📷 {detail.image_path ? 'Change photo' : 'Add photo'}</button>
+                  >{detail.image_path ? 'Change photo' : 'Add photo'}</button>
                 )}
               </div>
 
@@ -805,10 +805,8 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
                   {(fitment || []).map(f => {
                     const plat = platforms.find(p => p.id === f.platform_id);
-                    const srcIcon = f.source === 'manual' ? '👤' : f.source === 'vendor_site' ? '🌐' : '🏷';
                     return (
                       <span key={f.id} style={{ ...chip, display: 'inline-flex', alignItems: 'center', gap: '5px' }} title={`Tag source: ${f.source === 'manual' ? 'added by hand' : f.source === 'vendor_site' ? 'vendor website' : 'part description auto-tag'}`}>
-                        <span>{srcIcon}</span>
                         <span>
                           {plat?.label || 'Unknown vehicle'}
                           {f.roof_label ? ` · ${f.roof_label} roof` : ''}

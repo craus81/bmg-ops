@@ -352,7 +352,7 @@ export default function InstallerInvoicesPage() {
               ✕ Cancel
             </button>
           </div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>📄 {stagedFile.fileName}</div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>{stagedFile.fileName}</div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
             <div>
@@ -468,7 +468,7 @@ export default function InstallerInvoicesPage() {
                       target="_blank" rel="noreferrer"
                       onClick={e => e.stopPropagation()}
                       style={{ padding: '5px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', textDecoration: 'none' }}
-                    >📄 View File</a>
+                    >View File</a>
                   )}
                   {inv.status === 'rejected' && !readOnly && (
                     <button

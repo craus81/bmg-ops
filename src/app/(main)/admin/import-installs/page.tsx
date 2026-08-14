@@ -447,7 +447,7 @@ export default function ImportInstallsPage() {
             color: fileName ? theme.textPrimary : theme.textSecondary,
           }}
         >
-          {parsingFile ? 'Reading…' : fileName ? `📄 ${fileName} — click to replace` : '📄 Drop the spreadsheet here, or click to choose'}
+          {parsingFile ? 'Reading…' : fileName ? `${fileName} — click to replace` : 'Drop the spreadsheet here, or click to choose'}
         </button>
 
         <div style={{ margin: '14px 0 8px', display: 'flex', alignItems: 'center', gap: 10, color: theme.textMuted, fontSize: 12 }}>

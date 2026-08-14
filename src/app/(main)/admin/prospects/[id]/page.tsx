@@ -165,7 +165,6 @@ const OPP_TYPES: Record<string, string> = { tech_install: 'Tech Install', graphi
 const OPP_STAGES: Record<string, string> = { lead: 'Lead', quoted: 'Quoted', negotiating: 'Negotiating', won: 'Won', lost: 'Lost' };
 const STAGE_COLORS: Record<string, string> = { lead: '#60a5fa', quoted: '#a78bfa', negotiating: '#fbbf24', won: '#4ade80', lost: '#f87171' };
 // status_change stays in the icon map so historical feed entries still render.
-const ACTIVITY_ICONS: Record<string, string> = { call: '\u{1F4DE}', email: '\u{1F4E7}', note: '\u{1F4DD}', meeting: '\u{1F91D}', quote_sent: '\u{1F4CB}', status_change: '\u{1F504}' };
 const LEAD_SOURCES = ['Cold Call', 'Lead', 'Maryland Heights Chamber of Commerce', 'Little Black Book', 'Other'];
 const DOCS_PAGE_SIZE = 100;
 const ACTS_PAGE_SIZE = 30;
@@ -1397,7 +1396,6 @@ export default function CustomerRecordPage() {
           ) : (
             <span style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'var(--warning-bg)', color: 'var(--warning)' }}>Not tracked</span>
           )}
-          {prospect?.is_hot && <span style={{ fontSize: '11px' }}>🔥</span>}
           {tags.map(t => prospect ? (
             <button key={t.id} onClick={() => removeTag(t)} title="Remove tag" style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '999px', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}>{t.tag} ✕</button>
           ) : (
@@ -1414,11 +1412,11 @@ export default function CustomerRecordPage() {
           </div>
         )}
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}>
-          {phone && <a href={`tel:${phone}`} style={{ ...btnSm, color: '#22c55e' }}>📞 {phone}</a>}
-          {email && <a href={`mailto:${email}`} style={{ ...btnSm, color: '#60a5fa' }}>✉️ Email</a>}
+          {phone && <a href={`tel:${phone}`} style={btnSm}>{phone}</a>}
+          {email && <a href={`mailto:${email}`} style={btnSm}>Email</a>}
           {prospect && <button onClick={openEdit} title="Edit company details, lead source, and notes" style={btnSm}>✎ Edit</button>}
           {prospect && !prospect.netsuite_id && !isVendor && (
-            <button onClick={addToNetSuite} disabled={converting} title="Create this customer in NetSuite (normally automatic at creation — this retries)" style={{ ...btnSm, color: '#a78bfa', opacity: converting ? 0.6 : 1 }}>
+            <button onClick={addToNetSuite} disabled={converting} title="Create this customer in NetSuite (normally automatic at creation — this retries)" style={{ ...btnSm, opacity: converting ? 0.6 : 1 }}>
               {converting ? 'Adding…' : 'Add to NetSuite'}
             </button>
           )}
@@ -1430,7 +1428,7 @@ export default function CustomerRecordPage() {
           {customer && !isVendor && (
             <button onClick={() => router.push(deepLinks.newEstimate(customer.id))}
               title="Start a new estimate with this customer pre-selected"
-              style={{ ...btnSm, color: '#22c55e' }}>
+              style={btnSm}>
               + New Estimate
             </button>
           )}
@@ -1438,7 +1436,7 @@ export default function CustomerRecordPage() {
             <button onClick={() => setStModalOpen(true)}
               title="Open, print, or email a statement — choose open items or all invoices, with an optional date range"
               style={{ ...btnSm, color: 'var(--text-primary)' }}>
-              📄 Statement
+              Statement
             </button>
           )}
           {nsUrl && <a href={nsUrl} target="_blank" rel="noopener noreferrer" style={btnSm}>NetSuite ↗</a>}
@@ -1448,7 +1446,7 @@ export default function CustomerRecordPage() {
             <button onClick={() => toggleFlag('is_hot')} style={{
               padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
               background: prospect.is_hot ? 'rgba(239,68,68,0.1)' : 'var(--subtle-bg)', border: `1px solid ${prospect.is_hot ? 'rgba(239,68,68,0.25)' : 'var(--border)'}`, color: prospect.is_hot ? '#ef4444' : 'var(--text-muted)',
-            }}>{prospect.is_hot ? '🔥 Hot' : 'Mark Hot'}</button>
+            }}>{prospect.is_hot ? 'Hot' : 'Mark Hot'}</button>
             <button onClick={() => toggleFlag('email_campaign')} style={{
               padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
               background: prospect.email_campaign ? 'rgba(59,130,246,0.1)' : 'var(--subtle-bg)', border: `1px solid ${prospect.email_campaign ? 'rgba(59,130,246,0.25)' : 'var(--border)'}`, color: prospect.email_campaign ? '#60a5fa' : 'var(--text-muted)',
@@ -2006,7 +2004,7 @@ export default function CustomerRecordPage() {
             {prospect && (
               <div style={{ marginBottom: '10px' }}>
                 <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginBottom: '6px' }}>
-                  {([['call', '📞 Call'], ['email', '✉️ Email'], ['note', '📝 Note'], ['meeting', '🤝 Meeting']] as const).map(([k, label]) => (
+                  {([['call', 'Call'], ['email', 'Email'], ['note', 'Note'], ['meeting', 'Meeting']] as const).map(([k, label]) => (
                     <button key={k} onClick={() => setActType(k)} style={{
                       padding: '4px 10px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
                       background: actType === k ? 'var(--tab-active-bg)' : 'transparent',
@@ -2037,13 +2035,13 @@ export default function CustomerRecordPage() {
                   ) : (
                     <button onClick={startVoiceNote} disabled={voiceProcessing} title="Voice note — AI files it as activity and creates any reminders you mention" style={{
                       padding: '8px 12px', borderRadius: '8px', fontSize: '12px',
-                      background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa',
+                      background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)',
                       cursor: 'pointer', opacity: voiceProcessing ? 0.6 : 1,
-                    }}>🎤</button>
+                    }}>Voice note</button>
                   )}
                 </div>
                 {voiceProcessing && (
-                  <div style={{ fontSize: '10.5px', color: '#a78bfa', fontWeight: 600, marginTop: '5px' }}>AI is parsing your note and creating reminders…</div>
+                  <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontWeight: 600, marginTop: '5px' }}>AI is parsing your note and creating reminders…</div>
                 )}
                 {voiceResult && (
                   <div style={{ padding: '6px 10px', borderRadius: '6px', marginTop: '5px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', fontSize: '10.5px', color: '#22c55e', fontWeight: 600 }}>
@@ -2055,7 +2053,6 @@ export default function CustomerRecordPage() {
             {activities.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{prospect ? 'No activity logged yet.' : '—'}</div>}
             {activities.map(a => (
               <div key={a.id} style={{ display: 'flex', gap: '8px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12px' }}>
-                <span style={{ flexShrink: 0 }}>{ACTIVITY_ICONS[a.type] || '📝'}</span>
                 <span style={{ flex: 1, minWidth: 0, color: 'var(--text-secondary)' }}>{a.summary}</span>
                 <span style={{ flexShrink: 0, color: 'var(--text-muted)', fontSize: '11px', textAlign: 'right' }}>
                   {a.creator_name ? `${a.creator_name} · ` : ''}{timeAgo(a.created_at)}
@@ -2286,9 +2283,9 @@ export default function CustomerRecordPage() {
                 background: 'var(--tab-active-bg)', border: '1px solid var(--tab-active-border)', color: 'var(--text-primary)',
                 cursor: 'pointer', opacity: stWorking ? 0.6 : 1,
               }}>{stWorking ? 'Building…' : 'Open PDF'}</button>
-              <button onClick={() => generateStatement('print')} disabled={stWorking || emailingSt} style={{ ...btnSm, padding: '9px 12px', fontSize: '12px' }}>🖨 Print</button>
+              <button onClick={() => generateStatement('print')} disabled={stWorking || emailingSt} style={{ ...btnSm, padding: '9px 12px', fontSize: '12px' }}>Print</button>
               <button onClick={emailStatement} disabled={stWorking || emailingSt} style={{ ...btnSm, padding: '9px 12px', fontSize: '12px' }}>
-                {emailingSt ? 'Sending…' : '✉️ Email…'}
+                {emailingSt ? 'Sending…' : 'Email…'}
               </button>
               <button onClick={() => setStModalOpen(false)} disabled={stWorking || emailingSt} style={{ ...btnSm, padding: '9px 12px', fontSize: '12px' }}>Cancel</button>
             </div>
