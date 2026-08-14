@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAttachment, getMessage, getPdfAttachments, proofContentType } from '@/lib/google';
+import { getAttachment, getMessage, getPdfAttachments, getProofAttachments, proofContentType } from '@/lib/google';
 import { requireStaff } from '@/lib/api-auth';
 import { isProofLikeName } from '@/lib/pdf-classify';
 
@@ -29,34 +29,52 @@ export async function GET(req: NextRequest) {
   try {
     if (!attachmentId) {
       const message = await getMessage(messageId);
-      const pdfs = getPdfAttachments(message);
-      if (pdfs.length === 0) {
-        return NextResponse.json({ error: 'No PDF attachments on this message' }, { status: 404 });
-      }
       const requested = req.nextUrl.searchParams.get('filename');
-      const match = requested && pdfs.find(p => p.filename === requested);
-      // Never fall back to a proof/artwork file while a real document exists —
-      // proofs are usually the biggest attachment and would win the size sort.
-      const nonProof = pdfs.filter(p => !isProofLikeName(p.filename));
-      const pool = nonProof.length > 0 ? nonProof : pdfs;
-      const best = match || [...pool].sort((a, b) => {
-        const aIsPO = /\b(po|purchase.?order)\b/i.test(a.filename) ? 1 : 0;
-        const bIsPO = /\b(po|purchase.?order)\b/i.test(b.filename) ? 1 : 0;
-        if (aIsPO !== bIsPO) return bIsPO - aIsPO;
-        return b.size - a.size;
-      })[0];
-      attachmentId = best.attachmentId;
-      filename = best.filename;
+      // Exact-name match across every proof-type attachment (images and design
+      // files, not just PDFs) — the proof-sweep review queue stores only
+      // message_id + filename, and its rows are often PNGs/JPGs. Same resolver
+      // the queue's attach action uses, so preview and attach agree.
+      const proofMatch = requested ? getProofAttachments(message).find(a => a.filename === requested) : null;
+      if (proofMatch) {
+        attachmentId = proofMatch.attachmentId;
+        filename = proofMatch.filename;
+      } else {
+        const pdfs = getPdfAttachments(message);
+        if (pdfs.length === 0) {
+          return NextResponse.json({ error: 'No PDF attachments on this message' }, { status: 404 });
+        }
+        // Never fall back to a proof/artwork file while a real document exists —
+        // proofs are usually the biggest attachment and would win the size sort.
+        const nonProof = pdfs.filter(p => !isProofLikeName(p.filename));
+        const pool = nonProof.length > 0 ? nonProof : pdfs;
+        const best = [...pool].sort((a, b) => {
+          const aIsPO = /\b(po|purchase.?order)\b/i.test(a.filename) ? 1 : 0;
+          const bIsPO = /\b(po|purchase.?order)\b/i.test(b.filename) ? 1 : 0;
+          if (aIsPO !== bIsPO) return bIsPO - aIsPO;
+          return b.size - a.size;
+        })[0];
+        attachmentId = best.attachmentId;
+        filename = best.filename;
+      }
     }
 
     const base64 = await getAttachment(messageId, attachmentId);
     const buffer = Buffer.from(base64, 'base64');
+    const contentType = proofContentType(filename);
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
-        'Content-Type': proofContentType(filename),
+        'Content-Type': contentType,
         // Private: this is a single user's mail. Short cache so re-renders in
         // the picker don't re-download the same attachment.
         'Cache-Control': 'private, max-age=3600',
+        // These bytes come from external email: nosniff stops HTML disguised
+        // under an image/pdf type from rendering, and SVG (the one proof type
+        // whose scripts would run on our origin when opened directly) gets
+        // sandboxed — <img> consumers never execute SVG scripts, so thumbnails
+        // are unaffected. Broader types (pdf/png/jpg) stay unsandboxed so the
+        // browser's inline PDF viewer keeps working.
+        'X-Content-Type-Options': 'nosniff',
+        ...(contentType === 'image/svg+xml' ? { 'Content-Security-Policy': 'sandbox' } : {}),
       },
     });
   } catch (err: any) {

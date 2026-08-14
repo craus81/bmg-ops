@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect, type CSSProperties } from 'react';
+import { useState, useEffect, useRef, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
+import ProofThumbnail from '@/components/ProofThumbnail';
 
 /**
  * K12 proof sweep — bulk front-end for /api/parts/proof-sweep. Scope the
@@ -23,6 +24,60 @@ interface QueueRow {
 }
 
 const BATCH = 5;
+
+// Extensions a browser can render directly in an <img>. heic/heif/tif and
+// design-source files (ai/eps/psd) can't be previewed, so they get a badge.
+const IMG_EXT = new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg']);
+
+// Same-origin URL that streams the attachment's bytes (cookie-authed). The
+// queue stores no attachment id — Gmail ids aren't stable across fetches — so
+// the endpoint re-resolves by filename, same as the queue's attach action.
+const queueFileUrl = (row: QueueRow) =>
+  `/api/gmail/attachment?messageId=${encodeURIComponent(row.message_id)}&filename=${encodeURIComponent(row.filename)}`;
+
+/**
+ * Thumbnail for a review-queue row, so you can tell an actual proof from a
+ * signature logo or an unrelated PDF without opening anything. Images render
+ * directly, PDFs render page 1 (pdfjs); ai/eps/psd/tif/heic can't be previewed
+ * in a browser and keep the type badge. Lazy-mounted via IntersectionObserver
+ * so a long queue doesn't fetch hundreds of Gmail attachments on page load.
+ */
+function QueueThumb({ row }: { row: QueueRow }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+
+  const ext = (row.filename.split('.').pop() || '').toLowerCase();
+  const isImg = IMG_EXT.has(ext) || (row.mime_type || '').startsWith('image/');
+  const isPdf = ext === 'pdf' || row.mime_type === 'application/pdf';
+  const previewable = isPdf || (isImg && !['heic', 'heif', 'tif', 'tiff'].includes(ext));
+
+  useEffect(() => {
+    if (!previewable) return;
+    const el = ref.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(entries => {
+      if (entries.some(e => e.isIntersecting)) { setVisible(true); obs.disconnect(); }
+    }, { rootMargin: '200px' });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [previewable]);
+
+  const badge = (
+    <div style={{
+      width: 56, height: 56, borderRadius: 6, background: theme.inputBg, border: `1px solid ${theme.border}`,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: 10, fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase',
+    }}>{ext || 'file'}</div>
+  );
+
+  return (
+    <div ref={ref} style={{ flexShrink: 0 }}>
+      {!previewable || !visible ? badge : isPdf
+        ? <ProofThumbnail pdfUrl={queueFileUrl(row)} label={row.filename} thumbSize={56} expandedSize={300} />
+        : <ProofThumbnail imageUrl={queueFileUrl(row)} label={row.filename} thumbSize={56} expandedSize={300} />}
+    </div>
+  );
+}
 
 export default function ProofSweepPage() {
   const router = useRouter();
@@ -241,9 +296,12 @@ export default function ProofSweepPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {queue.map(row => (
               <div key={row.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8, border: `1px solid ${theme.border}`, flexWrap: 'wrap', opacity: queueBusy === row.id ? 0.5 : 1 }}>
+                <QueueThumb row={row} />
                 <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>{row.part_number}</span>
                 <div style={{ flex: 1, minWidth: 220 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, wordBreak: 'break-all' }}>{row.filename}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, wordBreak: 'break-all' }}>
+                    <a href={queueFileUrl(row)} target="_blank" rel="noreferrer" style={{ color: theme.textPrimary }}>{row.filename}</a>
+                  </div>
                   <div style={{ fontSize: 11, color: theme.textMuted }}>
                     {row.subject || '(no subject)'} · {row.from_addr || 'unknown sender'}{row.email_date ? ` · ${new Date(row.email_date).toLocaleDateString()}` : ''}
                   </div>
