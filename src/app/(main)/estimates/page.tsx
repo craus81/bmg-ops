@@ -1797,7 +1797,7 @@ export default function EstimatesPage() {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {/* Header row */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 60px 80px 80px 60px 30px', gap: '4px', padding: '4px 0', fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase' }}>
+            <div className="est-line est-line-head" style={{ padding: '4px 0', fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase' }}>
               <div onClick={() => toggleEstSort('item_number')} style={{ cursor: 'pointer', color: estSortCol === 'item_number' ? '#60a5fa' : undefined }}>Item #{estSortIndicator('item_number')}</div>
               <div>Description</div>
               <div onClick={() => toggleEstSort('quantity')} style={{ textAlign: 'center', cursor: 'pointer', color: estSortCol === 'quantity' ? '#60a5fa' : undefined }}>Qty{estSortIndicator('quantity')}</div>
@@ -1812,21 +1812,19 @@ export default function EstimatesPage() {
               return (
               <div key={line.key}>
                 <div
-                  style={{
-                    display: 'grid', gridTemplateColumns: '1fr 2fr 60px 80px 80px 60px 30px',
-                    gap: '4px', alignItems: 'center',
-                    padding: '6px 0', borderBottom: unmatched ? 'none' : '1px solid var(--border)',
-                  }}
+                  className="est-line"
+                  style={{ padding: '6px 0', borderBottom: unmatched ? 'none' : '1px solid var(--border)' }}
                 >
                   {line.is_custom ? (
                     <input
+                      className="est-c-item"
                       style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
                       value={line.item_number}
                       onChange={e => updateLine(line.key, 'item_number', e.target.value)}
                       placeholder="Item #"
                     />
                   ) : (
-                    <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <div className="est-c-item" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {line.item_number}
                     </div>
                   )}
@@ -1837,6 +1835,7 @@ export default function EstimatesPage() {
                       record is never modified). Cleared = NetSuite falls back
                       to the item's default description. */}
                   <input
+                    className="est-c-desc"
                     style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
                     value={line.description}
                     onChange={e => updateLine(line.key, 'description', e.target.value)}
@@ -1844,26 +1843,30 @@ export default function EstimatesPage() {
                     title={line.description}
                   />
 
+                  <div className="est-c-qty">
+                    <div className="est-cell-label" style={{ textAlign: 'center' }}>Qty</div>
+                    <input
+                      type="number"
+                      style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px', textAlign: 'center' }}
+                      value={line.quantity}
+                      onChange={e => updateLine(line.key, 'quantity', parseFloat(e.target.value) || 0)}
+                      min={0}
+                    />
+                  </div>
 
-                  <input
-                    type="number"
-                    style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px', textAlign: 'center' }}
-                    value={line.quantity}
-                    onChange={e => updateLine(line.key, 'quantity', parseFloat(e.target.value) || 0)}
+                  <div className="est-c-price">
+                    <div className="est-cell-label" style={{ textAlign: 'right' }}>Price</div>
+                    <input
+                      type="number"
+                      style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px', textAlign: 'right' }}
+                      value={line.unit_price}
+                      onChange={e => updateLine(line.key, 'unit_price', parseFloat(e.target.value) || 0)}
+                      step={0.01}
+                    />
+                  </div>
 
-                    min={0}
-                  />
-
-                  <input
-                    type="number"
-                    style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px', textAlign: 'right' }}
-                    value={line.unit_price}
-                    onChange={e => updateLine(line.key, 'unit_price', parseFloat(e.target.value) || 0)}
-
-                    step={0.01}
-                  />
-
-                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)', textAlign: 'right' }}>
+                  <div className="est-c-total" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)', textAlign: 'right' }}>
+                    <div className="est-cell-label">Total</div>
                     {fmt(line.quantity * line.unit_price)}
                     {(() => {
                       const pct = lineMarginPct(line);
@@ -1877,13 +1880,16 @@ export default function EstimatesPage() {
                     })()}
                   </div>
 
-                  <div style={{ fontSize: '10px', color: line.labor_hours > 0 ? '#fbbf24' : 'var(--text-label)', textAlign: 'center' }}>
+                  <div className="est-c-labor" style={{ fontSize: '10px', color: line.labor_hours > 0 ? '#fbbf24' : 'var(--text-label)', textAlign: 'center' }}>
+                    <div className="est-cell-label">Labor</div>
                     {line.labor_hours > 0 ? `${(line.labor_hours * line.quantity).toFixed(1)}h` : '—'}
                   </div>
 
                   {(
                     <button
+                      className="est-c-x"
                       onClick={() => removeLine(line.key)}
+                      title="Remove line"
                       style={{ background: 'transparent', border: 'none', color: '#f87171', fontSize: '14px', cursor: 'pointer', padding: '2px' }}
                     >
                       ×
