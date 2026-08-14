@@ -1825,7 +1825,11 @@ export default function EstimatesPage() {
                     />
                   ) : (
                     <div className="est-c-item" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {line.item_number}
+                      {line.part_id ? (
+                        <a className="part-link" href={deepLinks.part(line.part_id)} target="_blank" rel="noreferrer" title="Open part record">
+                          {line.item_number}
+                        </a>
+                      ) : line.item_number}
                     </div>
                   )}
 

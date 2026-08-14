@@ -28,6 +28,7 @@ import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import type { GraphicsJob, GraphicsJobStatus } from '@/lib/types';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { PartNumberLink } from '@/components/PartLabel';
 
 type HubTab = 'graphics' | 'scans' | 'sent';
 
@@ -764,7 +765,12 @@ export default function InvoicingHubPage() {
                         </span>
                       </div>
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '3px' }}>
-                        {Object.entries(partCounts).map(([pn, n]) => `${pn} × ${n}`).join(' · ')}
+                        {Object.entries(partCounts).map(([pn, n], i) => (
+                          <span key={pn}>
+                            {i > 0 && ' · '}
+                            {pn === 'No part' ? pn : <PartNumberLink partNumber={pn} />} × {n}
+                          </span>
+                        ))}
                       </div>
                     </div>
                   </label>

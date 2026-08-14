@@ -6,6 +6,7 @@ import { sendEmailDetailed } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { sendSMS } from '@/lib/sms-provider';
 import { renderEstimateDocument } from '@/lib/estimate-document';
+import { enrichLinesWithPartAssets } from '@/lib/estimate-line-parts';
 import { r2PublicUrl } from '@/lib/r2';
 import { validateBody, z } from '@/lib/validate';
 
@@ -111,12 +112,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   // The customer-facing document — line items, quantities, rates, totals —
   // loaded once for both the preview and the real send.
-  const { data: lineItems } = await supabase
+  const { data: rawLineItems } = await supabase
     .from('estimate_line_items')
     .select('*')
     .eq('estimate_id', estimate.id)
     .order('sort_order')
     .order('id');
+  // Enhanced estimate: product photos + vendor links per line (same
+  // enrichment the approval page and signed snapshot use).
+  const lineItems = await enrichLinesWithPartAssets(supabase, rawLineItems || []);
   const { data: settings } = await supabase
     .from('wrap_quote_settings')
     .select('company')

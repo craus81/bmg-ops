@@ -58,6 +58,40 @@ describe('renderEstimateDocument vehicle identity (K5)', () => {
   });
 });
 
+// Enhanced-estimate line assets: photo thumbnail + vendor product link,
+// attached by enrichLinesWithPartAssets and rendered here for the email,
+// the approval page's sibling markup, and the signed snapshot alike.
+describe('renderEstimateDocument line assets', () => {
+  const baseEst = { estimate_number: 'EST-1', customer_name: 'Acme', subtotal: 10, grand_total: 10 };
+  const baseLine = { id: 'l1', item_number: 'RR-KIT-148', description: 'Shelving kit', quantity: 1, unit_price: 10, line_total: 10 };
+
+  it('renders the photo thumbnail and product link when enriched', () => {
+    const html = renderEstimateDocument(baseEst, [{
+      ...baseLine,
+      part_image_url: 'https://pub.example.com/photos/parts/p1/vendor-1.jpg',
+      part_product_url: 'https://vendor.example.com/rr-kit-148',
+    }]);
+    expect(html).toContain('src="https://pub.example.com/photos/parts/p1/vendor-1.jpg"');
+    expect(html).toContain('href="https://vendor.example.com/rr-kit-148"');
+    expect(html).toContain('View product');
+  });
+
+  it('renders plain rows when no assets are attached', () => {
+    const html = renderEstimateDocument(baseEst, [baseLine]);
+    expect(html).toContain('RR-KIT-148');
+    expect(html).not.toContain('View product');
+    expect(html).not.toContain('<img src=');
+  });
+
+  it('escapes asset URLs', () => {
+    const html = renderEstimateDocument(baseEst, [{
+      ...baseLine,
+      part_product_url: 'https://vendor.example.com/a?b=1&c="x"',
+    }]);
+    expect(html).toContain('href="https://vendor.example.com/a?b=1&amp;c=&quot;x&quot;"');
+  });
+});
+
 describe('vehicleDescription', () => {
   it('composes year + platform + qualifiers, skipping blanks', () => {
     expect(vehicleDescription({

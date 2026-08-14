@@ -16,6 +16,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { PartNumberLink } from '@/components/PartLabel';
 import {
   assembleIncomingParts,
   type IncomingPartRow,
@@ -248,7 +249,9 @@ function PartCard({ r }: { r: IncomingPartRow }) {
     }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>{r.item_number}</div>
+          <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>
+            <PartNumberLink partNumber={r.item_number} />
+          </div>
           {r.display_name && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{r.display_name}</div>}
         </div>
         <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 8px', borderRadius: '6px', whiteSpace: 'nowrap', background: pill.bg, color: pill.color, border: `1px solid ${pill.border}` }}>

@@ -40,6 +40,9 @@ export const deepLinks = {
    *  entering a new client to quoting them. */
   newEstimate: (customerId?: string | null) =>
     `/estimates?new=1${customerId ? `&customer=${customerId}` : ''}`,
+  /** Parts page — opens the part's record: switches to its catalog tab,
+   *  expands the row, scrolls to it, and highlights it (page reads ?part=). */
+  part: (partId: string) => `/parts?part=${partId}`,
   /** Wrap-quote list — opens that quote (page reads ?id=). */
   wrapQuote: (quoteId: string) => `/admin/wrap-quote?id=${quoteId}`,
   /** AP queue — jumps to the vendor invoice's status tab and highlights it. */

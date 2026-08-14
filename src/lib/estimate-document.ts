@@ -86,7 +86,20 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
     const sub = l.description && l.description !== l.item_number
       ? `<div style="font-size:12px;color:#6b7280;">${escHtml(l.description)}</div>` : '';
     const note = l.notes ? `<div style="font-size:11px;color:#9ca3af;font-style:italic;">${escHtml(l.notes)}</div>` : '';
-    return `<tr>${cell(`${label}${sub}${note}`)}${cell(escHtml(l.quantity), true)}${cell(money(l.unit_price), true)}${cell(money(lineTotal), true)}</tr>`;
+    // Enhanced-estimate assets (enrichLinesWithPartAssets): product photo and
+    // vendor product-page link, where the catalog has them.
+    const productLink = l.part_product_url
+      ? `<div style="margin-top:2px;"><a href="${escHtml(l.part_product_url)}" target="_blank" rel="noopener noreferrer" style="font-size:11px;color:#2563eb;text-decoration:underline;">View product &#8599;</a></div>` : '';
+    const itemText = `${label}${sub}${note}${productLink}`;
+    // With a photo, the item cell becomes a nested table (the email-safe way
+    // to put a thumbnail beside text — floats don't survive Outlook).
+    const itemHtml = l.part_image_url
+      ? `<table role="presentation" style="border-collapse:collapse;"><tr>
+          <td style="padding:0 10px 0 0;vertical-align:top;"><img src="${escHtml(l.part_image_url)}" alt="${label}" width="56" height="56" style="width:56px;height:56px;object-fit:cover;border-radius:6px;border:1px solid #e5e7eb;display:block;"></td>
+          <td style="vertical-align:top;">${itemText}</td>
+        </tr></table>`
+      : itemText;
+    return `<tr>${cell(itemHtml)}${cell(escHtml(l.quantity), true)}${cell(money(l.unit_price), true)}${cell(money(lineTotal), true)}</tr>`;
   }).join('\n');
 
   const laborHours = est.labor_hours_override ?? est.labor_hours;
