@@ -373,6 +373,40 @@ button {
   z-index: 2;
 }
 
+/* Estimate line items: one row per line on desktop; on phones each line
+   collapses into a stacked card (item # + remove on top, full-width
+   description, then qty / price / total / labor with mini-labels) so the
+   description isn't crushed to a few characters by the fixed columns. */
+.est-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) 48px 76px 84px 44px 26px;
+  gap: 4px;
+  align-items: center;
+}
+.est-cell-label { display: none; }
+@media (max-width: 640px) {
+  .est-line-head { display: none; }
+  .est-line {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1.3fr) minmax(0, 0.9fr);
+    grid-template-areas:
+      'item item item x'
+      'desc desc desc desc'
+      'qty price total labor';
+    row-gap: 6px;
+  }
+  .est-c-item  { grid-area: item; }
+  .est-c-desc  { grid-area: desc; }
+  .est-c-qty   { grid-area: qty; }
+  .est-c-price { grid-area: price; }
+  .est-c-total { grid-area: total; }
+  .est-c-labor { grid-area: labor; }
+  .est-c-x     { grid-area: x; justify-self: end; }
+  .est-cell-label {
+    display: block; font-size: 8px; font-weight: 700; letter-spacing: 0.5px;
+    text-transform: uppercase; color: var(--text-muted); margin-bottom: 2px;
+  }
+}
+
 /* Mention → note focus: when a Mentions-inbox deep link lands on a record,
    the target surface scroll-flashes the exact note it references (see
    src/lib/focus-note.ts). The class is toggled imperatively via classList,
