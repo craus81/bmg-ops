@@ -153,8 +153,8 @@ export default function ShopArrivals() {
                 {r.need_back_date && <span style={{ color: '#fbbf24' }}>back by {fmt(r.need_back_date)}</span>}
               </div>
             </div>
-            <button onClick={() => markArrived(r)} style={{ flexShrink: 0, padding: '6px 10px', borderRadius: '8px', background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)', color: '#22c55e', fontSize: '10px', fontWeight: 800, cursor: 'pointer' }}>
-              Arrived ✓
+            <button onClick={() => markArrived(r)} title="Mark this vehicle as arrived — clears it off the arrival schedule" style={{ flexShrink: 0, padding: '6px 10px', borderRadius: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', fontSize: '10px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              Mark Arrived
             </button>
             <button onClick={() => cancelRow(r)} title="Remove from schedule" style={{ flexShrink: 0, padding: '6px 8px', borderRadius: '8px', background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer' }}>
               ✕
