@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   extractProduct, extractAllSkus, parseSitemapLocs, matchSkuToPart, skuKeys,
-  looksLikeProductUrl, looksLikeListingUrl, extractSameOriginLinks,
-  extractPaginationLinks, originVariants, skuCandidatesFromUrl, ensureScheme,
-  nearMatchSkuToPart,
+  looksLikeProductUrl, looksLikeListingUrl, looksLikeProductUnder,
+  extractSameOriginLinks, extractPaginationLinks, originVariants,
+  skuCandidatesFromUrl, ensureScheme, nearMatchSkuToPart, diagnosePage,
 } from './vendor-catalog-import';
 
 // Extraction is written blind to any one vendor's HTML — pin the layered
@@ -46,6 +46,12 @@ describe('extractProduct', () => {
     const p = extractProduct('<html><body>hello</body></html>');
     expect(p.imageUrl).toBeNull();
     expect(p.sku).toBeNull();
+  });
+
+  it('uses the page <h1> for the name before the site-suffixed <title>', () => {
+    const html = `<html><head><title>Shelf Unit - 32" W x 46" H x 14" D | Holman</title></head>
+      <body><h1>Shelf Unit - 32&quot; W x 46&quot; H x 14&quot; D</h1></body></html>`;
+    expect(extractProduct(html).name).toBe('Shelf Unit - 32" W x 46" H x 14" D');
   });
 
   it('falls back to a visible WooCommerce sku span (class token, not sku_wrapper)', () => {
@@ -112,6 +118,55 @@ describe('skuCandidatesFromUrl (slug fallback, exact match downstream)', () => {
 
   it('returns nothing for word-only slugs', () => {
     expect(skuCandidatesFromUrl('https://x.com/products/heavy-duty-van-shelving/')).toEqual([]);
+  });
+
+  // cve.holman.com names pages by size, not part number. "14-D" / "X-14-D"
+  // carry a letter and a digit, so without the dimension guard they'd be
+  // offered as SKUs — and a shelf's photo could land on catalog row 14D.
+  it('drops dimension tails (…-32-w-x-46-h-x-14-d)', () => {
+    expect(skuCandidatesFromUrl('https://cve.holman.com/shelf-unit-32-w-x-46-h-x-14-d')).toEqual([]);
+    expect(skuCandidatesFromUrl('https://x.com/products/folding-shelf-unit-48-w-x-20-d')).toEqual([]);
+  });
+
+  it('still keeps a real part number that follows dimensions', () => {
+    const c = skuCandidatesFromUrl('https://x.com/products/shelf-unit-32-w-x-14-d-48320a');
+    expect(c).toContain('48320A');
+    expect(c).not.toContain('14-D');
+  });
+});
+
+describe('diagnosePage (why a page yielded nothing)', () => {
+  it('names an anti-bot interstitial', () => {
+    const incapsula = `<html><head><meta name="robots" content="noindex"></head><body>
+      <iframe src="/_Incapsula_Resource?SWUDNSAI=31&xinfo=8-1234"></iframe>
+      </body></html>`.padEnd(200, ' ');
+    const d = diagnosePage(incapsula);
+    expect(d.verdict).toBe('bot-wall');
+    expect(d.detail).toContain('Incapsula');
+
+    expect(diagnosePage(`<html><head><title>Just a moment...</title></head>
+      <body><div class="cf-browser-verification"></div></body></html>`.padEnd(200, ' ')).verdict).toBe('bot-wall');
+  });
+
+  it('names a JavaScript app shell (no title, no h1, all script)', () => {
+    const shell = `<html><head><meta charset="utf-8"><link rel="stylesheet" href="/a.css"></head>
+      <body><div id="root"></div><script src="/bundle.js"></script>
+      <script>window.__CFG__={api:"/graphql",locale:"en-US"}</script></body></html>`;
+    const d = diagnosePage(shell);
+    expect(d.verdict).toBe('js-shell');
+    expect(d.detail).toContain('app shell');
+  });
+
+  it('calls an essentially empty body what it is', () => {
+    expect(diagnosePage('<html><body></body></html>').verdict).toBe('empty');
+  });
+
+  it('says "readable" for a real page that simply has no part number', () => {
+    const real = `<html><head><title>Shelf Unit | Vendor</title></head><body>
+      <h1>Shelf Unit</h1>
+      <p>${'Adjustable steel shelving for cargo vans, sold by the unit. '.repeat(12)}</p>
+      </body></html>`;
+    expect(diagnosePage(real).verdict).toBe('ok');
   });
 });
 
@@ -193,6 +248,32 @@ describe('looksLikeProductUrl / looksLikeListingUrl', () => {
     expect(looksLikeProductUrl('https://x.com/wp-content/plugins/x/assets/css/product/global.0f804f5f.css')).toBe(false);
     expect(looksLikeProductUrl('https://x.com/catalog/feed/')).toBe(false);
     expect(looksLikeListingUrl('https://x.com/catalog/theme.js')).toBe(false);
+  });
+});
+
+describe('looksLikeProductUnder (teach mode: no /product/ segment anywhere)', () => {
+  const listing = 'https://cve.holman.com/shelving';
+
+  it('accepts a page one level under the category the admin pasted', () => {
+    expect(looksLikeProductUnder(listing, 'https://cve.holman.com/shelving/steel-shelving-unit')).toBe(true);
+    expect(looksLikeProductUrl('https://cve.holman.com/shelving/steel-shelving-unit')).toBe(false);
+  });
+
+  it('refuses anything not exactly one level down, or off-origin', () => {
+    expect(looksLikeProductUnder(listing, 'https://cve.holman.com/shelving')).toBe(false);
+    expect(looksLikeProductUnder(listing, 'https://cve.holman.com/shelving/a/b')).toBe(false);
+    expect(looksLikeProductUnder(listing, 'https://cve.holman.com/van-equipment/partition')).toBe(false);
+    expect(looksLikeProductUnder(listing, 'https://other.com/shelving/steel-shelving-unit')).toBe(false);
+  });
+
+  it('still refuses assets, cart actions and pagination', () => {
+    expect(looksLikeProductUnder(listing, 'https://cve.holman.com/shelving/spec.pdf')).toBe(false);
+    expect(looksLikeProductUnder(listing, 'https://cve.holman.com/shelving/unit?add-to-cart=12')).toBe(false);
+    expect(looksLikeProductUnder(listing, 'https://cve.holman.com/shelving/page/2')).toBe(false);
+  });
+
+  it('chains from a paginated category page', () => {
+    expect(looksLikeProductUnder('https://cve.holman.com/shelving/page/3', 'https://cve.holman.com/shelving/steel-shelving-unit')).toBe(true);
   });
 });
 
