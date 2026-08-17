@@ -6,9 +6,10 @@ import { r2Upload } from '@/lib/r2';
 import { fetchAllRows } from '@/lib/fetch-all';
 import {
   extractProduct, extractAllSkus, parseSitemapLocs, matchSkuToPart, skuKeys,
-  looksLikeProductUrl, looksLikeListingUrl, extractSameOriginLinks,
-  extractPaginationLinks, originVariants, skuCandidatesFromUrl, ensureScheme,
-  nearMatchSkuToPart, SITEMAP_CANDIDATES,
+  looksLikeProductUrl, looksLikeListingUrl, looksLikeProductUnder,
+  extractSameOriginLinks, extractPaginationLinks, originVariants,
+  skuCandidatesFromUrl, ensureScheme, nearMatchSkuToPart, diagnosePage,
+  SITEMAP_CANDIDATES,
 } from '@/lib/vendor-catalog-import';
 import { detectFitment } from '@/lib/vehicle-fitment';
 
@@ -77,7 +78,12 @@ const FETCH_HEADERS = {
 };
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-async function fetchText(url: string, maxBytes = 2_000_000): Promise<string> {
+interface FetchedPage { html: string; status: number; finalUrl: string; bytes: number; contentType: string | null }
+
+/** The fetch, with the evidence kept: the probe reports status / redirect /
+ *  size so "we read nothing off this page" can be told apart from "the site
+ *  bounced us somewhere else". */
+async function fetchPage(url: string, maxBytes = 2_000_000): Promise<FetchedPage> {
   const res = await fetch(url, {
     headers: { ...FETCH_HEADERS, Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' },
     signal: AbortSignal.timeout(15_000),
@@ -86,7 +92,17 @@ async function fetchText(url: string, maxBytes = 2_000_000): Promise<string> {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf.length > maxBytes) throw new Error(`Response too large (${buf.length} bytes)`);
-  return buf.toString('utf8');
+  return {
+    html: buf.toString('utf8'),
+    status: res.status,
+    finalUrl: res.url || url,
+    bytes: buf.length,
+    contentType: res.headers.get('content-type'),
+  };
+}
+
+async function fetchText(url: string, maxBytes = 2_000_000): Promise<string> {
+  return (await fetchPage(url, maxBytes)).html;
 }
 
 interface MappedPart { item_number: string; vendor: string | null; is_active: boolean; image_path: string | null; marketing_description: string | null; product_url: string | null }
@@ -147,16 +163,19 @@ export async function POST(req: NextRequest) {
 
   try {
     if (body.mode === 'probe') {
-      const html = await fetchText(body.url);
+      const page = await fetchPage(body.url);
+      const html = page.html;
       const product = extractProduct(html);
       const { byKey, partById, inScope, total, allTotal } = await buildPartMap(body.vendor);
       // Family pages can carry a whole model line's part numbers — match
       // them all; the slug is the fallback when the page yields nothing.
+      const pageSkus = extractAllSkus(html);
+      const slugSkus = skuCandidatesFromUrl(body.url);
       const matchedIds = [...new Set(
-        extractAllSkus(html).map(s => matchSkuToPart(s, byKey)).filter((id): id is string => !!id),
+        pageSkus.map(s => matchSkuToPart(s, byKey)).filter((id): id is string => !!id),
       )];
       if (matchedIds.length === 0) {
-        const slugHit = skuCandidatesFromUrl(body.url).map(c => matchSkuToPart(c, byKey)).find(Boolean);
+        const slugHit = slugSkus.map(c => matchSkuToPart(c, byKey)).find(Boolean);
         if (slugHit) matchedIds.push(slugHit);
       }
       const matchedParts = matchedIds.map(id => {
@@ -186,6 +205,12 @@ export async function POST(req: NextRequest) {
         matchedParts,
         catalogSearched: { active: total, all: allTotal },
         closest,
+        // What we actually received, and what we made of it — so a page that
+        // yields nothing says WHY (bot wall / JS shell / readable but no SKU)
+        // instead of a bare "no SKU on the page".
+        fetched: { status: page.status, finalUrl: page.finalUrl, bytes: page.bytes, contentType: page.contentType },
+        diagnosis: diagnosePage(html),
+        skuCandidates: [...new Set([...pageSkus, ...slugSkus])].slice(0, 12),
       });
     }
 
@@ -205,7 +230,12 @@ export async function POST(req: NextRequest) {
           const page = await fetchText(listing);
           let found = 0;
           const links = extractSameOriginLinks(page, listing);
-          for (const l of links) if (looksLikeProductUrl(l)) { candidates.add(l); found++; }
+          // Product shape globally, OR a page hanging one level under this
+          // category — vendors like cve.holman.com have no /product/ segment
+          // at all (/shelving → /shelving/steel-shelving-unit).
+          for (const l of links) {
+            if (looksLikeProductUrl(l) || looksLikeProductUnder(listing, l)) { candidates.add(l); found++; }
+          }
           note(listing, `${found} product links`);
           return [
             ...extractPaginationLinks(page, listing),

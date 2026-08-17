@@ -29,6 +29,12 @@ interface ProbeResult {
   catalogSearched?: { active: number; all: number };
   /** No match → the catalog rows nearest this SKU (spelling/active truth). */
   closest?: { itemNumber: string; active: boolean; vendor: string | null }[];
+  /** What came back off the wire — status, redirect target, size. */
+  fetched?: { status: number; finalUrl: string; bytes: number; contentType: string | null };
+  /** Why the page yielded nothing: readable, bot wall, JS shell, or empty. */
+  diagnosis?: { verdict: 'ok' | 'empty' | 'bot-wall' | 'js-shell'; detail: string };
+  /** Every SKU-ish string the page and the URL slug offered up. */
+  skuCandidates?: string[];
 }
 
 interface RunRow { url: string; ok: boolean; partId?: string; sku?: string | null; matched?: number; imported?: string[]; error?: string; nearItemNumber?: string }
@@ -514,9 +520,31 @@ export default function ImportVendorAssetsPage() {
                   </div>
                 );
               })()}
+              {/* Why nothing was read — a bot wall and a JS-built page both
+                  look like "no SKU on the page" without this. */}
+              {!probe.matchedPartId && probe.diagnosis && (
+                <div style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5, color: probe.diagnosis.verdict === 'ok' ? theme.textSecondary : theme.warning }}>
+                  {probe.diagnosis.verdict !== 'ok' && <strong>Why: </strong>}
+                  {probe.diagnosis.detail}
+                </div>
+              )}
+              {!probe.matchedPartId && probe.skuCandidates && probe.skuCandidates.length > 0 && (
+                <div style={{ fontSize: 12, marginTop: 2 }}>
+                  <span style={{ color: theme.textSecondary, fontWeight: 700 }}>Part-number-ish text on the page: </span>
+                  <span style={{ fontFamily: 'monospace' }}>{probe.skuCandidates.join(', ')}</span>
+                </div>
+              )}
               {probe.catalogSearched && (
                 <div style={{ fontSize: 11, color: theme.textMuted }}>
                   searched {probe.catalogSearched.active.toLocaleString()} active parts ({probe.catalogSearched.all.toLocaleString()} incl. inactive)
+                </div>
+              )}
+              {probe.fetched && (
+                <div style={{ fontSize: 11, color: theme.textMuted }}>
+                  fetched HTTP {probe.fetched.status} · {(probe.fetched.bytes / 1024).toFixed(1)} KB
+                  {probe.fetched.finalUrl.replace(/\/$/, '') !== ensureScheme(probeUrl.trim()).replace(/\/$/, '') && (
+                    <> · redirected to <span style={{ fontFamily: 'monospace' }}>{probe.fetched.finalUrl}</span></>
+                  )}
                 </div>
               )}
               {!probe.matchedPartId && probe.closest && (
