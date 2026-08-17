@@ -41,6 +41,9 @@ interface LineItem {
   labor_hours: number;
   is_custom: boolean;
   notes?: string;
+  // Which wrap quote produced this line (Add Graphics flow) — preserved
+  // through save so re-adding an edited quote replaces instead of duplicating.
+  wrap_quote_id?: string | null;
   catalog?: string; // 'upfit' | 'graphics' — drives the graphics-job prompt
   // True-cost inputs for the margin strip: NetSuite part cost + the running
   // average of what installers actually charge us for this part.
@@ -777,6 +780,7 @@ export default function EstimatesPage() {
           labor_hours: l.labor_hours,
           is_custom: l.is_custom,
           notes: l.notes || null,
+          wrap_quote_id: l.wrap_quote_id || null,
         })),
         created_by: user?.id,
       };
@@ -803,6 +807,8 @@ export default function EstimatesPage() {
           savedInternalNotesRef.current = internalNotes;
         }
         await loadEstimates(true);
+        setSaving(false);
+        return (editingId || data.id) as string;
       } else {
         await dialog.alert('Save failed: ' + (data.error || 'Unknown error'));
       }
@@ -810,6 +816,17 @@ export default function EstimatesPage() {
       await dialog.alert('Network error — please try again');
     }
     setSaving(false);
+    return null;
+  };
+
+  // ── Add Graphics (wrap-quote round trip) ──
+  // Saves first — the builder holds unsaved work in the browser, and the
+  // wrap screen is a navigation away — then hands off to the wrap-quote
+  // builder, which returns here via /estimates?id= with the graphics lines
+  // already written by /api/estimates/[id]/add-wrap-quote.
+  const addGraphics = async () => {
+    const id = await saveEstimate();
+    if (id) router.push(`/admin/wrap-quote?forEstimate=${id}`);
   };
 
   // ── Push to NetSuite (initial push or sync update) ──
@@ -1099,6 +1116,7 @@ export default function EstimatesPage() {
       labor_hours: l.labor_hours || 0,
       is_custom: l.is_custom || false,
       notes: l.notes || '',
+      wrap_quote_id: l.wrap_quote_id || null,
       catalog: l.part_id ? infoByPart[l.part_id]?.catalog : undefined,
       purchase_price: l.part_id ? infoByPart[l.part_id]?.purchase_price ?? null : null,
       avg_install_cost: l.part_id ? infoByPart[l.part_id]?.avg_install_cost ?? null : null,
@@ -1749,6 +1767,15 @@ export default function EstimatesPage() {
               style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
             >
               Browse Catalog
+            </button>
+            <button
+              type="button"
+              onClick={addGraphics}
+              disabled={saving}
+              title="Save this estimate and price vehicle graphics in the wrap-quote builder — the result comes back as lines on this estimate"
+              style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: saving ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}
+            >
+              🎨 Add Graphics
             </button>
             {lines.some(l => l.part_id && !l.is_custom) && (
               <button

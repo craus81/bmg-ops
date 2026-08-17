@@ -360,6 +360,64 @@ export default function WrapQuotePage() {
   const [emailPreview, setEmailPreview] = useState<{ to: string[]; subject: string; html: string; attachments: string[] } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
+  // Add Graphics round trip (?forEstimate=<id>): the estimate builder saved
+  // itself and sent the rep here to price graphics. Prefill the customer,
+  // pin a banner with the estimate's identity, and offer "Add to Estimate"
+  // which writes the quote back as estimate lines and returns.
+  const [forEstimate, setForEstimate] = useState<{
+    id: string; number: string; customerName: string | null; vehicle: string | null;
+  } | null>(null);
+  const [addingToEstimate, setAddingToEstimate] = useState(false);
+  const forEstimateHandled = useRef(false);
+  useEffect(() => {
+    const estId = searchParams.get('forEstimate');
+    if (!estId || forEstimateHandled.current) return;
+    forEstimateHandled.current = true;
+    (async () => {
+      const { data: est } = await supabase
+        .from('estimates')
+        .select('id, estimate_number, customer_id, customer_name, vehicle_year, vehicle_roof, vehicle_wheelbase, vehicle_platform_id, vehicle_platforms(label)')
+        .eq('id', estId)
+        .maybeSingle();
+      if (!est) return;
+      const vehicle = [
+        est.vehicle_year,
+        (est as any).vehicle_platforms?.label,
+        est.vehicle_roof ? `${est.vehicle_roof} roof` : null,
+        est.vehicle_wheelbase ? `${est.vehicle_wheelbase}" WB` : null,
+      ].filter(Boolean).join(' · ') || null;
+      setForEstimate({ id: est.id, number: est.estimate_number, customerName: est.customer_name, vehicle });
+      // Prefill the customer on a fresh quote only — never clobber a loaded one.
+      if (!savedQuoteId && est.customer_id) {
+        setCustomerId(est.customer_id);
+        if (est.customer_name) setCustomer((prev: any) => ({ ...prev, name: prev.name || est.customer_name }));
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on arrival
+  }, [searchParams]);
+
+  const addToEstimate = async () => {
+    if (!forEstimate) return;
+    setAddingToEstimate(true);
+    try {
+      const quoteId = await saveQuote();
+      if (!quoteId) return;
+      const res = await apiFetch(`/api/estimates/${forEstimate.id}/add-wrap-quote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wrapQuoteId: quoteId }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        await dialog.alert(`Could not add to the estimate: ${d.error || 'unknown error'}`);
+        return;
+      }
+      router.push(`/estimates?id=${forEstimate.id}`);
+    } finally {
+      setAddingToEstimate(false);
+    }
+  };
+
   // Deep link from search/popout/notifications: ?id= opens that quote's
   // detail view over the history tab once the quote list has loaded.
   // The ref guards the handling window: loadAll() refreshes `history` after
@@ -2183,6 +2241,39 @@ export default function WrapQuotePage() {
       <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '12px' }}>
         Wrap Quotes
       </div>
+
+      {/* Add Graphics round trip — pinned while pricing for an estimate */}
+      {forEstimate && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap',
+          padding: '10px 14px', borderRadius: '10px', marginBottom: '12px',
+          background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.3)',
+        }}>
+          <div style={{ flex: 1, minWidth: '220px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 800, color: '#8b5cf6' }}>
+              🎨 Building graphics for Estimate {forEstimate.number}
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+              {[forEstimate.customerName, forEstimate.vehicle].filter(Boolean).join(' · ') || 'Price the wrap, then add it to the estimate'}
+            </div>
+          </div>
+          <button
+            onClick={addToEstimate}
+            disabled={addingToEstimate}
+            title="Save this wrap quote and add it to the estimate as materials + install lines (re-adding after edits updates the same lines)"
+            style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#8b5cf6', color: '#fff', fontSize: '12px', fontWeight: 800, cursor: addingToEstimate ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}
+          >
+            {addingToEstimate ? 'Adding…' : `✓ Add to Estimate ${forEstimate.number}`}
+          </button>
+          <button
+            onClick={() => router.push(`/estimates?id=${forEstimate.id}`)}
+            title="Return to the estimate without adding graphics"
+            style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
+          >
+            ← Back to estimate
+          </button>
+        </div>
+      )}
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', flexWrap: 'wrap' }}>
