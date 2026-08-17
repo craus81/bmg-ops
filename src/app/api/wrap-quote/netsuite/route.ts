@@ -58,6 +58,13 @@ export async function POST(req: NextRequest) {
       error: `Already in NetSuite as estimate ${quote.netsuite_estimate_number || quote.netsuite_estimate_id}.`,
     }, { status: 409 });
   }
+  // Add Graphics flow: a quote folded into a FleetSuite estimate rides that
+  // estimate's NetSuite push — a standalone push would double-bill.
+  if ('estimate_id' in quote && quote.estimate_id) {
+    return NextResponse.json({
+      error: 'This wrap quote is part of a FleetSuite estimate — its price goes to NetSuite with that estimate. Pushing it separately would double-bill the graphics.',
+    }, { status: 409 });
+  }
   if (!quote.customer_id) {
     return NextResponse.json({
       error: 'Pick the customer from the NetSuite search on the Quote tab first — a typed-in name has no NetSuite record to attach the estimate to.',

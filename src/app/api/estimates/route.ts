@@ -17,6 +17,9 @@ const LineItemSchema = z.object({
   labor_hours: z.union([z.number(), z.string()]).optional(),
   is_custom: z.boolean().optional(),
   notes: z.string().max(2000).optional().nullable(),
+  // Which wrap quote produced the line (Add Graphics flow) — must survive
+  // the builder's save round trip or re-adding an edited quote duplicates.
+  wrap_quote_id: z.string().uuid().optional().nullable(),
 });
 
 const UpsertEstimateSchema = z.object({
@@ -216,6 +219,7 @@ export async function POST(req: NextRequest) {
           labor_hours: parseFloat(l.labor_hours || 0),
           is_custom: !!l.is_custom,
           notes: l.notes || null,
+          wrap_quote_id: l.wrap_quote_id || null,
         }));
         await supabase.from('estimate_line_items').insert(lineRows);
       }
@@ -288,6 +292,7 @@ export async function POST(req: NextRequest) {
           labor_hours: parseFloat(l.labor_hours || 0),
           is_custom: !!l.is_custom,
           notes: l.notes || null,
+          wrap_quote_id: l.wrap_quote_id || null,
         }));
         await supabase.from('estimate_line_items').insert(lineRows);
       }
