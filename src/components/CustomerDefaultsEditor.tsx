@@ -217,7 +217,7 @@ export default function CustomerDefaultsEditor({ initial, customerId, customerNa
                 <div key={f.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '4px 0' }}>
                   <a href={`/api/customers/files?download=${f.id}`} target="_blank" rel="noreferrer"
                     style={{ fontSize: '12px', color: 'var(--accent,#2563eb)', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    📎 {f.file_name}
+                    {f.file_name}
                   </a>
                   <button onClick={() => deleteCert(f)} style={{ background: 'transparent', border: 'none', color: '#ef4444', fontSize: '11px', fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>Delete</button>
                 </div>

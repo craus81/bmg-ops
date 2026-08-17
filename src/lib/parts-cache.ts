@@ -14,6 +14,7 @@ import { useState, useEffect } from 'react';
 import { createClient } from './supabase-browser';
 
 export interface PartInfo {
+  id: string;
   item_number: string;
   display_name: string | null;
   description: string | null;
@@ -29,7 +30,7 @@ async function loadParts(): Promise<Map<string, PartInfo>> {
   for (let offset = 0; ; offset += 1000) {
     const { data, error } = await supabase
       .from('netsuite_parts')
-      .select('item_number, display_name, description, billable_customer')
+      .select('id, item_number, display_name, description, billable_customer')
       .eq('is_active', true)
       .order('item_number')
       .range(offset, offset + 999);

@@ -10,6 +10,7 @@ import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
 import PartCatalogBrowser, { type BrowsePart, type KitWithMembers } from '@/components/PartCatalogBrowser';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { flashNote } from '@/lib/focus-note';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import { resolvePlatform, matchQualifiersToConfig } from '@/lib/vin-platform';
@@ -94,6 +95,12 @@ interface Estimate {
   netsuite_estimate_number: string | null;
   netsuite_so_id: string | null;
   netsuite_so_number: string | null;
+  // Delivery state of the LATEST approval email (Resend webhook — same
+  // scheme as invoice emails). null = never emailed / pre-tracking sends.
+  approval_email_status: string | null;
+  approval_email_detail: string | null;
+  approval_email_to: string[] | null;
+  approval_email_updated_at: string | null;
   pushed_at: string | null;
   created_by: string | null;
   created_at: string;
@@ -358,13 +365,12 @@ export default function EstimatesPage() {
   const [syncing, setSyncing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [convertingToSO, setConvertingToSO] = useState(false);
+  // Busy while the estimate saves ahead of opening the compose screen.
   const [sendingForApproval, setSendingForApproval] = useState(false);
-  // Compose + preview the approval email before it goes out (E4): a personal
-  // note plus the exact rendered document, recipient, and subject.
+  // Approval email goes through the standard compose screen (E4 +
+  // docs/customer-email-standard.md): editable recipients, bcc-me,
+  // personal note, and the exact rendered document as a live preview.
   const [approvalModal, setApprovalModal] = useState(false);
-  const [approvalMessage, setApprovalMessage] = useState('');
-  const [approvalPreview, setApprovalPreview] = useState<{ to: string | null; subject: string; html: string } | null>(null);
-  const [approvalPreviewLoading, setApprovalPreviewLoading] = useState(false);
 
   // Part search
   const [partSearch, setPartSearch] = useState('');
@@ -437,6 +443,36 @@ export default function EstimatesPage() {
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
+  }, [loading, searchParams]);
+
+  // ?new=1[&customer=<customers.id>] (deepLinks.newEstimate) opens the
+  // builder on a fresh estimate, pre-selecting the customer when one is
+  // given — the straight path from entering a new client to quoting them.
+  // One-shot: ?id= (an existing-estimate deep link) always wins over ?new=.
+  const handledNewParam = useRef(false);
+  useEffect(() => {
+    if (loading || handledNewParam.current) return;
+    if (searchParams.get('new') !== '1' || searchParams.get('id')) return;
+    handledNewParam.current = true;
+    resetBuilder();
+    setView('builder');
+    const custId = searchParams.get('customer');
+    if (!custId) return;
+    (async () => {
+      const { data } = await supabase
+        .from('customers')
+        .select('id, netsuite_id, company_name, entity_id')
+        .eq('id', custId)
+        .maybeSingle();
+      // No match (bad/stale id) degrades to a blank builder — the customer
+      // search is right there.
+      if (data) {
+        setCustomerId(data.id);
+        setCustomerName(data.company_name || data.entity_id || '');
+        setCustomerNsId(data.netsuite_id);
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: apply once after load
   }, [loading, searchParams]);
 
   // `silent` skips the `loading` toggle so mid-session refreshes (after a
@@ -858,25 +894,24 @@ export default function EstimatesPage() {
   // Compose + preview flow (E4): open the modal, persist edits so the preview
   // matches, then render the exact email before the staffer commits to send.
 
-  const fetchApprovalPreview = async (message: string) => {
-    if (!editingId) return;
-    setApprovalPreviewLoading(true);
+  const fetchApprovalPreview = async (fields: EmailComposeFields) => {
+    if (!editingId) return { error: 'No estimate open' };
     try {
       const res = await fetch(`/api/estimates/${editingId}/send-for-approval`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ preview: true, message: message.trim() || undefined }),
+        body: JSON.stringify({
+          preview: true,
+          emails: fields.emails,
+          message: fields.message || undefined,
+        }),
       });
       const data = await res.json();
-      if (res.ok && data.preview) {
-        setApprovalPreview({ to: data.to ?? null, subject: data.subject, html: data.html });
-      } else {
-        await dialog.alert('Preview failed: ' + (data.error || 'Unknown error'));
-      }
+      if (res.ok && data.preview) return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      return { error: data.error || 'Unknown error' };
     } catch {
-      await dialog.alert('Network error building preview — please try again.');
+      return { error: 'Network error — please try again.' };
     }
-    setApprovalPreviewLoading(false);
   };
 
   const openApprovalModal = async () => {
@@ -885,31 +920,39 @@ export default function EstimatesPage() {
     // Persist current edits so the preview and the sent email match. Keep the
     // estimate's current status — the send itself flips draft → sent
     // server-side, so opening a preview never marks anything sent.
+    setSendingForApproval(true);
     const currentStatus = estimates.find(e => e.id === editingId)?.status || 'draft';
     await saveEstimate(currentStatus);
-    setApprovalMessage('');
-    setApprovalPreview(null);
+    setSendingForApproval(false);
     setApprovalModal(true);
-    await fetchApprovalPreview('');
   };
 
-  const confirmSendApproval = async () => {
-    if (!editingId || sendingForApproval) return;
-    setSendingForApproval(true);
-    const res = await fetch(`/api/estimates/${editingId}/send-for-approval`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: approvalMessage.trim() || undefined }),
-    });
-    const data = await res.json();
-    setSendingForApproval(false);
-    if (!res.ok) {
-      await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
-      return;
+  const confirmSendApproval = async (fields: EmailComposeFields): Promise<{ ok: boolean }> => {
+    if (!editingId) return { ok: false };
+    let data: any;
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/send-for-approval`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          emails: fields.emails,
+          bccSelf: fields.bccSelf,
+          message: fields.message || undefined,
+        }),
+      });
+      data = await res.json();
+      if (!res.ok) {
+        await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
+        return { ok: false };
+      }
+    } catch {
+      await dialog.alert('Network error — please try again.');
+      return { ok: false };
     }
-    setApprovalModal(false);
     const emailInfo = data.dispatch?.email
-      ? (data.dispatch.email.ok ? `Email sent to ${data.dispatch.email.target}` : `Email failed: ${data.dispatch.email.error || 'unknown'}`)
+      ? (data.dispatch.email.ok
+          ? `Email sent to ${data.dispatch.email.target}${data.dispatch.email.bcc ? ` (bcc ${data.dispatch.email.bcc})` : ''}`
+          : `Email failed: ${data.dispatch.email.error || 'unknown'}`)
       : null;
     const smsInfo = data.dispatch?.sms
       ? (data.dispatch.sms.skipped
@@ -920,6 +963,7 @@ export default function EstimatesPage() {
       : null;
     await dialog.alert(`Approval link sent. Link: ${data.approvalUrl}\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n')}`);
     loadEstimates(true);
+    return { ok: true };
   };
 
   const convertToSalesOrder = async () => {
@@ -1337,6 +1381,15 @@ export default function EstimatesPage() {
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
+                      {['bounced', 'failed', 'complained'].includes(est.approval_email_status || '') && (
+                        <div title={`The approval email did not reach the customer${est.approval_email_detail ? ` — ${est.approval_email_detail}` : ''}. Open the estimate to resend.`} style={{
+                          padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                          background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)',
+                          color: '#ef4444', whiteSpace: 'nowrap',
+                        }}>
+                          ✉ Bounced
+                        </div>
+                      )}
                       {est.netsuite_estimate_id && (
                         <button
                           onClick={async (e) => {
@@ -1570,7 +1623,7 @@ export default function EstimatesPage() {
           </select>
           {selectedPlatform && (
             <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
-              🚐 Browse Catalog will filter to parts that fit the {selectedPlatform.label}
+              Browse Catalog will filter to parts that fit the {selectedPlatform.label}
               {vehicleRoof ? ` · ${vehicleRoof} roof` : ''}
               {vehicleWheelbase ? ` · ${/^\d/.test(vehicleWheelbase) ? `${vehicleWheelbase}" WB` : vehicleWheelbase}` : ''}
             </div>
@@ -1695,7 +1748,7 @@ export default function EstimatesPage() {
               title="Browse the catalog by category and vendor, with photos"
               style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
             >
-              🗂 Browse Catalog
+              Browse Catalog
             </button>
             {lines.some(l => l.part_id && !l.is_custom) && (
               <button
@@ -1704,7 +1757,7 @@ export default function EstimatesPage() {
                 title="Save this estimate's catalog lines as a reusable package (Browse Catalog → Packages)"
                 style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
               >
-                📦 Save as Package
+                Save as Package
               </button>
             )}
             {partResults.length > 0 && (
@@ -1750,7 +1803,7 @@ export default function EstimatesPage() {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {/* Header row */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 60px 80px 80px 60px 30px', gap: '4px', padding: '4px 0', fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase' }}>
+            <div className="est-line est-line-head" style={{ padding: '4px 0', fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase' }}>
               <div onClick={() => toggleEstSort('item_number')} style={{ cursor: 'pointer', color: estSortCol === 'item_number' ? '#60a5fa' : undefined }}>Item #{estSortIndicator('item_number')}</div>
               <div>Description</div>
               <div onClick={() => toggleEstSort('quantity')} style={{ textAlign: 'center', cursor: 'pointer', color: estSortCol === 'quantity' ? '#60a5fa' : undefined }}>Qty{estSortIndicator('quantity')}</div>
@@ -1765,22 +1818,24 @@ export default function EstimatesPage() {
               return (
               <div key={line.key}>
                 <div
-                  style={{
-                    display: 'grid', gridTemplateColumns: '1fr 2fr 60px 80px 80px 60px 30px',
-                    gap: '4px', alignItems: 'center',
-                    padding: '6px 0', borderBottom: unmatched ? 'none' : '1px solid var(--border)',
-                  }}
+                  className="est-line"
+                  style={{ padding: '6px 0', borderBottom: unmatched ? 'none' : '1px solid var(--border)' }}
                 >
                   {line.is_custom ? (
                     <input
+                      className="est-c-item"
                       style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
                       value={line.item_number}
                       onChange={e => updateLine(line.key, 'item_number', e.target.value)}
                       placeholder="Item #"
                     />
                   ) : (
-                    <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {line.item_number}
+                    <div className="est-c-item" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {line.part_id ? (
+                        <a className="part-link" href={deepLinks.part(line.part_id)} target="_blank" rel="noreferrer" title="Open part record">
+                          {line.item_number}
+                        </a>
+                      ) : line.item_number}
                     </div>
                   )}
 
@@ -1790,6 +1845,7 @@ export default function EstimatesPage() {
                       record is never modified). Cleared = NetSuite falls back
                       to the item's default description. */}
                   <input
+                    className="est-c-desc"
                     style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
                     value={line.description}
                     onChange={e => updateLine(line.key, 'description', e.target.value)}
@@ -1797,26 +1853,30 @@ export default function EstimatesPage() {
                     title={line.description}
                   />
 
+                  <div className="est-c-qty">
+                    <div className="est-cell-label" style={{ textAlign: 'center' }}>Qty</div>
+                    <input
+                      type="number"
+                      style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px', textAlign: 'center' }}
+                      value={line.quantity}
+                      onChange={e => updateLine(line.key, 'quantity', parseFloat(e.target.value) || 0)}
+                      min={0}
+                    />
+                  </div>
 
-                  <input
-                    type="number"
-                    style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px', textAlign: 'center' }}
-                    value={line.quantity}
-                    onChange={e => updateLine(line.key, 'quantity', parseFloat(e.target.value) || 0)}
+                  <div className="est-c-price">
+                    <div className="est-cell-label" style={{ textAlign: 'right' }}>Price</div>
+                    <input
+                      type="number"
+                      style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px', textAlign: 'right' }}
+                      value={line.unit_price}
+                      onChange={e => updateLine(line.key, 'unit_price', parseFloat(e.target.value) || 0)}
+                      step={0.01}
+                    />
+                  </div>
 
-                    min={0}
-                  />
-
-                  <input
-                    type="number"
-                    style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px', textAlign: 'right' }}
-                    value={line.unit_price}
-                    onChange={e => updateLine(line.key, 'unit_price', parseFloat(e.target.value) || 0)}
-
-                    step={0.01}
-                  />
-
-                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)', textAlign: 'right' }}>
+                  <div className="est-c-total" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)', textAlign: 'right' }}>
+                    <div className="est-cell-label">Total</div>
                     {fmt(line.quantity * line.unit_price)}
                     {(() => {
                       const pct = lineMarginPct(line);
@@ -1830,13 +1890,16 @@ export default function EstimatesPage() {
                     })()}
                   </div>
 
-                  <div style={{ fontSize: '10px', color: line.labor_hours > 0 ? '#fbbf24' : 'var(--text-label)', textAlign: 'center' }}>
+                  <div className="est-c-labor" style={{ fontSize: '10px', color: line.labor_hours > 0 ? '#fbbf24' : 'var(--text-label)', textAlign: 'center' }}>
+                    <div className="est-cell-label">Labor</div>
                     {line.labor_hours > 0 ? `${(line.labor_hours * line.quantity).toFixed(1)}h` : '—'}
                   </div>
 
                   {(
                     <button
+                      className="est-c-x"
                       onClick={() => removeLine(line.key)}
+                      title="Remove line"
                       style={{ background: 'transparent', border: 'none', color: '#f87171', fontSize: '14px', cursor: 'pointer', padding: '2px' }}
                     >
                       ×
@@ -2320,6 +2383,37 @@ export default function EstimatesPage() {
           </button>
         )}
 
+        {/* Delivery state of the latest approval email (Resend webhook).
+            A bounce used to be invisible — the app said "sent" while the
+            customer never saw the estimate. */}
+        {editingId && (() => {
+          const est = estimates.find(e => e.id === editingId);
+          const st = est?.approval_email_status;
+          if (!est || !st) return null;
+          const to = (est.approval_email_to || []).join(', ');
+          const when = est.approval_email_updated_at ? new Date(est.approval_email_updated_at).toLocaleString() : null;
+          const bad = ['bounced', 'failed', 'complained'].includes(st);
+          const meta = bad
+            ? {
+                color: '#ef4444', bg: 'rgba(239,68,68,0.08)', border: 'rgba(239,68,68,0.25)',
+                text: `⚠ Approval email ${st === 'complained' ? 'marked as spam' : st === 'failed' ? 'failed' : 'bounced'}${to ? ` (${to})` : ''} — the customer did not get it.${est.approval_email_detail ? ` ${est.approval_email_detail}.` : ''} Fix the address and resend.`,
+              }
+            : st === 'delivered'
+              ? { color: '#22c55e', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.2)', text: `✓ Approval email delivered${to ? ` to ${to}` : ''}` }
+              : st === 'delivery_delayed'
+                ? { color: '#f59e0b', bg: 'rgba(251,191,36,0.08)', border: 'rgba(251,191,36,0.25)', text: `Approval email delayed — the receiving server is retrying${to ? ` (${to})` : ''}` }
+                : { color: 'var(--text-muted)', bg: 'var(--subtle-bg)', border: 'var(--border)', text: `Approval email sent${to ? ` to ${to}` : ''} — awaiting delivery confirmation` };
+          return (
+            <div style={{
+              width: '100%', padding: '8px 12px', borderRadius: '10px', textAlign: 'center',
+              background: meta.bg, border: `1px solid ${meta.border}`,
+              fontSize: '11px', fontWeight: 700, color: meta.color,
+            }}>
+              {meta.text}{when ? <span style={{ fontWeight: 400 }}> · {when}</span> : null}
+            </div>
+          );
+        })()}
+
         {/* Convert to Sales Order — gated on customer approval; admins can
             override with a recorded reason (phone/email/PO approvals). */}
         {editingId && customerNsId && lines.length > 0 && !estimates.find(e => e.id === editingId)?.netsuite_so_id && (() => {
@@ -2371,71 +2465,25 @@ export default function EstimatesPage() {
               opacity: deleting ? 0.5 : 1,
             }}
           >
-            {deleting ? 'Deleting...' : isPushed ? '🗑️ Delete Estimate (Supabase + NetSuite)' : '🗑️ Delete Estimate'}
+            {deleting ? 'Deleting...' : isPushed ? 'Delete Estimate (also deletes in NetSuite)' : 'Delete Estimate'}
           </button>
         )}
       </div>
 
-      {/* Approval-email preview modal (E4) — compose a personal note and see
-          the exact document, recipient, and subject before it goes out. */}
+      {/* Approval email — standard compose screen (E4 + the customer-email
+          standard): edit recipients, bcc yourself, add a note, and see the
+          exact document before it goes out. */}
       {approvalModal && (
-        <div
-          style={{ position: 'fixed', inset: 0, background: 'var(--overlay, rgba(0,0,0,0.5))', zIndex: 1500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
-          onClick={() => setApprovalModal(false)}
-        >
-          <div onClick={e => e.stopPropagation()} style={{
-            background: 'var(--card)', borderRadius: '14px', padding: '16px',
-            width: '100%', maxWidth: '760px', maxHeight: 'calc(100vh - 40px)',
-            display: 'flex', flexDirection: 'column', gap: '10px',
-            boxShadow: '0 8px 30px rgba(0,0,0,0.3)',
-          }}>
-            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>Review Approval Email Before Sending</div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              <b style={{ color: 'var(--text-secondary)' }}>To:</b> {approvalPreview?.to || <span style={{ color: '#f59e0b' }}>no email on file — add a contact, or it sends by SMS only</span>}
-              <span style={{ margin: '0 6px' }}>·</span>
-              <b style={{ color: 'var(--text-secondary)' }}>Subject:</b> {approvalPreview?.subject || '…'}
-            </div>
-            <div>
-              <div style={labelStyle}>Personal message (shown at the top of the email)</div>
-              <textarea
-                value={approvalMessage}
-                onChange={e => setApprovalMessage(e.target.value)}
-                onBlur={() => fetchApprovalPreview(approvalMessage)}
-                rows={3}
-                placeholder="Optional note to the customer — added above the estimate…"
-                style={{ ...inputStyle, resize: 'vertical' }}
-              />
-            </div>
-            <div style={{ flex: 1, minHeight: '220px', border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden', background: '#f3f4f6', position: 'relative' }}>
-              {approvalPreviewLoading && (
-                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700, color: '#6b7280', background: 'rgba(243,244,246,0.7)' }}>Updating preview…</div>
-              )}
-              <iframe srcDoc={approvalPreview?.html || ''} title="Approval email preview" sandbox="" style={{ width: '100%', height: '100%', minHeight: '220px', border: 'none', display: 'block' }} />
-            </div>
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => setApprovalModal(false)}
-                style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-body)', fontWeight: 700, fontSize: '12px', cursor: 'pointer' }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => fetchApprovalPreview(approvalMessage)}
-                disabled={approvalPreviewLoading}
-                style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid rgba(59,130,246,0.3)', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', fontWeight: 700, fontSize: '12px', cursor: 'pointer', opacity: approvalPreviewLoading ? 0.5 : 1 }}
-              >
-                Refresh Preview
-              </button>
-              <button
-                onClick={confirmSendApproval}
-                disabled={sendingForApproval || approvalPreviewLoading}
-                style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#22c55e', color: '#fff', fontWeight: 800, fontSize: '12px', cursor: 'pointer', opacity: (sendingForApproval || approvalPreviewLoading) ? 0.6 : 1 }}
-              >
-                {sendingForApproval ? 'Sending…' : 'Send for Approval'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <EmailComposeModal
+          title="Review Approval Email Before Sending"
+          sendLabel="Send for Approval"
+          messagePlaceholder="Optional note to the customer — added above the estimate…"
+          allowSendWithoutTo
+          emptyToNote="No email on file — add a contact, or it sends by SMS only if a phone is on file."
+          fetchPreview={fetchApprovalPreview}
+          onSend={confirmSendApproval}
+          onClose={() => setApprovalModal(false)}
+        />
       )}
 
       {/* N4-A: Ranger-style visual catalog — add straight into the estimate */}

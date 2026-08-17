@@ -29,6 +29,7 @@ import RecordChanges from '@/components/RecordChanges';
 import AssignJobPOModal from '@/components/AssignJobPOModal';
 import GraphicsInvoiceReviewModal from '@/components/GraphicsInvoiceReviewModal';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
+import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { PartLabel } from '@/components/PartLabel';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
 import GraphicsMaterialsCard from '@/components/GraphicsMaterialsCard';
@@ -143,8 +144,7 @@ export default function GraphicsJobRecordPage() {
   const [creatingEstimate, setCreatingEstimate] = useState(false);
   const [fetchingPdf, setFetchingPdf] = useState(false);
 
-  // Customer approval proof picker
-  const [sendingApproval, setSendingApproval] = useState(false);
+  // Customer approval — proof picker + standard compose modal
   const [approvalPickerOpen, setApprovalPickerOpen] = useState(false);
   const [approvalPickerFileId, setApprovalPickerFileId] = useState<string | null>(null);
 
@@ -741,8 +741,10 @@ export default function GraphicsJobRecordPage() {
   };
 
   // ── Customer approval ────────────────────────────────────────────────────
+  // Standard compose screen (docs/customer-email-standard.md): editable
+  // recipients, bcc-me, personal message, attachments, live preview. The
+  // proof-file radio picker rides along in the modal's intro slot.
   const openApprovalPicker = () => {
-    if (sendingApproval) return;
     // Pre-fill with the most recently uploaded file (common case: artist
     // uploads the proof, then sends).
     setApprovalPickerOpen(true);
@@ -754,30 +756,63 @@ export default function GraphicsJobRecordPage() {
     setApprovalPickerFileId(null);
   };
 
-  const confirmSendForApproval = async () => {
-    if (!job || sendingApproval) return;
+  const fetchApprovalPreview = async (fields: EmailComposeFields) => {
+    if (!job) return { error: 'Job not loaded' };
+    try {
+      const res = await fetch(`/api/graphics-jobs/${job.id}/send-for-approval`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          preview: true,
+          proofFileId: approvalPickerFileId,
+          emails: fields.emails,
+          message: fields.message || undefined,
+          attachmentFileIds: fields.attachmentIds,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.preview) return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      return { error: data.error || 'Unknown error' };
+    } catch {
+      return { error: 'Network error — please try again.' };
+    }
+  };
+
+  const sendForApproval = async (fields: EmailComposeFields): Promise<{ ok: boolean }> => {
+    if (!job) return { ok: false };
     if (!approvalPickerFileId) {
       await dialog.alert('Pick a proof file to send.');
-      return;
+      return { ok: false };
     }
-    setSendingApproval(true);
-    const res = await fetch(`/api/graphics-jobs/${job.id}/send-for-approval`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ proofFileId: approvalPickerFileId }),
-    });
-    const data = await res.json();
-    setSendingApproval(false);
-    if (!res.ok) {
-      await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
-      return;
+    let data: any;
+    try {
+      const res = await fetch(`/api/graphics-jobs/${job.id}/send-for-approval`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          proofFileId: approvalPickerFileId,
+          emails: fields.emails,
+          bccSelf: fields.bccSelf,
+          message: fields.message || undefined,
+          attachmentFileIds: fields.attachmentIds,
+        }),
+      });
+      data = await res.json();
+      if (!res.ok) {
+        await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
+        return { ok: false };
+      }
+    } catch {
+      await dialog.alert('Network error — please try again.');
+      return { ok: false };
     }
-    closeApprovalPicker();
     // Refresh the job row so the approval timestamps render.
     const { data: fresh } = await supabase.from('graphics_jobs').select('*').eq('id', job.id).maybeSingle();
     if (fresh) setJob(fresh as GraphicsJob);
     const emailInfo = data.dispatch?.email
-      ? (data.dispatch.email.ok ? `Email sent to ${data.dispatch.email.target}` : `Email failed: ${data.dispatch.email.error || 'unknown'}`)
+      ? (data.dispatch.email.ok
+          ? `Email sent to ${data.dispatch.email.target}${data.dispatch.email.bcc ? ` (bcc ${data.dispatch.email.bcc})` : ''}${data.dispatch.email.attachments ? ` with ${data.dispatch.email.attachments} attachment${data.dispatch.email.attachments !== 1 ? 's' : ''}` : ''}`
+          : `Email failed: ${data.dispatch.email.error || 'unknown'}`)
       : null;
     const smsInfo = data.dispatch?.sms
       ? (data.dispatch.sms.skipped
@@ -787,6 +822,7 @@ export default function GraphicsJobRecordPage() {
             : `SMS failed: ${data.dispatch.sms.error || 'unknown'}`)
       : null;
     await dialog.alert(`Proof sent for approval. Link: ${data.approvalUrl}\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n')}`);
+    return { ok: true };
   };
 
   // ── Render ───────────────────────────────────────────────────────────────
@@ -860,7 +896,7 @@ export default function GraphicsJobRecordPage() {
               title="Track on ups.com"
               style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(96,165,250,0.1)', color: '#60a5fa', fontWeight: 700, textDecoration: 'none' }}
             >
-              📦 {job.tracking_number}
+              {job.tracking_number}
             </a>
           )}
           {job.ship_to && (
@@ -1401,7 +1437,6 @@ export default function GraphicsJobRecordPage() {
             {!approvalPickerOpen && (
               <button
                 onClick={openApprovalPicker}
-                disabled={sendingApproval}
                 style={{
                   marginTop: '6px', padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
                   background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
@@ -1430,7 +1465,6 @@ export default function GraphicsJobRecordPage() {
             {!approvalPickerOpen && (
               <button
                 onClick={openApprovalPicker}
-                disabled={sendingApproval}
                 style={{
                   padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
                   background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
@@ -1441,65 +1475,59 @@ export default function GraphicsJobRecordPage() {
           </div>
         )}
 
-        {/* Proof picker — only the chosen file is sent to the customer. */}
+        {/* Standard compose screen; the proof picker rides in the intro slot —
+            only the chosen file drives what the approval page displays. */}
         {approvalPickerOpen && (
-          <div style={{ marginTop: '8px', padding: '10px', borderRadius: '8px', background: 'var(--bg)', border: '1px solid var(--border)' }}>
-            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
-              Pick the proof to send
-            </div>
-            {jobFiles.length === 0 ? (
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>
-                No files attached to this job. Upload a proof first.
+          <EmailComposeModal
+            title="Send Proof for Customer Approval"
+            sendLabel="Send for Approval"
+            messagePlaceholder="Optional note to the customer — shown at the top of the email…"
+            attachments={jobFiles.map(f => ({ id: f.id, name: f.file_name, sizeBytes: f.file_size }))}
+            initialAttachmentIds={approvalPickerFileId ? [approvalPickerFileId] : []}
+            allowSendWithoutTo
+            emptyToNote="No email recipients — the approval link goes out by SMS only if the customer has a phone on file."
+            previewKey={approvalPickerFileId || ''}
+            fetchPreview={fetchApprovalPreview}
+            onSend={sendForApproval}
+            onClose={closeApprovalPicker}
+            intro={
+              <div style={{ padding: '10px', borderRadius: '8px', background: 'var(--bg)', border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                  Pick the proof to send — the approval page shows this file
+                </div>
+                {jobFiles.length === 0 ? (
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>
+                    No files attached to this job. Upload a proof first.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '140px', overflowY: 'auto' }}>
+                    {jobFiles.map(f => (
+                      <label key={f.id} style={{
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                        padding: '6px 8px', borderRadius: '6px',
+                        background: approvalPickerFileId === f.id ? 'rgba(59,130,246,0.1)' : 'var(--subtle-bg)',
+                        border: '1px solid ' + (approvalPickerFileId === f.id ? 'rgba(59,130,246,0.3)' : 'var(--border)'),
+                        cursor: 'pointer',
+                      }}>
+                        <input
+                          type="radio"
+                          name="approval-file"
+                          checked={approvalPickerFileId === f.id}
+                          onChange={() => setApprovalPickerFileId(f.id)}
+                        />
+                        <span style={{ fontSize: '12px', color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {f.file_name}
+                        </span>
+                        {f.file_type && (
+                          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{f.file_type.split('/')[1] || f.file_type}</span>
+                        )}
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                {jobFiles.map(f => (
-                  <label key={f.id} style={{
-                    display: 'flex', alignItems: 'center', gap: '8px',
-                    padding: '6px 8px', borderRadius: '6px',
-                    background: approvalPickerFileId === f.id ? 'rgba(59,130,246,0.1)' : 'var(--subtle-bg)',
-                    border: '1px solid ' + (approvalPickerFileId === f.id ? 'rgba(59,130,246,0.3)' : 'var(--border)'),
-                    cursor: 'pointer',
-                  }}>
-                    <input
-                      type="radio"
-                      name="approval-file"
-                      checked={approvalPickerFileId === f.id}
-                      onChange={() => setApprovalPickerFileId(f.id)}
-                    />
-                    <span style={{ fontSize: '12px', color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {f.file_name}
-                    </span>
-                    {f.file_type && (
-                      <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{f.file_type.split('/')[1] || f.file_type}</span>
-                    )}
-                  </label>
-                ))}
-              </div>
-            )}
-            <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-              <button
-                onClick={confirmSendForApproval}
-                disabled={!approvalPickerFileId || sendingApproval}
-                style={{
-                  flex: 1, padding: '8px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
-                  background: approvalPickerFileId ? '#22c55e' : 'var(--border)',
-                  border: 'none', color: '#fff',
-                  cursor: approvalPickerFileId && !sendingApproval ? 'pointer' : 'not-allowed',
-                  opacity: approvalPickerFileId && !sendingApproval ? 1 : 0.5,
-                }}
-              >{sendingApproval ? 'Sending…' : 'Send to customer'}</button>
-              <button
-                onClick={closeApprovalPicker}
-                disabled={sendingApproval}
-                style={{
-                  padding: '8px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
-                  background: 'transparent', border: '1px solid var(--border)',
-                  color: 'var(--text-muted)', cursor: 'pointer',
-                }}
-              >Cancel</button>
-            </div>
-          </div>
+            }
+          />
         )}
       </div>
 
@@ -1521,7 +1549,7 @@ export default function GraphicsJobRecordPage() {
                   border: '1px solid rgba(96,165,250,0.3)',
                   color: '#60a5fa', textDecoration: 'none',
                 }}
-              >⬇ Download all ({jobFiles.length})</a>
+              >Download all ({jobFiles.length})</a>
             )}
           </div>
           {jobFiles.length > 0 && (
@@ -1531,7 +1559,6 @@ export default function GraphicsJobRecordPage() {
                 const isPdf = f.file_type === 'application/pdf';
                 return (
                   <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '8px', background: 'var(--subtle-bg)' }}>
-                    <span style={{ fontSize: '14px', flexShrink: 0 }}>{isImage ? '🖼️' : isPdf ? '📄' : '📎'}</span>
                     <a
                       href={getFileUrl(f)}
                       target="_blank"
@@ -1558,7 +1585,6 @@ export default function GraphicsJobRecordPage() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 {poFiles.map(f => (
                   <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '8px', background: 'rgba(96,165,250,0.06)', border: '1px dashed rgba(96,165,250,0.3)' }}>
-                    <span style={{ fontSize: '14px', flexShrink: 0 }}>📄</span>
                     <a
                       href={getFileUrl(f)}
                       target="_blank"

@@ -692,7 +692,7 @@ export default function CniInstallerDetailPage() {
                     target="_blank" rel="noreferrer"
                     style={{ marginLeft: '8px', fontSize: '11px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none' }}
                   >
-                    📄 View
+                    View
                   </a>
                 )}
               </div>

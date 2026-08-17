@@ -85,6 +85,9 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
   const [verifying, setVerifying] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
+  // Customer-email compose standard: one click copies the real send to the
+  // signed-in sender's inbox.
+  const [bccSelf, setBccSelf] = useState(false);
 
   // Billing workflow (K3): customers.billing_workflow routes invoices —
   // po_portal customers get a "submit in the portal, don't email" banner and
@@ -247,6 +250,7 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
           customerName,
           customerEmail: recipients,
           customBody: body,
+          bccSelf: !isTest && bccSelf,
           testSend: isTest,
         }),
       });
@@ -420,9 +424,18 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
           })()}
         </div>
 
-        {/* Test send */}
+        {/* Bcc me + test send */}
         {user?.email && (
-          <div style={{ marginTop: '8px' }}>
+          <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={bccSelf}
+                onChange={e => setBccSelf(e.target.checked)}
+                style={{ accentColor: '#3b82f6' }}
+              />
+              Bcc me a copy ({user.email})
+            </label>
             <button
               onClick={() => sendInvoices(user.email!)}
               disabled={sendingTest || sending}

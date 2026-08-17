@@ -135,6 +135,11 @@ export async function GET(req: NextRequest) {
         email,
         `[BMG Fleet] Weekly vehicle update — ${b.active.length} in shop${b.completed.length + b.shipped.length > 0 ? `, ${b.completed.length + b.shipped.length} finished` : ''}`,
         html,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { kind: 'customer_digest' },
       );
       if (ok) sent++;
     }

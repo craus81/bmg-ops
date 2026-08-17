@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { generateToken } from '@/lib/magic-link-approval';
-import { sendEmail } from '@/lib/resend';
+import { sendEmailDetailed } from '@/lib/resend';
+import { deepLinks } from '@/lib/deep-links';
 import { sendSMS } from '@/lib/sms-provider';
 import { renderEstimateDocument } from '@/lib/estimate-document';
+import { enrichLinesWithPartAssets } from '@/lib/estimate-line-parts';
 import { r2PublicUrl } from '@/lib/r2';
 import { validateBody, z } from '@/lib/validate';
 
@@ -17,6 +19,10 @@ const supabase = createClient(
 
 const SendForApprovalSchema = z.object({
   email: z.string().email().max(254).optional().nullable(),
+  // Standard compose fields (docs/customer-email-standard.md): editable
+  // multi-recipient To and bcc-the-sender.
+  emails: z.array(z.string().email().max(254)).max(20).optional(),
+  bccSelf: z.boolean().optional().default(false),
   phone: z.string().trim().max(40).optional().nullable(),
   expiryDays: z.number().int().positive().max(365).optional(),
   // Personal note rendered at the top of the estimate email (plain text,
@@ -61,9 +67,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: 'Already approved' }, { status: 409 });
   }
 
-  // Resolve delivery targets
+  // Resolve delivery targets. Explicit compose recipients win; otherwise
+  // fall back to the customer's primary contact / synced profile.
   let email: string | null = body.email || null;
   let phone: string | null = body.phone || null;
+  const composeEmails = (body.emails || []).map(e => e.trim()).filter(Boolean);
 
   if (!email || !phone) {
     let customerId: string | null = estimate.customer_id || null;
@@ -92,7 +100,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
   }
 
-  if (!email && !phone && !body.preview) {
+  const emailList: string[] = composeEmails.length > 0 ? composeEmails : (email ? [email] : []);
+
+  if (emailList.length === 0 && !phone && !body.preview) {
     return NextResponse.json({ error: 'No email or phone on file for this customer. Add a contact first.' }, { status: 400 });
   }
 
@@ -102,12 +112,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   // The customer-facing document — line items, quantities, rates, totals —
   // loaded once for both the preview and the real send.
-  const { data: lineItems } = await supabase
+  const { data: rawLineItems } = await supabase
     .from('estimate_line_items')
     .select('*')
     .eq('estimate_id', estimate.id)
     .order('sort_order')
     .order('id');
+  // Enhanced estimate: product photos + vendor links per line (same
+  // enrichment the approval page and signed snapshot use).
+  const lineItems = await enrichLinesWithPartAssets(supabase, rawLineItems || []);
   const { data: settings } = await supabase
     .from('wrap_quote_settings')
     .select('company')
@@ -128,7 +141,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       ctaLabel: 'Review & Approve',
       ctaNote: `A unique, secure link is generated when you send. It expires in ${expiryDays} days.`,
     });
-    return NextResponse.json({ preview: true, to: email, subject, html });
+    return NextResponse.json({ preview: true, to: emailList.join(', ') || null, subject, html });
   }
 
   // Mint a fresh token — rotating on resend invalidates prior links.
@@ -153,8 +166,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const dispatch: Record<string, any> = { email: null, sms: null };
 
-  if (email) {
-    const link = `${appUrl}/approve/estimate/${token}?via=email${email ? `&to=${encodeURIComponent(email)}` : ''}`;
+  if (emailList.length > 0) {
+    const link = `${appUrl}/approve/estimate/${token}?via=email&to=${encodeURIComponent(emailList[0])}`;
     // The real estimate document, not a notification card: the old email
     // carried a one-line summary and no quantities, rates, or line totals
     // at all — the fields customers kept asking about.
@@ -166,11 +179,31 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       ctaLabel: 'Review & Approve',
       ctaNote: `This link expires in ${expiryDays} days.`,
     });
+    const bcc = body.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
     try {
-      const ok = await sendEmail(email, subject, html, undefined, undefined, auth.user?.email || undefined);
-      dispatch.email = { target: email, ok };
+      const { ok, id: resendId } = await sendEmailDetailed(
+        emailList, subject, html, undefined, undefined, auth.user?.email || undefined, bcc,
+        { kind: 'estimate_approval', sentBy: auth.user?.id, contextUrl: deepLinks.estimate(estimate.id) },
+      );
+      dispatch.email = { target: emailList.join(', '), ok, bcc: bcc ? bcc.join(', ') : undefined };
+      // Delivery tracking (same scheme as invoice emails): store the Resend
+      // message id so the webhook can update this estimate's delivery state,
+      // and reset the state for this fresh send. A failed hand-off to Resend
+      // is recorded as 'failed' immediately — no webhook will ever come.
+      // Best-effort: a logging failure never turns a sent email into an error.
+      const { error: trackErr } = await supabase
+        .from('estimates')
+        .update({
+          approval_email_id: ok ? resendId : null,
+          approval_email_to: emailList,
+          approval_email_status: ok ? 'sent' : 'failed',
+          approval_email_detail: ok ? null : 'The email could not be handed to the delivery service',
+          approval_email_updated_at: new Date().toISOString(),
+        })
+        .eq('id', estimate.id);
+      if (trackErr) console.error('estimate email tracking update failed:', trackErr.message);
     } catch (err: any) {
-      dispatch.email = { target: email, ok: false, error: err?.message };
+      dispatch.email = { target: emailList.join(', '), ok: false, error: err?.message };
     }
   }
 

@@ -425,7 +425,7 @@ export default function VehiclePickListPage() {
             border: '1px solid var(--border)', background: 'var(--card)',
             fontSize: '13px', fontWeight: 700, cursor: 'pointer', marginBottom: '12px',
           }}
-        >{messagingCustomer ? 'Opening thread...' : '💬 Message Customer'}</button>
+        >{messagingCustomer ? 'Opening thread...' : 'Message Customer'}</button>
       )}
 
       {isComplete && (

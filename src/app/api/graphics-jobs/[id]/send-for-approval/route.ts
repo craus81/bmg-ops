@@ -16,6 +16,13 @@ const supabase = createClient(
 const Schema = z.object({
   proofFileId: z.string().uuid().optional().nullable(),
   email: z.string().email().max(254).optional().nullable(),
+  // Standard compose fields (docs/customer-email-standard.md)
+  emails: z.array(z.string().email().max(254)).max(20).optional(),
+  bccSelf: z.boolean().optional().default(false),
+  message: z.string().trim().max(5000).optional(),
+  attachmentFileIds: z.array(z.string().uuid()).max(20).optional(),
+  // Render the exact email (to/subject/html) without minting or sending.
+  preview: z.boolean().optional().default(false),
   phone: z.string().max(40).optional().nullable(),
   expiryDays: z.number().int().positive().max(365).optional(),
 });
@@ -23,9 +30,9 @@ const Schema = z.object({
 /**
  * POST /api/graphics-jobs/[id]/send-for-approval
  * Mints a 30-day token + dispatches the proof approval link via email +
- * SMS. Body: { proofFileId, email?, phone?, expiryDays? }. The heavy
- * lifting lives in src/lib/proof-approval-send.ts, shared with the daily
- * reminder cron.
+ * SMS. Body: { proofFileId, emails?, bccSelf?, message?, attachmentFileIds?,
+ * preview?, phone?, expiryDays? }. The heavy lifting lives in
+ * src/lib/proof-approval-send.ts, shared with the daily reminder cron.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireAuth(req);
@@ -39,11 +46,20 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     actorId: auth.user.id,
     actorEmail: auth.user.email || null,
     email: body.email || null,
+    emails: body.emails || null,
+    bcc: body.bccSelf && auth.user.email ? [auth.user.email] : null,
+    message: body.message || null,
+    attachmentFileIds: body.attachmentFileIds || null,
+    preview: body.preview,
     phone: body.phone || null,
     proofFileId: body.proofFileId ?? null,
     expiryDays: body.expiryDays,
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status || 500 });
+
+  if (result.preview) {
+    return NextResponse.json({ preview: true, ...result.preview });
+  }
 
   // Internal FYI + timeline entry. Lives here rather than in the shared
   // sendProofApproval lib on purpose — the daily reminder cron uses the same

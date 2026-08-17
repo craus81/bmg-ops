@@ -364,7 +364,7 @@ export default function CniDashboardPage() {
                         due {new Date(job.deadline).toLocaleDateString([], { month: 'short', day: 'numeric' })}
                       </span>
                     )}
-                    {photoJobIds.has(job.id) && <span style={{ color: 'var(--warning)', fontWeight: 700 }}>📷 photos to review</span>}
+                    {photoJobIds.has(job.id) && <span style={{ color: 'var(--warning)', fontWeight: 700 }}>Photos to review</span>}
                   </div>
                 </button>
               </div>

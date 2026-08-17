@@ -127,7 +127,6 @@ export default function CniJobChat({ jobId, userId, backPath, jobNumber, jobTitl
           <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '20px' }}>Loading...</div>
         ) : messages.length === 0 ? (
           <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '40px 20px' }}>
-            <div style={{ fontSize: '24px', marginBottom: '8px' }}>💬</div>
             <div style={{ fontSize: '13px' }}>No messages yet. Start the conversation.</div>
           </div>
         ) : (

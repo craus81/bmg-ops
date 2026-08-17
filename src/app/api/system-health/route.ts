@@ -18,9 +18,20 @@ export async function GET(req: NextRequest) {
   // so instead of letting the wall of "Stale" tell a false story. The probe
   // row isn't in HEALTH_MONITORS, so it never shows up as a job itself.
   const writeProbe = await recordHeartbeat(service, 'health_probe', { probe: true });
+
+  // The Email delivery section: every outbound email (email_log, written by
+  // the send layer), newest first. 100 rows covers days at current volume;
+  // the page filters problems client-side.
+  const { data: emails } = await service
+    .from('email_log')
+    .select('id, kind, recipients, subject, sent_by, context_url, delivery_status, delivery_detail, delivery_updated_at, created_at')
+    .order('created_at', { ascending: false })
+    .limit(100);
+
   return NextResponse.json({
     checks,
     writeProbe,
+    emails: emails || [],
     cronSecretConfigured: !!process.env.CRON_SECRET,
     externalPingConfigured: !!process.env.HEALTH_PING_URL,
     generatedAt: new Date().toISOString(),

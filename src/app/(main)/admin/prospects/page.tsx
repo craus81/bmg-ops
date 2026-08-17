@@ -32,6 +32,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { DropZone } from '@/components/DropZone';
 import PhoneInput from '@/components/PhoneInput';
 import { downloadXlsx } from '@/lib/xlsx-export';
+import { deepLinks } from '@/lib/deep-links';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { SortableTh, useTableSort, type SortState } from '@/components/ui/SortableTh';
 import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
@@ -314,12 +315,51 @@ export default function ProspectsPage() {
   // separate prospect stage / convert step). If the NetSuite create fails,
   // the local record still exists and the record page offers a retry.
   // Vendor records skip the NetSuite push entirely — they're FleetSuite-only.
-  const createCustomer = async () => {
+  // `startEstimate` (Valarie's new-client-to-quote flow) lands in the
+  // estimate builder with the new customer pre-selected instead — falling
+  // back to the record page when the NetSuite create failed (an estimate
+  // can't link a customer that doesn't exist yet).
+  const createCustomer = async (startEstimate = false) => {
     if (!form.company_name.trim() || saving) return;
     setSaving(true);
     const isVendor = form.record_type === 'vendor';
+    const name = form.company_name.trim();
+
+    // Duplicate guard (same rule as wrap-quote's create-customer): a
+    // same-named record created again becomes a second NetSuite customer
+    // that splits spend history, statements, and estimate search. Match CRM
+    // rows of the same type, and — for customers — the synced NetSuite
+    // mirror, which can hold customers that have no CRM row at all.
+    const existingProspect = prospects.find(p =>
+      (p.record_type === 'vendor') === isVendor &&
+      p.company_name.trim().toLowerCase() === name.toLowerCase()) || null;
+    let existingLabel = existingProspect?.company_name || null;
+    let existingUrl = existingProspect ? `/admin/prospects/${existingProspect.id}` : null;
+    if (!existingUrl && !isVendor) {
+      const escaped = name.replace(/[\\%_]/g, '\\$&');
+      const { data: cust } = await supabase
+        .from('customers')
+        .select('netsuite_id, company_name')
+        .ilike('company_name', escaped)
+        .limit(1)
+        .maybeSingle();
+      if (cust?.netsuite_id) {
+        existingLabel = cust.company_name || name;
+        existingUrl = `/admin/prospects/ns-${cust.netsuite_id}`;
+      }
+    }
+    if (existingUrl) {
+      setSaving(false);
+      const open = await dialog.confirm(
+        `"${existingLabel}" already exists${!existingProspect ? ' in NetSuite' : ''}.${isVendor ? '' : ' Creating it again would make a duplicate NetSuite customer that splits spend history and statements.'}\n\nOpen the existing record instead? If this really is a different company, go back and adjust the name (e.g. add the city).`,
+        { confirmLabel: 'Open Existing', cancelLabel: 'Go Back' },
+      );
+      if (open) router.push(existingUrl);
+      return;
+    }
+
     const { data, error } = await supabase.from('prospects')
-      .insert({ ...form, company_name: form.company_name.trim(), location_count: form.location_count || 1, created_by: user?.id })
+      .insert({ ...form, company_name: name, location_count: form.location_count || 1, created_by: user?.id })
       .select().single();
     if (error || !data) {
       setSaving(false);
@@ -329,6 +369,7 @@ export default function ProspectsPage() {
     if (form.location_count > 1) {
       await supabase.from('prospect_tags').insert({ prospect_id: data.id, tag: 'multilocation', auto_generated: true });
     }
+    let localCustomerId: string | null = null;
     if (!isVendor) {
       try {
         const res = await fetch('/api/prospects/push-to-netsuite', {
@@ -337,6 +378,7 @@ export default function ProspectsPage() {
         });
         const body = await res.json().catch(() => ({}));
         if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+        localCustomerId = body.localCustomerId || null;
       } catch (e: any) {
         await dialog.alert(`Saved locally, but the NetSuite customer could not be created: ${e?.message || 'unknown error'}\n\nUse "Add to NetSuite" on the record to retry.`);
       }
@@ -353,6 +395,10 @@ export default function ProspectsPage() {
           title: form.title || undefined, email: form.email || undefined, phone: form.phone || undefined,
         }),
       }).catch(() => {});
+    }
+    if (startEstimate && localCustomerId) {
+      router.push(deepLinks.newEstimate(localCustomerId));
+      return;
     }
     router.push(`/admin/prospects/${data.id}`);
   };
@@ -586,11 +632,24 @@ export default function ProspectsPage() {
             <div><div style={labelStyle}># of Locations</div><input type="number" min="1" style={inputStyle} value={form.location_count} onChange={e => setForm({ ...form, location_count: parseInt(e.target.value) || 1 })} /></div>
             <div style={{ gridColumn: '1 / -1' }}><div style={labelStyle}>Notes</div><textarea style={{ ...inputStyle, minHeight: '50px', resize: 'vertical' }} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
           </div>
-          <button onClick={createCustomer} disabled={saving || !form.company_name.trim()} style={{
-            width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-            background: form.company_name.trim() ? '#22c55e' : 'var(--border)', color: '#fff', border: 'none', cursor: 'pointer',
-            opacity: saving ? 0.5 : 1,
-          }}>{saving ? 'Creating...' : form.record_type === 'vendor' ? 'Create Vendor' : 'Create Customer'}</button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button onClick={() => createCustomer()} disabled={saving || !form.company_name.trim()} style={{
+              flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+              background: form.company_name.trim() ? '#22c55e' : 'var(--border)', color: '#fff', border: 'none', cursor: 'pointer',
+              opacity: saving ? 0.5 : 1,
+            }}>{saving ? 'Creating...' : form.record_type === 'vendor' ? 'Create Vendor' : 'Create Customer'}</button>
+            {form.record_type !== 'vendor' && (
+              <button onClick={() => createCustomer(true)} disabled={saving || !form.company_name.trim()}
+                title="Create the customer, then jump straight into a new estimate with them pre-selected"
+                style={{
+                  flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+                  background: form.company_name.trim() ? 'rgba(96,165,250,0.12)' : 'var(--border)',
+                  border: `1px solid ${form.company_name.trim() ? 'rgba(96,165,250,0.4)' : 'var(--border)'}`,
+                  color: form.company_name.trim() ? '#60a5fa' : '#fff', cursor: 'pointer',
+                  opacity: saving ? 0.5 : 1,
+                }}>{saving ? 'Creating...' : 'Create + Start Estimate'}</button>
+            )}
+          </div>
         </div>
       )}
 

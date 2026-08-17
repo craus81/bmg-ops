@@ -312,7 +312,7 @@ export default function AtRiskReportPage() {
                         border: `1px solid ${r.internal_notes ? 'rgba(96,165,250,0.35)' : 'var(--border)'}`,
                         color: r.internal_notes ? '#60a5fa' : 'var(--text-muted)',
                       }}
-                    >📝{r.internal_notes ? '' : ' +'}</button>
+                    >{r.internal_notes ? 'Note' : 'Note +'}</button>
                     {r.at_risk_dismissed_at ? (
                       <button onClick={() => restoreRow(r)} style={{ padding: '3px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, cursor: 'pointer', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e' }}>
                         Restore

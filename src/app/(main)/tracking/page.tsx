@@ -1211,9 +1211,9 @@ export default function TrackingPage() {
             onClick={() => { setShowArchived(!showArchived); setFilterStatus('all'); }}
             style={{
               padding: '10px 12px', borderRadius: '10px', fontSize: '11px', fontWeight: 700,
-              background: showArchived ? 'rgba(167,139,250,0.1)' : 'var(--card)',
-              border: `1px solid ${showArchived ? 'rgba(167,139,250,0.3)' : 'var(--border)'}`,
-              color: showArchived ? '#a78bfa' : 'var(--text-muted)',
+              background: showArchived ? 'rgba(148,163,184,0.22)' : 'var(--card)',
+              border: `1px solid ${showArchived ? 'rgba(148,163,184,0.5)' : 'var(--border)'}`,
+              color: showArchived ? 'var(--text-primary)' : 'var(--text-muted)',
               cursor: 'pointer', whiteSpace: 'nowrap',
             }}
           >
@@ -1237,8 +1237,8 @@ export default function TrackingPage() {
       {showArchived && (
         <div style={{
           padding: '8px 14px', marginBottom: '10px', borderRadius: '10px',
-          background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)',
-          color: '#a78bfa', fontSize: '12px', fontWeight: 700, textAlign: 'center',
+          background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)',
+          color: 'var(--text-secondary)', fontSize: '12px', fontWeight: 700, textAlign: 'center',
         }}>
           Viewing Archived Vehicles
         </div>
@@ -1250,7 +1250,6 @@ export default function TrackingPage() {
           padding: '30px 20px', textAlign: 'center', background: 'var(--card)',
           border: '1px solid var(--border)', borderRadius: '14px',
         }}>
-          <div style={{ fontSize: '28px', marginBottom: '8px' }}>🚚</div>
           <div style={{ color: 'var(--text-muted)', fontSize: '14px', fontWeight: 600 }}>
             {showArchived ? 'No archived vehicles' : searchTerm ? 'No vehicles match your search' : 'No vehicles in this status'}
           </div>
@@ -1402,7 +1401,7 @@ export default function TrackingPage() {
                             title="Restore to the active board"
                             style={{
                               marginTop: '6px', padding: '3px 9px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                              background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', cursor: 'pointer',
+                              background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', cursor: 'pointer',
                             }}
                           >
                             {archivingId === vehicle.id ? 'Restoring…' : 'Restore'}
@@ -1419,7 +1418,7 @@ export default function TrackingPage() {
                             title="Archive off the In-Shop board"
                             style={{
                               marginTop: '6px', padding: '3px 9px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                              background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', cursor: 'pointer',
+                              background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', cursor: 'pointer',
                             }}
                           >
                             {archivingId === vehicle.id ? 'Archiving…' : 'Archive'}
@@ -1639,7 +1638,7 @@ export default function TrackingPage() {
                                 opacity: messagingVehicleId === vehicle.id ? 0.6 : 1,
                               }}
                             >
-                              {messagingVehicleId === vehicle.id ? 'Opening…' : '💬 Message Customer'}
+                              {messagingVehicleId === vehicle.id ? 'Opening…' : 'Message Customer'}
                             </button>
                           )}
                         </div>
@@ -1817,7 +1816,7 @@ export default function TrackingPage() {
                         return (
                           <div style={{
                             marginBottom: '12px', padding: '10px', borderRadius: '8px',
-                            background: 'rgba(167,139,250,0.05)', border: '1px solid rgba(167,139,250,0.2)',
+                            background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)',
                           }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                               <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
@@ -1862,9 +1861,9 @@ export default function TrackingPage() {
                             style={{
                               width: '100%', padding: '12px', borderRadius: '10px',
                               fontSize: '13px', fontWeight: 700, cursor: 'pointer',
-                              background: flagged ? 'rgba(251,146,60,0.1)' : 'rgba(167,139,250,0.08)',
-                              border: `1px dashed ${flagged ? 'rgba(251,146,60,0.45)' : 'rgba(167,139,250,0.4)'}`,
-                              color: flagged ? '#fb923c' : '#a78bfa',
+                              background: flagged ? 'rgba(251,146,60,0.1)' : 'var(--subtle-bg)',
+                              border: `1px dashed ${flagged ? 'rgba(251,146,60,0.45)' : 'var(--border-strong)'}`,
+                              color: flagged ? '#fb923c' : 'var(--text-secondary)',
                             }}
                           >
                             + Create Graphics Job for this Vehicle
@@ -1883,7 +1882,7 @@ export default function TrackingPage() {
                       <div style={{
                         display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px',
                         padding: '10px', borderRadius: '8px',
-                        background: 'rgba(167,139,250,0.04)', border: '1px solid rgba(167,139,250,0.15)',
+                        background: 'var(--subtle-bg)', border: '1px solid var(--border)',
                       }}>
                         <div>
                           <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Invoice #</div>
@@ -2697,7 +2696,7 @@ export default function TrackingPage() {
                             disabled={archivingId === vehicle.id}
                             style={{
                               flex: 1, padding: '10px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-                              background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)', color: '#a78bfa',
+                              background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)',
                             }}
                           >
                             {archivingId === vehicle.id ? 'Restoring...' : 'Restore from Archive'}
@@ -2708,7 +2707,7 @@ export default function TrackingPage() {
                             disabled={archivingId === vehicle.id}
                             style={{
                               flex: 1, padding: '10px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-                              background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)', color: '#a78bfa',
+                              background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)',
                             }}
                           >
                             {archivingId === vehicle.id ? 'Archiving...' : 'Archive Vehicle'}

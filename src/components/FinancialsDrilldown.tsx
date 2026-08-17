@@ -320,14 +320,14 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
           )}
           {customer && (
             <button onClick={() => printStatements([statementGroupFor(customer)], dialog.alert, letterhead)} style={{ ...btnSm, color: 'var(--text-primary)' }}>
-              🖨 Print statement
+              Print statement
             </button>
           )}
           {grouped && !customer && customerRows.length > 0 && (
             <button onClick={() => printStatements(customerRows.map(c => statementGroupFor({ key: c.key, name: c.customer })), dialog.alert, letterhead)} style={{ ...btnSm, color: 'var(--text-primary)' }}>
               {bucket !== 'all' || search.trim()
-                ? `🖨 Statements for these ${customerRows.length} customer${customerRows.length === 1 ? '' : 's'}`
-                : `🖨 Print all statements (${customerRows.length})`}
+                ? `Statements for these ${customerRows.length} customer${customerRows.length === 1 ? '' : 's'}`
+                : `Print all statements (${customerRows.length})`}
             </button>
           )}
         </div>
@@ -359,7 +359,7 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
                     <td style={{ ...tdNum, color: c.pastDue > 0.005 ? 'var(--error)' : 'var(--text-muted)', fontWeight: 700 }}>{c.pastDue > 0.005 ? usd2(c.pastDue) : '—'}</td>
                     <td style={tdNum}>{daysChip(c.oldest) || '—'}</td>
                     <td style={{ ...td, textAlign: 'right' }}>
-                      <button onClick={e => { e.stopPropagation(); printStatements([statementGroupFor({ key: c.key, name: c.customer })], dialog.alert, letterhead); }} style={btnSm}>🖨 Statement</button>
+                      <button onClick={e => { e.stopPropagation(); printStatements([statementGroupFor({ key: c.key, name: c.customer })], dialog.alert, letterhead); }} style={btnSm}>Statement</button>
                     </td>
                   </tr>
                 ))}
@@ -450,13 +450,13 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
                   <td style={{ ...tdNum, fontWeight: 700 }}>{usd2(b.unpaid)}</td>
                   <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <span style={{ display: 'inline-flex', gap: '8px', alignItems: 'center' }}>
-                      <button onClick={() => printBill(b, dialog.alert, { unpaidKnown: bills.data!.unpaidColumn, letterhead })} style={btnSm}>🖨 Print</button>
+                      <button onClick={() => printBill(b, dialog.alert, { unpaidKnown: bills.data!.unpaidColumn, letterhead })} style={btnSm}>Print</button>
                       {nsLink(b.nsUrl)}
                     </span>
                   </td>
                 </tr>
               ))}
-              {list.length === 0 && <tr><td style={tdMuted} colSpan={7}>No open vendor bills 🎉</td></tr>}
+              {list.length === 0 && <tr><td style={tdMuted} colSpan={7}>No open vendor bills</td></tr>}
             </tbody>
             <tfoot>
               <tr>

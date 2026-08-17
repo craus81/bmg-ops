@@ -1095,7 +1095,7 @@ export default function GraphicsPage() {
                 whiteSpace: 'nowrap',
               }}
             >
-              🗄 Archived{showArchived ? ' ✓' : ''}
+              Archived{showArchived ? ' ✓' : ''}
             </button>
           </div>
         </FilterButton>
@@ -1186,7 +1186,7 @@ export default function GraphicsPage() {
                           onClick={e => e.stopPropagation()}
                           title="Track on ups.com"
                           style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}
-                        >📦 {job.tracking_number}</a>
+                        >{job.tracking_number}</a>
                       );
                     }
                     return (

@@ -35,6 +35,14 @@ export const deepLinks = {
    *  scroll-flashes the Internal Notes field (estimate-note mentions). */
   estimate: (estimateId: string, opts?: { flashNotes?: boolean }) =>
     `/estimates?id=${estimateId}${opts?.flashNotes ? '&note=field' : ''}`,
+  /** Estimates page — opens the builder on a fresh estimate, optionally
+   *  pre-selecting a customer (local customers.id). The straight path from
+   *  entering a new client to quoting them. */
+  newEstimate: (customerId?: string | null) =>
+    `/estimates?new=1${customerId ? `&customer=${customerId}` : ''}`,
+  /** Parts page — opens the part's record: switches to its catalog tab,
+   *  expands the row, scrolls to it, and highlights it (page reads ?part=). */
+  part: (partId: string) => `/parts?part=${partId}`,
   /** Wrap-quote list — opens that quote (page reads ?id=). */
   wrapQuote: (quoteId: string) => `/admin/wrap-quote?id=${quoteId}`,
   /** AP queue — jumps to the vendor invoice's status tab and highlights it. */
@@ -78,6 +86,10 @@ export const deepLinks = {
   customerPortal: () => '/customer/dashboard',
   /** System health dashboard (checks are keyed by sync type, not record ids). */
   systemHealth: () => '/admin/system-health',
+  /** System health's Email delivery section — flashes one email_log row.
+   *  The bounce-alert fallback when a send has no record context_url. */
+  emailDelivery: (logId?: string | null) =>
+    `/admin/system-health${logId ? `?email=${logId}` : ''}`,
   /** In-app PDF viewer tab. Use this instead of linking a new tab straight at
    *  PDF bytes: a raw-PDF tab has no app chrome and no working Back button,
    *  so it strands whoever opened it (field bug: opening a PO PDF mid-import).

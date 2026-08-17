@@ -232,7 +232,7 @@ export function RollNesting(props: Props) {
           <input type="range" min="2" max="14" step="1" value={zoom} onChange={e => setZoom(numv(e.target.value) || 6)} style={{ width: '110px' }} />
         </div>
         <button onClick={autoNest} style={{ padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 800, border: 'none', background: '#06b6d4', color: '#fff', cursor: 'pointer' }}>
-          ⚡ Auto-Nest
+          Auto-Nest
         </button>
         {selPiece && selPl && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', borderRadius: '8px', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.35)' }}>

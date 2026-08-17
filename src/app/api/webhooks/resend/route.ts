@@ -72,10 +72,12 @@ const EVENT_TO_STATUS: Record<string, string> = {
 /**
  * POST /api/webhooks/resend — delivery events from Resend (configure the
  * endpoint in the Resend dashboard with email.* events enabled). Updates
- * invoice_emails rows by Resend message id; a bounce/failure pushes an
- * alert to finance so a dead invoice email surfaces today, not at 60-day
- * AR review. Events for non-invoice emails match zero rows and are
- * acknowledged silently.
+ * invoice_emails rows and estimates' approval-email tracking by Resend
+ * message id; a bounce/failure pushes an alert — to finance for invoices
+ * (a dead invoice email surfaces today, not at 60-day AR review), to the
+ * sales side for estimates (the app said "sent" but the customer never saw
+ * it). Events for untracked emails match zero rows and are acknowledged
+ * silently.
  */
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
@@ -99,18 +101,19 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { data: rows } = await service
-      .from('invoice_emails')
-      .select('id, invoice_number, customer_name, recipients, delivery_status')
-      .eq('source_id', emailId);
-    if (!rows || rows.length === 0) return NextResponse.json({ received: true, matched: 0 });
-
     const detail = [
       event?.data?.bounce?.type || event?.data?.bounce?.subType || null,
       event?.data?.bounce?.message || event?.data?.failed?.reason || null,
     ].filter(Boolean).join(': ') || null;
+    const badStates = ['bounced', 'failed', 'complained'];
 
-    const toUpdate = rows.filter(r => (STATUS_RANK[status] ?? 0) >= (STATUS_RANK[r.delivery_status] ?? 0));
+    // ── Invoice emails (one send can cover several invoice rows) ──
+    const { data: rows } = await service
+      .from('invoice_emails')
+      .select('id, invoice_number, customer_name, recipients, delivery_status')
+      .eq('source_id', emailId);
+
+    const toUpdate = (rows || []).filter(r => (STATUS_RANK[status] ?? 0) >= (STATUS_RANK[r.delivery_status] ?? 0));
     if (toUpdate.length > 0) {
       await service
         .from('invoice_emails')
@@ -124,8 +127,8 @@ export async function POST(req: NextRequest) {
 
     // A bounced/failed invoice email is an AR problem RIGHT NOW — tell
     // finance while the send is fresh, once per transition into a bad state.
-    if (['bounced', 'failed', 'complained'].includes(status)) {
-      const fresh = toUpdate.filter(r => !['bounced', 'failed', 'complained'].includes(r.delivery_status));
+    if (badStates.includes(status)) {
+      const fresh = toUpdate.filter(r => !badStates.includes(r.delivery_status));
       if (fresh.length > 0) {
         const recipients = await financeUserIds(service);
         if (recipients.length > 0) {
@@ -145,7 +148,129 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ received: true, matched: rows.length, updated: toUpdate.length });
+    // ── Estimate approval emails (tracking lives on the estimates row;
+    // realistically one match per message id) ──
+    const { data: estRows } = await service
+      .from('estimates')
+      .select('id, estimate_number, customer_name, customer_id, created_by, sent_for_approval_by, approval_email_status, approval_email_to')
+      .eq('approval_email_id', emailId);
+
+    const estToUpdate = (estRows || []).filter(r => (STATUS_RANK[status] ?? 0) >= (STATUS_RANK[r.approval_email_status] ?? 0));
+    if (estToUpdate.length > 0) {
+      await service
+        .from('estimates')
+        .update({
+          approval_email_status: status,
+          approval_email_detail: detail,
+          approval_email_updated_at: new Date().toISOString(),
+        })
+        .in('id', estToUpdate.map(r => r.id));
+    }
+
+    // A bounced approval email means the customer never saw the estimate —
+    // tell the sales side (same targets as the accepted/rejected
+    // notifications: creator, sender, account owner; admins as fallback),
+    // once per transition into a bad state.
+    if (badStates.includes(status)) {
+      for (const est of estToUpdate.filter(r => !badStates.includes(r.approval_email_status))) {
+        const targetIds = new Set<string>();
+        if (est.created_by) targetIds.add(est.created_by);
+        if (est.sent_for_approval_by) targetIds.add(est.sent_for_approval_by);
+        if (est.customer_id) {
+          const { data: cust } = await service
+            .from('customers')
+            .select('account_owner_id')
+            .eq('id', est.customer_id)
+            .maybeSingle();
+          if (cust?.account_owner_id) targetIds.add(cust.account_owner_id);
+        }
+        if (targetIds.size === 0) {
+          const { data: admins } = await service
+            .from('profiles')
+            .select('id')
+            .eq('role', 'admin')
+            .eq('status', 'approved');
+          for (const a of admins || []) targetIds.add(a.id);
+        }
+        if (targetIds.size === 0) continue;
+        await notifyMany(Array.from(targetIds), {
+          type: 'estimate_email_bounced',
+          title: `⚠ Estimate email ${status}: #${est.estimate_number}`,
+          body: `The approval email to ${(est.approval_email_to || []).join(', ') || 'the customer'}${est.customer_name ? ` (${est.customer_name})` : ''} ${status === 'complained' ? 'was marked as spam' : status}. ${detail ? `Reason: ${detail}. ` : ''}Fix the address and resend it from the estimate.`,
+          url: deepLinks.estimate(est.id),
+          channels: ['in_app', 'push'],
+          forceChannels: true,
+        });
+      }
+    }
+
+    // ── Universal email log (every send is logged at the send layer, so
+    // this matches ALL emails — the two specialized flows above included) ──
+    const { data: logRows } = await service
+      .from('email_log')
+      .select('id, kind, recipients, subject, sent_by, context_url, delivery_status')
+      .eq('source_id', emailId);
+
+    const logToUpdate = (logRows || []).filter(r => (STATUS_RANK[status] ?? 0) >= (STATUS_RANK[r.delivery_status] ?? 0));
+    if (logToUpdate.length > 0) {
+      await service
+        .from('email_log')
+        .update({
+          delivery_status: status,
+          delivery_detail: detail,
+          delivery_updated_at: new Date().toISOString(),
+        })
+        .in('id', logToUpdate.map(r => r.id));
+    }
+
+    // Customer-thread messages store the Resend id too — reflect real
+    // delivery in the thread (its status vocabulary is narrower: bounced/
+    // complained collapse to 'failed'; a late 'delivered' never overwrites
+    // a recorded failure).
+    if (status === 'delivered') {
+      await service.from('customer_messages')
+        .update({ delivery_status: 'delivered' })
+        .eq('external_provider_sid', emailId)
+        .eq('channel', 'email')
+        .neq('delivery_status', 'failed');
+    } else if (badStates.includes(status)) {
+      await service.from('customer_messages')
+        .update({ delivery_status: 'failed' })
+        .eq('external_provider_sid', emailId)
+        .eq('channel', 'email');
+    }
+
+    // Generic bounce alert: composed sends carry sent_by — tell that person
+    // their email died, once per transition into a bad state. Skipped when a
+    // specialized handler above already alerted for this message (invoice →
+    // finance, estimate → sales targets), so nobody gets paged twice.
+    const specializedMatch = (rows?.length || 0) + (estRows?.length || 0) > 0;
+    if (badStates.includes(status) && !specializedMatch) {
+      const KIND_LABELS: Record<string, string> = {
+        invoice: 'Invoice email', estimate_approval: 'Estimate approval email',
+        statement: 'Statement email', wrap_quote: 'Wrap quote email',
+        proof_approval: 'Proof approval email', customer_thread: 'Customer message',
+        customer_notify: 'Customer status email', customer_digest: 'Weekly digest email',
+        pickup_notice: 'Pickup notice email', staff_notification: 'Notification email',
+        invite: 'Invite email', other: 'Email',
+      };
+      for (const row of logToUpdate.filter(r => r.sent_by && !badStates.includes(r.delivery_status))) {
+        await notifyMany([row.sent_by], {
+          type: 'email_bounced',
+          title: `⚠ ${KIND_LABELS[row.kind] || 'Email'} ${status === 'complained' ? 'marked as spam' : status}`,
+          body: `Your email to ${(row.recipients || []).join(', ') || 'the recipient'}${row.subject ? ` (“${row.subject}”)` : ''} ${status === 'complained' ? 'was marked as spam' : status}. ${detail ? `Reason: ${detail}. ` : ''}They did not receive it — fix the address and resend.`,
+          url: row.context_url || deepLinks.emailDelivery(row.id),
+          channels: ['in_app', 'push'],
+          forceChannels: true,
+        });
+      }
+    }
+
+    return NextResponse.json({
+      received: true,
+      matched: (rows?.length || 0) + (estRows?.length || 0) + (logRows?.length || 0),
+      updated: toUpdate.length + estToUpdate.length + logToUpdate.length,
+    });
   } catch (e: any) {
     console.error('Resend webhook processing failed:', e);
     return NextResponse.json({ error: e.message || 'processing failed' }, { status: 500 });

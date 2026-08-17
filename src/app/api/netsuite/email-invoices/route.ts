@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getNetSuitePdf, suiteqlQuery } from '@/lib/netsuite';
 import { sendEmailDetailed, buildInvoiceEmail } from '@/lib/resend';
+import { deepLinks } from '@/lib/deep-links';
 import { requireRole } from '@/lib/api-auth';
 import { safeStringLiteral, SqlSafeError } from '@/lib/sql-safe';
 import { validateBody, z } from '@/lib/validate';
@@ -69,6 +70,8 @@ const EmailInvoicesSchema = z.object({
     .union([z.string().max(2000), z.array(z.string().max(254)).max(20)])
     .optional(),
   customBody: z.string().max(10_000).optional(),
+  // Bcc the signed-in sender (customer-email compose standard).
+  bccSelf: z.boolean().optional(),
   dryRun: z.boolean().optional(),
   // True when the send goes to the signed-in user as a preview — test sends
   // are never logged to invoice_emails.
@@ -95,7 +98,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, EmailInvoicesSchema);
   if (parsed.error) return parsed.error;
-  const { invoices, customerName, customerEmail, customBody, dryRun, testSend } = parsed.data;
+  const { invoices, customerName, customerEmail, customBody, bccSelf, dryRun, testSend } = parsed.data;
 
   try {
     const recipients: string[] = Array.isArray(customerEmail)
@@ -196,7 +199,14 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const { ok: sent, id: resendId } = await sendEmailDetailed(recipients, subject, html, undefined, attachments, auth.user?.email || undefined);
+    // Bcc-me: skipped on test sends — those already land in the sender's inbox.
+    const bcc = bccSelf && !testSend && auth.user?.email ? [auth.user.email] : undefined;
+    const { ok: sent, id: resendId } = await sendEmailDetailed(
+      recipients, subject, html, undefined, attachments, auth.user?.email || undefined, bcc,
+      // A single-invoice send deep-links that invoice on the Sent tab; a
+      // multi-invoice send links the tab itself (a true digest).
+      { kind: 'invoice', sentBy: auth.user?.id, contextUrl: deepLinks.invoicesSent(invoiceNumbers.length === 1 ? invoiceNumbers[0] : null) },
+    );
 
     if (!sent) {
       return NextResponse.json({ error: 'Failed to send email' }, { status: 500 });

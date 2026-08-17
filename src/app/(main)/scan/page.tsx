@@ -1248,7 +1248,7 @@ export default function ScanPage() {
                     disabled={photoUploading}
                     style={{ padding: '3px 10px', borderRadius: '6px', border: '1px solid rgba(34,197,94,0.35)', background: 'transparent', color: '#22c55e', fontSize: '11px', fontWeight: 700, cursor: 'pointer', opacity: photoUploading ? 0.6 : 1 }}
                   >
-                    {photoUploading ? 'Uploading…' : photoCount > 0 ? `📷 ${photoCount} added · add another` : '📷 Add photo (optional)'}
+                    {photoUploading ? 'Uploading…' : photoCount > 0 ? `${photoCount} added · add another` : 'Add photo (optional)'}
                   </button>
                 </span>
               )}

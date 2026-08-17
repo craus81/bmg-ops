@@ -425,7 +425,7 @@ export default function ImportVendorAssetsPage() {
                 <button onClick={() => loadProfile(p)} style={{ ...btn, padding: '7px 14px', fontSize: 12 }}>
                   {profileId === p.id ? 'Reload' : 'Load'}
                 </button>
-                <button onClick={() => deleteProfile(p)} title="Delete saved import" style={{ background: 'none', border: 'none', color: theme.textMuted, fontSize: 14, cursor: 'pointer' }}>🗑</button>
+                <button onClick={() => deleteProfile(p)} title="Delete saved import" style={{ background: 'none', border: 'none', color: theme.textMuted, fontSize: 14, cursor: 'pointer' }}>✕</button>
               </div>
             ))}
           </div>
@@ -472,7 +472,7 @@ export default function ImportVendorAssetsPage() {
             Replace existing photos/descriptions
           </label>
           <button onClick={saveProfile} disabled={savingProfile || !siteUrl.trim()} style={{ ...btn, padding: '8px 14px', fontSize: 12, background: theme.card, color: theme.textPrimary, border: `1px solid ${theme.border}`, opacity: savingProfile ? 0.6 : 1 }}>
-            {savingProfile ? 'Saving…' : profileId ? '💾 Update saved import' : '💾 Save import'}
+            {savingProfile ? 'Saving…' : profileId ? 'Update saved import' : 'Save import'}
           </button>
         </div>
       </div>

@@ -530,7 +530,7 @@ export default function CniCompanyDetailPage() {
                 onClick={() => { setShowVendorSearch(s => !s); setPickedVendor(null); }}
                 style={{ fontSize: '11px', fontWeight: 700, color: 'var(--orange)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
               >
-                {showVendorSearch ? 'Close search' : '🔍 Search NetSuite'}
+                {showVendorSearch ? 'Close search' : 'Search NetSuite'}
               </button>
             </span>
           </div>
@@ -651,7 +651,7 @@ export default function CniCompanyDetailPage() {
                         target="_blank" rel="noreferrer"
                         style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}
                       >
-                        📄 View
+                        View
                       </a>
                     )}
                     <label style={{
@@ -877,7 +877,7 @@ export default function CniCompanyDetailPage() {
                       target="_blank" rel="noreferrer"
                       style={{ padding: '6px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}
                     >
-                      📄 View File
+                      View File
                     </a>
                   ) : (
                     <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>no file</span>

@@ -45,6 +45,7 @@ interface Part {
   // import or manual upload in the visual catalog)
   image_path: string | null;
   marketing_description: string | null;
+  product_url: string | null;
 }
 
 interface SyncLog {
@@ -75,9 +76,9 @@ const RANGE_PHRASE: Record<CompletedRange, string> = {
 // netsuite_parts directly.
 type EditableField =
   | 'item_number' | 'display_name' | 'sales_price' | 'purchase_price'
-  | 'vehicle_type' | 'graphic_package' | 'customer' | 'proof_pages';
+  | 'vehicle_type' | 'graphic_package' | 'customer' | 'proof_pages' | 'product_url';
 const NETSUITE_FIELDS: EditableField[] = ['item_number', 'display_name', 'sales_price', 'purchase_price'];
-const TEXT_FIELDS: EditableField[] = ['item_number', 'display_name', 'vehicle_type', 'graphic_package', 'customer'];
+const TEXT_FIELDS: EditableField[] = ['item_number', 'display_name', 'vehicle_type', 'graphic_package', 'customer', 'product_url'];
 
 // A real NetSuite-synced part has a numeric internal id, not a local placeholder.
 const isRealNsPart = (p: { netsuite_id: string | null }) => !!p.netsuite_id && !/^(LOCAL-|bmg-)/i.test(p.netsuite_id);
@@ -182,13 +183,32 @@ export default function PartsPage() {
   }, [catalog]);
 
   // Deep-link from global search: /parts?catalog=graphics&q=06U183
+  // Deep-link to one record: /parts?part=<netsuite_parts.id> (deepLinks.part)
+  // — resolves the part first so we can land on the right catalog tab, then
+  // reuses the same search + focus machinery as ?q=.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
     const c = params.get('catalog');
     const q = params.get('q');
+    const partId = params.get('part');
     if (c === 'graphics' || c === 'upfit') setCatalog(c);
     if (q) { setSearch(q); setPendingFocus(q.toUpperCase()); setView('list'); }
+    if (partId && !q) {
+      setView('list');
+      (async () => {
+        const { data } = await supabase
+          .from('netsuite_parts')
+          .select('item_number, catalog, catalog_override')
+          .eq('id', partId)
+          .maybeSingle();
+        if (!data?.item_number) return;
+        const cat = (data as any).catalog_override || data.catalog;
+        if (cat === 'graphics' || cat === 'upfit') setCatalog(cat);
+        setSearch(data.item_number);
+        setPendingFocus(data.item_number.toUpperCase());
+      })();
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- read URL once on mount
   }, []);
 
@@ -490,7 +510,7 @@ export default function PartsPage() {
   // NetSuite. If the item still lives in NetSuite, a later sync may re-add it.
   const deletePart = async (part: Part) => {
     if (!(await dialog.confirm(
-      `Delete "${part.item_number}" from FleetSuite?\n\n` +
+      `Remove "${part.item_number}" from the catalog?\n\n` +
       `This removes it from this app only — NetSuite is not changed. If the item ` +
       `still exists in NetSuite, a future sync may re-add it.`,
       { confirmLabel: 'Delete', destructive: true },
@@ -804,7 +824,7 @@ export default function PartsPage() {
         borderRadius: '12px', marginBottom: '10px',
       }}>
         {([
-          { id: 'gallery' as const, label: '🗂 Visual Catalog', desc: 'Photos, categories, browse' },
+          { id: 'gallery' as const, label: 'Visual Catalog', desc: 'Photos, categories, browse' },
           { id: 'list' as const, label: '≡ Ops List', desc: 'Prices, labor, stats, files' },
         ]).map((tab) => (
           <button
@@ -1176,6 +1196,34 @@ export default function PartsPage() {
                       </div>
                     )}
 
+                    {/* Vendor product page — shown to the customer on the
+                        enhanced estimate ("View product"). Local-only field. */}
+                    {(isAdmin || part.product_url) && (
+                      <div style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        {isAdmin ? (
+                          <div style={{ flex: 1, minWidth: '220px' }}>
+                            <InlineEditField
+                              label="Product URL"
+                              display={part.product_url || '— Set product URL'}
+                              color={part.product_url ? 'var(--text-primary)' : 'var(--text-muted)'}
+                              isEditing={fieldEditing('product_url')} value={editFieldValue} onValueChange={setEditFieldValue}
+                              onEdit={() => startFieldEdit(part.id, 'product_url', part.product_url || '')}
+                              onSave={() => savePartField(part.id)} onCancel={cancelFieldEdit}
+                              saving={savingField} error={fieldErr('product_url')} placeholder="https://vendor.com/product-page"
+                            />
+                          </div>
+                        ) : (
+                          <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Product URL</span>
+                        )}
+                        {part.product_url && (
+                          <a href={part.product_url} target="_blank" rel="noopener noreferrer"
+                            style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textDecoration: 'underline' }}>
+                            Open ↗
+                          </a>
+                        )}
+                      </div>
+                    )}
+
                     {/* Part Number & Display Name (editable by admins; written back to NetSuite) */}
                     {isAdmin && (
                       <div style={{ marginTop: '10px' }}>
@@ -1335,12 +1383,12 @@ export default function PartsPage() {
                               flex: 1, padding: '6px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                               background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
                               color: proofSearch?.partId === part.id && proofSearch.source === 'email' ? '#ea4335' : 'var(--text-secondary)', cursor: 'pointer',
-                            }}>{proofSearch?.partId === part.id && proofSearch.source === 'email' ? '✕ Close Email' : '🔎 Search Email'}</button>
+                            }}>{proofSearch?.partId === part.id && proofSearch.source === 'email' ? '✕ Close Email' : 'Search Email'}</button>
                             <button onClick={() => setProofSearch(prev => prev?.partId === part.id && prev.source === 'dropbox' ? null : { partId: part.id, source: 'dropbox' })} style={{
                               flex: 1, padding: '6px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                               background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
                               color: proofSearch?.partId === part.id && proofSearch.source === 'dropbox' ? '#0061fe' : 'var(--text-secondary)', cursor: 'pointer',
-                            }}>{proofSearch?.partId === part.id && proofSearch.source === 'dropbox' ? '✕ Close Dropbox' : '🔎 Search Dropbox'}</button>
+                            }}>{proofSearch?.partId === part.id && proofSearch.source === 'dropbox' ? '✕ Close Dropbox' : 'Search Dropbox'}</button>
                           </div>
                           {proofSearch?.partId === part.id && proofSearch.source === 'email' && (
                             <div style={{ marginTop: '6px' }}>
@@ -1425,7 +1473,7 @@ export default function PartsPage() {
                           opacity: deletingId === part.id ? 0.6 : 1,
                         }}
                       >
-                        {deletingId === part.id ? 'Deleting…' : '🗑  Delete from FleetSuite'}
+                        {deletingId === part.id ? 'Deleting…' : 'Remove from Catalog'}
                       </button>
                     )}
                   </div>

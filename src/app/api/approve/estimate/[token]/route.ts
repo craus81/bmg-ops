@@ -12,6 +12,7 @@ import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { validateBody, z } from '@/lib/validate';
 import { renderEstimateDocument, escHtml } from '@/lib/estimate-document';
+import { enrichLinesWithPartAssets } from '@/lib/estimate-line-parts';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,7 +44,10 @@ async function loadEstimateByToken(token: string) {
     .select('*')
     .eq('estimate_id', estimate.id)
     .order('sort_order');
-  return { estimate, lines: lines || [] };
+  // Enhanced estimate: attach each line's catalog photo + vendor product
+  // link so the approval page and the signed snapshot both show them.
+  const enriched = await enrichLinesWithPartAssets(supabase, lines || []);
+  return { estimate, lines: enriched };
 }
 
 /**
@@ -84,6 +88,8 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
       unit_price: l.unit_price,
       line_total: l.line_total,
       notes: l.notes,
+      image_url: l.part_image_url || null,
+      product_url: l.part_product_url || null,
     })),
   });
 }

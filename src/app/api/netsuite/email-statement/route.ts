@@ -5,6 +5,7 @@ import { safeIntId, SqlSafeError } from '@/lib/sql-safe';
 import { fetchStatementInvoices, type StatementInvoice, type StatementScope } from '@/lib/financials-data';
 import { getNetSuitePdf } from '@/lib/netsuite';
 import { sendEmailDetailed } from '@/lib/resend';
+import { deepLinks } from '@/lib/deep-links';
 import { r2PublicUrl } from '@/lib/r2';
 
 export const dynamic = 'force-dynamic';
@@ -19,7 +20,13 @@ export const maxDuration = 60;
  * Vercel's 60s limit, the same reason bulk-download zips client-side).
  *
  * Body: { customerId: <NetSuite internal id>, recipients: string[] (1-10),
- *         customBody?: string, attachInvoices?: boolean (default true) }
+ *         customBody?: string, attachInvoices?: boolean (default true),
+ *         bccSelf?: boolean, preview?: boolean }
+ *
+ * preview: true renders the exact email — { to, subject, html, attachments }
+ * — with zero side effects (customer-email compose standard): recipients are
+ * optional, no PDFs are fetched (the attachment list is predicted from the
+ * same selection the send uses), nothing sends, nothing is logged.
  *
  * Failed PDF fetches don't block the send — the statement body is the
  * document of record; failures are reported in the response and a note is
@@ -129,9 +136,12 @@ export async function POST(req: NextRequest) {
 
   try {
     const customerId = safeIntId(body?.customerId, 'customerId');
+    const preview = body?.preview === true;
     const recipients: string[] = (Array.isArray(body?.recipients) ? body.recipients : [])
       .map((r: any) => String(r).trim()).filter((r: string) => EMAIL_RE.test(r));
-    if (recipients.length === 0 || recipients.length > 10) {
+    // A preview renders fine with no recipients yet — the compose screen
+    // fetches it while the To field is still being filled in.
+    if (!preview && (recipients.length === 0 || recipients.length > 10)) {
       return NextResponse.json({ error: 'Provide 1-10 valid recipient email addresses' }, { status: 400 });
     }
     const scope: StatementScope = body?.scope === 'all' ? 'all' : 'open';
@@ -147,13 +157,18 @@ export async function POST(req: NextRequest) {
     const customerName = invoices[0].customer;
 
     // ── Attach OPEN invoices' PDFs (best effort, capped) ──────────────────
+    // The selection is computed for previews too — the email body's
+    // attachment note and the preview's attachment list come from it — but
+    // only a real send pays for the NetSuite PDF fetches.
     const attachInvoices = body?.attachInvoices !== false;
+    const toAttach = attachInvoices
+      ? invoices.filter(i => i.status === 'open')
+          .sort((a, b) => b.daysPastDue - a.daysPastDue || (a.date || '').localeCompare(b.date || ''))
+          .slice(0, MAX_ATTACH)
+      : [];
     const attachments: { filename: string; content: Buffer; contentType: string }[] = [];
     const failedAttachments: string[] = [];
-    if (attachInvoices) {
-      const toAttach = invoices.filter(i => i.status === 'open')
-        .sort((a, b) => b.daysPastDue - a.daysPastDue || (a.date || '').localeCompare(b.date || ''))
-        .slice(0, MAX_ATTACH);
+    if (!preview) {
       for (const inv of toAttach) {
         const pdf = await getNetSuitePdf('invoice', inv.id);
         if (pdf.success && pdf.pdfBase64) {
@@ -168,8 +183,9 @@ export async function POST(req: NextRequest) {
       }
     }
     const openCount = invoices.filter(i => i.status === 'open').length;
+    const attachedCount = preview ? toAttach.length : attachments.length;
     const attachNote = [
-      attachInvoices && openCount > MAX_ATTACH ? `The ${Math.min(MAX_ATTACH, attachments.length)} most overdue invoices are attached; the table above covers all ${invoices.length}.` : '',
+      attachInvoices && openCount > MAX_ATTACH ? `The ${Math.min(MAX_ATTACH, attachedCount)} most overdue invoices are attached; the table above covers all ${invoices.length}.` : '',
       failedAttachments.length ? `PDFs unavailable for: ${failedAttachments.join(', ')}.` : '',
     ].filter(Boolean).join(' ');
 
@@ -182,7 +198,28 @@ export async function POST(req: NextRequest) {
 
     const html = statementEmailHtml(customerName, invoices, scope, rangeNote, lh, body?.customBody, attachNote);
     const subject = `Statement — ${customerName} — ${new Date().toLocaleDateString('en-US')}`;
-    const result = await sendEmailDetailed(recipients, subject, html, undefined, attachments);
+
+    // Preview: the exact email that would go out — nothing sends, nothing
+    // is logged. Attachment names are predicted (real filenames come from
+    // NetSuite at send time).
+    if (preview) {
+      return NextResponse.json({
+        preview: true,
+        to: recipients.join(', ') || null,
+        subject,
+        html,
+        attachments: toAttach.map(i => `Invoice_${i.tranid}.pdf`),
+      });
+    }
+
+    // Standard compose behavior: replies reach the sender (the from address
+    // has no mailbox), and bcc-me copies the send to their inbox.
+    const bcc = body?.bccSelf === true && auth.user?.email ? [auth.user.email] : undefined;
+    const result = await sendEmailDetailed(
+      recipients, subject, html, undefined, attachments, auth.user?.email || undefined, bcc,
+      // ns-<id> routes to the customer record even when no CRM row exists.
+      { kind: 'statement', sentBy: auth.user?.id, contextUrl: deepLinks.prospect(`ns-${customerId}`) },
+    );
     if (!result.ok) {
       return NextResponse.json({ error: 'Email send failed' }, { status: 502 });
     }
