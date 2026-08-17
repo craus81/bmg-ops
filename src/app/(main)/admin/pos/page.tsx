@@ -181,6 +181,12 @@ export default function POsPage() {
   const [createLineForm, setCreateLineForm] = useState({ part_number: '', quantity: '1', unit_price: '' });
   const fileRef = useRef<HTMLInputElement>(null);
   const [poSearch, setPoSearch] = useState('');
+  // Deep link: ?q=<term> (universal search "View all") prefills the list search.
+  useEffect(() => {
+    const q = searchParams.get('q');
+    if (q) setPoSearch(q);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: read once on mount
+  }, []);
   // List filters: attribute filter (billing issues, notes, graphics jobs)
   // and a date window on the PO date (imported date when none on record).
   type PoFilter = 'all' | 'billing' | 'not_invoiced' | 'notes' | 'has_gfx' | 'no_gfx';

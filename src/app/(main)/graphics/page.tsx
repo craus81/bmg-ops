@@ -116,6 +116,12 @@ export default function GraphicsPage() {
 
   const isMine = (j: GraphicsJob) => j.assigned_to === user?.id || myAssignedIds.has(j.id);
   const [search, setSearch] = useState('');
+  // Deep link: ?q=<term> (universal search "View all") prefills the board search.
+  useEffect(() => {
+    const q = searchParams.get('q');
+    if (q) setSearch(q);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: read once on mount
+  }, []);
 
   // ?invoiceJob= deep-link flow (bell notification → confirm → invoice modal)
   const [invoiceJob, setInvoiceJob] = useState<GraphicsJob | null>(null);

@@ -179,6 +179,12 @@ export default function EstimatesPage() {
   const [estimates, setEstimates] = useState<Estimate[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  // Deep link: ?q=<term> (universal search "View all") prefills the list search.
+  useEffect(() => {
+    const q = searchParams.get('q');
+    if (q) setSearch(q);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: read once on mount
+  }, []);
 
   // Builder state
   const [editingId, setEditingId] = useState<string | null>(null);
