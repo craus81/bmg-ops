@@ -80,6 +80,14 @@ function visibleSkuSpan(html: string): string | null {
   return m ? m[1].trim() : null;
 }
 
+/** The page's own <h1> — a cleaner product name than <title>, which usually
+ *  carries a site suffix ("Shelf Unit - 32\" W … | Holman"). */
+function firstH1(html: string): string | null {
+  const m = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  const t = m ? stripTags(m[1]) : '';
+  return t.length > 1 && t.length <= 200 ? t : null;
+}
+
 export function extractProduct(html: string): ExtractedProduct {
   const ld = findJsonLdProduct(html);
   const og = {
@@ -93,7 +101,7 @@ export function extractProduct(html: string): ExtractedProduct {
     || (og.description ? stripTags(og.description) : null);
 
   return {
-    name: (ld?.name ? stripTags(String(ld.name)) : null) || (og.title ? stripTags(og.title) : null) || (titleTag ? stripTags(titleTag) : null),
+    name: (ld?.name ? stripTags(String(ld.name)) : null) || (og.title ? stripTags(og.title) : null) || firstH1(html) || (titleTag ? stripTags(titleTag) : null),
     description: description && description.length > 10 ? description.slice(0, 2000) : null,
     imageUrl: jsonLdImageUrl(ld?.image) || og.image,
     sku: ld?.sku ? String(ld.sku).trim() : (ld?.mpn ? String(ld.mpn).trim() : visibleSkuSpan(html)),
@@ -138,6 +146,10 @@ export function extractAllSkus(html: string): string[] {
   return out;
 }
 
+/** Measurement words a slug's tail is made of when the slug ends in the
+ *  product's SIZE rather than its part number. */
+const DIMENSION_TOKENS = new Set(['W', 'H', 'D', 'L', 'X', 'IN', 'INCH', 'INCHES', 'FT', 'CM', 'MM', 'LB', 'LBS', 'OZ', 'GA', 'GAUGE']);
+
 /**
  * SKU candidates from a product URL's slug — vendors routinely end the slug
  * with the part number (…/over-the-cab-truck-rack-36-extension-otc-u6036/).
@@ -145,18 +157,65 @@ export function extractAllSkus(html: string): string[] {
  * catalog holds both OTC-U6036 and U6036). Candidates must look like part
  * numbers (≥4 chars, a letter AND a digit); matching stays exact via
  * matchSkuToPart, so a non-SKU word tail simply matches nothing.
+ *
+ * Dimension tails are dropped outright: cve.holman.com names its pages by
+ * size (/shelf-unit-32-w-x-46-h-x-14-d), whose trailing joins — "14-D",
+ * "X-14-D", "H-X-14-D" — carry a letter and a digit and so read as part
+ * numbers. Letting those through risks a shelf's photo landing on whatever
+ * catalog row happens to be numbered 14D, and a wrong photo is worse than
+ * none. A candidate made ENTIRELY of measurement words and bare numbers is
+ * never a part number.
  */
 export function skuCandidatesFromUrl(pageUrl: string): string[] {
   let path: string;
   try { path = decodeURIComponent(new URL(pageUrl).pathname); } catch { return []; }
   const slug = path.replace(/\/+$/, '').split('/').pop() || '';
   const tokens = slug.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+  const dimensional = (parts: string[]) => parts.every(t => DIMENSION_TOKENS.has(t) || /^\d+$/.test(t));
   const out: string[] = [];
   for (let n = Math.min(4, tokens.length); n >= 1; n--) {
-    const cand = tokens.slice(tokens.length - n).join('-');
-    if (cand.length >= 4 && /\d/.test(cand) && /[A-Z]/.test(cand)) out.push(cand);
+    const tail = tokens.slice(tokens.length - n);
+    const cand = tail.join('-');
+    if (cand.length >= 4 && /\d/.test(cand) && /[A-Z]/.test(cand) && !dimensional(tail)) out.push(cand);
   }
   return out;
+}
+
+/**
+ * Why a page yielded nothing. "No SKU on the page" is a dead end on its own —
+ * it reads the same whether the vendor served the real product page, an
+ * anti-bot interstitial, or a JavaScript shell we can't run. The probe shows
+ * this verdict so step 1 says what actually came back.
+ */
+export type PageVerdict = 'ok' | 'empty' | 'bot-wall' | 'js-shell';
+
+/** Interstitials that answer 200 with a challenge instead of the page. */
+const BOT_WALL_MARKERS: [RegExp, string][] = [
+  [/_Incapsula_Resource|incap_ses_|distil_r_captcha/i, 'Imperva/Incapsula bot protection'],
+  [/cf-browser-verification|cf_chl_|challenge-platform|just a moment\.\.\./i, 'Cloudflare challenge'],
+  [/perimeterx|_pxhd|px-captcha/i, 'PerimeterX challenge'],
+  [/reference\s*#\s*\d+\.[0-9a-f]+|access denied.{0,80}akamai/i, 'Akamai bot manager block'],
+  [/(please )?enable (javascript|js) and cookies|javascript is required to (view|continue)/i, 'JavaScript/cookie gate'],
+  [/are you a (human|robot)|verify (that )?you are (a )?human|unusual traffic from your/i, 'Bot verification page'],
+];
+
+export function diagnosePage(html: string): { verdict: PageVerdict; detail: string } {
+  const trimmed = html.trim();
+  if (trimmed.length < 120) {
+    return { verdict: 'empty', detail: `The server answered with an essentially empty body (${trimmed.length} characters) — the real page never arrived.` };
+  }
+  for (const [re, label] of BOT_WALL_MARKERS) {
+    if (re.test(html)) {
+      return { verdict: 'bot-wall', detail: `${label}: the site served an anti-bot interstitial instead of the product page. Nothing on it is importable — ask the vendor to allow our importer, or get a product feed from them.` };
+    }
+  }
+  const text = stripTags(html.replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' '));
+  const hasTitle = /<title[^>]*>\s*[^<\s]/i.test(html);
+  const hasH1 = /<h1[^>]*>[\s\S]*?[^<>\s][\s\S]*?<\/h1>/i.test(html);
+  if (!hasTitle && !hasH1 && text.length < 400 && /<script/i.test(html)) {
+    return { verdict: 'js-shell', detail: `The served HTML is an app shell — no <title>, no <h1>, only ${text.length} characters of text — so the product details are drawn by JavaScript, which the importer doesn't run. This vendor needs a product feed or a different page source.` };
+  }
+  return { verdict: 'ok', detail: 'The page was readable — it just carried no part number we could match.' };
 }
 
 /** <loc> entries from a sitemap or sitemap index. */
@@ -243,6 +302,28 @@ export function looksLikeListingUrl(url: string): boolean {
   if (/\/page\/\d+\/?$/.test(path) || /[?&]page=\d+/.test(u)) return true;
   return /\/(product-category|product_category|collections|categories|category)\//.test(u)
     || /\/(products|shop|catalog)\/?$/.test(path);
+}
+
+/**
+ * Teach mode's companion to looksLikeProductUrl: a link sitting exactly one
+ * segment UNDER the category page an admin handed us. Plenty of vendors hang
+ * products straight off the category path with no /product/ segment anywhere
+ * (cve.holman.com: /shelving → /shelving/steel-shelving-unit), which the
+ * global shape test can't see. Scoped to pages the admin explicitly pointed
+ * at, so the open-web crawl keeps its narrower rule.
+ */
+export function looksLikeProductUnder(listingUrl: string, url: string): boolean {
+  const lower = url.toLowerCase();
+  if (ASSET_URL_RE.test(lower) || CART_ACTION_RE.test(lower)) return false;
+  if (looksLikeListingUrl(url)) return false;
+  let base: URL, u: URL;
+  try { base = new URL(listingUrl); u = new URL(url); } catch { return false; }
+  if (u.origin !== base.origin) return false;
+  const segments = (p: string) => p.split('/').filter(Boolean);
+  const baseSegs = segments(base.pathname.replace(/\/page\/\d+\/?$/, '/'));
+  const urlSegs = segments(u.pathname);
+  if (urlSegs.length !== baseSegs.length + 1) return false;
+  return baseSegs.every((s, i) => urlSegs[i] === s);
 }
 
 /**
