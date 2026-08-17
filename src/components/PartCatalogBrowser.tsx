@@ -429,6 +429,19 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                 </>
               );
             })()}
+            {/* Escape hatch (Craig 2026-08-17): universal parts carry no
+                fitment tags, so a vehicle-narrowed browse hides them — one
+                tap widens to the whole catalog to grab dividers/hardware,
+                without losing the rest of the filters. */}
+            {platformId && (
+              <button
+                onClick={() => { setPlatformId(''); setWheelbase(''); setRoof(''); }}
+                title="Clear the vehicle filter — universal parts (hardware, dividers, accessories) aren't vehicle-tagged, so they only show here"
+                style={{ marginTop: '6px', width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--accent, #2563eb)', background: 'transparent', fontSize: '11px', fontWeight: 800, cursor: 'pointer', color: 'var(--accent, #2563eb)' }}
+              >
+                See all parts ✕
+              </button>
+            )}
             {isAdmin && (
               <button
                 onClick={async () => {
@@ -823,7 +836,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                     );
                   })}
                   {fitment !== null && fitment.length === 0 && (
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No vehicle tags — shows for every vehicle filter</span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No vehicle tags — hidden when browsing by vehicle (use &quot;See all parts&quot;), or tag it below</span>
                   )}
                 </div>
                 {isAdmin && (() => {
