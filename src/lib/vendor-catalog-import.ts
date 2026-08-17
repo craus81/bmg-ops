@@ -88,7 +88,61 @@ function firstH1(html: string): string | null {
   return t.length > 1 && t.length <= 200 ? t : null;
 }
 
-export function extractProduct(html: string): ExtractedProduct {
+/** One attribute off an <img …> tag's attribute text. */
+const tagAttr = (tag: string, name: string): string | null => {
+  const m = tag.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, 'i'));
+  return m ? m[1].trim() : null;
+};
+
+/** Largest candidate in a srcset ("a.jpg 400w, b.jpg 1200w" → b.jpg). */
+const largestInSrcset = (v: string | null): string | null => {
+  if (!v) return null;
+  const urls = v.split(',').map(s => s.trim().split(/\s+/)[0]).filter(Boolean);
+  return urls.length > 0 ? urls[urls.length - 1] : null;
+};
+
+/** Chrome that is never the product: logos, icons, payment badges, spacers. */
+const IMAGE_NOISE_RE = /logo|icon|sprite|badge|placeholder|spacer|blank|pixel|avatar|favicon|social|payment|banner/i;
+
+/** An absolute image URL sitting in the page's own embedded product JSON
+ *  (Squarespace's assetUrl, Shopify's featured_image, …). */
+function embeddedJsonImage(html: string): string | null {
+  for (const block of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
+    const m = block[1].match(/"(?:assetUrl|imageUrl|featured_image|originalUrl|image|src)"\s*:\s*"(https?:\\?\/\\?\/[^"]{10,400}?\.(?:jpe?g|png|webp)(?:\?[^"]{0,150})?)"/i);
+    if (m && !IMAGE_NOISE_RE.test(m[1])) return m[1].replace(/\\\//g, '/');
+  }
+  return null;
+}
+
+/**
+ * Best <img> in the page body — the last resort when a site publishes no
+ * og:image at all (legendsoftheroad.com shows a full gallery and advertises
+ * none of it). Header/nav/footer are cut first, chrome is filtered by name,
+ * anything declaring itself under 200px is skipped, and gallery/product
+ * containers win ties. It's a heuristic, which is exactly why the probe
+ * renders the result: step 1 shows the photo before any import runs.
+ */
+function bodyImageUrl(html: string): string | null {
+  const body = html.replace(/<(script|style|header|nav|footer)\b[\s\S]*?<\/\1>/gi, ' ');
+  let best: { url: string; score: number } | null = null;
+  for (const m of body.matchAll(/<img\b([^>]*)>/gi)) {
+    const tag = m[1];
+    const src = tagAttr(tag, 'src') || tagAttr(tag, 'data-src') || tagAttr(tag, 'data-image')
+      || largestInSrcset(tagAttr(tag, 'srcset') || tagAttr(tag, 'data-srcset'));
+    if (!src || /^data:/i.test(src) || /\.svg(\?|$)/i.test(src)) continue;
+    const context = `${src} ${tagAttr(tag, 'alt') || ''} ${tagAttr(tag, 'class') || ''} ${tagAttr(tag, 'id') || ''}`;
+    if (IMAGE_NOISE_RE.test(context)) continue;
+    const w = parseInt(tagAttr(tag, 'width') || '0', 10) || 0;
+    const h = parseInt(tagAttr(tag, 'height') || '0', 10) || 0;
+    if ((w > 0 && w < 200) || (h > 0 && h < 200)) continue;
+    let score = Math.max(w, h) || 100;
+    if (/product|gallery|hero|main|primary|feature/i.test(context)) score += 500;
+    if (!best || score > best.score) best = { url: src, score };
+  }
+  return best?.url ?? null;
+}
+
+export function extractProduct(html: string, pageUrl?: string): ExtractedProduct {
   const ld = findJsonLdProduct(html);
   const og = {
     image: metaContent(html, 'og:image'),
@@ -100,10 +154,16 @@ export function extractProduct(html: string): ExtractedProduct {
   const description = (ld?.description ? stripTags(String(ld.description)) : null)
     || (og.description ? stripTags(og.description) : null);
 
-  // twitter:image and <link rel="image_src"> are what's left when a site
-  // skips og:image — worth asking before reporting "no image".
-  const imageUrl = jsonLdImageUrl(ld?.image) || og.image || metaContent(html, 'twitter:image')
-    || html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i)?.[1] || null;
+  // Image, most-declared first: the page's own structured metadata, then its
+  // embedded product JSON, then the best <img> in the body. A relative hit
+  // is resolved against the page URL, since the importer fetches it directly.
+  const rawImage = jsonLdImageUrl(ld?.image) || og.image || metaContent(html, 'twitter:image')
+    || html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i)?.[1]
+    || embeddedJsonImage(html) || bodyImageUrl(html) || null;
+  let imageUrl = rawImage;
+  if (rawImage && pageUrl) {
+    try { imageUrl = new URL(decodeEntities(rawImage), pageUrl).toString(); } catch { imageUrl = null; }
+  }
 
   // The headline SKU is what the probe prints and what run-mode errors quote.
   // Fall back to the first of the page's other SKU signals so a variant-list

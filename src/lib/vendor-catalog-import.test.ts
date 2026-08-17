@@ -54,6 +54,37 @@ describe('extractProduct', () => {
     expect(extractProduct(html).sku).toBe('741-135-6441');
   });
 
+  // legendsoftheroad.com publishes a full gallery and no og:image at all.
+  it('falls back to the embedded product JSON for a photo', () => {
+    const html = `<html><head>
+      <script>window.Static={SQUARESPACE_CONTEXT:{"product":{"items":[{"assetUrl":"https://images.squarespace-cdn.com/content/v1/abc/stabiligrip.jpg?format=2500w"}]}}};</script>
+      </head><body><h1>StabiliGrip</h1></body></html>`;
+    expect(extractProduct(html).imageUrl).toBe('https://images.squarespace-cdn.com/content/v1/abc/stabiligrip.jpg?format=2500w');
+  });
+
+  it('falls back to the best <img> in the body, skipping chrome', () => {
+    const html = `<html><body>
+      <header><img src="/site-logo.png" width="240" height="240" alt="Legend"></header>
+      <img src="/assets/ford-logo.png" width="300" height="300" alt="Ford">
+      <img src="/assets/spacer.gif" width="900" height="900">
+      <div class="product-gallery"><img src="/assets/stabiligrip-hero.jpg" width="1200" height="800" alt="StabiliGrip floor"></div>
+      <img src="/assets/thumb-2.jpg" width="120" height="90" alt="thumbnail">
+      </body></html>`;
+    expect(extractProduct(html, 'https://www.legendsoftheroad.com/products/x').imageUrl)
+      .toBe('https://www.legendsoftheroad.com/assets/stabiligrip-hero.jpg');
+  });
+
+  it('takes the largest srcset entry and leaves absolute URLs alone', () => {
+    const html = `<html><body><div class="product">
+      <img srcset="/a-400.jpg 400w, /a-1600.jpg 1600w" alt="floor kit"></div></body></html>`;
+    expect(extractProduct(html, 'https://x.com/products/p').imageUrl).toBe('https://x.com/a-1600.jpg');
+    expect(extractProduct(LD_PAGE, 'https://x.com/p').imageUrl).toBe('https://cdn.example.com/shelf.jpg');
+  });
+
+  it('still reports no image when the page really has none', () => {
+    expect(extractProduct('<html><body><p>No pictures here at all.</p></body></html>').imageUrl).toBeNull();
+  });
+
   it('asks twitter:image and <link rel="image_src"> before giving up on a photo', () => {
     expect(extractProduct('<html><head><meta name="twitter:image" content="https://cdn.example.com/t.jpg"></head></html>').imageUrl)
       .toBe('https://cdn.example.com/t.jpg');
