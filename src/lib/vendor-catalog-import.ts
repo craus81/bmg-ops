@@ -100,11 +100,23 @@ export function extractProduct(html: string): ExtractedProduct {
   const description = (ld?.description ? stripTags(String(ld.description)) : null)
     || (og.description ? stripTags(og.description) : null);
 
+  // twitter:image and <link rel="image_src"> are what's left when a site
+  // skips og:image — worth asking before reporting "no image".
+  const imageUrl = jsonLdImageUrl(ld?.image) || og.image || metaContent(html, 'twitter:image')
+    || html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i)?.[1] || null;
+
+  // The headline SKU is what the probe prints and what run-mode errors quote.
+  // Fall back to the first of the page's other SKU signals so a variant-list
+  // page reports the number it carries instead of a bare "—".
+  const sku = ld?.sku ? String(ld.sku).trim()
+    : ld?.mpn ? String(ld.mpn).trim()
+    : visibleSkuSpan(html) || extractAllSkus(html)[0] || null;
+
   return {
     name: (ld?.name ? stripTags(String(ld.name)) : null) || (og.title ? stripTags(og.title) : null) || firstH1(html) || (titleTag ? stripTags(titleTag) : null),
     description: description && description.length > 10 ? description.slice(0, 2000) : null,
-    imageUrl: jsonLdImageUrl(ld?.image) || og.image,
-    sku: ld?.sku ? String(ld.sku).trim() : (ld?.mpn ? String(ld.mpn).trim() : visibleSkuSpan(html)),
+    imageUrl,
+    sku,
   };
 }
 
@@ -134,14 +146,61 @@ export function extractAllSkus(html: string): string[] {
   for (const m of html.matchAll(/class=["'](?:[^"']*\s)?sku(?:\s[^"']*)?["'][^>]*>\s*([^<>\s][^<>]{0,58}?)\s*</gi)) {
     push(m[1]);
   }
-  // Last resort: visible "Part #: 022824KP" labels. Only when the page
-  // offered NO structured SKU at all — so a product page's own signals
-  // always win and related-product cards can't hijack a page's photo.
-  // Tokens must carry a digit (labels like "Part: One" match nothing).
+  // ── Last-resort tiers, each running ONLY when everything above it came up
+  // empty. A page's own structured signals always win, so related-product
+  // cards can't hijack its photo.
+
+  // 1. Embedded platform JSON. Storefronts hand the browser their product as
+  //    a JSON blob (Squarespace's SQUARESPACE_CONTEXT, Shopify's meta,
+  //    __NEXT_DATA__ …) where the variant part numbers live under a sku-ish
+  //    key, even when the rendered markup carries no class="sku" anywhere.
+  if (out.length === 0) for (const s of embeddedJsonSkus(html)) push(s);
+
+  // 2. Visible "Part #: 022824KP" labels. Tokens must carry a digit (labels
+  //    like "Part: One" match nothing).
   if (out.length === 0) {
     for (const m of html.matchAll(/part\s*(?:#|no\.?|number)?\s*:?\s*(?:<[^>]+>\s*)*([A-Z0-9][A-Z0-9._/-]{3,29})/gi)) {
       if (/\d/.test(m[1])) push(m[1]);
     }
+  }
+
+  // 3. Bare code tokens standing alone in their own element — the shape a
+  //    variant picker uses when it prints the option's part number under the
+  //    option's name with no label at all (legendsoftheroad.com lists
+  //    "3 Pc" / "741-135-6441" per option).
+  if (out.length === 0) for (const s of standaloneCodeTokens(html)) push(s);
+
+  return out;
+}
+
+/** Part numbers under a sku-ish key inside any <script> JSON blob. */
+function embeddedJsonSkus(html: string): string[] {
+  const keyed = /"(?:sku|mpn|partNumber|part_number|itemNumber|item_number|productCode|product_code)"\s*:\s*"([^"\\]{3,40})"/gi;
+  const out: string[] = [];
+  for (const block of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
+    for (const m of block[1].matchAll(keyed)) {
+      const v = m[1].trim();
+      if (v && /\d/.test(v) && !out.includes(v)) out.push(v);
+      if (out.length >= 200) return out;
+    }
+  }
+  return out;
+}
+
+/**
+ * Elements whose ENTIRE text is one part-number-shaped token: alphanumerics
+ * broken by at least one - . or / ("741-135-6441", "741-135-6441.2"). The
+ * separator requirement is what keeps prose, prices and bare quantities out.
+ * Junk that slips through (a date, a phone number) is harmless — matching
+ * downstream is exact against item_number, so it simply hits nothing.
+ */
+function standaloneCodeTokens(html: string): string[] {
+  const body = html.replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' ');
+  const out: string[] = [];
+  for (const m of body.matchAll(/>\s*([A-Za-z0-9]+(?:[.\-/][A-Za-z0-9]+)+)\s*</g)) {
+    const t = m[1].toUpperCase();
+    if (t.length >= 5 && t.length <= 40 && /\d/.test(t) && !out.includes(t)) out.push(t);
+    if (out.length >= 60) break;
   }
   return out;
 }
