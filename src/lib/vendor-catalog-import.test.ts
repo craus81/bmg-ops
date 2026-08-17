@@ -227,13 +227,27 @@ describe('diagnosePage (why a page yielded nothing)', () => {
       <body><div class="cf-browser-verification"></div></body></html>`.padEnd(200, ' ')).verdict).toBe('bot-wall');
   });
 
-  it('names a JavaScript app shell (no title, no h1, all script)', () => {
+  // cve.holman.com answered a root-level slug with 0.8 KB of nothing, while
+  // its own /shelving/<product> links serve real markup — a soft 404, not a
+  // vendor we can't read. Point at the URL before blaming the site.
+  it('treats a tiny skeleton as a probable bad URL, not a dead vendor', () => {
+    const stub = `<html><head><meta charset="utf-8"></head><body><div id="app"></div>
+      <script src="/media/js/app.js?v=ab8ea1e5"></script></body></html>`;
+    const d = diagnosePage(stub);
+    expect(d.verdict).toBe('js-shell');
+    expect(d.detail).toContain("DOESN'T EXIST");
+    expect(d.detail).not.toContain('needs a product feed');
+  });
+
+  it('names a JavaScript app shell (a real page, bulky but textless)', () => {
     const shell = `<html><head><meta charset="utf-8"><link rel="stylesheet" href="/a.css"></head>
       <body><div id="root"></div><script src="/bundle.js"></script>
-      <script>window.__CFG__={api:"/graphql",locale:"en-US"}</script></body></html>`;
+      <script>window.__CFG__={api:"/graphql",locale:"en-US",boot:"${'x'.repeat(6000)}"}</script>
+      </body></html>`;
     const d = diagnosePage(shell);
     expect(d.verdict).toBe('js-shell');
     expect(d.detail).toContain('app shell');
+    expect(d.detail).toContain('needs a product feed');
   });
 
   it('calls an essentially empty body what it is', () => {
