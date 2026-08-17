@@ -48,6 +48,19 @@ describe('extractProduct', () => {
     expect(p.sku).toBeNull();
   });
 
+  it('reports a variant-list page\'s number instead of a bare dash', () => {
+    const html = `<html><body><h1>Kit With Sills</h1>
+      <span class="code">741-135-6441</span></body></html>`;
+    expect(extractProduct(html).sku).toBe('741-135-6441');
+  });
+
+  it('asks twitter:image and <link rel="image_src"> before giving up on a photo', () => {
+    expect(extractProduct('<html><head><meta name="twitter:image" content="https://cdn.example.com/t.jpg"></head></html>').imageUrl)
+      .toBe('https://cdn.example.com/t.jpg');
+    expect(extractProduct('<html><head><link rel="image_src" href="https://cdn.example.com/l.jpg"></head></html>').imageUrl)
+      .toBe('https://cdn.example.com/l.jpg');
+  });
+
   it('uses the page <h1> for the name before the site-suffixed <title>', () => {
     const html = `<html><head><title>Shelf Unit - 32" W x 46" H x 14" D | Holman</title></head>
       <body><h1>Shelf Unit - 32&quot; W x 46&quot; H x 14&quot; D</h1></body></html>`;
@@ -84,6 +97,41 @@ describe('extractAllSkus (family pages: one page, many part numbers)', () => {
 
   it('returns an empty list when nothing sku-shaped exists', () => {
     expect(extractAllSkus('<html><body>hello</body></html>')).toEqual([]);
+  });
+
+  // legendsoftheroad.com: one product page, several real part numbers listed
+  // as buyable options, none of them in JSON-LD or a class="sku" element.
+  it('reads variant part numbers out of embedded platform JSON', () => {
+    const html = `<html><head>
+      <script>window.Static = {SQUARESPACE_CONTEXT: {"product":{"title":"LEGEND StabiliGrip | Kit With Sills",
+        "variants":[{"sku":"741-135-6441","attributes":{"Option":"3 Pc"}},
+                    {"sku":"741-135-6441.1","attributes":{"Option":"3 Pc - Dual Rear Wheels"}},
+                    {"sku":"741-135-6441.2","attributes":{"Option":"3 Pc - Dual Side Doors"}}]}}};</script>
+      </head><body><h1>LEGEND StabiliGrip | Kit With Sills | Transit 148"</h1></body></html>`;
+    expect(extractAllSkus(html)).toEqual(['741-135-6441', '741-135-6441.1', '741-135-6441.2']);
+  });
+
+  it('reads bare option codes standing alone in their own element', () => {
+    const html = `<html><body>
+      <h1>LEGEND StabiliGrip | Kit With Sills | Transit 148"</h1>
+      <div class="option"><span class="name">3 Pc</span><span class="code">741-135-6441</span></div>
+      <div class="option"><span class="name">3 Pc - Dual Side Doors</span><span class="code">741-135-6441.2</span></div>
+      <p>Field-proven in hundreds of thousands of cargo vans.</p>
+      <span>0 items</span>
+    </body></html>`;
+    const skus = extractAllSkus(html);
+    expect(skus).toContain('741-135-6441');
+    expect(skus).toContain('741-135-6441.2');
+    // Prose, labels and bare counts carry no separator — never candidates.
+    expect(skus).not.toContain('0');
+    expect(skus.every(s => /[.\-/]/.test(s))).toBe(true);
+  });
+
+  it('keeps the structured signal when one exists — bare tokens never override it', () => {
+    const html = `<html><head>
+      <script type="application/ld+json">{"@type":"Product","sku":"C4-RA24-3"}</script>
+      </head><body><span class="code">741-135-6441</span><span>2026-08-17</span></body></html>`;
+    expect(extractAllSkus(html)).toEqual(['C4-RA24-3']);
   });
 
   it('falls back to visible "Part #:" labels only when no structured SKU exists', () => {
