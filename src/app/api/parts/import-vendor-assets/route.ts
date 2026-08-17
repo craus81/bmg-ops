@@ -165,7 +165,7 @@ export async function POST(req: NextRequest) {
     if (body.mode === 'probe') {
       const page = await fetchPage(body.url);
       const html = page.html;
-      const product = extractProduct(html);
+      const product = extractProduct(html, page.finalUrl);
       const { byKey, partById, inScope, total, allTotal } = await buildPartMap(body.vendor);
       // Family pages can carry a whole model line's part numbers — match
       // them all; the slug is the fallback when the page yields nothing.
@@ -367,7 +367,7 @@ export async function POST(req: NextRequest) {
     for (const url of body.urls) {
       try {
         const html = await fetchText(url);
-        const product = extractProduct(html);
+        const product = extractProduct(html, url);
         // Family pages carry a whole model line's part numbers — match every
         // SKU signal on the page (slug fallback when the page yields none).
         // Each match is still exact-or-dashless against item_number.
