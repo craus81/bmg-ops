@@ -21,6 +21,20 @@ const GROUP_CONFIG: Record<string, { label: string; icon: string; color: string 
   quotes: { label: 'Quotes', icon: '', color: '#8b5cf6' },
 };
 
+// Where "View all N →" lands, with the query prefilled — only groups whose
+// list page actually applies a search param (deep-link rule: never a dead
+// click). Quotes/messages have no searchable list page yet, so their
+// headers show the total without a link.
+const VIEW_ALL: Record<string, (q: string) => string> = {
+  purchase_orders: q => `/admin/pos?q=${encodeURIComponent(q)}`,
+  vehicles: q => `/tracking?q=${encodeURIComponent(q)}`,
+  graphics_jobs: q => `/graphics?q=${encodeURIComponent(q)}`,
+  estimates: q => `/estimates?q=${encodeURIComponent(q)}`,
+  parts: q => `/parts?q=${encodeURIComponent(q)}`,
+  customers: q => `/admin/prospects?q=${encodeURIComponent(q)}`,
+  invoices: q => `/invoices?invoice=${encodeURIComponent(q)}`,
+};
+
 function formatDate(dateStr: string) {
   if (!dateStr) return '';
   const d = new Date(dateStr.includes('T') ? dateStr : dateStr + 'T00:00:00');
@@ -205,6 +219,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Record<string, any[]>>({});
+  const [totals, setTotals] = useState<Record<string, number>>({});
   const [searching, setSearching] = useState(false);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -227,6 +242,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
       // Reset state
       setQuery('');
       setResults({});
+      setTotals({});
     }
   }, [open]);
 
@@ -251,8 +267,10 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
       const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
       const data = await res.json();
       setResults(data.results || {});
+      setTotals(data.totals || {});
     } catch {
       setResults({});
+      setTotals({});
     } finally {
       setSearching(false);
     }
@@ -341,10 +359,14 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
             const config = GROUP_CONFIG[group] || { label: group, icon: '', color: 'var(--text-body)' };
             const items = results[group] || [];
             if (items.length === 0) return null;
+            const total = totals[group] ?? items.length;
+            const hasMore = total > items.length;
+            const viewAllUrl = hasMore && VIEW_ALL[group] ? VIEW_ALL[group](query) : null;
 
             return (
               <div key={group}>
-                {/* Group header */}
+                {/* Group header — true match count; capped lists link to the
+                    full, pre-filtered list page. */}
                 <div style={{
                   padding: '10px 14px 6px', display: 'flex', alignItems: 'center', gap: '6px',
                   position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 1,
@@ -355,8 +377,20 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
                     {config.label}
                   </span>
                   <span style={{ fontSize: '10px', color: 'var(--text-label)', fontWeight: 600 }}>
-                    ({items.length})
+                    ({total}{hasMore ? `, showing ${items.length}` : ''})
                   </span>
+                  {viewAllUrl && (
+                    <button
+                      onClick={() => { onClose(); router.push(viewAllUrl); }}
+                      style={{
+                        marginLeft: 'auto', background: 'transparent', border: 'none',
+                        color: config.color, fontSize: '11px', fontWeight: 800, cursor: 'pointer',
+                        padding: '2px 4px', whiteSpace: 'nowrap',
+                      }}
+                    >
+                      View all {total} →
+                    </button>
+                  )}
                 </div>
 
                 {/* Group results */}

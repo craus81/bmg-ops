@@ -54,6 +54,13 @@ export default function TrackingPage() {
   const [statusNote, setStatusNote] = useState('');
   const [profiles, setProfiles] = useState<Record<string, string>>({});
   const [searchTerm, setSearchTerm] = useState('');
+  // Deep link: ?q=<term> (universal search "View all" on vehicles) prefills
+  // the board search.
+  useEffect(() => {
+    const q = searchParams?.get('q');
+    if (q) setSearchTerm(q);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: read once on mount
+  }, []);
   const [updateSuccess, setUpdateSuccess] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [showArchived, setShowArchived] = useState(false);

@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
     // Purchase Orders — search by PO number, customer, line item part numbers
     supabase
       .from('purchase_orders')
-      .select('id, po_number, customer, status, ordered_date, created_at, ship_to, po_line_items(id, part_number, description, quantity, unit_price, installed)')
+      .select('id, po_number, customer, status, ordered_date, created_at, ship_to, po_line_items(id, part_number, description, quantity, unit_price, installed)', { count: 'exact' })
       .or(`po_number.ilike.${like},customer.ilike.${like}`)
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     // Fleet Check-ins — search by VIN, make/model, customer, sales order
     supabase
       .from('fleet_checkins')
-      .select('id, vin, vehicle_year, vehicle_make, vehicle_model, vehicle_trim, customer_name, sales_order_number, status, created_at')
+      .select('id, vin, vehicle_year, vehicle_make, vehicle_model, vehicle_trim, customer_name, sales_order_number, status, created_at', { count: 'exact' })
       .or(`vin.ilike.${like},vehicle_make.ilike.${like},vehicle_model.ilike.${like},customer_name.ilike.${like},sales_order_number.ilike.${like}`)
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
@@ -43,7 +43,7 @@ export async function GET(req: NextRequest) {
     // Graphics Jobs — search by job number, title, part number, customer
     supabase
       .from('graphics_jobs')
-      .select('id, job_number, title, part_number, customer, status, priority, due_date, created_at')
+      .select('id, job_number, title, part_number, customer, status, priority, due_date, created_at', { count: 'exact' })
       .or(`job_number.ilike.${like},title.ilike.${like},part_number.ilike.${like},customer.ilike.${like}`)
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
     // Estimates — search by estimate number, customer name, title
     supabase
       .from('estimates')
-      .select('id, estimate_number, customer_id, title, status, total, created_at')
+      .select('id, estimate_number, customer_id, title, status, total, created_at', { count: 'exact' })
       .or(`estimate_number.ilike.${like},title.ilike.${like}`)
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
@@ -59,7 +59,7 @@ export async function GET(req: NextRequest) {
     // Parts Catalog — search the unified catalog by part number, name, customer
     supabase
       .from('netsuite_parts')
-      .select('id, item_number, display_name, billable_customer, vehicle_type, graphic_package, sales_price, catalog')
+      .select('id, item_number, display_name, billable_customer, vehicle_type, graphic_package, sales_price, catalog', { count: 'exact' })
       .eq('is_active', true)
       .or(`item_number.ilike.${like},display_name.ilike.${like},billable_customer.ilike.${like},vehicle_type.ilike.${like},graphic_package.ilike.${like}`)
       .limit(MAX_PER_GROUP * 4),
@@ -67,7 +67,7 @@ export async function GET(req: NextRequest) {
     // Customers — search by company name, contact, email
     supabase
       .from('prospects')
-      .select('id, company_name, contact_name, email, phone, netsuite_id')
+      .select('id, company_name, contact_name, email, phone, netsuite_id', { count: 'exact' })
       .or(`company_name.ilike.${like},contact_name.ilike.${like},email.ilike.${like}`)
       .order('company_name')
       .limit(MAX_PER_GROUP),
@@ -75,7 +75,7 @@ export async function GET(req: NextRequest) {
     // Messages — search by body text
     supabase
       .from('messages')
-      .select('id, conversation_id, sender_id, body, created_at')
+      .select('id, conversation_id, sender_id, body, created_at', { count: 'exact' })
       .ilike('body', like)
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
@@ -83,7 +83,7 @@ export async function GET(req: NextRequest) {
     // Quotes — search by quote number, customer, vehicle description
     supabase
       .from('wrap_quotes')
-      .select('id, quote_number, customer, vehicle_description, status, total, created_at')
+      .select('id, quote_number, customer, vehicle_description, status, total, created_at', { count: 'exact' })
       .or(`quote_number.ilike.${like},customer->>name.ilike.${like},vehicle_description.ilike.${like}`)
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
@@ -199,13 +199,35 @@ export async function GET(req: NextRequest) {
   }
 
   const results: Record<string, any> = {};
-  if (invoiceItems.length > 0) results.invoices = invoiceItems.slice(0, MAX_PER_GROUP);
+  // True match counts per group (the lists themselves stay capped at
+  // MAX_PER_GROUP) so the UI can say "showing 5 of 23" and link to the rest.
+  // Merged groups (POs, estimates, invoices) report the primary query's
+  // count plus the extras the merge actually found — a floor, never a lie.
+  const totals: Record<string, number> = {};
+  if (invoiceItems.length > 0) {
+    results.invoices = invoiceItems.slice(0, MAX_PER_GROUP);
+    totals.invoices = invoiceItems.length;
+  }
 
-  if (allPOs.length > 0) results.purchase_orders = allPOs;
-  if (vehicles.data?.length) results.vehicles = vehicles.data;
-  if (graphicsJobs.data?.length) results.graphics_jobs = graphicsJobs.data;
-  if (allEstimates.length > 0) results.estimates = allEstimates;
+  if (allPOs.length > 0) {
+    results.purchase_orders = allPOs;
+    totals.purchase_orders = Math.max(allPOs.length, (pos.count ?? 0) + poFromLineItems.length);
+  }
+  if (vehicles.data?.length) {
+    results.vehicles = vehicles.data;
+    totals.vehicles = vehicles.count ?? vehicles.data.length;
+  }
+  if (graphicsJobs.data?.length) {
+    results.graphics_jobs = graphicsJobs.data;
+    totals.graphics_jobs = graphicsJobs.count ?? graphicsJobs.data.length;
+  }
+  if (allEstimates.length > 0) {
+    results.estimates = allEstimates;
+    totals.estimates = Math.max(allEstimates.length, (estimates.count ?? 0) + estimatesByCustomer.length);
+  }
   if (parts.data?.length) {
+    // Count is raw matching rows (pre-dedupe) — close enough for "of N".
+    totals.parts = parts.count ?? parts.data.length;
     // De-dupe by item number (legacy data can carry >1 row per part), then map
     // onto the shape UniversalSearch renders.
     const seen = new Set<string>();
@@ -228,9 +250,16 @@ export async function GET(req: NextRequest) {
         graphic_package: p.graphic_package,
       }));
   }
-  if (customers.data?.length) results.customers = customers.data;
-  if (messages.data?.length) results.messages = messages.data;
+  if (customers.data?.length) {
+    results.customers = customers.data;
+    totals.customers = customers.count ?? customers.data.length;
+  }
+  if (messages.data?.length) {
+    results.messages = messages.data;
+    totals.messages = messages.count ?? messages.data.length;
+  }
   if (quotes.data?.length) {
+    totals.quotes = quotes.count ?? quotes.data.length;
     // Keep the legacy result shape the search UI renders
     results.quotes = quotes.data.map((q: any) => ({
       id: q.id, quote_number: q.quote_number, customer_name: q.customer?.name || null,
@@ -239,5 +268,5 @@ export async function GET(req: NextRequest) {
     }));
   }
 
-  return NextResponse.json({ results, query: q });
+  return NextResponse.json({ results, totals, query: q });
 }
