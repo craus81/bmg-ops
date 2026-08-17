@@ -332,7 +332,16 @@ export function diagnosePage(html: string): { verdict: PageVerdict; detail: stri
   const hasTitle = /<title[^>]*>\s*[^<\s]/i.test(html);
   const hasH1 = /<h1[^>]*>[\s\S]*?[^<>\s][\s\S]*?<\/h1>/i.test(html);
   if (!hasTitle && !hasH1 && text.length < 400 && /<script/i.test(html)) {
-    return { verdict: 'js-shell', detail: `The served HTML is an app shell — no <title>, no <h1>, only ${text.length} characters of text — so the product details are drawn by JavaScript, which the importer doesn't run. This vendor needs a product feed or a different page source.` };
+    // A SHORT shell is usually a soft 404 — plenty of sites answer an unknown
+    // path with an empty 200 skeleton rather than a real 404, so the first
+    // suspect is the URL, not the vendor. (Learned the hard way on
+    // cve.holman.com: a root-level slug returned 0.8 KB of nothing while the
+    // site's own /shelving/<product> URLs serve real markup.)
+    const kb = (trimmed.length / 1024).toFixed(1);
+    if (trimmed.length < 5000) {
+      return { verdict: 'js-shell', detail: `The server returned a bare ${kb} KB skeleton — no <title>, no <h1>, no text. That is usually what a site sends for a URL THAT DOESN'T EXIST, so check the address first: open the vendor's own menu and copy a product link from it (they often nest products under a category, e.g. /shelving/steel-shelving-unit, rather than at the site root). If a link straight from their navigation does the same thing, then the page really is drawn by JavaScript the importer doesn't run.` };
+    }
+    return { verdict: 'js-shell', detail: `The served HTML is an app shell — no <title>, no <h1>, only ${text.length} characters of text in ${kb} KB — so the product details are drawn by JavaScript, which the importer doesn't run. This vendor needs a product feed or a different page source.` };
   }
   return { verdict: 'ok', detail: 'The page was readable — it just carried no part number we could match.' };
 }
