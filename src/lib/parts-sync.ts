@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
+import { runCategorySweep } from '@/lib/part-category-sweep';
 
 /**
  * Parts-catalog sync against NetSuite (K11).
@@ -140,6 +141,8 @@ export interface PartsIncrementalResult {
   deactivated: number;
   promoted: number;
   itemsWithPrice: number;
+  /** Parts re-categorized by the tagging rules (migration 209). */
+  categorized?: number;
   error?: string;
   /** Outcome of the sync_state heartbeat write — not persisted, only reported. */
   syncStateWrite?: HeartbeatResult;
@@ -314,11 +317,23 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
 
   const promoted = await promoteManualTwins(service, active);
 
+  // Newly synced parts arrive uncategorized, so run the tagging rules
+  // (migration 209) behind every sync — otherwise a rule only ever covers
+  // the catalog as it stood the last time someone opened the admin page.
+  // Non-fatal: a sweep failure must not fail the sync that already landed.
+  let categorized = 0;
+  try {
+    categorized = (await runCategorySweep(service)).applied;
+  } catch (err: any) {
+    console.error('[parts-sync] category rule sweep failed:', err?.message || err);
+  }
+
   const result = {
     modified: nsItems.length,
     upserted,
     deactivated,
     promoted,
+    categorized,
     itemsWithPrice: Object.keys(pricingMap).length,
   };
   return { ...result, syncStateWrite: await recordHeartbeat(service, 'netsuite_parts', result) };

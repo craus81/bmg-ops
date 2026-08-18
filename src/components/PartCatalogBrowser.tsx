@@ -35,6 +35,9 @@ export interface BrowsePart {
   labor_hours: number | null;
   quantity_available: number | null;
   product_category_id: string | null;
+  /** 'rule' when a tagging rule set the category, 'manual' when a human
+   *  did (migration 209). Manual always wins over the rules. */
+  category_source?: string | null;
   image_path: string | null;
 }
 
@@ -190,7 +193,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
         for (let i = 0; i < partIds.length; i += 200) {
           const { data: ps } = await supabase
             .from('netsuite_parts')
-            .select('id, netsuite_id, item_number, display_name, description, marketing_description, catalog, item_type, vendor, sales_price, purchase_price, avg_install_cost, labor_hours, quantity_available, product_category_id, image_path')
+            .select('id, netsuite_id, item_number, display_name, description, marketing_description, catalog, item_type, vendor, sales_price, purchase_price, avg_install_cost, labor_hours, quantity_available, product_category_id, category_source, image_path')
             .in('id', partIds.slice(i, i + 200))
             .eq('is_active', true);
           for (const p of ps || []) partsById.set(p.id, p as BrowsePart);
@@ -282,8 +285,10 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
         body: JSON.stringify({ partId, productCategoryId: id }),
       });
       if (res.ok) {
-        setParts(prev => prev.map(p => p.id === partId ? { ...p, product_category_id: id } : p));
-        setDetail(d => d && d.id === partId ? { ...d, product_category_id: id } : d);
+        // The API stamps this as a manual assignment, which pins the part
+        // against the tagging rules — reflect that without a refetch.
+        setParts(prev => prev.map(p => p.id === partId ? { ...p, product_category_id: id, category_source: 'manual' } : p));
+        setDetail(d => d && d.id === partId ? { ...d, product_category_id: id, category_source: 'manual' } : d);
       }
     } finally {
       setBusyPart(null);
@@ -706,7 +711,9 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                       disabled={busyPart === p.id}
                       onChange={e => setPartCategory(p.id, e.target.value || null)}
                       style={{ ...selStyle, fontSize: '10px', padding: '4px 6px', marginTop: '2px' }}
-                      title="Set browse category"
+                      title={p.category_source === 'rule'
+                        ? 'Set by a tagging rule — changing it here pins the part and the rules stop touching it'
+                        : 'Set browse category'}
                     >
                       <option value="">No category</option>
                       {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
