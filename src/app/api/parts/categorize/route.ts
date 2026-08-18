@@ -25,7 +25,9 @@ const CategorySchema = z.object({
 /**
  * PATCH /api/parts/categorize — stock the catalog shelf (roadmap N4-A):
  * assign a part's browse category and/or product photo. Both columns are
- * FleetSuite-owned, so the parts sync never undoes an assignment.
+ * FleetSuite-owned, so the parts sync never undoes an assignment. A
+ * category set here is stamped as manual and outranks every tagging rule
+ * (migration 209).
  */
 export async function PATCH(req: NextRequest) {
   const auth = await requireAdmin(req);
@@ -36,7 +38,15 @@ export async function PATCH(req: NextRequest) {
   const { partId, productCategoryId, imagePath } = parsed.data;
 
   const updates: Record<string, unknown> = {};
-  if (productCategoryId !== undefined) updates.product_category_id = productCategoryId;
+  if (productCategoryId !== undefined) {
+    updates.product_category_id = productCategoryId;
+    // A human touched it, so the tagging-rule sweep (migration 209) must
+    // leave it alone from here on — including a deliberate clear to null,
+    // which is an answer ("this part has no category"), not a gap for a
+    // rule to fill. Drop any rule that previously owned the part.
+    updates.category_source = 'manual';
+    updates.category_rule_id = null;
+  }
   if (imagePath !== undefined) updates.image_path = imagePath || null;
   if (Object.keys(updates).length === 0) {
     return NextResponse.json({ error: 'Nothing to update' }, { status: 400 });

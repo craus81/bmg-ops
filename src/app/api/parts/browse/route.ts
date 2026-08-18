@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
   try {
     // A vehicle filter needs an inner join to part_fitment; without one the
     // select stays flat (no embedded arrays in the payload).
-    const baseColumns = 'id, netsuite_id, item_number, display_name, description, marketing_description, catalog, item_type, vendor, sales_price, purchase_price, avg_install_cost, labor_hours, quantity_available, product_category_id, image_path';
+    const baseColumns = 'id, netsuite_id, item_number, display_name, description, marketing_description, catalog, item_type, vendor, sales_price, purchase_price, avg_install_cost, labor_hours, quantity_available, product_category_id, category_source, image_path';
     let query = supabase
       .from('netsuite_parts')
       .select(platformId ? `${baseColumns}, part_fitment!inner(platform_id)` : baseColumns, { count: 'exact' })
