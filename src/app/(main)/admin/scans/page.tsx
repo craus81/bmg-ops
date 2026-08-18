@@ -14,7 +14,7 @@ import { theme } from '@/lib/theme';
 import { locationBillingOverride } from '@/lib/scan-billing';
 import { findExistingScanVins, sameVehicleVin, vinTail, fetchScansMatchingVins, pickScanForLine } from '@/lib/vin-match';
 import { scanLifecycle } from '@/lib/scan-state';
-import { customerRequiresPo, loadBillableCustomers, DEFAULT_BILLABLE_CUSTOMERS, type BillableCustomer } from '@/lib/billable-customers';
+import { customerRequiresPo, loadBillableCustomers, matchesBillableCustomer, DEFAULT_BILLABLE_CUSTOMERS, type BillableCustomer } from '@/lib/billable-customers';
 import { decodeVinsBatch } from '@/lib/vin-decoder';
 import { storage } from '@/lib/storage';
 import { fetchAllRows } from '@/lib/fetch-all';
@@ -354,6 +354,32 @@ export default function AdminScansPage() {
   const needsPO = (scan: ScanLog) =>
     poRequired[scan.part_number || ''] !== false
     && customerRequiresPo(scan.billable_customer, billableCustomers);
+
+  // Quick-pick chips for customer fields — the same billable_customers list
+  // the tech scan flow offers, so admins land on canonical NetSuite names
+  // (one click for Reading Truck / Masterack) instead of retyping variants.
+  // Free text stays for everyone else; clicking the active chip clears it.
+  const customerQuickPick = (current: string, onPick: (name: string) => void) => (
+    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '4px' }}>
+      {billableCustomers.map(c => {
+        const active = matchesBillableCustomer(c, current);
+        return (
+          <button
+            key={c.name}
+            type="button"
+            onMouseDown={e => e.preventDefault()}
+            onClick={() => onPick(active ? '' : c.name)}
+            style={{
+              padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+              border: `1px solid ${active ? 'rgba(167,139,250,0.5)' : theme.border}`,
+              background: active ? 'rgba(167,139,250,0.12)' : 'transparent',
+              color: active ? '#a78bfa' : 'var(--text-muted)',
+            }}
+          >{c.label}</button>
+        );
+      })}
+    </div>
+  );
 
   // Categorize scans
   const pending = scans.filter(s => !s.exported_at);
@@ -923,7 +949,10 @@ export default function AdminScansPage() {
             ...vehicleData,
             part_number: part?.item_number || null,
             part_description: part?.display_name || null,
-            billable_customer: locationOverrideCustomer ?? (pg.header.customer || part?.billable_customer || null),
+            // The worksheet's own customer beats the location default —
+            // Reading work happens inside Masterack buildings now, so the
+            // location can only fill in when the document names nobody.
+            billable_customer: pg.header.customer || locationOverrideCustomer || part?.billable_customer || null,
             unit_number: unitByVin[vin] || null,
             location_id: selectedLoc?.id || null,
             location_name: selectedLoc?.name || null,
@@ -1009,7 +1038,10 @@ export default function AdminScansPage() {
       ...(decoded.get(vin) || {}),
       part_number: part?.partNumber || null,
       part_description: part?.description || null,
-      billable_customer: locationOverrideCustomer ?? (bulkCustomer.trim() || part?.customer || null),
+      // The admin's explicit Customer field beats the location default —
+      // same-building Reading/Masterack work means the location alone can't
+      // decide who's billed anymore.
+      billable_customer: bulkCustomer.trim() || locationOverrideCustomer || part?.customer || null,
       location_id: selectedLoc?.id || null,
       location_name: selectedLoc?.name || null,
       installer_name: vendorCompanies.find(c => c.id === bulkVendor)?.name || null,
@@ -1457,6 +1489,7 @@ export default function AdminScansPage() {
                 placeholder="No change"
                 style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}
               />
+              {customerQuickPick(bulkEditCustomer, setBulkEditCustomer)}
               {bulkEditCustomer.length >= 1 && (() => {
                 const q = bulkEditCustomer.toLowerCase();
                 const set = new Set<string>();
@@ -1846,6 +1879,7 @@ export default function AdminScansPage() {
                 placeholder="Search NetSuite customers…"
                 style={{ width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px' }}
               />
+              {customerQuickPick(bulkCustomer, n => { setBulkCustomer(n); setShowCustDropdown(false); })}
               {showCustDropdown && bulkCustomer.trim().length >= 2 && (() => {
                 const matches = custMatches.filter(c => c.company_name.toLowerCase() !== bulkCustomer.trim().toLowerCase());
                 if (matches.length === 0) return null;
@@ -1866,11 +1900,14 @@ export default function AdminScansPage() {
                 );
               })()}
               {(() => {
+                // An explicit customer now beats the location default (same-
+                // building Reading/Masterack work), so only surface the
+                // fallback when the field is blank.
                 const override = locationBillingOverride(allLocations.find(l => l.id === bulkLocation)?.name);
-                if (!override) return null;
+                if (!override || bulkCustomer.trim()) return null;
                 return (
                   <div style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa', marginTop: '4px' }}>
-                    Will be billed to {override} (location override)
+                    Will be billed to {override} (location default — pick a customer to override)
                   </div>
                 );
               })()}
@@ -2360,6 +2397,7 @@ export default function AdminScansPage() {
                   onChange={e => setEditingScan({ ...editingScan, billable_customer: e.target.value })}
                   style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }}
                 />
+                {customerQuickPick(editingScan.billable_customer || '', n => setEditingScan({ ...editingScan, billable_customer: n || null }))}
                 {(editingScan.billable_customer || '').length >= 1 && (() => {
                   const q = (editingScan.billable_customer || '').toLowerCase();
                   const set = new Set<string>();
