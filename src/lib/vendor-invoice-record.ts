@@ -13,6 +13,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchScansMatchingVins, pickScanForLine } from './vin-match';
 import { scanLifecycle } from './scan-state';
+import { customerRequiresPo, loadBillableCustomers } from './billable-customers';
 import { decodeVinsBatch } from './vin-decoder';
 import { locationBillingOverride } from './scan-billing';
 import { matchScansToOpenPos } from './scan-match';
@@ -36,7 +37,7 @@ interface ScanRow {
 }
 
 const SCAN_MATCH_COLUMNS =
-  'id, vin, part_number, po_id, location_id, exported_at, archived_at, invoice_number, date_invoiced, is_paid, scanned_at';
+  'id, vin, part_number, po_id, location_id, exported_at, archived_at, billable_customer, invoice_number, date_invoiced, is_paid, scanned_at';
 
 export const cleanVin = (v: string) => v.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 
@@ -245,7 +246,10 @@ export async function recordVendorInvoice(
     matched.map(m => m.scan?.part_number).filter((p): p is string => !!p && !partByNumber.has(p.toUpperCase())),
   )];
   const scanParts = await lookupParts(service, scanPartNumbers);
-  const requiresPo = (part: string | null) => {
+  const billableCustomers = await loadBillableCustomers(service);
+  const requiresPo = (part: string | null, billableCustomer?: string | null) => {
+    // Invoice-first customers (e.g. Reading Truck) never wait for a PO.
+    if (!customerRequiresPo(billableCustomer, billableCustomers)) return false;
     if (!part) return true;
     const info = partByNumber.get(part.toUpperCase()) || scanParts.get(part.toUpperCase());
     return info ? info.requires_po_match !== false : true;

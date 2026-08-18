@@ -8,6 +8,7 @@ import { DropZone } from '@/components/DropZone';
 import PartPicker, { type PickedPart } from '@/components/PartPicker';
 import PhoneInput from '@/components/PhoneInput';
 import { loadCompaniesWithCounts, type CompanyOption } from '@/lib/cni-companies';
+import { loadBillableCustomers, type BillableCustomer } from '@/lib/billable-customers';
 import { uploadJobFiles } from '@/lib/job-files';
 import { isVerizonRfidPart } from '@/lib/rfid';
 
@@ -23,7 +24,13 @@ export default function CreateCniJobPage() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [scope, setScope] = useState('');
-  const [customerName, setCustomerName] = useState('');
+  // Customer picker: the same billable_customers list the scan flow offers,
+  // because Reading Truck vs Masterack can't be told apart by location or
+  // part anymore. The choice lands on cni_jobs.billable_customer, which
+  // /api/cni/complete-vin stamps on every scan the installers log.
+  const [billableCustomers, setBillableCustomers] = useState<BillableCustomer[]>([]);
+  const [customerChoice, setCustomerChoice] = useState(''); // '' | canonical name | '__other__'
+  const [customerName, setCustomerName] = useState(''); // free text for "Other…"
   const [budget, setBudget] = useState('');
   const [payPerVehicle, setPayPerVehicle] = useState('');
   // Optional expected vehicle count — counts down as VINs are scanned so the
@@ -67,6 +74,7 @@ export default function CreateCniJobPage() {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     loadCompanies();
+    loadBillableCustomers(supabase).then(setBillableCustomers);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, isAdmin]);
 
@@ -88,6 +96,11 @@ export default function CreateCniJobPage() {
       // field, not pre-loaded, so the rate is set explicitly here.
       const rate = payPerVehicle ? parseFloat(payPerVehicle) : null;
 
+      // The admin's explicit customer choice wins; a typed "Other" name is
+      // next; the default part's tag only backstops jobs with no choice.
+      const picked = billableCustomers.find(c => c.name === customerChoice) || null;
+      const typedCustomer = customerChoice === '__other__' ? customerName.trim() : '';
+
       // Create job
       const { data: job, error: jobError } = await supabase
         .from('cni_jobs')
@@ -95,10 +108,10 @@ export default function CreateCniJobPage() {
           title: title.trim(),
           description: description.trim() || null,
           scope: scope.trim() || null,
-          customer_name: customerName.trim() || null,
+          customer_name: picked?.label || typedCustomer || null,
           part_number: part?.part_number || null,
           part_description: part?.part_description || null,
-          billable_customer: part?.billable_customer || null,
+          billable_customer: picked?.name || typedCustomer || part?.billable_customer || null,
           device_capture: deviceCapture || isVerizonRfidPart(part?.part_number),
           budget: budget ? parseFloat(budget) : null,
           target_quantity: targetQuantity ? parseInt(targetQuantity) : null,
@@ -190,7 +203,29 @@ export default function CreateCniJobPage() {
         </div>
         <div style={{ marginBottom: '12px' }}>
           <label style={labelStyle}>Customer</label>
-          <input style={inputStyle} value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="e.g. Masterack" />
+          <select
+            style={inputStyle}
+            value={customerChoice}
+            onChange={e => setCustomerChoice(e.target.value)}
+          >
+            <option value="">— Select customer —</option>
+            {billableCustomers.map(c => (
+              <option key={c.name} value={c.name}>{c.label}</option>
+            ))}
+            <option value="__other__">Other…</option>
+          </select>
+          {customerChoice === '__other__' && (
+            <input
+              style={{ ...inputStyle, marginTop: '8px' }}
+              value={customerName}
+              onChange={e => setCustomerName(e.target.value)}
+              placeholder="Customer name"
+              autoFocus
+            />
+          )}
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+            Who gets invoiced — stamped on every VIN the installers scan.
+          </div>
         </div>
         <div style={{ marginBottom: '12px' }}>
           <label style={labelStyle}>Scope / Description</label>

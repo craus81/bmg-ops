@@ -11,6 +11,7 @@ import DropboxProofSearch, { type DropboxProofFile } from '@/components/DropboxP
 import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 import { DropZone } from '@/components/DropZone';
 import PartCatalogBrowser from '@/components/PartCatalogBrowser';
+import { loadBillableCustomers, type BillableCustomer } from '@/lib/billable-customers';
 
 interface Part {
   id: string;
@@ -98,6 +99,8 @@ export default function PartsPage() {
 
   const [parts, setParts] = useState<Part[]>([]);
   const [loading, setLoading] = useState(true);
+  // Suggestions for the Billable Customer editor (canonical NetSuite names).
+  const [billableCustomerOpts, setBillableCustomerOpts] = useState<BillableCustomer[]>([]);
   // The visual catalog (same component as the estimate builder's Browse
   // Catalog) is the default face of this page; the ops list keeps the
   // sync/edit/stats tooling. Deep links (?q=) land on the list view so the
@@ -174,6 +177,7 @@ export default function PartsPage() {
     // so we don't call it here — a second call just races the first.
     loadLastSync();
     loadStats();
+    loadBillableCustomers(supabase).then(setBillableCustomerOpts);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, isAdmin, isSales]);
 
@@ -1340,7 +1344,14 @@ export default function PartsPage() {
                         <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Billable Customer</div>
                         {editingCustomer === part.id ? (
                           <div style={{ display: 'flex', gap: '4px' }}>
+                            {/* Suggest the billable_customers pick-list (canonical
+                                NetSuite names) so tags match what the scan flow
+                                stamps — free text still allowed. */}
+                            <datalist id="billable-customer-options">
+                              {billableCustomerOpts.map(c => <option key={c.name} value={c.name}>{c.label}</option>)}
+                            </datalist>
                             <input value={customerValue} onChange={e => setCustomerValue(e.target.value)} placeholder="e.g. Masterack" autoFocus
+                              list="billable-customer-options"
                               onKeyDown={e => { if (e.key === 'Enter') updateBillableCustomer(part.id); if (e.key === 'Escape') setEditingCustomer(null); }}
                               style={{ ...inputStyle, padding: '6px 8px', flex: 1 }} />
                             <button onClick={() => updateBillableCustomer(part.id)} style={{ padding: '6px 10px', borderRadius: '6px', background: '#22c55e', color: '#fff', fontSize: '10px', fontWeight: 700, border: 'none', cursor: 'pointer' }}>Save</button>

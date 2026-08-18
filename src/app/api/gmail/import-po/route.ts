@@ -404,7 +404,7 @@ RULES:
 - unit_price: Decimal number, no $ sign (e.g., 45.00)
 - delivery_date: The requested delivery date for that line, if shown
 - If the PO has items across multiple pages, include ALL pages
-- customer: Usually "Masterack" for Masterack POs. Use the buyer/company name from the header`;
+- customer: The buyer/company name from the header — usually "Masterack" for Masterack POs, or "Reading Equipment and Distribution" (Reading Truck) for Reading POs. The two run separate PO systems even though the work happens in the same buildings, so never guess one from the other`;
 
 type ExtractResult =
   | { ok: true; extracted: any; stopReason: string | null; inputTokens: number; outputTokens: number }
