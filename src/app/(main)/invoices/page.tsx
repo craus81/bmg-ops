@@ -28,6 +28,7 @@ import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import type { GraphicsJob, GraphicsJobStatus } from '@/lib/types';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { customerRequiresPo, loadBillableCustomers } from '@/lib/billable-customers';
 import { PartNumberLink } from '@/components/PartLabel';
 
 type HubTab = 'graphics' | 'scans' | 'sent';
@@ -326,7 +327,12 @@ export default function InvoicingHubPage() {
     // either matched to a PO or the part doesn't require one.
     const poRequired: Record<string, boolean> = {};
     (partsRes.data || []).forEach((p: any) => { poRequired[p.item_number] = p.requires_po_match !== false; });
-    const needsPO = (s: ScanRow) => poRequired[s.part_number || ''] !== false;
+    // Invoice-first customers (billable_customers.requires_po = FALSE, e.g.
+    // Reading Truck) skip the PO wait regardless of the part-level flag.
+    const billableCustomers = await loadBillableCustomers(supabase);
+    const needsPO = (s: ScanRow) =>
+      poRequired[s.part_number || ''] !== false
+      && customerRequiresPo(s.billable_customer, billableCustomers);
     const pending = ((scansRes.data as ScanRow[]) || []).filter(s => !s.exported_at);
     setReadyScans(pending.filter(s => s.po_id || !needsPO(s)));
     setWaitingScanCount(pending.filter(s => !s.po_id && needsPO(s)).length);

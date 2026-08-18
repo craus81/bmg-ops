@@ -23,6 +23,7 @@ import { useAuth } from '@/components/AuthProvider';
 import RecentActivity from '@/components/RecentActivity';
 import type { GraphicsJobStatus } from '@/lib/types';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { customerRequiresPo, loadBillableCustomers } from '@/lib/billable-customers';
 
 // Stage buckets over graphics statuses (mirrors the pipeline on /graphics).
 const RECEIVED: GraphicsJobStatus[] = ['received', 'designing', 'revision'];
@@ -244,8 +245,12 @@ export default function OpsDashboard() {
     // ── Ready-to-invoice scan batches (mirror Invoicing hub grouping) ──
     const poRequired: Record<string, boolean> = {};
     for (const p of rows(partsRes)) poRequired[p.item_number] = p.requires_po_match !== false;
+    // Invoice-first customers (billable_customers.requires_po = FALSE, e.g.
+    // Reading Truck) count as ready without a PO — matching the Invoicing hub.
+    const billableCustomers = await loadBillableCustomers(supabase);
     const readyScans = rows(scansRes).filter(s =>
-      !s.exported_at && (s.po_id || poRequired[s.part_number || ''] === false)
+      !s.exported_at && (s.po_id || poRequired[s.part_number || ''] === false
+        || !customerRequiresPo(s.billable_customer, billableCustomers))
     );
     const batchKeys = new Set(readyScans.map(s => `${s.billable_customer || 'Unknown'}|||${s.po_number || 'NO_PO'}`));
 

@@ -14,6 +14,7 @@ import { theme } from '@/lib/theme';
 import { locationBillingOverride } from '@/lib/scan-billing';
 import { findExistingScanVins, sameVehicleVin, vinTail, fetchScansMatchingVins, pickScanForLine } from '@/lib/vin-match';
 import { scanLifecycle } from '@/lib/scan-state';
+import { customerRequiresPo, loadBillableCustomers, DEFAULT_BILLABLE_CUSTOMERS, type BillableCustomer } from '@/lib/billable-customers';
 import { decodeVinsBatch } from '@/lib/vin-decoder';
 import { storage } from '@/lib/storage';
 import { fetchAllRows } from '@/lib/fetch-all';
@@ -74,6 +75,9 @@ export default function AdminScansPage() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   // Part requires_po_match lookup
   const [poRequired, setPoRequired] = useState<Record<string, boolean>>({});
+  // Customer-level PO waiver: invoice-first customers (billable_customers.
+  // requires_po = FALSE, e.g. Reading Truck) skip Waiting for PO entirely.
+  const [billableCustomers, setBillableCustomers] = useState<BillableCustomer[]>(DEFAULT_BILLABLE_CUSTOMERS);
   // scan_log_id → completion-photo storage paths (K8), loaded after the list.
   const [photosByScanId, setPhotosByScanId] = useState<Record<string, string[]>>({});
   // scan_log_id → CNI job number, for the source column/filter (a scan is "CNI"
@@ -188,6 +192,7 @@ export default function AdminScansPage() {
 
   const loadAll = async () => {
     setLoading(true);
+    loadBillableCustomers(supabase).then(setBillableCustomers);
     const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes, posRes, cniVinsRes, companiesRes, creditsRes] = await Promise.all([
       supabase.from('scan_logs').select('*').is('archived_at', null).order('scanned_at', { ascending: false }).limit(1000),
       // Paginate archived scans — Supabase caps responses at 1000 rows by default
@@ -346,7 +351,9 @@ export default function AdminScansPage() {
     } catch { /* photos are an enhancement, not required for the log */ }
   };
 
-  const needsPO = (scan: ScanLog) => poRequired[scan.part_number || ''] !== false;
+  const needsPO = (scan: ScanLog) =>
+    poRequired[scan.part_number || ''] !== false
+    && customerRequiresPo(scan.billable_customer, billableCustomers);
 
   // Categorize scans
   const pending = scans.filter(s => !s.exported_at);
@@ -362,7 +369,8 @@ export default function AdminScansPage() {
   // Lifecycle chip for the All Scans tab — labels come from the shared
   // scanLifecycle derivation; this only adds colors.
   const scanStatus = (s: ScanLog) => {
-    const { state, label } = scanLifecycle(s, part => poRequired[part || ''] !== false);
+    const { state, label } = scanLifecycle(s, (part, cust) =>
+      poRequired[part || ''] !== false && customerRequiresPo(cust, billableCustomers));
     if (state === 'invoiced') {
       return s.is_paid
         ? { label, color: '#4ade80', bg: 'rgba(74,222,128,0.12)' }
@@ -2742,17 +2750,18 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
 
   // Same lifecycle labels the scan tabs derive (shared scanLifecycle), for
   // the "already in system" badges shown before committing.
-  const stateLabelFor = (s: { part_number: string | null; po_id: string | null; exported_at: string | null; archived_at: string | null; invoice_number?: string | null; date_invoiced?: string | null; is_paid?: boolean | null }): string =>
-    scanLifecycle(s, part => poRequired[part || ''] !== false).label;
+  const stateLabelFor = (s: { part_number: string | null; po_id: string | null; exported_at: string | null; archived_at: string | null; billable_customer?: string | null; invoice_number?: string | null; date_invoiced?: string | null; is_paid?: boolean | null }): string =>
+    scanLifecycle(s, (part, cust) =>
+      poRequired[part || ''] !== false && customerRequiresPo(cust, billableCustomers)).label;
 
   // Look up which of the review VINs are already scans and tag each line
   // with the state its record is in — the same matching rule the commit
   // endpoint applies (same-vehicle last-8; part-aware attachment).
   const checkExistingVins = async (lines: VendorLine[]): Promise<VendorLine[]> => {
-    const scans = await fetchScansMatchingVins<{ vin: string; part_number: string | null; po_id: string | null; exported_at: string | null; archived_at: string | null; invoice_number: string | null; date_invoiced: string | null; is_paid: boolean | null }>(
+    const scans = await fetchScansMatchingVins<{ vin: string; part_number: string | null; po_id: string | null; exported_at: string | null; archived_at: string | null; billable_customer: string | null; invoice_number: string | null; date_invoiced: string | null; is_paid: boolean | null }>(
       supabase,
       lines.map(l => l.vin),
-      'vin, part_number, po_id, exported_at, archived_at, invoice_number, date_invoiced, is_paid, scanned_at',
+      'vin, part_number, po_id, exported_at, archived_at, billable_customer, invoice_number, date_invoiced, is_paid, scanned_at',
     );
     return lines.map(line => {
       const match = pickScanForLine(scans, line.vin, line.partNumber.trim() || null);

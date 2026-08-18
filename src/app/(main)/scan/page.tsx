@@ -8,6 +8,7 @@ import { theme } from '@/lib/theme';
 import VinScanner from '@/components/VinScanner';
 import RfidCapture, { type RfidCompletion } from '@/components/RfidCapture';
 import { locationBillingOverride } from '@/lib/scan-billing';
+import { loadBillableCustomers, findBillableCustomer, matchesBillableCustomer, type BillableCustomer } from '@/lib/billable-customers';
 import { isVerizonRfidPart } from '@/lib/rfid';
 
 interface Part {
@@ -48,7 +49,17 @@ export default function ScanPage() {
   const supabase = createClient();
 
   // Step state
-  const [step, setStep] = useState<'part' | 'location' | 'scan'>('part');
+  const [step, setStep] = useState<'customer' | 'part' | 'location' | 'scan'>('customer');
+
+  // Customer selection — who gets invoiced for this shift's work. Asked
+  // explicitly (not inferred from the location or the part) because Reading
+  // Truck and Masterack graphics get installed in the SAME buildings while
+  // the companies merge — see src/lib/billable-customers.ts. The choice
+  // filters the parts list and is stamped on every scan.
+  const [billableCustomers, setBillableCustomers] = useState<BillableCustomer[]>([]);
+  const [selectedCustomer, setSelectedCustomer] = useState<{ name: string; label: string } | null>(null);
+  const [otherCustomer, setOtherCustomer] = useState('');
+  const [showOtherCustomer, setShowOtherCustomer] = useState(false);
 
   // Part selection
   const [parts, setParts] = useState<Part[]>([]);
@@ -147,6 +158,7 @@ export default function ScanPage() {
   useEffect(() => {
     loadParts();
     loadLocations();
+    loadBillableCustomers(supabase).then(setBillableCustomers);
 
     const handleOffline = () => setIsOffline(true);
     const handleOnline = () => { setIsOffline(false); syncOfflineScans(); };
@@ -167,11 +179,13 @@ export default function ScanPage() {
         const s = JSON.parse(session);
         if (s.selectedParts) { setSelectedParts(s.selectedParts); }
         else if (s.selectedPart) { setSelectedParts([s.selectedPart]); } // migrate old sessions
+        if (s.billableCustomer?.name) { setSelectedCustomer(s.billableCustomer); }
         if (s.customJob) { setCustomJob(s.customJob); setShowCustom(true); }
         if (s.customCustomer) { setCustomCustomer(s.customCustomer); }
         if (s.selectedLocation) { setSelectedLocation(s.selectedLocation); }
         if (s.shiftId) { shiftIdRef.current = s.shiftId; setShiftId(s.shiftId); }
         if (s.selectedParts?.length || s.selectedPart || s.customJob) { setStep(s.selectedLocation ? 'scan' : 'location'); restoredJob = true; }
+        else if (s.billableCustomer?.name) { setStep('part'); }
       }
     } catch {}
     if (!restoredJob) prefillCustomJobDefaults();
@@ -183,14 +197,15 @@ export default function ScanPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
 
-  // Persist active session
+  // Persist active session (customer included: the choice survives app
+  // reloads for the whole shift, and only End Shift clears it)
   useEffect(() => {
-    if (selectedParts.length > 0 || customJob) {
+    if (selectedParts.length > 0 || customJob || selectedCustomer) {
       try {
-        localStorage.setItem('scan_session', JSON.stringify({ selectedParts, customJob, customCustomer, selectedLocation, shiftId }));
+        localStorage.setItem('scan_session', JSON.stringify({ selectedParts, customJob, customCustomer, selectedLocation, shiftId, billableCustomer: selectedCustomer }));
       } catch {}
     }
-  }, [selectedParts, customJob, customCustomer, selectedLocation, shiftId]);
+  }, [selectedParts, customJob, customCustomer, selectedLocation, shiftId, selectedCustomer]);
 
   // Stopgap while the CNI custom-job process is in flux: remember the last
   // custom job/customer beyond End Shift / Switch Part (scan_session only
@@ -347,7 +362,10 @@ export default function ScanPage() {
 
   const endShift = () => {
     closeServerShift();
-    setStep('part');
+    setStep('customer');
+    setSelectedCustomer(null);
+    setShowOtherCustomer(false);
+    setOtherCustomer('');
     setSelectedParts([]);
     setCustomJob('');
     setCustomCustomer('');
@@ -560,9 +578,12 @@ export default function ScanPage() {
       vehicleData = { vehicle_year: get(29), vehicle_make: get(26), vehicle_model: get(28), vehicle_trim: get(38), body_class: get(5) };
     } catch {}
 
-    // Some locations bill the facility (e.g. Masterack) regardless of the part's
-    // end customer — apply that override so the scan lands under the right
-    // customer in the export/invoice flow.
+    // The tech's explicit customer choice wins over everything: Reading and
+    // Masterack work happens in the same buildings now, so neither the
+    // location nor the part can settle who's paying. The location override
+    // (any Masterack facility bills Masterack) only applies to sessions that
+    // predate the customer step.
+    const explicitCustomer = selectedCustomer?.name || null;
     const locationOverrideCustomer = locationBillingOverride(selectedLocation?.name);
 
     let entry: ScanEntry | undefined;
@@ -573,7 +594,7 @@ export default function ScanPage() {
         ...vehicleData,
         part_number: pt.partNumber,
         part_description: pt.partDesc,
-        billable_customer: locationOverrideCustomer ?? pt.billable,
+        billable_customer: explicitCustomer ?? locationOverrideCustomer ?? pt.billable,
         unit_number: unitClean,
         serial_number: deviceFields?.serial_number ?? null,
         imei: deviceFields?.imei ?? null,
@@ -668,10 +689,18 @@ export default function ScanPage() {
   // for one finds the other. The slice cap is generous so a broad query like
   // "06u" doesn't hide later matches alphabetically.
   const normalizePartSearch = (s: string) => s.toLowerCase().replace(/o/g, '0');
+  // Scope the picker to the chosen customer's tagged parts (plus untagged
+  // ones — most of the catalog carries no tag). Reading and Masterack part
+  // numbers look nothing alike, so cross-customer noise is real. An "Other"
+  // customer isn't in the list, so it searches the whole catalog.
+  const selectedEntry = findBillableCustomer(billableCustomers, selectedCustomer?.name);
+  const customerParts = selectedEntry
+    ? parts.filter(p => !p.billable_customer || matchesBillableCustomer(selectedEntry, p.billable_customer))
+    : parts;
   const filteredParts = partSearch
     ? (() => {
         const s = normalizePartSearch(partSearch);
-        return parts.filter(p =>
+        return customerParts.filter(p =>
           normalizePartSearch(p.item_number || '').includes(s) ||
           normalizePartSearch(p.display_name || '').includes(s) ||
           normalizePartSearch(p.description || '').includes(s) ||
@@ -715,9 +744,84 @@ export default function ScanPage() {
         </div>
       )}
 
+      {/* ─── STEP 0: Pick Customer ─── */}
+      {step === 'customer' && (
+        <div>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '4px' }}>
+            Who are you working for?
+          </div>
+          <div style={{ fontSize: '12px', color: theme.textMuted, marginBottom: '14px' }}>
+            The company that gets invoiced for this work.
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {billableCustomers.map(c => (
+              <button key={c.name} onClick={() => {
+                setSelectedCustomer({ name: c.name, label: c.label });
+                setShowOtherCustomer(false);
+                setStep('part');
+              }} style={{
+                width: '100%', padding: '16px', borderRadius: '12px', textAlign: 'left',
+                border: `1px solid ${selectedCustomer?.name === c.name ? 'rgba(34,197,94,0.4)' : theme.border}`,
+                background: selectedCustomer?.name === c.name ? 'rgba(34,197,94,0.06)' : theme.card,
+                cursor: 'pointer', fontSize: '16px', fontWeight: 800, color: theme.textPrimary,
+              }}>
+                {c.label}
+                {c.label !== c.name && (
+                  <div style={{ fontSize: '11px', fontWeight: 600, color: theme.textMuted, marginTop: '2px' }}>{c.name}</div>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {!showOtherCustomer ? (
+            <button onClick={() => setShowOtherCustomer(true)} style={{
+              width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+              background: 'transparent', border: `1px dashed ${theme.border}`,
+              color: theme.textSecondary, cursor: 'pointer', marginTop: '8px',
+            }}>
+              + Other Customer
+            </button>
+          ) : (
+            <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginTop: '8px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '6px' }}>Customer Name</div>
+              <input value={otherCustomer} onChange={e => setOtherCustomer(e.target.value)} placeholder='e.g. "Uhaul"' autoFocus style={{
+                width: '100%', padding: '10px 12px', borderRadius: '8px', fontSize: '14px',
+                border: `1px solid ${theme.border}`, background: 'var(--input-bg)',
+                color: theme.textPrimary, fontWeight: 600, marginBottom: '10px',
+              }} />
+              <button onClick={() => {
+                const n = otherCustomer.trim();
+                if (n) { setSelectedCustomer({ name: n, label: n }); setStep('part'); }
+              }} disabled={!otherCustomer.trim()} style={{
+                width: '100%', padding: '12px', borderRadius: '10px', fontSize: '14px', fontWeight: 800,
+                background: otherCustomer.trim() ? theme.navy : theme.border, color: '#fff', border: 'none',
+                cursor: otherCustomer.trim() ? 'pointer' : 'default', opacity: otherCustomer.trim() ? 1 : 0.5,
+              }}>Continue</button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ─── STEP 1: Pick Part ─── */}
       {step === 'part' && (
         <div>
+          {selectedCustomer && (
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '8px 12px', borderRadius: '10px', marginBottom: '10px',
+              background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.2)',
+            }}>
+              <span style={{ fontSize: '12px', color: theme.textSecondary }}>
+                Working for <span style={{ fontWeight: 800, color: '#a78bfa' }}>{selectedCustomer.label}</span>
+              </span>
+              <button onClick={() => setStep('customer')} style={{
+                padding: '3px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                background: 'transparent', border: `1px solid ${theme.border}`,
+                color: theme.textMuted, cursor: 'pointer',
+              }}>Change</button>
+            </div>
+          )}
           <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '12px' }}>
             What are you working on?
           </div>
@@ -753,8 +857,8 @@ export default function ScanPage() {
           {partSearch && (
             <div style={{ fontSize: '10px', color: theme.textMuted, marginBottom: '8px', textAlign: 'right' }}>
               {filteredParts.length === 0
-                ? `No matches in ${parts.length} active parts`
-                : `${filteredParts.length}${filteredParts.length === 50 ? '+' : ''} of ${parts.length} parts`}
+                ? `No matches in ${customerParts.length} active parts${selectedEntry ? ` for ${selectedEntry.label}` : ''}`
+                : `${filteredParts.length}${filteredParts.length === 50 ? '+' : ''} of ${customerParts.length} parts`}
             </div>
           )}
 
@@ -843,14 +947,17 @@ export default function ScanPage() {
               <input value={customJob} onChange={e => setCustomJob(e.target.value)} placeholder='e.g. "Uhaul Regular"' autoFocus style={{
                 width: '100%', padding: '10px 12px', borderRadius: '8px', fontSize: '14px',
                 border: `1px solid ${theme.border}`, background: 'var(--input-bg)',
-                color: theme.textPrimary, fontWeight: 600, marginBottom: '8px',
-              }} />
-              <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '6px' }}>Billable Customer</div>
-              <input value={customCustomer} onChange={e => setCustomCustomer(e.target.value)} placeholder='e.g. "Designs That Stick"' style={{
-                width: '100%', padding: '10px 12px', borderRadius: '8px', fontSize: '14px',
-                border: `1px solid ${theme.border}`, background: 'var(--input-bg)',
                 color: theme.textPrimary, fontWeight: 600, marginBottom: '10px',
               }} />
+              {/* No Billable Customer input here anymore — the customer step
+                  already asked, and the selection stamps every scan. The old
+                  customCustomer value still backstops restored pre-step
+                  sessions in logVehicle's fallback chain. */}
+              {selectedCustomer && (
+                <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '10px' }}>
+                  Bills to <span style={{ fontWeight: 700, color: '#a78bfa' }}>{selectedCustomer.label}</span>
+                </div>
+              )}
               <button onClick={() => { if (customJob.trim()) { saveCustomJobDefaults(); setStep('location'); } }} disabled={!customJob.trim()} style={{
                 width: '100%', padding: '12px', borderRadius: '10px', fontSize: '14px', fontWeight: 800,
                 background: customJob.trim() ? theme.navy : theme.border, color: '#fff', border: 'none',
@@ -947,9 +1054,9 @@ export default function ScanPage() {
           }}>
             <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>{partLabel}</div>
             {partDesc && <div style={{ fontSize: '11px', color: theme.textSecondary }}>{partDesc}</div>}
-            {locationBillingOverride(selectedLocation?.name) && (
+            {(selectedCustomer || locationBillingOverride(selectedLocation?.name)) && (
               <div style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa', marginTop: '2px' }}>
-                Billing: {locationBillingOverride(selectedLocation?.name)}
+                Billing: {selectedCustomer?.label ?? locationBillingOverride(selectedLocation?.name)}
               </div>
             )}
             <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '2px' }}>
