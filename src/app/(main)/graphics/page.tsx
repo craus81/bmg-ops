@@ -37,7 +37,7 @@ import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '
 import { fetchAllRows } from '@/lib/fetch-all';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
-import type { GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsJobView } from '@/lib/types';
+import type { GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsJobView, Profile } from '@/lib/types';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
@@ -62,6 +62,20 @@ function displayDate(dateStr: string | null | undefined): string {
   const d = parseLocalDate(dateStr);
   if (!d) return '';
   return d.toLocaleDateString();
+}
+
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!isFinite(then)) return '';
+  const sec = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (sec < 60) return 'just now';
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.round(hr / 24);
+  if (day < 7) return `${day}d ago`;
+  return new Date(iso).toLocaleDateString();
 }
 
 // Active statuses (not terminal)
@@ -194,8 +208,23 @@ export default function GraphicsPage() {
   const createFileInputRef = useRef<HTMLInputElement>(null);
 
   // Job views — record of who has opened each job (read receipts). Loaded
-  // eagerly for all jobs so the table can show the unread-activity dot.
+  // eagerly for all jobs so the table can show the unread-activity dot and
+  // the 👁 seen-by badge (whose tooltip needs profile names).
   const [jobViews, setJobViews] = useState<Record<string, GraphicsJobView[]>>({});
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+
+  useEffect(() => {
+    if (!user) return;
+    const loadProfiles = async () => {
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, full_name, email')
+        .eq('status', 'approved');
+      setProfiles((data as Profile[]) || []);
+    };
+    loadProfiles();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once when auth resolves
+  }, [user]);
 
   useEffect(() => {
     // Wait for auth to finish before role-gating: on a fresh tab (deep links
@@ -1187,6 +1216,24 @@ export default function GraphicsPage() {
                           title="Track on ups.com"
                           style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}
                         >{job.tracking_number}</a>
+                      );
+                    }
+                    // Seen-by read receipts: who else has opened this job.
+                    // Hover for names + when; the full list lives on the record page.
+                    const seenByOthers = (jobViews[job.id] || []).filter(v => v.user_id !== user?.id);
+                    if (seenByOthers.length > 0) {
+                      const seenTooltip = seenByOthers
+                        .map(v => {
+                          const p = profiles.find(pr => pr.id === v.user_id);
+                          return `${p?.full_name || p?.email || 'Unknown'} — ${relativeTime(v.last_viewed_at)}`;
+                        })
+                        .join('\n');
+                      flags.push(
+                        <span
+                          key="seen"
+                          title={`Seen by:\n${seenTooltip}`}
+                          style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', whiteSpace: 'nowrap', padding: '0 4px', borderRadius: '3px', background: 'rgba(148,163,184,0.12)' }}
+                        >👁 {seenByOthers.length}</span>
                       );
                     }
                     return (
