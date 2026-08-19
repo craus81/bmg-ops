@@ -1,9 +1,21 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
+import { deepLinks } from '@/lib/deep-links';
+import { flashNote } from '@/lib/focus-note';
+
+interface FollowUpNote {
+  id: string;
+  note: string | null;
+  remindAt: string | null;
+  reminderSentAt: string | null;
+  createdBy: string | null;
+  creatorName: string | null;
+  createdAt: string;
+}
 
 interface FollowUpItem {
   type: 'estimate' | 'wrap';
@@ -16,10 +28,14 @@ interface FollowUpItem {
   repName: string | null;
   sentAt: string | null;
   lastFollowupAt: string | null;
+  followups: FollowUpNote[];
+  nextReminderAt: string | null;
 }
 
 const fmtMoney = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtDate = (d: string | null) => d ? new Date(d).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '—';
+// remind_at is a bare DATE — parse it as local so it doesn't shift a day.
+const fmtDay = (d: string) => new Date(d + 'T12:00:00').toLocaleDateString([], { month: 'short', day: 'numeric' });
 
 const quietDaysOf = (i: FollowUpItem): number => {
   const ref = Math.max(
@@ -32,6 +48,7 @@ const quietColor = (d: number) => d >= 14 ? '#ef4444' : d >= 5 ? '#fbbf24' : 'va
 
 export default function QuoteFollowUpsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, isAdmin, isSales, loading: authLoading } = useAuth();
   const dialog = useDialog();
 
@@ -39,6 +56,14 @@ export default function QuoteFollowUpsPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [mineOnly, setMineOnly] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState<Set<string>>(new Set());
+
+  // Log Follow-Up dialog — the comment ("what did the customer say") and an
+  // optional "remind me on" date that pauses the quiet-day nudges until then.
+  const [logTarget, setLogTarget] = useState<FollowUpItem | null>(null);
+  const [logNote, setLogNote] = useState('');
+  const [logRemindAt, setLogRemindAt] = useState('');
+  const [logSaving, setLogSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -56,8 +81,19 @@ export default function QuoteFollowUpsPage() {
     load();
   }, [authLoading, isAdmin, isSales, router, load]);
 
-  const act = async (item: FollowUpItem, action: 'log_followup' | 'mark_accepted' | 'mark_rejected', confirmMsg?: string) => {
-    if (confirmMsg && !(await dialog.confirm(confirmMsg))) return;
+  // Deep link: ?item=<type>-<id> (follow-up nudges and reminders) scrolls to
+  // and flashes that quote's row once the list is in.
+  const [flashedItem, setFlashedItem] = useState<string | null>(null);
+  useEffect(() => {
+    if (loading) return;
+    const item = searchParams.get('item');
+    if (!item || item === flashedItem) return;
+    setFlashedItem(item);
+    flashNote(`qfu-${item}`);
+  }, [loading, searchParams, flashedItem]);
+
+  const act = async (item: FollowUpItem, action: 'mark_accepted' | 'mark_rejected', confirmMsg: string) => {
+    if (!(await dialog.confirm(confirmMsg))) return;
     setBusy(item.id);
     try {
       const res = await fetch('/api/quotes/follow-up', {
@@ -74,6 +110,44 @@ export default function QuoteFollowUpsPage() {
     setBusy(null);
   };
 
+  const saveFollowUp = async () => {
+    if (!logTarget) return;
+    setLogSaving(true);
+    try {
+      const res = await fetch('/api/quotes/follow-up', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: logTarget.type,
+          id: logTarget.id,
+          action: 'log_followup',
+          note: logNote.trim() || undefined,
+          remindAt: logRemindAt || undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        await dialog.alert(data.error || 'Failed to log the follow-up');
+      } else {
+        setLogTarget(null);
+        setLogNote('');
+        setLogRemindAt('');
+        await load();
+      }
+    } catch (e: any) {
+      await dialog.alert(e.message || 'Failed to log the follow-up');
+    }
+    setLogSaving(false);
+  };
+
+  const toggleHistory = (key: string) => {
+    setHistoryOpen(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
   const visible = items
     .filter(i => !mineOnly || i.repId === user?.id)
     .sort((a, b) => quietDaysOf(b) - quietDaysOf(a));
@@ -85,7 +159,7 @@ export default function QuoteFollowUpsPage() {
       <div style={{ marginBottom: '14px' }}>
         <div style={{ fontSize: '20px', fontWeight: 800 }}>Quote Follow-Ups</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-          Every sent quote still waiting on an answer, quietest first. Log each follow-up so the clock resets — reps get a nudge after {5} quiet days.
+          Every sent quote still waiting on an answer, quietest first. Log each follow-up so the clock resets — reps get a nudge after {5} quiet days. A reminder date pauses the nudges until that day.
         </div>
       </div>
 
@@ -111,8 +185,11 @@ export default function QuoteFollowUpsPage() {
         {visible.map(item => {
           const quiet = quietDaysOf(item);
           const isBusy = busy === item.id;
+          const key = `${item.type}-${item.id}`;
+          const latestNote = item.followups.find(f => f.note);
+          const showHistory = historyOpen.has(key);
           return (
-            <div key={`${item.type}-${item.id}`} style={{ background: 'var(--card)', border: `1px solid ${quiet >= 14 ? 'rgba(239,68,68,0.35)' : quiet >= 5 ? 'rgba(251,191,36,0.35)' : 'var(--border)'}`, borderRadius: '12px', padding: '12px 14px' }}>
+            <div key={key} id={`qfu-${key}`} style={{ background: 'var(--card)', border: `1px solid ${quiet >= 14 ? 'rgba(239,68,68,0.35)' : quiet >= 5 ? 'rgba(251,191,36,0.35)' : 'var(--border)'}`, borderRadius: '12px', padding: '12px 14px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                 <div style={{ flex: 1, minWidth: '220px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
@@ -122,6 +199,11 @@ export default function QuoteFollowUpsPage() {
                     <span style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{item.number}</span>
                     <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{item.customer}</span>
                     <span style={{ fontSize: '13px', fontWeight: 800, color: '#f472b6' }}>{fmtMoney(item.total)}</span>
+                    {item.nextReminderAt && (
+                      <span title="Reminder pending — quiet-day nudges are paused until this date" style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '5px', background: 'rgba(52,211,153,0.12)', color: '#34d399' }}>
+                        ⏰ reminds {fmtDay(item.nextReminderAt)}
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '3px' }}>
                     {item.title && <span>{item.title} · </span>}
@@ -130,9 +212,15 @@ export default function QuoteFollowUpsPage() {
                     {item.repName && <span> · {item.repName}</span>}
                     <span style={{ fontWeight: 800, color: quietColor(quiet) }}> · quiet {quiet}d</span>
                   </div>
+                  {latestNote && !showHistory && (
+                    <div style={{ fontSize: '11px', color: 'var(--text-body)', marginTop: '4px', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '520px' }}>
+                      &ldquo;{latestNote.note}&rdquo;
+                      <span style={{ color: 'var(--text-muted)', fontStyle: 'normal' }}> — {latestNote.creatorName || 'Unknown'}, {fmtDate(latestNote.createdAt)}</span>
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                  <button disabled={isBusy} onClick={() => act(item, 'log_followup')} style={{ padding: '6px 12px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', cursor: 'pointer' }}>
+                  <button disabled={isBusy} onClick={() => { setLogTarget(item); setLogNote(''); setLogRemindAt(''); }} style={{ padding: '6px 12px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', cursor: 'pointer' }}>
                     ☎ Log Follow-Up
                   </button>
                   <button disabled={isBusy} onClick={() => act(item, 'mark_accepted', `Mark ${item.number} (${fmtMoney(item.total)}) as accepted?`)} style={{ padding: '6px 12px', borderRadius: '7px', fontSize: '11px', fontWeight: 800, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer' }}>
@@ -141,15 +229,106 @@ export default function QuoteFollowUpsPage() {
                   <button disabled={isBusy} onClick={() => act(item, 'mark_rejected', `Mark ${item.number} as lost/rejected?`)} style={{ padding: '6px 12px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', cursor: 'pointer' }}>
                     ✕ Lost
                   </button>
-                  <button onClick={() => router.push(item.type === 'estimate' ? '/estimates' : '/admin/wrap-quote')} style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}>
+                  <button onClick={() => router.push(item.type === 'estimate' ? deepLinks.estimate(item.id) : deepLinks.wrapQuote(item.id))} style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}>
                     Open →
                   </button>
                 </div>
               </div>
+
+              {/* Follow-up history — every logged touch with its comment */}
+              {item.followups.length > 0 && (
+                <div style={{ marginTop: '6px' }}>
+                  <button onClick={() => toggleHistory(key)} style={{ background: 'none', border: 'none', padding: 0, fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', cursor: 'pointer' }}>
+                    {showHistory ? '▾ Hide' : `▸ ${item.followups.length} follow-up${item.followups.length !== 1 ? 's' : ''} logged`}
+                  </button>
+                  {showHistory && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '6px' }}>
+                      {item.followups.map(f => (
+                        <div key={f.id} style={{ fontSize: '11px', padding: '6px 8px', borderRadius: '7px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', color: 'var(--text-muted)', fontSize: '10px' }}>
+                            <span>{f.creatorName || 'Unknown'} · {new Date(f.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}</span>
+                            {f.remindAt && (
+                              <span style={{ color: f.reminderSentAt ? 'var(--text-muted)' : '#34d399', fontWeight: 700 }}>
+                                ⏰ {f.reminderSentAt ? 'reminded' : 'reminds'} {fmtDay(f.remindAt)}
+                              </span>
+                            )}
+                          </div>
+                          {f.note && <div style={{ color: 'var(--text-body)', marginTop: '2px', whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>{f.note}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
       </div>
+
+      {/* ── Log Follow-Up dialog: comment + optional reminder date ── */}
+      {logTarget && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 1500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
+          onClick={() => { if (!logSaving) setLogTarget(null); }}
+        >
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '14px', padding: '20px', width: '100%', maxWidth: '420px', boxShadow: '0 8px 30px rgba(0,0,0,0.3)' }}>
+            <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+              Log Follow-Up
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
+              {logTarget.number} — {logTarget.customer} · {fmtMoney(logTarget.total)}
+            </div>
+            <textarea
+              autoFocus
+              value={logNote}
+              onChange={e => setLogNote(e.target.value)}
+              placeholder="What did the customer say? (e.g. vehicles arrive in September)"
+              style={{
+                width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px',
+                background: 'var(--input-bg)', border: '1px solid var(--border)',
+                color: 'var(--text-primary)', minHeight: '80px', resize: 'vertical', outline: 'none',
+              }}
+            />
+            <div style={{ marginTop: '10px' }}>
+              <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '4px' }}>
+                Remind me to follow up on (optional)
+              </div>
+              <input
+                type="date"
+                value={logRemindAt}
+                min={new Date().toISOString().slice(0, 10)}
+                onChange={e => setLogRemindAt(e.target.value)}
+                style={{
+                  width: '100%', padding: '8px 10px', borderRadius: '8px', fontSize: '12px',
+                  background: 'var(--input-bg)', border: '1px solid var(--border)',
+                  color: 'var(--text-primary)', outline: 'none',
+                }}
+              />
+              {logRemindAt && (
+                <div style={{ fontSize: '10px', color: '#34d399', marginTop: '4px' }}>
+                  You&apos;ll get a reminder that morning, and the quiet-day nudges pause until then.
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '14px' }}>
+              <button
+                disabled={logSaving}
+                onClick={() => setLogTarget(null)}
+                style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                disabled={logSaving}
+                onClick={saveFollowUp}
+                style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'rgba(96,165,250,0.15)', border: '1px solid rgba(96,165,250,0.3)', color: '#60a5fa', cursor: 'pointer' }}
+              >
+                {logSaving ? 'Saving…' : 'Log Follow-Up'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

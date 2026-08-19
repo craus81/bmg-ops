@@ -45,6 +45,11 @@ export const deepLinks = {
   part: (partId: string) => `/parts?part=${partId}`,
   /** Wrap-quote list — opens that quote (page reads ?id=). */
   wrapQuote: (quoteId: string) => `/admin/wrap-quote?id=${quoteId}`,
+  /** Quote follow-ups queue — optionally scroll-flashes one quote's row.
+   *  This is where Log Follow-Up / Won / Lost live, so quote-followup
+   *  notifications land here, on the exact row they're about. */
+  quoteFollowUps: (type?: 'estimate' | 'wrap', quoteId?: string) =>
+    `/admin/quote-followups${type && quoteId ? `?item=${type}-${quoteId}` : ''}`,
   /** AP queue — jumps to the vendor invoice's status tab and highlights it. */
   apInvoice: (invoiceId: string) => `/admin/ap?invoice=${invoiceId}`,
   /** Installer portal invoice list — expands and scrolls to the invoice. */
