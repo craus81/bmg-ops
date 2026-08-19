@@ -1,5 +1,16 @@
 # Project instructions
 
+## Typecheck before every push — the right way
+
+`npx tsc --noEmit` here can lie twice, and it shipped a type error that
+blocked production deploys (the #568 build): tsconfig has
+`"incremental": true`, so a stale `tsconfig.tsbuildinfo` hides brand-new
+errors — delete it first (`rm -f tsconfig.tsbuildinfo`). And never pipe
+the command (`tsc | tail`): the pipeline's exit code is the pipe's, not
+tsc's, so failures read as exit 0. Capture output to a file and check
+tsc's own exit code. The authoritative check is `npx next build` (its
+"checking validity of types" phase) — exactly what the Vercel build runs.
+
 ## Git workflow
 
 Pushes to `main` are currently broken (the local git proxy returns
