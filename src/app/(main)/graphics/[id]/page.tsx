@@ -38,7 +38,7 @@ import { DropZone } from '@/components/DropZone';
 import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
 import { INSTALL_LOCATIONS, SHOP_INSTALL_LOCATION } from '@/lib/shop-inbound';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
-import type { GraphicsJob, GraphicsJobStatus, GraphicsStatusHistory, Profile } from '@/lib/types';
+import type { GraphicsJob, GraphicsJobStatus, GraphicsJobView, GraphicsStatusHistory, Profile } from '@/lib/types';
 import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
   GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
@@ -61,6 +61,20 @@ function displayDate(dateStr: string | null | undefined): string {
 function toDateInputValue(dateStr: string | null | undefined): string {
   if (!dateStr) return '';
   return dateStr.substring(0, 10);
+}
+
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!isFinite(then)) return '';
+  const sec = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (sec < 60) return 'just now';
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.round(hr / 24);
+  if (day < 7) return `${day}d ago`;
+  return new Date(iso).toLocaleDateString();
 }
 
 // Everything ships UPS — tracking numbers link straight to their site.
@@ -115,6 +129,7 @@ export default function GraphicsJobRecordPage() {
   const [poFiles, setPoFiles] = useState<PoFile[]>([]);
   const [assignments, setAssignments] = useState<string[]>([]);
   const [upfit, setUpfit] = useState<UpfitProject | null>(null);
+  const [views, setViews] = useState<GraphicsJobView[]>([]);
 
   // Edit mode — a working copy of the job, same as the board's editingJob.
   const [edit, setEdit] = useState<GraphicsJob | null>(null);
@@ -255,6 +270,18 @@ export default function GraphicsJobRecordPage() {
     } catch (e) {
       console.warn('record_graphics_job_view unavailable:', e);
     }
+    loadViews();
+  };
+
+  // Read receipts for the Seen By card. One row per user who has opened the
+  // job, so the per-job set is bounded by staff headcount — no pagination.
+  const loadViews = async () => {
+    const { data } = await supabase
+      .from('graphics_job_views')
+      .select('*')
+      .eq('job_id', jobId)
+      .order('last_viewed_at', { ascending: false });
+    setViews((data as GraphicsJobView[]) || []);
   };
 
   const getProfileName = (userId: string | null) => {
@@ -1687,6 +1714,40 @@ export default function GraphicsJobRecordPage() {
             Post
           </button>
         </div>
+      </div>
+
+      {/* ── Seen By — read receipts of who has opened this job ── */}
+      <div style={card}>
+        <div style={labelStyle}>Seen By</div>
+        {(() => {
+          const others = views.filter(v => v.user_id !== user?.id);
+          if (others.length === 0) {
+            return (
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                No one else has opened this job yet.
+              </div>
+            );
+          }
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '4px' }}>
+              {others.map(v => (
+                <div key={v.id} style={{ fontSize: '11px', color: 'var(--text-body)', display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                  <span>
+                    {getProfileName(v.user_id) || 'Unknown'}
+                    {v.view_count > 1 && (
+                      <span style={{ marginLeft: '6px', color: 'var(--text-muted)', fontSize: '10px' }}>
+                        ({v.view_count}×)
+                      </span>
+                    )}
+                  </span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '10px' }} title={new Date(v.last_viewed_at).toLocaleString()}>
+                    {relativeTime(v.last_viewed_at)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
       </div>
 
       {/* ── Status change comment modal ── */}
