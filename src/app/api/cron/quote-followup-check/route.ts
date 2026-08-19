@@ -41,6 +41,72 @@ export async function GET(req: NextRequest) {
   try {
     const now = Date.now();
     const dayMs = 86_400_000;
+    const today = new Date().toISOString().slice(0, 10);
+
+    // ── Deliver due follow-up reminders ("remind me Sept 1") ──────────────
+    // Best-effort: the sweep below must run even before migration 212 lands.
+    let reminded = 0;
+    try {
+      const { data: due } = await service
+        .from('quote_followups')
+        .select('id, quote_type, quote_id, note, created_by, remind_at')
+        .is('reminder_sent_at', null)
+        .not('remind_at', 'is', null)
+        .lte('remind_at', today)
+        .limit(200);
+      for (const r of due || []) {
+        const table = r.quote_type === 'estimate' ? 'estimates' : 'wrap_quotes';
+        const { data: q } = await service
+          .from(table)
+          .select(r.quote_type === 'estimate'
+            ? 'id, status, estimate_number, customer_name, grand_total, created_by'
+            : 'id, status, quote_number, customer, total, created_by')
+          .eq('id', r.quote_id)
+          .maybeSingle();
+        // Quote answered (or gone) before the reminder date — nothing to
+        // chase; retire the reminder silently.
+        if (q && (q as any).status === 'sent') {
+          const number = r.quote_type === 'estimate' ? (q as any).estimate_number : (q as any).quote_number;
+          const customer = r.quote_type === 'estimate'
+            ? (q as any).customer_name || '—'
+            : ((q as any).customer as any)?.name || '—';
+          const targets = [...new Set([r.created_by, (q as any).created_by].filter(Boolean))] as string[];
+          if (targets.length > 0) {
+            await notifyMany(targets, {
+              type: 'quote_followup',
+              title: `⏰ Follow-up reminder: ${number} — ${customer}`,
+              body: r.note ? r.note.slice(0, 900) : `You asked to be reminded today to follow up on ${number}.`,
+              url: deepLinks.quoteFollowUps(r.quote_type as 'estimate' | 'wrap', r.quote_id),
+              channels: ['in_app', 'push'],
+              forceChannels: true,
+            });
+            reminded++;
+          }
+        }
+        await service.from('quote_followups').update({ reminder_sent_at: new Date().toISOString() }).eq('id', r.id);
+      }
+    } catch (e: any) {
+      console.warn('quote follow-up reminders unavailable:', e.message || e);
+    }
+
+    // A pending FUTURE reminder means the rep deliberately deferred this
+    // quote ("customer answers in September") — hold the quiet-day nudge
+    // until the reminder fires.
+    const deferred = new Set<string>();
+    try {
+      const { data: pending } = await service
+        .from('quote_followups')
+        .select('quote_type, quote_id')
+        .is('reminder_sent_at', null)
+        .gt('remind_at', today)
+        .limit(1000);
+      for (const p of pending || []) {
+        deferred.add(`${p.quote_type === 'estimate' ? 'estimates' : 'wrap_quotes'}:${p.quote_id}`);
+      }
+    } catch (e: any) {
+      console.warn('quote follow-up deferrals unavailable:', e.message || e);
+    }
+
     const quiet: QuietQuote[] = [];
     const isDue = (sentAt: string | null, lastFollowup: string | null, nudgedAt: string | null): number | null => {
       const ref = Math.max(
@@ -65,10 +131,12 @@ export async function GET(req: NextRequest) {
     ]);
 
     for (const e of estRes.data || []) {
+      if (deferred.has(`estimates:${e.id}`)) continue;
       const days = isDue(e.sent_for_approval_at || e.updated_at, e.last_followup_at, e.followup_nudged_at);
       if (days != null) quiet.push({ table: 'estimates', id: e.id, number: e.estimate_number, customer: e.customer_name || '—', total: Number(e.grand_total) || 0, repId: e.created_by, quietDays: days });
     }
     for (const w of wrapRes.data || []) {
+      if (deferred.has(`wrap_quotes:${w.id}`)) continue;
       const days = isDue(w.sent_at, w.last_followup_at, w.followup_nudged_at);
       if (days != null) quiet.push({ table: 'wrap_quotes', id: w.id, number: w.quote_number, customer: (w.customer as any)?.name || '—', total: Number(w.total) || 0, repId: w.created_by, quietDays: days });
     }
@@ -97,16 +165,17 @@ export async function GET(req: NextRequest) {
           .sort((a, b) => b.quietDays - a.quietDays)
           .map(q => `${q.number} ${q.customer} (${fmtK(q.total)}, quiet ${q.quietDays}d)`)
           .join(' · ');
-        // A one-quote nudge (the common case) opens the quote itself; only
-        // real multi-quote digests land on the follow-ups list.
+        // Land on the follow-ups queue — that's where Log Follow-Up / Won /
+        // Lost live. A one-quote nudge highlights its exact row; a real
+        // multi-quote digest opens the list.
         const only = quotes.length === 1 ? quotes[0] : null;
         await notifyMany([repId], {
           type: 'quote_followup',
           title: `${quotes.length} quote${quotes.length !== 1 ? 's' : ''} need${quotes.length === 1 ? 's' : ''} a follow-up`,
           body: lines.slice(0, 900),
           url: only
-            ? (only.table === 'estimates' ? deepLinks.estimate(only.id) : deepLinks.wrapQuote(only.id))
-            : '/admin/quote-followups',
+            ? deepLinks.quoteFollowUps(only.table === 'estimates' ? 'estimate' : 'wrap', only.id)
+            : deepLinks.quoteFollowUps(),
           channels: ['in_app', 'push'],
           forceChannels: true,
         });
@@ -121,10 +190,10 @@ export async function GET(req: NextRequest) {
     }
 
     const syncStateWrite = await recordHeartbeat(
-      service, 'quote_followup_check', { status: 'ok', quiet: quiet.length, notified },
+      service, 'quote_followup_check', { status: 'ok', quiet: quiet.length, notified, reminded },
     );
 
-    return NextResponse.json({ status: 'ok', quiet: quiet.length, notified, syncStateWrite });
+    return NextResponse.json({ status: 'ok', quiet: quiet.length, notified, reminded, syncStateWrite });
   } catch (e: any) {
     console.error('quote-followup-check failed:', e);
     await recordHeartbeat(service, 'quote_followup_check', { error: e.message || 'quote follow-up check failed' }); // never throws; failure already logged
