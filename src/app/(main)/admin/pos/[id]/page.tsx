@@ -1327,14 +1327,27 @@ export default function PoRecordPage() {
             {invoiceList.map((inv, idx) => (
               <div key={inv.netsuite_invoice_id || idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', padding: '7px 9px', borderRadius: '8px', background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)' }}>
                 <div style={{ minWidth: 0 }}>
-                  <a
-                    href={`https://system.netsuite.com/app/accounting/transactions/custinvc.nl?id=${inv.netsuite_invoice_id}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: '#34d399', fontWeight: 700, fontSize: '12px', textDecoration: 'none' }}
-                  >
-                    INV #{inv.netsuite_invoice_number || inv.netsuite_invoice_id}
-                  </a>
+                  {/* Open OUR invoice view — most staff have no NetSuite login,
+                      so the old system.netsuite.com link was a dead end (the
+                      PDF button already goes through our proxy). Fall back to
+                      NetSuite only when the invoice has no number to filter by. */}
+                  {inv.netsuite_invoice_number ? (
+                    <a
+                      href={deepLinks.invoicesSent(inv.netsuite_invoice_number)}
+                      style={{ color: '#34d399', fontWeight: 700, fontSize: '12px', textDecoration: 'none' }}
+                    >
+                      INV #{inv.netsuite_invoice_number}
+                    </a>
+                  ) : (
+                    <a
+                      href={`https://system.netsuite.com/app/accounting/transactions/custinvc.nl?id=${inv.netsuite_invoice_id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: '#34d399', fontWeight: 700, fontSize: '12px', textDecoration: 'none' }}
+                    >
+                      INV #{inv.netsuite_invoice_id}
+                    </a>
+                  )}
                   {(() => {
                     // Payment status from NetSuite, refreshed by the invoice
                     // sync sweeps and the Recheck button.
