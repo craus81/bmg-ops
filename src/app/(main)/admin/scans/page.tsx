@@ -1984,6 +1984,7 @@ export default function AdminScansPage() {
           allParts={allParts}
           allLocations={allLocations}
           poRequired={poRequired}
+          billableCustomers={billableCustomers}
           onCommitted={loadAll}
           onPartAdded={p => setAllParts(prev => prev.some(x => x.id === p.id) ? prev.map(x => x.id === p.id ? p : x) : [p, ...prev])}
         />
@@ -2559,10 +2560,13 @@ const INVOICE_STATUS_CHIP: Record<string, { label: string; color: string; bg: st
   paid: { label: 'Paid', color: '#34d399', bg: 'rgba(52,211,153,0.12)' },
 };
 
-function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, onPartAdded }: {
+function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustomers, onCommitted, onPartAdded }: {
   allParts: { id: string; item_number: string; display_name: string | null; billable_customer: string | null; vehicle_type: string | null; graphic_package: string | null }[];
   allLocations: { id: string; name: string }[];
   poRequired: Record<string, boolean>;
+  // The customer-level PO waiver list, for the same lifecycle labels the
+  // parent's tabs derive (invoice-first customers are Ready without a PO).
+  billableCustomers: BillableCustomer[];
   onCommitted: () => void;
   onPartAdded: (p: { id: string; item_number: string; display_name: string | null; billable_customer: string | null; vehicle_type: string | null; graphic_package: string | null }) => void;
 }) {
