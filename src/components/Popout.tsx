@@ -60,12 +60,12 @@ export function pathFor(type: PopoutType, item: any): string {
     case 'customers': return deepLinks.prospect(item.id);
     case 'messages': return deepLinks.conversation(item.conversation_id);
     case 'quotes': return deepLinks.wrapQuote(item.id);
-    // Invoices live in NetSuite — deep-link to whichever record in the app
-    // references this one (PO, graphics job, or the sent-invoices list).
+    // The Invoiced tab lists every NetSuite invoice, so it can show any
+    // invoice number prefiltered — the app's own view of the invoice.
+    // (Scan-batch invoices used to fall through to the bare list, and
+    // PO/graphics ones bounced to the PO or job instead of the invoice.)
     case 'invoices':
-      if (item.po_id) return deepLinks.po(item.po_id);
-      if (item.job_id) return deepLinks.graphicsJob(item.job_id);
-      return deepLinks.invoicesSent();
+      return deepLinks.invoicesSent(item.invoice_number);
     default: return '/';
   }
 }
