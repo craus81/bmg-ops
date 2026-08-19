@@ -157,6 +157,9 @@ export default function GraphicsPage() {
     poId: string; poLineItemId: string | null; customerNetsuiteId: string | null; partNumbers: string[];
   } | null>(null);
   const [awaitingGraphics, setAwaitingGraphics] = useState<any[]>([]);
+  // Awaiting-queue entry being linked to an EXISTING job (vs + Create).
+  const [linkAwaiting, setLinkAwaiting] = useState<any | null>(null);
+  const [linkSearch, setLinkSearch] = useState('');
   const [createForm, setCreateForm] = useState({
     job_category: '' as GraphicsJobCategory | '',
     title: '', part_number: '', part_numbers: [] as string[], partInput: '', customer: '', quantity: 1,
@@ -390,6 +393,20 @@ export default function GraphicsPage() {
       .eq('id', ci.id);
     if (error) { await dialog.alert('Failed to dismiss: ' + error.message); return; }
     setAwaitingGraphics(prev => prev.filter(x => x.id !== ci.id));
+  };
+
+  // Link a queue entry to an EXISTING graphics job — same back-link the
+  // create flow writes, for when the job was already made (imported, created
+  // from the estimate, or before the check-in was scanned).
+  const linkAwaitingToJob = async (ci: any, job: GraphicsJob) => {
+    const { error } = await supabase
+      .from('fleet_checkins')
+      .update({ matched_graphics_job_id: job.id })
+      .eq('id', ci.id);
+    if (error) { await dialog.alert('Failed to link: ' + error.message); return; }
+    setAwaitingGraphics(prev => prev.filter(x => x.id !== ci.id));
+    setLinkAwaiting(null);
+    setLinkSearch('');
   };
 
   const loadJobs = async (includeArchived: boolean = showArchivedRef.current) => {
@@ -957,6 +974,15 @@ export default function GraphicsPage() {
                     background: '#fb923c', color: '#fff', flexShrink: 0, marginLeft: '8px',
                   }}>+ Create</div>
                   <button
+                    onClick={e => { e.stopPropagation(); setLinkAwaiting(ci); setLinkSearch(ci.customer_name || ''); }}
+                    style={{
+                      padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 800,
+                      background: 'transparent', border: '1px solid #fb923c55', color: '#fb923c',
+                      cursor: 'pointer', flexShrink: 0, marginLeft: '6px', whiteSpace: 'nowrap',
+                    }}
+                    title="Link an existing graphics job to this vehicle"
+                  >Link Existing</button>
+                  <button
                     onClick={e => { e.stopPropagation(); dismissAwaiting(ci); }}
                     style={{
                       background: 'none', border: 'none', color: 'var(--text-label)',
@@ -1313,6 +1339,76 @@ export default function GraphicsPage() {
           </div>
         );
       })()}
+
+      {/* ═══════════ LINK EXISTING JOB PICKER (awaiting-graphics queue) ═══════════ */}
+      {linkAwaiting && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
+          onClick={() => { setLinkAwaiting(null); setLinkSearch(''); }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ background: 'var(--card)', borderRadius: '14px', padding: '16px', width: '100%', maxWidth: '460px', maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 30px rgba(0,0,0,0.3)' }}
+          >
+            <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '2px' }}>
+              Link Existing Graphics Job
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+              {[linkAwaiting.vehicle_year, linkAwaiting.vehicle_make, linkAwaiting.vehicle_model].filter(Boolean).join(' ') || 'Vehicle'}
+              {linkAwaiting.customer_name ? ` — ${linkAwaiting.customer_name}` : ''}
+              {linkAwaiting.sales_order_number ? ` · SO #${linkAwaiting.sales_order_number}` : ''}
+            </div>
+            <input
+              autoFocus
+              value={linkSearch}
+              onChange={e => setLinkSearch(e.target.value)}
+              placeholder="Search jobs by title, customer, PO #..."
+              style={{
+                width: '100%', padding: '8px 10px', borderRadius: '8px', fontSize: '12px',
+                background: 'var(--input-bg)', border: '1px solid var(--border)',
+                color: 'var(--text-primary)', outline: 'none', marginBottom: '8px',
+              }}
+            />
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              {(() => {
+                const q = linkSearch.trim().toLowerCase();
+                const matches = jobs.filter(j => !q
+                  || (j.title || '').toLowerCase().includes(q)
+                  || (j.customer || '').toLowerCase().includes(q)
+                  || (j.po_number || '').toLowerCase().includes(q)
+                  || (j.job_number || '').toLowerCase().includes(q));
+                if (matches.length === 0) {
+                  return <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', padding: '16px' }}>No jobs match — clear the search or use + Create instead.</div>;
+                }
+                return matches.slice(0, 40).map(j => (
+                  <button
+                    key={j.id}
+                    onClick={() => linkAwaitingToJob(linkAwaiting, j)}
+                    style={{
+                      textAlign: 'left', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer',
+                      background: 'var(--bg)', border: '1px solid var(--border)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{j.title}</span>
+                      <span style={{
+                        fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', flexShrink: 0,
+                        background: `${GRAPHICS_STATUS_COLORS[j.status]}18`, border: `1px solid ${GRAPHICS_STATUS_COLORS[j.status]}44`,
+                        color: GRAPHICS_STATUS_COLORS[j.status], whiteSpace: 'nowrap',
+                      }}>
+                        {GRAPHICS_STATUS_LABELS[j.status]}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                      {[j.customer, j.po_number ? `PO #${j.po_number}` : null, j.job_number].filter(Boolean).join(' · ') || '—'}
+                    </div>
+                  </button>
+                ));
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ═══════════ CREATE JOB MODAL ═══════════ */}
       {showCreate && (
