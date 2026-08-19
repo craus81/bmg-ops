@@ -30,10 +30,13 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    // Archived vehicles keep their last status, so without this filter a
+    // vehicle archived while stuck kept re-alerting every 48h forever.
     const { data: stuck } = await service
       .from('fleet_checkins')
       .select('id, vin, vehicle_year, vehicle_make, vehicle_model, status, customer_name, assigned_to, updated_at')
       .in('status', ['stuck_parts', 'stuck_graphics'])
+      .is('archived_at', null)
       .limit(500);
 
     const now = Date.now();
