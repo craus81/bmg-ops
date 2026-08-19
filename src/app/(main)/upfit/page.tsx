@@ -10,6 +10,7 @@ import { DropZone } from '@/components/DropZone';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { theme } from '@/lib/theme';
 import { flashNote } from '@/lib/focus-note';
+import { fetchAllRows } from '@/lib/fetch-all';
 import RecordChanges from '@/components/RecordChanges';
 
 interface UpfitNote {
@@ -65,6 +66,29 @@ const GRAPHICS_STATUS_COLORS: Record<string, string> = {
   installed: '#22c55e',
   cancelled: '#64748b',
 };
+
+interface UpfitProjectView {
+  id: string;
+  project_id: string;
+  user_id: string;
+  first_viewed_at: string;
+  last_viewed_at: string;
+  view_count: number;
+}
+
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!isFinite(then)) return '';
+  const sec = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (sec < 60) return 'just now';
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.round(hr / 24);
+  if (day < 7) return `${day}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
 
 interface UpfitProject {
   id: string;
@@ -122,6 +146,11 @@ export default function UpfitProjectsPage() {
   const [filter, setFilter] = useState('active');
   const [search, setSearch] = useState('');
   const [profiles, setProfiles] = useState<Record<string, string>>({});
+
+  // Project views — who has opened each project (read receipts). Loaded
+  // eagerly for all projects so the list can show the unread-activity dot
+  // and the 👁 seen-by badge; the detail view shows the full Seen By list.
+  const [projectViews, setProjectViews] = useState<Record<string, UpfitProjectView[]>>({});
 
   const [profileList, setProfileList] = useState<{ id: string; full_name: string }[]>([]);
 
@@ -190,6 +219,44 @@ export default function UpfitProjectsPage() {
     }
 
     setLoading(false);
+    loadViews();
+  };
+
+  // Views are best-effort — the page must still render if the
+  // upfit_project_views migration hasn't been applied yet. One row per
+  // (user, opened project) grows unboundedly, so paginate past PostgREST's
+  // 1000-row cap; id gives the deterministic unique order.
+  const loadViews = async () => {
+    try {
+      const { data } = await fetchAllRows<UpfitProjectView>((from, to) =>
+        supabase
+          .from('upfit_project_views')
+          .select('*')
+          .order('id')
+          .range(from, to)
+      );
+      const byProject: Record<string, UpfitProjectView[]> = {};
+      for (const v of data) (byProject[v.project_id] ||= []).push(v);
+      for (const k of Object.keys(byProject)) {
+        byProject[k].sort((a, b) => b.last_viewed_at.localeCompare(a.last_viewed_at));
+      }
+      setProjectViews(byProject);
+    } catch (e) {
+      console.warn('upfit_project_views unavailable:', e);
+    }
+  };
+
+  // Stamp my view so the unread dot clears for me and I appear in Seen By
+  // (best-effort — opening the project must work even if the RPC hasn't
+  // been migrated).
+  const recordProjectView = async (projectId: string) => {
+    if (!user) return;
+    try {
+      await supabase.rpc('record_upfit_project_view', { p_project_id: projectId });
+    } catch (e) {
+      console.warn('record_upfit_project_view unavailable:', e);
+    }
+    loadViews();
   };
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
@@ -511,6 +578,7 @@ export default function UpfitProjectsPage() {
     loadLinkedCheckin(p.fleet_checkin_id);
     loadLinkedGraphics(p.id);
     loadReadiness(p.id, !!p.netsuite_so_id);
+    recordProjectView(p.id);
   };
 
   const addNote = async () => {
@@ -1158,6 +1226,34 @@ export default function UpfitProjectsPage() {
           </div>
         )}
 
+        {/* Seen By — read receipts of who has opened this project */}
+        <div style={{ marginTop: '16px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textSecondary, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Seen By</div>
+          {(() => {
+            const others = (projectViews[selected.id] || []).filter(v => v.user_id !== user?.id);
+            if (others.length === 0) {
+              return <div style={{ fontSize: '11px', color: theme.textMuted }}>No one else has opened this project yet.</div>;
+            }
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                {others.map(v => (
+                  <div key={v.id} style={{ fontSize: '11px', color: theme.textPrimary, display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                    <span>
+                      {profiles[v.user_id] || 'Unknown'}
+                      {v.view_count > 1 && (
+                        <span style={{ marginLeft: '6px', color: theme.textMuted, fontSize: '10px' }}>({v.view_count}×)</span>
+                      )}
+                    </span>
+                    <span style={{ color: theme.textMuted, fontSize: '10px' }} title={new Date(v.last_viewed_at).toLocaleString()}>
+                      {relativeTime(v.last_viewed_at)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+
         {/* Field-level audit history (A2 phase 4) — admin-only per audit_log RLS */}
         {isAdmin && <RecordChanges table="upfit_projects" recordId={selected.id} />}
       </div>
@@ -1280,6 +1376,15 @@ export default function UpfitProjectsPage() {
             const noteCount = p.upfit_project_notes?.length || 0;
             const openTasks = (p.upfit_project_tasks || []).filter(t => !t.completed_at).length;
             const totalTasks = (p.upfit_project_tasks || []).length;
+            // Unread: project changed since this viewer last opened it. No
+            // view row = never opened = unread. Cleared when openProject
+            // stamps a view.
+            const myView = (projectViews[p.id] || []).find(v => v.user_id === user?.id);
+            const hasNew = !myView || new Date(p.updated_at).getTime() > new Date(myView.last_viewed_at).getTime();
+            const seenByOthers = (projectViews[p.id] || []).filter(v => v.user_id !== user?.id);
+            const seenTooltip = seenByOthers
+              .map(v => `${profiles[v.user_id] || 'Unknown'} — ${relativeTime(v.last_viewed_at)}`)
+              .join('\n');
             return (
               <div
                 key={p.id}
@@ -1297,7 +1402,12 @@ export default function UpfitProjectsPage() {
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
                   <div>
-                    <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{p.project_name}</div>
+                    <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>
+                      {hasNew && (
+                        <span title="New activity since you last opened this project" style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#ef4444', flexShrink: 0, marginRight: '6px', verticalAlign: '1px' }} />
+                      )}
+                      {p.project_name}
+                    </div>
                     {p.customer_name && <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '2px' }}>{p.customer_name}</div>}
                   </div>
                   <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: `${st.color}20`, color: st.color, border: `1px solid ${st.color}40`, whiteSpace: 'nowrap', flexShrink: 0 }}>{st.label}</span>
@@ -1315,6 +1425,12 @@ export default function UpfitProjectsPage() {
                     </span>
                   )}
                   {noteCount > 0 && <span>{noteCount} note{noteCount !== 1 ? 's' : ''}</span>}
+                  {seenByOthers.length > 0 && (
+                    <span
+                      title={`Seen by:\n${seenTooltip}`}
+                      style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(148,163,184,0.12)', fontWeight: 700 }}
+                    >👁 {seenByOthers.length}</span>
+                  )}
                   <span style={{ marginLeft: 'auto' }}>{fmt(p.updated_at)}</span>
                 </div>
               </div>
