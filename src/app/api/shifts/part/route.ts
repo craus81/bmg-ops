@@ -4,6 +4,7 @@ import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { rolesOf } from '@/lib/cni-access';
 import { loadShift, canManageShift } from '@/lib/shifts';
+import { canonicalizePartNumber } from '@/lib/part-number';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,7 +51,9 @@ export async function POST(req: NextRequest) {
   const { error } = await service
     .from('work_shifts')
     .update({
-      part_number: parsed.data.partNumber || null,
+      // Stored with the catalog's casing so scans logged under this part
+      // match pricing/rate lookups whatever case was typed.
+      part_number: await canonicalizePartNumber(service, parsed.data.partNumber),
       part_description: parsed.data.partDescription || null,
       billable_customer: parsed.data.billableCustomer || null,
     })

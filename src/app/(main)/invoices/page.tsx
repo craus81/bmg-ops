@@ -30,6 +30,8 @@ import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { customerRequiresPo, loadBillableCustomers } from '@/lib/billable-customers';
 import { PartNumberLink } from '@/components/PartLabel';
+import { type EmailedInfo, fetchEmailedByNumber, isBadDelivery } from '@/lib/invoice-emails';
+import { InvoiceEmailedBadge } from '@/components/InvoiceEmailedBadge';
 
 type HubTab = 'graphics' | 'scans' | 'sent';
 
@@ -199,40 +201,9 @@ export default function InvoicingHubPage() {
   // Latest customer email per invoice number (with its delivery state and
   // full send history), so the sent list shows which invoices have already
   // been emailed — and which of those emails actually landed.
-  interface EmailedInfo {
-    sent_at: string;
-    recipients: string[];
-    delivery_status: string | null;
-    delivery_detail: string | null;
-    history: { sent_at: string; recipients: string[]; delivery_status: string | null }[];
-  }
   const [emailedByNumber, setEmailedByNumber] = useState<Record<string, EmailedInfo>>({});
   const loadEmailedInvoices = async (numbers: string[]) => {
-    const latest: Record<string, EmailedInfo> = {};
-    for (let i = 0; i < numbers.length; i += 200) {
-      const { data } = await supabase
-        .from('invoice_emails')
-        .select('invoice_number, sent_at, recipients, delivery_status, delivery_detail')
-        .in('invoice_number', numbers.slice(i, i + 200))
-        .order('sent_at', { ascending: false });
-      for (const row of (data || []) as any[]) {
-        if (!latest[row.invoice_number]) {
-          latest[row.invoice_number] = {
-            sent_at: row.sent_at,
-            recipients: row.recipients || [],
-            delivery_status: row.delivery_status || null,
-            delivery_detail: row.delivery_detail || null,
-            history: [],
-          };
-        }
-        latest[row.invoice_number].history.push({
-          sent_at: row.sent_at,
-          recipients: row.recipients || [],
-          delivery_status: row.delivery_status || null,
-        });
-      }
-    }
-    setEmailedByNumber(latest);
+    setEmailedByNumber(await fetchEmailedByNumber(supabase, numbers));
   };
 
   // One-time (re-runnable) reconstruction of the email log for sends that
@@ -852,31 +823,7 @@ export default function InvoicingHubPage() {
                           color: r.source === 'Graphics' ? '#22c55e' : r.source === 'Scans' ? '#fbbf24' : '#60a5fa',
                         }}>{r.source}</span>
                         <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>#{r.invoiceNumber}</span>
-                        {emailedByNumber[r.invoiceNumber] && (() => {
-                          const info = emailedByNumber[r.invoiceNumber];
-                          const bad = ['bounced', 'failed', 'complained'].includes(info.delivery_status || '');
-                          const delivered = info.delivery_status === 'delivered';
-                          const label = bad
-                            ? `✉ ${(info.delivery_status || '').toUpperCase()}`
-                            : delivered
-                              ? `✉ DELIVERED ${new Date(info.sent_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}`
-                              : `✉ EMAILED ${new Date(info.sent_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
-                          const historyLines = info.history
-                            .map(h => `${new Date(h.sent_at).toLocaleString()} → ${h.recipients.join(', ') || 'customer'}${h.delivery_status && h.delivery_status !== 'sent' ? ` (${h.delivery_status})` : ''}`)
-                            .join('\n');
-                          return (
-                            <span
-                              title={`${bad ? `Delivery failed${info.delivery_detail ? `: ${info.delivery_detail}` : ''} — resend this invoice.\n\n` : ''}Send history:\n${historyLines}`}
-                              style={{
-                                fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px',
-                                background: bad ? 'var(--error-bg)' : delivered ? 'rgba(34,197,94,0.12)' : 'rgba(251,191,36,0.12)',
-                                color: bad ? 'var(--error)' : delivered ? '#22c55e' : '#fbbf24',
-                              }}
-                            >
-                              {label}
-                            </span>
-                          );
-                        })()}
+                        <InvoiceEmailedBadge info={emailedByNumber[r.invoiceNumber]} />
                         {(() => {
                           if (r.status === 'paid') {
                             return <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px', background: 'var(--success-bg)', color: 'var(--success)' }}>PAID</span>;
@@ -908,7 +855,7 @@ export default function InvoicingHubPage() {
                           >{openingPdf === r.invoiceNumber ? 'Opening…' : 'PDF'}</button>
                         )}
                         {(() => {
-                          const bad = ['bounced', 'failed', 'complained'].includes(emailedByNumber[r.invoiceNumber]?.delivery_status || '');
+                          const bad = isBadDelivery(emailedByNumber[r.invoiceNumber]?.delivery_status);
                           return (
                             <button
                               onClick={() => setEmailTarget({

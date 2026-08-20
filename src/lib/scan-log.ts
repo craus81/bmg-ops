@@ -15,6 +15,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { isVerizonRfidPart, validateSerial, validateImei, validateIccid } from './rfid';
 import { vinMatchOrFilter } from './vin-match';
+import { canonicalizePartNumber, partNumberPattern } from './part-number';
 
 export interface ScanRecordInput {
   vin: string;
@@ -91,11 +92,16 @@ export async function logScan(
   const vin = (rec.vin || '').trim().toUpperCase();
   if (vin.length < 5) return { ok: false, status: 400, error: 'VIN too short' };
 
+  // Part-number case never matters: a hand-typed "06u166" is stored with the
+  // catalog's casing ("06U166") so pricing, PO matching, and pay rates all
+  // line up. Custom-job free text (not in the catalog) stays as typed.
+  const partNumber = await canonicalizePartNumber(service, rec.part_number);
+
   // Verizon RFID part requires all three device identifiers, validated.
   let serial = rec.serial_number ?? null;
   let imei = rec.imei ?? null;
   let iccid = rec.iccid ?? null;
-  if (isVerizonRfidPart(rec.part_number)) {
+  if (isVerizonRfidPart(partNumber)) {
     serial = validateSerial(serial || '');
     imei = validateImei(imei || '');
     iccid = validateIccid(iccid || '');
@@ -110,12 +116,14 @@ export async function logScan(
   // vice versa — see vin-match.ts. With allowNearDuplicate (admin override)
   // only an EXACT string match still blocks; migration 191's unique index
   // backstops the exact case race-free either way.
-  if (rec.part_number) {
+  if (partNumber) {
     const dupFilter = vinMatchOrFilter(vin);
+    // ilike (wildcards escaped) so a historical scan logged in another
+    // casing still counts as the same part.
     let dupQuery = service
       .from('scan_logs')
       .select('id, vin, scanned_at')
-      .eq('part_number', rec.part_number);
+      .ilike('part_number', partNumberPattern(partNumber));
     dupQuery = rec.allowNearDuplicate || !dupFilter
       ? dupQuery.eq('vin', vin)
       : dupQuery.or(dupFilter);
@@ -123,7 +131,7 @@ export async function logScan(
     if (dup && dup.length > 0) {
       const when = new Date(dup[0].scanned_at).toLocaleDateString();
       const loggedAs = dup[0].vin === vin ? '' : ` (logged as ${dup[0].vin})`;
-      return { ok: false, status: 409, duplicate: true, error: `Duplicate — ${vin} already scanned for ${rec.part_number} on ${when}${loggedAs}` };
+      return { ok: false, status: 409, duplicate: true, error: `Duplicate — ${vin} already scanned for ${partNumber} on ${when}${loggedAs}` };
     }
   }
   if (imei) {
@@ -142,7 +150,7 @@ export async function logScan(
       vehicle_model: rec.vehicle_model ?? null,
       vehicle_trim: rec.vehicle_trim ?? null,
       body_class: rec.body_class ?? null,
-      part_number: rec.part_number ?? null,
+      part_number: partNumber,
       part_description: rec.part_description ?? null,
       billable_customer: rec.billable_customer ?? null,
       unit_number: rec.unit_number ?? null,

@@ -4,6 +4,7 @@ import { requireAdmin, requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { priceUnpricedCredits } from '@/lib/pay-credits';
 import { logAudit } from '@/lib/audit';
+import { canonicalizePartNumber, partNumberPattern } from '@/lib/part-number';
 
 export const dynamic = 'force-dynamic';
 
@@ -92,15 +93,20 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, PostSchema);
   if (parsed.error) return parsed.error;
-  const { partNumber, ratePerVehicle } = parsed.data;
+  const { ratePerVehicle } = parsed.data;
+  // Case never matters for part numbers: store the catalog's casing, and
+  // match any existing rate row case-insensitively so "06u166" updates the
+  // "06U166" rate instead of creating a duplicate.
+  const partNumber = (await canonicalizePartNumber(service, parsed.data.partNumber))!;
 
   // Read the current rate first: the audit log records the change, and an
   // update must not clobber the original created_by.
-  const { data: existing } = await service
+  const { data: existingRows } = await service
     .from('install_pay_rates')
     .select('id, rate_per_vehicle, active')
-    .eq('part_number', partNumber)
-    .maybeSingle();
+    .ilike('part_number', partNumberPattern(partNumber))
+    .limit(1);
+  const existing = existingRows?.[0] || null;
 
   const { error } = existing
     ? await service

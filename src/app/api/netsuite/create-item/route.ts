@@ -3,6 +3,7 @@ import { createItem, findItems, itemUrl, updateItemFields } from '@/lib/netsuite
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { partNumberPattern } from '@/lib/part-number';
 
 export const dynamic = 'force-dynamic';
 // NetSuite's REST record create plus the price RESTlet routinely take longer
@@ -73,12 +74,12 @@ export async function POST(req: NextRequest) {
     }
     upgradeTarget = row;
   } else {
-    // Legacy data can hold several rows per item number — prefer any real
-    // NetSuite row, otherwise upgrade the first local one.
+    // Legacy data can hold several rows per item number (casing included) —
+    // prefer any real NetSuite row, otherwise upgrade the first local one.
     const { data: rows } = await supabase
       .from('netsuite_parts')
       .select(PART_COLS)
-      .eq('item_number', partNumber);
+      .ilike('item_number', partNumberPattern(partNumber));
     const real = (rows || []).find(r => isRealNsId(r.netsuite_id));
     if (real) {
       return NextResponse.json({ success: true, alreadyExists: true, part: real, netsuiteUrl: itemUrl(real.netsuite_id!) });
