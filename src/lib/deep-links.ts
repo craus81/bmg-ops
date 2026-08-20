@@ -45,6 +45,8 @@ export const deepLinks = {
   part: (partId: string) => `/parts?part=${partId}`,
   /** Wrap-quote list — opens that quote (page reads ?id=). */
   wrapQuote: (quoteId: string) => `/admin/wrap-quote?id=${quoteId}`,
+  /** Install guide editor — the dimensioned placement guide record page. */
+  installGuide: (guideId: string) => `/graphics/install-guides/${guideId}`,
   /** Quote follow-ups queue — optionally scroll-flashes one quote's row.
    *  This is where Log Follow-Up / Won / Lost live, so quote-followup
    *  notifications land here, on the exact row they're about. */
