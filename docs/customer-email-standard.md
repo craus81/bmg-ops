@@ -54,6 +54,7 @@ on every send, not just estimates.
 | Invoice emails (`EmailInvoicesModal`) | Own modal, fits the standard | Multi-To, message, bcc-me, invoice-PDF attachments with verify + view, test-send, delivery tracking. Migrate to the shared component if it's ever rebuilt. |
 | Wrap quote (`/admin/wrap-quote`) | Own modal, fits the standard | Editable To (prefills customer email + cc), bcc-me, message, per-attachment toggles, live preview. |
 | Statement (`/admin/prospects/[id]`) | `EmailComposeModal` | Full standard. Preview predicts the invoice-PDF attachment list without fetching from NetSuite; real filenames land at send time. |
+| Install guide (`/graphics/install-guides/[id]`) | `EmailComposeModal` | Full standard. The guide PDF (dimensioned proof or BMG deck) is generated client-side, staged to R2 (`install-guides/<id>/exports/`), and attached by the server (`/api/install-guides/send`, `email_log` kind `install_guide`). No stored recipient — the sender types the installer's address. |
 | Customer threads (`customer-threads`) | Chat-style thread | Deliberately not a compose modal (it's a running conversation). Reply-To = sender is in place. |
 | Invites (CNI/admin), reminder crons, digests, notify-pickup | Exempt | Automated/transactional — nobody is composing. Reply-To falls back to `RESEND_REPLY_TO_EMAIL`. |
 
