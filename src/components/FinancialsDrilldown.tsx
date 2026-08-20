@@ -526,9 +526,9 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
     <div
       onMouseDown={e => { downOnBackdrop.current = e.target === e.currentTarget; }}
       onClick={e => { if (e.target === e.currentTarget && downOnBackdrop.current) onClose(); }}
-      style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto', padding: '4vh 12px calc(24px + env(safe-area-inset-bottom))' }}>
+      style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto', padding: 'calc(4vh / var(--ts)) 12px calc(24px + env(safe-area-inset-bottom))' }}>
       <div ref={panelRef} role="dialog" aria-modal="true" aria-label={VIEW_TITLES[view]} onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
-        style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '14px', width: 'min(980px, 100%)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: 'var(--shadow-md)' }}>
+        style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '14px', width: 'min(980px, 100%)', maxHeight: 'calc(92vh / var(--ts))', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: 'var(--shadow-md)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '13px 16px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
           {view !== target.view && (
             <button onClick={() => setView(target.view)} aria-label="Back" style={{ ...btnSm, padding: '4px 9px' }}>‹</button>

@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { createClient } from '@/lib/supabase-browser';
+import { getTextZoom } from '@/lib/text-size';
 
 // Keep the prompt + history under a sane token budget by only sending
 // the most recent N exchanges to the model. The full transcript still
@@ -349,7 +350,13 @@ export default function AiChat() {
   const [pos, setPos] = useState({ x: -1, y: -1 }); // -1 = use default
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number; dragging: boolean }>({ startX: 0, startY: 0, origX: 0, origY: 0, dragging: false });
 
-  const getDefaultPos = () => ({ x: window.innerWidth - 84, y: window.innerHeight - 148 });
+  // pos is in CSS px inside the text-size-zoomed page, while clientX/Y and
+  // window.innerWidth/Height are real viewport px — divide the real px by
+  // the zoom factor so the button tracks the finger and clamps on-screen.
+  const getDefaultPos = () => {
+    const z = getTextZoom();
+    return { x: window.innerWidth / z - 84, y: window.innerHeight / z - 148 };
+  };
   const getPos = () => pos.x < 0 ? getDefaultPos() : pos;
 
   const handleDragStart = (clientX: number, clientY: number) => {
@@ -359,13 +366,14 @@ export default function AiChat() {
 
   const handleDragMove = (clientX: number, clientY: number) => {
     const d = dragRef.current;
-    const dx = clientX - d.startX;
-    const dy = clientY - d.startY;
+    const z = getTextZoom();
+    const dx = (clientX - d.startX) / z;
+    const dy = (clientY - d.startY) / z;
     if (Math.abs(dx) > 5 || Math.abs(dy) > 5) d.dragging = true;
     if (d.dragging) {
       setPos({
-        x: Math.max(0, Math.min(window.innerWidth - 72, d.origX + dx)),
-        y: Math.max(0, Math.min(window.innerHeight - 72, d.origY + dy)),
+        x: Math.max(0, Math.min(window.innerWidth / z - 72, d.origX + dx)),
+        y: Math.max(0, Math.min(window.innerHeight / z - 72, d.origY + dy)),
       });
     }
   };
@@ -522,6 +530,7 @@ export default function AiChat() {
           bottom: '80px',
           right: '12px',
           width: '340px',
+          maxWidth: 'calc(100vw / var(--ts) - 24px)',
           maxHeight: '500px',
           borderRadius: '16px',
           background: 'var(--card)',

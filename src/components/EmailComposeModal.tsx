@@ -220,7 +220,7 @@ export default function EmailComposeModal({
     >
       <div onClick={e => e.stopPropagation()} style={{
         background: 'var(--card)', borderRadius: '14px', padding: '16px',
-        width: '100%', maxWidth: '760px', maxHeight: 'calc(100vh - 40px)',
+        width: '100%', maxWidth: '760px', maxHeight: 'calc(100vh / var(--ts) - 40px)',
         display: 'flex', flexDirection: 'column', gap: '10px',
         boxShadow: '0 8px 30px rgba(0,0,0,0.3)', overflowY: 'auto',
       }}>

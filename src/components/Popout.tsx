@@ -334,7 +334,7 @@ export function PopoutProvider({ children }: { children: ReactNode }) {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{ width: '100%', maxWidth: '500px', margin: 'auto', maxHeight: '90vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '14px', overflow: 'hidden' }}
+            style={{ width: '100%', maxWidth: '500px', margin: 'auto', maxHeight: 'calc(90vh / var(--ts))', display: 'flex', flexDirection: 'column', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '14px', overflow: 'hidden' }}
           >
             <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px', color: LABELS[state.type]?.color || 'var(--text-body)' }}>

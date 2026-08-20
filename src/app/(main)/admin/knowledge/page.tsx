@@ -843,7 +843,7 @@ export default function KnowledgePage() {
       {/* Create/Edit Text Modal */}
       {showForm && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
-          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', maxWidth: '480px', width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
+          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', maxWidth: '480px', width: '100%', maxHeight: 'calc(80vh / var(--ts))', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-body)' }}>
                 {editingDoc ? 'Edit Document' : 'Add Knowledge Document'}

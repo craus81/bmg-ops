@@ -16,7 +16,7 @@ import NativePushHandler from '@/components/NativePushHandler';
 function PendingScreen() {
   const { signOut } = useAuth();
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', padding: '20px' }}>
+    <div style={{ minHeight: 'calc(100vh / var(--ts))', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', padding: '20px' }}>
       <div style={{ textAlign: 'center', maxWidth: '340px' }}>
         <div style={{ fontSize: '20px', marginBottom: '12px', color: 'var(--text-muted)' }}>Pending</div>
         <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px' }}>Waiting for Approval</div>
@@ -41,7 +41,7 @@ function PendingScreen() {
 function DeniedScreen() {
   const { signOut } = useAuth();
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', padding: '20px' }}>
+    <div style={{ minHeight: 'calc(100vh / var(--ts))', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', padding: '20px' }}>
       <div style={{ textAlign: 'center', maxWidth: '340px' }}>
         <div style={{ fontSize: '20px', marginBottom: '12px', color: 'var(--text-muted)' }}>Denied</div>
         <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px' }}>Access Denied</div>
@@ -76,7 +76,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
   if (loading || appLoading) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
+      <div style={{ minHeight: 'calc(100vh / var(--ts))', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
         <div style={{ textAlign: 'center' }}>
           <div style={{
             width: '36px', height: '36px', border: '3px solid var(--border)',
@@ -96,7 +96,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   if (profile?.status === 'denied') return <DeniedScreen />;
 
   return (
-    <div style={{ minHeight: '100vh', paddingBottom: '85px', background: 'var(--bg)' }}>
+    <div style={{ minHeight: 'calc(100vh / var(--ts))', paddingBottom: '85px', background: 'var(--bg)' }}>
       <Header clockStatus={clockStatus} activePartNumber={activePart?.part_number} activeEndCustomer={activePart?.end_customer} />
       <main id="main" style={{ maxWidth: '1200px', margin: '0 auto', padding: '14px 20px', boxSizing: 'border-box' }}>
         {children}

@@ -1708,7 +1708,7 @@ export default function CniJobDetailPage() {
         }}>
           <div style={{
             background: 'var(--card)', borderRadius: '16px', padding: '20px',
-            maxWidth: '400px', width: '100%', maxHeight: '80vh', overflowY: 'auto',
+            maxWidth: '400px', width: '100%', maxHeight: 'calc(80vh / var(--ts))', overflowY: 'auto',
             border: '1px solid var(--border)',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
@@ -1768,7 +1768,7 @@ export default function CniJobDetailPage() {
       {/* Import already-scanned vehicles modal */}
       {importOpen && (
         <div onClick={() => setImportOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '16px', padding: '20px', maxWidth: '460px', width: '100%', maxHeight: '88vh', overflowY: 'auto', border: '1px solid var(--border)' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '16px', padding: '20px', maxWidth: '460px', width: '100%', maxHeight: 'calc(88vh / var(--ts))', overflowY: 'auto', border: '1px solid var(--border)' }}>
             <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>Import Scanned Vehicles</div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>
               Pull in vehicles already in the scan log that aren&apos;t on any CNI job. By default this matches the job&apos;s part (<strong>{job.part_number || '—'}</strong>); search another part (e.g. <strong>rfid</strong>) to find scans logged under a different name. Imported scans are re-stamped to this job&apos;s part.
@@ -1846,7 +1846,7 @@ export default function CniJobDetailPage() {
         const people = addRoster;
         return (
         <div onClick={() => setAddVinOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '16px', padding: '20px', maxWidth: '440px', width: '100%', maxHeight: '88vh', overflowY: 'auto', border: '1px solid var(--border)' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '16px', padding: '20px', maxWidth: '440px', width: '100%', maxHeight: 'calc(88vh / var(--ts))', overflowY: 'auto', border: '1px solid var(--border)' }}>
             <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>Add a Completed Vehicle</div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px' }}>
               For a vehicle that was installed but never scanned. It&apos;s added to the job as completed, logged to the scan log, and credited to the crew you pick.
@@ -1931,7 +1931,7 @@ export default function CniJobDetailPage() {
         }}>
           <div style={{
             background: 'var(--card)', borderRadius: '16px', padding: '20px',
-            maxWidth: '400px', width: '100%', maxHeight: '80vh', overflowY: 'auto',
+            maxWidth: '400px', width: '100%', maxHeight: 'calc(80vh / var(--ts))', overflowY: 'auto',
             border: '1px solid var(--border)',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>

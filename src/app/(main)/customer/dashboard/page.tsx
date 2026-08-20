@@ -232,7 +232,7 @@ export default function CustomerDashboardPage() {
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', cursor: 'zoom-out' }}
         >
           {/* eslint-disable-next-line @next/next/no-img-element -- external storage URL */}
-          <img src={lightbox} alt="Completed work" style={{ maxWidth: '100%', maxHeight: '90vh', borderRadius: '10px' }} />
+          <img src={lightbox} alt="Completed work" style={{ maxWidth: '100%', maxHeight: 'calc(90vh / var(--ts))', borderRadius: '10px' }} />
         </div>
       )}
       <div style={{ height: '80px' }} />

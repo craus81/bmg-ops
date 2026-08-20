@@ -132,7 +132,7 @@ export default function CustomerDefaultsEditor({ initial, customerId, customerNa
         style={{
           background: 'var(--card)', borderRadius: '14px',
           padding: '18px', maxWidth: '520px', width: '100%',
-          maxHeight: '90vh', overflow: 'auto', border: '1px solid var(--border)',
+          maxHeight: 'calc(90vh / var(--ts))', overflow: 'auto', border: '1px solid var(--border)',
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>

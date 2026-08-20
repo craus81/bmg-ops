@@ -32,10 +32,20 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    // suppressHydrationWarning: the pre-paint script below stamps
+    // data-textsize on <html> before React hydrates.
+    <html lang="en" suppressHydrationWarning>
       <head>
         <link rel="apple-touch-icon" href="/icon-192.png" />
         <script dangerouslySetInnerHTML={{ __html: `
+          // Apply the saved text size before first paint so the page doesn't
+          // visibly re-zoom on load. ThemeProvider takes over after mount.
+          try {
+            var ts = localStorage.getItem('bmg-text-size');
+            if (ts === 'large' || ts === 'xl') {
+              document.documentElement.setAttribute('data-textsize', ts);
+            }
+          } catch (e) {}
           if ('serviceWorker' in navigator) {
             window.addEventListener('load', function() {
               navigator.serviceWorker.register('/sw.js').catch(function(err) {

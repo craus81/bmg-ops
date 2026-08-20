@@ -1447,7 +1447,7 @@ export default function TrackingPage() {
                       style={{
                         position: 'fixed', top: '50%', left: '50%',
                         transform: 'translate(-50%, -50%)',
-                        width: 'min(720px, 96vw)', maxHeight: '92vh',
+                        width: 'min(720px, calc(96vw / var(--ts)))', maxHeight: 'calc(92vh / var(--ts))',
                         overflow: 'auto',
                         background: 'var(--card)', borderRadius: '14px',
                         boxShadow: '0 24px 60px rgba(0,0,0,0.35)',

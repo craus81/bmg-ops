@@ -18,7 +18,7 @@ export default function UploadProgressBar({ progress }: { progress: UploadProgre
   const pct = progress.total > 0 ? Math.min(100, Math.round((progress.loaded / progress.total) * 100)) : 0;
   const mb = (n: number) => n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
   return (
-    <div style={{ position: 'fixed', bottom: '18px', left: '50%', transform: 'translateX(-50%)', zIndex: 3000, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', boxShadow: '0 8px 30px rgba(0,0,0,0.35)', padding: '10px 14px', width: 'min(440px, calc(100vw - 32px))' }}>
+    <div style={{ position: 'fixed', bottom: '18px', left: '50%', transform: 'translateX(-50%)', zIndex: 3000, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', boxShadow: '0 8px 30px rgba(0,0,0,0.35)', padding: '10px 14px', width: 'min(440px, calc(100vw / var(--ts) - 32px))' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px', fontSize: '11px', marginBottom: '6px' }}>
         <span style={{ fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           Uploading {progress.fileName}{progress.fileCount > 1 ? ` (${progress.fileIndex} of ${progress.fileCount})` : ''}

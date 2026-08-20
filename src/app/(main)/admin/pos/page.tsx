@@ -2466,7 +2466,7 @@ export default function POsPage() {
       {/* Email PO Review/Edit Panel */}
       {reviewingExtraction && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
-          <div style={{ background: 'var(--card)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px', width: '100%', maxWidth: reviewingExtraction.pdf && reviewPdfOpen ? 'min(1280px, 96vw)' : '520px', height: reviewingExtraction.pdf && reviewPdfOpen ? '88vh' : 'auto', maxHeight: '88vh', display: 'flex', alignItems: 'stretch', overflow: 'hidden' }}>
+          <div style={{ background: 'var(--card)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px', width: '100%', maxWidth: reviewingExtraction.pdf && reviewPdfOpen ? 'min(1280px, calc(96vw / var(--ts)))' : '520px', height: reviewingExtraction.pdf && reviewPdfOpen ? 'calc(88vh / var(--ts))' : 'auto', maxHeight: 'calc(88vh / var(--ts))', display: 'flex', alignItems: 'stretch', overflow: 'hidden' }}>
             {/* Form pane (scrolls independently of the PDF pane) */}
             <div style={{ padding: '18px', overflowY: 'auto', flex: reviewingExtraction.pdf && reviewPdfOpen ? '0 1 520px' : '1 1 auto', minWidth: '300px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
@@ -2730,7 +2730,7 @@ export default function POsPage() {
       {/* PO Overwrite Confirmation Dialog */}
       {showOverwriteConfirm && overwriteData && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
-          <div style={{ background: 'var(--card)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '14px', padding: '18px', maxWidth: '420px', width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
+          <div style={{ background: 'var(--card)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '14px', padding: '18px', maxWidth: '420px', width: '100%', maxHeight: 'calc(80vh / var(--ts))', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <div>
                 <div style={{ fontSize: '15px', fontWeight: 800, color: '#fbbf24' }}>PO #{overwriteData.poNumber} Already Exists</div>

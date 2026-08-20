@@ -137,15 +137,15 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
             className={active ? undefined : 'bottom-nav-tab'}
             onClick={() => router.push(tab.path)}
             style={{
-              flex: 1, padding: '4px 2px', display: 'flex',
+              flex: 1, padding: '6px 2px', display: 'flex',
               flexDirection: 'column',
               alignItems: 'center', justifyContent: 'center',
-              gap: '1px',
+              gap: '2px',
               borderRadius: '6px',
               background: active ? 'rgba(59,130,246,0.15)' : 'transparent',
               border: active ? '1px solid rgba(59,130,246,0.35)' : '1px solid transparent',
               color: active ? '#60a5fa' : theme.textMuted,
-              fontSize: '8px',
+              fontSize: '10px',
               fontWeight: active ? 800 : 600,
               letterSpacing: '0.01em',
               cursor: 'pointer',
@@ -154,8 +154,11 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
               transition: 'all 0.15s',
             }}
           >
-            {Icon && <Icon size={16} strokeWidth={active ? 2.5 : 2} />}
-            {tab.label}
+            {Icon && <Icon size={22} strokeWidth={active ? 2.5 : 2} />}
+            {/* Ellipsis guard: with 8 tabs on a narrow phone the longest
+                labels (Customers, Estimates) can exceed their slot at 10px —
+                clip visually, screen readers still get the full text. */}
+            <span style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tab.label}</span>
           </button>
         );
       })}

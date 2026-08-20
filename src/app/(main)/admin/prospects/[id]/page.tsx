@@ -2185,7 +2185,7 @@ export default function CustomerRecordPage() {
         <div onClick={() => !editSaving && setEditOpen(false)}
           style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Edit record"
-            style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', width: 'min(560px, 100%)', maxHeight: '90vh', overflowY: 'auto' }}>
+            style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', width: 'min(560px, 100%)', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto' }}>
             <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '12px' }}>Edit record</div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
               <input style={{ ...cInput, gridColumn: '1 / -1' }} placeholder="Company name *" value={editForm.company_name} onChange={e => setEditForm({ ...editForm, company_name: e.target.value })} />

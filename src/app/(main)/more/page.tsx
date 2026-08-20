@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useTheme } from '@/components/ThemeProvider';
+import TextSizeToggle from '@/components/TextSizeToggle';
 import { createClient } from '@/lib/supabase-browser';
 
 export default function MorePage() {
@@ -154,6 +155,15 @@ export default function MorePage() {
             Currently showing {resolvedTheme} (matches your device)
           </div>
         )}
+
+        {/* Text Size */}
+        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px', marginTop: '16px', marginBottom: '10px' }}>
+          Text Size
+        </div>
+        <TextSizeToggle />
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px', textAlign: 'center' }}>
+          Makes everything on this device larger and easier to read
+        </div>
       </div>
 
       {/* Profile */}
