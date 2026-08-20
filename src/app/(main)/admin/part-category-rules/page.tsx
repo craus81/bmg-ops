@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
+import NumberInput from '@/components/NumberInput';
 import { MATCH_FIELDS, type MatchField, type MatchType } from '@/lib/part-category-rules';
 
 // Tagging rules for the catalog browser's product categories (migration
@@ -319,8 +320,8 @@ export default function PartCategoryRulesPage() {
           </div>
           <div>
             <div style={label}>Priority</div>
-            <input
-              type="number" min={0} max={10000} value={form.priority}
+            <NumberInput
+              min={0} max={10000} value={form.priority}
               onChange={e => { setForm(f => ({ ...f, priority: Number(e.target.value) })); setPreview(null); }}
               style={input}
             />

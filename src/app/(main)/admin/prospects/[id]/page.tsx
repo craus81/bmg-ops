@@ -42,6 +42,7 @@ import { fetchCompanyLetterhead, type CompanyLetterhead } from '@/lib/company-pr
 import { AGE_META } from '@/components/FinancialsDrilldown';
 import type { OpenArInvoice, AgingBucketKey, StatementInvoice, StatementScope } from '@/lib/financials-data';
 import { fetchAllRows } from '@/lib/fetch-all';
+import NumberInput from '@/components/NumberInput';
 
 interface Prospect {
   id: string;
@@ -2211,7 +2212,7 @@ export default function CustomerRecordPage() {
               </div>
               <div>
                 <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Locations</div>
-                <input style={cInput} type="number" min={1} value={editForm.location_count} onChange={e => setEditForm({ ...editForm, location_count: parseInt(e.target.value) || 1 })} />
+                <NumberInput style={cInput} min={1} value={editForm.location_count} onChange={e => setEditForm({ ...editForm, location_count: parseInt(e.target.value) || 1 })} />
               </div>
               <div style={{ gridColumn: '1 / -1' }}>
                 <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Record type</div>

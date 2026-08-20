@@ -13,6 +13,7 @@ import { isVerizonRfidPart } from '@/lib/rfid';
 import InstallerPreviewBanner from '@/components/InstallerPreviewBanner';
 import { getInstallerPreview } from '@/lib/installer-preview';
 import JobAttachments from '@/components/JobAttachments';
+import NumberInput from '@/components/NumberInput';
 
 const STATUS_LABELS: Record<string, string> = {
   assigned_awaiting_scheduling: 'Awaiting Schedule from BMG',
@@ -915,8 +916,8 @@ export default function InstallerJobDetailPage() {
                     {checked && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                         <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>share</span>
-                        <input
-                          type="number" min="0.5" step="0.5" value={crewDraft.get(id)}
+                        <NumberInput
+                          min="0.5" step="0.5" value={crewDraft.get(id)}
                           onChange={e => {
                             const w = parseFloat(e.target.value);
                             if (!isNaN(w) && w > 0) setCrewDraft(new Map(crewDraft).set(id, w));

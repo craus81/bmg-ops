@@ -22,6 +22,7 @@ import { printPos } from '@/lib/po-print';
 import { PART_FIELDS, partToCatalogItem, findOrCreateManualPart } from '@/lib/parts-catalog';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
+import NumberInput from '@/components/NumberInput';
 
 interface ImportLine extends ParsedPOLine {
   catalog_match: CatalogItem | null;
@@ -2637,8 +2638,7 @@ export default function POsPage() {
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
                     <div>
                       <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', marginBottom: '2px' }}>Qty</div>
-                      <input
-                        type="number"
+                      <NumberInput
                         value={line.quantity ?? ''}
                         onChange={e => updateReviewLine(idx, 'quantity', parseInt(e.target.value) || 0)}
                         style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px' }}
@@ -2646,8 +2646,7 @@ export default function POsPage() {
                     </div>
                     <div>
                       <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', marginBottom: '2px' }}>Unit Price</div>
-                      <input
-                        type="number"
+                      <NumberInput
                         step="0.01"
                         value={line.unit_price ?? ''}
                         onChange={e => updateReviewLine(idx, 'unit_price', parseFloat(e.target.value) || 0)}
@@ -3172,8 +3171,7 @@ export default function POsPage() {
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
                   <div style={{ flex: 1, fontSize: '13px', fontWeight: 700 }}>{li.part_number}</div>
                   <div style={{ fontSize: '12px', color: 'var(--text-label)' }}>{fmt(li.unit_price)}</div>
-                  <input
-                    type="number"
+                  <NumberInput
                     value={li.quantity}
                     onChange={(e) => {
                       const q = parseInt(e.target.value) || 1;

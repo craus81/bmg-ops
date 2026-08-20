@@ -11,6 +11,7 @@ import { isVerizonRfidPart, validateSerial, validateImei, validateIccid } from '
 import VinScanner from '@/components/VinScanner';
 import { theme } from '@/lib/theme';
 import RecordChanges from '@/components/RecordChanges';
+import NumberInput from '@/components/NumberInput';
 
 interface CniJob {
   id: string;
@@ -1901,7 +1902,7 @@ export default function CniJobDetailPage() {
                     style={{ width: '20px', height: '20px', borderRadius: '5px', flexShrink: 0, border: checked ? '2px solid var(--success)' : '2px solid var(--border)', background: checked ? 'var(--success)' : 'transparent', color: '#fff', fontSize: '12px', fontWeight: 800, cursor: 'pointer' }}>{checked ? '✓' : ''}</button>
                   <div style={{ flex: 1, fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{p.full_name}</div>
                   {checked && (
-                    <input type="number" min="0.5" step="0.5" value={addCrew.get(p.profile_id)}
+                    <NumberInput min="0.5" step="0.5" value={addCrew.get(p.profile_id)}
                       onChange={e => { const w = parseFloat(e.target.value); if (!isNaN(w) && w > 0) setAddCrew(new Map(addCrew).set(p.profile_id, w)); }}
                       style={{ width: '54px', padding: '5px 8px', borderRadius: '6px', fontSize: '13px', fontWeight: 700, textAlign: 'center', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)' }} />
                   )}

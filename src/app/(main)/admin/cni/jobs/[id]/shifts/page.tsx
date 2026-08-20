@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import NumberInput from '@/components/NumberInput';
 
 interface Member { profile_id: string; full_name: string; share_weight: number }
 interface Credit {
@@ -370,8 +371,8 @@ export default function CniJobShiftsPage() {
             {checked && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                 <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>share</span>
-                <input
-                  type="number" min="0.5" step="0.5" value={map.get(p.profile_id)}
+                <NumberInput
+                  min="0.5" step="0.5" value={map.get(p.profile_id)}
                   onChange={e => {
                     const w = parseFloat(e.target.value);
                     if (!isNaN(w) && w > 0) setMap(new Map(map).set(p.profile_id, w));

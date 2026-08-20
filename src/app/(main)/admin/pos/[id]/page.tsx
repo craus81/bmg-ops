@@ -31,6 +31,7 @@ import { findOrCreateManualPart } from '@/lib/parts-catalog';
 import { deepLinks } from '@/lib/deep-links';
 import type { PurchaseOrder, POLineItem, PoLocation, GraphicsJobStatus } from '@/lib/types';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
+import NumberInput from '@/components/NumberInput';
 
 type ShipTo = NonNullable<PurchaseOrder['ship_to']>;
 
@@ -1588,8 +1589,7 @@ export default function PoRecordPage() {
                           {li.description || '—'} · open {open} of {li.quantity} · ${li.unit_price.toFixed(2)}/ea
                         </div>
                       </div>
-                      <input
-                        type="number"
+                      <NumberInput
                         min={0}
                         max={open}
                         value={invoiceOpenQtys[li.id] ?? 0}

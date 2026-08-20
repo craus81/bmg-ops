@@ -16,6 +16,7 @@ import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import { resolvePlatform, matchQualifiersToConfig } from '@/lib/vin-platform';
 import { deepLinks } from '@/lib/deep-links';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
+import NumberInput from '@/components/NumberInput';
 
 interface Part {
   id: string;
@@ -1882,8 +1883,7 @@ export default function EstimatesPage() {
 
                   <div className="est-c-qty">
                     <div className="est-cell-label" style={{ textAlign: 'center' }}>Qty</div>
-                    <input
-                      type="number"
+                    <NumberInput
                       style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px', textAlign: 'center' }}
                       value={line.quantity}
                       onChange={e => updateLine(line.key, 'quantity', parseFloat(e.target.value) || 0)}
@@ -1893,8 +1893,7 @@ export default function EstimatesPage() {
 
                   <div className="est-c-price">
                     <div className="est-cell-label" style={{ textAlign: 'right' }}>Price</div>
-                    <input
-                      type="number"
+                    <NumberInput
                       style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px', textAlign: 'right' }}
                       value={line.unit_price}
                       onChange={e => updateLine(line.key, 'unit_price', parseFloat(e.target.value) || 0)}
@@ -2150,8 +2149,7 @@ export default function EstimatesPage() {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '10px' }}>
           <div>
             <div style={labelStyle}>Labor Rate ($/hr)</div>
-            <input
-              type="number"
+            <NumberInput
               style={inputStyle}
               value={laborRate}
               onChange={e => setLaborRate(parseFloat(e.target.value) || 0)}
@@ -2186,8 +2184,7 @@ export default function EstimatesPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
           <div style={{ flex: 1 }}>
             <div style={labelStyle}>Tax Rate</div>
-            <input
-              type="number"
+            <NumberInput
               style={inputStyle}
               value={(taxRate * 100).toFixed(2)}
               onChange={e => setTaxRate((parseFloat(e.target.value) || 0) / 100)}
