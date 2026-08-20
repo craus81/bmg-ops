@@ -25,10 +25,14 @@ import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { deepLinks } from '@/lib/deep-links';
 import PartCatalogBrowser, { BrowsePart, KitWithMembers } from '@/components/PartCatalogBrowser';
+import CustomerPicker from '@/components/CustomerPicker';
+import { apiFetch } from '@/lib/api-client';
+import { computeTotals } from '@/lib/estimate-totals';
+import { CompanyLetterhead, fetchCompanyLetterhead } from '@/lib/company-profile';
 import {
-  AutoLayoutEntry, InteriorGeometry, LayoutState, PlacedItem, UndoableLayout,
-  aggregateLines, autoLayout, checkpoint, emptyLayout, footprint, initialUndoable,
-  layoutWarnings, parseLayout, redo, snapPosition, undo, undoableApply,
+  AutoLayoutEntry, InteriorGeometry, LayoutState, TRADES, UndoableLayout,
+  aggregateLines, autoLayout, checkpoint, emptyLayout, estimateLinesFromLayout, footprint,
+  initialUndoable, layoutWarnings, parseLayout, redo, snapPosition, undo, undoableApply,
 } from '@/lib/upfit-layout';
 
 const UpfitSceneLazy = dynamic(() => import('@/components/upfit/UpfitScene'), {
@@ -53,10 +57,18 @@ interface DesignListRow {
   status: string; snapshot_path: string | null; estimate_id: string | null; updated_at: string;
 }
 
+interface TemplateRow {
+  id: string; name: string; trade: string | null;
+  wheelbase_label: string; roof_label: string;
+  snapshot_path: string | null; layout: unknown;
+}
+
 interface DesignMeta {
   id: string | null;
   name: string;
   customerId: string | null;
+  customerName: string;
+  customerNetsuiteId: string | null;
   platform: Platform | null;
   wheelbase: string;
   roof: string;
@@ -66,11 +78,18 @@ interface DesignMeta {
 }
 
 const BLANK_META: DesignMeta = {
-  id: null, name: '', customerId: null, platform: null,
-  wheelbase: '', roof: '', interior: null, status: 'draft', estimateId: null,
+  id: null, name: '', customerId: null, customerName: '', customerNetsuiteId: null,
+  platform: null, wheelbase: '', roof: '', interior: null, status: 'draft', estimateId: null,
 };
 
-type Step = 'home' | 'vehicle' | 'design';
+type Step = 'home' | 'vehicle' | 'package' | 'design' | 'review';
+
+// Match the estimate API's own defaults so the review totals equal what the
+// draft estimate will say (src/app/api/estimates/route.ts).
+const DEFAULT_TAX_RATE = 0.0795;
+const DEFAULT_LABOR_RATE = 85;
+
+interface SnapshotData { blob: Blob; dataUrl: string; width: number; height: number }
 
 const newUid = () => Math.random().toString(36).slice(2, 9);
 
@@ -115,6 +134,11 @@ export default function UpfitDesignerPage() {
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [sceneKey, setSceneKey] = useState(0);
+  const [templates, setTemplates] = useState<TemplateRow[] | null>(null);
+  const [templateModal, setTemplateModal] = useState<{ name: string; trade: string } | null>(null);
+  const [reviewSnapshot, setReviewSnapshot] = useState<SnapshotData | null>(null);
+  const [letterhead, setLetterhead] = useState<CompanyLetterhead | null>(null);
+  const [creatingEstimate, setCreatingEstimate] = useState(false);
   const dragMovedRef = useRef(false);
   const captureFnRef = useRef<(() => Promise<Blob | null>) | null>(null);
 
@@ -185,10 +209,17 @@ export default function UpfitDesignerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once when refs arrive
   }, [refsLoaded, searchParams]);
 
+  // Letterhead pre-fetched on load, not at click time — the PDF opens a
+  // window inside the click gesture and an await would trip popup blockers.
+  useEffect(() => {
+    if (authLoading || !user) return;
+    fetchCompanyLetterhead().then(setLetterhead);
+  }, [authLoading, user]);
+
   const openDesign = async (designId: string) => {
     const { data: row, error } = await supabase
       .from('upfit_designs')
-      .select('id, name, customer_id, platform_id, wheelbase_label, roof_label, interior_id, layout, status, estimate_id')
+      .select('id, name, customer_id, platform_id, wheelbase_label, roof_label, interior_id, layout, status, estimate_id, customers(company_name, netsuite_id)')
       .eq('id', designId)
       .maybeSingle();
     if (error || !row) {
@@ -199,13 +230,16 @@ export default function UpfitDesignerPage() {
     const interior = interiors.find(i => i.id === row.interior_id)
       || interiors.find(i => i.platform_id === row.platform_id && i.wheelbase_label === row.wheelbase_label && i.roof_label === row.roof_label)
       || null;
+    const customer = (row as any).customers as { company_name: string | null; netsuite_id: string | null } | null;
     setMeta({
-      id: row.id, name: row.name, customerId: row.customer_id, platform,
-      wheelbase: row.wheelbase_label, roof: row.roof_label, interior,
+      id: row.id, name: row.name, customerId: row.customer_id,
+      customerName: customer?.company_name || '', customerNetsuiteId: customer?.netsuite_id || null,
+      platform, wheelbase: row.wheelbase_label, roof: row.roof_label, interior,
       status: row.status, estimateId: row.estimate_id,
     });
     setUndoState(initialUndoable(parseLayout(row.layout)));
     setSelectedUid(null);
+    setReviewSnapshot(null);
     setDirty(false);
     setStep('design');
   };
@@ -225,8 +259,40 @@ export default function UpfitDesignerPage() {
       name: m.name || `${platform.label} ${combo.wheelbase_label}${combo.roof_label ? ` ${combo.roof_label}` : ''} upfit`,
     }));
     setDirty(true);
+    // Step 2: trade packages for this platform (or blank). Straight to the
+    // editor when this design already has a layout going.
+    if (undoState.present.items.length > 0 || undoState.present.unplaced.length > 0) {
+      setStep('design');
+    } else {
+      setTemplates(null);
+      loadTemplates(platform.id);
+      setStep('package');
+    }
+  };
+
+  const loadTemplates = async (platformId: string) => {
+    const { data } = await supabase
+      .from('upfit_designs')
+      .select('id, name, trade, wheelbase_label, roof_label, snapshot_path, layout')
+      .eq('is_template', true)
+      .eq('platform_id', platformId)
+      .order('trade')
+      .order('name')
+      .limit(100);
+    setTemplates((data as TemplateRow[]) || []);
+  };
+
+  /** Clone a template's layout into this design (fresh uids — the template
+   *  row itself must never be edited by accident). */
+  const applyTemplate = (t: TemplateRow) => {
+    const layout = parseLayout(t.layout);
+    const items = layout.items.map(i => ({ ...i, uid: newUid() }));
+    setUndoState(initialUndoable({ ...layout, items }));
+    setDirty(true);
     setStep('design');
   };
+
+  const tradeLabel = (key: string | null) => TRADES.find(t => t.key === key)?.label || key || 'General';
 
   // ── Layout ops ──
   const apply = useCallback((op: Parameters<typeof undoableApply>[1], opts?: { transient?: boolean }) => {
@@ -254,7 +320,8 @@ export default function UpfitDesignerPage() {
         const existing = unplaced.find(u => u.item_number === o.item_number);
         if (existing) existing.qty += o.qty;
         else unplaced.push({
-          part_id: o.part_id, item_number: o.item_number, label: o.label, category: o.category,
+          part_id: o.part_id, netsuite_item_id: o.netsuite_item_id ?? null,
+          item_number: o.item_number, label: o.label, category: o.category,
           qty: o.qty, unit_price: o.unit_price, labor_hours: o.labor_hours,
         });
       }
@@ -266,6 +333,7 @@ export default function UpfitDesignerPage() {
 
   const entryFromPart = (p: BrowsePart, qty: number): AutoLayoutEntry => ({
     part_id: p.id,
+    netsuite_item_id: p.netsuite_id,
     item_number: p.item_number,
     label: p.display_name || p.item_number,
     category: p.product_category_id ? categoriesById.get(p.product_category_id) || null : null,
@@ -282,7 +350,7 @@ export default function UpfitDesignerPage() {
     const entries = kit.members.map(m => entryFromPart(m.part, m.quantity));
     if (kit.labor_adder_hours > 0) {
       entries.push({
-        part_id: null, item_number: 'ASSEMBLY', label: `${kit.name} — assembly labor`,
+        part_id: null, netsuite_item_id: null, item_number: 'ASSEMBLY', label: `${kit.name} — assembly labor`,
         category: 'Labor & Services', w: 0, d: 0, h: 0, qty: 1,
         unit_price: 0, labor_hours: kit.labor_adder_hours, mount_type: null,
       });
@@ -379,17 +447,32 @@ export default function UpfitDesignerPage() {
   }, [step, doUndo, doRedo, rotateSelected, duplicateSelected, removeSelected, nudgeSelected]);
 
   // ── Persistence ──
+  /** upfit_designs.customer_id is the LOCAL customers.id; the picker hands
+   *  back a name + NetSuite id, so resolve when we can (non-fatal when not). */
+  const resolveCustomerId = async (): Promise<string | null> => {
+    if (meta.customerId) return meta.customerId;
+    if (!meta.customerNetsuiteId) return null;
+    const { data } = await supabase
+      .from('customers')
+      .select('id')
+      .eq('netsuite_id', meta.customerNetsuiteId)
+      .maybeSingle();
+    return data?.id || null;
+  };
+
   const saveDesign = async (): Promise<string | null> => {
     if (!meta.platform || !meta.interior) return null;
     setSaving(true);
     try {
+      const customerId = await resolveCustomerId();
+      if (customerId !== meta.customerId) setMeta(m => ({ ...m, customerId }));
       const layoutJson = JSON.parse(JSON.stringify(present));
       if (meta.id) {
         const { error } = await supabase
           .from('upfit_designs')
           .update({
             name: meta.name || 'Untitled design',
-            customer_id: meta.customerId,
+            customer_id: customerId,
             platform_id: meta.platform.id,
             wheelbase_label: meta.wheelbase,
             roof_label: meta.roof,
@@ -407,7 +490,7 @@ export default function UpfitDesignerPage() {
         .from('upfit_designs')
         .insert({
           name: meta.name || 'Untitled design',
-          customer_id: meta.customerId,
+          customer_id: customerId,
           platform_id: meta.platform.id,
           wheelbase_label: meta.wheelbase,
           roof_label: meta.roof,
@@ -431,20 +514,155 @@ export default function UpfitDesignerPage() {
     }
   };
 
-  // Design thumbnail: captured on save, non-fatal on failure (wrap-quote
-  // diagram pattern — timestamped path so caches never serve a stale one).
+  /** Capture the 3D view with the pixel size the PDF needs. Only possible
+   *  while the scene is mounted (design step) — review keeps the last one. */
+  const captureSnapshotData = async (): Promise<SnapshotData | null> => {
+    const fn = captureFnRef.current;
+    if (!fn) return null;
+    const blob = await fn();
+    if (!blob) return null;
+    const dataUrl = await new Promise<string>((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result as string);
+      r.onerror = () => rej(new Error('snapshot read failed'));
+      r.readAsDataURL(blob);
+    });
+    const dims = await new Promise<{ width: number; height: number }>((res, rej) => {
+      const img = new Image();
+      img.onload = () => res({ width: img.naturalWidth, height: img.naturalHeight });
+      img.onerror = () => rej(new Error('snapshot decode failed'));
+      img.src = dataUrl;
+    });
+    return { blob, dataUrl, ...dims };
+  };
+
+  const uploadSnapshot = async (designId: string, blob: Blob): Promise<string | null> => {
+    // Timestamped path so caches never serve a stale render (wrap-quote
+    // diagram pattern); failure is non-fatal everywhere this is used.
+    try {
+      const path = `upfit-designs/${designId}-${Date.now()}.png`;
+      const up = await storage.from('photos').upload(path, blob, { contentType: 'image/png', upsert: true });
+      if (up.error) return null;
+      await supabase.from('upfit_designs').update({ snapshot_path: path }).eq('id', designId);
+      return path;
+    } catch {
+      return null;
+    }
+  };
+
+  // Design thumbnail: captured on save, non-fatal on failure.
   const saveWithSnapshot = async () => {
     const id = await saveDesign();
-    if (!id || !captureFnRef.current) return;
+    if (!id) return;
     try {
-      const blob = await captureFnRef.current();
-      if (!blob) return;
-      const path = `upfit-designs/${id}-${Date.now()}.png`;
-      const up = await storage.from('photos').upload(path, blob, { contentType: 'image/png', upsert: true });
-      if (!up.error) {
-        await supabase.from('upfit_designs').update({ snapshot_path: path }).eq('id', id);
+      const snap = await captureSnapshotData();
+      if (snap) {
+        setReviewSnapshot(snap);
+        await uploadSnapshot(id, snap.blob);
       }
     } catch { /* thumbnail is a nice-to-have */ }
+  };
+
+  /** Leave the editor for Review & Quote — the capture must happen NOW,
+   *  while the canvas still exists. */
+  const goToReview = async () => {
+    try {
+      const snap = await captureSnapshotData();
+      if (snap) setReviewSnapshot(snap);
+    } catch { /* review degrades to text-only */ }
+    setStep('review');
+  };
+
+  // ── Save as template (trade package) ──
+  const saveTemplate = async () => {
+    if (!templateModal || !meta.platform || !meta.interior) return;
+    const name = templateModal.name.trim();
+    if (!name) return;
+    setSaving(true);
+    try {
+      const snap = await captureSnapshotData().catch(() => null);
+      const { data, error } = await supabase
+        .from('upfit_designs')
+        .insert({
+          name,
+          is_template: true,
+          trade: templateModal.trade || null,
+          platform_id: meta.platform.id,
+          wheelbase_label: meta.wheelbase,
+          roof_label: meta.roof,
+          interior_id: meta.interior.id,
+          layout: JSON.parse(JSON.stringify(present)),
+          created_by: profile?.id || null,
+        })
+        .select('id')
+        .single();
+      if (error) throw new Error(error.message);
+      if (snap) await uploadSnapshot(data.id, snap.blob);
+      setTemplateModal(null);
+      dialog.alert(`Template "${name}" saved — it now shows as a package option for every ${meta.platform.label} design.`);
+    } catch (err: any) {
+      dialog.alert(`Template save failed: ${err.message || err}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // ── Create the draft estimate (the Review & Quote handoff) ──
+  const createEstimate = async () => {
+    if (creatingEstimate) return;
+    setCreatingEstimate(true);
+    try {
+      const designId = await saveDesign();
+      if (!designId) return;
+      const res = await apiFetch('/api/estimates', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: meta.name || 'Upfit design',
+          customer_id: meta.customerId,
+          customer_name: meta.customerName || null,
+          customer_netsuite_id: meta.customerNetsuiteId,
+          status: 'draft',
+          vehicle_platform_id: meta.platform?.id || null,
+          vehicle_wheelbase: meta.wheelbase || null,
+          vehicle_roof: meta.roof || null,
+          line_items: estimateLinesFromLayout(present),
+          created_by: profile?.id || null,
+          internal_notes: `Created from 3D upfit design "${meta.name}".`,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok || body.error) throw new Error(body.error || `HTTP ${res.status}`);
+      await supabase
+        .from('upfit_designs')
+        .update({ estimate_id: body.id, status: 'quoted', updated_at: new Date().toISOString() })
+        .eq('id', designId);
+      if (reviewSnapshot) await uploadSnapshot(designId, reviewSnapshot.blob);
+      router.push(deepLinks.estimate(body.id));
+    } catch (err: any) {
+      dialog.alert(`Estimate creation failed: ${err.message || err}`);
+    } finally {
+      setCreatingEstimate(false);
+    }
+  };
+
+  const downloadPdf = async () => {
+    const linesNow = aggregateLines(latest.current.present);
+    const totals = computeTotals(
+      linesNow.map(l => ({ quantity: l.quantity, unit_price: l.unit_price, labor_hours: l.labor_hours })),
+      DEFAULT_TAX_RATE, false, DEFAULT_LABOR_RATE, null,
+    );
+    const { exportUpfitDesignPDF } = await import('@/lib/upfit-design-pdf');
+    exportUpfitDesignPDF({
+      designName: meta.name || 'Upfit design',
+      vehicle: vehicleLabel(meta.platform, meta.wheelbase, meta.roof),
+      customerName: meta.customerName || null,
+      snapshot: reviewSnapshot ? { dataUrl: reviewSnapshot.dataUrl, width: reviewSnapshot.width, height: reviewSnapshot.height } : null,
+      lines: linesNow,
+      totals,
+      taxExempt: false,
+      laborRate: DEFAULT_LABOR_RATE,
+      letterhead,
+    });
   };
 
   // ── Derived ──
@@ -562,7 +780,161 @@ export default function UpfitDesignerPage() {
     );
   }
 
-  // ═══ Step 2/3: the 3D editor ═══
+  // ═══ Step 2: trade package or blank layout ═══
+  if (step === 'package') {
+    return (
+      <div style={{ padding: '16px 0 40px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
+          <button style={btn()} onClick={() => setStep('vehicle')}>← Back</button>
+          <h1 style={{ fontSize: '20px', fontWeight: 800, margin: 0 }}>Start from a package?</h1>
+        </div>
+        <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '0 0 16px', lineHeight: 1.5 }}>
+          {vehicleLabel(meta.platform, meta.wheelbase, meta.roof)} — pick a trade package as a starting point, or begin with an
+          empty van. (Flat parts bundles are also available inside the catalog browser&apos;s Packages strip.)
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px' }}>
+          <div
+            onClick={() => setStep('design')}
+            style={{ ...card, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '180px', borderStyle: 'dashed' }}
+          >
+            <div style={{ fontSize: '28px', marginBottom: '6px' }}>▢</div>
+            <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>Blank layout</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Start with an empty van</div>
+          </div>
+          {templates === null && (
+            <div style={{ ...card, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '180px', color: 'var(--text-muted)', fontSize: '12px' }}>
+              Loading packages…
+            </div>
+          )}
+          {(templates || []).map(t => {
+            const differentCombo = t.wheelbase_label !== meta.wheelbase || t.roof_label !== meta.roof;
+            return (
+              <div key={t.id} onClick={() => applyTemplate(t)} style={{ ...card, padding: 0, overflow: 'hidden', cursor: 'pointer' }}>
+                <div style={{ height: '110px', background: 'var(--subtle-bg, rgba(127,127,127,0.08))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {t.snapshot_path
+                    ? <img src={imageUrl(t.snapshot_path)} alt={t.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    : <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No preview</span>}
+                </div>
+                <div style={{ padding: '10px 12px' }}>
+                  <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--accent, #2563eb)' }}>
+                    {tradeLabel(t.trade)}
+                  </div>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{t.name}</div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                    {parseLayout(t.layout).items.length} placed part{parseLayout(t.layout).items.length === 1 ? '' : 's'}
+                    {differentCombo && (
+                      <span style={{ color: 'var(--warning, #eab308)', fontWeight: 700 }}>
+                        {' '}· built for {t.wheelbase_label}{t.roof_label ? ` ${t.roof_label}` : ''} — check fit after applying
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          {templates !== null && templates.length === 0 && (
+            <div style={{ ...card, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '180px', color: 'var(--text-muted)', fontSize: '12px', textAlign: 'center', padding: '14px' }}>
+              No packages for this platform yet — design one and use &quot;Save as template&quot;.
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ═══ Step 4: Review & Quote ═══
+  if (step === 'review') {
+    const totals = computeTotals(
+      lines.map(l => ({ quantity: l.quantity, unit_price: l.unit_price, labor_hours: l.labor_hours })),
+      DEFAULT_TAX_RATE, false, DEFAULT_LABOR_RATE, null,
+    );
+    return (
+      <div style={{ padding: '16px 0 40px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px', flexWrap: 'wrap' }}>
+          <button style={btn()} onClick={() => setStep('design')}>← Back to design</button>
+          <h1 style={{ fontSize: '20px', fontWeight: 800, margin: 0 }}>Review &amp; Quote</h1>
+          <span style={{ flex: 1 }} />
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{meta.name} · {vehicleLabel(meta.platform, meta.wheelbase, meta.roof)}</span>
+        </div>
+
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          {/* Layout preview */}
+          <div style={{ flex: '1 1 380px', minWidth: '300px' }}>
+            <div style={{ ...card, padding: 0, overflow: 'hidden' }}>
+              {reviewSnapshot ? (
+                <img src={reviewSnapshot.dataUrl} alt="Layout" style={{ width: '100%', display: 'block' }} />
+              ) : (
+                <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
+                  No 3D capture — go back to the design step once so the view can be photographed.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Summary + actions */}
+          <div style={{ flex: '0 1 360px', minWidth: '280px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={card}>
+              <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-muted)', marginBottom: '6px' }}>Customer</div>
+              <CustomerPicker
+                value={meta.customerName}
+                netsuiteId={meta.customerNetsuiteId}
+                onChange={({ customer, customerNetsuiteId }) => {
+                  setMeta(m => ({ ...m, customerName: customer, customerNetsuiteId, customerId: null }));
+                  setDirty(true);
+                }}
+                placeholder="Search customers…"
+              />
+            </div>
+
+            <div style={card}>
+              <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                Parts ({lines.reduce((s, l) => s + l.quantity, 0)})
+              </div>
+              {lines.map(l => (
+                <div key={`${l.item_number}-${l.placed}`} style={{ display: 'flex', gap: '8px', fontSize: '12px', padding: '3px 0', color: 'var(--text-primary)' }}>
+                  <span style={{ fontWeight: 800, minWidth: '26px' }}>{l.quantity}×</span>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {l.description}{!l.placed && <span style={{ color: 'var(--warning, #eab308)' }}> *</span>}
+                  </span>
+                  <span style={{ fontWeight: 700 }}>{money(l.quantity * l.unit_price)}</span>
+                </div>
+              ))}
+              {lines.some(l => !l.placed) && (
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>* priced but not shown in 3D (no dimensions on file)</div>
+              )}
+              <div style={{ borderTop: '1px solid var(--border)', marginTop: '8px', paddingTop: '8px', fontSize: '12px', color: 'var(--text-primary)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}><span>Parts subtotal</span><span>{money(totals.subtotal)}</span></div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}><span>Labor ({totals.labor_hours} h @ {money(DEFAULT_LABOR_RATE)}/h)</span><span>{money(totals.labor_total)}</span></div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}><span>Tax</span><span>{money(totals.tax_amount)}</span></div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: '14px', fontWeight: 800 }}><span>Estimated total</span><span>{money(totals.grand_total)}</span></div>
+              </div>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Standard tax &amp; labor rates — final numbers live on the estimate.
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <button style={btn()} onClick={downloadPdf}>⬇ Download layout PDF</button>
+              {meta.estimateId ? (
+                <>
+                  <button style={btn('primary')} onClick={() => router.push(deepLinks.estimate(meta.estimateId!))}>Open estimate</button>
+                  <button style={btn(undefined, creatingEstimate)} disabled={creatingEstimate} onClick={createEstimate}>
+                    {creatingEstimate ? 'Creating…' : 'Create another estimate'}
+                  </button>
+                </>
+              ) : (
+                <button style={btn('primary', creatingEstimate || lines.length === 0)} disabled={creatingEstimate || lines.length === 0} onClick={createEstimate}>
+                  {creatingEstimate ? 'Creating…' : 'Create draft estimate →'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ═══ Step 3: the 3D editor ═══
   return (
     <div style={{ padding: '10px 0 30px' }}>
       {/* Header: name, vehicle, save */}
@@ -576,9 +948,17 @@ export default function UpfitDesignerPage() {
         />
         <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{vehicleLabel(meta.platform, meta.wheelbase, meta.roof)}</span>
         <button style={btn()} onClick={() => setStep('vehicle')}>Change vehicle</button>
-        <button style={btn('primary', saving)} disabled={saving} onClick={saveWithSnapshot}>
+        <button
+          style={btn()}
+          title="Save this layout as a reusable trade package for this platform"
+          onClick={() => setTemplateModal({ name: meta.name ? `${meta.name} package` : 'New package', trade: TRADES[0].key })}
+        >
+          Save as template
+        </button>
+        <button style={btn(undefined, saving)} disabled={saving} onClick={saveWithSnapshot}>
           {saving ? 'Saving…' : dirty ? 'Save' : 'Saved ✓'}
         </button>
+        <button style={btn('primary')} onClick={goToReview}>Review &amp; Quote →</button>
       </div>
 
       {/* Toolbar */}
@@ -683,6 +1063,38 @@ export default function UpfitDesignerPage() {
           </div>
         </div>
       </div>
+
+      {/* Save-as-template modal — a design becomes a trade package. */}
+      {templateModal && (
+        <div onClick={() => setTemplateModal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '16px' }}>
+          <div onClick={e => e.stopPropagation()} style={{ ...card, width: '100%', maxWidth: '380px', background: 'var(--bg, var(--card))' }}>
+            <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '10px' }}>Save as trade package</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: '12px' }}>
+              This layout (with 3D positions) becomes a starting option for every {meta.platform?.label} design.
+            </div>
+            <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-muted)', marginBottom: '4px' }}>Package name</div>
+            <input
+              value={templateModal.name}
+              onChange={e => setTemplateModal(m => m && { ...m, name: e.target.value })}
+              style={{ width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px', marginBottom: '10px' }}
+            />
+            <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-muted)', marginBottom: '4px' }}>Trade</div>
+            <select
+              value={templateModal.trade}
+              onChange={e => setTemplateModal(m => m && { ...m, trade: e.target.value })}
+              style={{ width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px', marginBottom: '14px' }}
+            >
+              {TRADES.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+            </select>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button style={btn()} onClick={() => setTemplateModal(null)}>Cancel</button>
+              <button style={btn('primary', saving || !templateModal.name.trim())} disabled={saving || !templateModal.name.trim()} onClick={saveTemplate}>
+                {saving ? 'Saving…' : 'Save package'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <PartCatalogBrowser
         open={browserOpen}

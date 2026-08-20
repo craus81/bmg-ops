@@ -66,6 +66,9 @@ export type Zone = 'floor' | 'wall_left' | 'wall_right' | 'ceiling';
 export interface PlacedItem {
   uid: string;
   part_id: string | null;
+  /** Snapshotted so a design → estimate → NetSuite push maps lines to real
+   *  NS items instead of the FS-CUSTOM fallback. */
+  netsuite_item_id?: string | null;
   item_number: string;
   label: string;
   category: string | null;
@@ -83,6 +86,7 @@ export interface PlacedItem {
  *  still rides the parts list, the PDF, and the estimate. */
 export interface UnplacedItem {
   part_id: string | null;
+  netsuite_item_id?: string | null;
   item_number: string;
   label: string;
   category: string | null;
@@ -336,6 +340,7 @@ export type TradeKey = (typeof TRADES)[number]['key'];
 
 export interface AutoLayoutEntry {
   part_id: string | null;
+  netsuite_item_id?: string | null;
   item_number: string;
   label: string;
   category: string | null;
@@ -378,7 +383,8 @@ export function autoLayout(
       let cz = entry.w / 2;
       while (cz + entry.w / 2 <= interior.cargo.length + EPS) {
         const candidate: PlacedItem = {
-          uid: '', part_id: entry.part_id, item_number: entry.item_number, label: entry.label,
+          uid: '', part_id: entry.part_id, netsuite_item_id: entry.netsuite_item_id ?? null,
+          item_number: entry.item_number, label: entry.label,
           category: entry.category, w: entry.w, d: entry.d, h: entry.h,
           pos: [cx, 0, cz], rot: 90, zone,
           unit_price: entry.unit_price, labor_hours: entry.labor_hours,
@@ -547,6 +553,7 @@ export function layoutWarnings(items: PlacedItem[], interior: InteriorGeometry):
 
 export interface AggregatedLine {
   part_id: string | null;
+  netsuite_item_id: string | null;
   item_number: string;
   description: string;
   quantity: number;
@@ -567,16 +574,34 @@ export function aggregateLines(layout: LayoutState): AggregatedLine[] {
     const line = byNumber.get(i.item_number);
     if (line) line.quantity += 1;
     else byNumber.set(i.item_number, {
-      part_id: i.part_id, item_number: i.item_number, description: i.label,
+      part_id: i.part_id, netsuite_item_id: i.netsuite_item_id ?? null,
+      item_number: i.item_number, description: i.label,
       quantity: 1, unit_price: i.unit_price ?? 0, labor_hours: i.labor_hours ?? 0, placed: true,
     });
   }
   const out = [...byNumber.values()];
   for (const u of layout.unplaced) {
     out.push({
-      part_id: u.part_id, item_number: u.item_number, description: u.label,
+      part_id: u.part_id, netsuite_item_id: u.netsuite_item_id ?? null,
+      item_number: u.item_number, description: u.label,
       quantity: u.qty, unit_price: u.unit_price ?? 0, labor_hours: u.labor_hours ?? 0, placed: false,
     });
   }
   return out;
+}
+
+/** The design's parts list in the exact shape POST /api/estimates accepts
+ *  as line_items — the whole Review & Quote handoff is one existing API
+ *  call with these lines. */
+export function estimateLinesFromLayout(layout: LayoutState) {
+  return aggregateLines(layout).map(l => ({
+    part_id: l.part_id,
+    netsuite_item_id: l.netsuite_item_id,
+    item_number: l.item_number || null,
+    description: l.description,
+    quantity: l.quantity,
+    unit_price: l.unit_price,
+    labor_hours: l.labor_hours,
+    is_custom: !l.part_id,
+  }));
 }
