@@ -40,6 +40,12 @@ export const deepLinks = {
    *  entering a new client to quoting them. */
   newEstimate: (customerId?: string | null) =>
     `/estimates?new=1${customerId ? `&customer=${customerId}` : ''}`,
+  /** 3D upfit designer — opens a saved design (page reads ?design=). */
+  upfitDesign: (designId: string) => `/upfit-designer?design=${designId}`,
+  /** 3D upfit designer — starts a fresh design, optionally pre-selecting the
+   *  vehicle platform and/or customer. */
+  newUpfitDesign: (opts?: { platformId?: string | null; customerId?: string | null }) =>
+    `/upfit-designer?new=1${opts?.platformId ? `&platform=${opts.platformId}` : ''}${opts?.customerId ? `&customer=${opts.customerId}` : ''}`,
   /** Parts page — opens the part's record: switches to its catalog tab,
    *  expands the row, scrolls to it, and highlights it (page reads ?part=). */
   part: (partId: string) => `/parts?part=${partId}`,

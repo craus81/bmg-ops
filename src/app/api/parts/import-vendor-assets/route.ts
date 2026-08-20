@@ -5,7 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { r2Upload } from '@/lib/r2';
 import { fetchAllRows } from '@/lib/fetch-all';
 import {
-  extractProduct, extractAllSkus, parseSitemapLocs, matchSkuToPart, skuKeys,
+  extractProduct, extractAllSkus, extractDimensions, parseSitemapLocs, matchSkuToPart, skuKeys,
   looksLikeProductUrl, looksLikeListingUrl, looksLikeProductUnder,
   extractSameOriginLinks, extractPaginationLinks, originVariants,
   skuCandidatesFromUrl, ensureScheme, nearMatchSkuToPart, diagnosePage,
@@ -105,7 +105,7 @@ async function fetchText(url: string, maxBytes = 2_000_000): Promise<string> {
   return (await fetchPage(url, maxBytes)).html;
 }
 
-interface MappedPart { item_number: string; vendor: string | null; is_active: boolean; image_path: string | null; marketing_description: string | null; product_url: string | null }
+interface MappedPart { item_number: string; vendor: string | null; is_active: boolean; image_path: string | null; marketing_description: string | null; product_url: string | null; width_in: number | null; depth_in: number | null; height_in: number | null; dims_source: string | null }
 
 /**
  * SKU lookup (id per skuKeys of item_number) over the WHOLE catalog —
@@ -121,7 +121,7 @@ interface MappedPart { item_number: string; vendor: string | null; is_active: bo
 async function buildPartMap(vendor?: string) {
   const { data: rows, error } = await fetchAllRows<any>((from, to) => supabase
     .from('netsuite_parts')
-    .select('id, item_number, vendor, is_active, image_path, marketing_description, product_url')
+    .select('id, item_number, vendor, is_active, image_path, marketing_description, product_url, width_in, depth_in, height_in, dims_source')
     .not('item_number', 'is', null)
     .order('id')
     .range(from, to));
@@ -354,6 +354,7 @@ export async function POST(req: NextRequest) {
     let imagesSaved = 0;
     let descriptionsSaved = 0;
     let vendorsSet = 0;
+    let dimsSaved = 0;
 
     // N4-B2: vendor pages name the vehicles a part fits ("Fits Transit 130"
     // and 148" WB", masterack ?vehicle= slugs, Ranger per-vehicle pages) —
@@ -368,6 +369,7 @@ export async function POST(req: NextRequest) {
       try {
         const html = await fetchText(url);
         const product = extractProduct(html, url);
+        const dims = extractDimensions(html);
         // Family pages carry a whole model line's part numbers — match every
         // SKU signal on the page (slug fallback when the page yields none).
         // Each match is still exact-or-dashless against item_number.
@@ -444,7 +446,7 @@ export async function POST(req: NextRequest) {
         const imported: string[] = [];
         for (const partId of inScopeIds) {
           const part = partById.get(partId)!;
-          const updates: Record<string, string> = {};
+          const updates: Record<string, string | number> = {};
           if (imgBuf && (body.overwrite || !part.image_path)) {
             const ext = imgType.includes('png') ? 'png' : imgType.includes('webp') ? 'webp' : 'jpg';
             const path = `parts/${partId}/vendor-${Date.now()}.${ext}`;
@@ -459,6 +461,27 @@ export async function POST(req: NextRequest) {
             updates.marketing_description = product.description;
             imported.push(`description→${part.item_number}`);
             descriptionsSaved++;
+          }
+          // Physical dims for the 3D upfit designer (migration 213): only a
+          // COMPLETE W×D×H set is worth writing (a partial can't place the
+          // part), only into blanks — and a manual set is never overwritten,
+          // even with the overwrite flag: vendor pages change, a human's
+          // tape measure doesn't.
+          if (dims && dims.widthIn != null && dims.depthIn != null && dims.heightIn != null) {
+            const blank = part.width_in == null && part.depth_in == null && part.height_in == null;
+            if (blank || (body.overwrite && part.dims_source !== 'manual')) {
+              updates.width_in = dims.widthIn;
+              updates.depth_in = dims.depthIn;
+              updates.height_in = dims.heightIn;
+              if (dims.weightLb != null) updates.weight_lb = dims.weightLb;
+              updates.dims_source = 'vendor_site';
+              part.width_in = dims.widthIn; // in-memory too — a later page in this batch matching the same part must see it filled
+              part.depth_in = dims.depthIn;
+              part.height_in = dims.heightIn;
+              part.dims_source = 'vendor_site';
+              imported.push(`dims→${part.item_number}`);
+              dimsSaved++;
+            }
           }
           // The page we matched this SKU on IS the vendor product page —
           // capture it so the enhanced estimate can link "View product".
@@ -524,7 +547,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ results, imagesSaved, descriptionsSaved, vendorsSet, fitmentTagged });
+    return NextResponse.json({ results, imagesSaved, descriptionsSaved, vendorsSet, dimsSaved, fitmentTagged });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message || 'Import failed' }, { status: 500 });
   }

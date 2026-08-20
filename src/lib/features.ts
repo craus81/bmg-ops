@@ -33,6 +33,7 @@ export const FEATURES = {
   catalog_management: 'Part Catalog Management',
   prospects: 'Customers (Sales CRM)',
   upfit_projects: 'Upfit Projects',
+  upfit_configurator: 'Upfit Designer (3D)',
   audit_log: 'Audit Log',
   system_health: 'System Health',
   ai_instructions: 'AI Instructions',
@@ -60,6 +61,7 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
   sales: [
     'home', 'fleet_checkin', 'in_shop', 'graphics', 'estimates',
     'time', 'messages', 'customers', 'parts_catalog', 'schedule', 'prospects', 'upfit_projects',
+    'upfit_configurator',
   ],
 
   graphics_production: [

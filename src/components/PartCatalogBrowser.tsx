@@ -39,7 +39,21 @@ export interface BrowsePart {
    *  did (migration 209). Manual always wins over the rules. */
   category_source?: string | null;
   image_path: string | null;
+  /** Installed footprint (migration 213). NULL width = not placeable in the
+   *  3D upfit designer; dims are written as a complete W×D×H set. */
+  width_in?: number | null;
+  depth_in?: number | null;
+  height_in?: number | null;
+  weight_lb?: number | null;
+  mount_type?: string | null;
+  dims_source?: string | null;
 }
+
+/** "52 × 14 × 46 in" — the card/record line for a dimensioned part. */
+export const dimsLabel = (p: Pick<BrowsePart, 'width_in' | 'depth_in' | 'height_in'>): string | null =>
+  p.width_in != null && p.depth_in != null && p.height_in != null
+    ? `${Number(p.width_in)} × ${Number(p.depth_in)} × ${Number(p.height_in)} in`
+    : null;
 
 interface Category { id: string; name: string; sort_order: number }
 
@@ -193,7 +207,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
         for (let i = 0; i < partIds.length; i += 200) {
           const { data: ps } = await supabase
             .from('netsuite_parts')
-            .select('id, netsuite_id, item_number, display_name, description, marketing_description, catalog, item_type, vendor, sales_price, purchase_price, avg_install_cost, labor_hours, quantity_available, product_category_id, category_source, image_path')
+            .select('id, netsuite_id, item_number, display_name, description, marketing_description, catalog, item_type, vendor, sales_price, purchase_price, avg_install_cost, labor_hours, quantity_available, product_category_id, category_source, image_path, width_in, depth_in, height_in, weight_lb, mount_type, dims_source')
             .in('id', partIds.slice(i, i + 200))
             .eq('is_active', true);
           for (const p of ps || []) partsById.set(p.id, p as BrowsePart);
@@ -681,6 +695,11 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                         {p.marketing_description || p.description}
                       </div>
                     )}
+                    {dimsLabel(p) && (
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                        {dimsLabel(p)}
+                      </div>
+                    )}
                   </div>
                   <span style={{ flex: 1 }} />
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -813,6 +832,8 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                 <RecordFact label="Sales Price" value={money(detail.sales_price)} strong />
                 <RecordFact label="Labor" value={(detail.labor_hours || 0) > 0 ? `${detail.labor_hours}h` : '—'} />
                 <RecordFact label="Qty Available" value={detail.quantity_available != null ? String(detail.quantity_available) : '—'} />
+                <RecordFact label="Dimensions (W×D×H)" value={dimsLabel(detail) || '—'} />
+                {detail.weight_lb != null && <RecordFact label="Weight" value={`${Number(detail.weight_lb)} lb`} />}
                 {isAdmin && <RecordFact label="Purchase Price" value={money(detail.purchase_price)} />}
                 {isAdmin && detail.avg_install_cost != null && <RecordFact label="Avg Installer Cost" value={money(detail.avg_install_cost)} />}
               </div>

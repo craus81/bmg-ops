@@ -41,6 +41,7 @@ export default function MorePage() {
       items: [
         { title: 'Customers', sub: 'Customers & sales pipeline', path: '/admin/prospects', show: F('prospects') },
         { title: 'Estimates', sub: 'Build estimates & push to NetSuite', path: '/estimates', show: F('estimates') },
+        { title: 'Upfit Designer', sub: 'Design a van upfit in 3D & turn it into an estimate', path: '/upfit-designer', show: F('upfit_configurator') },
         { title: 'Wrap Quotes', sub: 'Measure a vehicle template by hand & email the quote', path: '/admin/wrap-quote', show: isAdmin || isSales || isGraphicsProduction },
         { title: 'Quote Follow-Ups', sub: 'Sent quotes aging without an answer — chase, mark won or lost', path: '/admin/quote-followups', show: isAdmin || isSales },
         { title: 'Reports', sub: 'Sales by customer detail & other custom reports', path: '/admin/reports', show: F('reports') },
@@ -65,6 +66,8 @@ export default function MorePage() {
         { title: 'Parts Catalog', sub: 'Upfit & graphic parts from NetSuite', path: '/parts', show: F('parts_catalog') },
         { title: 'Inventory', sub: 'On hand · allocated to jobs · free · on order, at a glance', path: '/admin/inventory', show: F('parts_catalog') },
         { title: 'Part Tagging Rules', sub: 'Auto-categorize parts by vendor & name instead of one dropdown at a time', path: '/admin/part-category-rules', show: isAdmin },
+        { title: 'Part Dimensions', sub: 'Record W×D×H per part so the 3D Upfit Designer can place it', path: '/admin/part-dimensions', show: isAdmin },
+        { title: 'Vehicle Interiors', sub: 'Cargo geometry per wheelbase/roof — what the 3D designer draws', path: '/admin/vehicle-interiors', show: isAdmin },
         { title: 'Parts Mail', sub: 'Incoming parts & ETAs vs. stock and job allocations', path: '/admin/parts-mail', show: F('upfit_projects') },
         { title: 'Invoice Locations', sub: 'Backfill NetSuite invoice locations from the PO', path: '/admin/invoice-locations', show: isAdmin },
       ],

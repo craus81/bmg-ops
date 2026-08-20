@@ -28,6 +28,11 @@ const Schema = z.object({
   wheelbase: z.string().trim().max(20).regex(/^[A-Za-z0-9 .-]+$/).optional(),
   roof: z.string().trim().max(20).regex(/^[A-Za-z0-9 .-]+$/).optional(),
   sort: z.enum(['name', 'price_asc', 'price_desc']).optional(),
+  /** Dimension coverage filter (the /admin/part-dimensions authoring queue):
+   *  'missing' = no width yet (not placeable in the 3D designer), 'present'
+   *  = has one. width_in is the sentinel — dims are written as a complete
+   *  W×D×H set or not at all. */
+  dims: z.enum(['missing', 'present']).optional(),
   page: z.coerce.number().int().min(0).max(500).optional(),
 });
 
@@ -44,12 +49,12 @@ export async function GET(req: NextRequest) {
 
   const parsed = validateSearchParams(req, Schema);
   if (parsed.error) return parsed.error;
-  const { q, categoryId, uncategorized, vendor, catalog, platformId, wheelbase, roof, sort, page } = parsed.data;
+  const { q, categoryId, uncategorized, vendor, catalog, platformId, wheelbase, roof, sort, dims, page } = parsed.data;
 
   try {
     // A vehicle filter needs an inner join to part_fitment; without one the
     // select stays flat (no embedded arrays in the payload).
-    const baseColumns = 'id, netsuite_id, item_number, display_name, description, marketing_description, catalog, item_type, vendor, sales_price, purchase_price, avg_install_cost, labor_hours, quantity_available, product_category_id, category_source, image_path';
+    const baseColumns = 'id, netsuite_id, item_number, display_name, description, marketing_description, catalog, item_type, vendor, sales_price, purchase_price, avg_install_cost, labor_hours, quantity_available, product_category_id, category_source, image_path, width_in, depth_in, height_in, weight_lb, mount_type, dims_source';
     let query = supabase
       .from('netsuite_parts')
       .select(platformId ? `${baseColumns}, part_fitment!inner(platform_id)` : baseColumns, { count: 'exact' })
@@ -76,6 +81,8 @@ export async function GET(req: NextRequest) {
     else if (uncategorized) query = query.is('product_category_id', null);
     if (vendor) query = query.eq('vendor', vendor);
     if (catalog) query = query.eq('catalog', catalog);
+    if (dims === 'missing') query = query.is('width_in', null);
+    else if (dims === 'present') query = query.not('width_in', 'is', null);
 
     // Deterministic order with a unique tiebreaker per CLAUDE.md.
     if (sort === 'price_asc') query = query.order('sales_price', { ascending: true, nullsFirst: false }).order('id');
