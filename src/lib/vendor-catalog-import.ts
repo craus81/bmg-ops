@@ -496,6 +496,142 @@ export function originVariants(baseUrl: string): string[] {
   return hosts.map(h => `${u.protocol}//${h}`);
 }
 
+// ── Physical dimensions (upfit configurator, migration 213) ─────────────────
+
+export interface ExtractedDimensions {
+  widthIn?: number;
+  depthIn?: number;
+  heightIn?: number;
+  weightLb?: number;
+}
+
+/** Anything outside these bands is a scrape artifact (a SKU digit run, a
+ *  price, a year), not a shelving dimension — refuse it. */
+const dimSane = (n: number): boolean => Number.isFinite(n) && n >= 0.5 && n <= 300;
+const weightSane = (n: number): boolean => Number.isFinite(n) && n >= 0.1 && n <= 2000;
+
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+/** Unit → inches multiplier. UN/CEFACT codes (JSON-LD unitCode) and the
+ *  words/abbreviations sites put in unitText or prose. Default is inches —
+ *  US van-equipment vendors publish inches when they say nothing. */
+function lengthToInches(value: number, unit: string | null | undefined): number {
+  const u = (unit || '').trim().toUpperCase();
+  if (u === 'CMT' || u === 'CM' || u === 'CENTIMETER' || u === 'CENTIMETERS') return value / 2.54;
+  if (u === 'MMT' || u === 'MM' || u === 'MILLIMETER' || u === 'MILLIMETERS') return value / 25.4;
+  if (u === 'MTR' || u === 'M' || u === 'METER' || u === 'METERS') return value * 39.3701;
+  if (u === 'FOT' || u === 'FT' || u === 'FOOT' || u === 'FEET') return value * 12;
+  return value; // INH, IN, INCH, '', unknown → inches
+}
+
+function weightToPounds(value: number, unit: string | null | undefined): number {
+  const u = (unit || '').trim().toUpperCase();
+  if (u === 'KGM' || u === 'KG' || u === 'KILOGRAM' || u === 'KILOGRAMS') return value * 2.20462;
+  if (u === 'GRM' || u === 'G' || u === 'GRAM' || u === 'GRAMS') return value * 0.00220462;
+  if (u === 'ONZ' || u === 'OZ' || u === 'OUNCE' || u === 'OUNCES') return value / 16;
+  return value; // LBR, LB, LBS, '', unknown → pounds
+}
+
+/** A JSON-LD dimension: a bare number, a string ("48", "48 in", "121.9 cm"),
+ *  or a QuantitativeValue { value, unitCode?, unitText? }. */
+function qvToNumber(v: any, convert: (value: number, unit: string | null | undefined) => number): number | null {
+  if (v == null) return null;
+  if (typeof v === 'number') return convert(v, null);
+  if (typeof v === 'string') {
+    const m = v.match(/(\d+(?:\.\d+)?)\s*([a-z]*)/i);
+    return m ? convert(parseFloat(m[1]), m[2] || null) : null;
+  }
+  if (typeof v === 'object') {
+    const value = typeof v.value === 'number' ? v.value : parseFloat(String(v.value ?? ''));
+    if (!Number.isFinite(value)) return null;
+    return convert(value, v.unitCode || v.unitText || null);
+  }
+  return null;
+}
+
+/** Inch-ish number token: 52, 52.5, 52", 52″, 52 in, 52-1/2 stays out (mixed
+ *  fractions are rare on the pages we crawl and mis-parse as two numbers). */
+const NUM = '(\\d+(?:\\.\\d+)?)';
+const INCH_MARK = '(?:"|″|”|\\s*(?:in\\.?|inch(?:es)?))?';
+
+/**
+ * Physical dimensions off a vendor product page, most-declared first —
+ * same trust ladder as extractProduct:
+ *   1. JSON-LD Product width/depth/height/weight (QuantitativeValue-aware)
+ *   2. JSON-LD additionalProperty PropertyValue rows named Width/Depth/Height
+ *   3. Letter-tagged compact prose: 52"W x 14"D x 46"H (Ranger's format), in
+ *      any order, × or x, unicode inch marks included
+ *   4. Labeled prose: "Width: 52 in … Depth: 14 … Height: 46"
+ * Sources merge PER FIELD (a page may declare width in JSON-LD and the rest
+ * in prose); insane values (a year, a price) are dropped by range check.
+ * Returns null when no dimension survived — callers that need a placeable
+ * part gate on all three of width/depth/height being present.
+ */
+export function extractDimensions(html: string): ExtractedDimensions | null {
+  const out: ExtractedDimensions = {};
+  const setDim = (key: 'widthIn' | 'depthIn' | 'heightIn', val: number | null | undefined) => {
+    if (out[key] === undefined && val != null && dimSane(val)) out[key] = round2(val);
+  };
+
+  // 1. JSON-LD explicit dimension properties.
+  const ld = findJsonLdProduct(html);
+  if (ld) {
+    setDim('widthIn', qvToNumber(ld.width, lengthToInches));
+    setDim('depthIn', qvToNumber(ld.depth, lengthToInches));
+    setDim('heightIn', qvToNumber(ld.height, lengthToInches));
+    const wt = qvToNumber(ld.weight, weightToPounds);
+    if (wt != null && weightSane(wt)) out.weightLb = round2(wt);
+
+    // 2. additionalProperty PropertyValue rows.
+    const props = Array.isArray(ld.additionalProperty) ? ld.additionalProperty : ld.additionalProperty ? [ld.additionalProperty] : [];
+    for (const p of props) {
+      const name = String(p?.name || '').toLowerCase();
+      if (!name) continue;
+      if (/\bwidth\b/.test(name)) setDim('widthIn', qvToNumber(p.value ?? p, lengthToInches));
+      else if (/\bdepth\b/.test(name)) setDim('depthIn', qvToNumber(p.value ?? p, lengthToInches));
+      else if (/\bheight\b/.test(name)) setDim('heightIn', qvToNumber(p.value ?? p, lengthToInches));
+      else if (/\bweight\b/.test(name) && out.weightLb === undefined) {
+        const w = qvToNumber(p.value ?? p, weightToPounds);
+        if (w != null && weightSane(w)) out.weightLb = round2(w);
+      }
+    }
+  }
+
+  // 3 + 4. Prose, over the visible text (scripts/styles cut so a JSON blob's
+  // coordinates can't masquerade as inches).
+  const text = html.replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]*>/g, ' ');
+
+  // Letter-tagged tokens: 52"W / 14" D / 46 in H, joined by x/× or just
+  // nearby — capture each (number, letter) pair independently so any order
+  // works (52"W x 14"D x 46"H, 46"H x 52"W…).
+  for (const m of text.matchAll(new RegExp(`${NUM}\\s*${INCH_MARK}\\s*([WDH])(?:idth|epth|eight)?\\b`, 'gi'))) {
+    const val = parseFloat(m[1]);
+    const letter = m[2].toUpperCase();
+    if (letter === 'W') setDim('widthIn', val);
+    else if (letter === 'D') setDim('depthIn', val);
+    else if (letter === 'H') setDim('heightIn', val);
+  }
+
+  // Labeled prose: "Width: 52 in". The [^0-9]{0,12} gap absorbs colons,
+  // dashes and unit prefixes without jumping to an unrelated number.
+  const labeled = (label: string): number | null => {
+    const m = text.match(new RegExp(`\\b${label}\\b[^0-9]{0,12}${NUM}\\s*(cm|mm|in\\.?|inch(?:es)?|ft)?`, 'i'));
+    return m ? lengthToInches(parseFloat(m[1]), m[2] || null) : null;
+  };
+  setDim('widthIn', labeled('width'));
+  setDim('depthIn', labeled('depth'));
+  setDim('heightIn', labeled('height'));
+  if (out.weightLb === undefined) {
+    const m = text.match(new RegExp(`\\bweight\\b[^0-9]{0,12}${NUM}\\s*(kg|g|oz|lbs?|pounds?)?`, 'i'));
+    if (m) {
+      const w = weightToPounds(parseFloat(m[1]), m[2] || null);
+      if (weightSane(w)) out.weightLb = round2(w);
+    }
+  }
+
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 /**
  * Pagination links of a listing page: same-origin URLs on the same path
  * (or /page/N children) carrying a page indicator. Query is kept — ?page=2

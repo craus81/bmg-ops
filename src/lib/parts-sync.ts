@@ -280,6 +280,11 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
   }
 
   // ── Upsert, batches of 200, same row shape as the full sync.
+  // The fixed column list below is ALSO the protection for FleetSuite-owned
+  // columns (image_path, marketing_description, product_url,
+  // product_category_id, and the migration-213 dims: width_in/depth_in/
+  // height_in/weight_lb/mount_type/dims_source) — an upsert only writes the
+  // keys it names, so never add those columns here.
   const now = new Date().toISOString();
   let upserted = 0;
   for (const batch of chunk(active, 200)) {
