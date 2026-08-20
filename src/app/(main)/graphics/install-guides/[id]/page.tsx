@@ -614,30 +614,76 @@ export default function InstallGuideEditorPage() {
   };
 
   // ---- Export ----
+  // Shared checks + generation for downloads, CNI-job attach, and email.
+  const confirmUncalibrated = async (): Promise<boolean> => {
+    if (!guide) return false;
+    const uncalibrated = guide.pages.filter(p => !p.px_per_in && p.dims.some(d => d.kind === 'dim'));
+    if (uncalibrated.length === 0) return true;
+    return dialog.confirm(
+      `${uncalibrated.map(p => `"${p.name}"`).join(', ')} ${uncalibrated.length === 1 ? 'has' : 'have'} dimension lines but no calibration — those labels will export as "—". Export anyway?`,
+      { confirmLabel: 'Export anyway' },
+    );
+  };
+
+  const renderAllPages = async (): Promise<RenderedGuidePage[]> => {
+    if (!guide) return [];
+    const rendered: RenderedGuidePage[] = [];
+    for (const page of guide.pages) {
+      const r = await renderGuidePage(page, imgUrl(page.image_path), guide.units, guide.fraction_denominator);
+      if (!r) throw new Error(`Couldn't render "${page.name}" — the page image failed to load.`);
+      rendered.push({ page, dataUrl: r.dataUrl, w: r.w, h: r.h });
+    }
+    return rendered;
+  };
+
+  /**
+   * Build one of the two deliverables as raw PDF bytes: 'proof' rebuilds
+   * the original proof deck with the dimensioned pages in place; 'guide'
+   * is the standalone BMG guide deck. Throws with a user-readable message.
+   */
+  const generatePdfBytes = async (kind: 'proof' | 'guide'): Promise<{ bytes: ArrayBuffer; fileName: string }> => {
+    if (!guide) throw new Error('Guide not loaded.');
+    if (guide.pages.length === 0) throw new Error('Add at least one template page first.');
+    const rendered = await renderAllPages();
+    if (kind === 'proof') {
+      const sourcePath = baseSourcePath(guide.pages);
+      if (!sourcePath) throw new Error('No pages were imported from a proof PDF.');
+      const res = await fetch(imgUrl(sourcePath));
+      if (!res.ok) throw new Error(`Couldn't load the stored proof PDF (${res.status}).`);
+      const sourceBytes = await res.arrayBuffer();
+      const bytes = await buildDimensionedProofPdf(guide, rendered, sourceBytes, sourcePath, proofMode);
+      // Copy into a plain ArrayBuffer so Blob/File constructors take it as-is.
+      const buf = new ArrayBuffer(bytes.byteLength);
+      new Uint8Array(buf).set(bytes);
+      return { bytes: buf, fileName: dimensionedProofFileName(guide) };
+    }
+    const doc = buildInstallGuidePdf(guide, rendered, letterhead);
+    return { bytes: doc.output('arraybuffer'), fileName: installGuideFileName(guide) };
+  };
+
+  const downloadBytes = (bytes: ArrayBuffer, fileName: string) => {
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  };
+
   const exportPdf = async () => {
     if (!guide) return;
     if (guide.pages.length === 0) {
       await dialog.alert('Add at least one template page before exporting.', { title: 'Nothing to export' });
       return;
     }
-    const uncalibrated = guide.pages.filter(p => !p.px_per_in && p.dims.some(d => d.kind === 'dim'));
-    if (uncalibrated.length > 0) {
-      const ok = await dialog.confirm(
-        `${uncalibrated.map(p => `"${p.name}"`).join(', ')} ${uncalibrated.length === 1 ? 'has' : 'have'} dimension lines but no calibration — those labels will export as "—". Export anyway?`,
-        { confirmLabel: 'Export anyway' },
-      );
-      if (!ok) return;
-    }
+    if (!(await confirmUncalibrated())) return;
     setExporting(true);
     try {
-      const rendered: RenderedGuidePage[] = [];
-      for (const page of guide.pages) {
-        const r = await renderGuidePage(page, imgUrl(page.image_path), guide.units, guide.fraction_denominator);
-        if (!r) throw new Error(`Couldn't render "${page.name}" — the page image failed to load.`);
-        rendered.push({ page, dataUrl: r.dataUrl, w: r.w, h: r.h });
-      }
-      const doc = buildInstallGuidePdf(guide, rendered, letterhead);
-      doc.save(installGuideFileName(guide));
+      const { bytes, fileName } = await generatePdfBytes('guide');
+      downloadBytes(bytes, fileName);
     } catch (err: any) {
       await dialog.alert(err?.message || 'Export failed.', { title: 'Export failed' });
     }
@@ -647,38 +693,12 @@ export default function InstallGuideEditorPage() {
   // Rebuild the ORIGINAL proof deck with the dimensioned pages swapped in
   // (or inserted after) the pages they were imported from.
   const exportProofPdf = async () => {
-    if (!guide) return;
-    const sourcePath = baseSourcePath(guide.pages);
-    if (!sourcePath) return;
-    const uncalibrated = guide.pages.filter(p => !p.px_per_in && p.dims.some(d => d.kind === 'dim'));
-    if (uncalibrated.length > 0) {
-      const ok = await dialog.confirm(
-        `${uncalibrated.map(p => `"${p.name}"`).join(', ')} ${uncalibrated.length === 1 ? 'has' : 'have'} dimension lines but no calibration — those labels will export as "—". Export anyway?`,
-        { confirmLabel: 'Export anyway' },
-      );
-      if (!ok) return;
-    }
+    if (!guide || !baseSourcePath(guide.pages)) return;
+    if (!(await confirmUncalibrated())) return;
     setExportingProof(true);
     try {
-      const res = await fetch(imgUrl(sourcePath));
-      if (!res.ok) throw new Error(`Couldn't load the stored proof PDF (${res.status}).`);
-      const sourceBytes = await res.arrayBuffer();
-      const rendered: RenderedGuidePage[] = [];
-      for (const page of guide.pages) {
-        const r = await renderGuidePage(page, imgUrl(page.image_path), guide.units, guide.fraction_denominator);
-        if (!r) throw new Error(`Couldn't render "${page.name}" — the page image failed to load.`);
-        rendered.push({ page, dataUrl: r.dataUrl, w: r.w, h: r.h });
-      }
-      const bytes = await buildDimensionedProofPdf(guide, rendered, sourceBytes, sourcePath, proofMode);
-      const blob = new Blob([bytes as unknown as BlobPart], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = dimensionedProofFileName(guide);
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      const { bytes, fileName } = await generatePdfBytes('proof');
+      downloadBytes(bytes, fileName);
     } catch (err: any) {
       await dialog.alert(err?.message || 'Export failed.', { title: 'Export failed' });
     }
