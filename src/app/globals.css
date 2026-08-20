@@ -22,6 +22,25 @@ html, body {
   box-sizing: border-box !important;
 }
 
+/* ===== TEXT SIZE (Regular / Large / XL) =====
+   Chosen on the More page (staff) / Settings (customers), persisted in
+   localStorage as 'bmg-text-size', stamped as data-textsize on <html> by
+   ThemeProvider (and a pre-paint script in layout.tsx). CSS zoom scales all
+   the app's px-based inline styles — text, icons, paddings — and reflows
+   layout, unlike pinch-zoom.
+
+   --ts mirrors the zoom factor because zoom also multiplies viewport units:
+   an inline `maxHeight: '90vh'` would render at 117% of the screen at XL.
+   Inline styles must therefore write viewport lengths as
+   `calc(90vh / var(--ts))` — the zoom multiplies it back to exactly 90% of
+   the real viewport (and to a no-op at Regular). Keep the two values in
+   lockstep with TEXT_SIZE_ZOOM in src/lib/text-size.ts. */
+:root { --ts: 1; }
+[data-textsize="large"] { --ts: 1.15; }
+[data-textsize="xl"] { --ts: 1.3; }
+[data-textsize="large"] body { zoom: 1.15; }
+[data-textsize="xl"] body { zoom: 1.3; }
+
 /* ===== DARK THEME (default) ===== */
 :root {
   --navy: #1e4a5e;

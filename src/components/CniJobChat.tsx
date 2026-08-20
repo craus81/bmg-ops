@@ -108,7 +108,7 @@ export default function CniJobChat({ jobId, userId, backPath, jobNumber, jobTitl
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 120px)' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh / var(--ts) - 120px)' }}>
       {/* Header */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: '12px', padding: '0 0 14px 0',

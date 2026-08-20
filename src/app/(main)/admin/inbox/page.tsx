@@ -217,7 +217,7 @@ export default function AdminInboxPage() {
           ) : threads.length === 0 ? (
             <div style={{ padding: '28px', color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center' }}>No threads in this view.</div>
           ) : (
-            <div style={{ maxHeight: '72vh', overflow: 'auto' }}>
+            <div style={{ maxHeight: 'calc(72vh / var(--ts))', overflow: 'auto' }}>
               {threads.map(t => {
                 const selected = selectedId === t.id;
                 const preview = t.latestMessage?.body?.slice(0, 80) || (t.subject || '(no messages)');
@@ -259,7 +259,7 @@ export default function AdminInboxPage() {
         </div>
 
         {/* Detail panel */}
-        <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', minHeight: '60vh', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', minHeight: 'calc(60vh / var(--ts))', display: 'flex', flexDirection: 'column' }}>
           {!selectedId ? (
             <div style={{ padding: '40px', color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center' }}>
               Select a thread to view the conversation.
@@ -313,7 +313,7 @@ export default function AdminInboxPage() {
               </div>
 
               {/* Message list */}
-              <div ref={threadContainerRef} style={{ flex: 1, padding: '14px', overflow: 'auto', minHeight: '300px', maxHeight: '55vh', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div ref={threadContainerRef} style={{ flex: 1, padding: '14px', overflow: 'auto', minHeight: '300px', maxHeight: 'calc(55vh / var(--ts))', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 {detail.messages.length === 0 && (
                   <div style={{ color: 'var(--text-muted)', fontSize: '12px', textAlign: 'center' }}>No messages yet.</div>
                 )}

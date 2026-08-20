@@ -251,7 +251,7 @@ export default function EstimateApprovalPage() {
 
 function Frame({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ minHeight: '100vh', background: '#f1f5f9', padding: '20px 16px' }}>
+    <div style={{ minHeight: 'calc(100vh / var(--ts))', background: '#f1f5f9', padding: '20px 16px' }}>
       <div style={{ maxWidth: '640px', margin: '0 auto', background: '#fff', borderRadius: '14px', padding: '22px', border: '1px solid #e2e8f0' }}>
         {children}
       </div>

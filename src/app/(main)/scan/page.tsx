@@ -1126,9 +1126,9 @@ export default function ScanPage() {
             }}>
               <button onClick={() => setShowProof(null)} style={{ position: 'absolute', top: '12px', right: '16px', padding: '8px 14px', borderRadius: '10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', fontSize: '12px', fontWeight: 700, zIndex: 210 }}>✕ Close</button>
               {showProof.toLowerCase().includes('.pdf') ? (
-                <iframe src={showProof} style={{ width: '100%', maxWidth: '600px', height: '80vh', borderRadius: '8px', border: 'none' }} />
+                <iframe src={showProof} style={{ width: '100%', maxWidth: '600px', height: 'calc(80vh / var(--ts))', borderRadius: '8px', border: 'none' }} />
               ) : (
-                <img src={showProof} alt="Proof" style={{ maxWidth: '100%', maxHeight: '90vh', objectFit: 'contain', borderRadius: '8px' }} onClick={e => e.stopPropagation()} />
+                <img src={showProof} alt="Proof" style={{ maxWidth: '100%', maxHeight: 'calc(90vh / var(--ts))', objectFit: 'contain', borderRadius: '8px' }} onClick={e => e.stopPropagation()} />
               )}
             </div>
           )}
@@ -1245,7 +1245,7 @@ export default function ScanPage() {
           {/* Crew tag checklist (field installers; weights default to an even split) */}
           {crewOpen && (
             <div onClick={() => setCrewOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-              <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: theme.card, borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: '92vh', overflowY: 'auto' }}>
+              <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: theme.card, borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: 'calc(92vh / var(--ts))', overflowY: 'auto' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                   <div style={{ fontSize: '15px', fontWeight: 800, color: theme.textPrimary }}>Who&apos;s working this shift?</div>
                   <button onClick={() => setCrewOpen(false)} style={{ fontSize: '12px', fontWeight: 700, color: theme.textMuted, background: 'transparent', border: 'none', cursor: 'pointer' }}>Cancel</button>

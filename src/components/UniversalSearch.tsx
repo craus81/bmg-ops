@@ -297,7 +297,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
         onClick={(e) => e.stopPropagation()}
         style={{
           width: '100%', maxWidth: '500px', margin: '0 auto',
-          maxHeight: '100vh', display: 'flex', flexDirection: 'column',
+          maxHeight: 'calc(100vh / var(--ts))', display: 'flex', flexDirection: 'column',
           background: 'var(--bg)',
         }}
       >

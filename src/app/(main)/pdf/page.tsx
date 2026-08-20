@@ -103,7 +103,7 @@ export default function PdfViewerPage() {
           src={src}
           title={name}
           style={{
-            width: '100%', height: 'calc(100vh - 230px)', minHeight: '420px',
+            width: '100%', height: 'calc(100vh / var(--ts) - 230px)', minHeight: '420px',
             border: '1px solid var(--border)', borderRadius: '10px', background: 'var(--card)',
           }}
         />

@@ -854,7 +854,7 @@ export default function InstallerJobDetailPage() {
       {/* Crew tag checklist (company roster; weights default to an even split). */}
       {crewOpen && shiftInfo && (
         <div onClick={() => setCrewOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: 'var(--card)', borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: '92vh', overflowY: 'auto' }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: 'var(--card)', borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: 'calc(92vh / var(--ts))', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
               <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Who&apos;s working this shift?</div>
               <button onClick={() => setCrewOpen(false)} style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}>Cancel</button>
@@ -956,7 +956,7 @@ export default function InstallerJobDetailPage() {
       {/* Change the part the open shift scans under (mid-shift, §1.2). */}
       {changePartOpen && shiftInfo?.shift && (
         <div onClick={() => setChangePartOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: 'var(--card)', borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: '92vh', overflowY: 'auto' }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: 'var(--card)', borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: 'calc(92vh / var(--ts))', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
               <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Part for this shift</div>
               <button onClick={() => setChangePartOpen(false)} style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}>Cancel</button>
@@ -986,7 +986,7 @@ export default function InstallerJobDetailPage() {
       {/* Verizon RFID device capture modal (VIN known from the job). */}
       {captureVin && (
         <div onClick={closeCapture} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: 'var(--card)', borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: '92vh', overflowY: 'auto' }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: 'var(--card)', borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: 'calc(92vh / var(--ts))', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
               <div>
                 <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Verizon RFID Capture</div>
@@ -1009,7 +1009,7 @@ export default function InstallerJobDetailPage() {
       {/* Scan a new vehicle onto the job (VINs aren't pre-loaded). */}
       {scanNewOpen && (
         <div onClick={() => setScanNewOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: 'var(--card)', borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: '92vh', overflowY: 'auto' }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: 'var(--card)', borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: 'calc(92vh / var(--ts))', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
               <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>
                 {isRfidJob ? 'Scan Vehicle & Device' : 'Scan Vehicle'}

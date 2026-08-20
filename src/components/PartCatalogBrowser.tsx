@@ -368,7 +368,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
           value={q}
           onChange={e => setQ(e.target.value)}
           placeholder="Search part #, name, description…"
-          style={{ width: '300px', maxWidth: '45vw', padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '13px' }}
+          style={{ width: '300px', maxWidth: 'calc(45vw / var(--ts))', padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '13px' }}
         />
         {variant === 'modal' && onClose && (
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
@@ -766,7 +766,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
           jumps to the ops list row (sync, files, labor, price edits). */}
       {detail && (
         <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={() => setDetail(null)}>
-          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg, var(--card))', borderRadius: '16px', border: '1px solid var(--border)', width: '100%', maxWidth: '720px', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.4)' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg, var(--card))', borderRadius: '16px', border: '1px solid var(--border)', width: '100%', maxWidth: '720px', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.4)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 16px', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--bg, var(--card))', zIndex: 1, flexWrap: 'wrap' }}>
               <span style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{detail.item_number}</span>
               {detail.vendor && <span style={chip}>{detail.vendor}</span>}
@@ -931,7 +931,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
 
   if (variant === 'inline') {
     return (
-      <div style={{ background: 'var(--bg, var(--card))', border: '1px solid var(--border)', borderRadius: '16px', height: 'calc(100vh - 230px)', minHeight: '480px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ background: 'var(--bg, var(--card))', border: '1px solid var(--border)', borderRadius: '16px', height: 'calc(100vh / var(--ts) - 230px)', minHeight: '480px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {body}
       </div>
     );
@@ -939,7 +939,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg, var(--card))', borderRadius: '16px', width: '100%', maxWidth: '1100px', height: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid var(--border)', boxShadow: '0 12px 40px rgba(0,0,0,0.4)' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg, var(--card))', borderRadius: '16px', width: '100%', maxWidth: '1100px', height: 'calc(88vh / var(--ts))', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid var(--border)', boxShadow: '0 12px 40px rgba(0,0,0,0.4)' }}>
         {body}
       </div>
     </div>

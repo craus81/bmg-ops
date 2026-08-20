@@ -1569,7 +1569,7 @@ export default function PoRecordPage() {
         const openValue = openLines.reduce((s, li) => s + (invoiceOpenQtys[li.id] || 0) * li.unit_price, 0);
         return (
           <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
-            <div style={{ background: 'var(--card)', border: '1px solid rgba(52,211,153,0.3)', borderRadius: '14px', padding: '18px', width: '100%', maxWidth: '560px', maxHeight: '85vh', overflowY: 'auto' }}>
+            <div style={{ background: 'var(--card)', border: '1px solid rgba(52,211,153,0.3)', borderRadius: '14px', padding: '18px', width: '100%', maxWidth: '560px', maxHeight: 'calc(85vh / var(--ts))', overflowY: 'auto' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
                 <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>Invoice Open Quantities — PO #{po.po_number}</div>
                 <button onClick={() => setInvoiceOpenVisible(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer', padding: '2px' }}>✕</button>
@@ -1648,7 +1648,7 @@ export default function PoRecordPage() {
         >
           <div
             onClick={e => e.stopPropagation()}
-            style={{ background: 'var(--card)', borderRadius: '12px', width: 'min(960px, 100%)', height: 'min(90vh, 100%)', display: 'flex', flexDirection: 'column', border: '1px solid var(--border)', boxShadow: '0 24px 60px rgba(0,0,0,0.4)', overflow: 'hidden' }}
+            style={{ background: 'var(--card)', borderRadius: '12px', width: 'min(960px, 100%)', height: 'min(calc(90vh / var(--ts)), 100%)', display: 'flex', flexDirection: 'column', border: '1px solid var(--border)', boxShadow: '0 24px 60px rgba(0,0,0,0.4)', overflow: 'hidden' }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
               <div style={{ minWidth: 0, flex: 1 }}>

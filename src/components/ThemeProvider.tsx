@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { TEXT_SIZE_STORAGE_KEY, isTextSize, type TextSize } from '@/lib/text-size';
 
 type ThemeMode = 'auto' | 'light' | 'dark';
 
@@ -8,12 +9,16 @@ interface ThemeContextType {
   mode: ThemeMode;
   setMode: (mode: ThemeMode) => void;
   resolvedTheme: 'light' | 'dark'; // what's actually showing
+  textSize: TextSize;
+  setTextSize: (size: TextSize) => void;
 }
 
 const ThemeContext = createContext<ThemeContextType>({
   mode: 'auto',
   setMode: () => {},
   resolvedTheme: 'dark',
+  textSize: 'regular',
+  setTextSize: () => {},
 });
 
 export function useTheme() {
@@ -23,14 +28,19 @@ export function useTheme() {
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [mode, setModeState] = useState<ThemeMode>('auto');
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('dark');
+  const [textSize, setTextSizeState] = useState<TextSize>('regular');
   const [mounted, setMounted] = useState(false);
 
-  // Read saved preference on mount
+  // Read saved preferences on mount
   useEffect(() => {
     try {
       const saved = localStorage.getItem('bmg-theme') as ThemeMode | null;
       if (saved && ['auto', 'light', 'dark'].includes(saved)) {
         setModeState(saved);
+      }
+      const savedSize = localStorage.getItem(TEXT_SIZE_STORAGE_KEY);
+      if (isTextSize(savedSize)) {
+        setTextSizeState(savedSize);
       }
     } catch {}
     setMounted(true);
@@ -61,6 +71,17 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     }
   }, [mode, mounted]);
 
+  // Apply text size to <html>. A pre-paint script in layout.tsx stamps the
+  // saved value before first paint so the page doesn't visibly re-zoom; this
+  // effect keeps it in sync with in-app changes. Gated on `mounted` so the
+  // initial 'regular' state doesn't strip the pre-paint attribute for a frame.
+  useEffect(() => {
+    if (!mounted) return;
+    const html = document.documentElement;
+    if (textSize === 'regular') html.removeAttribute('data-textsize');
+    else html.setAttribute('data-textsize', textSize);
+  }, [textSize, mounted]);
+
   const setMode = useCallback((newMode: ThemeMode) => {
     setModeState(newMode);
     try {
@@ -68,10 +89,17 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     } catch {}
   }, []);
 
+  const setTextSize = useCallback((size: TextSize) => {
+    setTextSizeState(size);
+    try {
+      localStorage.setItem(TEXT_SIZE_STORAGE_KEY, size);
+    } catch {}
+  }, []);
+
   // Prevent flash of wrong theme — render nothing until mounted
   // Actually we need to render children so server-side works, just apply theme ASAP
   return (
-    <ThemeContext.Provider value={{ mode, setMode, resolvedTheme }}>
+    <ThemeContext.Provider value={{ mode, setMode, resolvedTheme, textSize, setTextSize }}>
       {children}
     </ThemeContext.Provider>
   );

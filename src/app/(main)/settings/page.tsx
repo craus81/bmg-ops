@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import PhoneInput from '@/components/PhoneInput';
+import TextSizeToggle from '@/components/TextSizeToggle';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_ORDER, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import type { GraphicsJobStatus, NotificationPreferences } from '@/lib/types';
 import { isPushSupported, getPushPermission, getExistingSubscription, subscribeToPush, unsubscribeFromPush } from '@/lib/push-client';
@@ -306,6 +307,17 @@ export default function SettingsPage() {
             {pwSaving ? 'Updating...' : pwSaved ? 'Password Updated!' : 'Update Password'}
           </button>
         </form>
+      </div>
+
+      {/* Display — customer-only accounts have no More page, so the text
+          size control lives here too (same localStorage preference). */}
+      <div style={{ fontSize: '16px', fontWeight: 800, marginBottom: '10px', marginTop: '20px' }}>Display</div>
+      <div style={sectionStyle}>
+        <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>Text Size</div>
+        <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
+          Makes everything on this device larger and easier to read.
+        </div>
+        <TextSizeToggle />
       </div>
 
       <div style={{ fontSize: '16px', fontWeight: 800, marginBottom: '10px', marginTop: '20px' }}>Notifications</div>

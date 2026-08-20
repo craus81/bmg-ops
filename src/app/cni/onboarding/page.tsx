@@ -152,7 +152,7 @@ export default function CniOnboardingPage() {
   if (step === 0) {
     return (
       <div style={{
-        minHeight: '100vh', background: 'var(--bg)', display: 'flex',
+        minHeight: 'calc(100vh / var(--ts))', background: 'var(--bg)', display: 'flex',
         alignItems: 'center', justifyContent: 'center',
       }}>
         <div style={{
@@ -169,7 +169,7 @@ export default function CniOnboardingPage() {
   if (step === 2) {
     return (
       <div style={{
-        minHeight: '100vh', background: 'var(--bg)', display: 'flex',
+        minHeight: 'calc(100vh / var(--ts))', background: 'var(--bg)', display: 'flex',
         alignItems: 'center', justifyContent: 'center', padding: '20px',
       }}>
         <div style={{
@@ -200,7 +200,7 @@ export default function CniOnboardingPage() {
   // Profile form
   return (
     <div style={{
-      minHeight: '100vh', background: 'var(--bg)', padding: '20px',
+      minHeight: 'calc(100vh / var(--ts))', background: 'var(--bg)', padding: '20px',
       display: 'flex', justifyContent: 'center',
     }}>
       <div style={{ maxWidth: '480px', width: '100%' }}>

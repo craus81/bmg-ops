@@ -71,7 +71,7 @@ export default function CreditApplicationPage() {
 
   if (submitted) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f4f5f7', padding: '20px' }}>
+      <div style={{ minHeight: 'calc(100vh / var(--ts))', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f4f5f7', padding: '20px' }}>
         <div style={{ background: '#fff', borderRadius: '16px', padding: '40px', maxWidth: '500px', textAlign: 'center', boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }}>
           <div style={{ fontSize: '48px', marginBottom: '16px' }}>&#10003;</div>
           <div style={{ fontSize: '22px', fontWeight: 800, color: '#1a2b36', marginBottom: '8px' }}>Application Submitted</div>
@@ -84,7 +84,7 @@ export default function CreditApplicationPage() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: '#f4f5f7', padding: '20px' }}>
+    <div style={{ minHeight: 'calc(100vh / var(--ts))', background: '#f4f5f7', padding: '20px' }}>
       <form onSubmit={handleSubmit} style={{ maxWidth: '680px', margin: '0 auto' }}>
         <div style={{ textAlign: 'center', marginBottom: '24px' }}>
           <div style={{ fontSize: '26px', fontWeight: 800, color: '#1a2b36' }}>Credit Application</div>

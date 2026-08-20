@@ -3031,7 +3031,7 @@ export default function WrapQuotePage() {
 
       {viewQuote && (
         <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={() => setViewQuote(null)}>
-          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '640px', maxHeight: '90vh', overflowY: 'auto' }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '640px', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto' }}>
             {quotePreview(viewQuote)}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px', marginTop: '8px' }}>
               <button onClick={() => loadQuoteForEdit(viewQuote)} style={btnStyle('#60a5fa', 'var(--card)')}>Edit / Resend</button>
@@ -3333,7 +3333,7 @@ export default function WrapQuotePage() {
         >
           <div onClick={e => e.stopPropagation()} style={{
             background: 'var(--card)', borderRadius: '14px', padding: '16px',
-            width: '100%', maxWidth: '760px', maxHeight: 'calc(100vh - 40px)',
+            width: '100%', maxWidth: '760px', maxHeight: 'calc(100vh / var(--ts) - 40px)',
             display: 'flex', flexDirection: 'column', gap: '10px',
             boxShadow: '0 8px 30px rgba(0,0,0,0.3)',
           }}>

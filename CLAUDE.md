@@ -80,6 +80,21 @@ they tell you to go back to auto-shipping.
 
 ## Domain notes
 
+- **Text size (Regular/Large/XL) scales the app via CSS `zoom` — never
+  write a bare vh/vw in an inline style.** The setting lives on the More
+  page and Settings (component `TextSizeToggle`), persists per-device in
+  localStorage (`bmg-text-size`), and is stamped as `data-textsize` on
+  `<html>` (pre-paint script in `src/app/layout.tsx` + `ThemeProvider`);
+  globals.css applies matching `zoom` on `<body>`. Because zoom also
+  multiplies viewport units, a plain `maxHeight: '90vh'` renders at 117%
+  of the screen at XL — write `calc(90vh / var(--ts))` instead (`--ts`
+  mirrors the zoom factor; the division makes it exact at every size and
+  a no-op at Regular). JS that mixes real viewport px (clientX,
+  window.innerWidth/innerHeight) with CSS px inside the zoomed page must
+  divide the real px by `getTextZoom()` from `src/lib/text-size.ts` —
+  see the AiChat drag handling. CSS media queries see real px and are
+  unaffected.
+
 - **Deep links are mandatory on every notification.** Anything that lands
   in "New for you", the bell, the Mentions inbox, a push, or an email CTA
   (`notify`/`notifyMany` `url`, `reportMentions` `contextUrl`,
