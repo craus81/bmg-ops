@@ -10,7 +10,7 @@
  * "looking into the van" viewpoint.
  */
 
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { BoxGeometry } from 'three';
 import { Line } from '@react-three/drei';
 import { InteriorGeometry, wheelwellBoxes } from '@/lib/upfit-layout';
@@ -33,8 +33,10 @@ export default function VanShell({ interior }: { interior: InteriorGeometry }) {
   const side = interior.doors?.side;
   const rear = interior.doors?.rear;
   // Geometry instances aren't managed by R3F when passed as args — memoize so
-  // orbiting doesn't rebuild them every render.
+  // orbiting doesn't rebuild them every render, and dispose by hand (GPU
+  // buffers otherwise outlive the scene; on webview GL that memory is scarce).
   const outlineBox = useMemo(() => new BoxGeometry(W, H, L), [W, H, L]);
+  useEffect(() => () => outlineBox.dispose(), [outlineBox]);
 
   return (
     <group>

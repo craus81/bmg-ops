@@ -70,6 +70,7 @@ export default function PartDimensionsPage() {
   const [drafts, setDrafts] = useState<Record<string, RowDraft>>({});
   const [busyRow, setBusyRow] = useState<string | null>(null);
   const [savedRow, setSavedRow] = useState<string | null>(null);
+  const [coverage, setCoverage] = useState<{ total: number; withDims: number } | null>(null);
   const qTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [qLive, setQLive] = useState('');
 
@@ -121,6 +122,22 @@ export default function PartDimensionsPage() {
     setPage(0);
     load(0, false);
   }, [authLoading, user, isAdmin, load]);
+
+  // Coverage stat: how much of the upfit catalog is 3D-placeable. Two exact
+  // head-counts, refreshed after each save (savedRow flips).
+  useEffect(() => {
+    if (authLoading || !user || !isAdmin) return;
+    (async () => {
+      const { createClient } = await import('@/lib/supabase-browser');
+      const supabase = createClient();
+      const base = () => supabase.from('netsuite_parts').select('id', { count: 'exact', head: true }).eq('is_active', true).eq('catalog', 'upfit');
+      const [{ count: total }, { count: withDims }] = await Promise.all([
+        base(),
+        base().not('width_in', 'is', null),
+      ]);
+      setCoverage({ total: total || 0, withDims: withDims || 0 });
+    })();
+  }, [authLoading, user, isAdmin, savedRow]);
 
   const saveRow = async (p: BrowsePart) => {
     const d = drafts[p.id];
@@ -213,8 +230,14 @@ export default function PartDimensionsPage() {
         />
       </div>
 
-      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
-        {total.toLocaleString()} part{total === 1 ? '' : 's'} in this view
+      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px', display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
+        <span>{total.toLocaleString()} part{total === 1 ? '' : 's'} in this view</span>
+        {coverage && coverage.total > 0 && (
+          <span>
+            Upfit catalog coverage: <b style={{ color: 'var(--text-primary)' }}>{coverage.withDims.toLocaleString()} / {coverage.total.toLocaleString()}</b>
+            {' '}placeable in 3D ({Math.round((coverage.withDims / coverage.total) * 100)}%)
+          </span>
+        )}
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>

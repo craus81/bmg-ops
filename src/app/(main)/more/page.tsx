@@ -66,6 +66,7 @@ export default function MorePage() {
         { title: 'Inventory', sub: 'On hand · allocated to jobs · free · on order, at a glance', path: '/admin/inventory', show: F('parts_catalog') },
         { title: 'Part Tagging Rules', sub: 'Auto-categorize parts by vendor & name instead of one dropdown at a time', path: '/admin/part-category-rules', show: isAdmin },
         { title: 'Part Dimensions', sub: 'Record W×D×H per part so the 3D Upfit Designer can place it', path: '/admin/part-dimensions', show: isAdmin },
+        { title: 'Vehicle Interiors', sub: 'Cargo geometry per wheelbase/roof — what the 3D designer draws', path: '/admin/vehicle-interiors', show: isAdmin },
         { title: 'Parts Mail', sub: 'Incoming parts & ETAs vs. stock and job allocations', path: '/admin/parts-mail', show: F('upfit_projects') },
         { title: 'Invoice Locations', sub: 'Backfill NetSuite invoice locations from the PO', path: '/admin/invoice-locations', show: isAdmin },
       ],
