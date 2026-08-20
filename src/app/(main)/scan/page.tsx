@@ -10,6 +10,7 @@ import RfidCapture, { type RfidCompletion } from '@/components/RfidCapture';
 import { locationBillingOverride } from '@/lib/scan-billing';
 import { loadBillableCustomers, findBillableCustomer, matchesBillableCustomer, type BillableCustomer } from '@/lib/billable-customers';
 import { isVerizonRfidPart } from '@/lib/rfid';
+import NumberInput from '@/components/NumberInput';
 
 interface Part {
   id: string;
@@ -1290,8 +1291,8 @@ export default function ScanPage() {
                         {checked && (
                           <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <span style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>share</span>
-                            <input
-                              type="number" min="0.5" step="0.5" value={crewDraft.get(id)}
+                            <NumberInput
+                              min="0.5" step="0.5" value={crewDraft.get(id)}
                               onChange={e => {
                                 const w = parseFloat(e.target.value);
                                 if (!isNaN(w) && w > 0) setCrewDraft(new Map(crewDraft).set(id, w));

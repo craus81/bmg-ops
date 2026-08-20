@@ -35,6 +35,7 @@ import { downloadXlsx } from '@/lib/xlsx-export';
 import { deepLinks } from '@/lib/deep-links';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { SortableTh, useTableSort, type SortState } from '@/components/ui/SortableTh';
+import NumberInput from '@/components/NumberInput';
 import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
 
 interface Prospect {
@@ -629,7 +630,7 @@ export default function ProspectsPage() {
               <div><div style={labelStyle}>State</div><input style={inputStyle} value={form.state} onChange={e => setForm({ ...form, state: e.target.value })} /></div>
               <div><div style={labelStyle}>Zip</div><input style={inputStyle} value={form.zip} onChange={e => setForm({ ...form, zip: e.target.value })} /></div>
             </div>
-            <div><div style={labelStyle}># of Locations</div><input type="number" min="1" style={inputStyle} value={form.location_count} onChange={e => setForm({ ...form, location_count: parseInt(e.target.value) || 1 })} /></div>
+            <div><div style={labelStyle}># of Locations</div><NumberInput min="1" style={inputStyle} value={form.location_count} onChange={e => setForm({ ...form, location_count: parseInt(e.target.value) || 1 })} /></div>
             <div style={{ gridColumn: '1 / -1' }}><div style={labelStyle}>Notes</div><textarea style={{ ...inputStyle, minHeight: '50px', resize: 'vertical' }} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
           </div>
           <div style={{ display: 'flex', gap: '8px' }}>

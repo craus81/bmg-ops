@@ -39,6 +39,7 @@ import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
 import type { GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsJobView, Profile } from '@/lib/types';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
+import NumberInput from '@/components/NumberInput';
 import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
   GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
@@ -1531,7 +1532,7 @@ export default function GraphicsPage() {
                   </div>
                   <div>
                     <div style={labelStyle}>Quantity</div>
-                    <input type="number" style={inputStyle} value={createForm.quantity} onChange={e => setCreateForm({ ...createForm, quantity: parseInt(e.target.value) || 1 })} />
+                    <NumberInput style={inputStyle} value={createForm.quantity} onChange={e => setCreateForm({ ...createForm, quantity: parseInt(e.target.value) || 1 })} />
                   </div>
                   <div>
                     <div style={labelStyle}>PO Number</div>

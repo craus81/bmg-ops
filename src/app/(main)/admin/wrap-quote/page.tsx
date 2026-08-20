@@ -12,6 +12,7 @@ import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { DropZone } from '@/components/DropZone';
 import { theme } from '@/lib/theme';
 import { RollNesting, RollFilmInfo } from '@/components/RollNesting';
+import NumberInput from '@/components/NumberInput';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import {
   DEFAULT_ROLL,
@@ -2449,7 +2450,7 @@ export default function WrapQuotePage() {
                       <div style={labelStyle}>{twoLines ? 'Line 2 (in)' : 'Height (in)'}</div>
                       <input type="number" value={selected.dim2_in ? Number(selected.dim2_in.toFixed(2)) : ''} onChange={e => updateMeasurement(selected.id, { dim2_in: num(e.target.value) })} style={{ ...inputStyle, marginBottom: '6px' }} />
                       <div style={labelStyle}>Quantity</div>
-                      <input type="number" min={1} value={selected.qty} onChange={e => updateMeasurement(selected.id, { qty: Math.max(1, Math.round(num(e.target.value))) })} style={{ ...inputStyle, marginBottom: '6px' }} />
+                      <NumberInput min={1} value={selected.qty} onChange={e => updateMeasurement(selected.id, { qty: Math.max(1, Math.round(num(e.target.value))) })} style={{ ...inputStyle, marginBottom: '6px' }} />
                       <div style={labelStyle}>Film</div>
                       <select value={selected.substrate_id || ''} onChange={e => updateMeasurement(selected.id, { substrate_id: e.target.value || null })} style={{ ...inputStyle, marginBottom: '6px' }}>
                         <option value="">— none —</option>
@@ -3126,8 +3127,7 @@ export default function WrapQuotePage() {
               <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', marginBottom: '4px' }}>
                 <div>
                   <div style={labelStyle}>Floor (%)</div>
-                  <input
-                    type="number"
+                  <NumberInput
                     value={marginFloor}
                     onChange={e => setMarginFloor(num(e.target.value))}
                     onBlur={async e => {

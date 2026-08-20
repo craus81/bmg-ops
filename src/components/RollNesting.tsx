@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { theme } from '@/lib/theme';
+import NumberInput from '@/components/NumberInput';
 import {
   NestPiece,
   PlacementMap,
@@ -224,7 +225,7 @@ export function RollNesting(props: Props) {
         </div>
         <div title="How many complete sets of the drawn graphics to nest — this is the quote's kit quantity">
           <div style={labelStyle}>Sets (kits)</div>
-          <input type="number" min="1" step="1" value={sets}
+          <NumberInput min="1" step="1" value={sets}
             onChange={e => onSetsChange(Math.max(1, Math.round(numv(e.target.value) || 1)))} style={inputStyle} />
         </div>
         <div>

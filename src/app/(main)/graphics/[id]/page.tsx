@@ -39,6 +39,7 @@ import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgr
 import { INSTALL_LOCATIONS, SHOP_INSTALL_LOCATION } from '@/lib/shop-inbound';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
 import type { GraphicsJob, GraphicsJobStatus, GraphicsJobView, GraphicsStatusHistory, Profile } from '@/lib/types';
+import NumberInput from '@/components/NumberInput';
 import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
   GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
@@ -1127,7 +1128,7 @@ export default function GraphicsJobRecordPage() {
             </div>
             <div>
               <div style={labelStyle}>Quantity</div>
-              <input type="number" style={inputStyle} value={edit.quantity} onChange={e => setEdit({ ...edit, quantity: parseInt(e.target.value) || 1 })} />
+              <NumberInput style={inputStyle} value={edit.quantity} onChange={e => setEdit({ ...edit, quantity: parseInt(e.target.value) || 1 })} />
             </div>
             <div>
               <div style={labelStyle}>PO Number</div>

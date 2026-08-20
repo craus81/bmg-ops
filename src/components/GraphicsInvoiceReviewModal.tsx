@@ -16,6 +16,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import PhoneInput from '@/components/PhoneInput';
+import NumberInput from '@/components/NumberInput';
 import type { GraphicsJob } from '@/lib/types';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
 
@@ -555,13 +556,13 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
                               style={{ ...numInput, marginTop: '6px', fontSize: '11px' }}
                             />
                           </div>
-                          <input
-                            type="number" min={0} step={1} value={line.quantity}
+                          <NumberInput
+                            min={0} step={1} value={line.quantity}
                             onChange={e => updateLine(line.key, { quantity: Math.max(0, parseFloat(e.target.value) || 0) })}
                             style={{ ...numInput, textAlign: 'center' }}
                           />
-                          <input
-                            type="number" min={0} step={0.01} value={line.rate}
+                          <NumberInput
+                            min={0} step={0.01} value={line.rate}
                             onChange={e => updateLine(line.key, { rate: Math.max(0, parseFloat(e.target.value) || 0) })}
                             style={{ ...numInput, textAlign: 'center', border: `1px solid ${lineUnpriced ? 'var(--danger, #ef4444)' : 'var(--border)'}` }}
                           />
