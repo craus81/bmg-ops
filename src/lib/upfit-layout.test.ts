@@ -5,6 +5,7 @@ import {
   aggregateLines,
   applyOp,
   autoLayout,
+  checkpoint,
   clampToShell,
   collides,
   containsWithinShell,
@@ -271,16 +272,17 @@ describe('applyOp + undo/redo', () => {
     expect(s.unplaced).toHaveLength(0);
   });
 
-  it('undo/redo walks history; transient moves collapse into one step', () => {
+  it('undo/redo walks history; a drag (checkpoint + transients) is one step back to PRE-drag', () => {
     let u = initialUndoable(emptyLayout());
     u = undoableApply(u, { type: 'place', item: item({ uid: 'a' }) }, interior);
-    // A drag: many transient moves, one commit.
+    // A drag: checkpoint once at gesture start, then only transient moves.
+    u = checkpoint(u);
     u = undoableApply(u, { type: 'move', uid: 'a', pos: [1, 0, 41] }, interior, { transient: true });
     u = undoableApply(u, { type: 'move', uid: 'a', pos: [2, 0, 42] }, interior, { transient: true });
-    u = undoableApply(u, { type: 'move', uid: 'a', pos: [3, 0, 43] }, interior);
-    expect(u.past).toHaveLength(2); // empty → placed → moved
+    u = undoableApply(u, { type: 'move', uid: 'a', pos: [3, 0, 43] }, interior, { transient: true });
+    expect(u.past).toHaveLength(2); // empty → placed(pre-drag)
     u = undo(u);
-    expect(u.present.items[0].pos).toEqual([2, 0, 42]); // the pre-commit present
+    expect(u.present.items[0].pos).toEqual([0, 0, 40]); // back to PRE-drag, not mid-drag
     u = undo(u);
     expect(u.present.items).toHaveLength(0);
     u = redo(u);

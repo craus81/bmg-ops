@@ -368,9 +368,13 @@ export function autoLayout(
   const wells = wheelwellBoxes(interior);
 
   const tryPlace = (entry: AutoLayoutEntry): PlacedItem | null => {
-    for (const zone of ['wall_left', 'wall_right'] as const) {
+    for (const wall of ['wall_left', 'wall_right'] as const) {
       // Flush to the wall: depth points inward, width runs along Z (rot 90).
-      const cx = zone === 'wall_left' ? -halfW + entry.d / 2 : halfW - entry.d / 2;
+      // The ZONE stays what the part's mount type says — a floor-standing
+      // shelf positioned against a wall still drags on the floor plane;
+      // only genuinely wall-hung parts get a wall zone (and its drag plane).
+      const zone: Zone = entry.mount_type === 'wall' ? wall : 'floor';
+      const cx = wall === 'wall_left' ? -halfW + entry.d / 2 : halfW - entry.d / 2;
       let cz = entry.w / 2;
       while (cz + entry.w / 2 <= interior.cargo.length + EPS) {
         const candidate: PlacedItem = {
@@ -488,8 +492,9 @@ const HISTORY_CAP = 100;
 
 /**
  * Apply an op with history. `transient` ops (every mouse-move of a drag)
- * replace the present without pushing history — the pointer-up commit is the
- * single undoable step, so Ctrl+Z steps back a whole drag, not one pixel.
+ * replace the present without pushing history; the gesture calls
+ * `checkpoint` once at its start, so Ctrl+Z steps back a whole drag to the
+ * PRE-drag state — not one pixel, and not the drop position.
  */
 export function undoableApply(s: UndoableLayout, op: LayoutOp, interior: InteriorGeometry | null, opts?: { transient?: boolean }): UndoableLayout {
   const next = applyOp(s.present, op, interior);
@@ -501,6 +506,14 @@ export function undoableApply(s: UndoableLayout, op: LayoutOp, interior: Interio
     future: [],
   };
 }
+
+/** Push the current state onto history without changing it — call once when
+ *  a drag gesture actually starts moving, before its transient ops. */
+export const checkpoint = (s: UndoableLayout): UndoableLayout => ({
+  past: [...s.past.slice(-(HISTORY_CAP - 1)), s.present],
+  present: s.present,
+  future: [],
+});
 
 export const undo = (s: UndoableLayout): UndoableLayout =>
   s.past.length === 0 ? s : {
