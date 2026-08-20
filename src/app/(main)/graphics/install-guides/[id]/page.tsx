@@ -35,6 +35,9 @@ import {
 } from '@/lib/install-guide';
 import { baseSourcePath, type ProofMode } from '@/lib/proof-assembly';
 import { buildDimensionedProofPdf, dimensionedProofFileName } from '@/lib/proof-pdf';
+import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
+import { apiFetch } from '@/lib/api-client';
+import { uploadJobFiles, type JobFile } from '@/lib/job-files';
 import { layoutDimension, pointToSegmentDistance, type Pt } from '@/lib/dimension-geometry';
 import {
   distancePx,
@@ -53,6 +56,15 @@ interface DragState {
   part: 'p1' | 'p2' | 'offset';
   start: Pt;
   moved: boolean;
+}
+
+interface CniJobLite {
+  id: string;
+  job_number: string;
+  title: string;
+  customer_name: string | null;
+  status: string;
+  created_at: string;
 }
 
 const BUCKET = 'vehicle-templates';
@@ -103,6 +115,11 @@ export default function InstallGuideEditorPage() {
   const [exporting, setExporting] = useState(false);
   const [exportingProof, setExportingProof] = useState(false);
   const [proofMode, setProofMode] = useState<ProofMode>('replace');
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sendKind, setSendKind] = useState<'proof' | 'guide'>('guide');
+  const [sendBusy, setSendBusy] = useState<string | null>(null);
+  const [jobPicker, setJobPicker] = useState<{ jobs: CniJobLite[]; search: string } | null>(null);
+  const [emailAttachment, setEmailAttachment] = useState<{ path: string; name: string; sizeBytes: number } | null>(null);
   const [showSections, setShowSections] = useState(false);
   const [letterhead, setLetterhead] = useState<CompanyLetterhead | null>(null);
   const [pdfImport, setPdfImport] = useState<{
@@ -118,6 +135,7 @@ export default function InstallGuideEditorPage() {
   const dirtyRef = useRef(false);
   const pdfDocRef = useRef<any>(null);
   const pdfFileRef = useRef<File | null>(null);
+  const attachFileRef = useRef<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // ---- Load ----
@@ -705,6 +723,110 @@ export default function InstallGuideEditorPage() {
     setExportingProof(false);
   };
 
+  // ---- Send to installers ----
+  // Attach the generated PDF to a CNI job so it lands in the installer's
+  // Job Files (same rails as JobAttachments), or stage it to storage and
+  // email it through the standard compose screen.
+  const startAttachToJob = async () => {
+    if (!guide || !(await confirmUncalibrated())) return;
+    setSendBusy('Building PDF…');
+    try {
+      const { bytes, fileName } = await generatePdfBytes(sendKind);
+      attachFileRef.current = new File([bytes], fileName, { type: 'application/pdf' });
+      setSendBusy('Loading CNI jobs…');
+      const { data, error } = await supabase
+        .from('cni_jobs')
+        .select('id, job_number, title, customer_name, status, created_at')
+        .order('created_at', { ascending: false })
+        .limit(100);
+      if (error) throw new Error(error.message);
+      setJobPicker({ jobs: (data || []) as CniJobLite[], search: '' });
+    } catch (err: any) {
+      await dialog.alert(err?.message || 'Failed to prepare the PDF.', { title: 'Attach failed' });
+    }
+    setSendBusy(null);
+  };
+
+  const attachToJob = async (job: CniJobLite) => {
+    const file = attachFileRef.current;
+    if (!file) return;
+    setJobPicker(null);
+    setSendBusy(`Attaching to ${job.job_number}…`);
+    try {
+      const { uploaded, errors } = await uploadJobFiles(job.id, [file]);
+      if (errors.length > 0 || uploaded.length === 0) {
+        throw new Error(errors.join('; ') || 'Upload failed.');
+      }
+      const { data: cur, error: readErr } = await supabase
+        .from('cni_jobs')
+        .select('attachments')
+        .eq('id', job.id)
+        .single();
+      if (readErr) throw new Error(readErr.message);
+      const existing: JobFile[] = Array.isArray(cur?.attachments) ? cur.attachments : [];
+      const { error: updErr } = await supabase
+        .from('cni_jobs')
+        .update({ attachments: [...existing, ...uploaded] })
+        .eq('id', job.id);
+      if (updErr) throw new Error(updErr.message);
+      setSendOpen(false);
+      attachFileRef.current = null;
+      await dialog.alert(
+        `"${file.name}" is attached to ${job.job_number} — the installer sees it under the job's files.`,
+        { title: 'Attached' },
+      );
+    } catch (err: any) {
+      await dialog.alert(err?.message || 'Attach failed.', { title: 'Attach failed' });
+    }
+    setSendBusy(null);
+  };
+
+  const startEmail = async () => {
+    if (!guide || !(await confirmUncalibrated())) return;
+    setSendBusy('Building PDF…');
+    try {
+      const { bytes, fileName } = await generatePdfBytes(sendKind);
+      // Stage the export to storage; the send route pulls it from there so
+      // the email request itself stays small.
+      const safe = fileName.replace(/[^\w.\- ]+/g, '_');
+      const path = `install-guides/${guide.id}/exports/${Date.now()}-${safe}`;
+      const { error } = await storage
+        .from(BUCKET)
+        .upload(path, new Blob([bytes], { type: 'application/pdf' }), { contentType: 'application/pdf' });
+      if (error) throw new Error(error.message);
+      setEmailAttachment({ path, name: fileName, sizeBytes: bytes.byteLength });
+      setSendOpen(false);
+    } catch (err: any) {
+      await dialog.alert(err?.message || 'Failed to prepare the PDF.', { title: 'Email failed' });
+    }
+    setSendBusy(null);
+  };
+
+  const postSend = async (fields: EmailComposeFields, preview: boolean) => {
+    if (!guide || !emailAttachment) return { error: 'No attachment staged.' };
+    if (!fields.attachmentIds.includes(emailAttachment.path)) {
+      return { error: 'Keep the guide PDF attached — it is the whole point of this email.' };
+    }
+    try {
+      const res = await apiFetch('/api/install-guides/send', {
+        method: 'POST',
+        body: JSON.stringify({
+          guideId: guide.id,
+          emails: fields.emails,
+          bccSelf: fields.bccSelf,
+          message: fields.message || undefined,
+          attachments: [{ path: emailAttachment.path, name: emailAttachment.name }],
+          preview,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) return { error: body.error || `Request failed (${res.status})` };
+      return body;
+    } catch (err: any) {
+      return { error: err?.message || 'Network error' };
+    }
+  };
+
   // ---- Render ----
   if (authLoading || (hasAccess && loading)) {
     return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading...</div>;
@@ -797,6 +919,21 @@ export default function InstallGuideEditorPage() {
             }}
           >
             {exporting ? 'Building PDF…' : 'Download Install Guide PDF'}
+          </button>
+          <button
+            onClick={() => {
+              setSendKind(baseSourcePath(guide.pages) ? 'proof' : 'guide');
+              setSendOpen(true);
+            }}
+            disabled={guide.pages.length === 0}
+            title="Attach the guide to a CNI job or email it to installers"
+            style={{
+              padding: '8px 14px', borderRadius: '10px', background: '#16a34a', color: '#fff',
+              fontWeight: 800, fontSize: '12px', border: 'none', cursor: 'pointer',
+              opacity: guide.pages.length === 0 ? 0.5 : 1,
+            }}
+          >
+            Send to Installers…
           </button>
         </div>
       </div>
@@ -1195,6 +1332,152 @@ export default function InstallGuideEditorPage() {
           </div>
         )}
       </div>
+
+      {/* Send-to-installers modal: pick the deliverable, then a destination */}
+      {sendOpen && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 200,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
+          }}
+          onClick={() => { if (!sendBusy) setSendOpen(false); }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: 'var(--card)', borderRadius: '14px', border: '1px solid var(--border)',
+              padding: '16px', maxWidth: '480px', width: '100%',
+            }}
+          >
+            <div style={{ fontWeight: 800, fontSize: '15px', marginBottom: '10px' }}>Send to installers</div>
+            <div style={labelStyle}>Which PDF</div>
+            <div style={{ display: 'grid', gap: '6px', marginBottom: '14px' }}>
+              {baseSourcePath(guide.pages) && (
+                <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', cursor: 'pointer' }}>
+                  <input type="radio" checked={sendKind === 'proof'} onChange={() => setSendKind('proof')} />
+                  <span>
+                    <b>Dimensioned proof PDF</b> — the original proof deck with the dimensioned pages{' '}
+                    {proofMode === 'replace' ? 'replacing the originals' : 'inserted after the originals'}
+                  </span>
+                </label>
+              )}
+              <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', cursor: 'pointer' }}>
+                <input type="radio" checked={sendKind === 'guide'} onChange={() => setSendKind('guide')} />
+                <span><b>BMG install guide deck</b> — cover, best practices, dimensioned pages, dimension schedule</span>
+              </label>
+            </div>
+            {sendBusy ? (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>{sendBusy}</div>
+            ) : (
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <button onClick={() => setSendOpen(false)} style={btnStyle('var(--text-secondary)', 'var(--subtle-bg)')}>
+                  Cancel
+                </button>
+                {isAdmin && (
+                  <button onClick={startAttachToJob} style={{ ...btnStyle('#fff', 'var(--navy)'), border: 'none' }}>
+                    Attach to CNI job…
+                  </button>
+                )}
+                <button onClick={startEmail} style={{ ...btnStyle('#fff', '#16a34a'), border: 'none' }}>
+                  Email…
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* CNI job picker for the attach flow */}
+      {jobPicker && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 210,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
+          }}
+          onClick={() => setJobPicker(null)}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: 'var(--card)', borderRadius: '14px', border: '1px solid var(--border)',
+              padding: '16px', maxWidth: '560px', width: '100%', maxHeight: 'calc(80vh / var(--ts))',
+              display: 'flex', flexDirection: 'column', gap: '10px',
+            }}
+          >
+            <div style={{ fontWeight: 800, fontSize: '15px' }}>Attach to which CNI job?</div>
+            <input
+              style={inputStyle}
+              placeholder="Search by job #, title, or customer…"
+              value={jobPicker.search}
+              onChange={e => setJobPicker(prev => (prev ? { ...prev, search: e.target.value } : prev))}
+              autoFocus
+            />
+            <div style={{ overflowY: 'auto', display: 'grid', gap: '6px' }}>
+              {jobPicker.jobs
+                .filter(j => {
+                  const q = jobPicker.search.trim().toLowerCase();
+                  if (!q) return true;
+                  return [j.job_number, j.title, j.customer_name || ''].some(s => s.toLowerCase().includes(q));
+                })
+                .slice(0, 40)
+                .map(j => (
+                  <button
+                    key={j.id}
+                    onClick={() => attachToJob(j)}
+                    style={{
+                      textAlign: 'left', padding: '10px 12px', borderRadius: '10px', cursor: 'pointer',
+                      background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)',
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, fontSize: '13px' }}>
+                      {j.job_number} — {j.title}
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                      {[j.customer_name, j.status.replace(/_/g, ' ')].filter(Boolean).join(' · ')}
+                    </div>
+                  </button>
+                ))}
+              {jobPicker.jobs.length === 0 && (
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '10px 0' }}>
+                  No CNI jobs found.
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button onClick={() => setJobPicker(null)} style={btnStyle('var(--text-secondary)', 'var(--subtle-bg)')}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Standard compose screen (docs/customer-email-standard.md) */}
+      {emailAttachment && (
+        <EmailComposeModal
+          title="Email Install Guide"
+          initialTo=""
+          attachments={[{ id: emailAttachment.path, name: emailAttachment.name, sizeBytes: emailAttachment.sizeBytes }]}
+          initialAttachmentIds={[emailAttachment.path]}
+          messagePlaceholder="Optional note to the installer…"
+          sendLabel="Send Guide"
+          fetchPreview={async fields => {
+            const res = await postSend(fields, true);
+            if (res.error) return { error: res.error };
+            return { preview: { to: (res.to || []).join(', ') || null, subject: res.subject, html: res.html } };
+          }}
+          onSend={async fields => {
+            const res = await postSend(fields, false);
+            if (res.error) {
+              await dialog.alert(res.error, { title: 'Send failed' });
+              return { ok: false };
+            }
+            await dialog.alert('Install guide sent.', { title: 'Sent' });
+            return { ok: true };
+          }}
+          onClose={() => setEmailAttachment(null)}
+        />
+      )}
 
       {/* PDF page picker modal */}
       {pdfImport && (
