@@ -13,6 +13,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { partNumberPattern } from './part-number';
 
 export interface ShiftMember {
   profile_id: string;
@@ -305,13 +306,15 @@ export async function getFieldRate(
   partNumber: string | null | undefined,
 ): Promise<number | null> {
   if (!partNumber) return null;
+  // ilike (wildcards escaped): rates and scans can carry different casing
+  // for the same part — a rate keyed 06U166 must still price a 06u166 scan.
   const { data } = await service
     .from('install_pay_rates')
     .select('rate_per_vehicle')
-    .eq('part_number', partNumber)
+    .ilike('part_number', partNumberPattern(partNumber))
     .eq('active', true)
-    .maybeSingle();
-  return data ? Number(data.rate_per_vehicle) : null;
+    .limit(1);
+  return data?.[0] ? Number(data[0].rate_per_vehicle) : null;
 }
 
 /**
@@ -509,7 +512,7 @@ export async function priceUnpricedCredits(
   const { data: rows } = await service
     .from('install_credits')
     .select('id, scan_log_id, cni_job_vin_id, profile_id, share_weight, total_weight')
-    .eq('part_number', partNumber)
+    .ilike('part_number', partNumberPattern(partNumber))
     .eq('source', 'field')
     .is('amount', null)
     .is('voided_at', null);

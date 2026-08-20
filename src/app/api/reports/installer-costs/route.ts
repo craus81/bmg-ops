@@ -4,6 +4,7 @@ import { requireRole } from '@/lib/api-auth';
 import { validateSearchParams, z } from '@/lib/validate';
 import { suiteqlQuery } from '@/lib/netsuite';
 import { safeStringLiteral } from '@/lib/sql-safe';
+import { fetchPartRowsCI } from '@/lib/part-number';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -228,14 +229,11 @@ export async function GET(req: NextRequest) {
       ...credits.map(c => c.part_number).filter(Boolean),
       ...[...scanById.values()].map(s => s.part_number).filter(Boolean),
     ])] as string[];
+    // Case-insensitive fetch — the map is already keyed uppercase, but an
+    // exact .in() never returned the catalog row for a hand-typed casing.
     const partPrice = new Map<string, number>();
-    for (let i = 0; i < neededParts.length; i += 200) {
-      const { data } = await service
-        .from('netsuite_parts').select('item_number, sales_price')
-        .in('item_number', neededParts.slice(i, i + 200));
-      for (const p of data || []) {
-        if (p.sales_price != null && Number(p.sales_price) > 0) partPrice.set(p.item_number.toUpperCase(), Number(p.sales_price));
-      }
+    for (const p of await fetchPartRowsCI(service, neededParts, 'item_number, sales_price')) {
+      if (p.sales_price != null && Number(p.sales_price) > 0) partPrice.set(p.item_number.toUpperCase(), Number(p.sales_price));
     }
 
     // Actual billed dollars for scans invoiced before invoiced_amount

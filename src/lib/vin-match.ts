@@ -18,6 +18,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { partNumberPattern } from './part-number';
 
 /** Normalized match key: uppercase alphanumerics only, last 8 characters. */
 export function vinTail(vin: string): string {
@@ -65,7 +66,8 @@ export async function findExistingScanVins(
   const out: string[] = [];
   for (let i = 0; i < filters.length; i += 25) {
     let q = client.from('scan_logs').select('vin').or(filters.slice(i, i + 25).join(','));
-    if (partNumber) q = q.eq('part_number', partNumber);
+    // Case-insensitive: a scan logged as 06u166 is the same part as 06U166.
+    if (partNumber) q = q.ilike('part_number', partNumberPattern(partNumber));
     const { data } = await q;
     for (const s of (data || []) as { vin: string }[]) out.push(s.vin);
   }

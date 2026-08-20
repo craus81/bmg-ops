@@ -107,7 +107,7 @@ export default function InventoryPage() {
   const visible = rows.filter(r => {
     if (filter === 'allocated' && r.allocated <= 0) return false;
     if (filter === 'on_order' && r.on_order <= 0) return false;
-    if (q && !r.item_number.includes(q) && !(r.display_name || '').toUpperCase().includes(q)) return false;
+    if (q && !r.item_number.toUpperCase().includes(q) && !(r.display_name || '').toUpperCase().includes(q)) return false;
     return true;
   });
 

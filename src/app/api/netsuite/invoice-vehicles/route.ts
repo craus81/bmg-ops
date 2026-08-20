@@ -6,6 +6,7 @@ import { requireRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { refreshPoInvoiceLinks } from '@/lib/po-invoice-sync';
 import { getPoBilledByPart, computeOverbillProblems } from '@/lib/po-invoice-verify';
+import { fetchPartRowsCI } from '@/lib/part-number';
 
 // The over-billing gate adds a couple of SuiteQL round trips per PO group on
 // top of the NetSuite invoice creation itself.
@@ -46,16 +47,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No scans found' }, { status: 400 });
     }
 
-    // Load pricing from netsuite_parts for all part numbers in the selection
+    // Load pricing from netsuite_parts for all part numbers in the selection.
+    // Case-insensitive: scans can carry hand-typed casing (06u166) while the
+    // catalog holds NetSuite's (06U166) — an exact .in() here priced those at
+    // 0 and refused the invoice with "No NetSuite price set".
     const partNumbers = [...new Set(scans.map(s => s.part_number).filter(Boolean))];
-    const { data: partsData } = await supabase
-      .from('netsuite_parts')
-      .select('item_number, sales_price')
-      .in('item_number', partNumbers);
+    const partsData = await fetchPartRowsCI(supabase, partNumbers, 'item_number, sales_price');
 
     const priceMap: Record<string, number> = {};
-    for (const p of partsData || []) {
-      priceMap[p.item_number] = parseFloat(p.sales_price) || 0;
+    for (const p of partsData) {
+      priceMap[p.item_number.toUpperCase()] = parseFloat(p.sales_price) || 0;
     }
 
     // Group scans by billable customer + PO (one invoice per PO)
@@ -82,15 +83,19 @@ export async function POST(req: NextRequest) {
     for (const { customer: customerName, po: poNumber, scans: custScans } of Object.values(byCustomerPO)) {
       try {
         // Group scans by part number and aggregate quantities (built before
-        // any NetSuite call — the billing gate needs the counts).
-        const partGroups: Record<string, { count: number; price: number; description: string }> = {};
+        // any NetSuite call — the billing gate needs the counts). Keyed by
+        // uppercase so case variants of one part land on one invoice line;
+        // `display` keeps the first-seen casing for messages.
+        const partGroups: Record<string, { count: number; price: number; description: string; display: string }> = {};
         for (const s of custScans) {
-          const partNum = s.part_number || 'UNKNOWN';
+          const raw = s.part_number || 'UNKNOWN';
+          const partNum = raw.toUpperCase();
           if (!partGroups[partNum]) {
             partGroups[partNum] = {
               count: 0,
               price: priceMap[partNum] || 0,
-              description: s.part_description || partNum,
+              description: s.part_description || raw,
+              display: raw,
             };
           }
           partGroups[partNum].count++;
@@ -122,7 +127,7 @@ export async function POST(req: NextRequest) {
             const problems = computeOverbillProblems(
               poLines,
               billedByPart,
-              Object.entries(partGroups).map(([partNumber, g]) => ({ partNumber, quantity: g.count })),
+              Object.values(partGroups).map(g => ({ partNumber: g.display, quantity: g.count })),
             );
             if (problems.length > 0) {
               results.push({
@@ -171,13 +176,13 @@ export async function POST(req: NextRequest) {
         const billedRates: Record<string, number> = {};
 
         for (const [partNum, group] of Object.entries(partGroups)) {
-          const nsItem = nsItems[partNum.toUpperCase()];
+          const nsItem = nsItems[partNum];
           if (!nsItem) {
-            unmatchedParts.push(partNum);
+            unmatchedParts.push(group.display);
             continue;
           }
-          if (!(group.price > 0)) unpricedParts.push(partNum);
-          matchDetail.push(`${partNum} → NS item #${nsItem.id}${nsItem.type ? ` (${nsItem.type})` : ''}`);
+          if (!(group.price > 0)) unpricedParts.push(group.display);
+          matchDetail.push(`${group.display} → NS item #${nsItem.id}${nsItem.type ? ` (${nsItem.type})` : ''}`);
           billedRates[partNum] = group.price;
           lineItems.push({
             itemId: nsItem.id,
@@ -273,7 +278,7 @@ export async function POST(req: NextRequest) {
             // land on the invoice (no NetSuite match) get no stamp.
             await Promise.all(Object.entries(billedRates).map(([partNum, rate]) => {
               const ids = custScans
-                .filter(s => (s.part_number || 'UNKNOWN') === partNum)
+                .filter(s => (s.part_number || 'UNKNOWN').toUpperCase() === partNum)
                 .map(s => s.id);
               if (ids.length === 0) return Promise.resolve(null);
               return supabase.from('scan_logs').update({ invoiced_amount: rate }).in('id', ids);

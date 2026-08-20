@@ -18,6 +18,8 @@ import { customerRequiresPo, loadBillableCustomers, matchesBillableCustomer, DEF
 import { decodeVinsBatch } from '@/lib/vin-decoder';
 import { storage } from '@/lib/storage';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { type EmailedInfo, fetchEmailedByNumber, isBadDelivery } from '@/lib/invoice-emails';
+import { InvoiceEmailedBadge } from '@/components/InvoiceEmailedBadge';
 
 interface ScanLog {
   id: string;
@@ -51,7 +53,7 @@ interface ScanLog {
   vendor_invoice_id?: string | null;
 }
 
-type ViewTab = 'all' | 'ready' | 'waiting' | 'exported' | 'archived' | 'bulk' | 'vendor';
+type ViewTab = 'all' | 'ready' | 'waiting' | 'exported' | 'archived' | 'invoices' | 'bulk' | 'vendor';
 
 // Local calendar date (YYYY-MM-DD) — scan date filters work in the user's day,
 // matching how the dashboard counts "scans today".
@@ -118,7 +120,7 @@ export default function AdminScansPage() {
   // ?from=YYYY-MM-DD&to=YYYY-MM-DD.
   useEffect(() => {
     const t = searchParams.get('tab');
-    if (t && ['all', 'ready', 'waiting', 'exported', 'archived', 'bulk', 'vendor'].includes(t)) setTab(t as ViewTab);
+    if (t && ['all', 'ready', 'waiting', 'exported', 'archived', 'invoices', 'bulk', 'vendor'].includes(t)) setTab(t as ViewTab);
     const range = searchParams.get('range');
     if (range === 'today' || range === '7d' || range === '30d') {
       const today = new Date();
@@ -168,6 +170,14 @@ export default function AdminScansPage() {
   const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; po?: string | null; invoiceId?: string; invoiceNumber?: string; vehicleCount: number; status: string; error?: string }[]; summary: { success: number; errors: number } } | null>(null);
   // Email-invoices flow lives in the shared EmailInvoicesModal.
   const [emailTarget, setEmailTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
+  // invoice_number → latest customer email + send history (invoice_emails),
+  // so the Invoices tab and archived groups show whether/when each invoice
+  // went out — same source the Invoicing hub's badges read.
+  const [emailedByNumber, setEmailedByNumber] = useState<Record<string, EmailedInfo>>({});
+  const refreshEmailedInvoices = async (list: ScanLog[]) => {
+    const numbers = list.map(s => s.invoice_number).filter(Boolean) as string[];
+    setEmailedByNumber(numbers.length > 0 ? await fetchEmailedByNumber(supabase, numbers) : {});
+  };
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { loadAll(); }, []);
@@ -282,6 +292,8 @@ export default function AdminScansPage() {
 
     setScans((scansRes.data || []) as ScanLog[]);
     setArchivedScans((archivedRes.data || []) as ScanLog[]);
+    // Non-blocking: the ✉ emailed badges fill in once the email log arrives.
+    refreshEmailedInvoices([...(scansRes.data || []), ...(archivedRes.data || [])] as ScanLog[]);
 
     const pMap: Record<string, string> = {};
     const metaMap: Record<string, { companyId: string | null; installer: boolean }> = {};
@@ -421,8 +433,9 @@ export default function AdminScansPage() {
   };
 
   // The scan-list chrome (search, filters, empty state, grouped list) applies
-  // to every tab except the two self-contained upload tabs.
-  const isScanListTab = tab !== 'bulk' && tab !== 'vendor';
+  // to every tab except the self-contained upload tabs and the Invoices tab
+  // (which lists invoices, not scans, and carries its own search).
+  const isScanListTab = tab !== 'bulk' && tab !== 'vendor' && tab !== 'invoices';
 
   // ── Installer attribution ─────────────────────────────────────────────
   // A scan's "installer" is whoever was CREDITED for the install (the live
@@ -587,6 +600,37 @@ export default function AdminScansPage() {
   const toggleGroup = (key: string) => {
     setExpandedGroups(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
   };
+
+  // ── Invoices tab ──────────────────────────────────────────────────────
+  // The log viewed by invoice instead of by scan: one row per distinct
+  // invoice number across every loaded scan (invoicing archives the scans it
+  // stamps, but hand-entered numbers can sit anywhere), so checking on
+  // invoices doesn't mean digging through archived scan groups.
+  interface InvoiceListRow {
+    invoiceNumber: string;
+    customer: string;
+    pos: string[];
+    dateInvoiced: string | null;
+    allPaid: boolean;
+    vinCount: number;
+  }
+  const invoiceRows: InvoiceListRow[] = (() => {
+    const byNumber = new Map<string, InvoiceListRow>();
+    for (const s of allLoadedScans) {
+      if (!s.invoice_number) continue;
+      let row = byNumber.get(s.invoice_number);
+      if (!row) {
+        row = { invoiceNumber: s.invoice_number, customer: s.billable_customer || 'No Customer', pos: [], dateInvoiced: null, allPaid: true, vinCount: 0 };
+        byNumber.set(s.invoice_number, row);
+      }
+      row.vinCount++;
+      if (s.billable_customer && row.customer === 'No Customer') row.customer = s.billable_customer;
+      if (s.po_number && !row.pos.includes(s.po_number)) row.pos.push(s.po_number);
+      if (s.date_invoiced && (!row.dateInvoiced || s.date_invoiced < row.dateInvoiced)) row.dateInvoiced = s.date_invoiced;
+      if (!s.is_paid) row.allPaid = false;
+    }
+    return [...byNumber.values()];
+  })();
 
   const toggleSelectGroup = (ids: string[]) => {
     setSelectedScans(prev => {
@@ -1161,6 +1205,7 @@ export default function AdminScansPage() {
           { id: 'waiting' as ViewTab, label: `Waiting for PO (${waitingForPO.length})` },
           { id: 'exported' as ViewTab, label: `Exported (${exported.length})` },
           { id: 'archived' as ViewTab, label: `Archived (${archivedScans.length})` },
+          { id: 'invoices' as ViewTab, label: `Invoices (${invoiceRows.length})` },
           { id: 'all' as ViewTab, label: `All Scans (${allScans.length})` },
           { id: 'bulk' as ViewTab, label: 'Bulk Upload' },
           { id: 'vendor' as ViewTab, label: 'Vendor Invoices' },
@@ -1421,7 +1466,11 @@ export default function AdminScansPage() {
         <EmailInvoicesModal
           customerName={emailTarget.customerName}
           invoices={emailTarget.invoices}
-          onClose={() => setEmailTarget(null)}
+          onClose={() => {
+            setEmailTarget(null);
+            // Refresh the ✉ emailed badges — a send may have just happened.
+            refreshEmailedInvoices([...scans, ...archivedScans]);
+          }}
         />
       )}
 
@@ -2078,6 +2127,96 @@ export default function AdminScansPage() {
         );
       })()}
 
+      {/* Invoices tab — the log by invoice, not by scan: every distinct
+          invoice number, grouped by customer, with whether/when it was
+          emailed and one-click (re)send. */}
+      {tab === 'invoices' && (() => {
+        const q = search.trim().toLowerCase();
+        const filtered = invoiceRows.filter(r =>
+          !q
+          || r.invoiceNumber.toLowerCase().includes(q)
+          || r.customer.toLowerCase().includes(q)
+          || r.pos.some(p => p.toLowerCase().includes(q)));
+        const byCustomer = new Map<string, InvoiceListRow[]>();
+        for (const r of filtered) {
+          const list = byCustomer.get(r.customer);
+          if (list) list.push(r); else byCustomer.set(r.customer, [r]);
+        }
+        for (const list of byCustomer.values()) list.sort((a, b) => compareInvoice(a.invoiceNumber, b.invoiceNumber));
+        const customers = [...byCustomer.keys()].sort((a, b) => {
+          if (a === 'No Customer') return 1;
+          if (b === 'No Customer') return -1;
+          return compareInvoice(byCustomer.get(a)![0].invoiceNumber, byCustomer.get(b)![0].invoiceNumber);
+        });
+        return (
+          <>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search invoice #, customer, PO..."
+              style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', fontSize: '13px', border: `1px solid ${theme.border}`, background: theme.card, color: theme.textPrimary, fontWeight: 600, marginBottom: '10px' }} />
+            {filtered.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>
+                {invoiceRows.length === 0 ? 'No invoices recorded yet — invoicing scans stamps them here' : 'No invoices match your search'}
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {customers.map(customer => {
+                  const rows = byCustomer.get(customer)!;
+                  return (
+                    <div key={customer} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '10px', padding: '10px 14px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', marginBottom: '8px', flexWrap: 'wrap' }}>
+                        <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{customer}</div>
+                        <button
+                          onClick={() => setEmailTarget({
+                            customerName: customer,
+                            invoices: rows.map(r => ({ invoiceNumber: r.invoiceNumber, po: r.pos[0] })),
+                          })}
+                          style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                        >Email {rows.length} Invoice{rows.length !== 1 ? 's' : ''}</button>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        {rows.map((r, i) => (
+                          <div key={r.invoiceNumber} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', padding: '4px 0', borderTop: i > 0 ? '1px solid var(--border)' : 'none', flexWrap: 'wrap' }}>
+                            <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>#{r.invoiceNumber}</span>
+                            <InvoiceEmailedBadge info={emailedByNumber[r.invoiceNumber]} showUnsent />
+                            <span style={{
+                              fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px',
+                              background: r.allPaid ? 'var(--success-bg)' : 'rgba(251,191,36,0.12)',
+                              color: r.allPaid ? 'var(--success)' : '#fbbf24',
+                            }}>{r.allPaid ? 'PAID' : 'UNPAID'}</span>
+                            {r.pos.length > 0 && <span style={{ color: 'var(--text-muted)' }}>PO #{r.pos.join(', #')}</span>}
+                            {r.dateInvoiced && <span style={{ color: 'var(--text-muted)' }}>{new Date(r.dateInvoiced + 'T12:00:00').toLocaleDateString()}</span>}
+                            <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{r.vinCount} VIN{r.vinCount !== 1 ? 's' : ''}</span>
+                            <span style={{ flex: 1 }} />
+                            {(() => {
+                              const bad = isBadDelivery(emailedByNumber[r.invoiceNumber]?.delivery_status);
+                              return (
+                                <button
+                                  onClick={() => setEmailTarget({
+                                    customerName: customer,
+                                    invoices: [{ invoiceNumber: r.invoiceNumber, po: r.pos[0] }],
+                                  })}
+                                  title={bad ? 'The last email for this invoice did not deliver — resend it' : undefined}
+                                  style={{
+                                    background: bad ? 'var(--error-bg)' : 'transparent',
+                                    border: bad ? '1px solid var(--error-border)' : 'none',
+                                    borderRadius: bad ? '5px' : undefined,
+                                    color: bad ? 'var(--error)' : '#60a5fa',
+                                    fontSize: '11px', fontWeight: 700, cursor: 'pointer', padding: '2px 6px',
+                                  }}
+                                >{bad ? '⚠ Resend' : 'Email'}</button>
+                              );
+                            })()}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        );
+      })()}
+
       {/* Grouped list */}
       {isScanListTab && tab !== 'all' && <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
         {customerKeys.map(customer => {
@@ -2229,6 +2368,7 @@ export default function AdminScansPage() {
                                   {isPaid ? 'Paid' : 'Unpaid'}
                                 </span>
                               </label>
+                              {invNum && <InvoiceEmailedBadge info={emailedByNumber[invNum]} showUnsent />}
                             </div>
                           );
                         })()}

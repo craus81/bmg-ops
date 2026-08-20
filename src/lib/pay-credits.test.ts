@@ -50,6 +50,8 @@ describe('priceUnpricedCredits', () => {
     const query: any = {
       select: vi.fn(() => query),
       eq: vi.fn((col: string, val: unknown) => { filters[col] = val; return query; }),
+      // Part-number matching is case-insensitive (ilike, wildcards escaped).
+      ilike: vi.fn((col: string, val: unknown) => { filters[`ilike:${col}`] = val; return query; }),
       is: vi.fn((col: string, val: unknown) => { filters[`is:${col}`] = val; return query; }),
       then: (resolve: (v: { data: any[] }) => void) => resolve({ data: [] }),
     };
@@ -57,7 +59,7 @@ describe('priceUnpricedCredits', () => {
 
     const result = await priceUnpricedCredits(service, '06T895', 145);
     expect(result).toEqual({ ok: true, priced: 0 });
-    expect(filters['part_number']).toBe('06T895');
+    expect(filters['ilike:part_number']).toBe('06T895');
     expect(filters['source']).toBe('field');
     expect(filters['is:amount']).toBe(null);
     expect(filters['is:voided_at']).toBe(null);
