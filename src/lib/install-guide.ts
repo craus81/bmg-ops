@@ -33,6 +33,15 @@ export interface GuidePage {
   /** Pixels per real vehicle inch; null until the page is calibrated. */
   px_per_in: number | null;
   dims: DimAnnotation[];
+  /**
+   * Where this page came from when it was imported from a proof PDF: the
+   * stored copy of that PDF and the 1-based page number within it. Lets the
+   * dimensioned-proof export rebuild the ORIGINAL deck with these pages
+   * replaced/inserted in place (see proof-pdf.ts). Absent for image uploads
+   * and for guides made before this existed.
+   */
+  source_pdf_path?: string | null;
+  source_page?: number | null;
 }
 
 export interface GuideSection {
@@ -59,6 +68,14 @@ export interface InstallGuide {
 
 export const DIM_COLOR = '#e11d48';
 export const NOTE_COLOR = '#2563eb';
+
+/**
+ * PDF pages rasterize at 72pt/in × this scale (216 dpi), so raster px ÷
+ * this = PDF points — which is how the dimensioned-proof export puts a
+ * raster back at exactly its original page size. A 1:20 template lands at
+ * (72 × 3) / 20 = 10.8 px per real inch, calibrated for free.
+ */
+export const PDF_RENDER_SCALE = 3;
 
 export const makeId = () => Math.random().toString(36).slice(2, 10);
 

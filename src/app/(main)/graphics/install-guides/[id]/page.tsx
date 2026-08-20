@@ -23,6 +23,7 @@ import { fetchCompanyLetterhead, type CompanyLetterhead } from '@/lib/company-pr
 import {
   DIM_COLOR,
   NOTE_COLOR,
+  PDF_RENDER_SCALE,
   defaultGuideSections,
   dimLabelText,
   makeId,
@@ -32,6 +33,8 @@ import {
   type GuidePage,
   type InstallGuide,
 } from '@/lib/install-guide';
+import { baseSourcePath, type ProofMode } from '@/lib/proof-assembly';
+import { buildDimensionedProofPdf, dimensionedProofFileName } from '@/lib/proof-pdf';
 import { layoutDimension, pointToSegmentDistance, type Pt } from '@/lib/dimension-geometry';
 import {
   distancePx,
@@ -51,10 +54,6 @@ interface DragState {
   start: Pt;
   moved: boolean;
 }
-
-// PDF pages rasterize at 72pt/in × this scale; a 1:20 template therefore
-// lands at (72 × 3) / 20 = 10.8 px per real inch, calibrated for free.
-const PDF_RENDER_SCALE = 3;
 
 const BUCKET = 'vehicle-templates';
 
@@ -102,6 +101,8 @@ export default function InstallGuideEditorPage() {
   const [draft, setDraft] = useState<{ p1: Pt; p2: Pt } | null>(null);
   const [uploading, setUploading] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [exportingProof, setExportingProof] = useState(false);
+  const [proofMode, setProofMode] = useState<ProofMode>('replace');
   const [showSections, setShowSections] = useState(false);
   const [letterhead, setLetterhead] = useState<CompanyLetterhead | null>(null);
   const [pdfImport, setPdfImport] = useState<{
@@ -116,6 +117,7 @@ export default function InstallGuideEditorPage() {
   const undoRef = useRef<string[]>([]);
   const dirtyRef = useRef(false);
   const pdfDocRef = useRef<any>(null);
+  const pdfFileRef = useRef<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // ---- Load ----
@@ -465,6 +467,7 @@ export default function InstallGuideEditorPage() {
     const buf = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
     pdfDocRef.current = pdf;
+    pdfFileRef.current = file;
     const thumbs: { idx: number; dataUrl: string }[] = [];
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
@@ -483,8 +486,23 @@ export default function InstallGuideEditorPage() {
   const importPdfPages = async () => {
     if (!guide || !pdfImport || !pdfDocRef.current) return;
     const pdf = pdfDocRef.current;
+    const sourceFile = pdfFileRef.current;
     const indices = [...pdfImport.selected].sort((a, b) => a - b);
     setPdfImport(null);
+    // Keep the original deck so the dimensioned-proof export can rebuild it
+    // with these pages replaced in place. The path is deterministic per
+    // guide + file name (upsert), so importing more pages from the same
+    // deck later references the same stored copy and they merge back into
+    // position. Import still works if this upload fails — only that export
+    // is off the table for these pages.
+    let sourcePath: string | null = null;
+    if (sourceFile) {
+      setUploading(`Storing ${sourceFile.name}…`);
+      const safeName = sourceFile.name.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-80);
+      const path = `install-guides/${guide.id}/source-${safeName}`;
+      const { error } = await storage.from(BUCKET).upload(path, sourceFile, { contentType: 'application/pdf', upsert: true });
+      if (!error) sourcePath = path;
+    }
     const pxPerIn = (72 * PDF_RENDER_SCALE) / parseGuideScale(guide.scale);
     for (const idx of indices) {
       setUploading(`Importing page ${idx} of ${pdfImport.fileName}…`);
@@ -509,6 +527,8 @@ export default function InstallGuideEditorPage() {
           image_h: canvas.height,
           px_per_in: pxPerIn,
           dims: [],
+          source_pdf_path: sourcePath,
+          source_page: sourcePath ? idx : null,
         };
         mutate(g => ({ ...g, pages: [...g.pages, newPage] }));
         setActivePageId(newPage.id);
@@ -518,6 +538,7 @@ export default function InstallGuideEditorPage() {
     }
     setUploading(null);
     pdfDocRef.current = null;
+    pdfFileRef.current = null;
   };
 
   const onFilesChosen = async (files: FileList | null) => {
@@ -623,6 +644,47 @@ export default function InstallGuideEditorPage() {
     setExporting(false);
   };
 
+  // Rebuild the ORIGINAL proof deck with the dimensioned pages swapped in
+  // (or inserted after) the pages they were imported from.
+  const exportProofPdf = async () => {
+    if (!guide) return;
+    const sourcePath = baseSourcePath(guide.pages);
+    if (!sourcePath) return;
+    const uncalibrated = guide.pages.filter(p => !p.px_per_in && p.dims.some(d => d.kind === 'dim'));
+    if (uncalibrated.length > 0) {
+      const ok = await dialog.confirm(
+        `${uncalibrated.map(p => `"${p.name}"`).join(', ')} ${uncalibrated.length === 1 ? 'has' : 'have'} dimension lines but no calibration — those labels will export as "—". Export anyway?`,
+        { confirmLabel: 'Export anyway' },
+      );
+      if (!ok) return;
+    }
+    setExportingProof(true);
+    try {
+      const res = await fetch(imgUrl(sourcePath));
+      if (!res.ok) throw new Error(`Couldn't load the stored proof PDF (${res.status}).`);
+      const sourceBytes = await res.arrayBuffer();
+      const rendered: RenderedGuidePage[] = [];
+      for (const page of guide.pages) {
+        const r = await renderGuidePage(page, imgUrl(page.image_path), guide.units, guide.fraction_denominator);
+        if (!r) throw new Error(`Couldn't render "${page.name}" — the page image failed to load.`);
+        rendered.push({ page, dataUrl: r.dataUrl, w: r.w, h: r.h });
+      }
+      const bytes = await buildDimensionedProofPdf(guide, rendered, sourceBytes, sourcePath, proofMode);
+      const blob = new Blob([bytes as unknown as BlobPart], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = dimensionedProofFileName(guide);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (err: any) {
+      await dialog.alert(err?.message || 'Export failed.', { title: 'Export failed' });
+    }
+    setExportingProof(false);
+  };
+
   // ---- Render ----
   if (authLoading || (hasAccess && loading)) {
     return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading...</div>;
@@ -675,13 +737,39 @@ export default function InstallGuideEditorPage() {
             {guide.title || 'Untitled guide'}
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
           <span style={{ fontSize: '11px', color: saveState === 'error' ? 'var(--error)' : 'var(--text-muted)' }}>
             {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : saveState === 'dirty' ? 'Unsaved changes' : saveState === 'error' ? 'Save failed' : ''}
           </span>
+          {baseSourcePath(guide.pages) && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <select
+                value={proofMode}
+                onChange={e => setProofMode(e.target.value as ProofMode)}
+                title="How the dimensioned pages go back into the original proof PDF"
+                style={{ ...inputStyle, width: 'auto', padding: '7px 8px' }}
+              >
+                <option value="replace">Replace original proof pages</option>
+                <option value="insert">Insert after original pages</option>
+              </select>
+              <button
+                onClick={exportProofPdf}
+                disabled={exportingProof}
+                title="Rebuild the uploaded proof PDF with the dimensioned pages in the proof section"
+                style={{
+                  padding: '8px 14px', borderRadius: '10px', background: 'var(--navy)', color: '#fff',
+                  fontWeight: 800, fontSize: '12px', border: 'none', cursor: 'pointer',
+                  opacity: exportingProof ? 0.6 : 1,
+                }}
+              >
+                {exportingProof ? 'Building…' : 'Download Dimensioned Proof PDF'}
+              </button>
+            </div>
+          )}
           <button
             onClick={exportPdf}
             disabled={exporting}
+            title="Build the standalone BMG install guide deck (cover, best practices, dimensioned pages, schedule)"
             style={{
               padding: '8px 14px', borderRadius: '10px', background: theme.orange, color: '#fff',
               fontWeight: 800, fontSize: '12px', border: 'none', cursor: 'pointer',
@@ -1095,7 +1183,7 @@ export default function InstallGuideEditorPage() {
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 200,
             display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
           }}
-          onClick={() => { setPdfImport(null); pdfDocRef.current = null; }}
+          onClick={() => { setPdfImport(null); pdfDocRef.current = null; pdfFileRef.current = null; }}
         >
           <div
             onClick={e => e.stopPropagation()}
@@ -1142,7 +1230,7 @@ export default function InstallGuideEditorPage() {
               })}
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '12px' }}>
-              <button onClick={() => { setPdfImport(null); pdfDocRef.current = null; }} style={btnStyle('var(--text-secondary)', 'var(--subtle-bg)')}>
+              <button onClick={() => { setPdfImport(null); pdfDocRef.current = null; pdfFileRef.current = null; }} style={btnStyle('var(--text-secondary)', 'var(--subtle-bg)')}>
                 Cancel
               </button>
               <button

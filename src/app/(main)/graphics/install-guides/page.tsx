@@ -76,8 +76,13 @@ export default function InstallGuidesPage() {
       await dialog.alert(err.message, { title: 'Delete failed' });
       return;
     }
-    // Best-effort storage cleanup; orphaned images are harmless.
-    const paths = (g.pages || []).map((p: GuidePage) => p.image_path).filter(Boolean);
+    // Best-effort storage cleanup (page rasters + stored source PDFs);
+    // orphans are harmless.
+    const paths = [
+      ...new Set(
+        (g.pages || []).flatMap((p: GuidePage) => [p.image_path, p.source_pdf_path || '']).filter(Boolean),
+      ),
+    ];
     if (paths.length) storage.from('vehicle-templates').remove(paths).catch(() => {});
     setGuides(prev => prev.filter(x => x.id !== g.id));
   };
