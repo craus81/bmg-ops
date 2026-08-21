@@ -1,5 +1,6 @@
 import { Resend } from 'resend';
 import { createClient } from '@supabase/supabase-js';
+import { renderSignatureHtml } from './email-signature';
 
 const apiKey = process.env.RESEND_API_KEY;
 const fromEmail = process.env.RESEND_FROM_EMAIL || 'notifications@bmgfleet.com';
@@ -213,7 +214,7 @@ export function buildNotificationEmail(
   body: string,
   ctaUrl?: string,
   ctaLabel?: string,
-  opts?: { note?: string; attachmentNames?: string[]; ctaNote?: string },
+  opts?: { note?: string; attachmentNames?: string[]; ctaNote?: string; signature?: string | null },
 ): string {
   const noteHtml = opts?.note?.trim()
     ? `
@@ -244,7 +245,7 @@ export function buildNotificationEmail(
         <div style="margin-top:20px;">
           <a href="${ctaUrl}" style="display:inline-block;padding:12px 24px;background:#3b82f6;color:#fff;font-weight:800;font-size:13px;border-radius:10px;text-decoration:none;">${escapeHtml(ctaLabel || 'Open in App')}</a>
         </div>` : ''}
-        ${opts?.ctaNote ? `<div style="margin-top:8px;font-size:11px;color:#8899aa;">${escapeHtml(opts.ctaNote)}</div>` : ''}${attachmentsHtml}
+        ${opts?.ctaNote ? `<div style="margin-top:8px;font-size:11px;color:#8899aa;">${escapeHtml(opts.ctaNote)}</div>` : ''}${attachmentsHtml}${renderSignatureHtml(opts?.signature, 'dark')}
       </div>
       <!-- Footer -->
       <div style="padding:16px 24px;border-top:1px solid #1e2d3d;text-align:center;">
@@ -301,7 +302,7 @@ export function buildCustomerDigestEmail(
 /**
  * Build a styled HTML email for sending invoices to customers
  */
-export function buildInvoiceEmail(customerName: string, invoiceNumbers: string[], poNumbers: string[], customBody?: string): string {
+export function buildInvoiceEmail(customerName: string, invoiceNumbers: string[], poNumbers: string[], customBody?: string, signature?: string | null): string {
   const invoiceList = invoiceNumbers.map(n => `<li style="margin-bottom:4px;color:#f5f8fc;font-size:14px;">Invoice #${escapeHtml(n)}</li>`).join('');
   const poLine = poNumbers.length > 0
     ? `<div style="font-size:13px;color:#8899aa;margin-top:12px;">PO${poNumbers.length > 1 ? 's' : ''}: ${poNumbers.map(p => escapeHtml(p)).join(', ')}</div>`
@@ -332,7 +333,7 @@ export function buildInvoiceEmail(customerName: string, invoiceNumbers: string[]
         <ul style="list-style:none;padding:0;margin:0 0 8px 0;">
           ${invoiceList}
         </ul>
-        ${poLine}
+        ${poLine}${renderSignatureHtml(signature, 'dark')}
       </div>
       <div style="padding:16px 24px;border-top:1px solid #1e2d3d;text-align:center;">
         <div style="font-size:10px;color:#8899aa;">BMG Fleet Services</div>

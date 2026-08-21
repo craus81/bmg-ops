@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getNetSuitePdf, suiteqlQuery } from '@/lib/netsuite';
 import { sendEmailDetailed, buildInvoiceEmail } from '@/lib/resend';
+import { getEmailSignature } from '@/lib/email-signature';
 import { deepLinks } from '@/lib/deep-links';
 import { requireRole } from '@/lib/api-auth';
 import { safeStringLiteral, SqlSafeError } from '@/lib/sql-safe';
@@ -181,7 +182,13 @@ export async function POST(req: NextRequest) {
       ? `Invoice #${invoiceNumbers[0]} from BMG Fleet`
       : `${invoiceNumbers.length} Invoices from BMG Fleet`;
 
-    const html = buildInvoiceEmail(customerName, invoiceNumbers, poNumbers, customBody);
+    const signature = process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
+      ? await getEmailSignature(
+          createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY),
+          auth.user?.id,
+        )
+      : null;
+    const html = buildInvoiceEmail(customerName, invoiceNumbers, poNumbers, customBody, signature);
 
     // Count invoice PDFs before appending the VIN list so the response's `sent`
     // tally reflects invoices, not attachments.

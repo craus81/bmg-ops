@@ -15,6 +15,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { generateToken } from './magic-link-approval';
 import { sendEmail, buildNotificationEmail } from './resend';
+import { getEmailSignature } from './email-signature';
 import { deepLinks } from './deep-links';
 import { sendSMS } from './sms-provider';
 import { r2Get } from './r2';
@@ -179,6 +180,9 @@ export async function sendProofApproval(
   const emailOpts = {
     note: message,
     attachmentNames: attachmentRows.map(r => r.file_name),
+    // Composed sends carry the sender's signature; automated reminders have
+    // no actor and go out without one.
+    signature: await getEmailSignature(service, opts.actorId),
   };
 
   // Preview: the exact email that would go out, with a placeholder CTA —

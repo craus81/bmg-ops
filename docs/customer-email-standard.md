@@ -18,6 +18,7 @@ on every send, not just estimates.
 | **Attachments** | Where the flow has files (job files, PDFs), a picker with per-file sizes and a total-size cap (20MB — `MAX_ATTACHMENT_BYTES`). Oversize or missing files are hard errors, never silent drops. |
 | **Live preview** | The exact HTML that will go out, rendered by the server (`preview: true` — no token minted, nothing marked sent, nothing dispatched). |
 | **Reply-To** | Always the sending user's email (the from address has no mailbox — without this, customer replies bounce). Automated sends fall back to `RESEND_REPLY_TO_EMAIL`. |
+| **Signature** | The sender's `profiles.email_signature` (edited on Settings), appended server-side at the bottom of the email — fetch with `getEmailSignature` and render via the builder's `signature` option (`src/lib/email-signature.ts`) **before the preview**, so the preview shows it. Automated sends have no composing user and none. |
 | **Dispatch summary** | After sending, tell the sender what actually happened (who got email/SMS, what failed) — from the API's `dispatch` result, not assumptions. |
 
 ## How to build it

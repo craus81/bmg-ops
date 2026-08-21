@@ -15,6 +15,8 @@
  * Server-safe: pure string building, no client imports.
  */
 
+import { renderSignatureHtml } from './email-signature';
+
 export function escHtml(s: string | number | null | undefined): string {
   if (s === null || s === undefined) return '';
   return String(s)
@@ -93,6 +95,9 @@ export interface EstimateDocumentOptions {
   /** Pre-built trusted HTML appended after the totals (the signed/audit
    *  block on acceptance snapshots). Caller escapes its own interpolations. */
   signedBlockHtml?: string | null;
+  /** The sender's email signature (plain text) — rendered at the bottom of
+   *  the document on composed sends; snapshots pass none. */
+  signature?: string | null;
 }
 
 /**
@@ -101,7 +106,7 @@ export interface EstimateDocumentOptions {
  * (`.order('sort_order').order('id')`).
  */
 export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDocumentOptions = {}): string {
-  const { company, logoUrl, message, ctaUrl, ctaLabel, ctaNote, signedBlockHtml } = opts;
+  const { company, logoUrl, message, ctaUrl, ctaLabel, ctaNote, signedBlockHtml, signature } = opts;
 
   const cell = (v: string, right = false) =>
     `<td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#111827;vertical-align:top;${right ? 'text-align:right;white-space:nowrap;' : ''}">${v}</td>`;
@@ -195,6 +200,7 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
       ${ctaNote ? `<div style="font-size:11px;color:#9ca3af;margin-top:8px;">${escHtml(ctaNote)}</div>` : ''}
     </div>` : ''}
 
+    ${renderSignatureHtml(signature, 'light')}
     ${signedBlockHtml || ''}
   </div>
   <div style="text-align:center;padding:14px;font-size:11px;color:#9ca3af;">Sent by ${escHtml(company?.name || 'BMG Fleet')}</div>

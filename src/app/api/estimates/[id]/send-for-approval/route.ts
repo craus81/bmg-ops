@@ -6,6 +6,7 @@ import { sendEmailDetailed } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { sendSMS } from '@/lib/sms-provider';
 import { renderEstimateDocument } from '@/lib/estimate-document';
+import { getEmailSignature } from '@/lib/email-signature';
 import { enrichLinesWithPartAssets } from '@/lib/estimate-line-parts';
 import { r2PublicUrl } from '@/lib/r2';
 import { validateBody, z } from '@/lib/validate';
@@ -128,6 +129,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .maybeSingle();
   const company = settings?.company || {};
   const logoUrl = company?.logo_path ? r2PublicUrl('vehicle-templates', company.logo_path) : null;
+  // Sender's signature — in the preview too, so what she sees is what goes.
+  const signature = await getEmailSignature(supabase, auth.user?.id);
 
   // Preview: show exactly what would go out (message, line items, totals,
   // Approve button) without minting a token, sending, or touching status.
@@ -140,6 +143,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       ctaUrl: `${appUrl}/approve/estimate/`,
       ctaLabel: 'Review & Approve',
       ctaNote: `A unique, secure link is generated when you send. It expires in ${expiryDays} days.`,
+      signature,
     });
     return NextResponse.json({ preview: true, to: emailList.join(', ') || null, subject, html });
   }
@@ -178,6 +182,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       ctaUrl: link,
       ctaLabel: 'Review & Approve',
       ctaNote: `This link expires in ${expiryDays} days.`,
+      signature,
     });
     const bcc = body.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
     try {

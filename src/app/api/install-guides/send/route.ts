@@ -5,6 +5,7 @@ import { sendEmail } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { validateBody, z } from '@/lib/validate';
 import { r2Get, r2PublicUrl } from '@/lib/r2';
+import { getEmailSignature, renderSignatureHtml } from '@/lib/email-signature';
 
 export const dynamic = 'force-dynamic';
 
@@ -46,6 +47,7 @@ function buildGuideHtml(
   logoUrl: string | null,
   attachmentNames: string[],
   message?: string,
+  signature?: string | null,
 ): string {
   const companyLines = [
     company?.name,
@@ -78,6 +80,7 @@ function buildGuideHtml(
         <b style="color:#374151;">Attached:</b> ${attachmentNames.map(n => esc(n)).join(', ')}
       </div>
       <div style="margin-top:20px;font-size:12px;color:#374151;line-height:1.5;">${companyLines}</div>
+      ${renderSignatureHtml(signature, 'light')}
     </div>
     <div style="text-align:center;padding:14px;font-size:11px;color:#9ca3af;">Sent by ${esc(company?.name || 'BMG Fleet')}</div>
   </div>
@@ -118,7 +121,9 @@ export async function POST(req: NextRequest) {
 
   const attachmentNames = parsed.data.attachments.map(a => a.name);
   const subject = `Install Guide — ${guide.title || guide.vehicle_desc || guide.customer_name || 'vehicle graphics'}${company?.name ? ` from ${company.name}` : ''}`;
-  const html = buildGuideHtml(guide, company, logoUrl, attachmentNames, parsed.data.message);
+  // Sender's signature — in the preview too, so what they see is what goes.
+  const signature = await getEmailSignature(supabase, auth.user?.id);
+  const html = buildGuideHtml(guide, company, logoUrl, attachmentNames, parsed.data.message, signature);
 
   if (parsed.data.preview) {
     return NextResponse.json({

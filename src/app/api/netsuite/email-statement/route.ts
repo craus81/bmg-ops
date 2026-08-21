@@ -7,6 +7,7 @@ import { getNetSuitePdf } from '@/lib/netsuite';
 import { sendEmailDetailed } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { r2PublicUrl } from '@/lib/r2';
+import { getEmailSignature, renderSignatureHtml } from '@/lib/email-signature';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -48,7 +49,7 @@ const fmtD = (iso: string | null) => {
 
 interface Letterhead { company: any; logoUrl: string | null }
 
-function statementEmailHtml(customer: string, invoices: StatementInvoice[], scope: StatementScope, rangeNote: string, lh: Letterhead, customBody?: string, attachNote?: string): string {
+function statementEmailHtml(customer: string, invoices: StatementInvoice[], scope: StatementScope, rangeNote: string, lh: Letterhead, customBody?: string, attachNote?: string, signature?: string | null): string {
   const total = invoices.reduce((s, i) => s + i.unpaid, 0);
   const pastDue = invoices.reduce((s, i) => s + (i.daysPastDue > 0 ? i.unpaid : 0), 0);
   const td = 'padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#111827;';
@@ -116,6 +117,7 @@ function statementEmailHtml(customer: string, invoices: StatementInvoice[], scop
       <div style="font-size:12px;color:#6b7280;margin-top:18px;border-top:1px solid #e5e7eb;padding-top:12px;">
         Amounts are open balances as of the statement date. Please reply to this email with any questions.
       </div>
+      ${renderSignatureHtml(signature, 'light')}
     </div>
     <div style="text-align:center;padding:14px;font-size:11px;color:#9ca3af;">Sent by ${esc(coName)}</div>
   </div>
@@ -196,7 +198,9 @@ export async function POST(req: NextRequest) {
     const co: any = settings?.company || {};
     const lh = { company: co, logoUrl: co.logo_path ? r2PublicUrl('vehicle-templates', co.logo_path) : null };
 
-    const html = statementEmailHtml(customerName, invoices, scope, rangeNote, lh, body?.customBody, attachNote);
+    // Sender's signature — in the preview too, so what they see is what goes.
+    const signature = await getEmailSignature(supabaseLh, auth.user?.id);
+    const html = statementEmailHtml(customerName, invoices, scope, rangeNote, lh, body?.customBody, attachNote, signature);
     const subject = `Statement — ${customerName} — ${new Date().toLocaleDateString('en-US')}`;
 
     // Preview: the exact email that would go out — nothing sends, nothing
