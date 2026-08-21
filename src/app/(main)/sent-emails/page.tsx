@@ -34,6 +34,7 @@ interface EmailRow {
 }
 
 const KIND_LABELS: Record<string, string> = {
+  customer_email: 'Customer email',
   estimate_approval: 'Estimate approval',
   invoice: 'Invoice',
   statement: 'Statement',

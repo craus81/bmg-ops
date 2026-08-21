@@ -206,13 +206,25 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // The customer behind the send, for the email history — the route only
+    // holds a name; resolve it against the synced customers table (same
+    // single-match ilike the proof/pickup flows use).
+    let historyCustomerId: string | null = null;
+    if (customerName && process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      try {
+        const svc = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+        const { data: cust } = await svc.from('customers').select('id').ilike('company_name', customerName).limit(2);
+        if (cust?.length === 1) historyCustomerId = cust[0].id;
+      } catch { /* history linkage is best-effort */ }
+    }
+
     // Bcc-me: skipped on test sends — those already land in the sender's inbox.
     const bcc = bccSelf && !testSend && auth.user?.email ? [auth.user.email] : undefined;
     const { ok: sent, id: resendId } = await sendEmailDetailed(
       recipients, subject, html, undefined, attachments, auth.user?.email || undefined, bcc,
       // A single-invoice send deep-links that invoice on the Sent tab; a
       // multi-invoice send links the tab itself (a true digest).
-      { kind: 'invoice', sentBy: auth.user?.id, contextUrl: deepLinks.invoicesSent(invoiceNumbers.length === 1 ? invoiceNumbers[0] : null) },
+      { kind: 'invoice', sentBy: auth.user?.id, contextUrl: deepLinks.invoicesSent(invoiceNumbers.length === 1 ? invoiceNumbers[0] : null), customerId: historyCustomerId },
     );
 
     if (!sent) {

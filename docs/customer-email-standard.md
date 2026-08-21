@@ -56,6 +56,7 @@ on every send, not just estimates.
 | Wrap quote (`/admin/wrap-quote`) | Own modal, fits the standard | Editable To (prefills customer email + cc), bcc-me, message, per-attachment toggles, live preview. |
 | Statement (`/admin/prospects/[id]`) | `EmailComposeModal` | Full standard. Preview predicts the invoice-PDF attachment list without fetching from NetSuite; real filenames land at send time. |
 | Install guide (`/graphics/install-guides/[id]`) | `EmailComposeModal` | Full standard. The guide PDF (dimensioned proof or BMG deck) is generated client-side, staged to R2 (`install-guides/<id>/exports/`), and attached by the server (`/api/install-guides/send`, `email_log` kind `install_guide`). No stored recipient — the sender types the installer's address. |
+| General customer email (`/admin/prospects/[id]` Email button + contact addresses, Contacts directory) | `EmailComposeModal` | Full standard + a Subject input in the intro slot (`/api/prospects/email`, kind `customer_email`). Replaced the bare `mailto:` links, which opened the DEVICE's mail app — composing from whichever account it defaulted to (iCloud vs BMG on Apple devices) and leaving no record in FleetSuite. |
 | Customer threads (`customer-threads`) | Chat-style thread | Deliberately not a compose modal (it's a running conversation). Reply-To = sender is in place. |
 | Invites (CNI/admin), reminder crons, digests, notify-pickup | Exempt | Automated/transactional — nobody is composing. Reply-To falls back to `RESEND_REPLY_TO_EMAIL`. |
 
@@ -78,10 +79,23 @@ send layer itself (`sendEmailDetailed`), and the Resend webhook
   message (same as SMS).
 
 Callers pass an `EmailMeta` as `sendEmail`/`sendEmailDetailed`'s last
-argument: `{ kind, sentBy, contextUrl }` — kind is a flow slug for the
-admin view, sentBy routes the bounce alert, contextUrl deep-links the
-record (falls back to the log row on System Health). Sends without meta
-still log, tagged `other`.
+argument: `{ kind, sentBy, contextUrl, customerId?, prospectId?,
+netsuiteCustomerId? }` — kind is a flow slug for the admin view, sentBy
+routes the bounce alert, contextUrl deep-links the record (falls back to
+the log row on System Health). Sends without meta still log, tagged
+`other`.
+
+## Account history (composed sends, automatic)
+
+Pass whichever customer id the flow holds (`customerId` = customers.id,
+`prospectId`, or `netsuiteCustomerId`) and the send layer resolves the
+rest (customers ↔ prospects bridge via `netsuite_id`), stamps both ids on
+the `email_log` row, keeps the rendered HTML for human-composed sends
+(`body_html`), and writes one `type: 'email'` row on the customer's
+`prospect_activities` timeline pointing at the log row — the record page's
+activity feed shows "Emailed … — subject" with a **View email** opener.
+Never insert your own timeline row for a send; the send layer owns it
+(the statement route's bespoke insert was removed for exactly that).
 
 ## For every new feature
 

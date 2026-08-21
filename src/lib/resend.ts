@@ -32,6 +32,13 @@ export interface EmailMeta {
   sentBy?: string | null;
   /** Deep link (deep-links.ts) to the record the email is about. */
   contextUrl?: string | null;
+  /** The customer behind the send, in whichever id space the flow holds —
+   *  the log layer resolves the other and stamps both on the email_log row,
+   *  and a composed send with a resolved prospect also lands a row on that
+   *  customer's activity timeline (the email history feature). */
+  customerId?: string | null;
+  prospectId?: string | null;
+  netsuiteCustomerId?: string | number | null;
 }
 
 /**
@@ -46,25 +53,72 @@ async function logEmailSend(
   ok: boolean,
   sourceId: string | null,
   meta?: EmailMeta,
+  html?: string,
 ): Promise<void> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) return;
   try {
     const service = createClient(url, key);
-    const { error } = await service.from('email_log').insert({
+
+    // Resolve the customer behind the send from whichever id the flow
+    // passed — customers.id and prospects.id bridge via netsuite_id (the
+    // record page's own join). Best-effort: a failed lookup logs without.
+    let customerId = meta?.customerId || null;
+    let prospectId = meta?.prospectId || null;
+    const nsId = meta?.netsuiteCustomerId != null ? String(meta.netsuiteCustomerId) : null;
+    try {
+      if (!customerId && nsId) {
+        const { data } = await service.from('customers').select('id').eq('netsuite_id', nsId).maybeSingle();
+        customerId = data?.id || null;
+      }
+      if (!prospectId && nsId) {
+        const { data } = await service.from('prospects').select('id').eq('netsuite_id', nsId).maybeSingle();
+        prospectId = data?.id || null;
+      }
+      if (!prospectId && customerId) {
+        const { data: cust } = await service.from('customers').select('netsuite_id').eq('id', customerId).maybeSingle();
+        if (cust?.netsuite_id) {
+          const { data } = await service.from('prospects').select('id').eq('netsuite_id', cust.netsuite_id).maybeSingle();
+          prospectId = data?.id || null;
+        }
+      }
+    } catch { /* log without the linkage */ }
+
+    const { data: logRow, error } = await service.from('email_log').insert({
       source_id: ok ? sourceId : null,
       kind: meta?.kind || 'other',
       recipients: Array.isArray(to) ? to : [to],
       subject,
       sent_by: meta?.sentBy || null,
       context_url: meta?.contextUrl || null,
+      customer_id: customerId,
+      prospect_id: prospectId,
+      // The rendered email, kept for human-composed sends only ("see the
+      // email that was written" on the account history) — automated fan-outs
+      // (digests, crons) would bloat the table for nothing.
+      body_html: meta?.sentBy && html ? html : null,
       // A failed hand-off gets 'failed' immediately — no webhook will ever
       // arrive to say so.
       delivery_status: ok ? 'sent' : 'failed',
       delivery_detail: ok ? null : 'The email could not be handed to the delivery service',
-    });
-    if (error) console.error('email_log insert failed:', error.message);
+    }).select('id').single();
+    if (error) { console.error('email_log insert failed:', error.message); return; }
+
+    // The account-history entry: one 'email' activity per composed send so
+    // the next person sees where things were left off without a manual
+    // note. Points at the log row so the timeline can open the email.
+    if (ok && logRow?.id && prospectId && meta?.sentBy) {
+      const toList = Array.isArray(to) ? to : [to];
+      const { error: actErr } = await service.from('prospect_activities').insert({
+        prospect_id: prospectId,
+        type: 'email',
+        summary: `Emailed ${toList.join(', ')} — ${subject}`,
+        created_by: meta.sentBy,
+        email_log_id: logRow.id,
+      });
+      if (actErr) console.error('prospect_activities email insert failed:', actErr.message);
+    }
   } catch (err) {
     console.error('email_log insert failed:', err);
   }
@@ -178,7 +232,7 @@ export async function sendEmailDetailed(
     result = { ok: false, id: null };
   }
 
-  await logEmailSend(to, subject, result.ok, result.id, meta);
+  await logEmailSend(to, subject, result.ok, result.id, meta, htmlBody);
   return result;
 }
 

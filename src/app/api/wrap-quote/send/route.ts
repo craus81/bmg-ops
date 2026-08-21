@@ -351,7 +351,7 @@ export async function POST(req: NextRequest) {
   const bcc = parsed.data.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
   const ok = await sendEmail(
     to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl, flags, message, approveUrl, signature), undefined, attachments, auth.user?.email || undefined, bcc,
-    { kind: 'wrap_quote', sentBy: auth.user?.id, contextUrl: deepLinks.wrapQuote(quote.id) },
+    { kind: 'wrap_quote', sentBy: auth.user?.id, contextUrl: deepLinks.wrapQuote(quote.id), customerId: quote.customer_id || null },
   );
   if (!ok) {
     return NextResponse.json({ error: 'Email send failed (is Resend configured?)' }, { status: 502 });
