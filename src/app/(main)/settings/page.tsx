@@ -30,6 +30,7 @@ export default function SettingsPage() {
   // Email signature state — appended by the server to every customer email
   // this user composes (estimates, invoices, wrap quotes, statements…).
   const [signature, setSignature] = useState('');
+  const [sigLogo, setSigLogo] = useState(false);
   const [sigSaving, setSigSaving] = useState(false);
   const [sigSaved, setSigSaved] = useState(false);
   const [sigError, setSigError] = useState('');
@@ -49,8 +50,11 @@ export default function SettingsPage() {
     if (!user) return;
     loadPrefs();
     checkPushStatus();
-    supabase.from('profiles').select('email_signature').eq('id', user.id).maybeSingle()
-      .then(({ data }: { data: { email_signature: string | null } | null }) => setSignature(data?.email_signature || ''));
+    supabase.from('profiles').select('email_signature, email_signature_logo').eq('id', user.id).maybeSingle()
+      .then(({ data }: { data: { email_signature: string | null; email_signature_logo: boolean | null } | null }) => {
+        setSignature(data?.email_signature || '');
+        setSigLogo(!!data?.email_signature_logo);
+      });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user]);
 
@@ -60,7 +64,7 @@ export default function SettingsPage() {
     setSigError('');
     const { error } = await supabase
       .from('profiles')
-      .update({ email_signature: signature.trim() || null })
+      .update({ email_signature: signature.trim() || null, email_signature_logo: sigLogo })
       .eq('id', user.id);
     setSigSaving(false);
     if (error) { setSigError(error.message); return; }
@@ -348,6 +352,15 @@ export default function SettingsPage() {
           placeholder={'Your Name\nBMG Fleet Services\n(555) 555-0100'}
           style={{ ...inputStyle, resize: 'vertical', marginBottom: '8px', fontFamily: 'inherit' }}
         />
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--text-body)', cursor: 'pointer', marginBottom: '8px', width: 'fit-content' }}>
+          <input
+            type="checkbox"
+            checked={sigLogo}
+            onChange={e => setSigLogo(e.target.checked)}
+            style={{ accentColor: '#3b82f6' }}
+          />
+          Include the company logo under my signature
+        </label>
         {sigError && (
           <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', marginBottom: '8px' }}>
             <div style={{ fontSize: '11px', color: '#ef4444' }}>{sigError}</div>

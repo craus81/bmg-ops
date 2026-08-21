@@ -7,7 +7,7 @@ import { validateBody, z } from '@/lib/validate';
 import { r2Get, r2PublicUrl } from '@/lib/r2';
 import { getNetSuitePdf } from '@/lib/netsuite';
 import { generateToken, validateExpiry } from '@/lib/magic-link-approval';
-import { getEmailSignature, renderSignatureHtml } from '@/lib/email-signature';
+import { getEmailSignature, renderSignatureHtml, type EmailSignature } from '@/lib/email-signature';
 
 export const dynamic = 'force-dynamic';
 
@@ -65,7 +65,7 @@ const money = (n: any) =>
 
 // Light-themed printable quote document (customers print/forward these, so
 // no dark chrome like the internal notification template).
-function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, logoUrl: string | null, flags: SendFlags, message?: string, approveUrl?: string | null, signature?: string | null): string {
+function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, logoUrl: string | null, flags: SendFlags, message?: string, approveUrl?: string | null, signature?: EmailSignature | null): string {
   const pricing = flags.pricing;
   const lineItems = flags.pricing && flags.lineItems;
   const showDiagram = flags.diagram && !!diagramUrl;

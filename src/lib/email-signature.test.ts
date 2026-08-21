@@ -20,6 +20,21 @@ describe('renderSignatureHtml', () => {
     expect(renderSignatureHtml('x', 'dark')).toContain('#1e2d3d');
     expect(renderSignatureHtml('x', 'light')).toContain('#e5e7eb');
   });
+
+  it('renders the company logo under the text when opted in', () => {
+    const html = renderSignatureHtml({ text: 'Pat Doe', logoUrl: 'https://pub.example.com/logo.png?a=1&b="x"' });
+    expect(html).toContain('Pat Doe');
+    expect(html).toContain('src="https://pub.example.com/logo.png?a=1&amp;b=&quot;x&quot;"');
+    // Light theme: no white chip behind the logo.
+    expect(html).not.toContain('background:#ffffff');
+  });
+
+  it('puts the logo on a white chip in dark cards, and renders logo-only signatures', () => {
+    const html = renderSignatureHtml({ text: null, logoUrl: 'https://pub.example.com/logo.png' }, 'dark');
+    expect(html).toContain('background:#ffffff');
+    expect(html).toContain('src="https://pub.example.com/logo.png"');
+    expect(html).not.toContain('white-space:pre-line');
+  });
 });
 
 describe('signature placement in the email builders', () => {
