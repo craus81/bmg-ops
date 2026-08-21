@@ -7,10 +7,16 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import { loadCompaniesWithCounts, type CompanyOption } from '@/lib/cni-companies';
-import { storage } from '@/lib/storage';
+import { storage, storageDownloadUrl } from '@/lib/storage';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import PhoneInput from '@/components/PhoneInput';
 import { flashNote } from '@/lib/focus-note';
+
+// Compliance docs are uploaded by the installer profile page, whose storage
+// paths look like `<userId>/<column>-<uuid>-<original name>` — recover the
+// original name so a download saves under it.
+const docFileName = (path: string) =>
+  (path.split('/').pop() || path).replace(/^[a-z0-9_]+-[0-9a-f-]{36}-/i, '');
 
 const RISK_TAG_OPTIONS = [
   { id: 'preferred', label: 'Preferred', color: 'var(--success)' },
@@ -688,7 +694,7 @@ export default function CniInstallerDetailPage() {
                 {path ? '✓ Uploaded' : '✕ Missing'}
                 {path && (
                   <a
-                    href={storage.from('cni-docs').getPublicUrl(path).data.publicUrl}
+                    href={storageDownloadUrl('cni-docs', path, docFileName(path))}
                     target="_blank" rel="noreferrer"
                     style={{ marginLeft: '8px', fontSize: '11px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none' }}
                   >

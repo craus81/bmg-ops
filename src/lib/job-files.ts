@@ -5,7 +5,7 @@
  * shared by the new-job form and the job detail pages.
  */
 
-import { storage } from './storage';
+import { storage, storageDownloadUrl } from './storage';
 
 export interface JobFile {
   name: string;   // original filename, for display
@@ -34,7 +34,8 @@ export async function uploadJobFiles(
   return { uploaded, errors };
 }
 
-/** Public download URL for an attachment path. */
-export function jobFileUrl(path: string): string {
-  return storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+/** Download URL for an attachment; pass the recorded name so a save keeps it
+ *  (otherwise it falls back to the storage key's basename). */
+export function jobFileUrl(path: string, name?: string): string {
+  return storageDownloadUrl(BUCKET, path, name || '');
 }

@@ -296,6 +296,11 @@ export default function VehiclePickListPage() {
   const proofUrl = vehicle?.proof_file_path
     ? storage.from('graphics-proofs').getPublicUrl(vehicle.proof_file_path).data.publicUrl
     : null;
+  // Anchors get the named-download variant; the public URL stays for
+  // thumbnail rendering (ProofThumbnail fetches it client-side).
+  const proofDownloadUrl = vehicle?.proof_file_path
+    ? storageDownloadUrl('graphics-proofs', vehicle.proof_file_path, vehicle.proof_file_name || '')
+    : null;
 
   const formatDate = (iso: string | null) => {
     if (!iso) return '—';
@@ -638,7 +643,7 @@ export default function VehiclePickListPage() {
             Proof
           </div>
           <a
-            href={proofUrl}
+            href={proofDownloadUrl || proofUrl}
             target="_blank"
             rel="noopener noreferrer"
             style={{
@@ -728,6 +733,7 @@ export default function VehiclePickListPage() {
           customerName={vehicle.customer_name}
           netsuiteSalesOrderId={vehicle.netsuite_sales_order_id}
           proofUrl={proofUrl}
+          proofDownloadUrl={proofDownloadUrl}
           proofIsPdf={(vehicle.proof_file_name || '').toLowerCase().endsWith('.pdf') || (vehicle.proof_file_path || '').toLowerCase().endsWith('.pdf')}
           graphicsFiles={graphicsFiles}
           isAdmin={!!isAdmin}
