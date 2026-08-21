@@ -7,6 +7,7 @@ import { validateBody, z } from '@/lib/validate';
 import { r2Get, r2PublicUrl } from '@/lib/r2';
 import { getNetSuitePdf } from '@/lib/netsuite';
 import { generateToken, validateExpiry } from '@/lib/magic-link-approval';
+import { getEmailSignature, renderSignatureHtml } from '@/lib/email-signature';
 
 export const dynamic = 'force-dynamic';
 
@@ -64,7 +65,7 @@ const money = (n: any) =>
 
 // Light-themed printable quote document (customers print/forward these, so
 // no dark chrome like the internal notification template).
-function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, logoUrl: string | null, flags: SendFlags, message?: string, approveUrl?: string | null): string {
+function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, logoUrl: string | null, flags: SendFlags, message?: string, approveUrl?: string | null, signature?: string | null): string {
   const pricing = flags.pricing;
   const lineItems = flags.pricing && flags.lineItems;
   const showDiagram = flags.diagram && !!diagramUrl;
@@ -177,6 +178,7 @@ function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, log
         <a href="${esc(approveUrl)}" style="display:inline-block;background:#16a34a;color:#ffffff;font-size:15px;font-weight:700;padding:13px 28px;border-radius:10px;text-decoration:none;">Review &amp; Accept This Quote</a>
         <div style="font-size:12px;color:#374151;margin-top:10px;line-height:1.5;">Accept online with a dated, legally binding signature — or use the same link to request changes.<br>No account needed. The link expires in 30 days.</div>
       </div>` : ''}
+      ${renderSignatureHtml(signature, 'light')}
     </div>
     <div style="text-align:center;padding:14px;font-size:11px;color:#9ca3af;">Sent by ${esc(company?.name || 'BMG Fleet')}</div>
   </div>
@@ -277,6 +279,8 @@ export async function POST(req: NextRequest) {
     : null;
 
   const message = parsed.data.message || undefined;
+  // Sender's signature — in the preview too, so what she sees is what goes.
+  const signature = await getEmailSignature(supabase, auth.user?.id);
 
   // Which of the quote's stored attachments ride along: all of them unless
   // the sender narrowed the set in the preview modal (e.g. "just the
@@ -299,7 +303,7 @@ export async function POST(req: NextRequest) {
       preview: true,
       to: Array.isArray(to) ? to : [to],
       subject,
-      html: buildQuoteHtml(quote, company, diagramUrl, logoUrl, flags, message, approveUrl),
+      html: buildQuoteHtml(quote, company, diagramUrl, logoUrl, flags, message, approveUrl, signature),
       attachments: names,
     });
   }
@@ -346,7 +350,7 @@ export async function POST(req: NextRequest) {
   // address has no mailbox, so without this a customer reply bounces.
   const bcc = parsed.data.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
   const ok = await sendEmail(
-    to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl, flags, message, approveUrl), undefined, attachments, auth.user?.email || undefined, bcc,
+    to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl, flags, message, approveUrl, signature), undefined, attachments, auth.user?.email || undefined, bcc,
     { kind: 'wrap_quote', sentBy: auth.user?.id, contextUrl: deepLinks.wrapQuote(quote.id) },
   );
   if (!ok) {

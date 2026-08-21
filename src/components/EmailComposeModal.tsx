@@ -97,6 +97,17 @@ function formatBytes(bytes: number | null | undefined): string {
 
 const DEFAULT_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
+// Bcc-me is a personal habit, not a per-send decision — staff who want a
+// copy of everything (e.g. to keep it findable in Gmail) shouldn't have to
+// re-tick it on every compose. Remembered per device; off by default.
+const BCC_SELF_KEY = 'bmg-email-bcc-self';
+export function loadBccSelfPref(): boolean {
+  try { return typeof window !== 'undefined' && localStorage.getItem(BCC_SELF_KEY) === '1'; } catch { return false; }
+}
+export function saveBccSelfPref(on: boolean): void {
+  try { localStorage.setItem(BCC_SELF_KEY, on ? '1' : '0'); } catch { /* private mode — session-only */ }
+}
+
 const labelStyle: React.CSSProperties = {
   fontSize: '9px', fontWeight: 700, color: 'var(--text-label)',
   textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '3px',
@@ -128,7 +139,7 @@ export default function EmailComposeModal({
 
   const [toInput, setToInput] = useState(initialTo || '');
   const toTouched = useRef(!!initialTo);
-  const [bccSelf, setBccSelf] = useState(false);
+  const [bccSelf, setBccSelf] = useState(loadBccSelfPref);
   const [message, setMessage] = useState('');
   const [attachmentIds, setAttachmentIds] = useState<string[]>(initialAttachmentIds || []);
   const [preview, setPreview] = useState<EmailComposePreview | null>(null);
@@ -261,10 +272,10 @@ export default function EmailComposeModal({
             <input
               type="checkbox"
               checked={bccSelf}
-              onChange={e => setBccSelf(e.target.checked)}
+              onChange={e => { setBccSelf(e.target.checked); saveBccSelfPref(e.target.checked); }}
               style={{ accentColor: '#3b82f6' }}
             />
-            Bcc me a copy ({user.email})
+            Bcc me a copy ({user.email}) — remembered on this device
           </label>
         )}
 

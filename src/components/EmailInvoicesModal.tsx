@@ -15,6 +15,7 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { loadBccSelfPref, saveBccSelfPref } from '@/components/EmailComposeModal';
 import { useDialog } from '@/components/DialogProvider';
 
 export interface EmailableInvoice {
@@ -87,7 +88,7 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
   const [sendingTest, setSendingTest] = useState(false);
   // Customer-email compose standard: one click copies the real send to the
   // signed-in sender's inbox.
-  const [bccSelf, setBccSelf] = useState(false);
+  const [bccSelf, setBccSelf] = useState(loadBccSelfPref);
 
   // Billing workflow (K3): customers.billing_workflow routes invoices —
   // po_portal customers get a "submit in the portal, don't email" banner and
@@ -431,7 +432,7 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
               <input
                 type="checkbox"
                 checked={bccSelf}
-                onChange={e => setBccSelf(e.target.checked)}
+                onChange={e => { setBccSelf(e.target.checked); saveBccSelfPref(e.target.checked); }}
                 style={{ accentColor: '#3b82f6' }}
               />
               Bcc me a copy ({user.email})

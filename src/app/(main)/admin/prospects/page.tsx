@@ -597,10 +597,17 @@ export default function ProspectsPage() {
             background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', cursor: 'pointer',
           }}>{scanning ? 'Scanning...' : 'Scan Card'}</button>
           </DropZone>
-          <button onClick={() => { if (showCreate) { setShowCreate(false); setForm(emptyForm); } else { setShowCreate(true); } }} style={{
+          <button onClick={() => {
+            if (showCreate) { setShowCreate(false); setForm(emptyForm); return; }
+            // Open matching the active tab — on Vendors, the form starts as a
+            // vendor (it used to open as Customer there, hiding the vendor
+            // path behind the small type pills).
+            setForm(f => ({ ...f, record_type: crmTab === 'vendors' ? 'vendor' : 'customer' }));
+            setShowCreate(true);
+          }} style={{
             padding: '8px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
             background: 'var(--tab-active-bg)', border: '1px solid var(--tab-active-border)', color: 'var(--tab-active-color)', cursor: 'pointer',
-          }}>{showCreate ? 'Cancel' : '+ New'}</button>
+          }}>{showCreate ? 'Cancel' : crmTab === 'vendors' ? '+ New Vendor' : '+ New Customer'}</button>
         </div>
       </div>
 

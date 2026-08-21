@@ -99,7 +99,8 @@ export default function MorePage() {
     {
       header: 'Account',
       items: [
-        { title: 'Settings', sub: 'Password, alerts & notification preferences', path: '/settings', show: true },
+        { title: 'Sent Emails', sub: 'Every email you’ve sent from FleetSuite — with delivery status', path: '/sent-emails', show: true },
+        { title: 'Settings', sub: 'Password, email signature, alerts & notifications', path: '/settings', show: true },
       ],
     },
   ];

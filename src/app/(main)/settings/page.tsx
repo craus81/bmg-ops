@@ -27,6 +27,13 @@ export default function SettingsPage() {
   const [pwSaved, setPwSaved] = useState(false);
   const [pwError, setPwError] = useState('');
 
+  // Email signature state — appended by the server to every customer email
+  // this user composes (estimates, invoices, wrap quotes, statements…).
+  const [signature, setSignature] = useState('');
+  const [sigSaving, setSigSaving] = useState(false);
+  const [sigSaved, setSigSaved] = useState(false);
+  const [sigError, setSigError] = useState('');
+
   // Push notification state
   const [pushSupported, setPushSupported] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -42,8 +49,24 @@ export default function SettingsPage() {
     if (!user) return;
     loadPrefs();
     checkPushStatus();
+    supabase.from('profiles').select('email_signature').eq('id', user.id).maybeSingle()
+      .then(({ data }: { data: { email_signature: string | null } | null }) => setSignature(data?.email_signature || ''));
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user]);
+
+  const handleSaveSignature = async () => {
+    if (!user) return;
+    setSigSaving(true);
+    setSigError('');
+    const { error } = await supabase
+      .from('profiles')
+      .update({ email_signature: signature.trim() || null })
+      .eq('id', user.id);
+    setSigSaving(false);
+    if (error) { setSigError(error.message); return; }
+    setSigSaved(true);
+    setTimeout(() => setSigSaved(false), 2500);
+  };
 
   const checkPushStatus = async () => {
     const supported = isPushSupported();
@@ -307,6 +330,44 @@ export default function SettingsPage() {
             {pwSaving ? 'Updating...' : pwSaved ? 'Password Updated!' : 'Update Password'}
           </button>
         </form>
+      </div>
+
+      {/* Email signature — appended to every customer email this user
+          composes (estimate approvals, invoices, wrap quotes, statements,
+          proofs, install guides). Plain text; the compose preview shows it. */}
+      <div style={sectionStyle}>
+        <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>Email Signature</div>
+        <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
+          Added to the bottom of every customer email you send from FleetSuite — estimates, invoices, quotes, statements. You&apos;ll see it in the email preview before sending. Leave blank for none.
+        </div>
+        <textarea
+          value={signature}
+          onChange={e => { setSignature(e.target.value); setSigError(''); }}
+          rows={4}
+          maxLength={1000}
+          placeholder={'Your Name\nBMG Fleet Services\n(555) 555-0100'}
+          style={{ ...inputStyle, resize: 'vertical', marginBottom: '8px', fontFamily: 'inherit' }}
+        />
+        {sigError && (
+          <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', marginBottom: '8px' }}>
+            <div style={{ fontSize: '11px', color: '#ef4444' }}>{sigError}</div>
+          </div>
+        )}
+        <button
+          onClick={handleSaveSignature}
+          disabled={sigSaving}
+          style={{
+            width: '100%', padding: '12px', borderRadius: '10px',
+            background: sigSaved ? 'rgba(34,197,94,0.12)' : 'rgba(59,130,246,0.12)',
+            border: `1px solid ${sigSaved ? 'rgba(34,197,94,0.3)' : 'rgba(59,130,246,0.3)'}`,
+            color: sigSaved ? '#22c55e' : '#3b82f6',
+            fontSize: '13px', fontWeight: 700,
+            cursor: sigSaving ? 'not-allowed' : 'pointer',
+            opacity: sigSaving ? 0.5 : 1,
+          }}
+        >
+          {sigSaving ? 'Saving...' : sigSaved ? 'Signature Saved!' : 'Save Signature'}
+        </button>
       </div>
 
       {/* Display — customer-only accounts have no More page, so the text
