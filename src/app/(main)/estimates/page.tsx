@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { usePopout } from '@/components/Popout';
 import { createClient } from '@/lib/supabase-browser';
@@ -14,6 +14,8 @@ import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailCo
 import { flashNote } from '@/lib/focus-note';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import { resolvePlatform, matchQualifiersToConfig } from '@/lib/vin-platform';
+import { sameVehicleVin, vinMatchOrFilter } from '@/lib/vin-match';
+import { IN_SHOP_STATUSES } from '@/lib/types';
 import { deepLinks } from '@/lib/deep-links';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import NumberInput from '@/components/NumberInput';
@@ -59,6 +61,26 @@ interface LinkedGraphicsJob {
   status: string;
   assigned_to: string | null;
 }
+
+// A checked-in vehicle (fleet_checkins) as the link button/picker sees it.
+interface CheckinLite {
+  id: string;
+  vin: string;
+  status: string;
+  vehicle_year: string | null;
+  vehicle_make: string | null;
+  vehicle_model: string | null;
+  customer_name: string | null;
+  install_instructions?: string | null;
+  on_site_contact_name?: string | null;
+  on_site_contact_phone?: string | null;
+  delivery_preferences?: string | null;
+}
+
+const CHECKIN_COLS = 'id, vin, status, vehicle_year, vehicle_make, vehicle_model, customer_name, install_instructions, on_site_contact_name, on_site_contact_phone, delivery_preferences';
+
+const checkinLabel = (c: CheckinLite) =>
+  [c.vehicle_year, c.vehicle_make, c.vehicle_model].filter(Boolean).join(' ') || 'Vehicle';
 
 const GRAPHICS_STATUS_COLORS: Record<string, string> = {
   flagged: '#ef4444',
@@ -117,6 +139,7 @@ interface Estimate {
   vehicle_roof: string | null;
   vehicle_cab: string | null;
   vehicle_bed: string | null;
+  fleet_checkin_id: string | null;
 }
 
 // Allowed qualifier options per platform, from vehicle_platforms.config —
@@ -220,6 +243,15 @@ export default function EstimatesPage() {
   // quote's expiration date (→ NS "Expires"/dueDate).
   const [poNumber, setPoNumber] = useState('');
   const [expirationDate, setExpirationDate] = useState('');
+  // Checked-in vehicle link: the fleet_checkins row (In-Shop board) this
+  // estimate is for. Linked by the button/picker below, or suggested when
+  // the typed VIN matches a vehicle currently on the ground.
+  const [fleetCheckinId, setFleetCheckinId] = useState<string | null>(null);
+  const [linkedCheckin, setLinkedCheckin] = useState<CheckinLite | null>(null);
+  const [checkinPickerOpen, setCheckinPickerOpen] = useState(false);
+  const [checkinOptions, setCheckinOptions] = useState<CheckinLite[]>([]);
+  const [checkinSearch, setCheckinSearch] = useState('');
+  const [checkinSuggestion, setCheckinSuggestion] = useState<CheckinLite | null>(null);
   // N4-B2 phase 3: the vehicle LIVES on the estimate whether or not a VIN
   // exists — platform (make+model), year, and the qualifiers that gate
   // fitment: roof/wheelbase for vans, cab/bed for trucks. Selects cascade
@@ -772,6 +804,7 @@ export default function EstimatesPage() {
         unit_number: unitNumber,
         po_number: poNumber,
         expiration_date: expirationDate || null,
+        fleet_checkin_id: fleetCheckinId,
         vehicle_platform_id: vehiclePlatformId,
         vehicle_year: vehicleYear,
         vehicle_wheelbase: vehicleWheelbase,
@@ -1077,12 +1110,17 @@ export default function EstimatesPage() {
     setVehicleRoof(est.vehicle_roof || '');
     setVehicleCab(est.vehicle_cab || '');
     setVehicleBed(est.vehicle_bed || '');
+    setFleetCheckinId(est.fleet_checkin_id || null);
+    setCheckinSuggestion(null);
+    setCheckinPickerOpen(false);
+    if (est.fleet_checkin_id) loadLinkedCheckin(est.fleet_checkin_id);
+    else setLinkedCheckin(null);
 
     // Load install context + line items + customer defaults in parallel
     const [{ data: fullEst }, { data: lineData }] = await Promise.all([
       supabase
         .from('estimates')
-        .select('install_instructions, on_site_contact_name, on_site_contact_phone, delivery_preferences, internal_notes')
+        .select('install_instructions, on_site_contact_name, on_site_contact_phone, delivery_preferences, internal_notes, po_number, expiration_date')
         .eq('id', est.id)
         .maybeSingle(),
       supabase
@@ -1137,6 +1175,100 @@ export default function EstimatesPage() {
 
     setView('builder');
   };
+
+  // ── Checked-in vehicle linkage (fleet_checkins / In-Shop board) ──
+  const loadLinkedCheckin = async (id: string) => {
+    const { data } = await supabase.from('fleet_checkins').select(CHECKIN_COLS).eq('id', id).maybeSingle();
+    setLinkedCheckin((data as CheckinLite) || null);
+  };
+
+  const openCheckinPicker = async () => {
+    setCheckinPickerOpen(true);
+    const { data } = await supabase
+      .from('fleet_checkins')
+      .select(CHECKIN_COLS)
+      .in('status', IN_SHOP_STATUSES)
+      .is('archived_at', null)
+      .order('created_at', { ascending: false })
+      .limit(150);
+    setCheckinOptions((data as CheckinLite[]) || []);
+  };
+
+  const linkCheckin = async (c: CheckinLite) => {
+    setFleetCheckinId(c.id);
+    setLinkedCheckin(c);
+    setCheckinPickerOpen(false);
+    setCheckinSearch('');
+    setCheckinSuggestion(null);
+    // Prefill what the estimate doesn't have yet — never clobber typed
+    // values. A full VIN triggers the decode effect, which fills
+    // year/platform/qualifiers on its own.
+    if (!vin.trim() && c.vin) setVin(c.vin.toUpperCase());
+    else if (!vehicleYear && c.vehicle_year) setVehicleYear(c.vehicle_year);
+    if (!installInstructions.trim() && c.install_instructions) setInstallInstructions(c.install_instructions);
+    if (!onSiteContactName.trim() && c.on_site_contact_name) setOnSiteContactName(c.on_site_contact_name);
+    if (!onSiteContactPhone.trim() && c.on_site_contact_phone) setOnSiteContactPhone(c.on_site_contact_phone);
+    if (!deliveryPreferences.trim() && c.delivery_preferences) setDeliveryPreferences(c.delivery_preferences);
+    // Check-ins carry only a customer NAME — link the real customer record
+    // when exactly one matches it, otherwise leave the picker to the human.
+    if (!customerId && c.customer_name?.trim()) {
+      const { data: matches } = await supabase
+        .from('customers')
+        .select('id, company_name, entity_id, netsuite_id')
+        .ilike('company_name', c.customer_name.trim())
+        .limit(2);
+      if (matches && matches.length === 1) {
+        setCustomerId(matches[0].id);
+        setCustomerName(matches[0].company_name || matches[0].entity_id || c.customer_name);
+        setCustomerNsId(matches[0].netsuite_id);
+      } else if (!customerName.trim()) {
+        setCustomerName(c.customer_name);
+      }
+    }
+  };
+
+  const unlinkCheckin = () => {
+    setFleetCheckinId(null);
+    setLinkedCheckin(null);
+  };
+
+  // When the typed VIN matches a vehicle currently on the ground and the
+  // estimate isn't linked yet, offer the link instead of waiting to be asked
+  // — the exact "I made an estimate for a checked-in vehicle" case.
+  useEffect(() => {
+    if (view !== 'builder' || fleetCheckinId || vin.trim().length < 8) { setCheckinSuggestion(null); return; }
+    const filter = vinMatchOrFilter(vin);
+    if (!filter) { setCheckinSuggestion(null); return; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const { data } = await supabase
+        .from('fleet_checkins')
+        .select(CHECKIN_COLS)
+        .or(filter)
+        .in('status', IN_SHOP_STATUSES)
+        .is('archived_at', null)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (!cancelled) setCheckinSuggestion((data?.[0] as CheckinLite) || null);
+    }, 400);
+    return () => { cancelled = true; clearTimeout(t); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
+  }, [view, vin, fleetCheckinId]);
+
+  // Picker rows: text filter, best matches first — the estimate's VIN, then
+  // its customer, then shop recency (openCheckinPicker's load order).
+  const checkinMatches = useMemo(() => {
+    const q = checkinSearch.trim().toLowerCase();
+    return checkinOptions
+      .filter(c => !q || [c.vin, c.customer_name, c.vehicle_year, c.vehicle_make, c.vehicle_model]
+        .filter(Boolean).join(' ').toLowerCase().includes(q))
+      .map(c => ({
+        ...c,
+        vinMatch: !!vin.trim() && sameVehicleVin(vin, c.vin),
+        customerMatch: !!customerName.trim() && (c.customer_name || '').trim().toLowerCase() === customerName.trim().toLowerCase(),
+      }))
+      .sort((a, b) => (Number(b.vinMatch) * 2 + Number(b.customerMatch)) - (Number(a.vinMatch) * 2 + Number(a.customerMatch)));
+  }, [checkinOptions, checkinSearch, vin, customerName]);
 
   // ── Graphics job linkage ──
   const loadLinkedGraphicsJobs = useCallback(async (estimateId: string) => {
@@ -1243,6 +1375,11 @@ export default function EstimatesPage() {
     setDeliveryPreferences('');
     setPoNumber('');
     setExpirationDate('');
+    setFleetCheckinId(null);
+    setLinkedCheckin(null);
+    setCheckinSuggestion(null);
+    setCheckinPickerOpen(false);
+    setCheckinSearch('');
     setInternalNotes('');
     savedInternalNotesRef.current = '';
     setCustomerDefaults(null);
@@ -1657,6 +1794,91 @@ export default function EstimatesPage() {
             placeholder="Customer's unit or stock #"
           />
         </div>
+      </div>
+
+      {/* Checked-in vehicle link — ties this estimate to the fleet_checkins
+          row on the In-Shop board. Linked: a chip that opens the vehicle on
+          /tracking. Not linked: a picker button, plus an automatic offer
+          when the typed VIN matches a vehicle currently on the ground. */}
+      <div style={{ marginBottom: '12px' }}>
+        {linkedCheckin ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => router.push(deepLinks.vehicle(linkedCheckin.id))}
+              title="Open this vehicle on the In-Shop board"
+              style={{
+                display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 12px', borderRadius: '8px',
+                background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.3)', cursor: 'pointer',
+                fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)',
+              }}
+            >
+              🚗 In Shop: {checkinLabel(linkedCheckin)}
+              <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>VIN {linkedCheckin.vin}</span>
+              <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', background: 'rgba(34,197,94,0.15)', color: '#22c55e', textTransform: 'uppercase' }}>
+                {(linkedCheckin.status || '').replace(/_/g, ' ')}
+              </span>
+            </button>
+            <button onClick={unlinkCheckin} title="Unlink this vehicle (takes effect on Save)" style={{
+              padding: '6px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'transparent',
+              color: 'var(--text-muted)', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+            }}>✕ Unlink</button>
+          </div>
+        ) : (
+          <div style={{ position: 'relative' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <button onClick={() => (checkinPickerOpen ? setCheckinPickerOpen(false) : openCheckinPicker())} style={{
+                padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.3)', color: '#60a5fa',
+              }}>
+                {checkinPickerOpen ? 'Close' : '🚗 Link Checked-In Vehicle'}
+              </button>
+              {checkinSuggestion && (
+                <button onClick={() => linkCheckin(checkinSuggestion)} title="This VIN matches a vehicle currently on the In-Shop board — click to link it" style={{
+                  padding: '7px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                  background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.4)', color: '#f59e0b',
+                }}>
+                  ⚡ This VIN is checked in — {checkinLabel(checkinSuggestion)}{checkinSuggestion.customer_name ? ` (${checkinSuggestion.customer_name})` : ''} · Link it
+                </button>
+              )}
+            </div>
+            {checkinPickerOpen && (
+              <div style={{ position: 'absolute', top: '100%', left: 0, zIndex: 60, marginTop: '4px', width: 'min(520px, 92vw)', background: 'var(--card)', border: '1px solid var(--border-strong)', borderRadius: '10px', boxShadow: '0 8px 24px rgba(0,0,0,0.25)', padding: '10px' }}>
+                <input
+                  autoFocus
+                  value={checkinSearch}
+                  onChange={e => setCheckinSearch(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Escape') setCheckinPickerOpen(false); }}
+                  placeholder="Search vehicles in the shop — VIN, customer, make, model…"
+                  style={{ ...inputStyle, marginBottom: '6px' }}
+                />
+                <div style={{ maxHeight: '260px', overflowY: 'auto' }}>
+                  {checkinMatches.length === 0 ? (
+                    <div style={{ padding: '10px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                      {checkinOptions.length === 0 ? 'No vehicles currently in the shop.' : 'No in-shop vehicles match that search.'}
+                    </div>
+                  ) : checkinMatches.map(c => (
+                    <button key={c.id} onClick={() => linkCheckin(c)} style={{
+                      display: 'flex', alignItems: 'center', gap: '8px', width: '100%', padding: '8px 10px',
+                      textAlign: 'left', border: 'none', borderBottom: '1px solid var(--border)',
+                      background: 'transparent', cursor: 'pointer', fontSize: '12px', color: 'var(--text-primary)',
+                    }}>
+                      <span style={{ fontWeight: 700 }}>{checkinLabel(c)}</span>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>VIN {c.vin}</span>
+                      {c.customer_name && <span style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>{c.customer_name}</span>}
+                      <span style={{ flex: 1 }} />
+                      {c.vinMatch && (
+                        <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', background: 'rgba(251,191,36,0.15)', color: '#f59e0b' }}>VIN MATCH</span>
+                      )}
+                      <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'var(--subtle-bg)', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                        {(c.status || '').replace(/_/g, ' ')}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '8px', marginBottom: '12px' }}>
         <div>

@@ -307,6 +307,12 @@ export const VEHICLE_STATUS_PIPELINE: VehicleTrackingStatus[] = [
   'received', 'in_progress', 'stuck_parts', 'stuck_graphics', 'complete', 'shipped'
 ];
 
+// "Physically on the ground at the shop" — the statuses the In-Shop board's
+// On Ground count, ShopArrivals, and the estimate builder's checked-in
+// vehicle picker all agree on ('checked_in' is the pre-migration alias of
+// 'received' that old rows can still carry). Pair with archived_at IS NULL.
+export const IN_SHOP_STATUSES = ['received', 'checked_in', 'in_progress', 'stuck_parts', 'stuck_graphics'];
+
 export const VEHICLE_STATUS_LABELS: Record<VehicleTrackingStatus, string> = {
   received: 'Received',
   in_progress: 'In Progress',

@@ -12,9 +12,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { deepLinks } from '@/lib/deep-links';
+import { IN_SHOP_STATUSES } from '@/lib/types';
 import { useAuth } from '@/components/AuthProvider';
-
-const IN_SHOP_STATUSES = ['received', 'checked_in', 'in_progress', 'stuck_parts', 'stuck_graphics'];
 
 interface InboundRow {
   id: string;

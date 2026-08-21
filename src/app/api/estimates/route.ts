@@ -49,6 +49,8 @@ const UpsertEstimateSchema = z.object({
   // expiration date (YYYY-MM-DD → NetSuite estimate dueDate/"Expires").
   po_number: z.string().max(60).optional().nullable(),
   expiration_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+  // The checked-in vehicle (fleet_checkins row) this estimate is for.
+  fleet_checkin_id: z.string().uuid().optional().nullable(),
   // N4-B2 phase 3: the vehicle lives on the estimate whether or not a VIN
   // exists — platform + year + the qualifiers that gate fitment.
   vehicle_platform_id: z.string().uuid().optional().nullable(),
@@ -122,7 +124,7 @@ export async function POST(req: NextRequest) {
     // T1.6 install context
     install_instructions, on_site_contact_name, on_site_contact_phone,
     delivery_preferences, internal_notes,
-    vin, unit_number, po_number, expiration_date,
+    vin, unit_number, po_number, expiration_date, fleet_checkin_id,
     vehicle_platform_id, vehicle_year, vehicle_wheelbase,
     vehicle_roof, vehicle_cab, vehicle_bed,
   } = parsed.data;
@@ -196,6 +198,7 @@ export async function POST(req: NextRequest) {
           unit_number: normalizedUnit,
           po_number: po_number?.trim() || null,
           expiration_date: expiration_date || null,
+          fleet_checkin_id: fleet_checkin_id || null,
           vehicle_platform_id: vehicle_platform_id || null,
           vehicle_year: vehicle_year?.trim() || null,
           vehicle_wheelbase: vehicle_wheelbase?.trim() || null,
@@ -268,6 +271,7 @@ export async function POST(req: NextRequest) {
           unit_number: normalizedUnit,
           po_number: po_number?.trim() || null,
           expiration_date: expiration_date || null,
+          fleet_checkin_id: fleet_checkin_id || null,
           vehicle_platform_id: vehicle_platform_id || null,
           vehicle_year: vehicle_year?.trim() || null,
           vehicle_wheelbase: vehicle_wheelbase?.trim() || null,
