@@ -15,7 +15,7 @@
  * Server-safe: pure string building, no client imports.
  */
 
-import { renderSignatureHtml } from './email-signature';
+import { renderSignatureHtml, type EmailSignature } from './email-signature';
 
 export function escHtml(s: string | number | null | undefined): string {
   if (s === null || s === undefined) return '';
@@ -95,9 +95,9 @@ export interface EstimateDocumentOptions {
   /** Pre-built trusted HTML appended after the totals (the signed/audit
    *  block on acceptance snapshots). Caller escapes its own interpolations. */
   signedBlockHtml?: string | null;
-  /** The sender's email signature (plain text) — rendered at the bottom of
-   *  the document on composed sends; snapshots pass none. */
-  signature?: string | null;
+  /** The sender's email signature — rendered at the bottom of the
+   *  document on composed sends; snapshots pass none. */
+  signature?: EmailSignature | string | null;
 }
 
 /**

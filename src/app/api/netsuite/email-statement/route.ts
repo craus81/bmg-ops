@@ -7,7 +7,7 @@ import { getNetSuitePdf } from '@/lib/netsuite';
 import { sendEmailDetailed } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { r2PublicUrl } from '@/lib/r2';
-import { getEmailSignature, renderSignatureHtml } from '@/lib/email-signature';
+import { getEmailSignature, renderSignatureHtml, type EmailSignature } from '@/lib/email-signature';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -49,7 +49,7 @@ const fmtD = (iso: string | null) => {
 
 interface Letterhead { company: any; logoUrl: string | null }
 
-function statementEmailHtml(customer: string, invoices: StatementInvoice[], scope: StatementScope, rangeNote: string, lh: Letterhead, customBody?: string, attachNote?: string, signature?: string | null): string {
+function statementEmailHtml(customer: string, invoices: StatementInvoice[], scope: StatementScope, rangeNote: string, lh: Letterhead, customBody?: string, attachNote?: string, signature?: EmailSignature | null): string {
   const total = invoices.reduce((s, i) => s + i.unpaid, 0);
   const pastDue = invoices.reduce((s, i) => s + (i.daysPastDue > 0 ? i.unpaid : 0), 0);
   const td = 'padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#111827;';

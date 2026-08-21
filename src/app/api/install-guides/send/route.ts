@@ -5,7 +5,7 @@ import { sendEmail } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { validateBody, z } from '@/lib/validate';
 import { r2Get, r2PublicUrl } from '@/lib/r2';
-import { getEmailSignature, renderSignatureHtml } from '@/lib/email-signature';
+import { getEmailSignature, renderSignatureHtml, type EmailSignature } from '@/lib/email-signature';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,7 +47,7 @@ function buildGuideHtml(
   logoUrl: string | null,
   attachmentNames: string[],
   message?: string,
-  signature?: string | null,
+  signature?: EmailSignature | null,
 ): string {
   const companyLines = [
     company?.name,

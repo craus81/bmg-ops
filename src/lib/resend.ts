@@ -1,6 +1,6 @@
 import { Resend } from 'resend';
 import { createClient } from '@supabase/supabase-js';
-import { renderSignatureHtml } from './email-signature';
+import { renderSignatureHtml, type EmailSignature } from './email-signature';
 
 const apiKey = process.env.RESEND_API_KEY;
 const fromEmail = process.env.RESEND_FROM_EMAIL || 'notifications@bmgfleet.com';
@@ -214,7 +214,7 @@ export function buildNotificationEmail(
   body: string,
   ctaUrl?: string,
   ctaLabel?: string,
-  opts?: { note?: string; attachmentNames?: string[]; ctaNote?: string; signature?: string | null },
+  opts?: { note?: string; attachmentNames?: string[]; ctaNote?: string; signature?: EmailSignature | string | null },
 ): string {
   const noteHtml = opts?.note?.trim()
     ? `
@@ -302,7 +302,7 @@ export function buildCustomerDigestEmail(
 /**
  * Build a styled HTML email for sending invoices to customers
  */
-export function buildInvoiceEmail(customerName: string, invoiceNumbers: string[], poNumbers: string[], customBody?: string, signature?: string | null): string {
+export function buildInvoiceEmail(customerName: string, invoiceNumbers: string[], poNumbers: string[], customBody?: string, signature?: EmailSignature | string | null): string {
   const invoiceList = invoiceNumbers.map(n => `<li style="margin-bottom:4px;color:#f5f8fc;font-size:14px;">Invoice #${escapeHtml(n)}</li>`).join('');
   const poLine = poNumbers.length > 0
     ? `<div style="font-size:13px;color:#8899aa;margin-top:12px;">PO${poNumbers.length > 1 ? 's' : ''}: ${poNumbers.map(p => escapeHtml(p)).join(', ')}</div>`
