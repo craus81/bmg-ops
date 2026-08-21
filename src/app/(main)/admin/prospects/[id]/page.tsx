@@ -508,12 +508,27 @@ export default function CustomerRecordPage() {
   };
 
   const [tagInput, setTagInput] = useState('');
+  // Every tag already in use anywhere — the datalist under the + tag input,
+  // so desktop gets a dropdown of options instead of blind free text.
+  const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
+  useEffect(() => {
+    (async () => {
+      const { data } = await fetchAllRows<{ tag: string }>((from, to) =>
+        supabase.from('prospect_tags').select('tag').order('tag').order('id').range(from, to));
+      setTagSuggestions([...new Set((data || []).map(r => r.tag))]);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- vocabulary loads once
+  }, []);
   const addTag = async () => {
     const t = tagInput.trim().toLowerCase();
     if (!t || !prospect) return;
+    // Already tagged — just clear the input instead of surfacing the raw
+    // unique-constraint error.
+    if (tags.some(x => x.tag === t)) { setTagInput(''); return; }
     const { data, error } = await supabase.from('prospect_tags').insert({ prospect_id: prospect.id, tag: t }).select().single();
     if (error || !data) { await dialog.alert(`Could not add the tag: ${error?.message || 'unknown error'}`); return; }
     setTags(prev => [...prev, data as Tag]);
+    setTagSuggestions(prev => (prev.includes(t) ? prev : [...prev, t].sort()));
     setTagInput('');
   };
 
@@ -1408,8 +1423,26 @@ export default function CustomerRecordPage() {
             <span key={t.id} style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '999px', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>{t.tag}</span>
           ))}
           {prospect && (
-            <input value={tagInput} onChange={e => setTagInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addTag(); }}
-              placeholder="+ tag" style={{ width: '76px', padding: '3px 9px', borderRadius: '999px', fontSize: '10px', background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+            <>
+              {/* Enter, blur, or the + button all commit — Enter used to be
+                  the ONLY save path, so a typed tag followed by a click
+                  anywhere else silently vanished ("it doesn't save"). The
+                  datalist offers every tag already in use. */}
+              <input value={tagInput} onChange={e => setTagInput(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') addTag(); }}
+                onBlur={() => { if (tagInput.trim()) addTag(); }}
+                list="prospect-tag-options"
+                placeholder="+ tag" style={{ width: '140px', padding: '3px 9px', borderRadius: '999px', fontSize: '10px', background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+              <datalist id="prospect-tag-options">
+                {tagSuggestions.map(t => <option key={t} value={t} />)}
+              </datalist>
+              {tagInput.trim() && (
+                <button onMouseDown={e => e.preventDefault()} onClick={addTag} title="Add this tag" style={{
+                  padding: '3px 9px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                  background: 'rgba(96,165,250,0.12)', border: '1px solid rgba(96,165,250,0.4)', color: '#60a5fa',
+                }}>Add</button>
+              )}
+            </>
           )}
         </div>
         {(prospect?.contact_name || customer?.entity_id) && (
