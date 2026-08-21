@@ -14,6 +14,7 @@ import { DropZone } from '@/components/DropZone';
 import { theme } from '@/lib/theme';
 import { RollNesting, RollFilmInfo } from '@/components/RollNesting';
 import NumberInput from '@/components/NumberInput';
+import { loadBccSelfPref, saveBccSelfPref } from '@/components/EmailComposeModal';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import {
   DEFAULT_ROLL,
@@ -362,7 +363,7 @@ export default function WrapQuotePage() {
   // Standard compose fields: editable recipients (prefilled from the quote's
   // customer email + cc on the first preview) and bcc-me.
   const [emailTo, setEmailTo] = useState('');
-  const [emailBccSelf, setEmailBccSelf] = useState(false);
+  const [emailBccSelf, setEmailBccSelf] = useState(loadBccSelfPref);
   const [attachInclude, setAttachInclude] = useState<Record<string, boolean>>({});
   const [emailPreview, setEmailPreview] = useState<{ to: string[]; subject: string; html: string; attachments: string[] } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -3437,7 +3438,7 @@ export default function WrapQuotePage() {
                 <input
                   type="checkbox"
                   checked={emailBccSelf}
-                  onChange={e => setEmailBccSelf(e.target.checked)}
+                  onChange={e => { setEmailBccSelf(e.target.checked); saveBccSelfPref(e.target.checked); }}
                   style={{ accentColor: '#3b82f6' }}
                 />
                 Bcc me a copy ({user.email})
