@@ -15,8 +15,9 @@ import AssignmentPicker from '@/components/AssignmentPicker';
 import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
 import { openOrCreateVehicleThread } from '@/lib/customer-thread';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
+import { deepLinks } from '@/lib/deep-links';
 import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto, GraphicsJob, GraphicsInstallStatus, CheckinSalesOrder } from '@/lib/types';
-import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS, GRAPHICS_STATUS_LABELS, GRAPHICS_INSTALL_PIPELINE, GRAPHICS_INSTALL_LABELS, GRAPHICS_INSTALL_COLORS } from '@/lib/types';
+import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS, GRAPHICS_STATUS_LABELS, GRAPHICS_INSTALL_PIPELINE, GRAPHICS_INSTALL_LABELS, GRAPHICS_INSTALL_COLORS, IN_SHOP_STATUSES } from '@/lib/types';
 import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
 import CompletionModal from '@/components/CompletionModal';
@@ -48,8 +49,30 @@ export default function TrackingPage() {
   const PAGE_SIZE = 50;
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Estimates tied to the expanded vehicle: rows whose fleet_checkin_id
+  // points here (the estimate builder's Link Checked-In Vehicle button),
+  // plus the originating estimate the check-in snapshotted at creation
+  // (source_estimate_id — written since migration 080, displayed nowhere
+  // until now).
+  const [linkedEstimates, setLinkedEstimates] = useState<{ id: string; estimate_number: string; title: string | null; status: string; grand_total: number | null }[]>([]);
   const [statusHistory, setStatusHistory] = useState<VehicleStatusHistory[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+
+  useEffect(() => {
+    if (!expandedId) { setLinkedEstimates([]); return; }
+    const src = (vehicles.find(x => x.id === expandedId) as any)?.source_estimate_id as string | null | undefined;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('estimates')
+        .select('id, estimate_number, title, status, grand_total')
+        .or(`fleet_checkin_id.eq.${expandedId}${src ? `,id.eq.${src}` : ''}`)
+        .order('created_at', { ascending: false });
+      if (!cancelled) setLinkedEstimates(data || []);
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
+  }, [expandedId, vehicles]);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [statusNote, setStatusNote] = useState('');
   const [profiles, setProfiles] = useState<Record<string, string>>({});
@@ -1038,7 +1061,6 @@ export default function TrackingPage() {
   }
 
   // ── Board metrics (graphics-board treatment) ──
-  const IN_SHOP_STATUSES = ['received', 'checked_in', 'in_progress', 'stuck_parts', 'stuck_graphics'];
   const vStageDays = (v: FleetCheckin): number => {
     const since = stageSince[v.id] || v.created_at;
     return Math.floor((Date.now() - new Date(since).getTime()) / 86_400_000);
@@ -1876,6 +1898,38 @@ export default function TrackingPage() {
                         </div>
                       );
                     })()}
+
+                    {/* Estimates linked to this vehicle — via the estimate
+                        builder's Link Checked-In Vehicle button, or the
+                        originating estimate snapshotted at check-in. */}
+                    {linkedEstimates.length > 0 && (
+                      <div style={{ marginBottom: '12px' }}>
+                        <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                          Linked Estimate{linkedEstimates.length === 1 ? '' : 's'}
+                        </div>
+                        {linkedEstimates.map(est => (
+                          <button
+                            key={est.id}
+                            onClick={(e) => { e.stopPropagation(); router.push(deepLinks.estimate(est.id)); }}
+                            title="Open this estimate in the builder"
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: '8px', width: '100%', padding: '8px 10px',
+                              marginBottom: '4px', borderRadius: '8px', textAlign: 'left', cursor: 'pointer',
+                              background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.25)',
+                              fontSize: '12px', color: 'var(--text-primary)',
+                            }}
+                          >
+                            <span style={{ fontWeight: 800, color: '#60a5fa' }}>{est.estimate_number}</span>
+                            {est.title && <span style={{ color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{est.title}</span>}
+                            <span style={{ flex: 1 }} />
+                            {est.grand_total != null && <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>${Number(est.grand_total).toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>}
+                            <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'var(--subtle-bg)', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                              {est.status}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
 
                     {/* Invoice tracking — shown for archived vehicles */}
                     {showArchived && (
