@@ -40,6 +40,7 @@ import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
 import type { GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsJobView, Profile } from '@/lib/types';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import NumberInput from '@/components/NumberInput';
+import { canonicalPartFromCache } from '@/lib/parts-cache';
 import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
   GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
@@ -1507,9 +1508,16 @@ export default function GraphicsPage() {
                     <input style={inputStyle} value={createForm.partInput} onChange={e => setCreateForm({ ...createForm, partInput: e.target.value })}
                       placeholder="Type each part # and press Enter to add (supports multiple PO lines)"
                       onKeyDown={e => {
-                        if ((e.key === 'Enter' || e.key === ',') && createForm.partInput.trim()) {
+                        const val = createForm.partInput.trim();
+                        if ((e.key === 'Enter' || e.key === ',') && val) {
                           e.preventDefault();
-                          setCreateForm(f => ({ ...f, part_numbers: [...f.part_numbers, f.partInput.trim()], partInput: '' }));
+                          setCreateForm(f => ({ ...f, part_numbers: [...f.part_numbers, val], partInput: '' }));
+                          // Swap the typed chip to the catalog's casing (06u166 →
+                          // 06U166) once the parts cache resolves, so the job stores
+                          // canonical part numbers.
+                          canonicalPartFromCache(val).then(canon => {
+                            if (canon !== val) setCreateForm(f => ({ ...f, part_numbers: f.part_numbers.map(p => p === val ? canon : p) }));
+                          });
                         }
                       }}
                     />

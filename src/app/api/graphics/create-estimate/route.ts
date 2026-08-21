@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
+import { partNumberPattern } from '@/lib/part-number';
 
 export const dynamic = 'force-dynamic';
 
@@ -97,13 +98,15 @@ export async function POST(req: NextRequest) {
     const lineItems: any[] = [];
 
     for (const pn of partNumbers) {
-      // Look up from netsuite_parts catalog
-      const { data: part } = await supabase
+      // Look up from netsuite_parts catalog — case-insensitively, since the
+      // job's parts are hand-typed (06u166 must find 06U166).
+      const { data: partRows } = await supabase
         .from('netsuite_parts')
         .select('id, netsuite_id, item_number, display_name, description, sales_price, labor_hours')
-        .eq('item_number', pn)
+        .ilike('item_number', partNumberPattern(pn))
         .eq('is_active', true)
-        .maybeSingle();
+        .limit(1);
+      const part = partRows?.[0];
 
       if (part) {
         lineItems.push({
