@@ -346,6 +346,10 @@ export default function AiChat() {
     }
   };
 
+  // Floating button diameter — trimmed ~30% from the original 72 (field
+  // ask 2026-08-21: "it seems to be in the way quite a bit").
+  const BTN_SIZE = 50;
+
   // Draggable position
   const [pos, setPos] = useState({ x: -1, y: -1 }); // -1 = use default
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number; dragging: boolean }>({ startX: 0, startY: 0, origX: 0, origY: 0, dragging: false });
@@ -355,7 +359,9 @@ export default function AiChat() {
   // the zoom factor so the button tracks the finger and clamps on-screen.
   const getDefaultPos = () => {
     const z = getTextZoom();
-    return { x: window.innerWidth / z - 84, y: window.innerHeight / z - 148 };
+    // Same margins as before the shrink: 12px off the right edge, 76px
+    // clear of the bottom nav.
+    return { x: window.innerWidth / z - (BTN_SIZE + 12), y: window.innerHeight / z - (BTN_SIZE + 76) };
   };
   const getPos = () => pos.x < 0 ? getDefaultPos() : pos;
 
@@ -372,8 +378,8 @@ export default function AiChat() {
     if (Math.abs(dx) > 5 || Math.abs(dy) > 5) d.dragging = true;
     if (d.dragging) {
       setPos({
-        x: Math.max(0, Math.min(window.innerWidth / z - 72, d.origX + dx)),
-        y: Math.max(0, Math.min(window.innerHeight / z - 72, d.origY + dy)),
+        x: Math.max(0, Math.min(window.innerWidth / z - BTN_SIZE, d.origX + dx)),
+        y: Math.max(0, Math.min(window.innerHeight / z - BTN_SIZE, d.origY + dy)),
       });
     }
   };
@@ -477,8 +483,8 @@ export default function AiChat() {
             position: 'fixed',
             left: `${getPos().x}px`,
             top: `${getPos().y}px`,
-            width: '72px',
-            height: '72px',
+            width: `${BTN_SIZE}px`,
+            height: `${BTN_SIZE}px`,
             borderRadius: '50%',
             background: 'var(--card)',
             border: '2px solid var(--border-strong, rgba(255,255,255,0.1))',
@@ -503,7 +509,7 @@ export default function AiChat() {
             e.currentTarget.style.boxShadow = '0 4px 20px rgba(30,58,138,0.5)';
           }}
         >
-          <MascotSvg thinking={sending} size={62} />
+          <MascotSvg thinking={sending} size={BTN_SIZE - 8} />
         </div>
       )}
 
