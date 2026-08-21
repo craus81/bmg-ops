@@ -100,6 +100,12 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   const [savedCheckin, setSavedCheckin] = useState<FleetCheckin | null>(null);
   const [notes, setNotes] = useState('');
   const [manualCustomerName, setManualCustomerName] = useState('');
+  // The picked local customer record (customers table, synced from
+  // NetSuite) behind the name — free text still saves, but a pick (or a
+  // create-in-NetSuite) links the check-in to the real customer.
+  const [manualCustomerId, setManualCustomerId] = useState<string | null>(null);
+  const [manualCustMatches, setManualCustMatches] = useState<{ id: string; company_name: string; entity_id: string | null }[]>([]);
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [scheduledUpfitDate, setScheduledUpfitDate] = useState('');
   const [promisedBackDate, setPromisedBackDate] = useState('');
 
@@ -358,6 +364,62 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
     setUploadedProofUrl(null);
   };
 
+  // ─── Manual customer picker (no sales order linked) ───────
+  // Debounced type-ahead over the synced NetSuite customers table — same
+  // pattern as the wrap-quote customer search. Typing clears any pick.
+  useEffect(() => {
+    const q = manualCustomerName.trim();
+    if (manualCustomerId || q.length < 2) { setManualCustMatches([]); return; }
+    const t = setTimeout(async () => {
+      const escaped = q.replace(/[%,()]/g, ' ');
+      const { data } = await supabase
+        .from('customers')
+        .select('id, company_name, entity_id')
+        .or(`company_name.ilike.%${escaped}%,entity_id.ilike.%${escaped}%`)
+        .order('company_name')
+        .limit(8);
+      setManualCustMatches((data || []) as typeof manualCustMatches);
+    }, 250);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
+  }, [manualCustomerName, manualCustomerId]);
+
+  const linkManualCustomer = async (id: string) => {
+    setManualCustomerId(id);
+    setManualCustMatches([]);
+    const { data } = await supabase.from('customers').select('company_name, entity_id').eq('id', id).maybeSingle();
+    if (data) setManualCustomerName(data.company_name || data.entity_id || manualCustomerName);
+  };
+
+  // New customer straight from the check-in screen: creates the NetSuite
+  // record + local mirror via the shared route. A name that already exists
+  // comes back 409 with the existing record's id — link that instead of
+  // creating a NetSuite double.
+  const createManualCustomer = async () => {
+    const name = manualCustomerName.trim();
+    if (!name || creatingCustomer) return;
+    setCreatingCustomer(true);
+    try {
+      const res = await fetch('/api/wrap-quote/create-customer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyName: name }),
+      });
+      const body = await res.json();
+      if (res.status === 409 && body.existingCustomerId) {
+        await linkManualCustomer(body.existingCustomerId);
+      } else if (res.ok && body.customerId) {
+        setManualCustomerId(body.customerId);
+        setManualCustMatches([]);
+      } else {
+        await dialog.alert(body.error || 'NetSuite customer create failed');
+      }
+    } catch (err: any) {
+      await dialog.alert('Create failed: ' + (err?.message || String(err)));
+    }
+    setCreatingCustomer(false);
+  };
+
   // ─── Save Check-In ────────────────────────────────────────
   const handleSave = async () => {
     setSaveError(null);
@@ -434,6 +496,21 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
       graphicsSignal = firstGraphicsMatch(estLines || []);
     }
 
+    // The real customer record behind the name: the manual pick, or — on
+    // the sales-order path — the SO's customer name resolved against the
+    // synced customers table (stored only on an unambiguous match).
+    let checkinCustomerId: string | null = manualCustomerId;
+    if (selectedOrder?.customer_name) {
+      checkinCustomerId = null;
+      const escapedName = selectedOrder.customer_name.trim().replace(/[\\%_]/g, '\\$&');
+      const { data: custMatch } = await supabase
+        .from('customers')
+        .select('id')
+        .ilike('company_name', escapedName)
+        .limit(2);
+      if (custMatch?.length === 1) checkinCustomerId = custMatch[0].id;
+    }
+
     const { data, error } = await supabase
       .from('fleet_checkins')
       .insert({
@@ -446,6 +523,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
         netsuite_sales_order_id: selectedOrder?.id || null,
         sales_order_number: selectedOrder?.sales_order_number || null,
         customer_name: selectedOrder?.customer_name || manualCustomerName.trim() || null,
+        customer_id: checkinCustomerId,
         sales_order_memo: selectedOrder?.memo || null,
         sales_order_total: selectedOrder?.total || null,
         proof_file_path: selectedProof?.storage_path || null,
@@ -589,6 +667,8 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
     setScheduledUpfitDate('');
     setPromisedBackDate('');
     setManualCustomerName('');
+    setManualCustomerId(null);
+    setManualCustMatches([]);
     setKeepingContext(false);
     setPartialVinMatches([]);
     setMode('text');
@@ -629,6 +709,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
 
     setCustomerSearch(ci.customer_name || '');
     setManualCustomerName(ci.customer_name || '');
+    setManualCustomerId((ci as any).customer_id || null);
     setScheduledUpfitDate(ci.scheduled_upfit_date || '');
     setPromisedBackDate((ci as any).promised_back_date || '');
     setNotes('');
@@ -859,6 +940,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
               onClick={() => {
                 setSelectedOrders([]);
                 setManualCustomerName('');
+                setManualCustomerId(null);
                 setCustomerSearch('');
                 setSelectedProof(null);
                 setDbxSelected(null);
@@ -1513,27 +1595,65 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
           )}
         </div>
 
-        {/* Customer Name — shown when no sales order is linked */}
+        {/* Customer — shown when no sales order is linked. A type-ahead
+            over the synced NetSuite customer list (was free text): pick a
+            match, or create the customer in NetSuite right here. Free text
+            still saves — a check-in is never blocked on customer hygiene. */}
         {!selectedOrder && (
           <div style={{
             background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '14px',
             padding: '14px', marginBottom: '14px',
           }}>
             <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
-              Customer Name
+              Customer
             </label>
-            <input
-              value={manualCustomerName}
-              onChange={(e) => setManualCustomerName(e.target.value)}
-              placeholder="Enter customer name..."
-              style={{
-                width: '100%', padding: '10px', borderRadius: '10px',
-                border: `1px solid ${theme.border}`, background: theme.bg,
-                color: theme.textPrimary, fontSize: '13px',
-              }}
-            />
-            <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '4px' }}>
-              Will be replaced if a sales order is matched later
+            <div style={{ position: 'relative' }}>
+              <input
+                value={manualCustomerName}
+                onChange={(e) => { setManualCustomerName(e.target.value); setManualCustomerId(null); }}
+                placeholder="Search NetSuite customers…"
+                style={{
+                  width: '100%', padding: '10px', borderRadius: '10px',
+                  border: `1px solid ${manualCustomerId ? 'rgba(34,197,94,0.4)' : theme.border}`, background: theme.bg,
+                  color: theme.textPrimary, fontSize: '13px', boxSizing: 'border-box',
+                }}
+              />
+              {manualCustMatches.length > 0 && (
+                <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '200px', overflowY: 'auto', marginTop: '2px' }}>
+                  {manualCustMatches.map(c => (
+                    <button key={c.id} onMouseDown={e => e.preventDefault()} onClick={() => linkManualCustomer(c.id)} style={{
+                      display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none',
+                      borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer',
+                      fontSize: '12px', color: theme.textPrimary,
+                    }}>
+                      <span style={{ fontWeight: 700 }}>{c.company_name}</span>
+                      {c.entity_id && <span style={{ color: theme.textMuted, marginLeft: '6px', fontSize: '10px' }}>{c.entity_id}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '6px' }}>
+              {manualCustomerId ? (
+                <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
+                  ✓ Linked to NetSuite customer
+                </span>
+              ) : manualCustomerName.trim().length >= 2 ? (
+                <>
+                  <button onClick={createManualCustomer} disabled={creatingCustomer} style={{
+                    padding: '5px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                    background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.3)', color: '#a78bfa',
+                    opacity: creatingCustomer ? 0.5 : 1,
+                  }}>
+                    {creatingCustomer ? 'Creating…' : `+ Create "${manualCustomerName.trim()}" in NetSuite`}
+                  </button>
+                  <span style={{ fontSize: '9px', color: theme.textMuted }}>Not in the list? Create them without leaving check-in.</span>
+                </>
+              ) : (
+                <span style={{ fontSize: '10px', color: theme.textMuted }}>
+                  Will be replaced if a sales order is matched later
+                </span>
+              )}
             </div>
           </div>
         )}

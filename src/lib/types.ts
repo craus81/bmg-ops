@@ -342,6 +342,10 @@ export interface FleetCheckin {
   netsuite_sales_order_id: string | null;
   sales_order_number: string | null;
   customer_name: string | null;
+  /** The customers row behind customer_name (migration 220) — set by the
+   *  check-in picker, or resolved from the SO's customer name. Older rows
+   *  carry only the name. */
+  customer_id?: string | null;
   sales_order_memo: string | null;
   sales_order_total: number | null;
   proof_file_path: string | null;

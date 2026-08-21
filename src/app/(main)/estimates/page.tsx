@@ -71,13 +71,14 @@ interface CheckinLite {
   vehicle_make: string | null;
   vehicle_model: string | null;
   customer_name: string | null;
+  customer_id?: string | null;
   install_instructions?: string | null;
   on_site_contact_name?: string | null;
   on_site_contact_phone?: string | null;
   delivery_preferences?: string | null;
 }
 
-const CHECKIN_COLS = 'id, vin, status, vehicle_year, vehicle_make, vehicle_model, customer_name, install_instructions, on_site_contact_name, on_site_contact_phone, delivery_preferences';
+const CHECKIN_COLS = 'id, vin, status, vehicle_year, vehicle_make, vehicle_model, customer_name, customer_id, install_instructions, on_site_contact_name, on_site_contact_phone, delivery_preferences';
 
 const checkinLabel = (c: CheckinLite) =>
   [c.vehicle_year, c.vehicle_make, c.vehicle_model].filter(Boolean).join(' ') || 'Vehicle';
@@ -1209,20 +1210,37 @@ export default function EstimatesPage() {
     if (!onSiteContactName.trim() && c.on_site_contact_name) setOnSiteContactName(c.on_site_contact_name);
     if (!onSiteContactPhone.trim() && c.on_site_contact_phone) setOnSiteContactPhone(c.on_site_contact_phone);
     if (!deliveryPreferences.trim() && c.delivery_preferences) setDeliveryPreferences(c.delivery_preferences);
-    // Check-ins carry only a customer NAME — link the real customer record
-    // when exactly one matches it, otherwise leave the picker to the human.
-    if (!customerId && c.customer_name?.trim()) {
-      const { data: matches } = await supabase
-        .from('customers')
-        .select('id, company_name, entity_id, netsuite_id')
-        .ilike('company_name', c.customer_name.trim())
-        .limit(2);
-      if (matches && matches.length === 1) {
-        setCustomerId(matches[0].id);
-        setCustomerName(matches[0].company_name || matches[0].entity_id || c.customer_name);
-        setCustomerNsId(matches[0].netsuite_id);
-      } else if (!customerName.trim()) {
-        setCustomerName(c.customer_name);
+    // Customer: newer check-ins carry the real customers row (customer_id,
+    // migration 220) — use it directly. Older ones have only a NAME: link
+    // the record when exactly one matches, else leave the picker to the
+    // human.
+    if (!customerId) {
+      if (c.customer_id) {
+        const { data: cust } = await supabase
+          .from('customers')
+          .select('id, company_name, entity_id, netsuite_id')
+          .eq('id', c.customer_id)
+          .maybeSingle();
+        if (cust) {
+          setCustomerId(cust.id);
+          setCustomerName(cust.company_name || cust.entity_id || c.customer_name || '');
+          setCustomerNsId(cust.netsuite_id);
+          return;
+        }
+      }
+      if (c.customer_name?.trim()) {
+        const { data: matches } = await supabase
+          .from('customers')
+          .select('id, company_name, entity_id, netsuite_id')
+          .ilike('company_name', c.customer_name.trim())
+          .limit(2);
+        if (matches && matches.length === 1) {
+          setCustomerId(matches[0].id);
+          setCustomerName(matches[0].company_name || matches[0].entity_id || c.customer_name);
+          setCustomerNsId(matches[0].netsuite_id);
+        } else if (!customerName.trim()) {
+          setCustomerName(c.customer_name);
+        }
       }
     }
   };
