@@ -38,7 +38,8 @@ import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { DropZone } from '@/components/DropZone';
 import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
 import { INSTALL_LOCATIONS, SHOP_INSTALL_LOCATION } from '@/lib/shop-inbound';
-import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
+import type { PackingListLine } from '@/lib/packing-list-pdf';
+import PackingListModal from '@/components/PackingListModal';
 import type { GraphicsJob, GraphicsJobStatus, GraphicsJobView, GraphicsStatusHistory, Profile } from '@/lib/types';
 import NumberInput from '@/components/NumberInput';
 import {
@@ -720,16 +721,11 @@ export default function GraphicsJobRecordPage() {
   // Print a packing list for the job. `overrides` lets us merge in fresh
   // invoice info right after creating one (before local state catches up).
   const printPackingList = async (j: GraphicsJob, overrides?: Partial<GraphicsJob>, lines?: PackingListLine[]) => {
-    try {
-      exportPackingListPDF(
-        packingListFromJob({ ...j, ...overrides }, lines && lines.length > 0 ? { lines } : undefined),
-        { print: true },
-      );
-    } catch (e) {
-      console.error('Packing list error:', e);
-      await dialog.alert('Could not generate the packing list.');
-    }
+    // Opens the review step (notes + job specs, editable) — the PDF prints
+    // from there.
+    setPackingModal({ job: j, overrides, lines });
   };
+  const [packingModal, setPackingModal] = useState<{ job: GraphicsJob; overrides?: Partial<GraphicsJob>; lines?: PackingListLine[] } | null>(null);
 
   // Pull the invoice PDF from NetSuite and store it on the job record.
   const storeInvoicePdf = async (silent = false): Promise<string | null> => {
@@ -1914,6 +1910,15 @@ export default function GraphicsJobRecordPage() {
 
       {/* Field-level audit history (A2 phase 4) — admin-only per audit_log RLS */}
       {isAdmin && job && <RecordChanges table="graphics_jobs" recordId={job.id} />}
+
+      {packingModal && (
+        <PackingListModal
+          job={packingModal.job}
+          overrides={packingModal.overrides}
+          lines={packingModal.lines}
+          onClose={() => setPackingModal(null)}
+        />
+      )}
 
       <UploadProgressBar progress={uploadProgress} />
     </div>
