@@ -11,6 +11,7 @@ import DropboxProofSearch, { type DropboxProofFile } from '@/components/DropboxP
 import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 import { DropZone } from '@/components/DropZone';
 import PartCatalogBrowser from '@/components/PartCatalogBrowser';
+import PartTransactionsModal from '@/components/PartTransactionsModal';
 import { loadBillableCustomers, type BillableCustomer } from '@/lib/billable-customers';
 
 interface Part {
@@ -112,6 +113,8 @@ export default function PartsPage() {
   const [syncMessage, setSyncMessage] = useState('');
   const [lastSync, setLastSync] = useState<SyncLog | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Transactions modal: every invoice/SO/estimate the part appears on.
+  const [txPart, setTxPart] = useState<Part | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
   // Duplicate cleanup: groups of rows sharing a part number, the chosen survivor
@@ -1104,6 +1107,17 @@ export default function PartsPage() {
                 {/* Expanded detail */}
                 {isExpanded && (
                   <div style={{ padding: '0 12px 12px', borderTop: '1px solid var(--border)' }}>
+                    {isRealNsPart(part) && (
+                      <div style={{ marginTop: '10px' }}>
+                        <button
+                          onClick={() => setTxPart(part)}
+                          title="Every invoice, sales order, and estimate this part appears on — open the PDF or print a packing list for any of them"
+                          style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.3)', color: '#60a5fa' }}
+                        >
+                          📄 Transactions
+                        </button>
+                      </div>
+                    )}
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '10px' }}>
                       {isAdmin ? (
                         <InlineEditField
@@ -1522,6 +1536,16 @@ export default function PartsPage() {
             loadParts();
           }}
           onClose={() => setNsCreatePart(null)}
+        />
+      )}
+
+      {/* Every invoice / SO / estimate this part appears on — with PDF
+          view and per-order packing list. */}
+      {txPart && (
+        <PartTransactionsModal
+          partNumber={txPart.item_number}
+          itemId={txPart.netsuite_id}
+          onClose={() => setTxPart(null)}
         />
       )}
     </div>
