@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import type { Profile, AppRole } from '@/lib/types';
 import { FEATURES, ROLE_DEFAULT_FEATURES, resolveFeatures, type FeatureKey } from '@/lib/features';
+import AdminUserSettings from '@/components/AdminUserSettings';
 
 interface Company {
   id: string;
@@ -40,7 +41,9 @@ function getUserRoles(user: Profile): AppRole[] {
 export default function UsersPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isAdmin, hasFeature, loading: authLoading } = useAuth();
+  const { isAdmin, hasFeature, loading: authLoading, profile: myProfile } = useAuth();
+  // Only super admins may open another user's settings panel below.
+  const isSuperAdmin = ((myProfile?.roles as string[] | null) || []).includes('super_admin');
   const supabase = createClient();
   const dialog = useDialog();
   const [users, setUsers] = useState<(Profile & { company_id?: string; company_name?: string })[]>([]);
@@ -1191,6 +1194,13 @@ export default function UsersPage() {
                     </div>
                   )}
                 </div>
+              )}
+
+              {/* Super admin: view/edit this user's own settings (field ask
+                  2026-08-21) — notification prefs + email signature, saved
+                  independently of the Save Changes button below. */}
+              {isSuperAdmin && (
+                <AdminUserSettings userId={editUser.id} userName={editUser.full_name || editUser.email || 'this user'} />
               )}
 
               <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
