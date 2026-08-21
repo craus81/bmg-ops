@@ -45,7 +45,11 @@ export default function TrackingPage() {
   const stageFetchedRef = useRef<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
+  const [hasMore, setHasMore] = useState(false);
+  // Exact table count from the paged query — drives Load More visibility
+  // and its "X of Y" label, so the button can't linger when everything is
+  // already on screen.
+  const [totalCount, setTotalCount] = useState<number | null>(null);
   const PAGE_SIZE = 50;
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -312,9 +316,9 @@ export default function TrackingPage() {
   const loadVehicles = async (append = false) => {
     if (append) setLoadingMore(true); else setLoading(true);
     const offset = append ? fetchedCountRef.current : 0;
-    const { data } = await supabase
+    const { data, count } = await supabase
       .from('fleet_checkins')
-      .select('*')
+      .select('*', { count: 'exact' })
       .order('updated_at', { ascending: false })
       .range(offset, offset + PAGE_SIZE - 1);
     if (data) {
@@ -324,7 +328,16 @@ export default function TrackingPage() {
       } else {
         setVehicles(data);
       }
-      setHasMore(data.length === PAGE_SIZE);
+      // The exact count says whether anything is actually left — the old
+      // full-page heuristic (data.length === PAGE_SIZE) left a dead Load
+      // More button whenever the table size was a multiple of the page, or
+      // after a delete shrank a full page (the "49 loaded" button).
+      if (typeof count === 'number') {
+        setTotalCount(count);
+        setHasMore(offset + data.length < count);
+      } else {
+        setHasMore(data.length === PAGE_SIZE);
+      }
       loadCheckinSalesOrders(data.map((v: FleetCheckin) => v.id));
     }
     if (append) setLoadingMore(false); else setLoading(false);
@@ -969,6 +982,7 @@ export default function TrackingPage() {
         await dialog.alert('Delete failed: ' + (data.error || 'Unknown error'));
       } else {
         setVehicles(prev => prev.filter(v => v.id !== vehicleId));
+        setTotalCount(prev => (prev === null ? prev : Math.max(0, prev - 1)));
         setExpandedId(null);
         setUpdateSuccess('Vehicle deleted');
         setTimeout(() => setUpdateSuccess(null), 2000);
@@ -2824,7 +2838,7 @@ export default function TrackingPage() {
                 color: loadingMore ? 'var(--text-muted)' : '#60a5fa',
               }}
             >
-              {loadingMore ? 'Loading...' : `Load More Vehicles (${vehicles.length} loaded)`}
+              {loadingMore ? 'Loading...' : `Load More Vehicles (${vehicles.length}${totalCount !== null ? ` of ${totalCount}` : ''} loaded)`}
             </button>
           )}
         </div>
