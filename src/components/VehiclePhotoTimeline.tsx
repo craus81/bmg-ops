@@ -1,8 +1,17 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { storage } from '@/lib/storage';
 import { createClient } from '@/lib/supabase-browser';
 import ProofThumbnail from '@/components/ProofThumbnail';
+
+// Files a browser <img> can actually render. Design files are often .ai /
+// .psd / .eps — those get a labeled file tile instead of a broken image.
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'avif', 'bmp', 'heic']);
+const fileExt = (item: { storagePath: string; fileName: string | null }) =>
+  ((item.fileName || item.storagePath).split('.').pop() || '').toLowerCase();
+const isRenderableImage = (item: { storagePath: string; fileName: string | null }) =>
+  IMAGE_EXTS.has(fileExt(item));
 
 export type PhotoCategory =
   | 'before'
@@ -58,6 +67,12 @@ const ALL_CATEGORIES: PhotoCategory[] = ['before', 'during', 'completion', 'dama
 export default function VehiclePhotoTimeline({ vin, variant = 'internal', refreshKey }: Props) {
   const supabase = createClient();
   const [items, setItems] = useState<TimelineItem[]>([]);
+  // Per-tile load fallback: R2 first (where uploads live), then legacy
+  // Supabase storage (some photos were uploaded there by the pick-list
+  // page's old raw-storage path), then a labeled file tile instead of the
+  // browser's broken-image glyph.
+  const [srcState, setSrcState] = useState<Record<string, 'legacy' | 'failed'>>({});
+  const failedIds = useMemo(() => new Set(Object.keys(srcState).filter(id => srcState[id] === 'failed')), [srcState]);
   const [loading, setLoading] = useState(true);
   const [selectedCats, setSelectedCats] = useState<Set<PhotoCategory>>(() => new Set(ALL_CATEGORIES));
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
@@ -84,17 +99,23 @@ export default function VehiclePhotoTimeline({ vin, variant = 'internal', refres
     }
   }, [variant]);
 
-  const thumbUrl = useCallback((item: TimelineItem) => {
-    const { data } = supabase.storage.from(item.bucket).getPublicUrl(item.storagePath, {
-      transform: { width: 400, height: 400, resize: 'cover' },
-    });
-    return data.publicUrl;
-  }, [supabase]);
+  // Files are uploaded through the @/lib/storage R2 shim, so URLs must come
+  // from it too — this component used the raw supabase-js storage client,
+  // whose URLs pointed at a Supabase bucket that doesn't exist (plus an
+  // unavailable image-transform endpoint), so every tile rendered broken.
+  const fullUrl = useCallback((item: TimelineItem) =>
+    storage.from(item.bucket).getPublicUrl(item.storagePath).data.publicUrl, []);
 
-  const fullUrl = useCallback((item: TimelineItem) => {
-    const { data } = supabase.storage.from(item.bucket).getPublicUrl(item.storagePath);
-    return data.publicUrl;
-  }, [supabase]);
+  const imgSrc = useCallback((item: TimelineItem) =>
+    srcState[item.id] === 'legacy'
+      ? supabase.storage.from(item.bucket).getPublicUrl(item.storagePath).data.publicUrl
+      : fullUrl(item),
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
+  [srcState, fullUrl]);
+
+  const onImgError = useCallback((id: string) => {
+    setSrcState(prev => ({ ...prev, [id]: prev[id] === 'legacy' ? 'failed' : 'legacy' }));
+  }, []);
 
   const visibleItems = useMemo(
     () => items.filter(i => selectedCats.has(i.category)),
@@ -218,16 +239,26 @@ export default function VehiclePhotoTimeline({ vin, variant = 'internal', refres
                       }}>
                         <ProofThumbnail pdfUrl={fullUrl(item)} label="PDF" thumbSize={100} />
                       </div>
-                    ) : (
+                    ) : isRenderableImage(item) && !failedIds.has(item.id) ? (
                       <img
-                        src={thumbUrl(item)}
+                        src={imgSrc(item)}
                         loading="lazy"
                         alt={item.caption || CATEGORY_LABELS[item.category]}
+                        onError={() => onImgError(item.id)}
                         style={{
                           position: 'absolute', inset: 0,
                           width: '100%', height: '100%', objectFit: 'cover',
                         }}
                       />
+                    ) : (
+                      <div style={{
+                        position: 'absolute', inset: 0,
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px',
+                        background: 'var(--subtle-bg, #f8fafc)', color: 'var(--text-muted)',
+                      }}>
+                        <span style={{ fontSize: '22px' }}>📄</span>
+                        <span style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase' }}>{fileExt(item) || 'file'}</span>
+                      </div>
                     )}
                     {item.caption && (
                       <div style={{
@@ -259,10 +290,10 @@ export default function VehiclePhotoTimeline({ vin, variant = 'internal', refres
         >
           {(() => {
             const item = visibleItems[lightboxIdx];
-            const url = fullUrl(item);
+            const url = isRenderableImage(item) && !failedIds.has(item.id) ? imgSrc(item) : fullUrl(item);
             return (
               <>
-                {item.isPdf ? (
+                {item.isPdf || !isRenderableImage(item) || failedIds.has(item.id) ? (
                   <a
                     href={url}
                     target="_blank"
@@ -274,7 +305,7 @@ export default function VehiclePhotoTimeline({ vin, variant = 'internal', refres
                       fontSize: '14px', fontWeight: 700, textDecoration: 'none',
                     }}
                   >
-                    Open PDF: {item.fileName || 'document.pdf'} ↗
+                    Open {item.isPdf ? 'PDF' : 'file'}: {item.fileName || item.storagePath.split('/').pop() || 'file'} ↗
                   </a>
                 ) : (
                   <img

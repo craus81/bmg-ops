@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { r2Get } from '@/lib/r2';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
@@ -66,12 +67,20 @@ export async function POST(req: NextRequest) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
   );
 
-  const dl = await supabase.storage.from('graphics-proofs').download(storagePath);
-  if (dl.error || !dl.data) {
-    return NextResponse.json({ error: 'Failed to download PDF', details: dl.error?.message }, { status: 500 });
+  // The PDF lives in R2 (bucket name as key prefix) — the raw supabase-js
+  // download() targeted a Supabase bucket that doesn't hold it.
+  const dl = await r2Get('graphics-proofs', storagePath);
+  if (!dl.success || !dl.body) {
+    return NextResponse.json({ error: 'Failed to download PDF', details: dl.error }, { status: 500 });
   }
-  const arrayBuf = await dl.data.arrayBuffer();
-  const pdfBase64 = Buffer.from(arrayBuf).toString('base64');
+  const chunks: Buffer[] = [];
+  const reader = dl.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) chunks.push(Buffer.from(value));
+  }
+  const pdfBase64 = Buffer.concat(chunks).toString('base64');
 
   const aiRes = await callAnthropic({
     model: 'claude-sonnet-4-6',
