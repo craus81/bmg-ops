@@ -2828,6 +2828,10 @@ export default function TrackingPage() {
             proofIsPdf={proofName.endsWith('.pdf')}
             graphicsFiles={[]}
             isAdmin={!!isAdmin}
+            salesOrders={(vehicleSalesOrders[v.id] || []).map(so => ({ netsuite_sales_order_id: so.netsuite_sales_order_id, sales_order_number: so.sales_order_number }))}
+            sourceEstimateId={(v as any).source_estimate_id || null}
+            invoiceNumber={(v as any).invoice_number || null}
+            onInvoiced={() => loadVehicles()}
             onClose={() => setCompletionModalVehicleId(null)}
             onComplete={() => {
               setCompletionModalVehicleId(null);

@@ -33,8 +33,7 @@ import { DropZone } from '@/components/DropZone';
 import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
 import { buildGraphicsJobPrefillFromPo, attachPartFilesToGraphicsJob } from '@/lib/graphics-job-from-po';
 import { INSTALL_LOCATIONS, SHOP_INSTALL_LOCATION } from '@/lib/shop-inbound';
-import type { PackingListLine } from '@/lib/packing-list-pdf';
-import PackingListModal from '@/components/PackingListModal';
+import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
@@ -733,11 +732,16 @@ export default function GraphicsPage() {
   // Print a packing list for the job. `overrides` lets us merge in fresh
   // invoice info right after creating one (before local state catches up).
   const printPackingList = async (job: GraphicsJob, overrides?: Partial<GraphicsJob>, lines?: PackingListLine[]) => {
-    // Opens the review step (notes + job specs, editable) — the PDF prints
-    // from there.
-    setPackingModal({ job, overrides, lines });
+    try {
+      exportPackingListPDF(
+        packingListFromJob({ ...job, ...overrides }, lines && lines.length > 0 ? { lines } : undefined),
+        { print: true },
+      );
+    } catch (e) {
+      console.error('Packing list error:', e);
+      await dialog.alert('Could not generate the packing list.');
+    }
   };
-  const [packingModal, setPackingModal] = useState<{ job: GraphicsJob; overrides?: Partial<GraphicsJob>; lines?: PackingListLine[] } | null>(null);
 
   // Best-effort: pull the invoice PDF from NetSuite and store it on the job
   // record right after invoicing (the record page has the on-demand button).
@@ -1838,15 +1842,6 @@ export default function GraphicsPage() {
           customerName={emailInvoiceTarget.customerName}
           invoices={emailInvoiceTarget.invoices}
           onClose={() => setEmailInvoiceTarget(null)}
-        />
-      )}
-
-      {packingModal && (
-        <PackingListModal
-          job={packingModal.job}
-          overrides={packingModal.overrides}
-          lines={packingModal.lines}
-          onClose={() => setPackingModal(null)}
         />
       )}
 
