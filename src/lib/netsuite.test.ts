@@ -195,6 +195,29 @@ describe('createDirectInvoice', () => {
     expect(result).toEqual({ success: true, invoiceId: '777', invoiceNumber: 'INV-2001' });
   });
 
+  it('writes the VIN to custbody_vin_number_ like the SO path, and omits it when absent', async () => {
+    fetchMock.mockResolvedValue(new Response(null, {
+      status: 204,
+      headers: { Location: 'https://x/services/rest/record/v1/invoice/779' },
+    }));
+
+    await createDirectInvoice({
+      customerId: 9,
+      locationId: '7',
+      vin: '1FTBW3XK1PKB39418',
+      lineItems: [{ itemId: '55', quantity: 1, rate: 10 }],
+    });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).custbody_vin_number_).toBe('1FTBW3XK1PKB39418');
+
+    await createDirectInvoice({
+      customerId: 9,
+      locationId: '7',
+      vin: null,
+      lineItems: [{ itemId: '55', quantity: 1, rate: 10 }],
+    });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).not.toHaveProperty('custbody_vin_number_');
+  });
+
   it('resolves a missing rate from the NetSuite base price before invoicing', async () => {
     fetchMock
       // getItemBasePrices source 1 (pricing table)

@@ -44,6 +44,32 @@ export function vehicleDescription(est: any): string {
   ].filter(Boolean).join(' · ');
 }
 
+/**
+ * The NetSuite memo for an estimate — ONE builder for every push path
+ * (estimate push and convert-to-SO), so the two NetSuite copies can't
+ * drift: title, customer-facing notes, then a context line with the
+ * vehicle, install/delivery/on-site details and the unit number (which has
+ * no dedicated NS field — the memo is where it survives), and finally the
+ * FleetSuite estimate number as a cross-reference. VIN and customer PO get
+ * real NS fields (custbody_vin_number_ / otherRefNum) and stay out of here.
+ */
+export function estimateContextMemo(est: any): string {
+  const memoParts: string[] = [];
+  if (est.title?.trim()) memoParts.push(est.title.trim());
+  if (est.notes?.trim()) memoParts.push(est.notes.trim());
+  const ctxLines: string[] = [];
+  const vehicle = vehicleDescription(est);
+  if (vehicle) ctxLines.push(`Vehicle: ${vehicle}`);
+  if (est.install_instructions?.trim()) ctxLines.push(`Install: ${est.install_instructions.trim()}`);
+  if (est.delivery_preferences?.trim()) ctxLines.push(`Delivery: ${est.delivery_preferences.trim()}`);
+  const onSite = [est.on_site_contact_name, est.on_site_contact_phone].filter(Boolean).join(' ');
+  if (onSite) ctxLines.push(`On-site: ${onSite}`);
+  if (est.unit_number?.trim()) ctxLines.push(`Unit: ${est.unit_number.trim()}`);
+  if (ctxLines.length > 0) memoParts.push(ctxLines.join(' · '));
+  memoParts.push(`FleetSuite Estimate #${est.estimate_number}`);
+  return memoParts.join('\n');
+}
+
 export interface EstimateDocumentCompany {
   name?: string | null;
   address?: string | null;
@@ -129,6 +155,10 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
           escHtml(vehicleDescription(est)),
           est.vin ? `VIN ${escHtml(est.vin)}` : '',
           est.unit_number ? `Unit ${escHtml(est.unit_number)}` : '',
+        ].filter(Boolean).join(' &middot; ')}</div>` : ''}
+        ${(est.po_number || est.expiration_date) ? `<div style="font-size:12px;color:#374151;margin-top:2px;">${[
+          est.po_number ? `PO #${escHtml(est.po_number)}` : '',
+          est.expiration_date ? `Expires ${escHtml(est.expiration_date)}` : '',
         ].filter(Boolean).join(' &middot; ')}</div>` : ''}
       </td>
       <td style="vertical-align:top;text-align:right;font-size:12px;color:#374151;line-height:1.5;">${companyLines}</td>

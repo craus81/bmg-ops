@@ -1317,6 +1317,9 @@ export async function createDirectInvoice(payload: {
   poNumber?: string;
   memo?: string;
   otherrefnum?: string;
+  /** Written to custbody_vin_number_ — same field the SO/estimate writes
+   *  set, so direct invoices carry the vehicle like transformed ones do. */
+  vin?: string | null;
   lineItems: {
     itemId: string | number;
     quantity: number;
@@ -1385,6 +1388,7 @@ export async function createDirectInvoice(payload: {
     ...(payload.poNumber ? { otherRefNum: payload.poNumber } : {}),
     ...(payload.memo ? { memo: payload.memo } : {}),
     ...(payload.otherrefnum ? { otherrefnum: payload.otherrefnum } : {}),
+    ...(payload.vin ? { custbody_vin_number_: payload.vin } : {}),
   };
 
   try {

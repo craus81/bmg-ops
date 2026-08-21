@@ -215,6 +215,11 @@ export default function EstimatesPage() {
   // K5: vehicle identity — prints on the estimate document, pushes to
   // NetSuite's VIN field, and feeds the Shop Board's Arriving row.
   const [vin, setVin] = useState('');
+  // Order header fields NetSuite entry has that we didn't: the customer's
+  // PO (→ NS otherRefNum, wins over our estimate number on the SO) and the
+  // quote's expiration date (→ NS "Expires"/dueDate).
+  const [poNumber, setPoNumber] = useState('');
+  const [expirationDate, setExpirationDate] = useState('');
   // N4-B2 phase 3: the vehicle LIVES on the estimate whether or not a VIN
   // exists — platform (make+model), year, and the qualifiers that gate
   // fitment: roof/wheelbase for vans, cab/bed for trucks. Selects cascade
@@ -765,6 +770,8 @@ export default function EstimatesPage() {
         internal_notes: internalNotes,
         vin,
         unit_number: unitNumber,
+        po_number: poNumber,
+        expiration_date: expirationDate || null,
         vehicle_platform_id: vehiclePlatformId,
         vehicle_year: vehicleYear,
         vehicle_wheelbase: vehicleWheelbase,
@@ -1089,6 +1096,8 @@ export default function EstimatesPage() {
     setOnSiteContactName(fullEst?.on_site_contact_name || '');
     setOnSiteContactPhone(fullEst?.on_site_contact_phone || '');
     setDeliveryPreferences(fullEst?.delivery_preferences || '');
+    setPoNumber(fullEst?.po_number || '');
+    setExpirationDate(fullEst?.expiration_date || '');
     setInternalNotes(fullEst?.internal_notes || '');
     savedInternalNotesRef.current = fullEst?.internal_notes || '';
 
@@ -1232,6 +1241,8 @@ export default function EstimatesPage() {
     setOnSiteContactName('');
     setOnSiteContactPhone('');
     setDeliveryPreferences('');
+    setPoNumber('');
+    setExpirationDate('');
     setInternalNotes('');
     savedInternalNotesRef.current = '';
     setCustomerDefaults(null);
@@ -1557,6 +1568,40 @@ export default function EstimatesPage() {
             value={notes}
             onChange={e => setNotes(e.target.value)}
             placeholder="Appears on the NS SO memo"
+          />
+        </div>
+      </div>
+
+      {/* Order header fields — the trio NetSuite entry has that pushes from
+          here used to drop. PO → the NS PO/Reference field; Delivery rides
+          the NS memo; Expiration → the NS estimate's Expires date. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '8px', marginBottom: '12px' }}>
+        <div>
+          <div style={labelStyle}>Customer PO #</div>
+          <input
+            style={inputStyle}
+            value={poNumber}
+            onChange={e => setPoNumber(e.target.value)}
+            maxLength={60}
+            placeholder="Their PO — fills NS PO/Reference"
+          />
+        </div>
+        <div>
+          <div style={labelStyle}>Delivery Method</div>
+          <input
+            style={inputStyle}
+            value={deliveryPreferences}
+            onChange={e => setDeliveryPreferences(e.target.value)}
+            placeholder="e.g. Pickup, deliver to site…"
+          />
+        </div>
+        <div>
+          <div style={labelStyle}>Expiration Date</div>
+          <input
+            type="date"
+            style={inputStyle}
+            value={expirationDate}
+            onChange={e => setExpirationDate(e.target.value)}
           />
         </div>
       </div>

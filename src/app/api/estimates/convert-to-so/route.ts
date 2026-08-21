@@ -8,7 +8,7 @@ import { logAudit } from '@/lib/audit';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { syncShopInboundForSalesOrder } from '@/lib/shop-inbound';
-import { vehicleDescription } from '@/lib/estimate-document';
+import { estimateContextMemo } from '@/lib/estimate-document';
 
 const ConvertSchema = z.object({
   estimateId: z.string().uuid(),
@@ -196,35 +196,19 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    // Build a richer SO memo that preserves the sales rep's notes +
-    // install context instead of the old hardcoded boilerplate. Installer-
-    // visible install context still lives on FleetSuite's purchase_orders
-    // + fleet_checkins records; copying it into the NS memo keeps a
-    // durable customer-facing reference on the SO itself.
-    const memoParts: string[] = [];
-    if (estimate.title) memoParts.push(estimate.title.trim());
-    if (estimate.notes?.trim()) memoParts.push(estimate.notes.trim());
-    const ctxLines: string[] = [];
-    // Vehicle identity (N4-B2): the VIN gets its own NS field below, but the
-    // human description (platform · roof · WB) only survives in the memo.
-    const vehicle = vehicleDescription(estimate);
-    if (vehicle) ctxLines.push(`Vehicle: ${vehicle}`);
-    if (estimate.install_instructions?.trim()) ctxLines.push(`Install: ${estimate.install_instructions.trim()}`);
-    if (estimate.delivery_preferences?.trim()) ctxLines.push(`Delivery: ${estimate.delivery_preferences.trim()}`);
-    const onSite = [estimate.on_site_contact_name, estimate.on_site_contact_phone].filter(Boolean).join(' ');
-    if (onSite) ctxLines.push(`On-site: ${onSite}`);
-    // The VIN gets its own NetSuite field (custbody_vin_number_, below); the
-    // unit number has no NS field, so the memo is where it survives.
-    if (estimate.unit_number?.trim()) ctxLines.push(`Unit: ${estimate.unit_number.trim()}`);
-    if (ctxLines.length > 0) memoParts.push(ctxLines.join(' · '));
-    memoParts.push(`FleetSuite Estimate #${estimate.estimate_number}`);
-    const memo = memoParts.join('\n');
+    // The rich SO memo (title, notes, vehicle/install/delivery/on-site/unit
+    // context, estimate number) — shared with the estimate-push path so the
+    // two NetSuite copies can't drift.
+    const memo = estimateContextMemo(estimate);
 
     const nsLocation = await findLocation("O'Fallon");
 
     const result = await createSalesOrder({
       customerId,
-      poNumber: estimate.estimate_number,
+      // The SO's PO/Reference field carries the CUSTOMER's PO when the
+      // estimate has one — that's what prints on their invoice and what
+      // their AP matches against. Our estimate number stays in the memo.
+      poNumber: estimate.po_number?.trim() || estimate.estimate_number,
       locationId: nsLocation?.id,
       memo,
       vin: estimate.vin,
