@@ -10,8 +10,10 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { exportPackingListPDF } from '@/lib/packing-list-pdf';
+import { deepLinks } from '@/lib/deep-links';
 
 interface TxRow {
   id: string;
@@ -21,6 +23,8 @@ interface TxRow {
   poNumber: string | null;
   customer: string | null;
   quantity: number;
+  /** The FleetSuite graphics job behind this transaction, when one exists. */
+  graphicsJob: { id: string; jobNumber: string | null; title: string | null } | null;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -42,6 +46,7 @@ interface Props {
 }
 
 export default function PartTransactionsModal({ partNumber, itemId, onClose }: Props) {
+  const router = useRouter();
   const [rows, setRows] = useState<TxRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -124,6 +129,13 @@ export default function PartTransactionsModal({ partNumber, itemId, onClose }: P
                 </span>
                 <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>qty {tx.quantity}</span>
                 <span style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                  {tx.graphicsJob && (
+                    <button onClick={() => router.push(deepLinks.graphicsJob(tx.graphicsJob!.id))}
+                      title={`Open graphics job ${tx.graphicsJob.jobNumber ? `#${tx.graphicsJob.jobNumber}` : ''}${tx.graphicsJob.title ? ` — ${tx.graphicsJob.title}` : ''}`}
+                      style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer', background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.3)', color: '#a78bfa' }}>
+                      🎨 Job
+                    </button>
+                  )}
                   <button onClick={() => openNetSuitePdf(PDF_TYPES[tx.type] || 'invoice', tx.id)}
                     title="Open the record's NetSuite PDF"
                     style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)', color: '#60a5fa' }}>
