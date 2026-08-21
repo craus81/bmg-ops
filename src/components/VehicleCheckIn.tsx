@@ -74,6 +74,12 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   const [selectedOrders, setSelectedOrders] = useState<NetsuiteSalesOrder[]>([]);
   const selectedOrder = selectedOrders[0] || null;
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
+  // Paged search (20 at a time — big customers have hundreds of open
+  // transactions) with a record-type filter.
+  const [soTypeFilter, setSoTypeFilter] = useState<'all' | 'SalesOrd' | 'CustInvc' | 'Estimate'>('all');
+  const [soHasMore, setSoHasMore] = useState(false);
+  const [soLoadingMore, setSoLoadingMore] = useState(false);
+  const SO_PAGE = 20;
 
   // Step 3: Proof
   const [proofs, setProofs] = useState<GraphicsProof[]>([]);
@@ -236,16 +242,28 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   };
 
   // ─── Step 2: Sales Order Search ────────────────────────────
-  const searchSalesOrders = async () => {
+  const fetchSalesOrdersPage = async (offset: number, typeFilter: typeof soTypeFilter) => {
+    const params = new URLSearchParams({
+      customer: customerSearch.trim(),
+      limit: String(SO_PAGE),
+      offset: String(offset),
+    });
+    if (typeFilter !== 'all') params.set('types', typeFilter);
+    const res = await fetch(`/api/netsuite/sales-orders?${params.toString()}`);
+    return res.json();
+  };
+
+  const searchSalesOrders = async (typeFilter: typeof soTypeFilter = soTypeFilter) => {
     if (!customerSearch.trim()) return;
     setSoLoading(true);
     setSoError('');
     setSalesOrders([]);
+    setSoHasMore(false);
     try {
-      const res = await fetch(`/api/netsuite/sales-orders?customer=${encodeURIComponent(customerSearch.trim())}`);
-      const data = await res.json();
+      const data = await fetchSalesOrdersPage(0, typeFilter);
       if (data.found && data.data) {
         setSalesOrders(data.data);
+        setSoHasMore(!!data.hasMore);
       } else {
         setSoError(data.error || 'No sales orders found.');
       }
@@ -253,6 +271,35 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
       setSoError('Failed to search sales orders.');
     }
     setSoLoading(false);
+  };
+
+  const loadMoreSalesOrders = async () => {
+    if (soLoadingMore || soLoading) return;
+    setSoLoadingMore(true);
+    try {
+      const data = await fetchSalesOrdersPage(salesOrders.length, soTypeFilter);
+      if (data.found && data.data) {
+        // Guard against overlap if records shifted between pages.
+        setSalesOrders(prev => {
+          const seen = new Set(prev.map(o => o.id));
+          return [...prev, ...data.data.filter((o: NetsuiteSalesOrder) => !seen.has(o.id))];
+        });
+        setSoHasMore(!!data.hasMore);
+      } else {
+        setSoHasMore(false);
+      }
+    } catch {
+      // leave the list as-is; the button stays for a retry
+    }
+    setSoLoadingMore(false);
+  };
+
+  // Re-run the search when the type filter changes (only once results are
+  // on screen — picking a filter before searching just sets the state).
+  const pickSoTypeFilter = (t: typeof soTypeFilter) => {
+    if (t === soTypeFilter) return;
+    setSoTypeFilter(t);
+    if (salesOrders.length > 0 || soError) searchSalesOrders(t);
   };
 
   const toggleSalesOrder = (order: NetsuiteSalesOrder) => {
@@ -1223,11 +1270,29 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
             }}
             onKeyDown={(e) => { if (e.key === 'Enter') searchSalesOrders(); }}
           />
-          <button onClick={searchSalesOrders} disabled={soLoading || !customerSearch.trim()} style={{
+          <button onClick={() => searchSalesOrders()} disabled={soLoading || !customerSearch.trim()} style={{
             padding: '10px 16px', borderRadius: '10px', background: theme.navy,
             color: '#fff', fontWeight: 700, fontSize: '13px', border: 'none',
             opacity: soLoading || !customerSearch.trim() ? 0.4 : 1,
           }}>{soLoading ? '...' : 'Search'}</button>
+        </div>
+
+        {/* Record-type filter — big customers return a wall of mixed
+            results; scope to just SOs / estimates / invoices. */}
+        <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
+          {([
+            ['all', 'All'],
+            ['SalesOrd', 'Sales Orders'],
+            ['Estimate', 'Estimates'],
+            ['CustInvc', 'Invoices'],
+          ] as const).map(([val, label]) => (
+            <button key={val} onClick={() => pickSoTypeFilter(val)} style={{
+              padding: '5px 12px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+              background: soTypeFilter === val ? theme.navy : theme.card,
+              border: `1px solid ${soTypeFilter === val ? theme.navy : theme.border}`,
+              color: soTypeFilter === val ? '#fff' : theme.textMuted,
+            }}>{label}</button>
+          ))}
         </div>
 
         {soError && (
@@ -1255,14 +1320,27 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
                 borderRadius: '12px', overflow: 'hidden',
               }}>
                 <button
-                  onClick={() => setExpandedOrder(expandedOrder === so.id ? null : so.id)}
+                  onClick={() => {
+                    // Clicking the record selects it (fills the green box)
+                    // AND opens the line items — it used to only expand,
+                    // which read as "nothing got picked". Collapsing keeps
+                    // the selection; the checkbox or the expanded panel's
+                    // Remove button deselects.
+                    if (!isSelected) toggleSalesOrder(so);
+                    setExpandedOrder(expandedOrder === so.id ? null : so.id);
+                  }}
                   style={{
                     width: '100%', padding: '12px 14px', textAlign: 'left',
                     background: 'transparent', border: 'none', color: theme.textPrimary,
                     display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px',
                   }}
                 >
-                  <div style={{
+                  <div
+                    role="checkbox"
+                    aria-checked={isSelected}
+                    title={isSelected ? 'Remove from check-in' : 'Add to check-in'}
+                    onClick={e => { e.stopPropagation(); toggleSalesOrder(so); }}
+                    style={{
                     width: '22px', height: '22px', borderRadius: '6px', flexShrink: 0,
                     border: `2px solid ${isSelected ? theme.success : theme.border}`,
                     background: isSelected ? theme.success : 'transparent',
@@ -1320,6 +1398,14 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
               </div>
               );
             })}
+            {soHasMore && (
+              <button onClick={loadMoreSalesOrders} disabled={soLoadingMore} style={{
+                width: '100%', padding: '10px', borderRadius: '10px',
+                border: `1px dashed ${theme.border}`, background: 'transparent',
+                color: theme.textSecondary, fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                opacity: soLoadingMore ? 0.6 : 1,
+              }}>{soLoadingMore ? 'Loading…' : `Load ${SO_PAGE} more`}</button>
+            )}
           </div>
         )}
 

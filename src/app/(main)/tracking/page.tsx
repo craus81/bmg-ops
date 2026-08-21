@@ -146,6 +146,7 @@ export default function TrackingPage() {
   const [soSearchOpen, setSoSearchOpen] = useState<string | null>(null); // vehicleId
   const [soSearchTerm, setSoSearchTerm] = useState('');
   const [soSearchResults, setSoSearchResults] = useState<any[]>([]);
+  const [soSearchHasMore, setSoSearchHasMore] = useState(false);
   const [soSearching, setSoSearching] = useState(false);
   const [soLinking, setSoLinking] = useState(false);
 
@@ -534,16 +535,25 @@ export default function TrackingPage() {
     await loadNotes(vehicleId);
   };
 
-  // Sales order search & link
-  const searchSalesOrders = async () => {
+  // Sales order search & link — paged 20 at a time (the API's default);
+  // `append` powers the "load more" affordance for big customers.
+  const searchSalesOrders = async (append = false) => {
     if (!soSearchTerm.trim()) return;
     setSoSearching(true);
-    setSoSearchResults([]);
+    if (!append) setSoSearchResults([]);
     try {
-      const res = await fetch(`/api/netsuite/sales-orders?customer=${encodeURIComponent(soSearchTerm.trim())}`);
+      const offset = append ? soSearchResults.length : 0;
+      const res = await fetch(`/api/netsuite/sales-orders?customer=${encodeURIComponent(soSearchTerm.trim())}&limit=20&offset=${offset}`);
       const data = await res.json();
       if (data.found && data.data) {
-        setSoSearchResults(data.data);
+        setSoSearchResults(prev => {
+          const base = append ? prev : [];
+          const seen = new Set(base.map((o: any) => o.id));
+          return [...base, ...data.data.filter((o: any) => !seen.has(o.id))];
+        });
+        setSoSearchHasMore(!!data.hasMore);
+      } else if (!append) {
+        setSoSearchHasMore(false);
       }
     } catch (err) {
       console.error('SO search error:', err);
@@ -2095,7 +2105,7 @@ export default function TrackingPage() {
                                   }}
                                 />
                                 <button
-                                  onClick={searchSalesOrders}
+                                  onClick={() => searchSalesOrders()}
                                   disabled={soSearching || !soSearchTerm.trim()}
                                   style={{
                                     padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
@@ -2140,6 +2150,13 @@ export default function TrackingPage() {
                                       </div>
                                     );
                                   })}
+                                  {soSearchHasMore && !soSearching && (
+                                    <button onClick={() => searchSalesOrders(true)} style={{
+                                      width: '100%', padding: '8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                                      border: '1px dashed var(--border)', background: 'transparent',
+                                      color: 'var(--text-secondary)', cursor: 'pointer',
+                                    }}>Load 20 more</button>
+                                  )}
                                 </div>
                               )}
                               {soSearching && (

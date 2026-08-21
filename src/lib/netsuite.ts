@@ -193,19 +193,48 @@ export interface SalesOrderLineItem {
   amount: number;
 }
 
-export async function getOpenSalesOrdersByCustomer(customerName: string): Promise<{
+export const SALES_ORDER_SEARCH_TYPES = ['SalesOrd', 'CustInvc', 'Estimate'] as const;
+export type SalesOrderSearchType = typeof SALES_ORDER_SEARCH_TYPES[number];
+
+export interface SalesOrderSearchOptions {
+  /** Page size (default 20, max 100). Big customers can have hundreds of
+   *  open transactions — pages keep the search fast and the list scannable. */
+  limit?: number;
+  /** Rows to skip (for "load 20 more"). */
+  offset?: number;
+  /** Restrict to these record types; omit for all three. */
+  types?: SalesOrderSearchType[];
+}
+
+export async function getOpenSalesOrdersByCustomer(
+  customerName: string,
+  opts: SalesOrderSearchOptions = {},
+): Promise<{
   found: boolean;
   count: number;
   data: SalesOrder[] | null;
+  hasMore: boolean;
   error?: string;
 }> {
   const searchTerm = customerName.trim().replace(/'/g, "''");
   if (!searchTerm) {
-    return { found: false, count: 0, data: null, error: 'Customer name cannot be empty' };
+    return { found: false, count: 0, data: null, hasMore: false, error: 'Customer name cannot be empty' };
   }
 
-  const statusConditions = OPEN_STATUSES.map(s => `t.status = '${s}'`).join(' OR ');
+  const limit = Math.min(Math.max(Math.floor(opts.limit ?? 20), 1), 100);
+  const offset = Math.max(Math.floor(opts.offset ?? 0), 0);
+  const types = (opts.types || []).filter(t => (SALES_ORDER_SEARCH_TYPES as readonly string[]).includes(t));
+  const effectiveTypes: readonly string[] = types.length > 0 ? types : SALES_ORDER_SEARCH_TYPES;
 
+  const statusConditions = OPEN_STATUSES.map(s => `t.status = '${s}'`).join(' OR ');
+  // Open-record status logic is per-type; only include the requested types.
+  const typeConditions = [
+    effectiveTypes.includes('SalesOrd') ? `(t.type = 'SalesOrd' AND (${statusConditions}))` : null,
+    effectiveTypes.includes('CustInvc') ? `(t.type = 'CustInvc' AND t.status IN ('A', 'B'))` : null,
+    effectiveTypes.includes('Estimate') ? `(t.type = 'Estimate' AND t.status IN ('A', 'B', 'E', 'X'))` : null,
+  ].filter(Boolean).join('\n      OR ');
+
+  // Fetch one extra row past the page to learn whether more exist.
   const query = `
     SELECT
       t.id,
@@ -221,37 +250,38 @@ export async function getOpenSalesOrdersByCustomer(customerName: string): Promis
       t.custbody_vin_number_ AS vin
     FROM transaction t
     LEFT JOIN customer c ON t.entity = c.id
-    WHERE t.type IN ('SalesOrd', 'CustInvc', 'Estimate')
+    WHERE t.type IN (${effectiveTypes.map(t => `'${t}'`).join(', ')})
     AND (
-      (t.type = 'SalesOrd' AND (${statusConditions}))
-      OR (t.type = 'CustInvc' AND t.status IN ('A', 'B'))
-      OR (t.type = 'Estimate' AND t.status IN ('A', 'B', 'E', 'X'))
+      ${typeConditions}
     )
     AND (
       UPPER(c.companyname) LIKE UPPER('%${searchTerm}%')
       OR UPPER(c.entityid) LIKE UPPER('%${searchTerm}%')
     )
-    ORDER BY c.companyname, t.trandate DESC
+    ORDER BY c.companyname, t.trandate DESC, t.id DESC
+    OFFSET ${offset} ROWS FETCH NEXT ${limit + 1} ROWS ONLY
   `;
 
   const result = await suiteqlQuery(query);
-  const items = result?.items || [];
+  const allItems = result?.items || [];
+  const hasMore = allItems.length > limit;
+  const items = hasMore ? allItems.slice(0, limit) : allItems;
 
   if (items.length === 0) {
     return {
       found: false,
       count: 0,
       data: null,
-      error: `No sales orders, invoices, or estimates found for "${customerName}"`,
+      hasMore: false,
+      error: offset > 0
+        ? 'No more results.'
+        : `No sales orders, invoices, or estimates found for "${customerName}"`,
     };
   }
 
-  // Get line items for each order
-  const detailedOrders: SalesOrder[] = [];
-
-  for (const so of items) {
+  const detailedOrders: SalesOrder[] = items.map((so: any) => {
     const typeLabel = so.type === 'CustInvc' ? 'Invoice' : so.type === 'Estimate' ? 'Estimate' : 'Sales Order';
-    const order: SalesOrder = {
+    return {
       id: so.id,
       sales_order_number: so.sales_order_number,
       record_type: typeLabel as SalesOrder['record_type'],
@@ -267,10 +297,19 @@ export async function getOpenSalesOrdersByCustomer(customerName: string): Promis
       total: so.total ? parseFloat(so.total) : null,
       line_items: [],
     };
+  });
 
+  // One batched line-item query for the whole page — this used to be one
+  // SuiteQL round trip per transaction, which is what made big customers
+  // (hundreds of open orders) take forever to load.
+  const numericIds = detailedOrders
+    .map(o => String(o.id))
+    .filter(id => /^\d+$/.test(id));
+  if (numericIds.length > 0) {
     try {
       const linesQuery = `
         SELECT
+          tl.transaction,
           tl.linesequencenumber,
           tl.memo AS description,
           tl.quantity,
@@ -279,34 +318,39 @@ export async function getOpenSalesOrdersByCustomer(customerName: string): Promis
           i.itemid AS item_name
         FROM transactionline tl
         LEFT JOIN item i ON tl.item = i.id
-        WHERE tl.transaction = ${so.id}
+        WHERE tl.transaction IN (${numericIds.join(', ')})
         AND tl.mainline = 'F'
         AND tl.taxline = 'F'
-        ORDER BY tl.linesequencenumber
+        ORDER BY tl.transaction, tl.linesequencenumber
       `;
       const linesResult = await suiteqlQuery(linesQuery);
-
-      if (linesResult?.items) {
-        order.line_items = linesResult.items.map((line: any) => ({
+      const byTx = new Map<string, SalesOrderLineItem[]>();
+      for (const line of linesResult?.items || []) {
+        const key = String(line.transaction);
+        const list = byTx.get(key) || [];
+        list.push({
           line_number: line.linesequencenumber,
           item_name: line.item_name || null,
           description: line.description || null,
           quantity: Math.abs(parseFloat(line.quantity || '0')),
           rate: Math.abs(parseFloat(line.rate || '0')),
           amount: Math.abs(parseFloat(line.netamount || '0')),
-        }));
+        });
+        byTx.set(key, list);
+      }
+      for (const order of detailedOrders) {
+        order.line_items = byTx.get(String(order.id)) || [];
       }
     } catch {
       // Line items fetch failed, continue with empty
     }
-
-    detailedOrders.push(order);
   }
 
   return {
     found: true,
     count: detailedOrders.length,
     data: detailedOrders,
+    hasMore,
   };
 }
 
