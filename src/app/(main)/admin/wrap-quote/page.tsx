@@ -8,6 +8,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { storage } from '@/lib/storage';
 import { apiFetch } from '@/lib/api-client';
 import { formatPhoneInput } from '@/lib/utils';
+import { fetchAllRows } from '@/lib/fetch-all';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { DropZone } from '@/components/DropZone';
 import { theme } from '@/lib/theme';
@@ -270,6 +271,11 @@ const polyMetrics = (points: { x: number; y: number }[], ppi: number) => {
 const templateLabel = (t: Template) =>
   [t.year, t.make, t.model, t.variant].filter(Boolean).join(' ');
 
+// Template make/model/year come in verbatim from ZIP folder names, so the
+// library holds mixed casings ("FORD" and "Ford") — every compare and dedupe
+// over them must go through this.
+const normText = (v?: string | null) => (v || '').trim().toLowerCase();
+
 // Free-text template search: every space-separated term must match somewhere
 // in the label, name, or code ("transit 2023 high" finds 2023 High Roof
 // Transits regardless of word order).
@@ -369,6 +375,9 @@ export default function WrapQuotePage() {
     id: string; number: string; customerName: string | null; vehicle: string | null;
   } | null>(null);
   const [addingToEstimate, setAddingToEstimate] = useState(false);
+  // Vehicle identity carried over from the estimate; resolved against the
+  // template library once it loads (loadAll races this effect on arrival).
+  const [vehiclePrefill, setVehiclePrefill] = useState<{ year: string; label: string } | null>(null);
   const forEstimateHandled = useRef(false);
   useEffect(() => {
     const estId = searchParams.get('forEstimate');
@@ -377,21 +386,43 @@ export default function WrapQuotePage() {
     (async () => {
       const { data: est } = await supabase
         .from('estimates')
-        .select('id, estimate_number, customer_id, customer_name, vehicle_year, vehicle_roof, vehicle_wheelbase, vehicle_platform_id, vehicle_platforms(label)')
+        .select('id, estimate_number, customer_id, customer_name, vehicle_year, vehicle_roof, vehicle_wheelbase, vehicle_platform_id, vin, unit_number, vehicle_platforms(label)')
         .eq('id', estId)
         .maybeSingle();
       if (!est) return;
+      const platformLabel = (est as any).vehicle_platforms?.label || '';
       const vehicle = [
         est.vehicle_year,
-        (est as any).vehicle_platforms?.label,
+        platformLabel,
         est.vehicle_roof ? `${est.vehicle_roof} roof` : null,
         est.vehicle_wheelbase ? `${est.vehicle_wheelbase}" WB` : null,
+        est.unit_number ? `Unit ${est.unit_number}` : null,
+        est.vin ? `VIN ${est.vin}` : null,
       ].filter(Boolean).join(' · ') || null;
       setForEstimate({ id: est.id, number: est.estimate_number, customerName: est.customer_name, vehicle });
-      // Prefill the customer on a fresh quote only — never clobber a loaded one.
-      if (!savedQuoteId && est.customer_id) {
-        setCustomerId(est.customer_id);
-        if (est.customer_name) setCustomer((prev: any) => ({ ...prev, name: prev.name || est.customer_name }));
+      // Prefill on a fresh quote only — never clobber a loaded one.
+      if (!savedQuoteId) {
+        // Customer: same fields the customer picker fills, so the quote tab
+        // doesn't ask her to re-type what the estimate already knows.
+        if (est.customer_id) {
+          setCustomerId(est.customer_id);
+          const { data: cust } = await supabase
+            .from('customers')
+            .select('company_name, email, phone, address')
+            .eq('id', est.customer_id)
+            .maybeSingle();
+          setCustomer((prev: any) => ({
+            ...prev,
+            name: prev.name || cust?.company_name || est.customer_name || '',
+            email: prev.email || cust?.email || '',
+            phone: prev.phone || cust?.phone || '',
+            address: prev.address || cust?.address || '',
+          }));
+        }
+        // Vehicle: hand the year + platform to the template matcher below.
+        if (platformLabel || est.vehicle_year) {
+          setVehiclePrefill({ year: String(est.vehicle_year ?? '').trim(), label: platformLabel });
+        }
       }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on arrival
@@ -488,7 +519,10 @@ export default function WrapQuotePage() {
   const loadAll = async () => {
     setLoading(true);
     const [tplRes, subRes, setRes, histRes, floorRes, jobsRes] = await Promise.all([
-      supabase.from('vehicle_templates').select('id, name, make, model, year, variant, scale, template_code, template_image_path, px_per_in, overall_length_in, is_active').not('template_image_path', 'is', null).order('make').order('model'),
+      // The template library can exceed PostgREST's silent 1000-row cap — a
+      // bare select made everything past row 1000 unfindable in the pickers.
+      fetchAllRows<Template>((from, to) =>
+        supabase.from('vehicle_templates').select('id, name, make, model, year, variant, scale, template_code, template_image_path, px_per_in, overall_length_in, is_active').not('template_image_path', 'is', null).order('make').order('model').order('id').range(from, to)),
       supabase.from('wrap_substrates').select('*').order('name'),
       supabase.from('wrap_quote_settings').select('*').eq('id', 1).maybeSingle(),
       supabase.from('wrap_quotes').select('*').order('created_at', { ascending: false }).limit(200),
@@ -545,18 +579,63 @@ export default function WrapQuotePage() {
   // Retired templates stay in state (the Templates tab manages them) but are
   // hidden from the estimator's vehicle pickers.
   const activeTemplates = useMemo(() => templates.filter(t => t.is_active !== false), [templates]);
-  const years = useMemo(() => [...new Set(activeTemplates.map(t => t.year).filter(Boolean) as string[])].sort().reverse(), [activeTemplates]);
-  const makes = useMemo(() => [...new Set(activeTemplates.filter(t => !yearFilter || t.year === yearFilter).map(t => t.make))].sort(), [activeTemplates, yearFilter]);
+  const years = useMemo(() => [...new Set(activeTemplates.map(t => (t.year || '').trim()).filter(Boolean))].sort().reverse(), [activeTemplates]);
+  // Dedupe makes case-insensitively (first-seen casing wins) so "FORD" and
+  // "Ford" don't appear as two entries that each hide the other's templates.
+  const makes = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const t of activeTemplates) {
+      if (yearFilter && normText(t.year) !== normText(yearFilter)) continue;
+      const key = normText(t.make);
+      if (key && !seen.has(key)) seen.set(key, t.make.trim());
+    }
+    // The <select> matches its value against options verbatim — keep the
+    // active filter's exact casing in the list so the pick never shows blank.
+    if (makeFilter && seen.has(normText(makeFilter))) seen.set(normText(makeFilter), makeFilter);
+    return [...seen.values()].sort((a, b) => a.localeCompare(b));
+  }, [activeTemplates, yearFilter, makeFilter]);
   const templateOptions = useMemo(() =>
     activeTemplates.filter(t =>
-      (!yearFilter || t.year === yearFilter) &&
-      (!makeFilter || t.make === makeFilter)),
+      (!yearFilter || normText(t.year) === normText(yearFilter)) &&
+      (!makeFilter || normText(t.make) === normText(makeFilter))),
     [activeTemplates, yearFilter, makeFilter]);
-  // Live type-ahead results for the template search box (independent of the
-  // browse dropdown — results show under the box as you type, click to load).
+  // Live type-ahead results for the template search box. Searches the WHOLE
+  // active library, not the Year/Make-filtered subset — a leftover filter
+  // used to make the search say "No templates match" for templates that
+  // plainly exist. Full list here; the render caps what's shown and says so.
   const templateSearchMatches = useMemo(() =>
-    tplSearch.trim().length < 2 ? [] : templateOptions.filter(t => matchesTemplateSearch(t, tplSearch)).slice(0, 20),
-    [templateOptions, tplSearch]);
+    tplSearch.trim().length < 2 ? [] : activeTemplates.filter(t => matchesTemplateSearch(t, tplSearch)),
+    [activeTemplates, tplSearch]);
+  // Picking a template (search result, browse dropdown, or grid Open) syncs
+  // the Year/Make filters to it so the browse <select> always shows the pick
+  // instead of rendering blank when a filter excludes it.
+  const pickTemplate = (t: Template) => {
+    setTemplateId(t.id);
+    setImgDim(null);
+    resetEstimate();
+    setTplSearch('');
+    setYearFilter((t.year || '').trim());
+    setMakeFilter(t.make.trim());
+  };
+
+  // Resolve the estimate's vehicle (Add Graphics round trip) against the
+  // template library: a unique match loads outright; several matches open
+  // the search box with them listed; no match leaves the pickers alone.
+  useEffect(() => {
+    if (!vehiclePrefill || templates.length === 0) return;
+    if (templateId || savedQuoteId) { setVehiclePrefill(null); return; }
+    const queries = [
+      [vehiclePrefill.year, vehiclePrefill.label].filter(Boolean).join(' '),
+      vehiclePrefill.label,
+    ].filter(q => q.trim().length >= 2);
+    for (const q of queries) {
+      const matches = activeTemplates.filter(t => matchesTemplateSearch(t, q));
+      if (matches.length === 1) { pickTemplate(matches[0]); break; }
+      if (matches.length > 1) { setTplSearch(q); break; }
+    }
+    setVehiclePrefill(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fires once when both the prefill and the library are in
+  }, [vehiclePrefill, templates]);
 
   // ----- Pricing math -----
   const measurementPricing = (m: Measurement) => {
@@ -2313,6 +2392,10 @@ export default function WrapQuotePage() {
               <input
                 value={tplSearch}
                 onChange={e => setTplSearch(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && templateSearchMatches.length > 0) { e.preventDefault(); pickTemplate(templateSearchMatches[0]); }
+                  else if (e.key === 'Escape') setTplSearch('');
+                }}
                 placeholder="Type to search templates…"
                 style={{ ...inputStyle, width: '100%' }}
               />
@@ -2320,17 +2403,17 @@ export default function WrapQuotePage() {
                 <div style={{ position: 'absolute', top: '100%', left: 0, minWidth: '100%', width: 'max-content', maxWidth: '420px', zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '260px', overflowY: 'auto', marginTop: '2px' }}>
                   {templateSearchMatches.length === 0 ? (
                     <div style={{ padding: '8px 10px', fontSize: '11px', color: 'var(--text-muted)' }}>No templates match</div>
-                  ) : templateSearchMatches.map(t => (
-                    <button key={t.id} onMouseDown={e => e.preventDefault()} onClick={() => {
-                      setTemplateId(t.id);
-                      setImgDim(null);
-                      resetEstimate();
-                      setTplSearch('');
-                    }} style={{ display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '12px', color: 'var(--text-primary)' }}>
+                  ) : templateSearchMatches.slice(0, 50).map(t => (
+                    <button key={t.id} onMouseDown={e => e.preventDefault()} onClick={() => pickTemplate(t)} style={{ display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '12px', color: 'var(--text-primary)' }}>
                       <span style={{ fontWeight: 700 }}>{templateLabel(t)}</span>
                       {t.template_code && <span style={{ color: 'var(--text-muted)', marginLeft: '6px', fontSize: '10px' }}>{t.template_code}</span>}
                     </button>
                   ))}
+                  {templateSearchMatches.length > 50 && (
+                    <div style={{ padding: '6px 10px', fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                      Showing 50 of {templateSearchMatches.length} matches — keep typing to narrow
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -3311,7 +3394,7 @@ export default function WrapQuotePage() {
                     {t.template_code || 'no code'} · {t.scale || '1:20'} · {t.px_per_in ? 'calibrated' : 'not calibrated'}
                   </div>
                   <div style={{ display: 'flex', gap: '4px' }}>
-                    <button onClick={() => { setTemplateId(t.id); setImgDim(null); resetEstimate(); setTab('estimator'); }} style={btnStyle('#06b6d4', 'rgba(6,182,212,0.08)')}>Open</button>
+                    <button onClick={() => { pickTemplate(t); setTab('estimator'); }} style={btnStyle('#06b6d4', 'rgba(6,182,212,0.08)')}>Open</button>
                     <button onClick={() => toggleTemplate(t)} style={btnStyle('#f59e0b', 'transparent')}>{t.is_active === false ? 'Reactivate' : 'Retire'}</button>
                     {isAdmin && (
                       <button onClick={() => deleteTemplate(t)} style={btnStyle('#ef4444', 'transparent')} title="Delete this template permanently">✕</button>
