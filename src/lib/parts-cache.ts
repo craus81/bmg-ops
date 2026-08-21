@@ -48,6 +48,18 @@ function getCache(): Promise<Map<string, PartInfo>> {
   return cachePromise;
 }
 
+/**
+ * Resolve a typed part number to the catalog's casing (06u166 → 06U166) once
+ * the cache has loaded; parts the catalog doesn't know come back as typed.
+ * Lets entry UIs store canonical casing without their own query.
+ */
+export async function canonicalPartFromCache(partNumber: string): Promise<string> {
+  const pn = partNumber.trim();
+  if (!pn) return pn;
+  const info = (await getCache()).get(pn.toUpperCase());
+  return info?.item_number || pn;
+}
+
 /** Look up part info synchronously after the cache has loaded. */
 export function usePartInfo(partNumber: string | null | undefined): PartInfo | null {
   const [info, setInfo] = useState<PartInfo | null>(null);

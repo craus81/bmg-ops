@@ -6,6 +6,7 @@ import { resolveCustomerNsId } from '@/lib/graphics-invoice';
 import { notifyInvoiceCreated } from '@/lib/graphics-invoice-notify';
 import { resolveLocationWithOverride } from '@/lib/invoice-location';
 import { validateBody, z } from '@/lib/validate';
+import { partNumberPattern } from '@/lib/part-number';
 
 export const dynamic = 'force-dynamic';
 
@@ -135,13 +136,14 @@ export async function POST(req: NextRequest) {
 
         let rate = priceOverrides[pn.toUpperCase()] || 0;
         if (!(rate > 0)) {
-          const { data: catalogItem } = await supabase
+          // Case-insensitive: hand-typed job parts must find the catalog row.
+          const { data: catalogRows } = await supabase
             .from('netsuite_parts')
             .select('sales_price')
-            .eq('item_number', pn)
+            .ilike('item_number', partNumberPattern(pn))
             .eq('is_active', true)
-            .maybeSingle();
-          rate = catalogItem?.sales_price || 0;
+            .limit(1);
+          rate = catalogRows?.[0]?.sales_price || 0;
         }
 
         matched.push({ partNumber: pn, itemId: nsItem.id, displayName: nsItem.displayName || pn, rate });

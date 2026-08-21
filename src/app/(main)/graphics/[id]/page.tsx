@@ -31,6 +31,7 @@ import GraphicsInvoiceReviewModal from '@/components/GraphicsInvoiceReviewModal'
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { PartLabel } from '@/components/PartLabel';
+import { canonicalPartFromCache } from '@/lib/parts-cache';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
 import GraphicsMaterialsCard from '@/components/GraphicsMaterialsCard';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
@@ -1115,6 +1116,16 @@ export default function GraphicsJobRecordPage() {
                           e.preventDefault();
                           setEdit({ ...edit, part_number: [...parts, val].join(', ') });
                           (e.target as HTMLInputElement).value = '';
+                          // Swap the typed chip to the catalog's casing (06u166 →
+                          // 06U166) once the parts cache resolves, so the job
+                          // stores canonical part numbers.
+                          canonicalPartFromCache(val).then(canon => {
+                            if (canon === val) return;
+                            setEdit((prev: any) => prev ? {
+                              ...prev,
+                              part_number: (prev.part_number || '').split(',').map((s: string) => s.trim()).filter(Boolean).map((p: string) => p === val ? canon : p).join(', '),
+                            } : prev);
+                          });
                         }
                       }}
                     />

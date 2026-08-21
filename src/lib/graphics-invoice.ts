@@ -12,6 +12,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { findItems, getItemBasePrices } from '@/lib/netsuite';
+import { fetchPartRowsCI } from '@/lib/part-number';
 
 // The two NetSuite items a wrap quote maps onto — kept identical to the
 // estimate push (/api/wrap-quote/netsuite): all material pricing collapses
@@ -147,14 +148,12 @@ export async function deriveProposedLines(
     }
   }
 
-  // Catalog prices by item number.
+  // Catalog prices by item number. Case-insensitive fetch — job parts are
+  // hand-typed, so an exact .in() never returned the catalog row for a
+  // casing variant and the line silently priced at 0.
   const catalogPrice: Record<string, number> = {};
-  const { data: catRows } = await supabase
-    .from('netsuite_parts')
-    .select('item_number, sales_price')
-    .in('item_number', partNumbers)
-    .eq('is_active', true);
-  for (const r of catRows || []) {
+  for (const r of await fetchPartRowsCI(supabase, partNumbers, 'item_number, sales_price, is_active')) {
+    if (r.is_active !== true) continue;
     if (r.item_number) catalogPrice[r.item_number.trim().toUpperCase()] = Number(r.sales_price) || 0;
   }
 
