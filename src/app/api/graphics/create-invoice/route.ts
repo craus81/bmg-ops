@@ -202,13 +202,13 @@ export async function POST(req: NextRequest) {
     let estimateVin: string | null = null;
     if (job.estimate_id) {
       const { data: est } = await supabase
-        .from('estimates').select('estimate_number, vin, unit_number, vehicle_year, vehicle_platform_id, vehicle_platforms(label)').eq('id', job.estimate_id).maybeSingle();
+        .from('estimates').select('estimate_number, vin, unit_number, vehicle_year, vehicle_platform_id, vehicle_other, vehicle_platforms(label)').eq('id', job.estimate_id).maybeSingle();
       if (est?.estimate_number) memoParts.push(`Estimate #${est.estimate_number}`);
       // Carry the estimate's vehicle onto the invoice: the VIN into its
       // dedicated NS field below, the human identity into the memo.
       if (est) {
         estimateVin = est.vin || null;
-        const vehicle = [est.vehicle_year, (est as any).vehicle_platforms?.label].filter(Boolean).join(' ');
+        const vehicle = [est.vehicle_year, (est as any).vehicle_platforms?.label || (est as any).vehicle_other].filter(Boolean).join(' ');
         const vehicleBits = [vehicle || null, est.unit_number ? `Unit ${est.unit_number}` : null].filter(Boolean).join(' · ');
         if (vehicleBits) memoParts.push(vehicleBits);
       }
