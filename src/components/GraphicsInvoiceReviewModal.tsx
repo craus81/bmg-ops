@@ -18,7 +18,8 @@ import { createClient } from '@/lib/supabase-browser';
 import PhoneInput from '@/components/PhoneInput';
 import NumberInput from '@/components/NumberInput';
 import type { GraphicsJob } from '@/lib/types';
-import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
+import type { PackingListLine } from '@/lib/packing-list-pdf';
+import PackingListModal from '@/components/PackingListModal';
 
 interface CustomerRow {
   id: string;
@@ -294,13 +295,10 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
 
   const canCreate = !!effectiveCustomer.netsuiteId && invoiceLines.length > 0 && unpriced.length === 0 && !submitting;
 
-  const printPackingList = () => {
-    try {
-      exportPackingListPDF(packingListFromJob(job, { lines: packingLines() }), { print: true });
-    } catch {
-      setError('Could not generate the packing list.');
-    }
-  };
+  const [packingOpen, setPackingOpen] = useState(false);
+  // Opens the review step (notes + job specs, editable) — the PDF prints
+  // from there, using the verified invoice lines.
+  const printPackingList = () => setPackingOpen(true);
 
   const createInvoice = async () => {
     if (!canCreate) return;
@@ -637,6 +635,14 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
           </div>
         )}
       </div>
+
+      {packingOpen && (
+        <PackingListModal
+          job={job}
+          lines={packingLines()}
+          onClose={() => setPackingOpen(false)}
+        />
+      )}
     </div>
   );
 }
