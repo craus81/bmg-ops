@@ -49,15 +49,34 @@ interface Props {
   proofIsPdf: boolean;
   graphicsFiles: GraphicsFile[];
   isAdmin: boolean;
+  /** Every SO linked to the check-in (join table) — the invoicing section
+   *  offers one button per SO. */
+  salesOrders?: { netsuite_sales_order_id: string; sales_order_number: string | null }[];
+  /** The estimate the check-in snapshotted at creation, if any. */
+  sourceEstimateId?: string | null;
+  /** Invoice already stamped on the check-in (migration 070). */
+  invoiceNumber?: string | null;
+  /** Called after an invoice is created so the board can refresh. */
+  onInvoiced?: () => void;
   onClose: () => void;
   onComplete: () => void;
+}
+
+interface LinkedEstimateLite {
+  id: string;
+  estimate_number: string;
+  netsuite_so_id: string | null;
+  netsuite_so_number: string | null;
+  customer_approved: boolean | null;
+  grand_total: number | null;
 }
 
 const PHOTO_BUCKET = 'photos';
 
 export default function CompletionModal({
   vehicleId, vehicleVin, vehicleLabel, customerName, netsuiteSalesOrderId,
-  proofUrl, proofIsPdf, graphicsFiles, isAdmin, onClose, onComplete,
+  proofUrl, proofIsPdf, graphicsFiles, isAdmin, salesOrders, sourceEstimateId,
+  invoiceNumber, onInvoiced, onClose, onComplete,
 }: Props) {
   const supabase = createClient();
   const { user, profile } = useAuth();
@@ -80,6 +99,101 @@ export default function CompletionModal({
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // ── Admin invoicing (turn the vehicle's SO or estimate into a NetSuite
+  // invoice, right from the completion process) ──
+  const [invNumber, setInvNumber] = useState<string | null>(invoiceNumber || null);
+  const [invWorking, setInvWorking] = useState<string | null>(null); // SO id in flight
+  const [invError, setInvError] = useState<string | null>(null);
+  const [linkedEstimates, setLinkedEstimates] = useState<LinkedEstimateLite[]>([]);
+  const [overrideFor, setOverrideFor] = useState<string | null>(null); // estimate id awaiting override reason
+  const [overrideReason, setOverrideReason] = useState('');
+
+  // The SO list the section offers: the join-table list, else the legacy
+  // primary column.
+  const invoiceSos = (salesOrders && salesOrders.length > 0)
+    ? salesOrders
+    : netsuiteSalesOrderId ? [{ netsuite_sales_order_id: netsuiteSalesOrderId, sales_order_number: null }] : [];
+
+  // Estimates tied to this vehicle — the fallback when no SO is linked yet.
+  useEffect(() => {
+    if (!isAdmin || invoiceSos.length > 0) return;
+    (async () => {
+      const { data } = await supabase
+        .from('estimates')
+        .select('id, estimate_number, netsuite_so_id, netsuite_so_number, customer_approved, grand_total')
+        .or(`fleet_checkin_id.eq.${vehicleId}${sourceEstimateId ? `,id.eq.${sourceEstimateId}` : ''}`)
+        .order('created_at', { ascending: false });
+      setLinkedEstimates((data || []) as LinkedEstimateLite[]);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one load per open
+  }, [isAdmin, vehicleId, sourceEstimateId]);
+
+  const invoiceSalesOrder = async (salesOrderId: string) => {
+    setInvWorking(salesOrderId);
+    setInvError(null);
+    try {
+      const res = await fetch('/api/vehicle-tracking/invoice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checkinId: vehicleId, salesOrderId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        // 409 already-invoiced still tells us the number — show it.
+        if (data.invoiceNumber) setInvNumber(data.invoiceNumber);
+        setInvError(data.error || 'Invoice create failed');
+        return;
+      }
+      setInvNumber(data.invoiceNumber || data.invoiceId || null);
+      onInvoiced?.();
+    } catch (e: any) {
+      setInvError(e?.message || 'Network error creating the invoice');
+    } finally {
+      setInvWorking(null);
+    }
+  };
+
+  // Estimate path: convert to SO first (with the approval gate — an admin
+  // can override with a recorded reason), then invoice the fresh SO.
+  const convertAndInvoice = async (est: LinkedEstimateLite, reason?: string) => {
+    if (est.netsuite_so_id) { await invoiceSalesOrder(est.netsuite_so_id); return; }
+    setInvWorking(est.id);
+    setInvError(null);
+    try {
+      const res = await fetch('/api/estimates/convert-to-so', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ estimateId: est.id, ...(reason ? { overrideReason: reason } : {}) }),
+      });
+      const data = await res.json();
+      if (res.status === 409 && data.step === 'not_approved') {
+        if (data.canOverride) { setOverrideFor(est.id); setOverrideReason(''); }
+        else setInvError(data.error || 'The estimate has not been accepted by the customer.');
+        return;
+      }
+      if (!res.ok || !data.salesOrderId) {
+        setInvError(data.error || 'Could not convert the estimate to a sales order');
+        return;
+      }
+      setOverrideFor(null);
+      // The fresh SO isn't linked to the check-in yet — link it so the
+      // invoice route's ownership check (and the card's SO list) see it.
+      await supabase.from('fleet_checkin_sales_orders').upsert({
+        checkin_id: vehicleId,
+        netsuite_sales_order_id: String(data.salesOrderId),
+        sales_order_number: data.salesOrderNumber || null,
+      }, { onConflict: 'checkin_id,netsuite_sales_order_id', ignoreDuplicates: true });
+      setLinkedEstimates(prev => prev.map(e => e.id === est.id
+        ? { ...e, netsuite_so_id: String(data.salesOrderId), netsuite_so_number: data.salesOrderNumber || null }
+        : e));
+      await invoiceSalesOrder(String(data.salesOrderId));
+    } catch (e: any) {
+      setInvError(e?.message || 'Network error converting the estimate');
+    } finally {
+      setInvWorking(prev => (prev === est.id ? null : prev));
+    }
+  };
 
   const refresh = useCallback(async () => {
     const [taskRes, photoRes] = await Promise.all([
@@ -461,6 +575,67 @@ export default function CompletionModal({
               style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'inherit', resize: 'vertical' }}
             />
           </label>
+
+          {/* Admin invoicing — turn the vehicle's SO (or its estimate,
+              converted first) into a NetSuite invoice without leaving the
+              completion process. */}
+          {isAdmin && (
+            <div style={{ padding: '10px 12px', borderRadius: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                NetSuite Invoice <span style={{ fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>· admin</span>
+              </div>
+              {invNumber ? (
+                <div style={{ fontSize: '12px', fontWeight: 700, color: '#22c55e' }}>✓ Invoice #{invNumber} created for this vehicle.</div>
+              ) : invoiceSos.length > 0 ? (
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {invoiceSos.map(so => (
+                    <button key={so.netsuite_sales_order_id}
+                      onClick={() => invoiceSalesOrder(so.netsuite_sales_order_id)}
+                      disabled={!!invWorking}
+                      title="Bill the full sales order as a NetSuite invoice and stamp it on this vehicle"
+                      style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', opacity: invWorking ? 0.6 : 1 }}>
+                      {invWorking === so.netsuite_sales_order_id ? 'Invoicing…' : `Invoice SO ${so.sales_order_number || `#${so.netsuite_sales_order_id}`}`}
+                    </button>
+                  ))}
+                </div>
+              ) : linkedEstimates.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {linkedEstimates.map(est => (
+                    <div key={est.id}>
+                      <button
+                        onClick={() => convertAndInvoice(est)}
+                        disabled={!!invWorking}
+                        title={est.netsuite_so_id ? 'Bill the estimate’s sales order as a NetSuite invoice' : 'Convert the estimate to a sales order, then bill it as a NetSuite invoice'}
+                        style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', opacity: invWorking ? 0.6 : 1 }}>
+                        {invWorking === est.id || invWorking === est.netsuite_so_id ? 'Working…'
+                          : est.netsuite_so_id ? `Invoice SO ${est.netsuite_so_number || `#${est.netsuite_so_id}`} (${est.estimate_number})`
+                          : `Convert ${est.estimate_number} to SO & Invoice`}
+                      </button>
+                      {overrideFor === est.id && (
+                        <div style={{ marginTop: '6px', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                          <input value={overrideReason} onChange={e => setOverrideReason(e.target.value)}
+                            placeholder="Not customer-approved — record the override reason (e.g. approved by phone)"
+                            style={{ flex: 1, minWidth: '220px', padding: '7px 9px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
+                          <button onClick={() => convertAndInvoice(est, overrideReason.trim())}
+                            disabled={overrideReason.trim().length < 3 || !!invWorking}
+                            style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.4)', color: '#f59e0b', opacity: overrideReason.trim().length < 3 ? 0.5 : 1 }}>
+                            Convert anyway
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  No sales order or estimate is linked to this vehicle — link one on the card first.
+                </div>
+              )}
+              {invError && (
+                <div style={{ marginTop: '6px', fontSize: '11px', color: 'var(--danger, #ef4444)' }}>{invError}</div>
+              )}
+            </div>
+          )}
 
           {/* Errors / missing list */}
           {missing && missing.length > 0 && (
