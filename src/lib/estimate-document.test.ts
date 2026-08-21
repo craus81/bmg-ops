@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderEstimateDocument, vehicleDescription } from './estimate-document';
+import { renderEstimateDocument, vehicleDescription, estimateContextMemo } from './estimate-document';
 
 // The estimate document is the legal record the customer approves — the
 // send-for-approval email and the frozen signed snapshot both come from this
@@ -106,5 +106,38 @@ describe('vehicleDescription', () => {
       vehicle_cab: 'SuperCrew', vehicle_bed: '5.5',
     })).toBe("2025 Ford F-150 · SuperCrew cab · 5.5' bed");
     expect(vehicleDescription({ vin: '1FTBR1C82TKA17431' })).toBe('');
+  });
+});
+
+// One memo builder for both NetSuite push paths (estimate push and
+// convert-to-SO) — these pin the shape so the two copies can't drift.
+describe('estimateContextMemo', () => {
+  it('stacks title, notes, the context line, and the estimate number', () => {
+    expect(estimateContextMemo({
+      estimate_number: 'EST-2608-ABCD',
+      title: 'Fleet Upfit — 10 Transits',
+      notes: 'Install before end of month',
+      vehicle_year: '2026', vehicle_platform_label: 'Ford Transit', vehicle_roof: 'medium',
+      delivery_preferences: 'Deliver to site',
+      unit_number: 'T-204',
+    })).toBe([
+      'Fleet Upfit — 10 Transits',
+      'Install before end of month',
+      'Vehicle: 2026 Ford Transit · medium roof · Delivery: Deliver to site · Unit: T-204',
+      'FleetSuite Estimate #EST-2608-ABCD',
+    ].join('\n'));
+  });
+
+  it('collapses to just the estimate number when nothing else is set', () => {
+    expect(estimateContextMemo({ estimate_number: 'EST-2608-ABCD' }))
+      .toBe('FleetSuite Estimate #EST-2608-ABCD');
+  });
+
+  it('keeps install and on-site context in the context line', () => {
+    expect(estimateContextMemo({
+      estimate_number: 'EST-1',
+      install_instructions: 'Roof rack first',
+      on_site_contact_name: 'Pat', on_site_contact_phone: '555-0100',
+    })).toBe('Install: Roof rack first · On-site: Pat 555-0100\nFleetSuite Estimate #EST-1');
   });
 });

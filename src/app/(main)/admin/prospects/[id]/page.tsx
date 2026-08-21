@@ -456,6 +456,11 @@ export default function CustomerRecordPage() {
     const { error } = await supabase.from('prospects').update({ [field]: next }).eq('id', prospect.id);
     if (error) { await dialog.alert(`Could not update: ${error.message}`); return; }
     setProspect(prev => (prev ? { ...prev, [field]: next } : prev));
+    // Campaign membership is consent-adjacent — keep a who/when trail on the
+    // activity feed (the other flags are cosmetic and stay unlogged).
+    if (field === 'email_campaign') {
+      logAuto('note', next ? 'Added to the email-campaign list' : 'Removed from the email-campaign list');
+    }
   };
 
   // Retry path for records whose NetSuite create failed at creation time —
@@ -1448,7 +1453,9 @@ export default function CustomerRecordPage() {
               padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
               background: prospect.is_hot ? 'rgba(239,68,68,0.1)' : 'var(--subtle-bg)', border: `1px solid ${prospect.is_hot ? 'rgba(239,68,68,0.25)' : 'var(--border)'}`, color: prospect.is_hot ? '#ef4444' : 'var(--text-muted)',
             }}>{prospect.is_hot ? 'Hot' : 'Mark Hot'}</button>
-            <button onClick={() => toggleFlag('email_campaign')} style={{
+            <button onClick={() => toggleFlag('email_campaign')}
+              title="Adds this customer to the email-campaign distribution list — see it on the Customers page via Filter → Email Campaign (it's in the Excel export too)"
+              style={{
               padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
               background: prospect.email_campaign ? 'rgba(59,130,246,0.1)' : 'var(--subtle-bg)', border: `1px solid ${prospect.email_campaign ? 'rgba(59,130,246,0.25)' : 'var(--border)'}`, color: prospect.email_campaign ? '#60a5fa' : 'var(--text-muted)',
             }}>{prospect.email_campaign ? '✓ Email Campaign' : 'Email Campaign'}</button>

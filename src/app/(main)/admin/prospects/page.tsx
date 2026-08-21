@@ -118,6 +118,7 @@ export default function ProspectsPage() {
   const [ownerFilter, setOwnerFilter] = useState<string>('all'); // 'all' or user_id
   const [spendTierFilter, setSpendTierFilter] = useState<SpendTier>('all');
   const [openQuoteFilter, setOpenQuoteFilter] = useState<boolean>(false);
+  const [emailCampaignFilter, setEmailCampaignFilter] = useState<boolean>(false);
   const [openQuoteCustomers, setOpenQuoteCustomers] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
 
@@ -488,6 +489,7 @@ export default function ProspectsPage() {
     if (industryFilter && !(custTagsByProspect[p.id] || []).includes(industryFilter)) return false;
     if (ownerFilter !== 'all' && p.created_by !== ownerFilter) return false;
     if (openQuoteFilter && !openQuoteCustomers.has((p.company_name || '').toLowerCase())) return false;
+    if (emailCampaignFilter && !p.email_campaign) return false;
     if (spendTierFilter !== 'all') {
       const ytd = customerMetrics[p.id]?.ytd_spend || 0;
       const threshold = spendTierFilter === '10k' ? 10000 : spendTierFilter === '50k' ? 50000 : 100000;
@@ -551,6 +553,7 @@ export default function ProspectsPage() {
           'Last Order Date': m?.last_order_date || '',
           'NetSuite ID': p.netsuite_id || '',
           'Has Open Quote': openQuoteCustomers.has((p.company_name || '').toLowerCase()) ? 'Y' : '',
+          'Email Campaign': p.email_campaign ? 'Y' : '',
         };
       });
       const today = new Date().toISOString().split('T')[0];
@@ -747,8 +750,8 @@ export default function ProspectsPage() {
         )}
         <div style={{ flex: 1 }} />
         <FilterButton
-          activeCount={(ownerFilter !== 'all' ? 1 : 0) + (tagFilter ? 1 : 0) + (industryFilter ? 1 : 0) + (spendTierFilter !== 'all' ? 1 : 0) + (openQuoteFilter ? 1 : 0)}
-          onClear={() => { setOwnerFilter('all'); setTagFilter(''); setIndustryFilter(''); setSpendTierFilter('all'); setOpenQuoteFilter(false); }}
+          activeCount={(ownerFilter !== 'all' ? 1 : 0) + (tagFilter ? 1 : 0) + (industryFilter ? 1 : 0) + (spendTierFilter !== 'all' ? 1 : 0) + (openQuoteFilter ? 1 : 0) + (emailCampaignFilter ? 1 : 0)}
+          onClear={() => { setOwnerFilter('all'); setTagFilter(''); setIndustryFilter(''); setSpendTierFilter('all'); setOpenQuoteFilter(false); setEmailCampaignFilter(false); }}
         >
           <FilterLabel>Owner</FilterLabel>
           <select value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} style={{ width: '100%', padding: '6px 8px', borderRadius: '7px', fontSize: '12px', fontWeight: 600, background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}>
@@ -796,6 +799,12 @@ export default function ProspectsPage() {
             border: `1px solid ${openQuoteFilter ? 'rgba(251,191,36,0.4)' : 'var(--border)'}`,
             color: openQuoteFilter ? '#f59e0b' : 'var(--text-muted)',
           }}>{openQuoteFilter ? '✓ Open Quote' : 'Open Quote'}</button>
+          <button onClick={() => setEmailCampaignFilter(v => !v)} title="Only customers marked for the email campaign — this is the campaign distribution list" style={{
+            padding: '4px 9px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+            background: emailCampaignFilter ? 'rgba(96,165,250,0.12)' : 'var(--subtle-bg)',
+            border: `1px solid ${emailCampaignFilter ? 'rgba(96,165,250,0.4)' : 'var(--border)'}`,
+            color: emailCampaignFilter ? '#60a5fa' : 'var(--text-muted)',
+          }}>{emailCampaignFilter ? '✓ Email Campaign' : 'Email Campaign'}</button>
         </FilterButton>
       </div>
 

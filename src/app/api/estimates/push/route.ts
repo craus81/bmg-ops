@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { vehicleDescription } from '@/lib/estimate-document';
+import { estimateContextMemo } from '@/lib/estimate-document';
 
 export const dynamic = 'force-dynamic';
 
@@ -79,6 +79,10 @@ async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
   lineItems: { itemId: string; quantity: number; rate: number; description?: string }[];
   taxExempt: boolean;
   vin?: string | null;
+  /** Customer's PO → the estimate's PO/Reference field (otherRefNum). */
+  poNumber?: string | null;
+  /** YYYY-MM-DD → NetSuite's "Expires" field (dueDate on estimates). */
+  expirationDate?: string | null;
 }) {
   const { oauth, token, baseUrl: url } = await getOAuthHelpers(config);
 
@@ -105,6 +109,15 @@ async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
   // body field so it survives NS's own estimate→SO→invoice transforms.
   if (payload.vin) {
     body.custbody_vin_number_ = payload.vin;
+  }
+
+  // Only sent when filled, so estimates without these keep the proven
+  // payload shape exactly as before.
+  if (payload.poNumber?.trim()) {
+    body.otherRefNum = payload.poNumber.trim();
+  }
+  if (payload.expirationDate) {
+    body.dueDate = payload.expirationDate;
   }
 
   // Only sent for exempt estimates so the common path's payload is
@@ -165,6 +178,8 @@ async function updateNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
   lineItems: { itemId: string; quantity: number; rate: number; description?: string }[];
   taxExempt: boolean;
   vin?: string | null;
+  poNumber?: string | null;
+  expirationDate?: string | null;
 }) {
   const { oauth, token, baseUrl } = await getOAuthHelpers(config);
   // ?replace=item tells NetSuite to replace the entire item sublist instead of
@@ -191,6 +206,16 @@ async function updateNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
 
   if (payload.memo) {
     body.memo = payload.memo;
+  }
+
+  // Like the VIN above: sent whenever set, so a re-push refreshes them.
+  // (Only included when filled — clearing them locally doesn't clear NS,
+  // which keeps the payload unchanged for estimates that never had them.)
+  if (payload.poNumber?.trim()) {
+    body.otherRefNum = payload.poNumber.trim();
+  }
+  if (payload.expirationDate) {
+    body.dueDate = payload.expirationDate;
   }
 
   if (payload.taxExempt) {
@@ -360,9 +385,10 @@ export async function POST(req: NextRequest) {
     }
 
     const config = getNetSuiteConfig();
-    // Vehicle first — it's what the shop scans the printed NS estimate for.
-    const memo = [vehicleDescription(estimate), estimate.title, estimate.notes]
-      .filter(Boolean).join(' — ');
+    // Same rich memo as convert-to-so (title, notes, vehicle/install/
+    // delivery/on-site/unit context) — the push used to send a thinner
+    // memo that dropped the unit number and delivery details.
+    const memo = estimateContextMemo(estimate);
 
     if (isUpdate) {
       // ── UPDATE existing NetSuite estimate via PATCH ──
@@ -372,6 +398,8 @@ export async function POST(req: NextRequest) {
         lineItems: nsLineItems,
         taxExempt: estimate.tax_exempt,
         vin: estimate.vin,
+        poNumber: estimate.po_number,
+        expirationDate: estimate.expiration_date,
       });
 
       if (!updateResult.success) {
@@ -405,6 +433,8 @@ export async function POST(req: NextRequest) {
       lineItems: nsLineItems,
       taxExempt: estimate.tax_exempt,
       vin: estimate.vin,
+      poNumber: estimate.po_number,
+      expirationDate: estimate.expiration_date,
     });
 
     if (!result.success) {

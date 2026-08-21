@@ -45,6 +45,10 @@ const UpsertEstimateSchema = z.object({
   // and the customer's unit/stock number.
   vin: z.string().max(32).optional().nullable(),
   unit_number: z.string().max(60).optional().nullable(),
+  // Customer's PO number (→ NetSuite otherRefNum) and the quote's
+  // expiration date (YYYY-MM-DD → NetSuite estimate dueDate/"Expires").
+  po_number: z.string().max(60).optional().nullable(),
+  expiration_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
   // N4-B2 phase 3: the vehicle lives on the estimate whether or not a VIN
   // exists — platform + year + the qualifiers that gate fitment.
   vehicle_platform_id: z.string().uuid().optional().nullable(),
@@ -118,7 +122,7 @@ export async function POST(req: NextRequest) {
     // T1.6 install context
     install_instructions, on_site_contact_name, on_site_contact_phone,
     delivery_preferences, internal_notes,
-    vin, unit_number,
+    vin, unit_number, po_number, expiration_date,
     vehicle_platform_id, vehicle_year, vehicle_wheelbase,
     vehicle_roof, vehicle_cab, vehicle_bed,
   } = parsed.data;
@@ -190,6 +194,8 @@ export async function POST(req: NextRequest) {
           internal_notes: internal_notes || null,
           vin: normalizedVin,
           unit_number: normalizedUnit,
+          po_number: po_number?.trim() || null,
+          expiration_date: expiration_date || null,
           vehicle_platform_id: vehicle_platform_id || null,
           vehicle_year: vehicle_year?.trim() || null,
           vehicle_wheelbase: vehicle_wheelbase?.trim() || null,
@@ -260,6 +266,8 @@ export async function POST(req: NextRequest) {
           internal_notes: internal_notes || null,
           vin: normalizedVin,
           unit_number: normalizedUnit,
+          po_number: po_number?.trim() || null,
+          expiration_date: expiration_date || null,
           vehicle_platform_id: vehicle_platform_id || null,
           vehicle_year: vehicle_year?.trim() || null,
           vehicle_wheelbase: vehicle_wheelbase?.trim() || null,

@@ -219,7 +219,28 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
-        const memo = 'BMG FleetSuite Invoice';
+        // The memo used to be bare boilerplate even though this flow is
+        // driven by scanned vehicles — put the vehicles on the invoice.
+        // "2025 Ford Transit VIN 1FT… (Unit 4021)" per distinct VIN, capped
+        // so a big fleet batch doesn't overflow the memo field.
+        const vehicleLines: string[] = [];
+        const seenVins = new Set<string>();
+        for (const s of custScans) {
+          const vinKey = (s.vin || '').toUpperCase();
+          if (!vinKey || seenVins.has(vinKey)) continue;
+          seenVins.add(vinKey);
+          const desc = [s.vehicle_year, s.vehicle_make, s.vehicle_model].filter(Boolean).join(' ');
+          vehicleLines.push([desc, `VIN ${s.vin}`, s.unit_number ? `(Unit ${s.unit_number})` : null].filter(Boolean).join(' '));
+        }
+        const MEMO_VEHICLE_CAP = 15;
+        const shownVehicles = vehicleLines.slice(0, MEMO_VEHICLE_CAP);
+        if (vehicleLines.length > MEMO_VEHICLE_CAP) {
+          shownVehicles.push(`…and ${vehicleLines.length - MEMO_VEHICLE_CAP} more vehicles`);
+        }
+        const memo = ['BMG FleetSuite Invoice', ...shownVehicles].join('\n');
+        // A single-vehicle invoice also gets the VIN in its dedicated NS
+        // field, same as SO-transformed invoices.
+        const soloVin = seenVins.size === 1 ? custScans.find(s => s.vin)?.vin || null : null;
 
         // Resolve the NetSuite location from our PO rules: the billed customer
         // plus the plant signal from the PO ship-to / scan work location.
@@ -251,6 +272,7 @@ export async function POST(req: NextRequest) {
           locationId,
           memo,
           ...(poNumber ? { otherrefnum: poNumber } : {}),
+          vin: soloVin,
           lineItems,
         });
 
