@@ -12,6 +12,7 @@ import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 import { DropZone } from '@/components/DropZone';
 import PartCatalogBrowser from '@/components/PartCatalogBrowser';
 import PartTransactionsModal from '@/components/PartTransactionsModal';
+import PartPosModal from '@/components/PartPosModal';
 import { loadBillableCustomers, type BillableCustomer } from '@/lib/billable-customers';
 
 interface Part {
@@ -115,6 +116,8 @@ export default function PartsPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   // Transactions modal: every invoice/SO/estimate the part appears on.
   const [txPart, setTxPart] = useState<Part | null>(null);
+  // PO list modal: every PO the part appears on ("click the counters").
+  const [poModal, setPoModal] = useState<{ partNumber: string; mode: 'open' | 'all' } | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
   // Duplicate cleanup: groups of rows sharing a part number, the chosen survivor
@@ -1144,8 +1147,10 @@ export default function PartsPage() {
                       <DetailField label="Qty On Hand" value={formatQty(part.quantity_on_hand)} color={part.quantity_on_hand > 0 ? 'var(--text-primary)' : 'var(--error)'} />
                       <DetailField label="Qty Available" value={formatQty(part.quantity_available)} color={part.quantity_available > 0 ? 'var(--text-primary)' : 'var(--error)'} />
                       <DetailField label={`Completed · ${RANGE_PHRASE[range]}`} value={statsLoading ? '…' : completed.toString()} color="#34d399" />
-                      <DetailField label="Open on POs" value={statsLoading ? '…' : formatQty(poRemainingByPart[key] || 0)} color="#60a5fa" />
-                      <DetailField label="On All POs" value={statsLoading ? '…' : formatQty(poAllByPart[key] || 0)} color="var(--text-secondary)" />
+                      <DetailField label="Open on POs" value={statsLoading ? '…' : formatQty(poRemainingByPart[key] || 0)} color="#60a5fa"
+                        onClick={() => setPoModal({ partNumber: part.item_number, mode: 'open' })} />
+                      <DetailField label="On All POs" value={statsLoading ? '…' : formatQty(poAllByPart[key] || 0)} color="var(--text-secondary)"
+                        onClick={() => setPoModal({ partNumber: part.item_number, mode: 'all' })} />
                       {margin && (
                         <DetailField label="Margin" value={`${margin}%`} color={parseFloat(margin) > 30 ? '#34d399' : '#f59e0b'} />
                       )}
@@ -1539,6 +1544,15 @@ export default function PartsPage() {
         />
       )}
 
+      {/* Every PO this part appears on — from the Open/All PO counters. */}
+      {poModal && (
+        <PartPosModal
+          partNumber={poModal.partNumber}
+          initialMode={poModal.mode}
+          onClose={() => setPoModal(null)}
+        />
+      )}
+
       {/* Every invoice / SO / estimate this part appears on — with PDF
           view and per-order packing list. */}
       {txPart && (
@@ -1552,13 +1566,14 @@ export default function PartsPage() {
   );
 }
 
-function DetailField({ label, value, color }: { label: string; value: string; color: string }) {
+function DetailField({ label, value, color, onClick }: { label: string; value: string; color: string; onClick?: () => void }) {
   return (
-    <div>
+    <div onClick={onClick} style={onClick ? { cursor: 'pointer' } : undefined}
+      title={onClick ? 'Click for the list behind this number' : undefined}>
       <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>
         {label}
       </div>
-      <div style={{ fontSize: '14px', fontWeight: 700, color }}>
+      <div style={{ fontSize: '14px', fontWeight: 700, color, textDecoration: onClick ? 'underline dotted' : undefined, textUnderlineOffset: '3px' }}>
         {value}
       </div>
     </div>
