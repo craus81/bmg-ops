@@ -89,7 +89,7 @@ export default function JobAttachments({
               background: 'var(--input-bg)', border: '1px solid var(--border)',
             }}>
               <a
-                href={jobFileUrl(f.path)}
+                href={jobFileUrl(f.path, f.name)}
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{ fontSize: '13px', fontWeight: 600, color: 'var(--orange)', textDecoration: 'none', wordBreak: 'break-all' }}

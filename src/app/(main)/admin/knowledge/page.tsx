@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
-import { storage } from '@/lib/storage';
+import { storage, storageDownloadUrl } from '@/lib/storage';
 import { DropZone } from '@/components/DropZone';
 
 interface KnowledgeDoc {
@@ -396,10 +396,10 @@ export default function KnowledgePage() {
     setShowForm(true);
   };
 
-  const getFileUrl = (filePath: string) => {
-    const { data } = storage.from('knowledge-files').getPublicUrl(filePath);
-    return data?.publicUrl || '';
-  };
+  // Download route keeps the recorded file name on save (the raw public URL
+  // would save as the randomized storage key).
+  const getFileUrl = (filePath: string, name?: string | null) =>
+    storageDownloadUrl('knowledge-files', filePath, name || '');
 
   // ─── Re-process a single doc with AI vision ───
   const reprocessDoc = async (docId: string, title: string): Promise<{ success: boolean; error?: string }> => {
@@ -719,7 +719,7 @@ export default function KnowledgePage() {
                   {/* File download link */}
                   {hasFile && doc.file_path && (
                     <a
-                      href={getFileUrl(doc.file_path)}
+                      href={getFileUrl(doc.file_path, doc.file_name)}
                       target="_blank"
                       rel="noopener noreferrer"
                       style={{

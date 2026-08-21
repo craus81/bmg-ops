@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
-import { storage } from '@/lib/storage';
+import { storage, storageDownloadUrl } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import EmailProofSearch, { type EmailProofFile } from '@/components/EmailProofSearch';
@@ -711,8 +711,9 @@ export default function PartsPage() {
   };
 
   // Folded-in proofs from the old catalog live in the 'proofs' bucket; native
-  // part files live in 'graphics-proofs'. Honor each file's own bucket.
-  const getFileUrl = (file: PartFile) => storage.from(file.bucket || 'graphics-proofs').getPublicUrl(file.storage_path).data.publicUrl;
+  // part files live in 'graphics-proofs'. Honor each file's own bucket. The
+  // download route keeps the recorded file name when someone saves the file.
+  const getFileUrl = (file: PartFile) => storageDownloadUrl(file.bucket || 'graphics-proofs', file.storage_path, file.file_name);
 
   const toggleSort = (col: typeof sortCol) => {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { storage } from '@/lib/storage';
+import { storage, storageDownloadUrl } from '@/lib/storage';
 import { createClient } from '@/lib/supabase-browser';
 import ProofThumbnail from '@/components/ProofThumbnail';
 
@@ -295,7 +295,7 @@ export default function VehiclePhotoTimeline({ vin, variant = 'internal', refres
               <>
                 {item.isPdf || !isRenderableImage(item) || failedIds.has(item.id) ? (
                   <a
-                    href={url}
+                    href={storageDownloadUrl(item.bucket, item.storagePath, item.fileName || '')}
                     target="_blank"
                     rel="noopener noreferrer"
                     onClick={e => e.stopPropagation()}

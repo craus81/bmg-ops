@@ -16,7 +16,7 @@ import { findExistingScanVins, sameVehicleVin, vinTail, fetchScansMatchingVins, 
 import { scanLifecycle } from '@/lib/scan-state';
 import { customerRequiresPo, loadBillableCustomers, matchesBillableCustomer, DEFAULT_BILLABLE_CUSTOMERS, type BillableCustomer } from '@/lib/billable-customers';
 import { decodeVinsBatch } from '@/lib/vin-decoder';
-import { storage } from '@/lib/storage';
+import { storage, storageDownloadUrl } from '@/lib/storage';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { type EmailedInfo, fetchEmailedByNumber, isBadDelivery } from '@/lib/invoice-emails';
 import { InvoiceEmailedBadge } from '@/components/InvoiceEmailedBadge';
@@ -2427,7 +2427,7 @@ export default function AdminScansPage() {
                                   )}
                                   {(photosByScanId[scan.id]?.length ?? 0) > 0 && (
                                     <a
-                                      href={storage.from('photos').getPublicUrl(photosByScanId[scan.id][0]).data.publicUrl}
+                                      href={storageDownloadUrl('photos', photosByScanId[scan.id][0], `${scan.vin}-completion.${photosByScanId[scan.id][0].split('.').pop() || 'jpg'}`)}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       title={`${photosByScanId[scan.id].length} completion photo${photosByScanId[scan.id].length !== 1 ? 's' : ''} — click to view`}
@@ -3972,7 +3972,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
                 )}
                 {inv.storage_path && (
                   <a
-                    href={storage.from('invoices').getPublicUrl(inv.storage_path).data.publicUrl}
+                    href={storageDownloadUrl('invoices', inv.storage_path, inv.file_name || '')}
                     target="_blank" rel="noreferrer"
                     style={{ padding: '3px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', textDecoration: 'none', flexShrink: 0 }}
                   >

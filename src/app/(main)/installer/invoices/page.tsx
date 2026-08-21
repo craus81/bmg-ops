@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
-import { storage } from '@/lib/storage';
+import { storage, storageDownloadUrl } from '@/lib/storage';
 import { DropZone } from '@/components/DropZone';
 import { getInstallerPreview } from '@/lib/installer-preview';
 
@@ -464,7 +464,7 @@ export default function InstallerInvoicesPage() {
                 <div style={{ display: 'flex', gap: '6px', padding: '0 14px 10px', flexWrap: 'wrap' }}>
                   {inv.storage_path && (
                     <a
-                      href={storage.from('invoices').getPublicUrl(inv.storage_path).data.publicUrl}
+                      href={storageDownloadUrl('invoices', inv.storage_path, inv.file_name || '')}
                       target="_blank" rel="noreferrer"
                       onClick={e => e.stopPropagation()}
                       style={{ padding: '5px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', textDecoration: 'none' }}

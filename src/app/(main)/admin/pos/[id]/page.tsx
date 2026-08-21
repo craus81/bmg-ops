@@ -17,7 +17,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
-import { storage } from '@/lib/storage';
+import { storage, storageDownloadUrl } from '@/lib/storage';
 import { resolvePoCustomer } from '@/lib/customer-match';
 import { formatShipTo, shipToCityLabel } from '@/lib/graphics-job-from-po';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
@@ -582,7 +582,11 @@ export default function PoRecordPage() {
   };
 
   // ── Files (same storage flow as the list's manual PDF backfill) ──────────
-  const fileUrl = (storagePath: string) => storage.from('graphics-proofs').getPublicUrl(storagePath).data.publicUrl;
+  // Served through the download route so a save keeps the recorded file name;
+  // the iframe preview and viewer tab follow its redirect the same as a raw
+  // public URL.
+  const fileUrl = (storagePath: string, name?: string | null) =>
+    storageDownloadUrl('graphics-proofs', storagePath, name || '');
 
   // "Open in new tab" goes through the in-app viewer rather than at the raw
   // file: a bare PDF tab has no app chrome and no working Back button, which
@@ -638,7 +642,7 @@ export default function PoRecordPage() {
     if (lastUpload) {
       // Pop the fresh upload into the preview, then mirror the Gmail import:
       // run the ship-to extraction so the PO's location fills itself in.
-      setPdfPreview({ url: fileUrl(lastUpload.path), name: lastUpload.name });
+      setPdfPreview({ url: fileUrl(lastUpload.path, lastUpload.name), name: lastUpload.name });
       setExtractingShipTo(true);
       try {
         const res = await fetch('/api/pos/extract-ship-to', {
@@ -1474,7 +1478,7 @@ export default function PoRecordPage() {
               <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 9px', borderRadius: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
                 <button
                   type="button"
-                  onClick={() => setPdfPreview({ url: fileUrl(f.storage_path), name: f.file_name })}
+                  onClick={() => setPdfPreview({ url: fileUrl(f.storage_path, f.file_name), name: f.file_name })}
                   title="Preview this PDF"
                   style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left', background: 'none', border: 'none', padding: 0, fontSize: '11.5px', fontWeight: 600, color: '#60a5fa', cursor: 'pointer' }}
                 >
@@ -1482,7 +1486,7 @@ export default function PoRecordPage() {
                 </button>
                 {f.source && <span style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{f.source === 'pdf_upload' ? 'PDF' : 'Email'}</span>}
                 {f.file_size != null && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{(f.file_size / 1024).toFixed(0)}KB</span>}
-                <a href={pdfTabUrl(fileUrl(f.storage_path), f.file_name)} onClick={openPdfTab} target="_blank" rel="noreferrer" title="Open in a new tab" style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textDecoration: 'none' }}>↗</a>
+                <a href={pdfTabUrl(fileUrl(f.storage_path, f.file_name), f.file_name)} onClick={openPdfTab} target="_blank" rel="noreferrer" title="Open in a new tab" style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textDecoration: 'none' }}>↗</a>
               </div>
             ))}
           </div>

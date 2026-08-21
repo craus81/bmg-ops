@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
-import { storage } from '@/lib/storage';
+import { storage, storageDownloadUrl } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { DropZone } from '@/components/DropZone';
@@ -407,7 +407,8 @@ export default function UpfitProjectsPage() {
     setFiles(prev => prev.filter(f => f.id !== file.id));
   };
 
-  const getFileUrl = (path: string) => storage.from('upfit-files').getPublicUrl(path).data.publicUrl;
+  // Download route keeps the recorded file name on save.
+  const getFileUrl = (path: string, name?: string | null) => storageDownloadUrl('upfit-files', path, name || '');
 
   const formatFileSize = (bytes: number | null) => {
     if (!bytes) return '';
@@ -1164,7 +1165,7 @@ export default function UpfitProjectsPage() {
             {files.map(f => (
               <div key={f.id} style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '8px 10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <a
-                  href={getFileUrl(f.storage_path)}
+                  href={getFileUrl(f.storage_path, f.file_name)}
                   target="_blank"
                   rel="noopener noreferrer"
                   style={{ flex: 1, minWidth: 0, color: theme.textPrimary, fontSize: '12px', fontWeight: 600, textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}

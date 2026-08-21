@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import PhoneInput from '@/components/PhoneInput';
-import { storage } from '@/lib/storage';
+import { storage, storageDownloadUrl } from '@/lib/storage';
 
 // Compliance docs are saved through /api/cni/my-docs so the server can
 // notify admins the moment the full set is on file.
@@ -410,7 +410,7 @@ export default function InstallerProfilePage() {
                   <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
                     {path && (
                       <a
-                        href={storage.from('cni-docs').getPublicUrl(path).data.publicUrl}
+                        href={storageDownloadUrl('cni-docs', path, docFileName(path))}
                         target="_blank" rel="noreferrer"
                         style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}
                       >

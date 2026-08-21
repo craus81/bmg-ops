@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
-import { storage } from '@/lib/storage';
+import { storage, storageDownloadUrl } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import ProofThumbnail from '@/components/ProofThumbnail';
@@ -46,6 +46,9 @@ interface Props {
   customerName: string | null;
   netsuiteSalesOrderId: string | null;
   proofUrl: string | null;
+  /** Named-download variant of proofUrl — open/save anchors use it so the
+   *  file keeps its recorded name; thumbnails stay on the public URL. */
+  proofDownloadUrl?: string | null;
   proofIsPdf: boolean;
   graphicsFiles: GraphicsFile[];
   isAdmin: boolean;
@@ -75,7 +78,7 @@ const PHOTO_BUCKET = 'photos';
 
 export default function CompletionModal({
   vehicleId, vehicleVin, vehicleLabel, customerName, netsuiteSalesOrderId,
-  proofUrl, proofIsPdf, graphicsFiles, isAdmin, salesOrders, sourceEstimateId,
+  proofUrl, proofDownloadUrl, proofIsPdf, graphicsFiles, isAdmin, salesOrders, sourceEstimateId,
   invoiceNumber, onInvoiced, onClose, onComplete,
 }: Props) {
   const supabase = createClient();
@@ -477,10 +480,10 @@ export default function CompletionModal({
                           proofIsPdf ? (
                             <div>
                               <ProofThumbnail pdfUrl={proofUrl} label="Proof PDF" thumbSize={120} expandedSize={400} />
-                              <a href={proofUrl} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-block', marginTop: '8px', fontSize: '12px', color: 'var(--accent, #2563eb)' }}>Open full proof ↗</a>
+                              <a href={proofDownloadUrl || proofUrl} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-block', marginTop: '8px', fontSize: '12px', color: 'var(--accent, #2563eb)' }}>Open full proof ↗</a>
                             </div>
                           ) : (
-                            <a href={proofUrl} target="_blank" rel="noopener noreferrer">
+                            <a href={proofDownloadUrl || proofUrl} target="_blank" rel="noopener noreferrer">
                               <img src={proofUrl} alt="proof" style={{ maxWidth: '100%', borderRadius: '8px', border: '1px solid var(--border)' }} />
                             </a>
                           )
@@ -492,7 +495,7 @@ export default function CompletionModal({
                             <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>Design files</div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                               {graphicsFiles.map(f => {
-                                const url = storage.from('graphics-proofs').getPublicUrl(f.storage_path).data.publicUrl;
+                                const url = storageDownloadUrl('graphics-proofs', f.storage_path, f.file_name);
                                 return (
                                   <a key={f.id} href={url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', color: 'var(--accent, #2563eb)', textDecoration: 'none' }}>
                                     {f.file_name} ↗

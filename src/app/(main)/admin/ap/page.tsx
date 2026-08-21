@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
-import { storage } from '@/lib/storage';
+import { storage, storageDownloadUrl } from '@/lib/storage';
 import EditVendorInvoiceModal from '@/components/EditVendorInvoiceModal';
 
 interface ApInvoice {
@@ -347,7 +347,7 @@ export default function ApQueuePage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                   {inv.storage_path && (
                     <a
-                      href={storage.from('invoices').getPublicUrl(inv.storage_path).data.publicUrl}
+                      href={storageDownloadUrl('invoices', inv.storage_path, inv.file_name || '')}
                       target="_blank" rel="noreferrer"
                       style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', textDecoration: 'none' }}
                     >Invoice</a>
