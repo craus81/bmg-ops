@@ -32,10 +32,13 @@ const money = (n: any) => `$${Number(n || 0).toFixed(2)}`;
  * One-line vehicle description from the estimate's stored vehicle fields
  * (N4-B2 phase 3): "2026 Ford Transit · medium roof · 148" WB". Callers
  * hydrate `vehicle_platform_label` from vehicle_platforms — the estimate
- * row itself only stores the FK. Also the line pushed into NetSuite memos.
+ * row itself only stores the FK. `vehicle_other` is the free-text vehicle
+ * for anything outside the platforms table (VIN-decoded or hand-typed) and
+ * fills in when no platform is set. Also the line pushed into NetSuite
+ * memos.
  */
 export function vehicleDescription(est: any): string {
-  const name = [est.vehicle_year, est.vehicle_platform_label].filter(Boolean).join(' ');
+  const name = [est.vehicle_year, est.vehicle_platform_label || est.vehicle_other].filter(Boolean).join(' ');
   const wb = est.vehicle_wheelbase;
   return [
     name || null,

@@ -387,11 +387,11 @@ export default function WrapQuotePage() {
     (async () => {
       const { data: est } = await supabase
         .from('estimates')
-        .select('id, estimate_number, customer_id, customer_name, vehicle_year, vehicle_roof, vehicle_wheelbase, vehicle_platform_id, vin, unit_number, vehicle_platforms(label)')
+        .select('id, estimate_number, customer_id, customer_name, vehicle_year, vehicle_roof, vehicle_wheelbase, vehicle_platform_id, vehicle_other, vin, unit_number, vehicle_platforms(label)')
         .eq('id', estId)
         .maybeSingle();
       if (!est) return;
-      const platformLabel = (est as any).vehicle_platforms?.label || '';
+      const platformLabel = (est as any).vehicle_platforms?.label || (est as any).vehicle_other || '';
       const vehicle = [
         est.vehicle_year,
         platformLabel,

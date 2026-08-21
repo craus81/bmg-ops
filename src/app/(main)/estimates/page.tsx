@@ -133,6 +133,7 @@ interface Estimate {
   created_at: string;
   updated_at: string;
   vin: string | null;
+  vehicle_other: string | null;
   unit_number: string | null;
   vehicle_platform_id: string | null;
   vehicle_year: string | null;
@@ -160,6 +161,10 @@ interface VehiclePlatform {
   sort_order: number;
   config: PlatformConfig | null;
 }
+
+// Sentinel option value for the vehicle dropdown's free-text "Other" entry
+// (not a platform id — pickPlatform intercepts it).
+const OTHER_VEHICLE = '__other__';
 
 // Live feedback under the VIN input — the decode is never silent.
 type VinStatus =
@@ -260,6 +265,11 @@ export default function EstimatesPage() {
   // platform are offered; a VIN decode auto-fills what it can.
   const [platforms, setPlatforms] = useState<VehiclePlatform[]>([]);
   const [vehiclePlatformId, setVehiclePlatformId] = useState<string | null>(null);
+  // Free-text vehicle for anything the platforms table doesn't cover — a
+  // VIN decode fills it when no platform matches, or staff type it by hand
+  // via the "Other" option (field ask 2026-08-21: any vehicle selectable).
+  const [vehicleOther, setVehicleOther] = useState('');
+  const [vehicleOtherMode, setVehicleOtherMode] = useState(false);
   const [vehicleYear, setVehicleYear] = useState('');
   const [vehicleWheelbase, setVehicleWheelbase] = useState('');
   const [vehicleRoof, setVehicleRoof] = useState('');
@@ -283,7 +293,16 @@ export default function EstimatesPage() {
   // Manual platform switch: keep qualifier values the new platform also
   // offers (same roof label etc.), drop the ones it doesn't.
   const pickPlatform = (id: string | null) => {
+    if (id === OTHER_VEHICLE) {
+      // "Other" — free-text vehicle, no platform (and no fitment filtering).
+      setVehiclePlatformId(null);
+      setVehicleOtherMode(true);
+      setVehicleWheelbase(''); setVehicleRoof(''); setVehicleCab(''); setVehicleBed('');
+      return;
+    }
     setVehiclePlatformId(id);
+    setVehicleOtherMode(false);
+    if (id) setVehicleOther('');
     const cfg: PlatformConfig = platforms.find(p => p.id === id)?.config || {};
     setVehicleWheelbase(prev => (cfg.wheelbases || []).includes(prev) ? prev : '');
     setVehicleRoof(prev => (cfg.roofs || []).includes(prev) ? prev : '');
@@ -315,7 +334,23 @@ export default function EstimatesPage() {
         if (decoded.year) setVehicleYear(decoded.year);
         const vehicleName = [decoded.year, decoded.make, decoded.model === 'Vehicle' ? '' : decoded.model]
           .filter(Boolean).join(' ');
+        // Off-platform vehicle: still land the decode on the estimate as the
+        // free-text vehicle (year lives in its own field) instead of leaving
+        // the picker empty.
+        const fillOther = () => {
+          const makeModel = [decoded.make, decoded.model === 'Vehicle' ? '' : decoded.model]
+            .filter(Boolean).join(' ');
+          if (!makeModel) return;
+          setVehiclePlatformId(prev => {
+            if (!prev) {
+              setVehicleOther(makeModel);
+              setVehicleOtherMode(true);
+            }
+            return prev;
+          });
+        };
         if (!res.platformKey) {
+          fillOther();
           setVinStatus({ kind: 'no-platform', summary: vehicleName });
           return;
         }
@@ -327,6 +362,7 @@ export default function EstimatesPage() {
           .maybeSingle();
         if (cancelled) return;
         if (!plat) {
+          fillOther();
           setVinStatus({ kind: 'no-platform', summary: vehicleName });
           return;
         }
@@ -339,6 +375,8 @@ export default function EstimatesPage() {
         const cab = matched.cab;
         const bed = matched.bed;
         setVehiclePlatformId(plat.id);
+        setVehicleOtherMode(false);
+        setVehicleOther('');
         // Fill only what the decode actually produced; a hand-picked
         // qualifier survives unless it doesn't exist on this platform.
         setVehicleWheelbase(prev => wb || ((cfg.wheelbases || []).includes(prev) ? prev : ''));
@@ -807,6 +845,7 @@ export default function EstimatesPage() {
         expiration_date: expirationDate || null,
         fleet_checkin_id: fleetCheckinId,
         vehicle_platform_id: vehiclePlatformId,
+        vehicle_other: vehiclePlatformId ? null : vehicleOther,
         vehicle_year: vehicleYear,
         vehicle_wheelbase: vehicleWheelbase,
         vehicle_roof: vehicleRoof,
@@ -1106,6 +1145,8 @@ export default function EstimatesPage() {
     setVin(est.vin || '');
     setUnitNumber(est.unit_number || '');
     setVehiclePlatformId(est.vehicle_platform_id || null);
+    setVehicleOther(est.vehicle_other || '');
+    setVehicleOtherMode(!est.vehicle_platform_id && !!est.vehicle_other);
     setVehicleYear(est.vehicle_year || '');
     setVehicleWheelbase(est.vehicle_wheelbase || '');
     setVehicleRoof(est.vehicle_roof || '');
@@ -1382,6 +1423,8 @@ export default function EstimatesPage() {
     setVin('');
     setUnitNumber('');
     setVehiclePlatformId(null);
+    setVehicleOther('');
+    setVehicleOtherMode(false);
     setVehicleYear('');
     setVehicleWheelbase('');
     setVehicleRoof('');
@@ -1777,7 +1820,7 @@ export default function EstimatesPage() {
           {vinStatus && (
             <div style={{
               marginTop: '4px', fontSize: '11px', fontWeight: 700,
-              color: vinStatus.kind === 'filled' ? '#34d399'
+              color: vinStatus.kind === 'filled' || vinStatus.kind === 'no-platform' ? '#34d399'
                 : vinStatus.kind === 'partial' || vinStatus.kind === 'decoding' ? 'var(--text-muted)'
                 : '#fbbf24',
             }}>
@@ -1798,8 +1841,8 @@ export default function EstimatesPage() {
                   )}
                 </>
               )}
-              {vinStatus.kind === 'no-platform' && `Decoded${vinStatus.summary ? `: ${vinStatus.summary}` : ''} — not a vehicle we stock parts for; pick the vehicle below if needed`}
-              {vinStatus.kind === 'failed' && '⚠ Couldn’t decode this VIN — pick the vehicle below by hand'}
+              {vinStatus.kind === 'no-platform' && `✓ Decoded${vinStatus.summary ? `: ${vinStatus.summary}` : ''} — filled in as a typed vehicle (not in the parts-fitment list)`}
+              {vinStatus.kind === 'failed' && '⚠ Couldn’t decode this VIN — pick the vehicle below or type it in'}
             </div>
           )}
         </div>
@@ -1903,7 +1946,7 @@ export default function EstimatesPage() {
           <div style={labelStyle}>Vehicle (Make & Model)</div>
           <select
             style={inputStyle}
-            value={vehiclePlatformId || ''}
+            value={vehiclePlatformId || (vehicleOtherMode ? OTHER_VEHICLE : '')}
             onChange={e => pickPlatform(e.target.value || null)}
           >
             <option value="">— select vehicle —</option>
@@ -1924,7 +1967,22 @@ export default function EstimatesPage() {
                 ))}
               </optgroup>
             )}
+            <option value={OTHER_VEHICLE}>Other — type it in…</option>
           </select>
+          {vehicleOtherMode && (
+            <input
+              style={{ ...inputStyle, marginTop: '6px' }}
+              value={vehicleOther}
+              onChange={e => setVehicleOther(e.target.value)}
+              placeholder="Make & model — e.g. Honda Civic, Isuzu NPR box truck"
+              autoFocus={!vehicleOther}
+            />
+          )}
+          {vehicleOtherMode && (
+            <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+              Prints on the estimate and pushes to NetSuite. Catalog fitment filtering only works for vehicles in the list above.
+            </div>
+          )}
           {selectedPlatform && (
             <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
               Browse Catalog will filter to parts that fit the {selectedPlatform.label}

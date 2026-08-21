@@ -54,6 +54,9 @@ const UpsertEstimateSchema = z.object({
   // N4-B2 phase 3: the vehicle lives on the estimate whether or not a VIN
   // exists — platform + year + the qualifiers that gate fitment.
   vehicle_platform_id: z.string().uuid().optional().nullable(),
+  // Free-text vehicle when no platform matches (VIN decode or hand-typed);
+  // null whenever a platform is selected.
+  vehicle_other: z.string().max(120).optional().nullable(),
   vehicle_year: z.string().max(8).optional().nullable(),
   vehicle_wheelbase: z.string().max(40).optional().nullable(),
   vehicle_roof: z.string().max(40).optional().nullable(),
@@ -125,7 +128,7 @@ export async function POST(req: NextRequest) {
     install_instructions, on_site_contact_name, on_site_contact_phone,
     delivery_preferences, internal_notes,
     vin, unit_number, po_number, expiration_date, fleet_checkin_id,
-    vehicle_platform_id, vehicle_year, vehicle_wheelbase,
+    vehicle_platform_id, vehicle_other, vehicle_year, vehicle_wheelbase,
     vehicle_roof, vehicle_cab, vehicle_bed,
   } = parsed.data;
 
@@ -200,6 +203,7 @@ export async function POST(req: NextRequest) {
           expiration_date: expiration_date || null,
           fleet_checkin_id: fleet_checkin_id || null,
           vehicle_platform_id: vehicle_platform_id || null,
+          vehicle_other: vehicle_platform_id ? null : vehicle_other?.trim() || null,
           vehicle_year: vehicle_year?.trim() || null,
           vehicle_wheelbase: vehicle_wheelbase?.trim() || null,
           vehicle_roof: vehicle_roof?.trim() || null,
@@ -273,6 +277,7 @@ export async function POST(req: NextRequest) {
           expiration_date: expiration_date || null,
           fleet_checkin_id: fleet_checkin_id || null,
           vehicle_platform_id: vehicle_platform_id || null,
+          vehicle_other: vehicle_platform_id ? null : vehicle_other?.trim() || null,
           vehicle_year: vehicle_year?.trim() || null,
           vehicle_wheelbase: vehicle_wheelbase?.trim() || null,
           vehicle_roof: vehicle_roof?.trim() || null,

@@ -107,6 +107,18 @@ describe('vehicleDescription', () => {
     })).toBe("2025 Ford F-150 · SuperCrew cab · 5.5' bed");
     expect(vehicleDescription({ vin: '1FTBR1C82TKA17431' })).toBe('');
   });
+
+  it('falls back to the free-text vehicle when no platform label is set', () => {
+    expect(vehicleDescription({ vehicle_year: '2024', vehicle_other: 'Honda Civic' }))
+      .toBe('2024 Honda Civic');
+    expect(vehicleDescription({ vehicle_other: 'Isuzu NPR box truck' }))
+      .toBe('Isuzu NPR box truck');
+    // Platform label wins when both exist (vehicle_other is nulled on save
+    // when a platform is selected, but be safe about stale rows).
+    expect(vehicleDescription({
+      vehicle_year: '2026', vehicle_platform_label: 'Ford Transit', vehicle_other: 'stale',
+    })).toBe('2026 Ford Transit');
+  });
 });
 
 // One memo builder for both NetSuite push paths (estimate push and
