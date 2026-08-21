@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { r2Delete } from '@/lib/r2';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
@@ -244,8 +245,13 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
       .eq('part_id', partId);
     const paths = (files || []).map((f) => f.storage_path).filter(Boolean);
     if (paths.length > 0) {
-      const { error: rmErr } = await supabase.storage.from('graphics-proofs').remove(paths);
-      if (rmErr) console.warn(`[part-delete] storage cleanup failed: ${rmErr.message}`);
+      // The files live in R2 (bucket name as key prefix) — the raw
+      // supabase-js remove() targeted a Supabase bucket that doesn't hold
+      // them, silently leaking the objects.
+      for (const path of paths) {
+        const rm = await r2Delete('graphics-proofs', path);
+        if (!rm.success) console.warn(`[part-delete] storage cleanup failed for ${path}: ${rm.error}`);
+      }
     }
 
     // Detach references whose FK has no auto rule — po_line_items and

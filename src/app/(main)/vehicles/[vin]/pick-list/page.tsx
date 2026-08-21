@@ -10,7 +10,7 @@ import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
 import CompletionModal from '@/components/CompletionModal';
 import { PartLabel } from '@/components/PartLabel';
 import { openOrCreateVehicleThread } from '@/lib/customer-thread';
-import { storageDownloadUrl } from '@/lib/storage';
+import { storage, storageDownloadUrl } from '@/lib/storage';
 
 interface VehicleData {
   id: string;
@@ -246,7 +246,11 @@ export default function VehiclePickListPage() {
     try {
       const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
       const path = `vehicles/${vehicle.id}/${type}-${Date.now()}.${ext}`;
-      const { error: upErr } = await supabase.storage.from('photos').upload(path, file, { contentType: file.type });
+      // Photos live in R2 — upload through the shim like the completion
+      // modal does. The raw supabase-js client used to put these in a
+      // Supabase bucket nothing else reads, so they rendered broken
+      // everywhere.
+      const { error: upErr } = await storage.from('photos').upload(path, file, { contentType: file.type });
       if (upErr) {
         await dialog.alert('Upload failed: ' + upErr.message);
       } else {
@@ -290,7 +294,7 @@ export default function VehiclePickListPage() {
     storageDownloadUrl('graphics-proofs', f.storage_path, f.file_name);
 
   const proofUrl = vehicle?.proof_file_path
-    ? supabase.storage.from('graphics-proofs').getPublicUrl(vehicle.proof_file_path).data.publicUrl
+    ? storage.from('graphics-proofs').getPublicUrl(vehicle.proof_file_path).data.publicUrl
     : null;
 
   const formatDate = (iso: string | null) => {
