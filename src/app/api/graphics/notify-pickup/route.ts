@@ -183,7 +183,7 @@ export async function POST(req: NextRequest) {
           undefined,
           auth.user?.email || undefined,
           undefined,
-          { kind: 'pickup_notice', sentBy: auth.user?.id, contextUrl: deepLinks.graphicsJob(jobId) },
+          { kind: 'pickup_notice', sentBy: auth.user?.id, contextUrl: deepLinks.graphicsJob(jobId), customerId },
         );
         dispatch.email = { target: contactEmail, ok };
         if (threadId) {

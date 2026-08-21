@@ -729,7 +729,14 @@ export default function ProspectsPage() {
                     {(c.phone || c.email) && (
                       <div style={{ display: 'flex', gap: '16px', marginTop: '4px', fontSize: '12px' }}>
                         {c.phone && <a href={`tel:${c.phone}`} style={{ color: '#22c55e', textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}>{c.phone}</a>}
-                        {c.email && <a href={`mailto:${c.email}`} style={{ color: '#60a5fa', textDecoration: 'none' }}>{c.email}</a>}
+                        {c.email && (
+                          <button
+                            onClick={() => router.push(`/admin/prospects/${c.prospect_id}?compose=1&to=${encodeURIComponent(c.email!)}`)}
+                            title="Email this contact from FleetSuite — opens the compose screen on their customer record"
+                            style={{ color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 'inherit', textAlign: 'left' }}>
+                            {c.email}
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>

@@ -25,7 +25,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import JSZip from 'jszip';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -113,7 +113,7 @@ const BILLING_WORKFLOWS: Record<string, string> = {
 
 interface Contact { id: string; name: string; title: string | null; email: string | null; phone: string | null; is_decision_maker: boolean; netsuite_contact_id: string | null }
 interface Opportunity { id: string; title: string; type: string; stage: string; value: number | null; expected_close_date: string | null; created_at: string }
-interface Activity { id: string; type: string; summary: string; created_by: string | null; created_at: string; creator_name?: string | null }
+interface Activity { id: string; type: string; summary: string; created_by: string | null; created_at: string; creator_name?: string | null; email_log_id?: string | null }
 interface Reminder { id: string; title: string; description: string | null; due_at: string }
 interface Tag { id: string; tag: string }
 interface CustDocument {
@@ -508,12 +508,27 @@ export default function CustomerRecordPage() {
   };
 
   const [tagInput, setTagInput] = useState('');
+  // Every tag already in use anywhere — the datalist under the + tag input,
+  // so desktop gets a dropdown of options instead of blind free text.
+  const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
+  useEffect(() => {
+    (async () => {
+      const { data } = await fetchAllRows<{ tag: string }>((from, to) =>
+        supabase.from('prospect_tags').select('tag').order('tag').order('id').range(from, to));
+      setTagSuggestions([...new Set((data || []).map(r => r.tag))]);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- vocabulary loads once
+  }, []);
   const addTag = async () => {
     const t = tagInput.trim().toLowerCase();
     if (!t || !prospect) return;
+    // Already tagged — just clear the input instead of surfacing the raw
+    // unique-constraint error.
+    if (tags.some(x => x.tag === t)) { setTagInput(''); return; }
     const { data, error } = await supabase.from('prospect_tags').insert({ prospect_id: prospect.id, tag: t }).select().single();
     if (error || !data) { await dialog.alert(`Could not add the tag: ${error?.message || 'unknown error'}`); return; }
     setTags(prev => [...prev, data as Tag]);
+    setTagSuggestions(prev => (prev.includes(t) ? prev : [...prev, t].sort()));
     setTagInput('');
   };
 
@@ -806,7 +821,7 @@ export default function CustomerRecordPage() {
     setActsLoadingMore(true);
     const from = activities.length;
     const { data } = await supabase.from('prospect_activities')
-      .select('id, type, summary, created_by, created_at')
+      .select('id, type, summary, created_by, created_at, email_log_id')
       .eq('prospect_id', prospect.id)
       .order('created_at', { ascending: false }).order('id')
       .range(from, from + ACTS_PAGE_SIZE - 1);
@@ -826,7 +841,7 @@ export default function CustomerRecordPage() {
   // server-side (it parses the transcript into both).
   const refreshFeed = async (pid: string) => {
     const [aRes, rRes] = await Promise.all([
-      supabase.from('prospect_activities').select('id, type, summary, created_by, created_at').eq('prospect_id', pid).order('created_at', { ascending: false }).order('id').limit(20),
+      supabase.from('prospect_activities').select('id, type, summary, created_by, created_at, email_log_id').eq('prospect_id', pid).order('created_at', { ascending: false }).order('id').limit(20),
       supabase.from('prospect_reminders').select('id, title, description, due_at').eq('prospect_id', pid).is('completed_at', null).order('due_at'),
     ]);
     const acts = (aRes.data || []) as Activity[];
@@ -955,7 +970,7 @@ export default function CustomerRecordPage() {
       const [cRes, oRes, aRes, tRes, rRes] = await Promise.all([
         supabase.from('prospect_contacts').select('id, name, title, email, phone, is_decision_maker, netsuite_contact_id').eq('prospect_id', p.id).order('is_decision_maker', { ascending: false }),
         supabase.from('prospect_opportunities').select('id, title, type, stage, value, expected_close_date, created_at').eq('prospect_id', p.id).order('created_at', { ascending: false }),
-        supabase.from('prospect_activities').select('id, type, summary, created_by, created_at').eq('prospect_id', p.id).order('created_at', { ascending: false }).order('id').limit(20),
+        supabase.from('prospect_activities').select('id, type, summary, created_by, created_at, email_log_id').eq('prospect_id', p.id).order('created_at', { ascending: false }).order('id').limit(20),
         supabase.from('prospect_tags').select('id, tag').eq('prospect_id', p.id),
         supabase.from('prospect_reminders').select('id, title, description, due_at').eq('prospect_id', p.id).is('completed_at', null).order('due_at'),
       ]);
@@ -1293,6 +1308,72 @@ export default function CustomerRecordPage() {
 
   // ── Statement options (scope + date range → PDF / print / email) ────────
   const [stModalOpen, setStModalOpen] = useState(false);
+
+  // ── General "email this customer" compose ──
+  // The Email button and contact-row addresses used to be bare mailto:
+  // links: the device's mail app composed from whichever account it
+  // considered default (iCloud vs BMG on Apple devices) and FleetSuite
+  // never saw the send. Now they open the standard compose screen —
+  // server-side send from the company address, Reply-To the sender's BMG
+  // login, logged to email_log, and recorded on this page's activity feed.
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [composeTo, setComposeTo] = useState('');
+  const [composeSubject, setComposeSubject] = useState('');
+  const [composeSubjectKey, setComposeSubjectKey] = useState(0);
+  const openCompose = (to: string) => { setComposeTo(to); setComposeSubject(''); setComposeSubjectKey(k => k + 1); setComposeOpen(true); };
+
+  // ?compose=1&to=… — the Contacts directory's email addresses land here
+  // with the compose pre-opened (they were mailto: links before).
+  const searchParams = useSearchParams();
+  const composeParamHandled = useRef(false);
+  useEffect(() => {
+    if (composeParamHandled.current) return;
+    if (searchParams.get('compose') !== '1') return;
+    composeParamHandled.current = true;
+    openCompose(searchParams.get('to') || '');
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on arrival
+  }, [searchParams]);
+
+  const composeRequest = async (fields: EmailComposeFields, preview: boolean) => {
+    const res = await fetch('/api/prospects/email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prospectId: prospect?.id || null,
+        customerId: customer?.id || null,
+        netsuiteCustomerId: prospect?.netsuite_id || customer?.netsuite_id || null,
+        emails: fields.emails,
+        bccSelf: fields.bccSelf,
+        subject: composeSubject,
+        message: fields.message,
+        preview,
+      }),
+    });
+    return { res, data: await res.json() };
+  };
+  const fetchComposePreview = async (fields: EmailComposeFields) => {
+    const { res, data } = await composeRequest(fields, true);
+    return res.ok ? { preview: data } : { error: data.error || 'Preview failed' };
+  };
+  const sendCompose = async (fields: EmailComposeFields) => {
+    const { res, data } = await composeRequest(fields, false);
+    if (!res.ok || !data.success) { await dialog.alert(data.error || 'Email send failed'); return { ok: false }; }
+    await dialog.alert(`Email sent to ${(data.to || []).join(', ')}${data.bcc?.length ? ` (bcc ${data.bcc.join(', ')})` : ''}.`);
+    if (prospect) refreshFeed(prospect.id);
+    return { ok: true };
+  };
+
+  // Viewer for a sent email off the activity feed (email_log.body_html).
+  const [viewEmail, setViewEmail] = useState<{ subject: string | null; recipients: string[]; body_html: string | null; delivery_status: string; created_at: string } | null>(null);
+  const openEmailView = async (emailLogId: string) => {
+    const { data } = await supabase
+      .from('email_log')
+      .select('subject, recipients, body_html, delivery_status, created_at')
+      .eq('id', emailLogId)
+      .maybeSingle();
+    if (data) setViewEmail(data as any);
+    else await dialog.alert('Could not load this email.');
+  };
   const [stScope, setStScope] = useState<StatementScope>('open');
   const [stFrom, setStFrom] = useState('');
   const [stTo, setStTo] = useState('');
@@ -1408,8 +1489,26 @@ export default function CustomerRecordPage() {
             <span key={t.id} style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '999px', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>{t.tag}</span>
           ))}
           {prospect && (
-            <input value={tagInput} onChange={e => setTagInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addTag(); }}
-              placeholder="+ tag" style={{ width: '76px', padding: '3px 9px', borderRadius: '999px', fontSize: '10px', background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+            <>
+              {/* Enter, blur, or the + button all commit — Enter used to be
+                  the ONLY save path, so a typed tag followed by a click
+                  anywhere else silently vanished ("it doesn't save"). The
+                  datalist offers every tag already in use. */}
+              <input value={tagInput} onChange={e => setTagInput(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') addTag(); }}
+                onBlur={() => { if (tagInput.trim()) addTag(); }}
+                list="prospect-tag-options"
+                placeholder="+ tag" style={{ width: '140px', padding: '3px 9px', borderRadius: '999px', fontSize: '10px', background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+              <datalist id="prospect-tag-options">
+                {tagSuggestions.map(t => <option key={t} value={t} />)}
+              </datalist>
+              {tagInput.trim() && (
+                <button onMouseDown={e => e.preventDefault()} onClick={addTag} title="Add this tag" style={{
+                  padding: '3px 9px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                  background: 'rgba(96,165,250,0.12)', border: '1px solid rgba(96,165,250,0.4)', color: '#60a5fa',
+                }}>Add</button>
+              )}
+            </>
           )}
         </div>
         {(prospect?.contact_name || customer?.entity_id) && (
@@ -1419,7 +1518,11 @@ export default function CustomerRecordPage() {
         )}
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}>
           {phone && <a href={`tel:${phone}`} style={btnSm}>{phone}</a>}
-          {email && <a href={`mailto:${email}`} style={btnSm}>Email</a>}
+          {email && (
+            <button onClick={() => openCompose(email)}
+              title="Email this record from FleetSuite — sends from the company address with replies to your inbox, and lands on the activity history"
+              style={btnSm}>Email</button>
+          )}
           {prospect && <button onClick={openEdit} title="Edit company details, lead source, and notes" style={btnSm}>✎ Edit</button>}
           {prospect && !prospect.netsuite_id && !isVendor && (
             <button onClick={addToNetSuite} disabled={converting} title="Create this customer in NetSuite (normally automatic at creation — this retries)" style={{ ...btnSm, opacity: converting ? 0.6 : 1 }}>
@@ -1808,7 +1911,12 @@ export default function CustomerRecordPage() {
                 {(c.phone || c.email) && (
                   <div style={{ display: 'flex', gap: '14px', marginTop: '3px', fontSize: '12px' }}>
                     {c.phone && <a href={`tel:${c.phone}`} style={{ color: '#22c55e', textDecoration: 'none', fontWeight: 600 }}>{c.phone}</a>}
-                    {c.email && <a href={`mailto:${c.email}`} style={{ color: '#60a5fa', textDecoration: 'none' }}>{c.email}</a>}
+                    {c.email && (
+                      <button onClick={() => openCompose(c.email!)} title="Email this contact from FleetSuite"
+                        style={{ color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 'inherit', textAlign: 'left' }}>
+                        {c.email}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -2061,7 +2169,16 @@ export default function CustomerRecordPage() {
             {activities.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{prospect ? 'No activity logged yet.' : '—'}</div>}
             {activities.map(a => (
               <div key={a.id} style={{ display: 'flex', gap: '8px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12px' }}>
-                <span style={{ flex: 1, minWidth: 0, color: 'var(--text-secondary)' }}>{a.summary}</span>
+                <span style={{ flex: 1, minWidth: 0, color: 'var(--text-secondary)' }}>
+                  {a.summary}
+                  {a.email_log_id && (
+                    <button onClick={() => openEmailView(a.email_log_id!)}
+                      title="View the email that was sent"
+                      style={{ marginLeft: '6px', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '11px', fontWeight: 700, color: '#60a5fa' }}>
+                      View email
+                    </button>
+                  )}
+                </span>
                 <span style={{ flexShrink: 0, color: 'var(--text-muted)', fontSize: '11px', textAlign: 'right' }}>
                   {a.creator_name ? `${a.creator_name} · ` : ''}{timeAgo(a.created_at)}
                 </span>
@@ -2314,6 +2431,59 @@ export default function CustomerRecordPage() {
           onSend={sendStatementEmail}
           onClose={() => setStEmailOpen(false)}
         />
+      )}
+
+      {/* General email — the standard compose screen behind the Email
+          button and contact addresses (formerly mailto: links). */}
+      {composeOpen && (
+        <EmailComposeModal
+          title={`Email — ${prospect?.company_name || customer?.company_name || ''}`}
+          sendLabel="Send Email"
+          initialTo={composeTo}
+          messagePlaceholder="Write your message…"
+          intro={
+            <div>
+              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '3px' }}>Subject</div>
+              <input
+                value={composeSubject}
+                onChange={e => setComposeSubject(e.target.value)}
+                onBlur={() => setComposeSubjectKey(k => k + 1)}
+                placeholder="e.g. Follow-up on your fleet graphics"
+                style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text-body)', fontSize: '12px', boxSizing: 'border-box' }}
+              />
+            </div>
+          }
+          previewKey={composeSubjectKey}
+          fetchPreview={fetchComposePreview}
+          onSend={sendCompose}
+          onClose={() => setComposeOpen(false)}
+        />
+      )}
+
+      {/* Sent-email viewer — opens off the activity feed's "View email". */}
+      {viewEmail && (
+        <div onClick={() => setViewEmail(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+          <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Sent email"
+            style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '16px', width: 'min(720px, 100%)', maxHeight: 'calc(100vh / var(--ts) - 40px)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{viewEmail.subject || '(no subject)'}</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                  To {(viewEmail.recipients || []).join(', ')} · {new Date(viewEmail.created_at).toLocaleString()} · {viewEmail.delivery_status.replace(/_/g, ' ')}
+                </div>
+              </div>
+              <button onClick={() => setViewEmail(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '16px', cursor: 'pointer', padding: 0 }}>✕</button>
+            </div>
+            {viewEmail.body_html ? (
+              <iframe srcDoc={viewEmail.body_html} title="Sent email" sandbox="" style={{ width: '100%', flex: 1, minHeight: '360px', border: '1px solid var(--border)', borderRadius: '8px', background: '#f3f4f6' }} />
+            ) : (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '16px 0' }}>
+                The email content wasn&apos;t stored for this send (older emails predate content capture — the log has recipients, subject, and delivery status).
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Assign parent / leasing company (K1) — the manual link that wins

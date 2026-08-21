@@ -222,26 +222,16 @@ export async function POST(req: NextRequest) {
     const result = await sendEmailDetailed(
       recipients, subject, html, undefined, attachments, auth.user?.email || undefined, bcc,
       // ns-<id> routes to the customer record even when no CRM row exists.
-      { kind: 'statement', sentBy: auth.user?.id, contextUrl: deepLinks.prospect(`ns-${customerId}`) },
+      { kind: 'statement', sentBy: auth.user?.id, contextUrl: deepLinks.prospect(`ns-${customerId}`), netsuiteCustomerId: String(customerId) },
     );
     if (!result.ok) {
       return NextResponse.json({ error: 'Email send failed' }, { status: 502 });
     }
 
-    // Log to the CRM timeline when this customer has a record.
-    try {
-      const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-      const { data: prospect } = await supabase.from('prospects').select('id').eq('netsuite_id', customerId).maybeSingle();
-      if (prospect) {
-        const total = invoices.reduce((s, i) => s + i.unpaid, 0);
-        await supabase.from('prospect_activities').insert({
-          prospect_id: prospect.id,
-          type: 'email',
-          summary: `Statement emailed to ${recipients.join(', ')} (${invoices.length} open invoice${invoices.length === 1 ? '' : 's'}, ${usd(total)})`,
-          created_by: auth.user?.id || null,
-        });
-      }
-    } catch { /* logging is best-effort */ }
+    // CRM-timeline logging now happens in the send layer itself (the
+    // EmailMeta netsuiteCustomerId above) — every composed send lands one
+    // 'email' activity with the log row attached, so the bespoke insert
+    // that used to live here would double-log.
 
     return NextResponse.json({ success: true, sent: recipients, attached: attachments.length, failedAttachments });
   } catch (e: any) {

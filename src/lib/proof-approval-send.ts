@@ -248,6 +248,16 @@ export async function sendProofApproval(
 
   const dispatch: Record<string, any> = { email: null, sms: null };
 
+  // The customer behind the send, for the email history (the earlier
+  // contact-resolution block only runs when recipients weren't explicit).
+  let historyCustomerId: string | null = null;
+  if (job.customer) {
+    try {
+      const { data: metaCust } = await service.from('customers').select('id').ilike('company_name', job.customer).maybeSingle();
+      historyCustomerId = metaCust?.id || null;
+    } catch { /* history linkage is best-effort */ }
+  }
+
   if (emailList.length > 0) {
     const link = `${appUrl}/approve/proof/${token}?via=email&to=${encodeURIComponent(emailList[0])}`;
     const html = buildNotificationEmail(emailTitle, emailBody, link, 'Review Proof', {
@@ -261,7 +271,7 @@ export async function sendProofApproval(
         emailAttachments.length > 0 ? emailAttachments : undefined,
         opts.actorEmail || undefined,
         bcc.length > 0 ? bcc : undefined,
-        { kind: 'proof_approval', sentBy: opts.actorId || null, contextUrl: deepLinks.graphicsJob(jobId) },
+        { kind: 'proof_approval', sentBy: opts.actorId || null, contextUrl: deepLinks.graphicsJob(jobId), customerId: historyCustomerId },
       );
       dispatch.email = { target: emailList.join(', '), ok, attachments: emailAttachments.length, bcc: bcc.length > 0 ? bcc.join(', ') : undefined };
     } catch (err: any) {

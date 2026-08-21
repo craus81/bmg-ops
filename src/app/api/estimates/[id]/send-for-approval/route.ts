@@ -188,7 +188,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     try {
       const { ok, id: resendId } = await sendEmailDetailed(
         emailList, subject, html, undefined, undefined, auth.user?.email || undefined, bcc,
-        { kind: 'estimate_approval', sentBy: auth.user?.id, contextUrl: deepLinks.estimate(estimate.id) },
+        { kind: 'estimate_approval', sentBy: auth.user?.id, contextUrl: deepLinks.estimate(estimate.id), customerId: estimate.customer_id, netsuiteCustomerId: estimate.customer_netsuite_id },
       );
       dispatch.email = { target: emailList.join(', '), ok, bcc: bcc ? bcc.join(', ') : undefined };
       // Delivery tracking (same scheme as invoice emails): store the Resend
