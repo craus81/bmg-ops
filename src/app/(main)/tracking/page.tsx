@@ -46,10 +46,16 @@ export default function TrackingPage() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
-  // Exact table count from the paged query — drives Load More visibility
-  // and its "X of Y" label, so the button can't linger when everything is
-  // already on screen.
+  // Exact count of ACTIVE (non-archived) vehicles from the paged query —
+  // drives Load More visibility and its "X of Y" label, so the button can't
+  // linger when the whole shop is already on screen. Archived vehicles are
+  // excluded from the paging and the count entirely (field ask 2026-08-21:
+  // "only vehicles that are at the shop should be on that list") and load
+  // separately the first time the Archived view opens.
   const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [archivedCount, setArchivedCount] = useState<number | null>(null);
+  const [archivedLoading, setArchivedLoading] = useState(false);
+  const archivedLoadedRef = useRef(false);
   const PAGE_SIZE = 50;
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -213,6 +219,7 @@ export default function TrackingPage() {
 
   useEffect(() => {
     loadVehicles();
+    loadArchivedCount();
     loadProfiles();
 
     // Handle Dropbox OAuth redirect
@@ -224,6 +231,13 @@ export default function TrackingPage() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
+
+  // First open of the Archived view (toggle click or archived deep link)
+  // pulls the archived rows in.
+  useEffect(() => {
+    if (showArchived) loadArchived();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- loadArchived is recreated per render
+  }, [showArchived]);
 
   // Deep link from check-in page/search: switch to whichever tab actually
   // shows the vehicle (shipped and archived hide from "All"), expand it,
@@ -319,6 +333,7 @@ export default function TrackingPage() {
     const { data, count } = await supabase
       .from('fleet_checkins')
       .select('*', { count: 'exact' })
+      .is('archived_at', null)
       .order('updated_at', { ascending: false })
       .range(offset, offset + PAGE_SIZE - 1);
     if (data) {
@@ -326,7 +341,12 @@ export default function TrackingPage() {
       if (append) {
         setVehicles(prev => [...prev, ...data.filter((d: FleetCheckin) => !prev.some(p => p.id === d.id))]);
       } else {
-        setVehicles(data);
+        // Full reload: replace the active window but keep any archived rows
+        // already loaded for the Archived view (they page separately).
+        setVehicles(prev => [
+          ...data,
+          ...prev.filter(v => (v as any).archived_at && !data.some((d: FleetCheckin) => d.id === v.id)),
+        ]);
       }
       // The exact count says whether anything is actually left — the old
       // full-page heuristic (data.length === PAGE_SIZE) left a dead Load
@@ -341,6 +361,36 @@ export default function TrackingPage() {
       loadCheckinSalesOrders(data.map((v: FleetCheckin) => v.id));
     }
     if (append) setLoadingMore(false); else setLoading(false);
+  };
+
+  // Archived vehicles load on demand (first open of the Archived view) —
+  // they're out of the main paging so the shop list and its count stay
+  // shop-only. The toggle's badge comes from a cheap head-count on mount.
+  const loadArchivedCount = async () => {
+    const { count } = await supabase
+      .from('fleet_checkins')
+      .select('id', { count: 'exact', head: true })
+      .not('archived_at', 'is', null);
+    if (typeof count === 'number') setArchivedCount(count);
+  };
+
+  const loadArchived = async () => {
+    if (archivedLoadedRef.current || archivedLoading) return;
+    setArchivedLoading(true);
+    const { data } = await fetchAllRows<FleetCheckin>((from, to) => supabase
+      .from('fleet_checkins')
+      .select('*')
+      .not('archived_at', 'is', null)
+      .order('updated_at', { ascending: false })
+      .order('id')
+      .range(from, to));
+    if (data) {
+      archivedLoadedRef.current = true;
+      setVehicles(prev => [...prev, ...data.filter(d => !prev.some(p => p.id === d.id))]);
+      setArchivedCount(data.length);
+      loadCheckinSalesOrders(data.map(v => v.id));
+    }
+    setArchivedLoading(false);
   };
 
   const loadCheckinSalesOrders = async (checkinIds: string[]) => {
@@ -981,8 +1031,10 @@ export default function TrackingPage() {
       if (!res.ok) {
         await dialog.alert('Delete failed: ' + (data.error || 'Unknown error'));
       } else {
+        const wasArchived = !!(vehicles.find(v => v.id === vehicleId) as any)?.archived_at;
         setVehicles(prev => prev.filter(v => v.id !== vehicleId));
-        setTotalCount(prev => (prev === null ? prev : Math.max(0, prev - 1)));
+        if (wasArchived) setArchivedCount(prev => (prev === null ? prev : Math.max(0, prev - 1)));
+        else setTotalCount(prev => (prev === null ? prev : Math.max(0, prev - 1)));
         setExpandedId(null);
         setUpdateSuccess('Vehicle deleted');
         setTimeout(() => setUpdateSuccess(null), 2000);
@@ -1008,6 +1060,10 @@ export default function TrackingPage() {
         setVehicles(prev => prev.map(v =>
           v.id === vehicleId ? { ...v, archived_at: unarchive ? null : new Date().toISOString() } as any : v
         ));
+        // The vehicle moves between the shop list and the archived list —
+        // keep both exact counts in step without a refetch.
+        setTotalCount(prev => (prev === null ? prev : Math.max(0, prev + (unarchive ? 1 : -1))));
+        setArchivedCount(prev => (prev === null ? prev : Math.max(0, prev + (unarchive ? -1 : 1))));
         setExpandedId(null);
         setUpdateSuccess(unarchive ? 'Vehicle restored' : 'Vehicle archived');
         setTimeout(() => setUpdateSuccess(null), 2000);
@@ -1252,7 +1308,7 @@ export default function TrackingPage() {
             boxSizing: 'border-box',
           }}
         />
-        {archivedVehicles.length > 0 && (
+        {((archivedCount ?? 0) > 0 || archivedVehicles.length > 0) && (
           <button
             onClick={() => { setShowArchived(!showArchived); setFilterStatus('all'); }}
             style={{
@@ -1263,7 +1319,7 @@ export default function TrackingPage() {
               cursor: 'pointer', whiteSpace: 'nowrap',
             }}
           >
-            {showArchived ? `Active (${activeVehicles.length})` : `Archived (${archivedVehicles.length})`}
+            {showArchived ? `Active (${totalCount ?? activeVehicles.length})` : `Archived (${archivedCount ?? archivedVehicles.length})`}
           </button>
         )}
       </div>
@@ -1297,7 +1353,7 @@ export default function TrackingPage() {
           border: '1px solid var(--border)', borderRadius: '14px',
         }}>
           <div style={{ color: 'var(--text-muted)', fontSize: '14px', fontWeight: 600 }}>
-            {showArchived ? 'No archived vehicles' : searchTerm ? 'No vehicles match your search' : 'No vehicles in this status'}
+            {showArchived ? (archivedLoading ? 'Loading archived vehicles…' : 'No archived vehicles') : searchTerm ? 'No vehicles match your search' : 'No vehicles in this status'}
           </div>
         </div>
       ) : (
@@ -2827,7 +2883,7 @@ export default function TrackingPage() {
               </div>
             );
           })}
-          {hasMore && !searchTerm && (
+          {hasMore && !searchTerm && !showArchived && (
             <button
               onClick={() => loadVehicles(true)}
               disabled={loadingMore}
@@ -2838,7 +2894,7 @@ export default function TrackingPage() {
                 color: loadingMore ? 'var(--text-muted)' : '#60a5fa',
               }}
             >
-              {loadingMore ? 'Loading...' : `Load More Vehicles (${vehicles.length}${totalCount !== null ? ` of ${totalCount}` : ''} loaded)`}
+              {loadingMore ? 'Loading...' : `Load More Vehicles (${activeVehicles.length}${totalCount !== null ? ` of ${totalCount}` : ''} loaded)`}
             </button>
           )}
         </div>
