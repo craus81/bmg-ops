@@ -934,10 +934,12 @@ export default function EstimatesPage() {
     setLines(prev => prev.filter(l => l.key !== key));
   };
 
-  // Lines with no NetSuite item id would silently vanish from the pushed
-  // NetSuite Estimate (NetSuite estimate lines require a real item id — there
-  // is no free-text line type), so pushing is blocked until every line is
-  // matched to a catalog item.
+  // NetSuite estimate lines require a real item id (no free-text line type),
+  // but lines without one still push: the API lands them on the FS-CUSTOM
+  // placeholder item with description/qty/price intact (same as convert-to-
+  // so). This list only feeds the pre-push heads-up — it no longer disables
+  // the button, which silently locked out pushing any estimate carrying a
+  // custom line or a package's assembly-labor line.
   const unmatchedLines = lines.filter(l => !l.netsuite_item_id);
 
   // ── Computed totals ──
@@ -1074,18 +1076,18 @@ export default function EstimatesPage() {
       await dialog.alert('Please add at least one line item');
       return;
     }
-    if (unmatchedLines.length > 0) {
-      await dialog.alert(
-        `${unmatchedLines.length} line item${unmatchedLines.length !== 1 ? 's are' : ' is'} not matched to a NetSuite item: `
+    // Unmatched lines don't block the push — the API routes them through the
+    // FS-CUSTOM placeholder item — but say so up front, so FS-CUSTOM lines
+    // on the NetSuite copy never come as a surprise.
+    const unmatchedNote = unmatchedLines.length > 0
+      ? `\n\n${unmatchedLines.length} line${unmatchedLines.length !== 1 ? 's have' : ' has'} no NetSuite item match (`
         + unmatchedLines.map(l => l.item_number || l.description || 'untitled line').join(', ')
-        + '. NetSuite estimate lines require a real item — pick one for each line (use "Match NetSuite item" below the line) before pushing.'
-      );
-      return;
-    }
-
-    const confirmMsg = isSync
+        + ') — pushed as the FS-CUSTOM placeholder item with description, quantity, and price kept. Use "Match NetSuite item" under a line first if it should be a real catalog item.'
+      : '';
+    const confirmMsg = (isSync
       ? 'Sync changes to NetSuite? This will update the existing Estimate in NetSuite.'
-      : 'Push this estimate to NetSuite? This will create an Estimate record in NetSuite.';
+      : 'Push this estimate to NetSuite? This will create an Estimate record in NetSuite.')
+      + unmatchedNote;
     if (!(await dialog.confirm(confirmMsg))) return;
 
     // Save first to ensure latest data
@@ -2871,22 +2873,22 @@ export default function EstimatesPage() {
           <>
             <button
               onClick={() => pushToNetSuite(!!isPushed)}
-              disabled={pushing || syncing || unmatchedLines.length > 0}
-              title={unmatchedLines.length > 0 ? 'Match every line to a NetSuite item first' : undefined}
+              disabled={pushing || syncing}
+              title={unmatchedLines.length > 0 ? 'Lines without a NetSuite match push as the FS-CUSTOM placeholder item' : undefined}
               style={{
                 width: '100%', padding: '12px', borderRadius: '10px',
                 background: (pushing || syncing) ? 'var(--subtle-bg)' : 'rgba(167,139,250,0.15)',
                 border: '1px solid rgba(167,139,250,0.3)',
                 color: '#a78bfa', fontWeight: 800, fontSize: '13px',
-                cursor: unmatchedLines.length > 0 ? 'not-allowed' : 'pointer',
-                opacity: (pushing || syncing || unmatchedLines.length > 0) ? 0.5 : 1,
+                cursor: 'pointer',
+                opacity: (pushing || syncing) ? 0.5 : 1,
               }}
             >
               {pushing ? 'Pushing to NetSuite...' : syncing ? 'Syncing to NetSuite...' : isPushed ? 'Sync Changes to NetSuite' : 'Push to NetSuite as Estimate'}
             </button>
             {unmatchedLines.length > 0 && (
               <div style={{ fontSize: '10px', color: '#fbbf24', fontWeight: 700, textAlign: 'center', marginTop: '-2px' }}>
-                {unmatchedLines.length} line{unmatchedLines.length !== 1 ? 's' : ''} need a NetSuite item match before pushing
+                {unmatchedLines.length} line{unmatchedLines.length !== 1 ? 's' : ''} without a NetSuite match will push as FS-CUSTOM placeholder line{unmatchedLines.length !== 1 ? 's' : ''}
               </div>
             )}
           </>
