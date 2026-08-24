@@ -452,6 +452,8 @@ export default function EstimatesPage() {
   // docs/customer-email-standard.md): editable recipients, bcc-me,
   // personal note, and the exact rendered document as a live preview.
   const [approvalModal, setApprovalModal] = useState(false);
+  // Email-the-PDF compose modal (FleetSuite enhanced-estimate copy).
+  const [pdfEmailModal, setPdfEmailModal] = useState(false);
 
   // Part search
   const [partSearch, setPartSearch] = useState('');
@@ -1138,6 +1140,77 @@ export default function EstimatesPage() {
     const { ok, error } = await openNetSuitePdf('estimate', nsId);
     if (!ok) await dialog.alert(`Could not open the NetSuite PDF: ${error}`);
     setViewingPdf(false);
+  };
+
+  // ── FleetSuite enhanced-estimate PDF: view / print in a new tab ──
+  // The endpoint renders the same customer-facing copy as the approval email
+  // (photos + product links) as a real PDF. The tab must open inside the
+  // click gesture (popup blockers), so open it blank, save so the PDF
+  // matches the screen, then point it at the endpoint.
+  const openFleetsuitePdf = (print = false) => {
+    if (!editingId) return;
+    const w = window.open('', '_blank');
+    const currentStatus = estimates.find(e => e.id === editingId)?.status || 'draft';
+    saveEstimate(currentStatus).then(() => {
+      const url = `/api/estimates/${editingId}/pdf${print ? '?print=1' : ''}`;
+      if (w) w.location.href = url;
+      else window.open(url, '_blank');
+    });
+  };
+
+  // ── Email the enhanced-estimate PDF (standard compose screen) ──
+  const openPdfEmailModal = async () => {
+    if (!editingId) return;
+    // Persist current edits so the attached PDF matches what's on screen.
+    const currentStatus = estimates.find(e => e.id === editingId)?.status || 'draft';
+    await saveEstimate(currentStatus);
+    setPdfEmailModal(true);
+  };
+
+  const fetchPdfEmailPreview = async (fields: EmailComposeFields) => {
+    if (!editingId) return { error: 'No estimate open' };
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/email-pdf`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          preview: true,
+          emails: fields.emails,
+          message: fields.message || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.preview) return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      return { error: data.error || 'Unknown error' };
+    } catch {
+      return { error: 'Network error — please try again.' };
+    }
+  };
+
+  const confirmSendPdfEmail = async (fields: EmailComposeFields): Promise<{ ok: boolean }> => {
+    if (!editingId) return { ok: false };
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/email-pdf`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          emails: fields.emails,
+          bccSelf: fields.bccSelf,
+          message: fields.message || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
+        return { ok: false };
+      }
+      const em = data.dispatch?.email;
+      await dialog.alert(`Estimate PDF sent to ${em?.target || 'recipient'}${em?.bcc ? ` (bcc ${em.bcc})` : ''}.`);
+      return { ok: true };
+    } catch {
+      await dialog.alert('Network error — please try again.');
+      return { ok: false };
+    }
   };
 
   // ── Send the estimate to the customer for approval (magic link) ──
@@ -2868,6 +2941,31 @@ export default function EstimatesPage() {
           </button>
         </div>
 
+        {/* FleetSuite enhanced-estimate PDF — view, print, or email the
+            customer-facing copy (photos + product links). Works on any saved
+            estimate; no NetSuite push required. */}
+        {editingId && lines.length > 0 && (() => {
+          const pdfBtn: React.CSSProperties = {
+            flex: 1, padding: '10px', borderRadius: '10px',
+            background: 'var(--card)', border: '1px solid var(--border)',
+            color: 'var(--text-body)', fontWeight: 700, fontSize: '12px',
+            cursor: 'pointer', whiteSpace: 'nowrap',
+          };
+          return (
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button onClick={() => openFleetsuitePdf(false)} style={pdfBtn} title="Open the customer-facing estimate PDF in a new tab">
+                Estimate PDF
+              </button>
+              <button onClick={() => openFleetsuitePdf(true)} style={pdfBtn} title="Open the PDF with the print dialog ready">
+                Print
+              </button>
+              <button onClick={openPdfEmailModal} style={pdfBtn} title="Email the estimate PDF to the customer">
+                Email PDF
+              </button>
+            </div>
+          );
+        })()}
+
         {/* Push or Sync to NetSuite */}
         {editingId && customerNsId && lines.length > 0 && (
           <>
@@ -3011,6 +3109,19 @@ export default function EstimatesPage() {
           fetchPreview={fetchApprovalPreview}
           onSend={confirmSendApproval}
           onClose={() => setApprovalModal(false)}
+        />
+      )}
+
+      {/* Email the enhanced-estimate PDF — standard compose screen; the
+          attachment is the same file the Estimate PDF button opens. */}
+      {pdfEmailModal && (
+        <EmailComposeModal
+          title="Email Estimate PDF"
+          sendLabel="Send PDF"
+          messagePlaceholder="Optional note to the customer — shown in the email above the attached PDF…"
+          fetchPreview={fetchPdfEmailPreview}
+          onSend={confirmSendPdfEmail}
+          onClose={() => setPdfEmailModal(false)}
         />
       )}
 
