@@ -14,6 +14,29 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { GraphicsJob } from '@/lib/types';
 
+// The BMG logo for the header, preloaded at module load rather than
+// fetched when the user clicks Print — an await before window.open()
+// would invite the popup blocker (same reasoning as company-profile.ts).
+// Until it arrives (or if the fetch fails) the header falls back to the
+// "BMG Fleet" text wordmark.
+let logoDataUrl: string | null = null;
+let logoFetch: Promise<void> | null = null;
+
+function ensureLogoLoaded(): void {
+  if (logoDataUrl || logoFetch || typeof window === 'undefined') return;
+  logoFetch = fetch('/bmg-logo-color.png')
+    .then(res => { if (!res.ok) throw new Error(String(res.status)); return res.blob(); })
+    .then(blob => new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    }))
+    .then(url => { logoDataUrl = url; })
+    .catch(() => { logoFetch = null; });
+}
+ensureLogoLoaded();
+
 export interface PackingListLine {
   partNumber: string;
   description: string;
@@ -85,21 +108,36 @@ export function packingListFromJob(
  * download the packing list PDF.
  */
 export function exportPackingListPDF(data: PackingListData, opts?: { print?: boolean }) {
+  ensureLogoLoaded(); // retry for the next click if the load-time fetch failed
   const doc = new jsPDF({ unit: 'pt', format: 'letter' });
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 40;
   let y = margin;
 
   // ─── Header ────────────────────────────────────────────────
-  doc.setFontSize(20);
-  doc.setFont('helvetica', 'bold');
-  doc.text('BMG Fleet', margin, y);
+  let logoBottom = 0;
+  if (logoDataUrl) {
+    try {
+      const props = doc.getImageProperties(logoDataUrl);
+      const h = 40;
+      const w = Math.min(160, (props.width / props.height) * h);
+      // 'FAST' (deflate) keeps the embedded PNG from bloating the file.
+      doc.addImage(logoDataUrl, 'PNG', margin, y - 12, w, h, undefined, 'FAST');
+      logoBottom = y - 12 + h;
+    } catch { /* unreadable image — use the text wordmark */ }
+  }
+  if (!logoBottom) {
+    doc.setFontSize(20);
+    doc.setFont('helvetica', 'bold');
+    doc.text('BMG Fleet', margin, y);
+  }
 
   doc.setFontSize(16);
+  doc.setFont('helvetica', 'bold');
   doc.setTextColor(110);
   doc.text('PACKING LIST', pageW - margin, y, { align: 'right' });
   doc.setTextColor(0);
-  y += 18;
+  y = logoBottom ? logoBottom + 14 : y + 18;
 
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
