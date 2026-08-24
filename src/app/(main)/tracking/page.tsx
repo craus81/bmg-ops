@@ -103,6 +103,12 @@ export default function TrackingPage() {
   // The first one added is also mirrored into FleetCheckin's legacy columns
   // so other readers — pick list, fleet page, universal search — keep working.
   const [vehicleSalesOrders, setVehicleSalesOrders] = useState<Record<string, CheckinSalesOrder[]>>({});
+  // Invoices billed from each linked SO (keyed by the SO's NetSuite id),
+  // looked up live when a vehicle record opens. Once an SO has an invoice
+  // it's basically dead paper — the record shows the invoice in its place.
+  // undefined = not looked up yet; [] = looked up, nothing billed.
+  const [soInvoices, setSoInvoices] = useState<Record<string, { id: string; tranid: string }[]>>({});
+  const soInvoiceFetchRef = useRef<Set<string>>(new Set());
   const [vehicleAssignments, setVehicleAssignments] = useState<Record<string, string[]>>({});
   const [assignmentSaving, setAssignmentSaving] = useState(false);
   // Per-vehicle generation counter for assignment loads. Bumped by saves so
@@ -328,6 +334,31 @@ export default function TrackingPage() {
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
+
+  // When a vehicle record opens, look up invoices billed from its linked
+  // SOs (live from NetSuite — covers invoices created there directly and
+  // ones FleetSuite raised, with no sync lag). One lookup per SO id.
+  useEffect(() => {
+    if (!expandedId) return;
+    const linked = vehicleSalesOrders[expandedId] || [];
+    for (const so of linked) {
+      const soId = so.netsuite_sales_order_id;
+      if (!soId || soInvoiceFetchRef.current.has(soId)) continue;
+      soInvoiceFetchRef.current.add(soId);
+      fetch(`/api/netsuite/so-invoices?soId=${encodeURIComponent(soId)}`)
+        .then(res => res.ok ? res.json() : null)
+        .then(data => {
+          if (data && Array.isArray(data.invoices)) {
+            setSoInvoices(prev => ({ ...prev, [soId]: data.invoices }));
+          } else {
+            // Lookup failed — allow a retry the next time a record opens.
+            soInvoiceFetchRef.current.delete(soId);
+          }
+        })
+        .catch(() => { soInvoiceFetchRef.current.delete(soId); });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed lookups; ref dedupes
+  }, [expandedId, vehicleSalesOrders]);
 
   // Lock body scroll and bind Escape while a vehicle detail modal is open
   useEffect(() => {
@@ -2279,25 +2310,50 @@ export default function TrackingPage() {
                         <div style={{ marginBottom: '12px' }}>
                           {linkedSos.length > 0 && (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '8px' }}>
-                              {linkedSos.map(so => (
-                                <div key={so.id}>
-                                  <NetSuitePdf
-                                    type="salesOrder"
-                                    recordId={so.netsuite_sales_order_id}
-                                    recordNumber={so.sales_order_number || so.netsuite_sales_order_id}
-                                  />
-                                  {isAdmin && (
-                                    <button
-                                      onClick={() => unlinkSalesOrder(vehicle.id, so.id)}
-                                      style={{
-                                        marginTop: '4px', padding: '4px 10px', fontSize: '10px', fontWeight: 600,
-                                        background: 'transparent', border: '1px solid var(--border)', borderRadius: '6px',
-                                        color: 'var(--text-muted)', cursor: 'pointer',
-                                      }}
-                                    >Unlink Sales Order</button>
-                                  )}
-                                </div>
-                              ))}
+                              {linkedSos.map(so => {
+                                // Once an SO has been invoiced (in NetSuite or
+                                // via FleetSuite's completion flow), the SO is
+                                // dead paper — show the invoice(s) in its place
+                                // so staff see billing happened and open the
+                                // document that matters now.
+                                const invoices = soInvoices[so.netsuite_sales_order_id] || [];
+                                return (
+                                  <div key={so.id}>
+                                    {invoices.length > 0 ? (
+                                      <>
+                                        <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--success)', marginBottom: '4px' }}>
+                                          ✓ SO #{so.sales_order_number || so.netsuite_sales_order_id} invoiced
+                                        </div>
+                                        {invoices.map(inv => (
+                                          <NetSuitePdf
+                                            key={inv.id}
+                                            type="invoice"
+                                            recordId={inv.id}
+                                            recordNumber={inv.tranid}
+                                            label="Invoice"
+                                          />
+                                        ))}
+                                      </>
+                                    ) : (
+                                      <NetSuitePdf
+                                        type="salesOrder"
+                                        recordId={so.netsuite_sales_order_id}
+                                        recordNumber={so.sales_order_number || so.netsuite_sales_order_id}
+                                      />
+                                    )}
+                                    {isAdmin && (
+                                      <button
+                                        onClick={() => unlinkSalesOrder(vehicle.id, so.id)}
+                                        style={{
+                                          marginTop: '4px', padding: '4px 10px', fontSize: '10px', fontWeight: 600,
+                                          background: 'transparent', border: '1px solid var(--border)', borderRadius: '6px',
+                                          color: 'var(--text-muted)', cursor: 'pointer',
+                                        }}
+                                      >Unlink Sales Order</button>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
                           )}
 
