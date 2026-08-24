@@ -1182,29 +1182,70 @@ export default function TrackingPage() {
       {/* Arrival schedule — merged from the old Shop Board tab */}
       <ShopArrivals />
 
-      {/* Check In Vehicle — merged from the old /fleet page */}
+      {/* Check In Vehicle — merged from the old /fleet page. Pops out as a
+          persistent overlay (same idiom as the vehicle detail modal below):
+          inline, the wizard scrolled away after a VIN scan swapped in the
+          next step, stranding the user down-page. ?checkin=1 still opens it. */}
       {(isAdmin || hasFeature('fleet_checkin')) && (
-        <div style={{ background: 'var(--card)', border: `1px solid ${showCheckIn ? 'var(--orange)' : 'var(--border)'}`, borderRadius: '14px', marginBottom: '14px', overflow: 'hidden' }}>
-          <button
-            onClick={() => setShowCheckIn(s => !s)}
-            style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
-              padding: '13px 16px', background: 'transparent', border: 'none', cursor: 'pointer',
-            }}
-          >
-            <span style={{ fontSize: '14px', fontWeight: 800, color: showCheckIn ? 'var(--orange)' : 'var(--text-primary)' }}>
-              ➕ Check In Vehicle
-            </span>
-            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{showCheckIn ? '▾ close' : '▸'}</span>
-          </button>
+        <>
+          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', marginBottom: '14px', overflow: 'hidden' }}>
+            <button
+              onClick={() => setShowCheckIn(true)}
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
+                padding: '13px 16px', background: 'transparent', border: 'none', cursor: 'pointer',
+              }}
+            >
+              <span style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>
+                ➕ Check In Vehicle
+              </span>
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>↗</span>
+            </button>
+          </div>
           {showCheckIn && (
-            <div style={{ padding: '0 14px 14px' }}>
-              <Suspense fallback={<div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>Loading check-in…</div>}>
-                <VehicleCheckIn onCheckedIn={() => loadVehicles(false)} />
-              </Suspense>
-            </div>
+            <>
+              {/* Backdrop — deliberately not click-to-close: a stray tap
+                  mid-check-in would throw away a scanned VIN and picked
+                  sales order. The ✕ in the header closes. */}
+              <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000 }} />
+              <div
+                style={{
+                  position: 'fixed', top: '50%', left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: 'min(720px, calc(96vw / var(--ts)))', maxHeight: 'calc(92vh / var(--ts))',
+                  display: 'flex', flexDirection: 'column', overflow: 'hidden',
+                  background: 'var(--card)', borderRadius: '14px',
+                  boxShadow: '0 24px 60px rgba(0,0,0,0.35)',
+                  border: '1px solid var(--border)',
+                  zIndex: 1001,
+                }}
+              >
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  gap: '12px', padding: '12px 14px', flexShrink: 0,
+                  background: 'var(--card)', borderBottom: '1px solid var(--border)',
+                }}>
+                  <span style={{ fontSize: '14px', fontWeight: 800, color: 'var(--orange)' }}>➕ Check In Vehicle</span>
+                  <button
+                    onClick={() => setShowCheckIn(false)}
+                    aria-label="Close"
+                    style={{
+                      width: '32px', height: '32px', borderRadius: '8px',
+                      background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+                      color: 'var(--text-muted)', fontSize: '16px', fontWeight: 700,
+                      cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}
+                  >✕</button>
+                </div>
+                <div style={{ flex: 1, overflowY: 'auto', padding: '14px' }}>
+                  <Suspense fallback={<div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>Loading check-in…</div>}>
+                    <VehicleCheckIn onCheckedIn={() => loadVehicles(false)} />
+                  </Suspense>
+                </div>
+              </div>
+            </>
           )}
-        </div>
+        </>
       )}
 
       {/* Summary / metrics strip */}

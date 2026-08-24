@@ -329,7 +329,11 @@ export function PopoutProvider({ children }: { children: ReactNode }) {
       {children}
       {state && (
         <div
-          style={{ position: 'fixed', inset: 0, zIndex: 310, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(6px)', display: 'flex', flexDirection: 'column', padding: '16px' }}
+          // 1300: popouts open from inside page-level modals too (vehicle
+          // detail and check-in at 1001, email invoices at 1100), so this
+          // must clear those — while staying under toasts (1400/1500) and
+          // DialogProvider (4000). UniversalSearch (300) stays below as before.
+          style={{ position: 'fixed', inset: 0, zIndex: 1300, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(6px)', display: 'flex', flexDirection: 'column', padding: '16px' }}
           onClick={close}
         >
           <div
