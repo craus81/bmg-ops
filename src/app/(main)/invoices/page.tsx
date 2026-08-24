@@ -478,8 +478,14 @@ export default function InvoicingHubPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scanIds: selectedScanIds }),
       });
-      const data = await res.json();
-      if (!res.ok) {
+      // A killed function (e.g. gateway timeout) answers with a plain-text
+      // error page, not JSON — and groups reached before the kill DID bill,
+      // so refresh rather than leave them selected for a duplicate retry.
+      const data = await res.json().catch(() => null);
+      if (!data) {
+        await dialog.alert(`Invoice failed: The server didn't return a result (HTTP ${res.status}). Some invoices may still have been created — the list will refresh; check it before retrying.`);
+        loadAll();
+      } else if (!res.ok) {
         await dialog.alert(`Invoice failed: ${data.error || 'Unknown error'}`);
       } else {
         setInvoiceResult(data);

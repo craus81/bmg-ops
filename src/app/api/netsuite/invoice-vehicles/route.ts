@@ -8,9 +8,14 @@ import { refreshPoInvoiceLinks } from '@/lib/po-invoice-sync';
 import { getPoBilledByPart, computeOverbillProblems } from '@/lib/po-invoice-verify';
 import { fetchPartRowsCI } from '@/lib/part-number';
 
-// The over-billing gate adds a couple of SuiteQL round trips per PO group on
-// top of the NetSuite invoice creation itself.
-export const maxDuration = 60;
+// Each customer/PO group costs 5-7 sequential NetSuite round trips (the
+// over-billing gate's SuiteQL, customer + item lookups, the invoice create),
+// so a many-group selection needs real headroom — 60s got killed by the
+// platform mid-run, which reached the client as Vercel's plain-text error
+// page ("Unexpected token 'A'") with no record of which groups had billed.
+// The loop below also stops early (see deadline) so the response is always
+// our own JSON, never a platform kill.
+export const maxDuration = 300;
 
 const Schema = z.object({
   scanIds: z.array(z.string().uuid()).min(1).max(500),
@@ -80,7 +85,24 @@ export async function POST(req: NextRequest) {
       error?: string;
     }[] = [];
 
+    // Groups commit their bookkeeping one at a time, so stopping between
+    // groups is safe — but a platform kill mid-group is not: the client gets
+    // an unparseable error page and no per-group results. Leave headroom for
+    // one in-flight group's NetSuite calls and report the rest untouched.
+    const deadline = Date.now() + (maxDuration - 25) * 1000;
+
     for (const { customer: customerName, po: poNumber, scans: custScans } of Object.values(byCustomerPO)) {
+      if (Date.now() > deadline) {
+        results.push({
+          customer: customerName,
+          po: poNumber,
+          scanIds: custScans.map(s => s.id),
+          vehicleCount: custScans.length,
+          status: 'error',
+          error: 'Not attempted — the run hit its time limit before reaching this group. Nothing was billed for it; re-select these scans and invoice again.',
+        });
+        continue;
+      }
       try {
         // Group scans by part number and aggregate quantities (built before
         // any NetSuite call — the billing gate needs the counts). Keyed by
