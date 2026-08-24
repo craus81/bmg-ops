@@ -181,7 +181,7 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
       BUILTIN.DF(i.department) AS department_name,
       BUILTIN.DF(i.vendor) AS vendor_name
     FROM item i
-    WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly')
+    WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly', 'OthCharge')
       AND i.lastmodifieddate >= TO_DATE('${sinceStr}', 'MM/DD/YYYY')
     ORDER BY i.id
   `);

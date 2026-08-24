@@ -39,9 +39,11 @@ export async function POST(req: NextRequest) {
   const logId = logEntry?.id;
 
   try {
-    // Query all inventory and non-inventory items from NetSuite
-    // Include: InventoryItem, NonInventoryResaleItem, NonInventoryPurchaseItem, ServiceResaleItem
-    // Get sales price, purchase/cost price, quantity on hand, and class info
+    // Query all sellable item types from NetSuite: inventory, non-inventory,
+    // service, kits/assemblies, and Other Charge (freight, misc fees — needed
+    // as estimate lines). Get sales price, purchase/cost price, quantity on
+    // hand, and class info. Keep this type list in step with the incremental
+    // sync (src/lib/parts-sync.ts) and its cost query below.
     const query = `
       SELECT
         i.id,
@@ -57,7 +59,7 @@ export async function POST(req: NextRequest) {
         BUILTIN.DF(i.department) AS department_name,
         BUILTIN.DF(i.vendor) AS vendor_name
       FROM item i
-      WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly')
+      WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly', 'OthCharge')
       AND i.isinactive = 'F'
       ORDER BY i.itemid
     `;
@@ -91,7 +93,7 @@ export async function POST(req: NextRequest) {
           i.id,
           i.cost AS purchase_price
         FROM item i
-        WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly')
+        WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly', 'OthCharge')
         AND i.isinactive = 'F'
       `;
       const costItems = await suiteqlQueryAll(costQuery);
