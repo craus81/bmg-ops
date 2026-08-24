@@ -799,7 +799,7 @@ export default function PartsPage() {
             disabled={syncing}
             style={{
               padding: '8px 14px', borderRadius: '10px',
-              background: syncing ? 'var(--subtle-bg)' : 'var(--accent)',
+              background: 'var(--accent)',
               color: '#fff', fontWeight: 800, fontSize: '12px',
               border: 'none', cursor: syncing ? 'not-allowed' : 'pointer',
               opacity: syncing ? 0.6 : 1,

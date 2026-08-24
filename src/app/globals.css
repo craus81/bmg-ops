@@ -48,6 +48,10 @@ html, body {
   --orange: #ee3120;
   --orange-glow: rgba(238,49,32,0.18);
   --orange-soft: rgba(238,49,32,0.08);
+  /* Accent for primary buttons/links; white text sits on it, same value in
+     both themes. Many call sites predate this definition and carry a
+     literal fallback — var(--accent, #2563eb) — keep the two in step. */
+  --accent: #2563eb;
 
   --bg: #0f1720;
   --card: #161f2b;
