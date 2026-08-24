@@ -174,6 +174,55 @@ export default function TrackingPage() {
   const [vinEdits, setVinEdits] = useState<Record<string, string>>({});
   const [vinSaving, setVinSaving] = useState<string | null>(null);
   const [vinError, setVinError] = useState<Record<string, string>>({});
+  // Customer attach/edit on a checked-in vehicle — field request: trucks get
+  // checked in without a customer and need one attached afterwards. Same
+  // type-ahead over the synced NetSuite customer list as the check-in wizard.
+  const [custEditFor, setCustEditFor] = useState<string | null>(null);
+  const [custEditSearch, setCustEditSearch] = useState('');
+  const [custEditMatches, setCustEditMatches] = useState<{ id: string; company_name: string; entity_id: string | null }[]>([]);
+  const [custEditSaving, setCustEditSaving] = useState(false);
+
+  // Debounced customer type-ahead for the attach/edit control (same query
+  // shape as the check-in wizard's manual picker).
+  useEffect(() => {
+    const q = custEditSearch.trim();
+    if (!custEditFor || q.length < 2) { setCustEditMatches([]); return; }
+    const t = setTimeout(async () => {
+      const escaped = q.replace(/[%,()]/g, ' ');
+      const { data } = await supabase
+        .from('customers')
+        .select('id, company_name, entity_id')
+        .or(`company_name.ilike.%${escaped}%,entity_id.ilike.%${escaped}%`)
+        .order('company_name')
+        .limit(8);
+      setCustEditMatches((data || []) as typeof custEditMatches);
+    }, 250);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
+  }, [custEditSearch, custEditFor]);
+
+  const attachCustomer = async (vehicleId: string, cust: { id: string; company_name: string; entity_id: string | null }) => {
+    setCustEditSaving(true);
+    const name = cust.company_name || cust.entity_id || '';
+    const { error } = await supabase.from('fleet_checkins').update({
+      customer_id: cust.id,
+      customer_name: name,
+      updated_at: new Date().toISOString(),
+    } as any).eq('id', vehicleId);
+    setCustEditSaving(false);
+    if (error) {
+      await dialog.alert('Failed to attach customer: ' + error.message);
+      return;
+    }
+    setVehicles(prev => prev.map(v =>
+      v.id === vehicleId ? { ...v, customer_id: cust.id, customer_name: name } as any : v
+    ));
+    setCustEditFor(null);
+    setCustEditSearch('');
+    setCustEditMatches([]);
+    setUpdateSuccess('Customer attached');
+    setTimeout(() => setUpdateSuccess(null), 2000);
+  };
 
   const startVinEdit = (id: string, currentVin: string) => {
     setVinEdits(prev => ({ ...prev, [id]: currentVin || '' }));
@@ -1856,12 +1905,69 @@ export default function TrackingPage() {
                     <div style={{
                       display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px',
                     }}>
-                      {vehicle.customer_name && (
-                        <div>
+                      {/* Customer — always shown, editable: trucks get checked
+                          in without a customer and need one attached later. */}
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Customer</div>
-                          <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>{vehicle.customer_name}</div>
+                          {custEditFor !== vehicle.id && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setCustEditFor(vehicle.id); setCustEditSearch(''); setCustEditMatches([]); }}
+                              style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                            >{vehicle.customer_name ? 'Edit' : '+ Attach'}</button>
+                          )}
                         </div>
-                      )}
+                        {custEditFor === vehicle.id ? (
+                          <div style={{ position: 'relative', marginTop: '2px' }} onClick={(e) => e.stopPropagation()}>
+                            <input
+                              autoFocus
+                              value={custEditSearch}
+                              onChange={(e) => setCustEditSearch(e.target.value)}
+                              placeholder="Search NetSuite customers…"
+                              style={{
+                                width: '100%', padding: '7px 9px', borderRadius: '7px',
+                                border: '1px solid var(--border)', background: 'var(--input-bg)',
+                                color: 'var(--text-primary)', fontSize: '12px', boxSizing: 'border-box',
+                              }}
+                            />
+                            {custEditMatches.length > 0 && (
+                              <div style={{
+                                position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 5,
+                                background: 'var(--card)', border: '1px solid var(--border-strong)',
+                                borderRadius: '8px', marginTop: '4px',
+                                boxShadow: 'var(--shadow-md)', maxHeight: '180px', overflowY: 'auto',
+                              }}>
+                                {custEditMatches.map(c => (
+                                  <button
+                                    key={c.id}
+                                    type="button"
+                                    disabled={custEditSaving}
+                                    onClick={() => attachCustomer(vehicle.id, c)}
+                                    style={{
+                                      display: 'block', width: '100%', textAlign: 'left', padding: '7px 9px',
+                                      background: 'transparent', border: 'none', cursor: 'pointer',
+                                      color: 'var(--text-body)', fontSize: '12px',
+                                    }}
+                                  >
+                                    <span style={{ fontWeight: 700 }}>{c.company_name}</span>
+                                    {c.entity_id && <span style={{ color: 'var(--text-muted)', marginLeft: '6px', fontSize: '11px' }}>{c.entity_id}</span>}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => { setCustEditFor(null); setCustEditSearch(''); setCustEditMatches([]); }}
+                              style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0 0' }}
+                            >Cancel</button>
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: '12px', fontWeight: 600, color: vehicle.customer_name ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                            {vehicle.customer_name || 'No customer'}
+                          </div>
+                        )}
+                      </div>
                       {vehicle.sales_order_number && (
                         <div>
                           <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Sales Order</div>
