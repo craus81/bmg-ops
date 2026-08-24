@@ -115,6 +115,29 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   const [scheduledUpfitDate, setScheduledUpfitDate] = useState('');
   const [promisedBackDate, setPromisedBackDate] = useState('');
 
+  // Check-in photos (optional, never required) — staged as Files during the
+  // wizard and uploaded right after the insert, since vehicle_photos rows
+  // are keyed by the check-in id which doesn't exist until then.
+  const [checkinPhotos, setCheckinPhotos] = useState<{ file: File; preview: string }[]>([]);
+  const [photosUploaded, setPhotosUploaded] = useState(0);
+  const [photoWarning, setPhotoWarning] = useState<string | null>(null);
+  const photoCameraRef = useRef<HTMLInputElement>(null);
+
+  const addCheckinPhotos = (files: FileList | File[] | null) => {
+    if (!files) return;
+    const next = Array.from(files)
+      .filter(f => f.type.startsWith('image/'))
+      .map(f => ({ file: f, preview: URL.createObjectURL(f) }));
+    if (next.length > 0) setCheckinPhotos(prev => [...prev, ...next]);
+  };
+
+  const removeCheckinPhoto = (i: number) => {
+    setCheckinPhotos(prev => {
+      if (prev[i]) URL.revokeObjectURL(prev[i].preview);
+      return prev.filter((_, idx) => idx !== i);
+    });
+  };
+
   // Duplicate vehicle found
   const [duplicateVehicle, setDuplicateVehicle] = useState<any>(null);
   const [updatingDupStatus, setUpdatingDupStatus] = useState(false);
@@ -633,6 +656,38 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
       });
     }
 
+    // Upload any staged check-in photos. Optional by design: a failure
+    // never blocks the check-in — it surfaces as a warning on the saved
+    // screen, and photos can always be added from the pick list after.
+    if (data?.id && checkinPhotos.length > 0) {
+      let failed = 0;
+      for (let i = 0; i < checkinPhotos.length; i++) {
+        const { file } = checkinPhotos[i];
+        try {
+          const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+          const path = `${data.id}/checkin-${Date.now()}-${i}.${ext}`;
+          const { error: upErr } = await storage.from('photos').upload(path, file, { contentType: file.type });
+          if (upErr) throw upErr;
+          const { error: dbErr } = await supabase.from('vehicle_photos').insert({
+            vehicle_id: data.id,
+            storage_path: path,
+            photo_type: 'before',
+            taken_by: user.id,
+          });
+          if (dbErr) throw dbErr;
+        } catch (err) {
+          console.error('[fleet check-in] photo upload failed:', err);
+          failed++;
+        }
+      }
+      setPhotosUploaded(checkinPhotos.length - failed);
+      setPhotoWarning(failed > 0
+        ? `${failed} of ${checkinPhotos.length} photo${checkinPhotos.length !== 1 ? 's' : ''} failed to upload — add them again from the pick list.`
+        : null);
+      checkinPhotos.forEach(p => URL.revokeObjectURL(p.preview));
+      setCheckinPhotos([]);
+    }
+
     // Persist every selected SO into the join table so multi-SO check-ins
     // round-trip correctly. The first one is already mirrored into the
     // legacy columns above; we still insert it here so the join table is
@@ -732,6 +787,10 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
     setManualCustomerName('');
     setManualCustomerId(null);
     setManualCustMatches([]);
+    checkinPhotos.forEach(p => URL.revokeObjectURL(p.preview));
+    setCheckinPhotos([]);
+    setPhotosUploaded(0);
+    setPhotoWarning(null);
     setKeepingContext(false);
     setPartialVinMatches([]);
     setMode('text');
@@ -753,6 +812,11 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
     setSavedCheckin(null);
     // Intentionally preserved: selectedOrder, manualCustomerName, customerSearch,
     // selectedProof, dbxSelected, scheduledUpfitDate, notes.
+    // Photos are per-vehicle, so the staged list and last-save results clear.
+    checkinPhotos.forEach(p => URL.revokeObjectURL(p.preview));
+    setCheckinPhotos([]);
+    setPhotosUploaded(0);
+    setPhotoWarning(null);
     setKeepingContext(true);
     setMode('text');
   };
@@ -941,6 +1005,20 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
         />
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '16px' }}>
+          {photosUploaded > 0 && (
+            <div style={{ fontSize: '12px', fontWeight: 700, color: theme.success, textAlign: 'center' }}>
+              ✓ {photosUploaded} check-in photo{photosUploaded !== 1 ? 's' : ''} uploaded
+            </div>
+          )}
+          {photoWarning && (
+            <div style={{
+              padding: '10px 12px', borderRadius: '10px',
+              background: theme.warningBg, border: `1px solid ${theme.warningBorder}`,
+              color: theme.warning, fontSize: '12px', fontWeight: 600,
+            }}>
+              {photoWarning}
+            </div>
+          )}
           <button
             onClick={() => router.push(`/vehicles/${savedCheckin.vin}/pick-list`)}
             style={{
@@ -949,7 +1027,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
               border: `1px solid ${theme.border}`,
               fontSize: '13px', fontWeight: 700,
             }}
-          >Take check-in photos (optional)</button>
+          >{photosUploaded > 0 ? 'Add more check-in photos' : 'Take check-in photos (optional)'}</button>
           {(savedCheckin.customer_name || savedCheckin.sales_order_number) && (
             <button onClick={checkInAnotherSameCustomer} style={{
               width: '100%', padding: '16px', borderRadius: '14px',
@@ -1795,6 +1873,73 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
               }}
             />
           </div>
+        </div>
+
+        {/* Check-in photos — optional by design; uploaded after the save
+            (vehicle_photos needs the check-in id) as photo_type 'before',
+            so they land in the vehicle timeline's Check-in section. */}
+        <div style={{
+          background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '14px',
+          padding: '14px', marginBottom: '14px',
+        }}>
+          <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+            Check-in Photos <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(optional)</span>
+          </label>
+          {checkinPhotos.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' }}>
+              {checkinPhotos.map((p, i) => (
+                <div key={p.preview} style={{ position: 'relative' }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element -- local object URL preview */}
+                  <img
+                    src={p.preview}
+                    alt={`Check-in photo ${i + 1}`}
+                    style={{ width: '72px', height: '72px', objectFit: 'cover', borderRadius: '10px', border: `1px solid ${theme.border}`, display: 'block' }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeCheckinPhoto(i)}
+                    aria-label="Remove photo"
+                    style={{
+                      position: 'absolute', top: '-6px', right: '-6px',
+                      width: '20px', height: '20px', borderRadius: '50%',
+                      background: theme.error, color: '#fff', border: 'none',
+                      fontSize: '11px', fontWeight: 800, cursor: 'pointer', lineHeight: 1,
+                    }}
+                  >✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <DropZone
+            onFiles={(files) => addCheckinPhotos(files)}
+            accept="image/*"
+            multiple
+            style={{
+              border: `1px dashed ${theme.border}`, borderRadius: '10px',
+              padding: '14px', textAlign: 'center', cursor: 'pointer',
+              color: theme.textMuted, fontSize: '12px', fontWeight: 600,
+            }}
+          >
+            Drop photos here, or tap to pick from your device
+          </DropZone>
+          <input
+            ref={photoCameraRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            multiple
+            hidden
+            onChange={(e) => { addCheckinPhotos(e.target.files); e.target.value = ''; }}
+          />
+          <button
+            type="button"
+            onClick={() => photoCameraRef.current?.click()}
+            style={{
+              marginTop: '8px', width: '100%', padding: '10px', borderRadius: '10px',
+              border: `1px solid ${theme.border}`, background: 'transparent',
+              color: theme.textPrimary, fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+            }}
+          >📷 Take Photo</button>
         </div>
 
         {/* Notes */}
