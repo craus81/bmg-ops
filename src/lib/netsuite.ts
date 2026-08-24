@@ -1729,10 +1729,11 @@ export async function createVendorBill(payload: {
 
 /**
  * Create a Vendor Bill in NetSuite from a Purchase Order.
- * Uses: POST /services/rest/record/v1/vendorBill?init=purchaseOrder&id={poId}
- * (same init pattern as createInvoiceFromSO) so the bill carries the PO's
- * vendor, items, and amounts — nothing is re-keyed. referenceNo becomes the
- * bill's tranId (the vendor's invoice number).
+ * Uses: POST /services/rest/record/v1/purchaseOrder/{poId}/!transform/vendorBill
+ * (same transform pattern as createInvoiceFromSO — the old `?init=…&id=…`
+ * form is rejected by the account's current NetSuite release) so the bill
+ * carries the PO's vendor, items, and amounts — nothing is re-keyed.
+ * referenceNo becomes the bill's tranId (the vendor's invoice number).
  */
 export async function createBillFromPo(payload: {
   purchaseOrderId: string | number;
@@ -1741,7 +1742,7 @@ export async function createBillFromPo(payload: {
 }): Promise<{ success: boolean; billId?: string; billNumber?: string; error?: string }> {
   const config = getConfig();
   const baseUrl = getBaseUrl(config.accountId);
-  const url = `${baseUrl}/services/rest/record/v1/vendorBill?init=purchaseOrder&id=${payload.purchaseOrderId}`;
+  const url = `${baseUrl}/services/rest/record/v1/purchaseOrder/${payload.purchaseOrderId}/!transform/vendorBill`;
   const { oauth, token } = createOAuth(config);
   const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
 
@@ -1815,12 +1816,6 @@ export async function createInvoiceFromSO(payload: {
   const config = getConfig();
   const baseUrl = getBaseUrl(config.accountId);
 
-  // Step 1: Initialize an Invoice from a Sales Order
-  // NetSuite REST API uses 'init' (not 'transform') to create from existing record
-  const transformUrl = `${baseUrl}/services/rest/record/v1/invoice?init=salesOrder&id=${payload.salesOrderId}&replace=item`;
-  const { oauth, token } = createOAuth(config);
-  const authHeader = getAuthHeader(oauth, token, { url: transformUrl, method: 'POST' });
-
   // First, get the SO line items to build the invoice with installed quantities
   let lineOverrides: any[] | undefined;
 
@@ -1876,6 +1871,19 @@ export async function createInvoiceFromSO(payload: {
       console.warn('Could not fetch SO lines for partial invoice, will invoice full SO:', e);
     }
   }
+
+  // SO→invoice via NetSuite's documented transform endpoint — the source id
+  // rides in the URL path. The old `invoice?init=salesOrder&id=` form was
+  // undocumented and the account's NetSuite upgrade started rejecting it
+  // ("Invalid query parameter name 'id'. Use one of the following valid
+  // query parameters: init, replace."), which broke vehicle invoicing.
+  // ?replace=item goes on ONLY when line overrides are sent: replace makes
+  // the sublist exactly what the body carries, so a full-SO invoice (empty
+  // body) must omit it or the transform would wipe the inherited lines.
+  const transformUrl = `${baseUrl}/services/rest/record/v1/salesOrder/${payload.salesOrderId}/!transform/invoice`
+    + (lineOverrides && lineOverrides.length > 0 ? '?replace=item' : '');
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url: transformUrl, method: 'POST' });
 
   const body: any = {};
   if (payload.memo) {

@@ -5,6 +5,7 @@ import {
   createSalesOrder,
   createDirectInvoice,
   createInvoiceFromSO,
+  createBillFromPo,
   createCustomerOrLead,
   getItemBasePrices,
 } from './netsuite';
@@ -309,10 +310,13 @@ describe('createInvoiceFromSO', () => {
 
     // …because ?replace=item rebuilds every line: one sent without a
     // description reverts to the item record's default text, silently
-    // dropping estimate/SO placement notes.
+    // dropping estimate/SO placement notes. The URL is the documented
+    // !transform path — the old `invoice?init=salesOrder&id=` form is
+    // rejected by the account's current NetSuite release ("Invalid query
+    // parameter name 'id'").
     const [transformUrl, init] = fetchMock.mock.calls[1];
     expect(transformUrl).toBe(
-      'https://1234567-sb1.suitetalk.api.netsuite.com/services/rest/record/v1/invoice?init=salesOrder&id=12345&replace=item'
+      'https://1234567-sb1.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/12345/!transform/invoice?replace=item'
     );
     const body = JSON.parse(init.body);
     expect(body.item.items).toEqual([
@@ -321,6 +325,58 @@ describe('createInvoiceFromSO', () => {
     ]);
     expect(body.location).toEqual({ id: '7' });
     expect(result).toEqual({ success: true, invoiceId: '900', invoiceNumber: 'INV-3001' });
+  });
+
+  it('bills the full SO with no replace=item and no line body (vehicle completion path)', async () => {
+    fetchMock
+      // invoice transform POST — no SO line lookup runs on the full path
+      .mockResolvedValueOnce(new Response(null, {
+        status: 204,
+        headers: { Location: 'https://x/services/rest/record/v1/invoice/901' },
+      }))
+      // tranid lookup
+      .mockResolvedValueOnce(jsonResponse({ items: [{ tranid: 'INV-3002' }] }));
+
+    const result = await createInvoiceFromSO({ salesOrderId: '766' });
+
+    // No ?replace=item here: replace makes the sublist exactly what the body
+    // carries, and this body carries no lines — the transform must keep the
+    // SO's own lines.
+    const [transformUrl, init] = fetchMock.mock.calls[0];
+    expect(transformUrl).toBe(
+      'https://1234567-sb1.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/766/!transform/invoice'
+    );
+    expect(JSON.parse(init.body)).toEqual({});
+    expect(result).toEqual({ success: true, invoiceId: '901', invoiceNumber: 'INV-3002' });
+  });
+});
+
+describe('createBillFromPo', () => {
+  it('transforms the PO via the documented !transform path with tranId/memo in the body', async () => {
+    fetchMock
+      // vendorBill transform POST
+      .mockResolvedValueOnce(new Response(null, {
+        status: 204,
+        headers: { Location: 'https://x/services/rest/record/v1/vendorBill/700' },
+      }))
+      // tranid lookup
+      .mockResolvedValueOnce(jsonResponse({ items: [{ tranid: 'VB-88' }] }));
+
+    const result = await createBillFromPo({
+      purchaseOrderId: '321',
+      referenceNo: 'INV-9',
+      memo: 'Parts invoice INV-9 (via FleetSuite parts mail)',
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      'https://1234567-sb1.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseOrder/321/!transform/vendorBill'
+    );
+    expect(JSON.parse(init.body)).toEqual({
+      tranId: 'INV-9',
+      memo: 'Parts invoice INV-9 (via FleetSuite parts mail)',
+    });
+    expect(result).toEqual({ success: true, billId: '700', billNumber: 'VB-88' });
   });
 });
 
