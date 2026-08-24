@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { storage } from '@/lib/storage';
 import { createClient } from '@/lib/supabase-browser';
+import AddToEstimateModal from '@/components/AddToEstimateModal';
 
 /**
  * The Ranger-Design-style catalog browser (roadmap N4-A): a faceted,
@@ -135,6 +136,10 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
   // Package templates (part_kits) with members resolved — loaded once per open.
   const [kits, setKits] = useState<KitWithMembers[] | null>(null);
   const [addedKits, setAddedKits] = useState<Record<string, number>>({});
+  // Standalone "Add to estimate" chooser (no host builder wired in via
+  // onAdd/onAddKit — i.e. the /parts Visual Catalog): pick an existing
+  // estimate or spin up a new one around this part/package.
+  const [addTarget, setAddTarget] = useState<{ part?: BrowsePart; kit?: KitWithMembers } | null>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const photoTargetRef = useRef<string | null>(null);
   const platformPhotoInputRef = useRef<HTMLInputElement>(null);
@@ -639,12 +644,20 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <span style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{money(k.totalPrice)}</span>
                           <span style={{ flex: 1 }} />
-                          {onAddKit && (
+                          {onAddKit ? (
                             <button
                               onClick={() => { onAddKit(k); setAddedKits(prev => ({ ...prev, [k.id]: (prev[k.id] || 0) + 1 })); }}
                               style={{ padding: '5px 12px', borderRadius: '8px', border: 'none', background: addedKits[k.id] ? 'rgba(34,197,94,0.15)' : 'var(--accent, #2563eb)', color: addedKits[k.id] ? '#22c55e' : '#fff', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
                             >
                               {addedKits[k.id] ? `✓ ×${addedKits[k.id]}` : `+ Add ${k.members.length} lines`}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => setAddTarget({ kit: k })}
+                              title="Add this package's lines to an existing estimate, or start a new estimate from it"
+                              style={{ padding: '5px 12px', borderRadius: '8px', border: 'none', background: 'var(--accent, #2563eb)', color: '#fff', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
+                            >
+                              + Add to estimate
                             </button>
                           )}
                         </div>
@@ -716,12 +729,21 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                         {added[p.id] ? `✓ ×${added[p.id]}` : '+ Add'}
                       </button>
                     ) : (
-                      <button
-                        onClick={() => setDetail(p)}
-                        style={{ padding: '5px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
-                      >
-                        View
-                      </button>
+                      <>
+                        <button
+                          onClick={() => setDetail(p)}
+                          style={{ padding: '5px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
+                        >
+                          View
+                        </button>
+                        <button
+                          onClick={() => setAddTarget({ part: p })}
+                          title="Add to an existing estimate, or start a new estimate from this part"
+                          style={{ padding: '5px 10px', borderRadius: '8px', border: 'none', background: 'var(--accent, #2563eb)', color: '#fff', fontSize: '11px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                        >
+                          + Estimate
+                        </button>
+                      </>
                     )}
                   </div>
                   {isAdmin && (
@@ -924,12 +946,20 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
               )}
 
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                {onAdd && (
+                {onAdd ? (
                   <button
                     onClick={() => addPart(detail)}
                     style={{ padding: '9px 18px', borderRadius: '9px', border: 'none', background: added[detail.id] ? 'rgba(34,197,94,0.15)' : 'var(--accent, #2563eb)', color: added[detail.id] ? '#22c55e' : '#fff', fontSize: '12px', fontWeight: 800, cursor: 'pointer' }}
                   >
                     {added[detail.id] ? `✓ Added ×${added[detail.id]}` : '+ Add to estimate'}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setAddTarget({ part: detail })}
+                    title="Add to an existing estimate, or start a new estimate from this part"
+                    style={{ padding: '9px 18px', borderRadius: '9px', border: 'none', background: 'var(--accent, #2563eb)', color: '#fff', fontSize: '12px', fontWeight: 800, cursor: 'pointer' }}
+                  >
+                    + Add to estimate…
                   </button>
                 )}
                 {isAdmin && (
@@ -946,6 +976,15 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
             </div>
           </div>
         </div>
+      )}
+
+      {/* Standalone add-to-estimate chooser (renders above the record modal). */}
+      {addTarget && (
+        <AddToEstimateModal
+          part={addTarget.part}
+          kit={addTarget.kit}
+          onClose={() => setAddTarget(null)}
+        />
       )}
     </>
   );

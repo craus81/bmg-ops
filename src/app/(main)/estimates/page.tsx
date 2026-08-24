@@ -18,6 +18,7 @@ import { sameVehicleVin, vinMatchOrFilter } from '@/lib/vin-match';
 import { IN_SHOP_STATUSES } from '@/lib/types';
 import { deepLinks } from '@/lib/deep-links';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
+import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
 import NumberInput from '@/components/NumberInput';
 
 interface Part {
@@ -534,11 +535,12 @@ export default function EstimatesPage() {
     if (loading || handledNewParam.current) return;
     if (searchParams.get('new') !== '1' || searchParams.get('id')) return;
     handledNewParam.current = true;
-    resetBuilder();
-    setView('builder');
-    const custId = searchParams.get('customer');
-    if (!custId) return;
     (async () => {
+      // A restored autosave backup carries its own customer — only prefill
+      // from the deep link when the builder really starts blank.
+      if (await openNewEstimate()) return;
+      const custId = searchParams.get('customer');
+      if (!custId) return;
       const { data } = await supabase
         .from('customers')
         .select('id, netsuite_id, company_name, entity_id')
@@ -596,6 +598,149 @@ export default function EstimatesPage() {
     await supabase.from('quote_settings').upsert({
       id: 1, margin_floor_pct: v, updated_at: new Date().toISOString(), updated_by: user?.id || null,
     });
+  };
+
+  // ── Local autosave (crash insurance) ──
+  // The builder holds unsaved work in component state only, so a crash, a
+  // stray Back, or an in-app navigation used to discard it all. While the
+  // builder is dirty its full field state is snapshotted into localStorage
+  // (debounced), keyed by estimate id ('new' before the first save);
+  // openEstimate/openNewEstimate offer the snapshot back, and a successful
+  // save retires it. See src/lib/estimate-draft.ts.
+  const draftFields = {
+    editingId, title, notes, customerId, customerName, customerNsId,
+    taxRate, taxExempt, laborRate, laborOverride, lines,
+    vin, unitNumber, vehiclePlatformId, vehicleOther, vehicleOtherMode,
+    vehicleYear, vehicleWheelbase, vehicleRoof, vehicleCab, vehicleBed,
+    installInstructions, onSiteContactName, onSiteContactPhone,
+    deliveryPreferences, poNumber, expirationDate, internalNotes,
+    fleetCheckinId,
+  };
+  const draftSerialized = JSON.stringify(draftFields);
+  // Bumped whenever builder state was just made to mirror persisted reality
+  // (open, reset, save) — the persist effect re-baselines instead of writing.
+  const [draftSession, setDraftSession] = useState(0);
+  const draftSessionSeenRef = useRef(-1);
+  const draftBaselineRef = useRef('');
+  const lastVinKindRef = useRef<string | null>(null);
+  const pendingDraftRef = useRef<{ id: string | null; fields: Record<string, any> } | null>(null);
+  const vinKind = vinStatus?.kind || null;
+
+  // Write out a snapshot still inside the debounce window — leaving the
+  // builder, switching estimates, unmounting, and unloading all route
+  // through here so the backup never trails the screen by a keystroke burst.
+  const flushPendingDraft = useCallback(() => {
+    if (pendingDraftRef.current) {
+      writeEstimateDraft(pendingDraftRef.current.id, pendingDraftRef.current.fields);
+      pendingDraftRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (view !== 'builder') { flushPendingDraft(); return; }
+    const sessionChanged = draftSessionSeenRef.current !== draftSession;
+    // A completed VIN decode also re-baselines: its fills (year, platform,
+    // qualifiers) are re-derived from the VIN on restore anyway, and counting
+    // them as edits produced a phantom "unsaved changes" backup on every open
+    // of an estimate whose saved vehicle fields lag what its VIN decodes to.
+    const vinFillLanded = lastVinKindRef.current !== vinKind
+      && (vinKind === 'filled' || vinKind === 'no-platform');
+    lastVinKindRef.current = vinKind;
+    if (sessionChanged || vinFillLanded) {
+      draftSessionSeenRef.current = draftSession;
+      draftBaselineRef.current = draftSerialized;
+      pendingDraftRef.current = null;
+      return;
+    }
+    if (draftSerialized === draftBaselineRef.current) { pendingDraftRef.current = null; return; }
+    // Content gate: a customer arriving via deep link (?new=1&customer=) or a
+    // lone dropdown change isn't worth a restore prompt later.
+    const meaningful = lines.length > 0 || !!(title.trim() || notes.trim() || internalNotes.trim()
+      || installInstructions.trim() || vin.trim() || unitNumber.trim() || poNumber.trim());
+    if (!meaningful) { pendingDraftRef.current = null; return; }
+    pendingDraftRef.current = { id: editingId, fields: draftFields };
+    const t = setTimeout(() => {
+      writeEstimateDraft(editingId, draftFields);
+      pendingDraftRef.current = null;
+    }, 800);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- draftSerialized covers every snapshotted field
+  }, [draftSerialized, view, draftSession, vinKind]);
+
+  useEffect(() => {
+    window.addEventListener('beforeunload', flushPendingDraft);
+    sweepEstimateDrafts();
+    return () => { flushPendingDraft(); window.removeEventListener('beforeunload', flushPendingDraft); };
+  }, [flushPendingDraft]);
+
+  // Put a backed-up snapshot into the builder. Loaders for the display-only
+  // side records (linked check-in, customer defaults) re-run from the ids.
+  const applyDraft = (id: string | null, draft: EstimateDraft) => {
+    const f = draft.fields || {};
+    setEditingId(id);
+    setTitle(f.title || '');
+    setNotes(f.notes || '');
+    setCustomerId(f.customerId ?? null);
+    setCustomerName(f.customerName || '');
+    setCustomerNsId(f.customerNsId ?? null);
+    setTaxRate(typeof f.taxRate === 'number' ? f.taxRate : DEFAULT_TAX_RATE);
+    setTaxExempt(!!f.taxExempt);
+    setLaborRate(typeof f.laborRate === 'number' ? f.laborRate : DEFAULT_LABOR_RATE);
+    setLaborOverride(typeof f.laborOverride === 'number' ? f.laborOverride : null);
+    setLines(Array.isArray(f.lines)
+      ? f.lines.map((l: any) => ({ ...l, key: l.key || genKey() }))
+      : []);
+    setVin(f.vin || '');
+    setUnitNumber(f.unitNumber || '');
+    setVehiclePlatformId(f.vehiclePlatformId ?? null);
+    setVehicleOther(f.vehicleOther || '');
+    setVehicleOtherMode(!!f.vehicleOtherMode);
+    setVehicleYear(f.vehicleYear || '');
+    setVehicleWheelbase(f.vehicleWheelbase || '');
+    setVehicleRoof(f.vehicleRoof || '');
+    setVehicleCab(f.vehicleCab || '');
+    setVehicleBed(f.vehicleBed || '');
+    setInstallInstructions(f.installInstructions || '');
+    setOnSiteContactName(f.onSiteContactName || '');
+    setOnSiteContactPhone(f.onSiteContactPhone || '');
+    setDeliveryPreferences(f.deliveryPreferences || '');
+    setPoNumber(f.poNumber || '');
+    setExpirationDate(f.expirationDate || '');
+    setInternalNotes(f.internalNotes || '');
+    setFleetCheckinId(f.fleetCheckinId ?? null);
+    if (f.fleetCheckinId) loadLinkedCheckin(f.fleetCheckinId);
+    else setLinkedCheckin(null);
+    if (f.customerId) loadCustomerDefaults(f.customerId);
+  };
+
+  // Offer the device-local backup for this estimate (null = the unsaved
+  // builder). True = restored. Declining discards the backup.
+  const maybeOfferDraft = async (id: string | null, est?: Estimate): Promise<boolean> => {
+    const draft = readEstimateDraft(id);
+    if (!draft) return false;
+    const savedAt = new Date(draft.savedAt);
+    const staleNote = est?.updated_at && new Date(est.updated_at) > savedAt
+      ? '\n\nNote: this estimate has been saved more recently (possibly on another device) than this backup — restoring brings back the older unsaved edits.'
+      : '';
+    const lineCount = Array.isArray(draft.fields?.lines) ? draft.fields.lines.length : 0;
+    const label = draft.fields?.title || draft.fields?.customerName || '';
+    const ok = await dialog.confirm(
+      `Unsaved work${label ? ` (“${label}”)` : ''} from ${savedAt.toLocaleString()} was backed up on this device — ` +
+      `${lineCount} line item${lineCount === 1 ? '' : 's'}. Restore it?${staleNote}`,
+      { title: 'Restore unsaved estimate?', confirmLabel: 'Restore', cancelLabel: 'Discard backup' },
+    );
+    if (!ok) { clearEstimateDraft(id); return false; }
+    applyDraft(id, draft);
+    return true;
+  };
+
+  // New-estimate entry point (button + ?new=1 deep link): blank builder,
+  // then offer any backed-up never-saved draft. True = a backup was restored.
+  const openNewEstimate = async (): Promise<boolean> => {
+    flushPendingDraft(); // don't lose the tail of whatever was open before
+    resetBuilder();
+    setView('builder');
+    return maybeOfferDraft(null);
   };
 
   // ── Part search ──
@@ -874,6 +1019,11 @@ export default function EstimatesPage() {
 
       const data = await res.json();
       if (data.success) {
+        // The just-saved state is the new baseline — retire the local backup
+        // ('new' on a first save, which then re-keys under the real id).
+        clearEstimateDraft(editingId);
+        if (!editingId && data.id) clearEstimateDraft(data.id);
+        setDraftSession(s => s + 1);
         if (!editingId) setEditingId(data.id);
         // Notify teammates newly @mentioned in the internal notes this save.
         if (internalNotes !== savedInternalNotesRef.current) {
@@ -1132,6 +1282,7 @@ export default function EstimatesPage() {
 
   // ── Open estimate for editing ──
   const openEstimate = async (est: Estimate) => {
+    flushPendingDraft(); // don't lose the tail of whatever was open before
     setEditingId(est.id);
     setTitle(est.title || '');
     setNotes(est.notes || '');
@@ -1215,7 +1366,11 @@ export default function EstimatesPage() {
     if (est.customer_id) loadCustomerDefaults(est.customer_id);
     loadLinkedGraphicsJobs(est.id);
 
+    // Loaded server state = the autosave baseline; then offer any local
+    // backup of unsaved edits (crash / stray navigation) on top of it.
+    setDraftSession(s => s + 1);
     setView('builder');
+    await maybeOfferDraft(est.id, est);
   };
 
   // ── Checked-in vehicle linkage (fleet_checkins / In-Shop board) ──
@@ -1448,6 +1603,8 @@ export default function EstimatesPage() {
     setShowGraphicsPicker(false);
     setGraphicsPickerSearch('');
     setGraphicsPickerResults([]);
+    // Blank builder = persisted reality; re-baseline the autosave.
+    setDraftSession(s => s + 1);
   };
 
   // Load customer defaults when a customer is picked on a NEW estimate —
@@ -1511,6 +1668,8 @@ export default function EstimatesPage() {
       const data = await res.json();
       if (!data.success && data.error) {
         await dialog.alert('Delete failed: ' + data.error);
+      } else {
+        clearEstimateDraft(id);
       }
     } catch {
       await dialog.alert('Network error — please try again');
@@ -1559,7 +1718,7 @@ export default function EstimatesPage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
           <div style={{ fontSize: '22px', fontWeight: 800 }}>Estimates</div>
           <button
-            onClick={() => { resetBuilder(); setView('builder'); }}
+            onClick={() => { openNewEstimate(); }}
             style={{ padding: '8px 14px', borderRadius: '10px', background: theme.orange, color: '#fff', fontWeight: 800, fontSize: '12px', border: 'none', cursor: 'pointer', boxShadow: '0 2px 8px rgba(238,49,32,0.3)' }}
           >
             + New Estimate
