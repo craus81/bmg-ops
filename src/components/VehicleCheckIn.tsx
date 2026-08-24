@@ -140,6 +140,22 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
     if (mode === 'text' && inputRef.current) inputRef.current.focus();
   }, [mode]);
 
+  // Each step swaps in content of a different height, and the scroll
+  // container (the check-in pop-out panel, or the page when embedded
+  // inline) keeps its old offset — so after a VIN scan the next step's top
+  // could sit out of view, which read in the field as the form vanishing.
+  // Bring the wizard's top back into view on step changes only, never on
+  // mount, so opening the wizard doesn't yank the host page around.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const lastStepKey = useRef<string | null>(null);
+  useEffect(() => {
+    const key = saved ? 'saved' : `step-${step}`;
+    if (lastStepKey.current !== null && lastStepKey.current !== key) {
+      rootRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    lastStepKey.current = key;
+  }, [step, saved]);
+
   useEffect(() => {
     loadRecentCheckins();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
@@ -843,7 +859,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   // ═══════════════════════════════════════════════════════════
   if (saved && savedCheckin) {
     return (
-      <div>
+      <div ref={rootRef}>
         <div style={{ textAlign: 'center', padding: '28px 0' }}>
           <div style={{
             width: '64px', height: '64px', borderRadius: '50%', background: theme.successBg,
@@ -960,7 +976,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
     const heldSO = selectedOrder?.sales_order_number;
     const heldProof = selectedProof?.file_name || dbxSelected?.name;
     return (
-      <div>
+      <div ref={rootRef}>
         <StepIndicator current={0} />
         <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
           Fleet Check-In
@@ -1237,7 +1253,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   // ═══════════════════════════════════════════════════════════
   if (step === 1) {
     return (
-      <div>
+      <div ref={rootRef}>
         <StepIndicator current={1} />
 
         {/* Vehicle summary card */}
@@ -1438,7 +1454,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   // ═══════════════════════════════════════════════════════════
   if (step === 2) {
     return (
-      <div>
+      <div ref={rootRef}>
         <StepIndicator current={2} />
 
         {/* Summary cards */}
