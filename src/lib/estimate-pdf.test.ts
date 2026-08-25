@@ -72,6 +72,25 @@ describe('buildEstimatePdf', () => {
     expect(raw).toContain('https://vendor.example.com/sh-4820');
   });
 
+  it('renders the vinyl/graphics section from linked wrap quotes', () => {
+    const doc = buildEstimatePdf({
+      ...data,
+      graphics: [{
+        quoteNumber: 'WQ-2093',
+        vehicle: '2026 Transit 148',
+        totalSqft: 214,
+        films: [
+          { name: '3M IJ180cv3', areas: ['Hood', 'Roof'] },
+          { name: 'Avery SW900', areas: ['Driver side'] },
+        ],
+      }],
+    });
+    const raw = Buffer.from(doc.output('arraybuffer')).toString('latin1');
+    expect(raw).toContain('WQ-2093');
+    expect(raw).toContain('3M IJ180cv3');
+    expect(raw).toContain('Avery SW900');
+  });
+
   it('renders without images, logo, company, or optional sections', () => {
     const doc = buildEstimatePdf({
       estimate: {
