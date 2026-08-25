@@ -14,7 +14,7 @@ import { DropZone } from '@/components/DropZone';
 import { theme } from '@/lib/theme';
 import { RollNesting, RollFilmInfo } from '@/components/RollNesting';
 import NumberInput from '@/components/NumberInput';
-import EmailComposeModal, { loadBccSelfPref, saveBccSelfPref, type EmailComposeFields } from '@/components/EmailComposeModal';
+import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import {
   DEFAULT_ROLL,
@@ -365,19 +365,11 @@ export default function WrapQuotePage() {
   const [sendInclude, setSendInclude] = useState<{ pricing: boolean; lineItems: boolean; diagram: boolean; netsuitePdf: boolean }>({
     pricing: true, lineItems: true, diagram: true, netsuitePdf: false,
   });
-  // Email preview modal: shows exactly what will go out (rendered body,
-  // recipients, attachments) with an optional personal message and
-  // per-attachment include toggles before anything is sent.
+  // Email-the-quote compose (the standard EmailComposeModal): opens on a
+  // saved quote id; the modal owns recipients/bcc/message/attachment picks
+  // and pulls its live preview from the send route's dry run.
   const [emailModal, setEmailModal] = useState(false);
   const [emailQuoteId, setEmailQuoteId] = useState<string | null>(null);
-  const [emailMessage, setEmailMessage] = useState('');
-  // Standard compose fields: editable recipients (prefilled from the quote's
-  // customer email + cc on the first preview) and bcc-me.
-  const [emailTo, setEmailTo] = useState('');
-  const [emailBccSelf, setEmailBccSelf] = useState(loadBccSelfPref);
-  const [attachInclude, setAttachInclude] = useState<Record<string, boolean>>({});
-  const [emailPreview, setEmailPreview] = useState<{ to: string[]; subject: string; html: string; attachments: string[] } | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
 
   // Add Graphics round trip (?forEstimate=<id>): the estimate builder saved
   // itself and sent the rep here to price graphics. Prefill the customer,
@@ -1500,50 +1492,33 @@ export default function WrapQuotePage() {
     return data.id;
   };
 
-  // Recipient field → validated address list (comma/semicolon separated).
-  const parseEmailTo = (input: string): string[] =>
-    [...new Set(input.split(/[,;\s]+/).map(e => e.trim().toLowerCase()).filter(e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)))];
-
-  // Ask the send route for a dry-run render of the email using the current
-  // message + recipients + attachment selection. Returns true when the
-  // preview loaded.
-  const fetchEmailPreview = async (id: string, msg: string, include: Record<string, boolean>, toOverride?: string) => {
-    setPreviewLoading(true);
+  // Dry-run render for the compose modal — the send route returns the exact
+  // email (recipients resolved, signature included) without sending or
+  // marking anything sent. The modal alerts on a returned error itself.
+  const fetchQuoteEmailPreview = async (fields: EmailComposeFields) => {
+    if (!emailQuoteId) return { error: 'Quote not saved yet' };
     try {
-      const emails = parseEmailTo(toOverride ?? emailTo);
       const res = await apiFetch('/api/wrap-quote/send', {
         method: 'POST',
         body: JSON.stringify({
-          quoteId: id,
+          quoteId: emailQuoteId,
           include: sendInclude,
           preview: true,
-          message: msg.trim() || undefined,
-          emails: emails.length > 0 ? emails : undefined,
-          attachmentPaths: attachments.filter(a => include[a.path] !== false).map(a => a.path),
+          message: fields.message || undefined,
+          emails: fields.emails.length > 0 ? fields.emails : undefined,
+          attachmentPaths: fields.attachmentIds,
         }),
       });
       const data = await res.json();
-      if (!res.ok || !data.preview) {
-        await dialog.alert(`Preview failed: ${data.error || 'Unknown error'}`);
-        return false;
-      }
-      setEmailPreview(data);
-      // First preview resolves the quote's stored recipients — surface them
-      // in the editable To field so the sender sees what they can change.
-      if (emails.length === 0 && Array.isArray(data.to) && data.to.length > 0) {
-        setEmailTo(data.to.join(', '));
-      }
-      return true;
+      if (!res.ok || !data.preview) return { error: data.error || 'Unknown error' };
+      return { preview: { to: data.to, subject: data.subject, html: data.html } };
     } catch (e: any) {
-      await dialog.alert(`Preview failed: ${e.message}`);
-      return false;
-    } finally {
-      setPreviewLoading(false);
+      return { error: e.message };
     }
   };
 
-  // Opens the email preview modal (saves the draft first so the server can
-  // render the real thing). The actual send happens in sendQuoteEmail.
+  // Opens the compose modal (saves the draft first so the server can render
+  // the real thing). The actual send happens in sendQuoteEmail.
   const createAndEmail = async () => {
     if (!customer.email?.trim()) { await dialog.alert('Enter a customer email first.'); return; }
     if (measurements.length === 0) { await dialog.alert('No measurements — draw the wrap areas on the Estimator tab first.'); return; }
@@ -1560,25 +1535,14 @@ export default function WrapQuotePage() {
       const id = await saveQuote();
       if (!id) return;
       setEmailQuoteId(id);
-      setEmailMessage('');
-      setEmailTo('');
-      setEmailBccSelf(false);
-      const include: Record<string, boolean> = {};
-      for (const a of attachments) include[a.path] = true;
-      setAttachInclude(include);
-      if (await fetchEmailPreview(id, '', include, '')) setEmailModal(true);
+      setEmailModal(true);
     } finally {
       setSending(false);
     }
   };
 
-  const sendQuoteEmail = async () => {
-    if (!emailQuoteId) return;
-    const emails = parseEmailTo(emailTo);
-    if (emails.length === 0) {
-      await dialog.alert('Enter at least one valid recipient email address.');
-      return;
-    }
+  const sendQuoteEmail = async (fields: EmailComposeFields): Promise<{ ok: boolean }> => {
+    if (!emailQuoteId) return { ok: false };
     const coverageOnly = !sendInclude.pricing && !sendInclude.netsuitePdf;
     setSending(true);
     try {
@@ -1587,31 +1551,36 @@ export default function WrapQuotePage() {
         body: JSON.stringify({
           quoteId: emailQuoteId,
           include: sendInclude,
-          message: emailMessage.trim() || undefined,
-          emails,
-          bccSelf: emailBccSelf,
-          attachmentPaths: attachments.filter(a => attachInclude[a.path] !== false).map(a => a.path),
+          message: fields.message || undefined,
+          emails: fields.emails,
+          bccSelf: fields.bccSelf,
+          attachmentPaths: fields.attachmentIds,
         }),
       });
       const data = await res.json();
-      const sentTo = emails.join(', ');
+      const sentTo = fields.emails.join(', ');
       if (!res.ok || !data.success) {
         await dialog.alert(`Email failed: ${data.error || 'Unknown error'}`);
-      } else if (coverageOnly) {
+        return { ok: false };
+      }
+      // Close before the success dialog so the alert isn't stacked on the
+      // compose screen.
+      setEmailModal(false);
+      if (coverageOnly) {
         // The quote itself hasn't gone out — keep everything in place so
         // the real quote can still be sent after the customer sees coverage.
-        setEmailModal(false);
         await dialog.alert(`Coverage picture emailed to ${sentTo}`);
         await loadAll();
       } else {
-        setEmailModal(false);
         await dialog.alert(`Quote emailed to ${sentTo}`);
         resetAfterSend();
         await loadAll();
         setTab('history');
       }
+      return { ok: true };
     } catch (e: any) {
       await dialog.alert(`Email failed: ${e.message}`);
+      return { ok: false };
     } finally {
       setSending(false);
     }
@@ -3552,99 +3521,27 @@ export default function WrapQuotePage() {
         </div>
       )}
 
-      {/* Email preview modal — shows the rendered email, recipients, and
-          attachment toggles before anything actually sends. */}
-      {emailModal && (
-        <div
-          style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 1500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
-          onClick={() => setEmailModal(false)}
-        >
-          <div onClick={e => e.stopPropagation()} style={{
-            background: 'var(--card)', borderRadius: '14px', padding: '16px',
-            width: '100%', maxWidth: '760px', maxHeight: 'calc(100vh / var(--ts) - 40px)',
-            display: 'flex', flexDirection: 'column', gap: '10px',
-            boxShadow: '0 8px 30px rgba(0,0,0,0.3)',
-          }}>
-            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>Review Email Before Sending</div>
-            <div>
-              <div style={labelStyle}>To — separate multiple addresses with commas</div>
-              <input
-                type="text"
-                value={emailTo}
-                onChange={e => setEmailTo(e.target.value)}
-                onBlur={() => { if (emailQuoteId) fetchEmailPreview(emailQuoteId, emailMessage, attachInclude); }}
-                placeholder="customer@company.com, ap@company.com"
-                style={inputStyle}
-              />
-            </div>
-            {user?.email && (
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer', width: 'fit-content' }}>
-                <input
-                  type="checkbox"
-                  checked={emailBccSelf}
-                  onChange={e => { setEmailBccSelf(e.target.checked); saveBccSelfPref(e.target.checked); }}
-                  style={{ accentColor: '#3b82f6' }}
-                />
-                Bcc me a copy ({user.email})
-              </label>
-            )}
+      {/* Email-the-quote compose — the standard customer email screen
+          (docs/customer-email-standard.md). The Email Content checkboxes
+          (sendInclude) live on the Quote tab, so they're fixed for the
+          modal's lifetime; the live preview is the send route's dry run of
+          the shared quote document. */}
+      {emailModal && emailQuoteId && (
+        <EmailComposeModal
+          title="Review Email Before Sending"
+          sendLabel={!sendInclude.pricing && !sendInclude.netsuitePdf ? 'Send Coverage' : 'Send Quote'}
+          messagePlaceholder="Optional note to the customer — added above the quote…"
+          intro={sendInclude.netsuitePdf ? (
             <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              <b style={{ color: 'var(--text-secondary)' }}>Subject:</b> {emailPreview?.subject}
+              The NetSuite quote PDF is attached automatically in this mode.
             </div>
-            <div>
-              <div style={labelStyle}>Personal message (shown at the top of the email)</div>
-              <textarea
-                value={emailMessage}
-                onChange={e => setEmailMessage(e.target.value)}
-                onBlur={() => { if (emailQuoteId) fetchEmailPreview(emailQuoteId, emailMessage, attachInclude); }}
-                rows={3}
-                placeholder="Optional note to the customer — added above the quote…"
-                style={{ ...inputStyle, resize: 'vertical' }}
-              />
-            </div>
-            {(attachments.length > 0 || sendInclude.netsuitePdf) && (
-              <div>
-                <div style={labelStyle}>Attachments</div>
-                {sendInclude.netsuitePdf && (
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '3px' }}>
-                    <input type="checkbox" checked disabled />
-                    NetSuite quote PDF <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(always included in this mode)</span>
-                  </label>
-                )}
-                {attachments.map(a => (
-                  <label key={a.path} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '3px', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={attachInclude[a.path] !== false}
-                      onChange={e => setAttachInclude(p => ({ ...p, [a.path]: e.target.checked }))}
-                    />
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
-                  </label>
-                ))}
-                <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Unchecked files stay on the quote — they just don&apos;t ride along on this email.</div>
-              </div>
-            )}
-            <div style={{ flex: 1, minHeight: '220px', border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden', background: '#f3f4f6', position: 'relative' }}>
-              {previewLoading && (
-                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700, color: '#6b7280', background: 'rgba(243,244,246,0.7)' }}>Updating preview…</div>
-              )}
-              <iframe srcDoc={emailPreview?.html || ''} title="Email preview" sandbox="" style={{ width: '100%', height: '100%', minHeight: '220px', border: 'none', display: 'block' }} />
-            </div>
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-              <button onClick={() => setEmailModal(false)} style={btnStyle('var(--text-body)', 'transparent')}>Cancel</button>
-              <button
-                onClick={() => { if (emailQuoteId) fetchEmailPreview(emailQuoteId, emailMessage, attachInclude); }}
-                disabled={previewLoading}
-                style={btnStyle('#60a5fa', 'rgba(59,130,246,0.1)')}
-              >
-                Refresh Preview
-              </button>
-              <button onClick={sendQuoteEmail} disabled={sending || previewLoading} style={{ ...btnStyle('#fff', '#22c55e'), border: 'none' }}>
-                {sending ? 'Sending…' : (!sendInclude.pricing && !sendInclude.netsuitePdf) ? 'Send Coverage' : 'Send Quote'}
-              </button>
-            </div>
-          </div>
-        </div>
+          ) : undefined}
+          attachments={attachments.map(a => ({ id: a.path, name: a.name, sizeBytes: a.size }))}
+          initialAttachmentIds={attachments.map(a => a.path)}
+          fetchPreview={fetchQuoteEmailPreview}
+          onSend={sendQuoteEmail}
+          onClose={() => setEmailModal(false)}
+        />
       )}
 
       {/* Follow-up email on a sent quote — standard compose screen; sending
