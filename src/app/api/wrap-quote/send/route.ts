@@ -7,7 +7,9 @@ import { validateBody, z } from '@/lib/validate';
 import { r2Get, r2PublicUrl } from '@/lib/r2';
 import { getNetSuitePdf } from '@/lib/netsuite';
 import { generateToken, validateExpiry } from '@/lib/magic-link-approval';
-import { getEmailSignature, renderSignatureHtml, type EmailSignature } from '@/lib/email-signature';
+import { getEmailSignature } from '@/lib/email-signature';
+import { renderQuoteDocument } from '@/lib/quote-document';
+import { wrapQuoteDocModel, wrapDocTitle } from '@/lib/wrap-quote-document';
 
 export const dynamic = 'force-dynamic';
 
@@ -58,133 +60,9 @@ const MODE_FLAGS: Record<SendMode, SendFlags> = {
   netsuite_pdf: { pricing: false, lineItems: false, diagram: true, netsuitePdf: true },
 };
 
-const esc = (s: any) =>
-  String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const money = (n: any) =>
-  (parseFloat(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-// Light-themed printable quote document (customers print/forward these, so
-// no dark chrome like the internal notification template).
-function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, logoUrl: string | null, flags: SendFlags, message?: string, approveUrl?: string | null, signature?: EmailSignature | null): string {
-  const pricing = flags.pricing;
-  const lineItems = flags.pricing && flags.lineItems;
-  const showDiagram = flags.diagram && !!diagramUrl;
-  const docTitle = pricing || flags.netsuitePdf ? 'Wrap Quote' : 'Wrap Coverage';
-  const cust = quote.customer || {};
-  const rows: string[] = [];
-  const cell = (v: string, right = false) =>
-    `<td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#111827;${right ? 'text-align:right;' : ''}">${v}</td>`;
-
-  // Kit-quantity jobs: the measurement lines price ONE kit; a bold rollup
-  // row shows kits × per-kit materials, and the totals block shows the
-  // quantity discount / shop minimum that produced the final subtotal.
-  // Roll-nested quotes instead price materials as vinyl cut off each film's
-  // roll: the shape lines carry no prices (sizes only, unit_price null) and
-  // per-film "Material" rows carry the roll totals.
-  const adj = quote.adjustments || null;
-  const kits = Math.max(1, parseInt(quote.package_qty, 10) || 1);
-  const nest = quote.nesting?.enabled ? quote.nesting : null;
-  for (const l of quote.measurements || []) {
-    const detail = `${money(l.billed_area_sqft)} ft²${l.substrate?.name ? ` · ${esc(l.substrate.name)}` : ''}${kits > 1 ? ' · per kit' : ''}`;
-    rows.push(`<tr>${cell(`${esc(l.name)} <span style="color:#6b7280;font-size:11px;">${detail}</span>`)}${cell(String(l.qty || 1), true)}${cell(l.unit_price == null ? '—' : money(l.unit_price), true)}${cell(l.line_total == null ? '—' : money(l.line_total), true)}</tr>`);
-  }
-  if (nest) {
-    for (const f of nest.films || []) {
-      if (!((parseFloat(f.material_total) || 0) > 0.005)) continue;
-      const usedIn = (f.rolls || []).reduce((s: number, r: any) => s + (parseFloat(r.used_length_in) || 0), 0);
-      const extra = parseFloat(f.extra_area_sqft) || 0;
-      const detail = [
-        (parseFloat(f.roll_sqft) || 0) > 0.005 ? `${money(f.roll_sqft)} ft² · ${(usedIn / 12).toFixed(1)} ft of ${money(nest.roll_width_in)}" roll` : '',
-        extra > 0.005 ? `${money(extra)} ft² billed by area` : '',
-      ].filter(Boolean).join(' + ') + ((nest.sets || 1) > 1 ? ` · ${nest.sets} sets` : '');
-      rows.push(`<tr>${cell(`<b>Material — ${esc(f.label)}</b> <span style="color:#6b7280;font-size:11px;">${detail}</span>`)}${cell('1', true)}${cell(money(f.material_total), true)}${cell(`<b>${money(f.material_total)}</b>`, true)}</tr>`);
-    }
-  }
-  if (kits > 1 && adj && !nest) {
-    rows.push(`<tr>${cell(`<b>Materials — ${kits} kits</b> <span style="color:#6b7280;font-size:11px;">${money(adj.kit_area_sqft)} ft² per kit</span>`)}${cell(`<b>${kits}</b>`, true)}${cell(money(adj.kit_materials), true)}${cell(`<b>${money(adj.pre_materials)}</b>`, true)}</tr>`);
-  }
-  for (const f of quote.labor?.films || []) {
-    if (!(parseFloat(f.total) || 0)) continue;
-    rows.push(`<tr>${cell(`Install — ${esc(f.label)} <span style="color:#6b7280;font-size:11px;">${money(f.sqft)} ft² @ $${money(f.rate)}/ft²</span>`)}${cell('1', true)}${cell(money(f.total), true)}${cell(money(f.total), true)}</tr>`);
-  }
-  const laborLabels: Record<string, string> = { design: 'Design', preparation: 'Preparation', installation: 'Installation' };
-  for (const key of Object.keys(laborLabels)) {
-    const sec = quote.labor?.[key];
-    if (!sec || !(parseFloat(sec.total) || 0)) continue;
-    rows.push(`<tr>${cell(laborLabels[key])}${cell('1', true)}${cell(money(sec.total), true)}${cell(money(sec.total), true)}</tr>`);
-  }
-
-  const companyLines = [
-    company?.name, company?.address,
-    [company?.city, company?.state, company?.zip].filter(Boolean).join(', '),
-    company?.phone, company?.email,
-  ].filter(Boolean).map(l => esc(l)).join('<br>');
-  const customerLines = [
-    cust.name, cust.address,
-    [cust.city, cust.state, cust.zip].filter(Boolean).join(', '),
-    cust.phone, cust.email,
-  ].filter(Boolean).map(l => esc(l)).join('<br>');
-
-  return `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-  <div style="max-width:640px;margin:0 auto;padding:24px;">
-    <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:28px;">
-      <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
-        <tr>
-          <td style="vertical-align:top;">
-            ${logoUrl ? `<img src="${esc(logoUrl)}" alt="${esc(company?.name || 'Company logo')}" height="44" style="height:44px;max-width:220px;display:block;margin-bottom:10px;">` : ''}
-            <div style="font-size:22px;font-weight:800;color:#111827;">${docTitle}</div>
-            <div style="font-size:12px;color:#6b7280;">${esc(quote.quote_number)} · ${new Date(quote.created_at || Date.now()).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</div>
-          </td>
-        </tr>
-      </table>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
-        <tr>
-          <td style="vertical-align:top;font-size:12px;color:#374151;line-height:1.5;">${companyLines || ''}</td>
-          <td style="vertical-align:top;font-size:12px;color:#374151;line-height:1.5;text-align:right;"><b style="color:#111827;">Customer</b><br>${customerLines || ''}</td>
-        </tr>
-      </table>
-      ${message ? `<div style="font-size:13px;color:#374151;margin:0 0 16px;white-space:pre-wrap;line-height:1.5;">${esc(message)}</div>` : ''}
-      ${quote.project_type ? `<div style="font-size:12px;color:#374151;margin-bottom:4px;"><b>Project Type:</b> ${esc(quote.project_type)}</div>` : ''}
-      ${quote.vehicle_description ? `<div style="font-size:12px;color:#374151;margin-bottom:14px;"><b>Vehicle:</b> ${esc(quote.vehicle_description)}</div>` : ''}
-      ${showDiagram ? `<div style="margin:0 0 14px;"><div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:4px;">Coverage Areas</div><img src="${esc(diagramUrl)}" alt="Wrap coverage diagram" width="584" style="width:100%;max-width:584px;display:block;border:1px solid #e5e7eb;border-radius:8px;"></div>` : ''}
-      ${flags.netsuitePdf && !pricing ? `<div style="font-size:13px;color:#374151;margin:0 0 14px;">Your quote is attached as a PDF.</div>` : ''}
-      ${lineItems ? `<table style="width:100%;border-collapse:collapse;">
-        <thead>
-          <tr>
-            <th style="text-align:left;padding:8px 10px;background:#f9fafb;border-bottom:2px solid #e5e7eb;font-size:11px;color:#6b7280;text-transform:uppercase;">Item</th>
-            <th style="text-align:right;padding:8px 10px;background:#f9fafb;border-bottom:2px solid #e5e7eb;font-size:11px;color:#6b7280;text-transform:uppercase;">Qty</th>
-            <th style="text-align:right;padding:8px 10px;background:#f9fafb;border-bottom:2px solid #e5e7eb;font-size:11px;color:#6b7280;text-transform:uppercase;">Price</th>
-            <th style="text-align:right;padding:8px 10px;background:#f9fafb;border-bottom:2px solid #e5e7eb;font-size:11px;color:#6b7280;text-transform:uppercase;">Total</th>
-          </tr>
-        </thead>
-        <tbody>${rows.join('')}</tbody>
-      </table>` : ''}
-      ${pricing ? `<table style="width:100%;border-collapse:collapse;margin-top:14px;">
-        ${adj && ((parseFloat(adj.discount_amount) || 0) > 0.005 || (parseFloat(adj.min_bump) || 0) > 0.005) ? `<tr><td style="text-align:right;font-size:13px;color:#6b7280;padding:2px 10px;">Subtotal before adjustments</td><td style="text-align:right;font-size:13px;color:#6b7280;padding:2px 10px;width:110px;">$${money(adj.pre_subtotal)}</td></tr>` : ''}
-        ${adj && (parseFloat(adj.discount_amount) || 0) > 0.005 ? `<tr><td style="text-align:right;font-size:13px;color:#7c3aed;padding:2px 10px;">Quantity discount (${money(adj.discount_pct)}%)</td><td style="text-align:right;font-size:13px;color:#7c3aed;padding:2px 10px;">−$${money(adj.discount_amount)}</td></tr>` : ''}
-        ${adj && (parseFloat(adj.min_bump) || 0) > 0.005 ? `<tr><td style="text-align:right;font-size:13px;color:#b45309;padding:2px 10px;">Shop minimum</td><td style="text-align:right;font-size:13px;color:#b45309;padding:2px 10px;">+$${money(adj.min_bump)}</td></tr>` : ''}
-        <tr><td style="text-align:right;font-size:13px;color:#374151;padding:2px 10px;">Subtotal</td><td style="text-align:right;font-size:13px;color:#111827;padding:2px 10px;width:110px;">$${money(quote.subtotal)}</td></tr>
-        <tr><td style="text-align:right;font-size:13px;color:#374151;padding:2px 10px;">Tax (${money(quote.tax_rate)}%)</td><td style="text-align:right;font-size:13px;color:#111827;padding:2px 10px;">$${money(quote.tax_amount)}</td></tr>
-        <tr><td style="text-align:right;font-size:16px;font-weight:800;color:#111827;padding:6px 10px;">Total</td><td style="text-align:right;font-size:16px;font-weight:800;color:#059669;padding:6px 10px;">$${money(quote.total)}</td></tr>
-      </table>` : ''}
-      ${lineItems && (quote.labor?.films || []).length ? `<div style="margin-top:12px;font-size:11px;color:#6b7280;"><b style="color:#374151;">Film usage:</b> ${(quote.labor.films as any[]).map((f: any) => `${esc(f.label)} — ${money(f.sqft)} ft²`).join(' &middot; ')}</div>` : ''}
-      ${nest && lineItems ? `<div style="margin-top:4px;font-size:11px;color:#6b7280;"><b style="color:#374151;">Materials priced from nested roll layout:</b> ${money((nest.films || []).reduce((s: number, f: any) => s + (parseFloat(f.roll_sqft) || 0), 0))} ft² of ${money(nest.roll_width_in)}&quot; roll${(nest.sets || 1) > 1 ? ` &middot; ${nest.sets} sets nested together` : ''}</div>` : ''}
-      ${quote.project_notes ? `<div style="margin-top:16px;font-size:12px;color:#374151;"><b>Project Notes:</b> ${esc(quote.project_notes)}</div>` : ''}
-      ${approveUrl ? `
-      <div style="margin-top:22px;padding:18px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;text-align:center;">
-        <a href="${esc(approveUrl)}" style="display:inline-block;background:#16a34a;color:#ffffff;font-size:15px;font-weight:700;padding:13px 28px;border-radius:10px;text-decoration:none;">Review &amp; Accept This Quote</a>
-        <div style="font-size:12px;color:#374151;margin-top:10px;line-height:1.5;">Accept online with a dated, legally binding signature — or use the same link to request changes.<br>No account needed. The link expires in 30 days.</div>
-      </div>` : ''}
-      ${renderSignatureHtml(signature, 'light')}
-    </div>
-    <div style="text-align:center;padding:14px;font-size:11px;color:#9ca3af;">Sent by ${esc(company?.name || 'BMG Fleet')}</div>
-  </div>
-</body>
-</html>`;
-}
+// The email body comes from the shared quote-document renderer
+// (src/lib/quote-document.ts) via the wrap adapter — the SAME document the
+// acceptance snapshot freezes, so what's sent and what's signed can't drift.
 
 /**
  * POST /api/wrap-quote/send
@@ -289,8 +167,27 @@ export async function POST(req: NextRequest) {
   const selectedMeta = (Array.isArray(quote.attachments) ? quote.attachments : [])
     .filter((a: any) => a?.path && (!wanted || wanted.has(a.path)));
 
-  const docWord = carriesQuote ? 'Wrap Quote' : 'Wrap Coverage';
+  const docWord = wrapDocTitle(flags.pricing, flags.netsuitePdf);
   const subject = `${docWord} ${quote.quote_number}${company?.name ? ` from ${company.name}` : ''}`;
+
+  const html = renderQuoteDocument(
+    wrapQuoteDocModel(quote, {
+      pricing: flags.pricing,
+      lineItems: flags.lineItems,
+      diagramUrl: flags.diagram ? diagramUrl : null,
+      pdfAttachedNote: flags.netsuitePdf,
+    }),
+    {
+      company,
+      logoUrl,
+      message,
+      ctaUrl: approveUrl,
+      ctaLabel: 'Review & Accept This Quote',
+      ctaNote: 'Accept online with a dated, legally binding signature — or use the same link to request changes. No account needed. The link expires in 30 days.',
+      ctaPanel: true,
+      signature,
+    },
+  );
 
   // Preview: return what would go out without touching R2/NetSuite or
   // marking anything sent.
@@ -303,7 +200,7 @@ export async function POST(req: NextRequest) {
       preview: true,
       to: Array.isArray(to) ? to : [to],
       subject,
-      html: buildQuoteHtml(quote, company, diagramUrl, logoUrl, flags, message, approveUrl, signature),
+      html,
       attachments: names,
     });
   }
@@ -350,7 +247,7 @@ export async function POST(req: NextRequest) {
   // address has no mailbox, so without this a customer reply bounces.
   const bcc = parsed.data.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
   const ok = await sendEmail(
-    to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl, flags, message, approveUrl, signature), undefined, attachments, auth.user?.email || undefined, bcc,
+    to, subject, html, undefined, attachments, auth.user?.email || undefined, bcc,
     { kind: 'wrap_quote', sentBy: auth.user?.id, contextUrl: deepLinks.wrapQuote(quote.id), customerId: quote.customer_id || null },
   );
   if (!ok) {
