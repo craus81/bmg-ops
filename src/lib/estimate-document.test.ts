@@ -28,6 +28,28 @@ describe('renderEstimateDocument vehicle identity (K5)', () => {
     expect(html).not.toContain('&middot;');
   });
 
+  it('renders the Vinyl/Graphics section with films and diagram (the #621 surfaces)', () => {
+    const html = renderEstimateDocument(baseEst, [], {
+      graphics: [{
+        quoteNumber: 'WQ-77',
+        vehicle: 'Transit 148',
+        totalSqft: 214,
+        films: [{ name: '3M IJ180cv3', areas: ['Hood', 'Roof'] }],
+        diagramUrl: 'https://pub.example.com/vehicle-templates/quote-diagrams/WQ-77.png',
+      }],
+    });
+    expect(html).toContain('Vinyl / Graphics');
+    expect(html).toContain('Quote WQ-77');
+    expect(html).toContain('3M IJ180cv3');
+    expect(html).toContain('Hood, Roof');
+    expect(html).toContain('quote-diagrams/WQ-77.png');
+  });
+
+  it('omits the Vinyl/Graphics section when no graphics are passed', () => {
+    const html = renderEstimateDocument(baseEst, []);
+    expect(html).not.toContain('Vinyl / Graphics');
+  });
+
   it('omits the vehicle block entirely when neither field is set', () => {
     const html = renderEstimateDocument({ ...baseEst }, []);
     expect(html).not.toContain('VIN ');

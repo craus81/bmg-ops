@@ -8,6 +8,7 @@ import { sendSMS } from '@/lib/sms-provider';
 import { renderEstimateDocument } from '@/lib/estimate-document';
 import { getEmailSignature } from '@/lib/email-signature';
 import { enrichLinesWithPartAssets } from '@/lib/estimate-line-parts';
+import { loadEstimateGraphics } from '@/lib/estimate-graphics';
 import { r2PublicUrl } from '@/lib/r2';
 import { validateBody, z } from '@/lib/validate';
 
@@ -131,6 +132,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const logoUrl = company?.logo_path ? r2PublicUrl('vehicle-templates', company.logo_path) : null;
   // Sender's signature — in the preview too, so what she sees is what goes.
   const signature = await getEmailSignature(supabase, auth.user?.id);
+  // Wrap content from linked wrap quotes (estimate_attach): the email BODY
+  // must show the same vinyl/coverage content the attached merged PDF and
+  // the frozen snapshot carry — one story on every surface.
+  const { summaries: approvalGraphics } = await loadEstimateGraphics(supabase, estimate.id);
 
   // Preview: show exactly what would go out (message, line items, totals,
   // Approve button) without minting a token, sending, or touching status.
@@ -144,6 +149,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       ctaLabel: 'Review & Approve',
       ctaNote: `A unique, secure link is generated when you send. It expires in ${expiryDays} days.`,
       signature,
+      graphics: approvalGraphics,
     });
     return NextResponse.json({ preview: true, to: emailList.join(', ') || null, subject, html });
   }
@@ -183,6 +189,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       ctaLabel: 'Review & Approve',
       ctaNote: `This link expires in ${expiryDays} days.`,
       signature,
+      graphics: approvalGraphics,
     });
     const bcc = body.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
 
