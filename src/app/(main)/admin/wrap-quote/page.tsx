@@ -440,6 +440,12 @@ export default function WrapQuotePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on arrival
   }, [searchParams]);
 
+  // What this quote contributes to the estimate's customer PDF — the
+  // Add-to-Estimate checkboxes (coverage diagram / uploaded proofs /
+  // vinyl details). Stored on the quote (estimate_attach) so the estimate
+  // PDF generator knows what to merge in.
+  const [estAttach, setEstAttach] = useState({ diagram: true, attachments: true, films: true });
+
   const addToEstimate = async () => {
     if (!forEstimate) return;
     setAddingToEstimate(true);
@@ -449,7 +455,7 @@ export default function WrapQuotePage() {
       const res = await apiFetch(`/api/estimates/${forEstimate.id}/add-wrap-quote`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wrapQuoteId: quoteId }),
+        body: JSON.stringify({ wrapQuoteId: quoteId, attach: estAttach }),
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -2431,6 +2437,25 @@ export default function WrapQuotePage() {
             </div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
               {[forEstimate.customerName, forEstimate.vehicle].filter(Boolean).join(' · ') || 'Price the wrap, then add it to the estimate'}
+            </div>
+            {/* What rides along onto the estimate's customer PDF (one merged
+                file: quote + these). Unchecked = price lines only. */}
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '6px' }}>
+              {([
+                ['diagram', 'Coverage diagram'],
+                ['attachments', `Attachments${attachments.length > 0 ? ` (${attachments.length})` : ''}`],
+                ['films', 'Vinyl details'],
+              ] as const).map(([key, label]) => (
+                <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={estAttach[key]}
+                    onChange={e => setEstAttach(prev => ({ ...prev, [key]: e.target.checked }))}
+                  />
+                  {label}
+                </label>
+              ))}
+              <span style={{ fontSize: '10px', color: 'var(--text-muted)', alignSelf: 'center' }}>→ merged into the estimate's customer PDF</span>
             </div>
           </div>
           <button

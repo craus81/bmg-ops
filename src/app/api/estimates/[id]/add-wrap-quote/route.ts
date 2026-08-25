@@ -13,7 +13,17 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
 );
 
-const Schema = z.object({ wrapQuoteId: z.string().uuid() });
+const Schema = z.object({
+  wrapQuoteId: z.string().uuid(),
+  /** Estimator checkboxes: what this quote contributes to the estimate's
+   *  customer PDF (wrap_quotes.estimate_attach — see migration 223).
+   *  Omitted = keep whatever was stored (legacy adds stay lines-only). */
+  attach: z.object({
+    diagram: z.boolean().optional(),
+    attachments: z.boolean().optional(),
+    films: z.boolean().optional(),
+  }).optional(),
+});
 
 /**
  * POST /api/estimates/[id]/add-wrap-quote — fold a saved wrap quote into
@@ -33,7 +43,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
-  const { wrapQuoteId } = parsed.data;
+  const { wrapQuoteId, attach } = parsed.data;
 
   try {
     const [{ data: estimate }, { data: quote }] = await Promise.all([
@@ -110,8 +120,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const { error: insertErr } = await supabase.from('estimate_line_items').insert(lineRows);
     if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 500 });
 
-    // Record the linkage + refresh the estimate's stored totals.
-    await supabase.from('wrap_quotes').update({ estimate_id: params.id, updated_at: new Date().toISOString() }).eq('id', wrapQuoteId);
+    // Record the linkage (+ what the quote contributes to the estimate's
+    // customer PDF, when the estimator sent its checkboxes) and refresh the
+    // estimate's stored totals.
+    await supabase.from('wrap_quotes').update({
+      estimate_id: params.id,
+      ...(attach ? { estimate_attach: attach } : {}),
+      updated_at: new Date().toISOString(),
+    }).eq('id', wrapQuoteId);
 
     const { data: allLines } = await supabase
       .from('estimate_line_items')

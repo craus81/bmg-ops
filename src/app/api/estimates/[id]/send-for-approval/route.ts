@@ -185,9 +185,32 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       signature,
     });
     const bcc = body.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
+
+    // When linked wrap quotes contribute assets (estimate_attach — coverage
+    // diagram, proofs, vinyl details), attach the merged estimate PDF so
+    // the customer approves ONE document carrying all of it. Best-effort:
+    // a PDF hiccup never blocks the approval email itself.
+    let approvalAttachments: { filename: string; content: Buffer; contentType: string }[] | undefined;
+    try {
+      const { count: attachCount } = await supabase
+        .from('wrap_quotes')
+        .select('id', { count: 'exact', head: true })
+        .eq('estimate_id', estimate.id)
+        .not('estimate_attach', 'is', null);
+      if ((attachCount || 0) > 0) {
+        const { generateEstimatePdf } = await import('@/lib/estimate-pdf-server');
+        const pdf = await generateEstimatePdf(supabase, estimate.id);
+        if (pdf.ok) {
+          approvalAttachments = [{ filename: pdf.filename, content: pdf.buffer, contentType: 'application/pdf' }];
+        }
+      }
+    } catch (err: any) {
+      console.warn('[send-for-approval] estimate PDF attach skipped:', err?.message || err);
+    }
+
     try {
       const { ok, id: resendId } = await sendEmailDetailed(
-        emailList, subject, html, undefined, undefined, auth.user?.email || undefined, bcc,
+        emailList, subject, html, undefined, approvalAttachments, auth.user?.email || undefined, bcc,
         { kind: 'estimate_approval', sentBy: auth.user?.id, contextUrl: deepLinks.estimate(estimate.id), customerId: estimate.customer_id, netsuiteCustomerId: estimate.customer_netsuite_id },
       );
       dispatch.email = { target: emailList.join(', '), ok, bcc: bcc ? bcc.join(', ') : undefined };

@@ -34,6 +34,14 @@ export interface EstimatePdfLine {
   image?: EstimatePdfImage | null;
 }
 
+export interface EstimatePdfGraphics {
+  quoteNumber: string;
+  vehicle: string | null;
+  totalSqft: number;
+  /** Film name → the coverage areas using it (measurement names). */
+  films: { name: string; areas: string[] }[];
+}
+
 export interface EstimatePdfData {
   /** The estimates row, with vehicle_platform_label flattened on. */
   estimate: any;
@@ -45,6 +53,9 @@ export interface EstimatePdfData {
     email?: string | null;
   } | null;
   logo?: EstimatePdfImage | null;
+  /** Linked wrap quotes whose "Vinyl details" checkbox was on — rendered
+   *  as a Vinyl / Graphics section (film names + coverage areas). */
+  graphics?: EstimatePdfGraphics[];
 }
 
 const money = (n: any) => `$${Number(n || 0).toFixed(2)}`;
@@ -54,7 +65,7 @@ const PHOTO = 40; // thumbnail edge in pt
 const LINK_LABEL = 'View product';
 
 export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
-  const { estimate: est, lines, company, logo } = data;
+  const { estimate: est, lines, company, logo, graphics } = data;
   const doc = new jsPDF({ unit: 'pt', format: 'letter' });
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
@@ -245,6 +256,30 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
     doc.setFontSize(9.5).setFont('helvetica', 'normal').setTextColor(17, 24, 39);
     doc.text(wrapped, margin, cursorY);
     cursorY += wrapped.length * 12;
+  }
+
+  // ── Vinyl / Graphics — films + coverage from linked wrap quotes ────────
+  for (const g of graphics || []) {
+    const filmLines = g.films.map(f =>
+      `• ${f.name}${f.areas.length > 0 ? ` — ${f.areas.join(', ')}` : ''}`);
+    ensureRoom(30 + filmLines.length * 12);
+    cursorY += 8;
+    doc.setFontSize(8).setFont('helvetica', 'bold').setTextColor(107, 114, 128);
+    doc.text('VINYL / GRAPHICS', margin, cursorY);
+    cursorY += 12;
+    doc.setFontSize(9.5).setFont('helvetica', 'bold').setTextColor(17, 24, 39);
+    doc.text(
+      `Quote ${g.quoteNumber}${g.vehicle ? ` — ${g.vehicle}` : ''}${g.totalSqft > 0 ? ` · ~${g.totalSqft.toFixed(0)} sqft coverage` : ''}`,
+      margin, cursorY,
+    );
+    cursorY += 13;
+    doc.setFont('helvetica', 'normal');
+    for (const fl of filmLines) {
+      const wrapped = doc.splitTextToSize(fl, pageW - margin * 2 - 6);
+      ensureRoom(wrapped.length * 12);
+      doc.text(wrapped, margin + 4, cursorY);
+      cursorY += wrapped.length * 12;
+    }
   }
 
   return doc;

@@ -1,0 +1,15 @@
+-- Migration 223: what a wrap quote contributes to its linked estimate's
+-- customer-facing PDF. Written by POST /api/estimates/[id]/add-wrap-quote
+-- from the wrap estimator's Add-to-Estimate checkboxes:
+--
+--   { "diagram": bool, "attachments": bool, "films": bool }
+--
+-- diagram     → the coverage diagram PNG (vehicle-templates/quote-diagrams/)
+--               appended to the estimate PDF as its own page
+-- attachments → the quote's uploaded files (proofs etc.) appended: images
+--               as pages, PDFs merged page-by-page
+-- films       → a "Vinyl / Graphics" summary section (films used, coverage
+--               areas, total sqft) rendered inside the estimate document
+--
+-- NULL = the quote contributes price lines only (pre-feature behavior).
+ALTER TABLE wrap_quotes ADD COLUMN IF NOT EXISTS estimate_attach JSONB;
