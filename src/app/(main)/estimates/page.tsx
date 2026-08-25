@@ -1065,6 +1065,68 @@ export default function EstimatesPage() {
     return null;
   };
 
+  // ── Quick graphics entry (no estimator) ──
+  // Field request: adding graphics to an estimate shouldn't force the wrap
+  // estimator's measuring canvas — sometimes the rep already knows the
+  // square footage and film. This types those in directly and lands them
+  // as ordinary custom lines (push handles them via FS-CUSTOM).
+  const [quickGfxOpen, setQuickGfxOpen] = useState(false);
+  const [substrates, setSubstrates] = useState<{ id: string; name: string; price_per_sqft: number }[] | null>(null);
+  const [qgFilmName, setQgFilmName] = useState('');
+  const [qgRate, setQgRate] = useState('');
+  const [qgSqft, setQgSqft] = useState('');
+  const [qgLabor, setQgLabor] = useState('');
+
+  const openQuickGraphics = async () => {
+    setQuickGfxOpen(v => !v);
+    if (substrates === null) {
+      const { data } = await supabase
+        .from('wrap_substrates')
+        .select('id, name, price_per_sqft')
+        .order('name');
+      setSubstrates((data || []) as any);
+    }
+  };
+
+  const addQuickGraphicsLines = () => {
+    const sqft = parseFloat(qgSqft) || 0;
+    const rate = parseFloat(qgRate) || 0;
+    const labor = parseFloat(qgLabor) || 0;
+    const film = qgFilmName.trim() || 'Vinyl';
+    if (sqft <= 0 && labor <= 0) return;
+    const newLines: LineItem[] = [];
+    if (sqft > 0) {
+      newLines.push({
+        key: genKey(),
+        part_id: null,
+        netsuite_item_id: null,
+        item_number: '',
+        description: `${film} — ${sqft} sqft @ $${rate.toFixed(2)}/sqft`,
+        quantity: sqft,
+        unit_price: rate,
+        labor_hours: 0,
+        is_custom: true,
+      });
+    }
+    if (labor > 0) {
+      newLines.push({
+        key: genKey(),
+        part_id: null,
+        netsuite_item_id: null,
+        item_number: '',
+        description: `Graphics install labor${film !== 'Vinyl' ? ` — ${film}` : ''}`,
+        quantity: 1,
+        unit_price: labor,
+        labor_hours: 0,
+        is_custom: true,
+      });
+    }
+    setLines(prev => [...prev, ...newLines]);
+    setQgSqft('');
+    setQgLabor('');
+    setQuickGfxOpen(false);
+  };
+
   // ── Add Graphics (wrap-quote round trip) ──
   // Saves first — the builder holds unsaved work in the browser, and the
   // wrap screen is a navigation away — then hands off to the wrap-quote
@@ -2485,6 +2547,14 @@ export default function EstimatesPage() {
             >
               🎨 Add Graphics
             </button>
+            <button
+              type="button"
+              onClick={openQuickGraphics}
+              title="Skip the estimator — type in square footage, vinyl type, and labor directly"
+              style={{ padding: '8px 14px', borderRadius: '8px', border: `1px solid ${quickGfxOpen ? 'rgba(96,165,250,0.4)' : 'var(--border)'}`, background: quickGfxOpen ? 'rgba(96,165,250,0.08)' : 'var(--card)', color: quickGfxOpen ? '#60a5fa' : 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              + Graphics Line
+            </button>
             {lines.some(l => l.part_id && !l.is_custom) && (
               <button
                 type="button"
@@ -2527,6 +2597,70 @@ export default function EstimatesPage() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Quick graphics entry — type sqft/film/labor, no estimator. */}
+        {quickGfxOpen && (
+          <div style={{
+            padding: '12px', borderRadius: '10px', marginBottom: '8px',
+            background: 'rgba(96,165,250,0.05)', border: '1px solid rgba(96,165,250,0.25)',
+          }}>
+            <div style={{ fontSize: '10px', fontWeight: 800, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
+              Quick Graphics Line
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div style={{ flex: '2 1 180px' }}>
+                <label style={{ display: 'block', fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Vinyl / film</label>
+                <input
+                  list="qg-substrates"
+                  value={qgFilmName}
+                  onChange={e => {
+                    const name = e.target.value;
+                    setQgFilmName(name);
+                    const match = (substrates || []).find(s => s.name === name);
+                    if (match) setQgRate(String(match.price_per_sqft));
+                  }}
+                  placeholder={substrates === null ? 'Loading films…' : 'Pick a film or type one'}
+                  style={{ ...inputStyle, width: '100%' }}
+                />
+                <datalist id="qg-substrates">
+                  {(substrates || []).map(s => (
+                    <option key={s.id} value={s.name}>{`$${Number(s.price_per_sqft).toFixed(2)}/sqft`}</option>
+                  ))}
+                </datalist>
+              </div>
+              <div style={{ flex: '1 1 90px' }}>
+                <label style={{ display: 'block', fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Sq ft</label>
+                <NumberInput value={qgSqft} onChange={e => setQgSqft(e.target.value)} style={{ ...inputStyle, width: '100%' }} />
+              </div>
+              <div style={{ flex: '1 1 90px' }}>
+                <label style={{ display: 'block', fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>$ / sq ft</label>
+                <NumberInput value={qgRate} onChange={e => setQgRate(e.target.value)} style={{ ...inputStyle, width: '100%' }} />
+              </div>
+              <div style={{ flex: '1 1 100px' }}>
+                <label style={{ display: 'block', fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Install labor $</label>
+                <NumberInput value={qgLabor} onChange={e => setQgLabor(e.target.value)} style={{ ...inputStyle, width: '100%' }} />
+              </div>
+              <button
+                type="button"
+                onClick={addQuickGraphicsLines}
+                disabled={(parseFloat(qgSqft) || 0) <= 0 && (parseFloat(qgLabor) || 0) <= 0}
+                style={{
+                  padding: '9px 16px', borderRadius: '8px', border: 'none',
+                  background: '#60a5fa', color: '#fff', fontSize: '12px', fontWeight: 800,
+                  cursor: 'pointer', whiteSpace: 'nowrap',
+                  opacity: (parseFloat(qgSqft) || 0) <= 0 && (parseFloat(qgLabor) || 0) <= 0 ? 0.5 : 1,
+                }}
+              >
+                Add {(parseFloat(qgSqft) || 0) > 0 && (parseFloat(qgRate) || 0) >= 0
+                  ? `· ${fmt((parseFloat(qgSqft) || 0) * (parseFloat(qgRate) || 0) + (parseFloat(qgLabor) || 0))}`
+                  : ''}
+              </button>
+            </div>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px' }}>
+              Lands as regular lines you can edit — materials as sqft × rate, labor as its own line. Films and rates come from the wrap-quote price list.
+            </div>
           </div>
         )}
 
