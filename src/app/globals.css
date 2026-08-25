@@ -414,7 +414,7 @@ button {
    description isn't crushed to a few characters by the fixed columns. */
 .est-line {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) 48px 76px 84px 44px 26px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) 48px 76px 84px 44px 26px 22px;
   gap: 4px;
   align-items: center;
 }
@@ -424,7 +424,7 @@ button {
   .est-line {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1.3fr) minmax(0, 0.9fr);
     grid-template-areas:
-      'item item item x'
+      'item item x drag'
       'desc desc desc desc'
       'qty price total labor';
     row-gap: 6px;
@@ -436,6 +436,7 @@ button {
   .est-c-total { grid-area: total; }
   .est-c-labor { grid-area: labor; }
   .est-c-x     { grid-area: x; justify-self: end; }
+  .est-c-drag  { grid-area: drag; justify-self: end; }
   .est-cell-label {
     display: block; font-size: 8px; font-weight: 700; letter-spacing: 0.5px;
     text-transform: uppercase; color: var(--text-muted); margin-bottom: 2px;

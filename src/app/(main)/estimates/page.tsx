@@ -440,6 +440,37 @@ export default function EstimatesPage() {
     else { setEstSortCol(col); setEstSortDir('asc'); }
   };
   const estSortIndicator = (col: NonNullable<typeof estSortCol>) => estSortCol === col ? (estSortDir === 'asc' ? ' ▲' : ' ▼') : '';
+
+  // ── Drag-to-reorder lines (≡ handle) ──
+  // Pointer-based (works with touch — HTML5 drag events don't on iOS).
+  // While dragging, the row under the pointer is found via elementFromPoint
+  // (both are viewport coordinates, so text-size zoom needs no correction)
+  // and the dragged line takes its place live. Only meaningful in natural
+  // order — the handle is inert while a column sort is active. Saving
+  // persists the order (sort_order = array index).
+  const [draggingKey, setDraggingKey] = useState<string | null>(null);
+  const onDragHandleDown = (e: React.PointerEvent, key: string) => {
+    if (estSortCol) return;
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    setDraggingKey(key);
+  };
+  const onDragHandleMove = (e: React.PointerEvent) => {
+    if (!draggingKey) return;
+    const el = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest('[data-linekey]') as HTMLElement | null;
+    const overKey = el?.dataset.linekey;
+    if (!overKey || overKey === draggingKey) return;
+    setLines(prev => {
+      const from = prev.findIndex(l => l.key === draggingKey);
+      const to = prev.findIndex(l => l.key === overKey);
+      if (from < 0 || to < 0 || from === to) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  };
+  const onDragHandleUp = () => setDraggingKey(null);
   const sortedLines = estSortCol ? [...lines].sort((a, b) => {
     const av = a[estSortCol] ?? 0; const bv = b[estSortCol] ?? 0;
     const cmp = typeof av === 'string' ? av.localeCompare(bv as string) : (av as number) - (bv as number);
@@ -2680,12 +2711,17 @@ export default function EstimatesPage() {
               <div style={{ textAlign: 'right' }}>Total</div>
               <div onClick={() => toggleEstSort('labor_hours')} style={{ textAlign: 'center', cursor: 'pointer', color: estSortCol === 'labor_hours' ? '#60a5fa' : undefined }}>Labor{estSortIndicator('labor_hours')}</div>
               <div></div>
+              <div></div>
             </div>
 
             {sortedLines.map(line => {
               const unmatched = !line.netsuite_item_id;
               return (
-              <div key={line.key}>
+              <div
+                key={line.key}
+                data-linekey={line.key}
+                style={draggingKey === line.key ? { background: 'rgba(96,165,250,0.08)', borderRadius: '8px' } : undefined}
+              >
                 <div
                   className="est-line"
                   style={{ padding: '6px 0', borderBottom: unmatched ? 'none' : '1px solid var(--border)' }}
@@ -2772,6 +2808,25 @@ export default function EstimatesPage() {
                       ×
                     </button>
                   )}
+
+                  {/* Drag handle — pointer-based reorder; inert while a
+                      column sort is active (dragging a sorted view lies). */}
+                  <div
+                    className="est-c-drag"
+                    title={estSortCol ? 'Clear the column sort to reorder lines' : 'Drag to reorder'}
+                    onPointerDown={(e) => onDragHandleDown(e, line.key)}
+                    onPointerMove={onDragHandleMove}
+                    onPointerUp={onDragHandleUp}
+                    onPointerCancel={onDragHandleUp}
+                    style={{
+                      touchAction: 'none', userSelect: 'none',
+                      cursor: estSortCol ? 'not-allowed' : (draggingKey === line.key ? 'grabbing' : 'grab'),
+                      color: estSortCol ? 'var(--border)' : 'var(--text-muted)',
+                      fontSize: '14px', lineHeight: 1, textAlign: 'center', padding: '4px 2px',
+                    }}
+                  >
+                    ≡
+                  </div>
                 </div>
 
                 {/* NetSuite item id required — a line without one silently
