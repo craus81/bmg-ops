@@ -140,6 +140,14 @@ export default function TrackingPage() {
   const [photosLoading, setPhotosLoading] = useState<Record<string, boolean>>({});
   const [photoUploading, setPhotoUploading] = useState(false);
   const [showCompletionPrompt, setShowCompletionPrompt] = useState<string | null>(null); // vehicleId
+  // What the next uploaded photos are stamped as. Defaults to completion
+  // (the historical behavior, and what the completion gate counts) — the
+  // picker lets staff add Before/During shots to a vehicle that's already
+  // in the shop, landing them in the photo timeline's matching section.
+  const [photoType, setPhotoType] = useState<'before' | 'during' | 'completion'>('completion');
+  // Notes edit on the record modal (same pattern as the VIN editor).
+  const [notesEdits, setNotesEdits] = useState<Record<string, string>>({});
+  const [notesSaving, setNotesSaving] = useState<string | null>(null);
   const [completionModalVehicleId, setCompletionModalVehicleId] = useState<string | null>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -227,6 +235,25 @@ export default function TrackingPage() {
     setCustEditSearch('');
     setCustEditMatches([]);
     setUpdateSuccess('Customer attached');
+    setTimeout(() => setUpdateSuccess(null), 2000);
+  };
+
+  // Notes edit on the record modal — same shape as the VIN editor.
+  const saveNotesEdit = async (id: string) => {
+    const draft = (notesEdits[id] ?? '').trim();
+    setNotesSaving(id);
+    const { error } = await supabase
+      .from('fleet_checkins')
+      .update({ notes: draft || null, updated_at: new Date().toISOString() })
+      .eq('id', id);
+    setNotesSaving(null);
+    if (error) {
+      await dialog.alert('Failed to save notes: ' + error.message);
+      return;
+    }
+    setVehicles(prev => prev.map(v => v.id === id ? { ...v, notes: draft || null } as any : v));
+    setNotesEdits(prev => { const next = { ...prev }; delete next[id]; return next; });
+    setUpdateSuccess('Notes saved');
     setTimeout(() => setUpdateSuccess(null), 2000);
   };
 
@@ -600,7 +627,7 @@ export default function TrackingPage() {
       const { error: dbErr } = await supabase.from('vehicle_photos').insert({
         vehicle_id: vehicleId,
         storage_path: path,
-        photo_type: 'completion',
+        photo_type: photoType,
         taken_by: user?.id,
       });
 
@@ -2011,12 +2038,59 @@ export default function TrackingPage() {
                           {new Date(vehicle.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                         </div>
                       </div>
-                      {vehicle.notes && (
-                        <div>
+                      {/* Notes — always shown, editable (field request: fix a
+                          check-in's notes after the vehicle is in the shop). */}
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Notes</div>
-                          <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{vehicle.notes}</div>
+                          {notesEdits[vehicle.id] === undefined && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setNotesEdits(prev => ({ ...prev, [vehicle.id]: vehicle.notes || '' })); }}
+                              style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                            >{vehicle.notes ? 'Edit' : '+ Add'}</button>
+                          )}
                         </div>
-                      )}
+                        {notesEdits[vehicle.id] === undefined ? (
+                          vehicle.notes
+                            ? <div style={{ fontSize: '12px', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>{vehicle.notes}</div>
+                            : <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>—</div>
+                        ) : (
+                          <div onClick={(e) => e.stopPropagation()}>
+                            <textarea
+                              value={notesEdits[vehicle.id]}
+                              onChange={(e) => setNotesEdits(prev => ({ ...prev, [vehicle.id]: e.target.value }))}
+                              rows={3}
+                              placeholder="Notes about this vehicle…"
+                              style={{
+                                width: '100%', padding: '8px 10px', borderRadius: '8px', boxSizing: 'border-box',
+                                border: '1px solid var(--border)', background: 'var(--input-bg)',
+                                color: 'var(--text-primary)', fontSize: '12px', resize: 'vertical', marginTop: '2px',
+                              }}
+                            />
+                            <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+                              <button
+                                type="button"
+                                onClick={() => saveNotesEdit(vehicle.id)}
+                                disabled={notesSaving === vehicle.id}
+                                style={{
+                                  flex: 1, padding: '8px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                                  background: '#22c55e', color: '#fff', border: 'none',
+                                  opacity: notesSaving === vehicle.id ? 0.5 : 1,
+                                }}
+                              >{notesSaving === vehicle.id ? 'Saving…' : 'Save Notes'}</button>
+                              <button
+                                type="button"
+                                onClick={() => setNotesEdits(prev => { const next = { ...prev }; delete next[vehicle.id]; return next; })}
+                                style={{
+                                  padding: '8px 14px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                                  background: 'transparent', color: 'var(--text-body)', border: '1px solid var(--border)',
+                                }}
+                              >Cancel</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     {/* Install Context — sales-order memo, install instructions, on-site contact, delivery prefs.
@@ -2638,6 +2712,7 @@ export default function TrackingPage() {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
+                                setPhotoType('completion');
                                 cameraInputRef.current?.click();
                               }}
                               style={{
@@ -2651,6 +2726,7 @@ export default function TrackingPage() {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
+                                setPhotoType('completion');
                                 photoInputRef.current?.click();
                               }}
                               style={{
@@ -2683,7 +2759,7 @@ export default function TrackingPage() {
                         textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px',
                         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                       }}>
-                        <span>Completion Photos {(vehiclePhotos[vehicle.id]?.length || 0) > 0 ? `(${vehiclePhotos[vehicle.id].length})` : ''}</span>
+                        <span>Photos {(vehiclePhotos[vehicle.id]?.length || 0) > 0 ? `(${vehiclePhotos[vehicle.id].length})` : ''}</span>
                         {showCompletionPrompt !== vehicle.id && (
                           <div style={{ display: 'flex', gap: '6px' }}>
                             <button
@@ -2710,6 +2786,28 @@ export default function TrackingPage() {
                             </button>
                           </div>
                         )}
+                      </div>
+
+                      {/* What the next uploads are stamped as — Before/During
+                          land in the timeline's matching sections; Completion
+                          (default) is what the completion gate counts. */}
+                      <div style={{ display: 'flex', gap: '4px', marginBottom: '8px' }} onClick={(e) => e.stopPropagation()}>
+                        {([['before', 'Before'], ['during', 'During'], ['completion', 'Completion']] as const).map(([key, label]) => (
+                          <button
+                            key={key}
+                            type="button"
+                            onClick={() => setPhotoType(key)}
+                            style={{
+                              flex: 1, padding: '5px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                              background: photoType === key ? 'rgba(59,130,246,0.15)' : 'var(--subtle-bg)',
+                              border: `1px solid ${photoType === key ? 'rgba(59,130,246,0.4)' : 'var(--border)'}`,
+                              color: photoType === key ? '#3b82f6' : 'var(--text-muted)',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {label}
+                          </button>
+                        ))}
                       </div>
 
                       {/* Hidden file inputs */}
