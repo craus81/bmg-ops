@@ -2017,25 +2017,37 @@ export default function CustomerRecordPage() {
                   {(estimatesList?.length || 0) > 0 && <button onClick={() => router.push('/estimates')} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10.5px', fontWeight: 700, color: '#60a5fa', padding: 0 }}>Estimates ›</button>}
                 </span>
               </div>
+              {/* Rows deep-link to the record — a quote you can see but not
+                  open is a dead end (field report). */}
               {(wrapQuotes || []).map(q => (
-                <div key={q.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px', marginTop: '4px' }}>
+                <button
+                  key={q.id}
+                  onClick={() => router.push(deepLinks.wrapQuote(q.id))}
+                  title={`Open quote ${q.quote_number} in the wrap-quote builder`}
+                  style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px', marginTop: '4px', width: '100%', background: 'transparent', border: 'none', borderRadius: 0, cursor: 'pointer', textAlign: 'left' }}
+                >
                   <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', flexShrink: 0, width: '48px', textAlign: 'center', background: 'rgba(96,165,250,0.12)', color: '#60a5fa' }}>QUOTE</span>
                   <span style={{ fontWeight: 700, color: 'var(--text-primary)', flexShrink: 0 }}>{q.quote_number}</span>
                   <span style={{ flex: 1, minWidth: 0, color: 'var(--text-muted)', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.vehicle_description || q.project_type || ''}</span>
                   <span style={{ fontSize: '10px', fontWeight: 700, color: q.status === 'sent' ? '#60a5fa' : 'var(--text-muted)', flexShrink: 0 }}>{q.status === 'sent' ? 'Sent' : 'Draft'}</span>
-                  <span style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{q.total ? usd2(q.total) : '—'}</span>
-                </div>
+                  <span style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', flexShrink: 0, color: 'var(--text-primary)' }}>{q.total ? usd2(q.total) : '—'}</span>
+                </button>
               ))}
               {(estimatesList || []).map(e => (
-                <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px', marginTop: '4px' }}>
+                <button
+                  key={e.id}
+                  onClick={() => router.push(deepLinks.estimate(e.id))}
+                  title={`Open estimate ${e.estimate_number} in the builder`}
+                  style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px', marginTop: '4px', width: '100%', background: 'transparent', border: 'none', borderRadius: 0, cursor: 'pointer', textAlign: 'left' }}
+                >
                   <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', flexShrink: 0, width: '48px', textAlign: 'center', background: 'var(--subtle-bg)', color: 'var(--text-muted)' }}>EST</span>
                   <span style={{ fontWeight: 700, color: 'var(--text-primary)', flexShrink: 0 }}>{e.estimate_number}</span>
                   <span style={{ flex: 1, minWidth: 0, color: 'var(--text-muted)', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.title || ''}</span>
                   <span style={{ fontSize: '10px', fontWeight: 700, flexShrink: 0, color: e.status === 'accepted' ? 'var(--success)' : e.status === 'rejected' ? 'var(--error)' : e.status === 'sent' ? '#60a5fa' : e.status === 'pushed' ? '#a78bfa' : 'var(--text-muted)' }}>
                     {e.status.charAt(0).toUpperCase() + e.status.slice(1)}
                   </span>
-                  <span style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{e.grand_total ? usd2(e.grand_total) : '—'}</span>
-                </div>
+                  <span style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', flexShrink: 0, color: 'var(--text-primary)' }}>{e.grand_total ? usd2(e.grand_total) : '—'}</span>
+                </button>
               ))}
             </div>
           )}
