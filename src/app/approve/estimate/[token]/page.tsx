@@ -7,6 +7,8 @@ interface LoadState {
   status: 'loading' | 'ready' | 'already_approved' | 'already_rejected' | 'expired' | 'invalid' | 'submitted_accepted' | 'submitted_rejected' | 'error';
   estimate?: any;
   lines?: any[];
+  /** Wrap content from linked wrap quotes (estimate_attach). */
+  graphics?: any[];
   message?: string;
 }
 
@@ -41,7 +43,7 @@ export default function EstimateApprovalPage() {
           setState({ status: data.status || 'invalid', message: data.error });
           return;
         }
-        setState({ status: data.status, estimate: data.estimate, lines: data.lines });
+        setState({ status: data.status, estimate: data.estimate, lines: data.lines, graphics: data.graphics });
       } catch (e: any) {
         if (!cancelled) setState({ status: 'error', message: e?.message });
       }
@@ -122,6 +124,22 @@ export default function EstimateApprovalPage() {
         <div style={{ fontSize: '22px', fontWeight: 800, color: '#0f172a', marginTop: '4px' }}>Estimate #{est.estimate_number}</div>
         {est.title && <div style={{ fontSize: '14px', color: '#475569', marginTop: '2px' }}>{est.title}</div>}
         <div style={{ fontSize: '12px', color: '#64748b', marginTop: '6px' }}>For {est.customer_name || 'customer'}</div>
+        {/* Vehicle identity — the emailed document shows it, so the page the
+            customer approves on must identify the same vehicle. */}
+        {(est.vehicle_year || est.vehicle_other || est.vin || est.unit_number) && (
+          <div style={{ fontSize: '12px', color: '#334155', marginTop: '4px', fontWeight: 600 }}>
+            {[
+              [est.vehicle_year, est.vehicle_other].filter(Boolean).join(' '),
+              est.vin ? `VIN ${est.vin}` : '',
+              est.unit_number ? `Unit ${est.unit_number}` : '',
+            ].filter(Boolean).join(' · ')}
+          </div>
+        )}
+        {(est.po_number || est.expiration_date) && (
+          <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>
+            {[est.po_number ? `PO #${est.po_number}` : '', est.expiration_date ? `Expires ${est.expiration_date}` : ''].filter(Boolean).join(' · ')}
+          </div>
+        )}
       </div>
 
       <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px', marginBottom: '16px' }}>
@@ -189,6 +207,34 @@ export default function EstimateApprovalPage() {
       )}
       {est.delivery_preferences && <Section title="Delivery">{est.delivery_preferences}</Section>}
       {est.notes && <Section title="Notes">{est.notes}</Section>}
+
+      {/* Vinyl / Graphics — the wrap content the customer is approving
+          (same summaries the emailed PDF and the frozen snapshot carry). */}
+      {(state.graphics || []).map((g: any) => (
+        <div key={g.quoteNumber} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px', marginTop: '14px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+            Vinyl / Graphics
+          </div>
+          <div style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a' }}>
+            Quote {g.quoteNumber}{g.vehicle ? ` — ${g.vehicle}` : ''}{g.totalSqft > 0 ? ` · ~${Math.round(g.totalSqft)} sqft coverage` : ''}
+          </div>
+          {(g.films || []).length > 0 && (
+            <ul style={{ margin: '6px 0 0', paddingLeft: '18px', fontSize: '13px', color: '#334155' }}>
+              {g.films.map((f: any, i: number) => (
+                <li key={i} style={{ marginTop: '2px' }}>{f.name}{f.areas?.length > 0 ? ` — ${f.areas.join(', ')}` : ''}</li>
+              ))}
+            </ul>
+          )}
+          {g.diagramUrl && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={g.diagramUrl}
+              alt={`Coverage diagram — Quote ${g.quoteNumber}`}
+              style={{ maxWidth: '100%', border: '1px solid #e2e8f0', borderRadius: '8px', marginTop: '10px', display: 'block' }}
+            />
+          )}
+        </div>
+      ))}
 
       {rejectMode ? (
         <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px', marginTop: '18px' }}>

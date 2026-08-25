@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { loadEstimateGraphics, inlineDiagrams } from '@/lib/estimate-graphics';
 import {
   validateExpiry,
   captureMetadata,
@@ -77,9 +78,15 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
     return NextResponse.json({ status: 'already_rejected', estimate: publicEstimate(estimate) });
   }
 
+  // Wrap content from linked wrap quotes (estimate_attach) — the customer
+  // must SEE on this page the same vinyl/coverage content they're approving
+  // (it's in the emailed PDF and the frozen snapshot).
+  const { summaries: graphics } = await loadEstimateGraphics(supabase, estimate.id);
+
   return NextResponse.json({
     status: 'ready',
     estimate: publicEstimate(estimate),
+    graphics,
     lines: (lines || []).map((l: any) => ({
       id: l.id,
       item_number: l.item_number,
@@ -189,6 +196,16 @@ function publicEstimate(est: any) {
     estimate_number: est.estimate_number,
     title: est.title,
     customer_name: est.customer_name,
+    // Vehicle identity — the email/PDF/snapshot all show it; the approval
+    // page must identify the same vehicle the customer is approving.
+    vin: est.vin,
+    unit_number: est.unit_number,
+    vehicle_year: est.vehicle_year,
+    vehicle_other: est.vehicle_other,
+    vehicle_wheelbase: est.vehicle_wheelbase,
+    vehicle_roof: est.vehicle_roof,
+    po_number: est.po_number,
+    expiration_date: est.expiration_date,
     tax_rate: est.tax_rate,
     tax_exempt: est.tax_exempt,
     tax_amount: est.tax_amount,
@@ -251,6 +268,9 @@ async function renderSignedSnapshot(est: any, lines: any[], meta: any, agreement
   // The snapshot is the shared customer-facing document (the same renderer
   // the approval email uses — if they drift, the legal record stops
   // matching what the customer was sent) plus the E-SIGN audit block.
+  // Wrap content rides along with the coverage diagram INLINED as a data
+  // URI: the R2 diagram is mutable, and a frozen legal record must never
+  // reference state a later quote save can rewrite.
   const approvedAt = new Date().toISOString();
   const { data: settings } = await supabase
     .from('wrap_quote_settings')
@@ -258,6 +278,8 @@ async function renderSignedSnapshot(est: any, lines: any[], meta: any, agreement
     .eq('id', 1)
     .maybeSingle();
   const company = settings?.company || {};
+  const { summaries } = await loadEstimateGraphics(supabase, est.id);
+  const graphics = await inlineDiagrams(summaries);
   const signedBlockHtml = `
   <div style="margin-top:20px;padding:14px;border:1px solid #16a34a;background:#dcfce7;border-radius:10px;font-size:12px;">
     <strong style="color:#14532d;">ACCEPTED</strong>
@@ -270,5 +292,5 @@ async function renderSignedSnapshot(est: any, lines: any[], meta: any, agreement
       ${typeof meta.timeOnPageSeconds === 'number' ? `<div>Time on page: ${meta.timeOnPageSeconds}s</div>` : ''}
     </div>
   </div>`;
-  return renderEstimateDocument(est, lines, { company, signedBlockHtml });
+  return renderEstimateDocument(est, lines, { company, signedBlockHtml, graphics });
 }

@@ -14,6 +14,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { enrichLinesWithPartAssets } from './estimate-line-parts';
+import { loadEstimateGraphics } from './estimate-graphics';
 import { r2PublicUrl } from './r2';
 import { buildEstimatePdf, estimatePdfFilename, type EstimatePdfGraphics, type EstimatePdfImage, type EstimatePdfLine } from './estimate-pdf';
 
@@ -105,38 +106,12 @@ export async function generateEstimatePdf(
   // estimate_attach (migration 223) carries the estimator's Add-to-Estimate
   // checkboxes: films → a Vinyl/Graphics section inside the document;
   // diagram/attachments → pages MERGED onto the end (images as pages, PDF
-  // attachments page-by-page), so the customer approves ONE file.
-  const { data: wrapQuotes } = await supabase
-    .from('wrap_quotes')
-    .select('id, quote_number, vehicle_description, diagram_path, attachments, measurements, estimate_attach, total_area_sqft')
-    .eq('estimate_id', estimateId)
-    .not('estimate_attach', 'is', null);
-
-  const graphics: EstimatePdfGraphics[] = [];
-  for (const q of wrapQuotes || []) {
-    if (!q.estimate_attach?.films) continue;
-    const measurements: any[] = Array.isArray(q.measurements) ? q.measurements : [];
-    const filmIds = [...new Set(measurements.map(m => m?.substrate_id).filter(Boolean))] as string[];
-    const names = new Map<string, string>();
-    if (filmIds.length > 0) {
-      const { data: films } = await supabase
-        .from('wrap_substrates').select('id, name').in('id', filmIds);
-      for (const f of films || []) names.set(f.id, f.name);
-    }
-    const byFilm = new Map<string, string[]>();
-    for (const m of measurements) {
-      const name = m?.substrate_id ? (names.get(m.substrate_id) || 'Vinyl') : 'Vinyl';
-      const areas = byFilm.get(name) || [];
-      if (m?.name) areas.push(String(m.name));
-      byFilm.set(name, areas);
-    }
-    graphics.push({
-      quoteNumber: q.quote_number,
-      vehicle: q.vehicle_description,
-      totalSqft: parseFloat(q.total_area_sqft) || 0,
-      films: [...byFilm.entries()].map(([name, areas]) => ({ name, areas })),
-    });
-  }
+  // attachments page-by-page), so the customer approves ONE file. The
+  // summaries come from the same loader every approval surface uses.
+  const { summaries, wrapQuotes } = await loadEstimateGraphics(supabase, estimateId);
+  const graphics: EstimatePdfGraphics[] = summaries
+    .filter(s => s.films.length > 0)
+    .map(s => ({ quoteNumber: s.quoteNumber, vehicle: s.vehicle, totalSqft: s.totalSqft, films: s.films }));
 
   const doc = buildEstimatePdf({ estimate, lines, company, logo, ...(graphics.length > 0 ? { graphics } : {}) });
   if (opts.print) doc.autoPrint();

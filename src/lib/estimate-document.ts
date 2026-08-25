@@ -101,6 +101,19 @@ export interface EstimateDocumentOptions {
   /** The sender's email signature — rendered at the bottom of the
    *  document on composed sends; snapshots pass none. */
   signature?: EmailSignature | string | null;
+  /** Wrap content from linked wrap quotes (wrap_quotes.estimate_attach —
+   *  loadEstimateGraphics). Rendered as a Vinyl / Graphics section with the
+   *  coverage diagram, so the email body, approval page, and signed
+   *  snapshot show the same wrap content the merged PDF carries. Frozen
+   *  snapshots must pass data-URI diagrams (inlineDiagrams) — the R2
+   *  object is mutable. */
+  graphics?: {
+    quoteNumber: string;
+    vehicle: string | null;
+    totalSqft: number;
+    films: { name: string; areas: string[] }[];
+    diagramUrl: string | null;
+  }[] | null;
 }
 
 /**
@@ -109,7 +122,7 @@ export interface EstimateDocumentOptions {
  * (`.order('sort_order').order('id')`).
  */
 export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDocumentOptions = {}): string {
-  const { company, logoUrl, message, ctaUrl, ctaLabel, ctaNote, signedBlockHtml, signature } = opts;
+  const { company, logoUrl, message, ctaUrl, ctaLabel, ctaNote, signedBlockHtml, signature, graphics } = opts;
 
   const cell = (v: string, right = false) =>
     `<td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#111827;vertical-align:top;${right ? 'text-align:right;white-space:nowrap;' : ''}">${v}</td>`;
@@ -196,6 +209,15 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
     ${(est.on_site_contact_name || est.on_site_contact_phone) ? section('On-site Contact', `${escHtml(est.on_site_contact_name || '')}${est.on_site_contact_phone ? ' · ' + escHtml(est.on_site_contact_phone) : ''}`) : ''}
     ${est.delivery_preferences ? section('Delivery', escHtml(est.delivery_preferences)) : ''}
     ${est.notes ? section('Notes', escHtml(est.notes)) : ''}
+
+    ${(graphics || []).map(g => `
+    <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px;margin-top:12px;font-size:13px;color:#111827;">
+      <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Vinyl / Graphics</div>
+      <div style="font-weight:700;">Quote ${escHtml(g.quoteNumber)}${g.vehicle ? ` — ${escHtml(g.vehicle)}` : ''}${g.totalSqft > 0 ? ` · ~${Math.round(g.totalSqft)} sqft coverage` : ''}</div>
+      ${g.films.length > 0 ? `<ul style="margin:6px 0 0;padding-left:18px;">${g.films.map(f =>
+        `<li style="margin-top:2px;">${escHtml(f.name)}${f.areas.length > 0 ? ` — ${escHtml(f.areas.join(', '))}` : ''}</li>`).join('')}</ul>` : ''}
+      ${g.diagramUrl ? `<img src="${escHtml(g.diagramUrl)}" alt="Coverage diagram — Quote ${escHtml(g.quoteNumber)}" style="max-width:100%;border:1px solid #e5e7eb;border-radius:8px;margin-top:10px;display:block;">` : ''}
+    </div>`).join('')}
 
     ${ctaUrl ? `
     <div style="text-align:center;margin-top:24px;">
