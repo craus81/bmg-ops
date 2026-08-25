@@ -40,7 +40,9 @@ export interface EmailComposeFields {
 }
 
 export interface EmailComposePreview {
-  to?: string | null;
+  /** Server-resolved recipients — comma-joined string or array; either
+   *  prefills an untouched To field. */
+  to?: string | string[] | null;
   subject?: string | null;
   html: string;
 }
@@ -170,8 +172,9 @@ export default function EmailComposeModal({
         setPreview(res.preview);
         // First resolved recipient prefills an untouched To field, so the
         // sender sees (and can change) exactly who the server picked.
-        if (!toTouched.current && res.preview.to) {
-          setToInput(res.preview.to);
+        const resolvedTo = Array.isArray(res.preview.to) ? res.preview.to.join(', ') : res.preview.to;
+        if (!toTouched.current && resolvedTo) {
+          setToInput(resolvedTo);
           toTouched.current = true;
         }
       } else if (res.error) {
