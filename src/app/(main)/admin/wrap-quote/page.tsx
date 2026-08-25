@@ -14,7 +14,7 @@ import { DropZone } from '@/components/DropZone';
 import { theme } from '@/lib/theme';
 import { RollNesting, RollFilmInfo } from '@/components/RollNesting';
 import NumberInput from '@/components/NumberInput';
-import { loadBccSelfPref, saveBccSelfPref } from '@/components/EmailComposeModal';
+import EmailComposeModal, { loadBccSelfPref, saveBccSelfPref, type EmailComposeFields } from '@/components/EmailComposeModal';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import {
   DEFAULT_ROLL,
@@ -159,6 +159,9 @@ interface WrapQuote {
   status: string;
   sent_at: string | null;
   sent_to: string | null;
+  // Follow-up state (quote-followups queue) — surfaced on sent history
+  // rows so chasing happens from here too.
+  last_followup_at: string | null;
   approval_token: string | null;
   accepted_at: string | null;
   customer_rejection_reason: string | null;
@@ -346,6 +349,14 @@ export default function WrapQuotePage() {
   const [quoteNumber, setQuoteNumber] = useState('');
   const [sending, setSending] = useState(false);
   const [viewQuote, setViewQuote] = useState<WrapQuote | null>(null);
+  // Follow-up actions on sent quotes (history rows) — same machinery as
+  // /admin/quote-followups: a compose modal for the follow-up email and a
+  // log-a-note dialog, both against /api/quotes/follow-up*.
+  const [followupEmailFor, setFollowupEmailFor] = useState<WrapQuote | null>(null);
+  const [followupNoteFor, setFollowupNoteFor] = useState<WrapQuote | null>(null);
+  const [fuNote, setFuNote] = useState('');
+  const [fuRemindAt, setFuRemindAt] = useState('');
+  const [fuSaving, setFuSaving] = useState(false);
   const [attachments, setAttachments] = useState<QuoteAttachment[]>([]);
   const [attaching, setAttaching] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
@@ -1849,6 +1860,90 @@ export default function WrapQuotePage() {
   };
 
   // ----- History: archive / delete -----
+  // ── Follow-up actions on sent quotes ──
+  // Quiet days since the customer last heard from us — same clock as the
+  // follow-up queue: max(sent date, last logged follow-up).
+  const quietDays = (q: WrapQuote): number | null => {
+    const ref = [q.sent_at, q.last_followup_at]
+      .filter(Boolean).map(d => new Date(d as string).getTime());
+    if (ref.length === 0) return null;
+    return Math.floor((Date.now() - Math.max(...ref)) / 86_400_000);
+  };
+
+  const saveFollowupNote = async () => {
+    if (!followupNoteFor || fuSaving) return;
+    setFuSaving(true);
+    try {
+      const res = await fetch('/api/quotes/follow-up', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'wrap', id: followupNoteFor.id, action: 'log_followup',
+          note: fuNote.trim() || undefined, remindAt: fuRemindAt || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        await dialog.alert('Failed to log follow-up: ' + (data.error || 'Unknown error'));
+      } else {
+        const nowIso = new Date().toISOString();
+        setHistory(prev => prev.map(q => q.id === followupNoteFor.id ? { ...q, last_followup_at: nowIso } : q));
+        setFollowupNoteFor(null);
+        setFuNote('');
+        setFuRemindAt('');
+      }
+    } catch {
+      await dialog.alert('Network error — please try again.');
+    }
+    setFuSaving(false);
+  };
+
+  const fetchFollowupEmailPreview = async (fields: EmailComposeFields) => {
+    if (!followupEmailFor) return { error: 'No quote selected' };
+    try {
+      const res = await fetch('/api/quotes/follow-up/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'wrap', id: followupEmailFor.id, preview: true,
+          emails: fields.emails, message: fields.message || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.preview) return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      return { error: data.error || 'Unknown error' };
+    } catch {
+      return { error: 'Network error — please try again.' };
+    }
+  };
+
+  const confirmSendFollowupEmail = async (fields: EmailComposeFields): Promise<{ ok: boolean }> => {
+    if (!followupEmailFor) return { ok: false };
+    try {
+      const res = await fetch('/api/quotes/follow-up/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'wrap', id: followupEmailFor.id,
+          emails: fields.emails, bccSelf: fields.bccSelf, message: fields.message || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
+        return { ok: false };
+      }
+      const nowIso = new Date().toISOString();
+      setHistory(prev => prev.map(q => q.id === followupEmailFor.id ? { ...q, last_followup_at: nowIso } : q));
+      const em = data.dispatch?.email;
+      await dialog.alert(`Follow-up email sent to ${em?.target || 'recipient'}${em?.bcc ? ` (bcc ${em.bcc})` : ''}. The follow-up was logged.`);
+      return { ok: true };
+    } catch {
+      await dialog.alert('Network error — please try again.');
+      return { ok: false };
+    }
+  };
+
   const toggleArchiveQuote = async (q: WrapQuote) => {
     const { error } = await supabase.from('wrap_quotes')
       .update({ archived_at: q.archived_at ? null : new Date().toISOString(), updated_at: new Date().toISOString() })
@@ -3085,6 +3180,30 @@ export default function WrapQuotePage() {
                   }}>{q.status === 'accepted' ? 'Accepted ✓' : q.status === 'rejected' ? 'Lost / Changes' : q.status === 'sent' ? `Sent${q.sent_to ? ` · ${q.sent_to}` : ''}` : 'Draft'}</span>
                 <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>${fmt(q.total)}</span>
                 <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{new Date(q.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                {q.status === 'sent' && !q.archived_at && (() => {
+                  const quiet = quietDays(q);
+                  return (
+                    <>
+                      {quiet !== null && quiet >= 3 && (
+                        <span title={q.last_followup_at ? `Last follow-up ${new Date(q.last_followup_at).toLocaleDateString()}` : 'No follow-up logged since sending'} style={{
+                          fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', whiteSpace: 'nowrap',
+                          background: quiet >= 14 ? 'rgba(239,68,68,0.12)' : quiet >= 5 ? 'rgba(251,191,36,0.12)' : 'rgba(148,163,184,0.12)',
+                          color: quiet >= 14 ? '#ef4444' : quiet >= 5 ? '#fbbf24' : '#94a3b8',
+                        }}>quiet {quiet}d</span>
+                      )}
+                      <button
+                        onClick={e => { e.stopPropagation(); setFollowupNoteFor(q); setFuNote(''); setFuRemindAt(''); }}
+                        title="Log a follow-up (call/text/etc) with an optional note and reminder"
+                        style={btnStyle('#60a5fa', 'transparent')}
+                      >☎ Log</button>
+                      <button
+                        onClick={e => { e.stopPropagation(); setFollowupEmailFor(q); }}
+                        title="Send a follow-up email (includes the Review & Accept link while it's valid)"
+                        style={btnStyle('#60a5fa', 'transparent')}
+                      >✉ Follow Up</button>
+                    </>
+                  );
+                })()}
                 {q.status === 'sent' && q.approval_token && (
                   <button
                     onClick={async e => {
@@ -3498,6 +3617,84 @@ export default function WrapQuotePage() {
               <button onClick={sendQuoteEmail} disabled={sending || previewLoading} style={{ ...btnStyle('#fff', '#22c55e'), border: 'none' }}>
                 {sending ? 'Sending…' : (!sendInclude.pricing && !sendInclude.netsuitePdf) ? 'Send Coverage' : 'Send Quote'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Follow-up email on a sent quote — standard compose screen; sending
+          also logs the follow-up (resets the queue's quiet clock). */}
+      {followupEmailFor && (
+        <EmailComposeModal
+          title={`Follow Up — Quote ${followupEmailFor.quote_number}`}
+          sendLabel="Send Follow-Up"
+          messagePlaceholder="Personal note — shown at the top of the follow-up email…"
+          fetchPreview={fetchFollowupEmailPreview}
+          onSend={confirmSendFollowupEmail}
+          onClose={() => setFollowupEmailFor(null)}
+        />
+      )}
+
+      {/* Log-a-follow-up dialog — same fields as /admin/quote-followups. */}
+      {followupNoteFor && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}
+          onClick={() => !fuSaving && setFollowupNoteFor(null)}
+        >
+          <div onClick={e => e.stopPropagation()} style={{
+            width: '100%', maxWidth: '420px', background: 'var(--card)', border: `1px solid ${theme.border}`,
+            borderRadius: '14px', padding: '16px',
+          }}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '2px' }}>
+              Log Follow-Up — {followupNoteFor.quote_number}
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+              {followupNoteFor.customer?.name || 'No customer'} · ${fmt(followupNoteFor.total)}
+            </div>
+            <textarea
+              value={fuNote}
+              onChange={e => setFuNote(e.target.value)}
+              placeholder="What did the customer say? (e.g. vehicles arrive in September)"
+              rows={3}
+              style={{
+                width: '100%', padding: '10px', borderRadius: '10px', boxSizing: 'border-box',
+                border: `1px solid ${theme.border}`, background: 'var(--input-bg)',
+                color: 'var(--text-primary)', fontSize: '13px', resize: 'vertical', marginBottom: '10px',
+              }}
+            />
+            <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+              Remind me on (optional)
+            </label>
+            <input
+              type="date"
+              value={fuRemindAt}
+              min={new Date().toISOString().slice(0, 10)}
+              onChange={e => setFuRemindAt(e.target.value)}
+              style={{
+                width: '100%', padding: '9px 10px', borderRadius: '10px', boxSizing: 'border-box',
+                border: `1px solid ${theme.border}`, background: 'var(--input-bg)',
+                color: 'var(--text-primary)', fontSize: '13px', marginBottom: '12px',
+              }}
+            />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={saveFollowupNote}
+                disabled={fuSaving}
+                style={{
+                  flex: 1, padding: '10px', borderRadius: '10px', border: 'none',
+                  background: '#60a5fa', color: '#fff', fontWeight: 800, fontSize: '13px',
+                  cursor: 'pointer', opacity: fuSaving ? 0.5 : 1,
+                }}
+              >{fuSaving ? 'Saving…' : 'Log Follow-Up'}</button>
+              <button
+                onClick={() => setFollowupNoteFor(null)}
+                disabled={fuSaving}
+                style={{
+                  padding: '10px 16px', borderRadius: '10px', background: 'transparent',
+                  border: `1px solid ${theme.border}`, color: 'var(--text-body)', fontWeight: 700,
+                  fontSize: '13px', cursor: 'pointer',
+                }}
+              >Cancel</button>
             </div>
           </div>
         </div>
