@@ -129,6 +129,10 @@ interface Estimate {
   approval_email_detail: string | null;
   approval_email_to: string[] | null;
   approval_email_updated_at: string | null;
+  // Follow-up state (quote-followups queue) — surfaced on sent rows so
+  // chasing happens from here without a trip to /admin/quote-followups.
+  sent_for_approval_at: string | null;
+  last_followup_at: string | null;
   pushed_at: string | null;
   created_by: string | null;
   created_at: string;
@@ -454,6 +458,13 @@ export default function EstimatesPage() {
   const [approvalModal, setApprovalModal] = useState(false);
   // Email-the-PDF compose modal (FleetSuite enhanced-estimate copy).
   const [pdfEmailModal, setPdfEmailModal] = useState(false);
+  // Follow-up actions on sent estimates (list rows): compose modal target
+  // and the log-a-note dialog — same machinery as /admin/quote-followups.
+  const [followupEmailFor, setFollowupEmailFor] = useState<Estimate | null>(null);
+  const [followupNoteFor, setFollowupNoteFor] = useState<Estimate | null>(null);
+  const [fuNote, setFuNote] = useState('');
+  const [fuRemindAt, setFuRemindAt] = useState('');
+  const [fuSaving, setFuSaving] = useState(false);
 
   // Part search
   const [partSearch, setPartSearch] = useState('');
@@ -1213,6 +1224,90 @@ export default function EstimatesPage() {
     }
   };
 
+  // ── Follow-up actions on sent estimates ──
+  // Quiet days since the customer last heard from us — same clock as the
+  // follow-up queue: max(sent date, last logged follow-up).
+  const quietDays = (est: Estimate): number | null => {
+    const ref = [est.sent_for_approval_at, est.last_followup_at]
+      .filter(Boolean).map(d => new Date(d as string).getTime());
+    if (ref.length === 0) return null;
+    return Math.floor((Date.now() - Math.max(...ref)) / 86_400_000);
+  };
+
+  const saveFollowupNote = async () => {
+    if (!followupNoteFor || fuSaving) return;
+    setFuSaving(true);
+    try {
+      const res = await fetch('/api/quotes/follow-up', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'estimate', id: followupNoteFor.id, action: 'log_followup',
+          note: fuNote.trim() || undefined, remindAt: fuRemindAt || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        await dialog.alert('Failed to log follow-up: ' + (data.error || 'Unknown error'));
+      } else {
+        const nowIso = new Date().toISOString();
+        setEstimates(prev => prev.map(e => e.id === followupNoteFor.id ? { ...e, last_followup_at: nowIso } : e));
+        setFollowupNoteFor(null);
+        setFuNote('');
+        setFuRemindAt('');
+      }
+    } catch {
+      await dialog.alert('Network error — please try again.');
+    }
+    setFuSaving(false);
+  };
+
+  const fetchFollowupEmailPreview = async (fields: EmailComposeFields) => {
+    if (!followupEmailFor) return { error: 'No estimate selected' };
+    try {
+      const res = await fetch('/api/quotes/follow-up/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'estimate', id: followupEmailFor.id, preview: true,
+          emails: fields.emails, message: fields.message || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.preview) return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      return { error: data.error || 'Unknown error' };
+    } catch {
+      return { error: 'Network error — please try again.' };
+    }
+  };
+
+  const confirmSendFollowupEmail = async (fields: EmailComposeFields): Promise<{ ok: boolean }> => {
+    if (!followupEmailFor) return { ok: false };
+    try {
+      const res = await fetch('/api/quotes/follow-up/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'estimate', id: followupEmailFor.id,
+          emails: fields.emails, bccSelf: fields.bccSelf, message: fields.message || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
+        return { ok: false };
+      }
+      const nowIso = new Date().toISOString();
+      setEstimates(prev => prev.map(e => e.id === followupEmailFor.id ? { ...e, last_followup_at: nowIso } : e));
+      const em = data.dispatch?.email;
+      await dialog.alert(`Follow-up email sent to ${em?.target || 'recipient'}${em?.bcc ? ` (bcc ${em.bcc})` : ''}. The follow-up was logged.`);
+      return { ok: true };
+    } catch {
+      await dialog.alert('Network error — please try again.');
+      return { ok: false };
+    }
+  };
+
   // ── Send the estimate to the customer for approval (magic link) ──
   // Compose + preview flow (E4): open the modal, persist edits so the preview
   // matches, then render the exact email before the staffer commits to send.
@@ -1843,6 +1938,41 @@ export default function EstimatesPage() {
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
+                      {est.status === 'sent' && (() => {
+                        const quiet = quietDays(est);
+                        return (
+                          <>
+                            {quiet !== null && quiet >= 3 && (
+                              <div title={est.last_followup_at ? `Last follow-up ${new Date(est.last_followup_at).toLocaleDateString()}` : 'No follow-up logged since sending'} style={{
+                                padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, whiteSpace: 'nowrap',
+                                background: quiet >= 14 ? 'rgba(239,68,68,0.1)' : quiet >= 5 ? 'rgba(251,191,36,0.1)' : 'var(--subtle-bg)',
+                                border: `1px solid ${quiet >= 14 ? 'rgba(239,68,68,0.3)' : quiet >= 5 ? 'rgba(251,191,36,0.3)' : 'var(--border)'}`,
+                                color: quiet >= 14 ? '#ef4444' : quiet >= 5 ? '#fbbf24' : 'var(--text-muted)',
+                              }}>
+                                quiet {quiet}d
+                              </div>
+                            )}
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setFollowupNoteFor(est); setFuNote(''); setFuRemindAt(''); }}
+                              title="Log a follow-up (call/text/etc) with an optional note and reminder"
+                              style={{
+                                padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                                background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)',
+                                color: '#60a5fa', cursor: 'pointer', whiteSpace: 'nowrap',
+                              }}
+                            >☎ Log</button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setFollowupEmailFor(est); }}
+                              title="Send a follow-up email (includes the Review & Accept link while it's valid)"
+                              style={{
+                                padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                                background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)',
+                                color: '#60a5fa', cursor: 'pointer', whiteSpace: 'nowrap',
+                              }}
+                            >✉ Follow Up</button>
+                          </>
+                        );
+                      })()}
                       {['bounced', 'failed', 'complained'].includes(est.approval_email_status || '') && (
                         <div title={`The approval email did not reach the customer${est.approval_email_detail ? ` — ${est.approval_email_detail}` : ''}. Open the estimate to resend.`} style={{
                           padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
@@ -3110,6 +3240,84 @@ export default function EstimatesPage() {
           onSend={confirmSendApproval}
           onClose={() => setApprovalModal(false)}
         />
+      )}
+
+      {/* Follow-up email on a sent estimate — standard compose screen;
+          sending also logs the follow-up (resets the queue's quiet clock). */}
+      {followupEmailFor && (
+        <EmailComposeModal
+          title={`Follow Up — Estimate #${followupEmailFor.estimate_number}`}
+          sendLabel="Send Follow-Up"
+          messagePlaceholder="Personal note — shown at the top of the follow-up email…"
+          fetchPreview={fetchFollowupEmailPreview}
+          onSend={confirmSendFollowupEmail}
+          onClose={() => setFollowupEmailFor(null)}
+        />
+      )}
+
+      {/* Log-a-follow-up dialog — same fields as /admin/quote-followups. */}
+      {followupNoteFor && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}
+          onClick={() => !fuSaving && setFollowupNoteFor(null)}
+        >
+          <div onClick={e => e.stopPropagation()} style={{
+            width: '100%', maxWidth: '420px', background: 'var(--card)', border: '1px solid var(--border)',
+            borderRadius: '14px', padding: '16px',
+          }}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '2px' }}>
+              Log Follow-Up — #{followupNoteFor.estimate_number}
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+              {followupNoteFor.customer_name || 'No customer'} · {fmt(followupNoteFor.grand_total)}
+            </div>
+            <textarea
+              value={fuNote}
+              onChange={e => setFuNote(e.target.value)}
+              placeholder="What did the customer say? (e.g. vehicles arrive in September)"
+              rows={3}
+              style={{
+                width: '100%', padding: '10px', borderRadius: '10px', boxSizing: 'border-box',
+                border: '1px solid var(--border)', background: 'var(--input-bg)',
+                color: 'var(--text-primary)', fontSize: '13px', resize: 'vertical', marginBottom: '10px',
+              }}
+            />
+            <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+              Remind me on (optional)
+            </label>
+            <input
+              type="date"
+              value={fuRemindAt}
+              min={new Date().toISOString().slice(0, 10)}
+              onChange={e => setFuRemindAt(e.target.value)}
+              style={{
+                width: '100%', padding: '9px 10px', borderRadius: '10px', boxSizing: 'border-box',
+                border: '1px solid var(--border)', background: 'var(--input-bg)',
+                color: 'var(--text-primary)', fontSize: '13px', marginBottom: '12px',
+              }}
+            />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={saveFollowupNote}
+                disabled={fuSaving}
+                style={{
+                  flex: 1, padding: '10px', borderRadius: '10px', border: 'none',
+                  background: '#60a5fa', color: '#fff', fontWeight: 800, fontSize: '13px',
+                  cursor: 'pointer', opacity: fuSaving ? 0.5 : 1,
+                }}
+              >{fuSaving ? 'Saving…' : 'Log Follow-Up'}</button>
+              <button
+                onClick={() => setFollowupNoteFor(null)}
+                disabled={fuSaving}
+                style={{
+                  padding: '10px 16px', borderRadius: '10px', background: 'transparent',
+                  border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700,
+                  fontSize: '13px', cursor: 'pointer',
+                }}
+              >Cancel</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Email the enhanced-estimate PDF — standard compose screen; the
