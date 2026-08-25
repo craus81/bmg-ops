@@ -1966,16 +1966,21 @@ export default function TrackingPage() {
                       {/* Customer — always shown, editable: trucks get checked
                           in without a customer and need one attached later. */}
                       <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Customer</div>
-                          {custEditFor !== vehicle.id && (
-                            <button
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); setCustEditFor(vehicle.id); setCustEditSearch(''); setCustEditMatches([]); }}
-                              style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                            >{vehicle.customer_name ? 'Edit' : '+ Attach'}</button>
-                          )}
-                        </div>
+                        <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Customer</div>
+                        {/* The attach/edit control is a real button — a bare
+                            10px link next to the label read as decoration on
+                            phones, and nobody found it (field report). */}
+                        {custEditFor !== vehicle.id && !vehicle.customer_name && (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); setCustEditFor(vehicle.id); setCustEditSearch(''); setCustEditMatches([]); }}
+                            style={{
+                              marginTop: '4px', width: '100%', padding: '10px', borderRadius: '8px',
+                              border: '1px dashed rgba(96,165,250,0.55)', background: 'rgba(96,165,250,0.08)',
+                              color: '#60a5fa', fontSize: '12px', fontWeight: 800, cursor: 'pointer', textAlign: 'center',
+                            }}
+                          >+ Attach Customer</button>
+                        )}
                         {custEditFor === vehicle.id ? (
                           <div style={{ position: 'relative', marginTop: '2px' }} onClick={(e) => e.stopPropagation()}>
                             <input
@@ -2020,11 +2025,20 @@ export default function TrackingPage() {
                               style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0 0' }}
                             >Cancel</button>
                           </div>
-                        ) : (
-                          <div style={{ fontSize: '12px', fontWeight: 600, color: vehicle.customer_name ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                            {vehicle.customer_name || 'No customer'}
+                        ) : vehicle.customer_name ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px' }}>
+                            <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>{vehicle.customer_name}</div>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setCustEditFor(vehicle.id); setCustEditSearch(''); setCustEditMatches([]); }}
+                              style={{
+                                padding: '3px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                                background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)',
+                                color: '#60a5fa', cursor: 'pointer', flexShrink: 0,
+                              }}
+                            >Edit</button>
                           </div>
-                        )}
+                        ) : null}
                       </div>
                       {vehicle.sales_order_number && (
                         <div>
@@ -2041,20 +2055,30 @@ export default function TrackingPage() {
                       {/* Notes — always shown, editable (field request: fix a
                           check-in's notes after the vehicle is in the shop). */}
                       <div style={{ gridColumn: '1 / -1' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Notes</div>
-                          {notesEdits[vehicle.id] === undefined && (
-                            <button
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); setNotesEdits(prev => ({ ...prev, [vehicle.id]: vehicle.notes || '' })); }}
-                              style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                            >{vehicle.notes ? 'Edit' : '+ Add'}</button>
-                          )}
-                        </div>
+                        <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Notes</div>
                         {notesEdits[vehicle.id] === undefined ? (
                           vehicle.notes
-                            ? <div style={{ fontSize: '12px', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>{vehicle.notes}</div>
-                            : <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>—</div>
+                            ? <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginTop: '2px' }}>
+                                <div style={{ flex: 1, fontSize: '12px', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>{vehicle.notes}</div>
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); setNotesEdits(prev => ({ ...prev, [vehicle.id]: vehicle.notes || '' })); }}
+                                  style={{
+                                    padding: '3px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                                    background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)',
+                                    color: '#60a5fa', cursor: 'pointer', flexShrink: 0,
+                                  }}
+                                >Edit</button>
+                              </div>
+                            : <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); setNotesEdits(prev => ({ ...prev, [vehicle.id]: '' })); }}
+                                style={{
+                                  marginTop: '4px', width: '100%', padding: '10px', borderRadius: '8px',
+                                  border: '1px dashed rgba(96,165,250,0.55)', background: 'rgba(96,165,250,0.08)',
+                                  color: '#60a5fa', fontSize: '12px', fontWeight: 800, cursor: 'pointer', textAlign: 'center',
+                                }}
+                              >+ Add Notes</button>
                         ) : (
                           <div onClick={(e) => e.stopPropagation()}>
                             <textarea
