@@ -41,6 +41,14 @@ export default function CniJobChat({ jobId, userId, backPath, jobNumber, jobTitl
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  const authHeaders = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return {
+      'Content-Type': 'application/json',
+      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+    };
+  };
+
   const loadMessages = async () => {
     const { data } = await supabase
       .from('cni_job_messages')
@@ -61,13 +69,14 @@ export default function CniJobChat({ jobId, userId, backPath, jobNumber, jobTitl
       }
       setMessages(data.map((m: any) => ({ ...m, sender_name: nameMap[m.sender_id] || 'Unknown' })));
 
-      // Mark unread messages as read
+      // Mark the other party's unread messages as read (via the API — the
+      // client no longer writes cni_job_messages directly).
       const unread = data.filter((m: any) => !m.read_at && m.sender_id !== userId);
       if (unread.length > 0) {
-        await supabase
-          .from('cni_job_messages')
-          .update({ read_at: new Date().toISOString() })
-          .in('id', unread.map((m: any) => m.id));
+        await fetch('/api/cni/mark-messages-read', {
+          method: 'POST', headers: await authHeaders(),
+          body: JSON.stringify({ jobId }),
+        }).catch(() => {});
       }
     }
 
@@ -79,13 +88,13 @@ export default function CniJobChat({ jobId, userId, backPath, jobNumber, jobTitl
     setSending(true);
 
     const body = newMsg.trim();
-    const { error } = await supabase.from('cni_job_messages').insert({
-      job_id: jobId,
-      sender_id: userId,
-      body,
+    const res = await fetch('/api/cni/job-message', {
+      method: 'POST', headers: await authHeaders(),
+      body: JSON.stringify({ jobId, body }),
     });
+    const ok = res.ok;
 
-    if (!error) {
+    if (ok) {
       reportMentions({
         text: body,
         sourceType: 'cni_job_message',
