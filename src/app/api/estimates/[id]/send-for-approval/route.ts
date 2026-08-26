@@ -13,6 +13,11 @@ import { r2PublicUrl } from '@/lib/r2';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
+// When linked wrap quotes contribute assets, the send generates the merged
+// estimate PDF (R2 fetches + pdf-lib) — same budget as the other
+// generateEstimatePdf routes (/pdf, /email-pdf); the platform default is
+// too tight for a cold start with several assets.
+export const maxDuration = 60;
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -141,6 +146,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   // Approve button) without minting a token, sending, or touching status.
   // The CTA points at a placeholder — the real link is minted on send.
   if (body.preview) {
+    // Predict the auto-attachment so the compose screen can say so: linked
+    // wrap quotes with estimate_attach mean the merged estimate PDF rides
+    // along on the real send (generated then, not here — this only names it).
+    let attachments: string[] = [];
+    const { count: attachCount } = await supabase
+      .from('wrap_quotes')
+      .select('id', { count: 'exact', head: true })
+      .eq('estimate_id', estimate.id)
+      .not('estimate_attach', 'is', null);
+    if ((attachCount || 0) > 0) {
+      const { estimatePdfFilename } = await import('@/lib/estimate-pdf');
+      attachments = [estimatePdfFilename(estimate)];
+    }
     const html = renderEstimateDocument(estimate, lineItems || [], {
       company,
       logoUrl,
@@ -151,7 +169,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       signature,
       graphics: approvalGraphics,
     });
-    return NextResponse.json({ preview: true, to: emailList.join(', ') || null, subject, html });
+    return NextResponse.json({ preview: true, to: emailList.join(', ') || null, subject, html, attachments });
   }
 
   // Mint a fresh token — rotating on resend invalidates prior links.
