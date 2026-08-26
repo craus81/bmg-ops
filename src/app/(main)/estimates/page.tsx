@@ -55,6 +55,24 @@ interface LineItem {
   avg_install_cost?: number | null;
 }
 
+// Does this line represent graphics work, for the "spawn or link a graphics
+// job" panel? `catalog === 'graphics'` only covers part-backed catalog lines —
+// the two MAIN graphics paths never satisfied it, so a combined upfit+graphics
+// estimate could sail to a Sales Order with no graphics job and no prompt:
+//   - Add Graphics (wrap-quote fold) lines have no part row, so catalog stays
+//     undefined after reload; wrap_quote_id (which round-trips through save)
+//     and the fold's two fixed NetSuite item names are the durable markers.
+//   - Quick Graphics lines are bare customs; they're stamped
+//     catalog:'graphics' at creation and matched after reload by the exact
+//     machine-generated descriptions addQuickGraphicsLines writes.
+const isGraphicsLine = (l: LineItem): boolean =>
+  l.catalog === 'graphics'
+  || !!l.wrap_quote_id
+  || l.item_number === '3M Vinyl'
+  || l.item_number === 'Graphics Install Labor'
+  || /\d+(\.\d+)? sqft @ \$/.test(l.description || '')
+  || /^Graphics install labor/i.test(l.description || '');
+
 interface LinkedGraphicsJob {
   id: string;
   job_number: string | null;
@@ -1141,6 +1159,9 @@ export default function EstimatesPage() {
         unit_price: rate,
         labor_hours: 0,
         is_custom: true,
+        // Trips the graphics-job panel immediately; after reload the
+        // machine-made description keeps isGraphicsLine true.
+        catalog: 'graphics',
       });
     }
     if (labor > 0) {
@@ -1154,6 +1175,7 @@ export default function EstimatesPage() {
         unit_price: labor,
         labor_hours: 0,
         is_custom: true,
+        catalog: 'graphics',
       });
     }
     setLines(prev => [...prev, ...newLines]);
@@ -2929,7 +2951,7 @@ export default function EstimatesPage() {
           a graphics job for production" prompt for combined upfit+graphics
           deals — see migrations/084-graphics-upfit-project-link.sql for the
           downstream upfit_project linkage. */}
-      {editingId && (lines.some(l => l.catalog === 'graphics') || linkedGraphicsJobs.length > 0) && (
+      {editingId && (lines.some(isGraphicsLine) || linkedGraphicsJobs.length > 0) && (
         <div style={{
           background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '10px',
           padding: '12px', marginBottom: '12px',
