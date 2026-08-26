@@ -3,7 +3,7 @@ import { getMessage, getPdfAttachments, getAttachment, getHeader } from '@/lib/g
 import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { r2Upload } from '@/lib/r2';
 import { resolvePoCustomer } from '@/lib/customer-match';
 import { validateBody, z } from '@/lib/validate';
@@ -479,7 +479,7 @@ export async function POST(req: NextRequest) {
   // calls, which is what keeps the "imported by" alert to human imports only.
   let actorId: string | null = null;
   if (!isInternalCall) {
-    const auth = await requireAuth(req);
+    const auth = await requireStaff(req);
     if (auth.error) return auth.error;
     actorId = auth.user?.id || null;
   }

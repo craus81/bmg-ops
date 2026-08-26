@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { createClient } from '@supabase/supabase-js';
 
 export const dynamic = 'force-dynamic';
@@ -21,7 +21,7 @@ const supabase = createClient(
  * Admin-only because this destroys check-off progress for the vehicle.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   // Admin gate

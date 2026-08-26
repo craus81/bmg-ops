@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { sendProofApproval } from '@/lib/proof-approval-send';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
@@ -35,7 +35,7 @@ const Schema = z.object({
  * src/lib/proof-approval-send.ts, shared with the daily reminder cron.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

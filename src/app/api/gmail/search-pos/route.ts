@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { searchPOEmails, getMessage, getPdfAttachments, getHeader } from '@/lib/google';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,7 +11,7 @@ export const maxDuration = 60;
 
 // Search Gmail for PO emails and return unimported ones
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   try {

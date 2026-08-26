@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { syncShopInboundForUpfitProject } from '@/lib/shop-inbound';
 
@@ -56,7 +56,7 @@ const DeleteSchema = z.object({ id: z.string().uuid() });
 
 /** GET /api/upfit-projects — list all projects, optionally filtered by status */
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const status = req.nextUrl.searchParams.get('status');
@@ -78,7 +78,7 @@ export async function GET(req: NextRequest) {
 
 /** POST /api/upfit-projects — create a new project */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, CreateSchema);
@@ -123,7 +123,7 @@ export async function POST(req: NextRequest) {
 
 /** PUT /api/upfit-projects — update a project */
 export async function PUT(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, UpdateSchema);
@@ -182,7 +182,7 @@ export async function PUT(req: NextRequest) {
 
 /** DELETE /api/upfit-projects — delete a project */
 export async function DELETE(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, DeleteSchema);

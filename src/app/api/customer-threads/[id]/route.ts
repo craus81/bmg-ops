@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -22,7 +22,7 @@ const PatchSchema = z.object({
  * Returns the thread with full message list + linked contact/customer + entity context.
  */
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const { data: thread, error: tErr } = await supabase
@@ -87,7 +87,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
  * Body: { assigned_to?, status?, subject?, markRead? }
  */
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, PatchSchema);

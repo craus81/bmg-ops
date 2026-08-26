@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { syncCalendarEvent, deleteCalendarEvent } from '@/lib/google';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
@@ -17,7 +17,7 @@ const Schema = z.object({ checkinId: z.string().uuid() });
  * Body: { checkinId: string }
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

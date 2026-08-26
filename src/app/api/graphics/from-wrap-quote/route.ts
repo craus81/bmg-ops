@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { fmtInches } from '@/lib/format';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
@@ -56,7 +56,7 @@ async function markQuoteWon(supabase: ReturnType<typeof getSupabase>, quoteId: s
  *     userId?: string }
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

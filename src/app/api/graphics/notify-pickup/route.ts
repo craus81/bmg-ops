@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { sendEmailDetailed, buildNotificationEmail } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { sendSMS } from '@/lib/sms-provider';
@@ -35,7 +35,7 @@ const Schema = z.object({
  * Body: { jobId: string, preview?: boolean, email?: string }
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { downloadFile } from '@/lib/dropbox';
 import { r2Upload } from '@/lib/r2';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -20,7 +20,7 @@ const Schema = z.object({
  * Body: { dropbox_path, vehicle_id, customer_name }
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

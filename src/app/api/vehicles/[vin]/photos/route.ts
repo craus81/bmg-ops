@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,7 +38,7 @@ interface TimelineItem {
  * and part_files (catalog-level, not per-vehicle) per T1.4 locked decisions.
  */
 export async function GET(req: NextRequest, { params }: { params: { vin: string } }) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const vin = (params.vin || '').toUpperCase();

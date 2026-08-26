@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -31,7 +31,7 @@ const UnassignSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, AssignSchema);
@@ -136,7 +136,7 @@ export async function POST(req: NextRequest) {
 
 // DELETE — remove an assignment
 export async function DELETE(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, UnassignSchema);

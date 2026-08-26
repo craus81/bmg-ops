@@ -31,7 +31,13 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
-  const { messageId, conversationId, senderId, body } = parsed.data;
+  const { messageId, conversationId, body } = parsed.data;
+
+  // The sender is the authenticated caller — never a client-supplied id. The
+  // route previously trusted body.senderId with no participant check, so any
+  // approved account could send a spoofed "Message from <victim>" SMS/email to
+  // any conversation's other participant.
+  const senderId = auth.user!.id;
 
   try {
 
@@ -44,6 +50,11 @@ export async function POST(req: NextRequest) {
 
     if (convoErr || !convo) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+    }
+
+    // The caller must be a participant of the conversation they're notifying.
+    if (convo.participant_1 !== senderId && convo.participant_2 !== senderId) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     const recipientId = convo.participant_1 === senderId ? convo.participant_2 : convo.participant_1;

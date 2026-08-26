@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth, requireAdmin } from '@/lib/api-auth';
+import { requireStaff, requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -29,7 +29,7 @@ const TemplateSchema = z.object({
  * GET /api/install-checklists — list all templates (readable by any staff)
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const { data, error } = await supabase

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import JSZip from 'jszip';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { r2Get } from '@/lib/r2';
 
 export const dynamic = 'force-dynamic';
@@ -38,7 +38,7 @@ async function readAll(stream: any): Promise<Buffer> {
 }
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const { data: job } = await supabase

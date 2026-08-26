@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
@@ -17,7 +17,7 @@ const DeleteNoteSchema = z.object({ id: z.string().uuid() });
 
 /** GET /api/upfit-projects/notes?projectId=xxx — list notes for a project */
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const projectId = req.nextUrl.searchParams.get('projectId');
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
 
 /** POST /api/upfit-projects/notes — add a note */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, CreateNoteSchema);
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
 
 /** DELETE /api/upfit-projects/notes — delete a note */
 export async function DELETE(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, DeleteNoteSchema);
