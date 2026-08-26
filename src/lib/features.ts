@@ -72,7 +72,7 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
   ],
 
   field_tech: [
-    'home', 'scan', 'time', 'messages',
+    'home', 'scan', 'in_shop', 'fleet_checkin', 'time', 'messages',
   ],
 
   installer: [

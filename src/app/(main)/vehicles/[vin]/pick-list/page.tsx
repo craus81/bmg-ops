@@ -83,7 +83,7 @@ export default function VehiclePickListPage() {
   const router = useRouter();
   const params = useParams<{ vin: string }>();
   const vin = (params?.vin || '').toUpperCase();
-  const { user, profile, isInstaller, isAdmin } = useAuth();
+  const { user, profile, isInstaller, isShopTech, isFieldTech, isAdmin } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
 
@@ -164,12 +164,17 @@ export default function VehiclePickListPage() {
 
   useEffect(() => {
     if (!user) return;
-    if (!isInstaller && !isAdmin) {
+    // Internal install techs (shop_tech, field_tech) run the pick-list too, not
+    // just the external CNI installer. Role flags, NOT hasFeature('in_shop'):
+    // sales/graphics also carry in_shop but must not get the install runner, and
+    // the external installer lacks in_shop yet must keep it (reached from
+    // /installer/ready-for-install).
+    if (!isInstaller && !isShopTech && !isFieldTech && !isAdmin) {
       router.push('/home');
       return;
     }
     load();
-  }, [user, isInstaller, isAdmin, router, load]);
+  }, [user, isInstaller, isShopTech, isFieldTech, isAdmin, router, load]);
 
   const postStatusChange = async (newStatus: string, opts: { note?: string; force?: boolean } = {}) => {
     if (!vehicle) return;
