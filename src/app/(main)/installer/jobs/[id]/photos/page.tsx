@@ -81,6 +81,14 @@ export default function InstallerPhotoUploadPage() {
 
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
 
+  const authHeaders = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return {
+      'Content-Type': 'application/json',
+      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+    };
+  };
+
   const uploadPhotos = async (files: File[]) => {
     if (!user || !job || files.length === 0) return;
     setUploading(true);
@@ -101,19 +109,22 @@ export default function InstallerPhotoUploadPage() {
         const result = await res.json();
 
         if (result.success) {
-          await supabase.from('cni_job_photos').insert({
-            job_id: job.id,
-            vin_id: selectedVin,
-            storage_path: result.key || path,
-            photo_type: selectedType,
-            uploaded_by: user.id,
+          await fetch('/api/cni/job-photos', {
+            method: 'POST', headers: await authHeaders(),
+            body: JSON.stringify({
+              jobId: job.id,
+              vinId: selectedVin,
+              storagePath: result.key || path,
+              photoType: selectedType,
+            }),
           });
         }
 
         setUploadProgress({ done: i + 1, total: files.length });
       }
 
-      // Update photos_submitted flag once after the batch
+      // Once every required angle is on file, flag the VIN submitted. The route
+      // re-verifies the required set server-side and notifies BMG to review.
       if (selectedVin) {
         const { data: allVinPhotos } = await supabase
           .from('cni_job_photos')
@@ -122,7 +133,10 @@ export default function InstallerPhotoUploadPage() {
           .eq('vin_id', selectedVin);
         const typesCovered = new Set((allVinPhotos || []).map((p: any) => p.photo_type));
         if (REQUIRED_TYPES.every(t => typesCovered.has(t))) {
-          await supabase.from('cni_job_vins').update({ photos_submitted: true }).eq('id', selectedVin);
+          await fetch('/api/cni/submit-photos', {
+            method: 'POST', headers: await authHeaders(),
+            body: JSON.stringify({ jobId: job.id, vinId: selectedVin }),
+          });
         }
       }
 

@@ -97,6 +97,16 @@ export function getProfileRoles(profile: any): string[] {
 }
 
 /**
+ * Is this profile internal BMG staff (same set requireStaff gates on)? For
+ * routes that must allow EITHER staff OR another authorized principal (e.g. a
+ * CNI job message can be sent by a coordinator OR the job's installer), where
+ * requireStaff alone would wrongly reject the non-staff side.
+ */
+export function isInternalStaffRole(profile: any): boolean {
+  return profileRoles(profile).some(r => INTERNAL_STAFF_ROLES.includes(r));
+}
+
+/**
  * Verify the request has a valid authenticated session AND the account has
  * been approved by an admin. Pending, denied, and deactivated accounts are
  * rejected. Returns the user's profile so downstream checks can reuse it.
