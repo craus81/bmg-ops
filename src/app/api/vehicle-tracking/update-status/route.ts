@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireStaff } from '@/lib/api-auth';
 import { notify, notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
+import { loadChecklistTemplate, buildTaskRows } from '@/lib/install-checklist';
 import { createClient as createServiceClient } from '@supabase/supabase-js';
 
 const serviceSupabase = createServiceClient(
@@ -47,7 +48,7 @@ export async function POST(request: Request) {
     const [vehicleResult, profileResult] = await Promise.all([
       serviceSupabase
         .from('fleet_checkins')
-        .select('id, status, vin, customer_name, vehicle_year, vehicle_make, vehicle_model, assigned_to, matched_graphics_job_id, graphics_install_status')
+        .select('id, status, vin, customer_name, vehicle_year, vehicle_make, vehicle_model, assigned_to, matched_graphics_job_id, graphics_install_status, qc_completed_at')
         .eq('id', vehicleId)
         .single(),
       serviceSupabase.from('profiles').select('id, full_name, role').eq('id', user.id).single(),
@@ -78,8 +79,20 @@ export async function POST(request: Request) {
       }, { status: 400 });
     }
 
-    // Enforce artifact requirements on in_progress → complete
-    if (currentStatus === 'in_progress' && newStatus === 'complete') {
+    // Enforce artifact requirements on EVERY transition into 'complete'.
+    // The gate used to run only on in_progress → complete, so received →
+    // complete (a legal transition) skipped the whole ceremony: no photos,
+    // no required tasks (never instantiated), no graphics-lane check, no QC
+    // stamp, no notifications. The one exception is shipped → complete —
+    // that's an un-ship bookkeeping correction on a vehicle that already
+    // completed, not a new completion.
+    const isCompleting = newStatus === 'complete' && currentStatus !== 'shipped';
+    if (isCompleting) {
+      // A vehicle completed straight from 'received' never had its checklist
+      // instantiated — required tasks would pass vacuously. Instantiate on
+      // demand (no-op when tasks already exist) so the gate has teeth.
+      await instantiateChecklist(vehicleId, !!vehicle.matched_graphics_job_id);
+
       const [photoResult, taskResult] = await Promise.all([
         serviceSupabase
           .from('vehicle_photos')
@@ -119,11 +132,15 @@ export async function POST(request: Request) {
       }
     }
 
-    // Build update payload
+    // Build update payload. QC stamps apply to every real completion, but
+    // never overwrite an earlier stamp (shipped → complete re-entry, or a
+    // second completion after in_progress rework keeps the original).
     const updatePayload: Record<string, any> = { status: newStatus };
-    if (currentStatus === 'in_progress' && newStatus === 'complete') {
-      updatePayload.qc_completed_at = new Date().toISOString();
-      updatePayload.qc_completed_by = user.id;
+    if (isCompleting) {
+      if (!(vehicle as any).qc_completed_at) {
+        updatePayload.qc_completed_at = new Date().toISOString();
+        updatePayload.qc_completed_by = user.id;
+      }
       if (note?.trim()) updatePayload.completion_notes = note.trim();
     }
 
@@ -152,8 +169,9 @@ export async function POST(request: Request) {
       await instantiateChecklist(vehicleId, !!vehicle.matched_graphics_job_id);
     }
 
-    // On in_progress → complete, fire notifications.
-    if (currentStatus === 'in_progress' && newStatus === 'complete') {
+    // On any real completion, fire notifications (shipped → complete is a
+    // bookkeeping correction — the customer was already told).
+    if (isCompleting) {
       // Don't block the response on notifications
       notifyCompletion(vehicle, userName, user.email || null).catch((err) => {
         console.error('notifyCompletion error:', err);
@@ -191,32 +209,15 @@ async function instantiateChecklist(vehicleId: string, hasGraphics: boolean) {
     if (count && count > 0) return;
 
     // Simple category heuristic — future work can extend this based on
-    // matched PO line items vs graphics jobs.
+    // matched PO line items vs graphics jobs. The shared helper tries the
+    // exact category first and falls back to 'mixed' (the old single-query
+    // ordering trick returned the mixed template for upfit-only vehicles,
+    // blocking their completion on a required graphics task).
     const preferredCategory = hasGraphics ? 'mixed' : 'upfit';
-    const { data: template } = await serviceSupabase
-      .from('install_checklist_templates')
-      .select('id, items, install_category')
-      .eq('is_active', true)
-      .in('install_category', [preferredCategory, 'mixed'])
-      .order('install_category', { ascending: preferredCategory !== 'mixed' })
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
+    const template = await loadChecklistTemplate(serviceSupabase, preferredCategory);
+    if (!template) return;
 
-    if (!template?.items || !Array.isArray(template.items)) return;
-
-    const rows = (template.items as Array<{ label: string; required?: boolean; key?: string }>)
-      .filter((i) => i?.label)
-      .map((item, i) => ({
-        job_type: 'fleet_checkin',
-        job_id: vehicleId,
-        label: item.label,
-        required: item.required === true,
-        sort_order: i,
-        template_id: template.id,
-        task_key: item.key || null,
-      }));
-
+    const rows = buildTaskRows(template, vehicleId);
     if (rows.length > 0) {
       await serviceSupabase.from('job_tasks').insert(rows);
     }
