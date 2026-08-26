@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireRole } from '@/lib/api-auth';
+import { requireSuperAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -25,7 +25,7 @@ function getSupabase() {
 
 // GET ?userId= — that user's settings as their own Settings page sees them.
 export async function GET(req: NextRequest) {
-  const auth = await requireRole(req, ['super_admin']);
+  const auth = await requireSuperAdmin(req);
   if (auth.error) return auth.error;
 
   const userId = req.nextUrl.searchParams.get('userId') || '';
@@ -75,7 +75,7 @@ const PutSchema = z.object({
 
 // PUT — apply edits to that user's settings.
 export async function PUT(req: NextRequest) {
-  const auth = await requireRole(req, ['super_admin']);
+  const auth = await requireSuperAdmin(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, PutSchema);

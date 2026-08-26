@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAdmin } from '@/lib/api-auth';
+import { requireAdmin, getProfileRoles } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -81,6 +81,12 @@ export async function POST(req: NextRequest) {
 
   try {
     const userRoles: string[] = (roles && roles.length > 0) ? roles : (role ? [role] : []);
+    // Only a super_admin may mint another super_admin. Without this, a regular
+    // admin (requireAdmin passes them) could POST roles:['super_admin'] and
+    // hand out the owner-level wall — financials, user management, audit log.
+    if (userRoles.includes('super_admin') && !getProfileRoles(auth.profile).includes('super_admin')) {
+      return NextResponse.json({ error: 'Forbidden: only a super admin can create a super admin account' }, { status: 403 });
+    }
     // super_admin implies admin in the roles array — without it the account
     // fails every roles-array gate (requireAdmin, PO-note tagging, View As).
     if (userRoles.includes('super_admin') && !userRoles.includes('admin')) userRoles.push('admin');
