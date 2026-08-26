@@ -88,6 +88,15 @@ function profileRoles(profile: any): string[] {
 }
 
 /**
+ * Public accessor for a profile's effective roles (roles[] with a fallback to
+ * the scalar role), so route handlers can make role decisions on the caller
+ * without re-implementing the array/scalar rule.
+ */
+export function getProfileRoles(profile: any): string[] {
+  return profileRoles(profile);
+}
+
+/**
  * Verify the request has a valid authenticated session AND the account has
  * been approved by an admin. Pending, denied, and deactivated accounts are
  * rejected. Returns the user's profile so downstream checks can reuse it.
@@ -114,11 +123,15 @@ export async function requireAuth(req: NextRequest): Promise<AuthResult> {
     const service = createClient(supabaseUrl, supabaseServiceKey);
     const { data: profile } = await service
       .from('profiles')
-      .select('id, role, roles, status')
+      .select('id, role, roles, status, deactivated')
       .eq('id', user.id)
       .single();
 
-    if (!profile || profile.status !== 'approved') {
+    // Reject pending/denied accounts AND soft-deleted (deactivated) ones. The
+    // Users page tells admins a deactivated account "will no longer be able to
+    // log in", but nothing enforced that — a deactivated user with a live
+    // session (or who simply logs back in) kept full role access until now.
+    if (!profile || profile.status !== 'approved' || profile.deactivated === true) {
       return { user, profile, error: NextResponse.json({ error: 'Forbidden: account not approved' }, { status: 403 }) };
     }
 
@@ -175,6 +188,26 @@ export async function requireFinancials(req: NextRequest): Promise<AuthResult> {
   const roles = profileRoles(auth.profile);
   if (!(roles.includes('super_admin') || roles.includes('executive'))) {
     return { user: auth.user, profile: auth.profile, error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) };
+  }
+
+  return auth;
+}
+
+/**
+ * Verify the request has a valid session AND the user is a super_admin.
+ *
+ * Unlike requireRole(req, ['super_admin']), this does NOT auto-pass regular
+ * admins — requireRole short-circuits on any admin before checking the allowed
+ * list, which silently defeats a super-admin-only gate. Use this for the
+ * owner-level wall (editing other users' settings, granting super_admin).
+ */
+export async function requireSuperAdmin(req: NextRequest): Promise<AuthResult> {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth;
+
+  const roles = profileRoles(auth.profile);
+  if (!roles.includes('super_admin')) {
+    return { user: auth.user, profile: auth.profile, error: NextResponse.json({ error: 'Forbidden: super admin required' }, { status: 403 }) };
   }
 
   return auth;
