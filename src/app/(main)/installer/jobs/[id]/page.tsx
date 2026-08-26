@@ -136,14 +136,17 @@ export default function InstallerJobDetailPage() {
     if (!job) return;
     setUpdating(true);
     setActionError('');
-    const { error } = await supabase.from('cni_jobs').update({
-      schedule_confirmed_at: new Date().toISOString(),
-      status: 'scheduled_confirmed',
-      updated_by: user?.id,
-    }).eq('id', job.id);
-    setUpdating(false);
-    if (error) { setActionError(error.message); return; }
-    await loadJob();
+    try {
+      const res = await fetch('/api/cni/update-schedule', {
+        method: 'POST', headers: await authHeaders(),
+        body: JSON.stringify({ jobId: job.id, action: 'accept' }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setActionError(json.error || 'Failed to accept schedule'); return; }
+      await loadJob();
+    } finally {
+      setUpdating(false);
+    }
   };
 
   // ...or declines it (with an optional reason), bouncing it back to the
@@ -153,16 +156,17 @@ export default function InstallerJobDetailPage() {
     const note = (await dialog.prompt('Optional: why are you declining this time? (helps BMG pick a new one)')) || null;
     setUpdating(true);
     setActionError('');
-    const { error } = await supabase.from('cni_jobs').update({
-      status: 'assigned_awaiting_scheduling',
-      schedule_decline_note: note,
-      scheduled_start_at: null,
-      scheduled_end_at: null,
-      updated_by: user?.id,
-    }).eq('id', job.id);
-    setUpdating(false);
-    if (error) { setActionError(error.message); return; }
-    await loadJob();
+    try {
+      const res = await fetch('/api/cni/update-schedule', {
+        method: 'POST', headers: await authHeaders(),
+        body: JSON.stringify({ jobId: job.id, action: 'decline', note }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setActionError(json.error || 'Failed to decline schedule'); return; }
+      await loadJob();
+    } finally {
+      setUpdating(false);
+    }
   };
 
   // Complete a VIN via the server route, which logs to scan_logs when the job
@@ -325,14 +329,12 @@ export default function InstallerJobDetailPage() {
           body: JSON.stringify({ shiftId: shiftInfo.shift.id }),
         });
       }
-      const { error } = await supabase.from('cni_jobs').update({
-        status: 'completed_pending_review',
-        completed_at: new Date().toISOString(),
-        // The 045 status-history trigger logs changed_by = updated_by; without
-        // this, installer-driven completions audit as changed_by NULL.
-        updated_by: user?.id ?? null,
-      }).eq('id', job.id);
-      if (error) { setActionError('Failed to mark complete: ' + error.message); return; }
+      const res = await fetch('/api/cni/complete-job', {
+        method: 'POST', headers: await authHeaders(),
+        body: JSON.stringify({ jobId: job.id }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setActionError('Failed to mark complete: ' + (json.error || 'unknown error')); return; }
       await loadJob();
     } finally {
       setUpdating(false);
@@ -581,12 +583,15 @@ export default function InstallerJobDetailPage() {
             <button
               onClick={async () => {
                 setUpdating(true);
-                await supabase.from('cni_jobs').update({
-                  material_delivered: true,
-                  material_delivered_at: new Date().toISOString(),
-                }).eq('id', job.id);
-                await loadJob();
-                setUpdating(false);
+                try {
+                  await fetch('/api/cni/materials-received', {
+                    method: 'POST', headers: await authHeaders(),
+                    body: JSON.stringify({ jobId: job.id }),
+                  });
+                  await loadJob();
+                } finally {
+                  setUpdating(false);
+                }
               }}
               disabled={updating}
               style={{

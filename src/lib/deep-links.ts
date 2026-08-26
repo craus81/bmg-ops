@@ -102,6 +102,11 @@ export const deepLinks = {
   /** The installer's own earnings/payout history — the destination for CNI
    *  payout-status notifications (there is no per-payout page). */
   earnings: () => '/earnings',
+  /** Installer-portal job detail — the landing for installer-facing CNI
+   *  notifications (assigned, schedule proposed). The page renders the
+   *  Accept/Decline schedule controls, so it needs no extra param. Distinct
+   *  from `cniJob`, which is the admin-side record an installer can't open. */
+  installerJob: (jobId: string) => `/installer/jobs/${jobId}`,
   /** System health dashboard (checks are keyed by sync type, not record ids). */
   systemHealth: () => '/admin/system-health',
   /** System health's Email delivery section — flashes one email_log row.

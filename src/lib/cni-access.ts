@@ -45,3 +45,47 @@ export async function canActOnCniJob(
   const companyId = await getCniCompanyId(service, userId);
   return companyId !== null && companyId === job.assigned_company_id;
 }
+
+/**
+ * The BMG-side people who coordinate CNI work — approved admins (scalar role or
+ * roles[] entry). The recipient set for installer-lifecycle notifications
+ * (schedule declined, job complete, photos ready). Optionally drops the actor
+ * so nobody is pinged about their own action. Mirrors the my-docs/my-invoices
+ * staff-notify convention.
+ */
+export async function getCniStaffIds(
+  service: SupabaseClient,
+  excludeUserId?: string | null,
+): Promise<string[]> {
+  const { data } = await service
+    .from('profiles')
+    .select('id')
+    .or('role.eq.admin,roles.cs.{admin}')
+    .eq('status', 'approved');
+  return (data || [])
+    .map((p: any) => p.id as string)
+    .filter((id: string) => id && id !== excludeUserId);
+}
+
+/**
+ * The installers to notify when a company is assigned/scheduled to a job:
+ * approved profiles at that company carrying the installer role (scalar or
+ * roles[]). A CNI company's roster is simply its profiles.company_id members.
+ * Optionally drops the actor.
+ */
+export async function getCompanyInstallerIds(
+  service: SupabaseClient,
+  companyId: string,
+  excludeUserId?: string | null,
+): Promise<string[]> {
+  if (!companyId) return [];
+  const { data } = await service
+    .from('profiles')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('status', 'approved')
+    .or('role.eq.installer,roles.cs.{installer}');
+  return (data || [])
+    .map((p: any) => p.id as string)
+    .filter((id: string) => id && id !== excludeUserId);
+}
