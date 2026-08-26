@@ -82,7 +82,7 @@ export default function KnowledgePage() {
 
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
-    if (!isAdmin || !hasFeature('knowledge_base')) { router.push('/home'); return; }
+    if (!hasFeature('knowledge_base')) { router.push('/home'); return; }
     loadDocs();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, isAdmin]);

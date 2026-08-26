@@ -112,7 +112,7 @@ export default function SystemHealthPage() {
 
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
-    if (!isAdmin || !hasFeature('system_health')) { router.push('/home'); return; }
+    if (!hasFeature('system_health')) { router.push('/home'); return; }
     load();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasFeature identity changes per render; auth state deps cover it
   }, [authLoading, isAdmin, router, load]);

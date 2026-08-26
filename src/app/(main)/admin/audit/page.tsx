@@ -77,7 +77,7 @@ export default function AuditLogPage() {
 
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
-    if (!isAdmin || !hasFeature('audit_log')) { router.push('/home'); return; }
+    if (!hasFeature('audit_log')) { router.push('/home'); return; }
     // Debounce so each keystroke doesn't fire a query.
     const t = setTimeout(async () => {
       setLoading(true);
