@@ -65,15 +65,25 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 3. Mirror the first assignee onto the legacy graphics assigned_to field.
-    // Vehicle assignments live in job_assignments alone: the old mirror onto
-    // the retired scanned_vehicles table silently matched nothing (the
-    // tracking page passes fleet_checkins ids), so it was dropped with the
-    // table (cni-redesign Phase 0).
+    // 3. Mirror the first assignee onto the record's own assigned_to column.
+    // job_assignments is the source of truth, but three consumers read the
+    // scalar mirror instead — the tracking board card, the stuck-vehicle cron,
+    // and graphics notify-ready all read fleet_checkins.assigned_to. The old
+    // mirror targeted the RETIRED scanned_vehicles table and so silently wrote
+    // nothing (jobType 'scanned_vehicle' carries a fleet_checkins id — see the
+    // completion notifier, which reads job_assignments by that id); it's
+    // restored here against fleet_checkins so assignees show on the card and
+    // receive stuck alerts again.
+    const firstAssignee = userIds.length > 0 ? userIds[0] : null;
     if (jobType === 'graphics_job') {
       await supabase
         .from('graphics_jobs')
-        .update({ assigned_to: userIds.length > 0 ? userIds[0] : null, updated_by: assignedBy || null })
+        .update({ assigned_to: firstAssignee, updated_by: assignedBy || null })
+        .eq('id', jobId);
+    } else if (jobType === 'scanned_vehicle') {
+      await supabase
+        .from('fleet_checkins')
+        .update({ assigned_to: firstAssignee })
         .eq('id', jobId);
     }
 
@@ -155,9 +165,9 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Mirror the next assignee onto the legacy graphics assigned_to field
-    // (vehicle assignments live in job_assignments alone — see POST step 3).
-    if (jobType === 'graphics_job') {
+    // Mirror the next assignee onto the record's scalar assigned_to field
+    // (the readers use the mirror — see POST step 3).
+    if (jobType === 'graphics_job' || jobType === 'scanned_vehicle') {
       const { data: remaining } = await supabase
         .from('job_assignments')
         .select('user_id')
@@ -165,11 +175,13 @@ export async function DELETE(req: NextRequest) {
         .eq('job_id', jobId)
         .order('assigned_at', { ascending: true })
         .limit(1);
+      const nextAssignee = remaining?.[0]?.user_id || null;
 
-      await supabase
-        .from('graphics_jobs')
-        .update({ assigned_to: remaining?.[0]?.user_id || null })
-        .eq('id', jobId);
+      if (jobType === 'graphics_job') {
+        await supabase.from('graphics_jobs').update({ assigned_to: nextAssignee }).eq('id', jobId);
+      } else {
+        await supabase.from('fleet_checkins').update({ assigned_to: nextAssignee }).eq('id', jobId);
+      }
     }
 
     return NextResponse.json({ success: true });
