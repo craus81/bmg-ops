@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireStaff } from '@/lib/api-auth';
+import { loadChecklistTemplate, buildTaskRows } from '@/lib/install-checklist';
 import { createClient } from '@supabase/supabase-js';
 
 export const dynamic = 'force-dynamic';
@@ -42,18 +43,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .single();
   if (!vehicle) return NextResponse.json({ error: 'Vehicle not found' }, { status: 404 });
 
+  // Shared lookup with update-status (exact category first, 'mixed' fallback,
+  // newest active wins) — the two routes used to disagree on both ordering
+  // and tiebreak, so "Reset checklist" could produce a different checklist
+  // than the automatic instantiation.
   const preferredCategory = vehicle.matched_graphics_job_id ? 'mixed' : 'upfit';
-  const { data: template } = await supabase
-    .from('install_checklist_templates')
-    .select('id, items, install_category')
-    .eq('is_active', true)
-    .in('install_category', [preferredCategory, 'mixed'])
-    .order('install_category', { ascending: preferredCategory !== 'mixed' })
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const template = await loadChecklistTemplate(supabase, preferredCategory);
 
-  if (!template?.items || !Array.isArray(template.items)) {
+  if (!template) {
     return NextResponse.json({ error: 'No active template found' }, { status: 404 });
   }
 
@@ -63,17 +60,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .eq('job_type', 'fleet_checkin')
     .eq('job_id', params.id);
 
-  const rows = (template.items as Array<{ label: string; required?: boolean; key?: string }>)
-    .filter((i) => i?.label)
-    .map((item, i) => ({
-      job_type: 'fleet_checkin',
-      job_id: params.id,
-      label: item.label,
-      required: item.required === true,
-      sort_order: i,
-      template_id: template.id,
-      task_key: item.key || null,
-    }));
+  const rows = buildTaskRows(template, params.id);
 
   if (rows.length > 0) {
     await supabase.from('job_tasks').insert(rows);
