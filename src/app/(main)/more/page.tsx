@@ -75,7 +75,7 @@ export default function MorePage() {
     {
       header: 'CNI Network',
       items: [
-        { title: 'Certified Network Installers', sub: 'Jobs, companies, installers & vendor payments', path: '/admin/cni', show: isAdmin },
+        { title: 'Certified Network Installers', sub: 'Jobs, companies, installers & vendor payments', path: '/admin/cni', show: F('cni_admin') },
         { title: 'Install Guides', sub: 'Dimension a 1:20 template & export a placement guide PDF for installers', path: '/graphics/install-guides', show: isAdmin || isSales || isGraphicsProduction },
         { title: 'Installer Portal', sub: 'The CNI installer view — available jobs, bids & invoices', path: '/installer', show: F('cni_portal') },
         { title: 'Import Installs', sub: 'Bulk-import installs from a spreadsheet, credited to a CNI installer', path: '/admin/import-installs', show: isAdmin },

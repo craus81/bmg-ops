@@ -46,7 +46,7 @@ type Filter = 'active' | 'all' | 'overdue' | 'needs_photos' | string;
 
 export default function CniDashboardPage() {
   const router = useRouter();
-  const { isAdmin, loading: authLoading } = useAuth();
+  const { isAdmin, hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
   const [jobs, setJobs] = useState<CniJobSummary[]>([]);
   const [installerCount, setInstallerCount] = useState(0);
@@ -59,7 +59,7 @@ export default function CniDashboardPage() {
 
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
-    if (!isAdmin) { router.push('/home'); return; }
+    if (!hasFeature('cni_admin')) { router.push('/home'); return; }
     loadData();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, isAdmin]);

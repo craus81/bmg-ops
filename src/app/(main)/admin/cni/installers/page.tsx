@@ -27,7 +27,7 @@ interface CniInstaller {
 
 export default function CniInstallersPage() {
   const router = useRouter();
-  const { isAdmin, loading: authLoading } = useAuth();
+  const { isAdmin, hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
   const [installers, setInstallers] = useState<CniInstaller[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,7 +47,7 @@ export default function CniInstallersPage() {
 
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
-    if (!isAdmin) { router.push('/home'); return; }
+    if (!hasFeature('cni_admin')) { router.push('/home'); return; }
     loadInstallers();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, isAdmin]);
