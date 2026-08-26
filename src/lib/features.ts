@@ -22,15 +22,12 @@ export const FEATURES = {
   parts_catalog: 'Parts Catalog',
   schedule: 'Schedule',
   reports: 'Reports',
-  photo_reviews: 'Photo Reviews',
   user_management: 'User Management',
-  cni_management: 'CNI Management',
+  cni_portal: 'CNI Portal',
   knowledge_base: 'Knowledge Base',
   vendor_payments: 'Vendor Payments',
   bulk_upload: 'Bulk Upload (Templates)',
-  proof_hygiene: 'Proof Search', // legacy key — now gates the Proof Search page only
-  all_jobs: 'CNI Jobs',
-  catalog_management: 'Part Catalog Management',
+  proof_search: 'Proof Search',
   prospects: 'Customers (Sales CRM)',
   upfit_projects: 'Upfit Projects',
   upfit_configurator: 'Upfit Designer (3D)',
@@ -79,7 +76,7 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
   ],
 
   installer: [
-    'home', 'scan', 'time', 'messages', 'cni_management',
+    'home', 'scan', 'time', 'messages', 'cni_portal',
   ],
 
   // AP/bookkeeping: the payment queue plus enough context to verify what's
