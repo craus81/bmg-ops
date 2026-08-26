@@ -62,7 +62,15 @@ export async function sendMMS(to: string, body: string, attachments: SmsAttachme
 }
 
 export function verifyWebhookSignature(url: string, params: Record<string, string>, headers: Record<string, string>): boolean {
-  if (process.env.TWILIO_VALIDATE_SIGNATURE !== 'true') return true;
+  // Secure by default. This webhook mutates data (injects inbound messages,
+  // and the legacy path overwrites a matched profile's phone number), so an
+  // unsigned request must be rejected. The old default failed OPEN whenever
+  // TWILIO_VALIDATE_SIGNATURE was unset — anyone on the internet could forge
+  // inbound SMS. Now validation is always on; the only opt-out is an explicit
+  // TWILIO_VALIDATE_SIGNATURE=false (discouraged; only if the webhook URL can't
+  // be made to match what Twilio signs).
+  if (process.env.TWILIO_VALIDATE_SIGNATURE === 'false') return true;
+  if (!authToken) return false; // cannot validate → reject
   const sig = headers['x-twilio-signature'] || headers['X-Twilio-Signature'] || '';
   return validateTwilioSignature(url, params, sig);
 }
