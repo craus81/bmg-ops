@@ -28,7 +28,7 @@ const CATEGORY_LABELS: Record<Category, string> = {
 
 export default function InstallChecklistsAdminPage() {
   const router = useRouter();
-  const { user, isAdmin, loading: authLoading } = useAuth();
+  const { user, hasFeature, loading: authLoading } = useAuth();
   const dialog = useDialog();
 
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -48,9 +48,9 @@ export default function InstallChecklistsAdminPage() {
   useEffect(() => {
     if (!user) return;
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
-    if (!isAdmin) { router.push('/home'); return; }
+    if (!hasFeature('install_admin')) { router.push('/home'); return; }
     load();
-  }, [authLoading, user, isAdmin, router, load]);
+  }, [authLoading, user, hasFeature, router, load]);
 
   const startNew = () => {
     setEditingId('new');

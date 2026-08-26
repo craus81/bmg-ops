@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuth } from '@/components/AuthProvider';
+import { useRequireFeature } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import ProofThumbnail from '@/components/ProofThumbnail';
 
@@ -81,7 +81,7 @@ function QueueThumb({ row }: { row: QueueRow }) {
 
 export default function ProofSweepPage() {
   const router = useRouter();
-  const { isAdmin } = useAuth();
+  const { allowed: canSweep } = useRequireFeature('proof_admin');
 
   const [pasted, setPasted] = useState('');
   const [days, setDays] = useState(365);
@@ -109,7 +109,7 @@ export default function ProofSweepPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
   useEffect(() => { loadQueue(); }, []);
 
-  if (isAdmin === false) { router.push('/home'); return null; }
+  if (!canSweep) return null;
 
   const post = async (body: unknown) => {
     const res = await fetch('/api/parts/proof-sweep', {

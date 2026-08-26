@@ -26,7 +26,7 @@ interface PayrollCredit {
  */
 export default function PayrollPage() {
   const router = useRouter();
-  const { isAdmin, loading: authLoading } = useAuth();
+  const { hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
 
   const [period, setPeriod] = useState<PayPeriod>(() => periodForDate(new Date()));
@@ -64,10 +64,10 @@ export default function PayrollPage() {
 
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
-    if (!isAdmin) { router.push('/home'); return; }
+    if (!hasFeature('payroll')) { router.push('/home'); return; }
     load(period);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, isAdmin, period]);
+  }, [authLoading, hasFeature, period]);
 
   const byPerson = new Map<string, { name: string; rows: PayrollCredit[]; total: number; unpriced: number; locked: number }>();
   for (const c of credits) {
@@ -139,7 +139,7 @@ export default function PayrollPage() {
     }
   };
 
-  if (!isAdmin) return null;
+  if (!hasFeature('payroll')) return null;
 
   return (
     <div>
