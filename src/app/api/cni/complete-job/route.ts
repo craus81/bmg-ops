@@ -53,6 +53,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, status: job.status, alreadyComplete: true });
   }
 
+  // Only an in-progress job can be marked complete — the same gate the installer
+  // UI enforces (the button shows only on 'in_progress'). Enforced server-side so
+  // a direct POST can't reopen a coordinator-closed job (resetting completed_at
+  // and re-notifying) or jump the lifecycle from an earlier state.
+  if (job.status !== 'in_progress') {
+    return NextResponse.json({ error: 'Only an in-progress job can be marked complete.' }, { status: 409 });
+  }
+
   const { error } = await supabase.from('cni_jobs').update({
     status: 'completed_pending_review',
     completed_at: new Date().toISOString(),
