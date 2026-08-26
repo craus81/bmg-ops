@@ -50,6 +50,9 @@ export async function POST(req: NextRequest) {
   const { error } = await supabase.from('cni_jobs').update({
     material_delivered: true,
     material_delivered_at: new Date().toISOString(),
+    // Attribute the audit-diff row to the caller (the trigger falls back to a
+    // NULL 'system' actor otherwise, since the service role has no auth.uid()).
+    updated_by: auth.user.id,
   }).eq('id', jobId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

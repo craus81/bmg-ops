@@ -49,6 +49,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
+  // Accept/decline only make sense while a proposed time is awaiting the
+  // installer's confirmation — the same gate the UI enforces (buttons show only
+  // on 'scheduled_pending_confirmation'). Enforced server-side so a direct POST
+  // can't revert an in-progress/closed job or confirm a schedule that has no
+  // proposed time.
+  if (job.status !== 'scheduled_pending_confirmation') {
+    return NextResponse.json({ error: 'Schedule can only be accepted or declined while awaiting confirmation.' }, { status: 409 });
+  }
+
   if (action === 'accept') {
     const { error } = await supabase.from('cni_jobs').update({
       schedule_confirmed_at: new Date().toISOString(),
