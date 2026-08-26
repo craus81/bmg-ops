@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { r2Upload, r2Delete, r2Get, r2PublicUrl } from '@/lib/r2';
 import { requireAuth } from '@/lib/api-auth';
+import { checkStoragePath } from '@/lib/storage-guard';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -22,6 +23,8 @@ export async function GET(req: NextRequest) {
   if (!bucket || !path || bucket.length > 80 || path.length > 1000) {
     return NextResponse.json({ error: 'Missing bucket or path' }, { status: 400 });
   }
+  const readErr = checkStoragePath(bucket, path, { write: false });
+  if (readErr) return NextResponse.json({ error: readErr }, { status: 403 });
 
   try {
     const result = await r2Get(bucket, path);
@@ -54,6 +57,8 @@ export async function POST(req: NextRequest) {
     if (!file || !bucket || !path) {
       return NextResponse.json({ error: 'Missing file, bucket, or path' }, { status: 400 });
     }
+    const writeErr = checkStoragePath(bucket, path, { write: true });
+    if (writeErr) return NextResponse.json({ error: writeErr }, { status: 403 });
 
     const buffer = Buffer.from(await file.arrayBuffer());
     const result = await r2Upload(bucket, path, buffer, file.type);
@@ -81,6 +86,8 @@ export async function DELETE(req: NextRequest) {
   const parsed = await validateBody(req, DeleteSchema);
   if (parsed.error) return parsed.error;
   const { bucket, path } = parsed.data;
+  const delErr = checkStoragePath(bucket, path, { write: true });
+  if (delErr) return NextResponse.json({ error: delErr }, { status: 403 });
 
   try {
     const result = await r2Delete(bucket, path);
