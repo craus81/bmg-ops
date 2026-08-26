@@ -487,6 +487,10 @@ export default function EstimatesPage() {
   // docs/customer-email-standard.md): editable recipients, bcc-me,
   // personal note, and the exact rendered document as a live preview.
   const [approvalModal, setApprovalModal] = useState(false);
+  // Filename of the merged estimate PDF the send will auto-attach (linked
+  // wrap quotes with estimate_attach) — from the preview response; null =
+  // no attachment.
+  const [approvalPdfName, setApprovalPdfName] = useState<string | null>(null);
   // Email-the-PDF compose modal (FleetSuite enhanced-estimate copy).
   const [pdfEmailModal, setPdfEmailModal] = useState(false);
   // Follow-up actions on sent estimates (list rows): compose modal target
@@ -1418,7 +1422,12 @@ export default function EstimatesPage() {
         }),
       });
       const data = await res.json();
-      if (res.ok && data.preview) return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      if (res.ok && data.preview) {
+        // Linked wrap quotes → the send auto-attaches the merged estimate
+        // PDF; the server names it so the compose screen can say so.
+        setApprovalPdfName((Array.isArray(data.attachments) && data.attachments[0]) || null);
+        return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      }
       return { error: data.error || 'Unknown error' };
     } catch {
       return { error: 'Network error — please try again.' };
@@ -1435,6 +1444,7 @@ export default function EstimatesPage() {
     const currentStatus = estimates.find(e => e.id === editingId)?.status || 'draft';
     await saveEstimate(currentStatus);
     setSendingForApproval(false);
+    setApprovalPdfName(null);
     setApprovalModal(true);
   };
 
@@ -3425,6 +3435,11 @@ export default function EstimatesPage() {
           messagePlaceholder="Optional note to the customer — added above the estimate…"
           allowSendWithoutTo
           emptyToNote="No email on file — add a contact, or it sends by SMS only if a phone is on file."
+          intro={approvalPdfName ? (
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              📎 <b style={{ color: 'var(--text-secondary)' }}>{approvalPdfName}</b> is attached automatically — the merged estimate PDF with the linked wrap quote&apos;s coverage picture, proofs, and vinyl details.
+            </div>
+          ) : undefined}
           fetchPreview={fetchApprovalPreview}
           onSend={confirmSendApproval}
           onClose={() => setApprovalModal(false)}
