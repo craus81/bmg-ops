@@ -113,12 +113,18 @@ export default function InstallerPortalPage() {
       .order('created_at', { ascending: false });
     setJobs(jobsData || []);
 
-    // Count pending invites (unseen)
-    const { count: invCount } = await supabase
+    // Count pending invites (unseen) — to me directly OR to my company. The
+    // admin UI only ever sends COMPANY invites now (installer_id: null,
+    // company_id set), so counting installer_id alone left this badge stuck
+    // at 0 for every modern invite; the Available page counts both.
+    let inviteQuery = supabase
       .from('cni_job_invites')
       .select('*', { count: 'exact', head: true })
-      .eq('installer_id', effectiveId)
       .is('seen_at', null);
+    inviteQuery = companyId
+      ? inviteQuery.or(`installer_id.eq.${effectiveId},company_id.eq.${companyId}`)
+      : inviteQuery.eq('installer_id', effectiveId);
+    const { count: invCount } = await inviteQuery;
     setInviteCount(invCount || 0);
 
     // Count open board jobs
