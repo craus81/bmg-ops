@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect, useRef, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuth } from '@/components/AuthProvider';
+import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { theme } from '@/lib/theme';
@@ -134,9 +134,7 @@ export default function ImportInstallsPage() {
   const [lastDuplicates, setLastDuplicates] = useState<{ vin: string; part?: string }[]>([]);
   const [lastShiftId, setLastShiftId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (isAdmin === false) router.push('/home');
-  }, [isAdmin, router]);
+  useRequireFeature('data_import');
 
   useEffect(() => {
     if (!isAdmin) return;

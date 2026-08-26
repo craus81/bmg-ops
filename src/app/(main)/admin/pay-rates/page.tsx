@@ -20,7 +20,7 @@ interface NeedsPricing {
 
 export default function PayRatesPage() {
   const router = useRouter();
-  const { isAdmin, loading: authLoading } = useAuth();
+  const { hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
 
   const [loading, setLoading] = useState(true);
@@ -45,10 +45,10 @@ export default function PayRatesPage() {
 
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
-    if (!isAdmin) { router.push('/home'); return; }
+    if (!hasFeature('payroll')) { router.push('/home'); return; }
     loadRates();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [authLoading, isAdmin]);
+  }, [authLoading, hasFeature]);
 
   const authHeaders = async (): Promise<Record<string, string>> => {
     const { data: { session } } = await supabase.auth.getSession();

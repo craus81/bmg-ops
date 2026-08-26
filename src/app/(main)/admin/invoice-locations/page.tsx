@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuth } from '@/components/AuthProvider';
+import { useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 
@@ -54,7 +54,6 @@ type Filter = 'all' | 'pending' | 'indeterminate' | 'correct';
 
 export default function InvoiceLocationsPage() {
   const router = useRouter();
-  const { isAdmin } = useAuth();
   const dialog = useDialog();
 
   const [loading, setLoading] = useState(false);
@@ -71,9 +70,7 @@ export default function InvoiceLocationsPage() {
   const [pdfLoadingId, setPdfLoadingId] = useState<string | null>(null);
   const [restoredCount, setRestoredCount] = useState(0);
 
-  useEffect(() => {
-    if (isAdmin === false) router.push('/home');
-  }, [isAdmin, router]);
+  useRequireFeature('invoice_admin');
 
   // Persist the user's unapplied picks (those that differ from the invoice's
   // current location) so the work survives a tab close / navigation. Skipped

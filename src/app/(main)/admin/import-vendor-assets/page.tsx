@@ -2,7 +2,7 @@
 
 import { useState, useEffect, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuth } from '@/components/AuthProvider';
+import { useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import { ensureScheme } from '@/lib/vendor-catalog-import';
@@ -56,7 +56,7 @@ const BATCH = 25;
 
 export default function ImportVendorAssetsPage() {
   const router = useRouter();
-  const { isAdmin } = useAuth();
+  const { allowed: canImport } = useRequireFeature('data_import');
   const dialog = useDialog();
 
   const [siteUrl, setSiteUrl] = useState('https://www.rangerdesign.com');
@@ -217,7 +217,7 @@ export default function ImportVendorAssetsPage() {
   const [failures, setFailures] = useState<RunRow[]>([]);
   const [ranTotal, setRanTotal] = useState(0);
 
-  if (isAdmin === false) { router.push('/home'); return null; }
+  if (!canImport) return null;
 
   const post = async (body: unknown) => {
     const res = await fetch('/api/parts/import-vendor-assets', {
