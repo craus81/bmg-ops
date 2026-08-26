@@ -90,7 +90,7 @@ export default function CniCompanyDetailPage() {
   const dialog = useDialog();
   const params = useParams();
   const companyId = params.id as string;
-  const { isAdmin, loading: authLoading } = useAuth();
+  const { isAdmin, hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
 
   const [loading, setLoading] = useState(true);
@@ -134,7 +134,7 @@ export default function CniCompanyDetailPage() {
 
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
-    if (!isAdmin) { router.push('/home'); return; }
+    if (!hasFeature('cni_admin')) { router.push('/home'); return; }
     loadData();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, isAdmin, companyId]);

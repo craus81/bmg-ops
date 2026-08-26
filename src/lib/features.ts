@@ -24,6 +24,7 @@ export const FEATURES = {
   reports: 'Reports',
   user_management: 'User Management',
   cni_portal: 'CNI Portal',
+  cni_admin: 'CNI Admin Console',
   knowledge_base: 'Knowledge Base',
   vendor_payments: 'Vendor Payments',
   bulk_upload: 'Bulk Upload (Templates)',

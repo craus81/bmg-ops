@@ -45,7 +45,7 @@ export default function CniInstallerDetailPage() {
   const params = useParams();
   const searchParams = useSearchParams();
   const userId = params.id as string;
-  const { isAdmin, user, loading: authLoading } = useAuth();
+  const { isAdmin, user, hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
 
@@ -86,7 +86,7 @@ export default function CniInstallerDetailPage() {
 
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
-    if (!isAdmin) { router.push('/home'); return; }
+    if (!hasFeature('cni_admin')) { router.push('/home'); return; }
     loadData();
     // A mention deep link (?note=<id>) scroll-flashes that note once the
     // notes list renders.
