@@ -74,7 +74,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 |---|---|---|
 | **Now** — security & data-loss (1–9) | ✅ done | PRs #630–#634; item 9's `cni_jobs` half finished by the CNI hardening (#641–#646, migration 226). |
 | **Next** — close the workflow chain (10–16) | ⚠️ mostly done | PRs #635–#640; #14 CNI notifications fully wired (#640–#646), but "kill the legacy CNI invoice flow" and the "graphics→CNI job bridge" remain open. |
-| **Soon** — the role cleanup (17–20) | 🔄 in progress | The installer-exclusion half of #19 landed with migration 224; the rest is being built now. |
+| **Soon** — the role cleanup (17–20) | ⚠️ mostly done | #17 infra + owner-page gates (#649), #18a registry (#648), #19 install roles (#650), #20 dead-end menus (#651) all shipped. #18b: the CNI console is keyed (#652); the remaining raw-`isAdmin` standalone tools (payroll, part/import/proof admin) and the ungated-by-URL page tightening are the last of it. |
 | **Data-integrity bugs to fix in passing** | ❌ not started | 6 bugs. |
 | **Hygiene** — delete the dead set | ❌ not started | ~1,500 lines. |
 
@@ -619,14 +619,21 @@ biggest ones:
 16. ✅ (#638) Fix the assignment split-brain (write `assigned_to`, or read
     `job_assignments` everywhere).
 
-### Soon — the role cleanup — 🔄 in progress
+### Soon — the role cleanup — ⚠️ mostly done
 
-17. 🔄 `requireFeature` server helper + one `useRequireFeature` gate per page.
-18. 🔄 Delete dead keys, rename `proof_hygiene`/`cni_management`, give the 10
-    raw-`isAdmin` tools real keys.
-19. ⚠️ Give `field_tech`/`shop_tech` the install surfaces; stop external installers
-    passing internal gates (the installer-exclusion half landed with migration 224).
-20. 🔄 Fix the finance and graphics dead-end menus.
+17. ✅ (#649) `requireFeature` server helper + `useRequireFeature` page gate; the
+    five owner-level admin pages now gate purely on their feature key. (Broad
+    per-page adoption continues opportunistically alongside 18b.)
+18. ⚠️ 18a ✅ (#648) — deleted `photo_reviews`/`all_jobs`/`catalog_management`,
+    renamed `proof_hygiene`→`proof_search` and `cni_management`→`cni_portal`
+    (migration 227). 18b ⚠️ — the CNI admin console got a delegatable `cni_admin`
+    key (#652); the remaining raw-`isAdmin` standalone tools (payroll/pay-rates,
+    part-category-rules/dimensions/interiors, invoice-locations, import-*,
+    proof-sweep, install-checklists) still need their own keys.
+19. ✅ (#650) `field_tech`/`shop_tech` can now run the pick-list install runner;
+    external installers gain no internal surface (exclusion half was migration 224).
+20. ✅ (#651) Finance lands on Reports; graphics lands (read-only) on Parts
+    Catalog; the Invoicing tile is hidden from finance (they don't author invoices).
 
 ### Data-integrity bugs to fix in passing
 
