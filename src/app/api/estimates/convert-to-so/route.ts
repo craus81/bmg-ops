@@ -169,9 +169,12 @@ export async function POST(req: NextRequest) {
       customLineDescriptions.push(label);
     }
 
-    // Add labor as a line item if there are labor hours
+    // Add labor as a line item if there are labor hours. When no LABOR item
+    // exists in NetSuite the SO silently shipped short by the labor amount —
+    // now the response carries laborSkipped so the user is told.
     const laborHours = parseFloat(estimate.labor_hours_override ?? estimate.labor_hours) || 0;
     const laborRate = parseFloat(estimate.labor_rate) || 85;
+    let laborSkipped = false;
     if (laborHours > 0) {
       try {
         const laborResult = await suiteqlQuery(
@@ -184,8 +187,10 @@ export async function POST(req: NextRequest) {
             rate: laborRate,
             description: `Labor - ${laborHours} hrs @ $${laborRate}/hr`,
           });
+        } else {
+          laborSkipped = true;
         }
-      } catch { /* no labor item found, skip */ }
+      } catch { laborSkipped = true; }
     }
 
     if (soLineItems.length === 0) {
@@ -222,7 +227,15 @@ export async function POST(req: NextRequest) {
       }, { status: 500 });
     }
 
-    await supabase
+    // Write the SO onto the estimate — CONDITIONALLY, and checked. This write
+    // used to be fire-and-forget with no guard: a failed write-back returned
+    // "created" while the estimate stayed convertible (next click → a second
+    // real SO in NetSuite), and two racing clicks each created an SO with the
+    // last writer silently winning. `.is('netsuite_so_id', null)` makes the
+    // stamp first-writer-wins; zero matched rows means a concurrent
+    // conversion already linked a different SO and OURS is the duplicate —
+    // reported loudly instead of swallowed.
+    const { data: stamped, error: writeBackError } = await supabase
       .from('estimates')
       .update({
         netsuite_so_id: result.salesOrderId,
@@ -233,7 +246,105 @@ export async function POST(req: NextRequest) {
         // keeps its won signal for phone/email-approved deals.
         status: 'accepted',
       })
-      .eq('id', estimateId);
+      .eq('id', estimateId)
+      .is('netsuite_so_id', null)
+      .select('id');
+
+    if (writeBackError) {
+      // The SO exists in NetSuite but the app couldn't record it. Do NOT let
+      // this read as failure-to-create (a retry would duplicate the SO).
+      return NextResponse.json({
+        status: 'created_unlinked',
+        salesOrderId: result.salesOrderId,
+        salesOrderNumber: result.salesOrderNumber,
+        error: `Sales Order SO #${result.salesOrderNumber || result.salesOrderId} WAS created in NetSuite, but saving it onto the estimate failed (${writeBackError.message}). Do NOT convert again — that would create a duplicate SO. Retry later or link the SO number by hand.`,
+      }, { status: 500 });
+    }
+
+    if ((stamped || []).length === 0) {
+      // A concurrent conversion won the stamp — the SO this request just made
+      // is a duplicate in NetSuite.
+      const { data: current } = await supabase
+        .from('estimates')
+        .select('netsuite_so_number, netsuite_so_id')
+        .eq('id', estimateId)
+        .maybeSingle();
+      const winner = current?.netsuite_so_number || current?.netsuite_so_id || 'unknown';
+      return NextResponse.json({
+        status: 'duplicate_so',
+        salesOrderId: result.salesOrderId,
+        salesOrderNumber: result.salesOrderNumber,
+        error: `Another conversion finished first and linked SO #${winner}. This click created a SECOND Sales Order (SO #${result.salesOrderNumber || result.salesOrderId}) in NetSuite — please delete it there.`,
+      }, { status: 409 });
+    }
+
+    // ── Auto-create/link the upfit project (roadmap N2 phase 1) ──
+    // Conversion used to create nothing downstream: someone had to know to
+    // open Upfit Projects, hand-create a project, and re-type the SO number
+    // the app just generated before parts readiness/allocations were even
+    // reachable. Find-or-create by estimate_id (migration 225's partial
+    // unique index guards the race). Non-fatal — the SO already exists.
+    let upfitProject: { id: string; created: boolean } | null = null;
+    try {
+      const { data: existing } = await supabase
+        .from('upfit_projects')
+        .select('id, netsuite_so_id')
+        .eq('estimate_id', estimateId)
+        .maybeSingle();
+      if (existing) {
+        if (!existing.netsuite_so_id) {
+          await supabase
+            .from('upfit_projects')
+            .update({
+              netsuite_so_id: result.salesOrderId,
+              netsuite_so_number: result.salesOrderNumber || null,
+              so_total: estimate.grand_total ?? null,
+            })
+            .eq('id', existing.id);
+        }
+        upfitProject = { id: existing.id, created: false };
+      } else {
+        const projectName = [estimate.customer_name, estimate.title || estimate.estimate_number]
+          .filter(Boolean).join(' — ') || `Estimate ${estimate.estimate_number || estimateId.slice(0, 8)}`;
+        const { data: createdProject, error: projectErr } = await supabase
+          .from('upfit_projects')
+          .insert({
+            project_name: projectName,
+            status: 'sold',
+            customer_name: estimate.customer_name || null,
+            customer_netsuite_id: customerId,
+            estimate_id: estimateId,
+            estimate_number: estimate.estimate_number || null,
+            netsuite_so_id: result.salesOrderId,
+            netsuite_so_number: result.salesOrderNumber || null,
+            estimated_total: estimate.grand_total ?? null,
+            so_total: estimate.grand_total ?? null,
+            created_by: auth.user.id,
+          })
+          .select('id')
+          .single();
+        if (projectErr) {
+          if (projectErr.code === '23505') {
+            // Racing conversion created it between our select and insert.
+            const { data: winner } = await supabase
+              .from('upfit_projects').select('id').eq('estimate_id', estimateId).maybeSingle();
+            if (winner) upfitProject = { id: winner.id, created: false };
+          } else {
+            console.error('auto upfit-project create failed:', projectErr);
+          }
+        } else if (createdProject) {
+          upfitProject = { id: createdProject.id, created: true };
+          await supabase.from('upfit_project_notes').insert({
+            project_id: createdProject.id,
+            note_type: 'sales_order',
+            content: `Project created automatically: ${estimate.estimate_number || 'estimate'} converted to SO #${result.salesOrderNumber || result.salesOrderId}`,
+            created_by: auth.user.id,
+          });
+        }
+      }
+    } catch (projErr) {
+      console.error('auto upfit-project step failed:', projErr);
+    }
 
     // Put the vehicle on the shop's Arriving board (V1). Non-fatal — the SO
     // already exists; a board hiccup shouldn't fail the conversion.
@@ -264,7 +375,7 @@ export async function POST(req: NextRequest) {
         await notifyMany(Array.from(targetIds), {
           type: 'estimate_converted',
           title: `Sales Order created: ${estimate.estimate_number}`,
-          body: `${actorProfile?.full_name || 'A teammate'} converted ${estimate.customer_name || 'the customer'}'s estimate to SO #${result.salesOrderNumber || result.salesOrderId}${overrideReason ? ' (admin override — customer approval was recorded outside the app)' : ''}.`,
+          body: `${actorProfile?.full_name || 'A teammate'} converted ${estimate.customer_name || 'the customer'}'s estimate to SO #${result.salesOrderNumber || result.salesOrderId}${overrideReason ? ' (admin override — customer approval was recorded outside the app)' : ''}.${upfitProject?.created ? ' An upfit project was created automatically — parts readiness lives there.' : ''}`,
           url: deepLinks.estimate(estimateId),
         });
       }
@@ -280,6 +391,8 @@ export async function POST(req: NextRequest) {
       customLineCount: customLineDescriptions.length,
       customLines: customLineDescriptions.length > 0 ? customLineDescriptions : undefined,
       unmappedLines: unmappedLineDescriptions.length > 0 ? unmappedLineDescriptions : undefined,
+      laborSkipped: laborSkipped || undefined,
+      upfitProject: upfitProject || undefined,
       memoUsed: memo,
     });
   } catch (err: any) {

@@ -1528,7 +1528,15 @@ export default function EstimatesPage() {
       });
       const data = await res.json();
       if (res.ok && data.status === 'created') {
-        await dialog.alert(`Sales Order created!\nSO #: ${data.salesOrderNumber || data.salesOrderId}\nLine items: ${data.lineItemCount}${data.skippedItems ? '\nSkipped (no NS item): ' + data.skippedItems.join(', ') : ''}`);
+        // NOTE: the API's dropped-lines key is `unmappedLines` — this dialog
+        // read `skippedItems` (a key the API never sent), so dropped custom
+        // lines were never surfaced to the person clicking Convert.
+        const warnings = [
+          data.unmappedLines?.length ? `⚠ Dropped (create FS-CUSTOM in NetSuite): ${data.unmappedLines.join(', ')}` : '',
+          data.laborSkipped ? '⚠ Labor was NOT pushed — no LABOR item exists in NetSuite, so the SO total is short by the labor amount.' : '',
+          data.upfitProject?.created ? 'Upfit project created — parts readiness is on the Upfit tab.' : '',
+        ].filter(Boolean).join('\n');
+        await dialog.alert(`Sales Order created!\nSO #: ${data.salesOrderNumber || data.salesOrderId}\nLine items: ${data.lineItemCount}${warnings ? '\n\n' + warnings : ''}`);
         // Stay in the estimate so the new SO number is visible in context.
         await loadEstimates(true);
       } else if (data.status === 'already_created') {
