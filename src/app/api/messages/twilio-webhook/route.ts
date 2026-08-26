@@ -28,13 +28,17 @@ export async function POST(req: NextRequest) {
       return twimlResponse('Missing from or body');
     }
 
-    // Optional: Validate Twilio signature for security
-    const signature = req.headers.get('x-twilio-signature') || '';
-    if (process.env.TWILIO_VALIDATE_SIGNATURE === 'true') {
+    // Validate the Twilio signature. Secure by default: this endpoint writes a
+    // matched profile's phone number (below), so an unsigned/forged request
+    // must be rejected. Validation is skipped only with an explicit
+    // TWILIO_VALIDATE_SIGNATURE=false opt-out; when the auth token isn't
+    // configured we cannot validate and reject.
+    if (process.env.TWILIO_VALIDATE_SIGNATURE !== 'false') {
+      const signature = req.headers.get('x-twilio-signature') || '';
       const params: Record<string, string> = {};
       formData.forEach((value, key) => { params[key] = value as string; });
       const webhookUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/messages/twilio-webhook`;
-      const valid = validateTwilioSignature(webhookUrl, params, signature);
+      const valid = !!process.env.TWILIO_AUTH_TOKEN && validateTwilioSignature(webhookUrl, params, signature);
       if (!valid) {
         console.warn('Invalid Twilio signature from', from);
         return twimlResponse('Unauthorized');

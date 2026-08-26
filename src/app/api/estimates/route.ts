@@ -66,6 +66,20 @@ const UpsertEstimateSchema = z.object({
 
 const DeleteSchema = z.object({ id: z.string().uuid() });
 
+// The customer-approval magic-link token lives on the estimate row. It must
+// never reach any client: a staff holder could open the customer's approval
+// page (/approve/estimate/<token>) and forge an acceptance — the E-SIGN record
+// the convert-to-SO gate trusts. Strip it (and its expiry) from every GET
+// response. internal_notes is intentionally kept: this route is requireStaff,
+// and those ops-only notes are what the builder loads and edits.
+const APPROVAL_SECRET_FIELDS = ['approval_token', 'approval_token_expires_at'] as const;
+function stripApprovalSecrets<T extends Record<string, any>>(row: T | null): T | null {
+  if (!row) return row;
+  const clone: any = { ...row };
+  for (const f of APPROVAL_SECRET_FIELDS) delete clone[f];
+  return clone;
+}
+
 function getSupabase() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -89,7 +103,7 @@ export async function GET(req: NextRequest) {
     if (id) {
       const { data, error } = await supabase.from('estimates').select('*').eq('id', id).maybeSingle();
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-      return NextResponse.json({ estimates: data ? [data] : [] });
+      return NextResponse.json({ estimates: data ? [stripApprovalSecrets(data)] : [] });
     }
 
     let query = supabase
@@ -103,7 +117,7 @@ export async function GET(req: NextRequest) {
 
     const { data, error } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json({ estimates: data || [] });
+    return NextResponse.json({ estimates: (data || []).map(stripApprovalSecrets) });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
