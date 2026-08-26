@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
+import { checkStoragePath } from '@/lib/storage-guard';
 import { r2PresignGet } from '@/lib/r2';
 
 export const dynamic = 'force-dynamic';
@@ -27,6 +28,8 @@ export async function GET(req: NextRequest) {
   if (!bucket || !path || bucket.length > 80 || path.length > 1000 || name.length > 300) {
     return NextResponse.json({ error: 'Missing or invalid bucket/path/name' }, { status: 400 });
   }
+  const readErr = checkStoragePath(bucket, path, { write: false });
+  if (readErr) return NextResponse.json({ error: readErr }, { status: 403 });
 
   try {
     const url = await r2PresignGet(bucket, path, {
