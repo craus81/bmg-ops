@@ -147,6 +147,6 @@ export function captureMetadata(
   };
 }
 
-export const AGREEMENT_TEXT =
-  'By checking this box, I agree to the terms of this document and authorize BMG Fleet Installations to begin work. ' +
-  'This action is legally binding and equivalent to a signed agreement under the U.S. E-SIGN Act.';
+// Canonical E-SIGN agreement copy — client-safe module so the approval
+// pages can import the same string this server lib stamps into snapshots.
+export { AGREEMENT_TEXT } from '@/lib/approval-agreement';
