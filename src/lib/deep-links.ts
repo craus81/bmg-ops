@@ -99,6 +99,9 @@ export const deepLinks = {
    *  customer login can open; use for customer email CTAs when no public
    *  page (carrier tracking, approval magic link) fits. */
   customerPortal: () => '/customer/dashboard',
+  /** The installer's own earnings/payout history — the destination for CNI
+   *  payout-status notifications (there is no per-payout page). */
+  earnings: () => '/earnings',
   /** System health dashboard (checks are keyed by sync type, not record ids). */
   systemHealth: () => '/admin/system-health',
   /** System health's Email delivery section — flashes one email_log row.

@@ -4,6 +4,43 @@ import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { findLocation, createVendorBill } from '@/lib/netsuite';
 import { logAudit } from '@/lib/audit';
+import { notify } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
+
+/**
+ * Tell the installer when their payout advances. The CNI lifecycle was a
+ * near-total notification vacuum — installers discovered "Approved / Billed /
+ * Paid" only by opening /earnings themselves. Fires in-app + push (the default
+ * for this type), deep-linked to their earnings page. Non-fatal.
+ */
+async function notifyPayoutInstaller(
+  payout: { profile_id: string; cni_job_id: string | null; total_amount: number | null },
+  toStatus: 'approved' | 'billed' | 'paid',
+) {
+  try {
+    let jobRef = '';
+    if (payout.cni_job_id) {
+      const { data: job } = await service
+        .from('cni_jobs').select('job_number').eq('id', payout.cni_job_id).maybeSingle();
+      if (job?.job_number) jobRef = ` for ${job.job_number}`;
+    }
+    const money = payout.total_amount != null ? ` ($${Number(payout.total_amount).toFixed(2)})` : '';
+    const copy = {
+      approved: { title: 'Payout approved', body: `Your installer payout${jobRef}${money} was approved and is being processed.` },
+      billed: { title: 'Payout billed', body: `Your installer payout${jobRef}${money} has been billed — payment is on the way.` },
+      paid: { title: 'Payout paid', body: `Your installer payout${jobRef}${money} has been marked paid.` },
+    }[toStatus];
+    await notify({
+      userId: payout.profile_id,
+      type: 'cni_payout',
+      title: copy.title,
+      body: copy.body,
+      url: deepLinks.earnings(),
+    });
+  } catch (e) {
+    console.error('payout installer notification failed:', e);
+  }
+}
 
 // NetSuite internal ids are used directly: this integration's role can't
 // query the `account` / `subsidiary` tables via SuiteQL ("Record 'account'
@@ -270,6 +307,7 @@ export async function POST(req: NextRequest) {
         action: 'create_bill',
         detail: { netsuite_bill_id: billRef, amount, location: body.location, profile_id: payout.profile_id },
       });
+      await notifyPayoutInstaller(payout, 'billed');
       return NextResponse.json({ success: true, netsuiteBillId: billRef });
     } catch (e: any) {
       console.error('create_bill error:', e);
@@ -322,5 +360,7 @@ export async function POST(req: NextRequest) {
       ...(body.action === 'record_bill' ? { netsuite_bill_id: (body as { netsuiteBillId?: string }).netsuiteBillId } : {}),
     },
   });
+  // Notify the installer at every terminal transition (approved/billed/paid).
+  await notifyPayoutInstaller(payout, t.to as 'approved' | 'billed' | 'paid');
   return NextResponse.json({ success: true });
 }
