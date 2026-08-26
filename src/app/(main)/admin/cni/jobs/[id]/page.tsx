@@ -528,18 +528,22 @@ export default function CniJobDetailPage() {
     if (!job || !schedStart) return;
     setUpdating(true);
     setScheduleError('');
-    const { error } = await supabase.from('cni_jobs').update({
-      scheduled_start_at: new Date(schedStart).toISOString(),
-      scheduled_end_at: schedEnd ? new Date(schedEnd).toISOString() : null,
-      schedule_decline_note: null,
-      schedule_confirmed_at: null,
-      status: 'scheduled_pending_confirmation',
-      updated_by: user?.id,
-    }).eq('id', job.id);
-    setUpdating(false);
-    if (error) { setScheduleError(error.message); return; }
-    setEditingSchedule(false);
-    await loadJob();
+    try {
+      const res = await fetch('/api/cni/propose-schedule', {
+        method: 'POST', headers: await authHeaders(),
+        body: JSON.stringify({
+          jobId: job.id,
+          startAt: new Date(schedStart).toISOString(),
+          endAt: schedEnd ? new Date(schedEnd).toISOString() : null,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setScheduleError(json.error || 'Failed to propose schedule'); return; }
+      setEditingSchedule(false);
+      await loadJob();
+    } finally {
+      setUpdating(false);
+    }
   };
 
   // Accept on the installer's behalf (e.g. a verbal commitment).
@@ -566,22 +570,18 @@ export default function CniJobDetailPage() {
   const assignCompany = async (companyId: string) => {
     if (!job || updating) return;
     setUpdating(true);
-    const { error } = await supabase
-      .from('cni_jobs')
-      .update({
-        assigned_company_id: companyId,
-        assigned_at: new Date().toISOString(),
-        status: job.status === 'awaiting_assignment' || job.status === 'bidding_open'
-          ? 'assigned_awaiting_scheduling'
-          : job.status,
-        updated_by: user?.id,
-      })
-      .eq('id', job.id);
-    if (!error) {
-      setShowAssign(false);
-      await loadJob();
+    try {
+      const res = await fetch('/api/cni/assign-company', {
+        method: 'POST', headers: await authHeaders(),
+        body: JSON.stringify({ jobId: job.id, companyId }),
+      });
+      if (res.ok) {
+        setShowAssign(false);
+        await loadJob();
+      }
+    } finally {
+      setUpdating(false);
     }
-    setUpdating(false);
   };
 
   const savePayRate = async () => {
