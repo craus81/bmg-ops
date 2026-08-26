@@ -8,6 +8,7 @@ import { syncVendorPos } from '@/lib/vendor-po-sync';
 import { syncSalesOrders } from '@/lib/sales-order-sync';
 import { syncInventoryQuantities } from '@/lib/inventory-sync';
 import { syncVendorBillPayments } from '@/lib/vendor-bill-sync';
+import { syncArInvoicePayments } from '@/lib/ar-payment-sync';
 import { recordHeartbeat } from '@/lib/system-health';
 
 export const dynamic = 'force-dynamic';
@@ -409,6 +410,19 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     console.error('[cron] Vendor bill payment sweep error:', err.message);
     results.vendorBills = { error: err.message };
+  }
+
+  // ═══════════ 3e. AR (CUSTOMER) PAYMENT SWEEP ═══════════
+  // The receivables mirror of the vendor-bill sweep: fleet_checkins.is_paid
+  // and scan_logs.is_paid were manual checkboxes, so the "invoiced, awaiting
+  // payment" dashboard tile inflated forever. Flip is_paid true for any
+  // recorded invoice number NetSuite shows Paid In Full. Only false → true;
+  // the checkbox stays a valid manual override.
+  try {
+    results.arPayments = await syncArInvoicePayments(supabase);
+  } catch (err: any) {
+    console.error('[cron] AR payment sweep error:', err.message);
+    results.arPayments = { error: err.message };
   }
 
   // ═══════════ 4. INVOICED-QUANTITY CHECK ═══════════
