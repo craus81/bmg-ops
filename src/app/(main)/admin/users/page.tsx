@@ -73,7 +73,7 @@ export default function UsersPage() {
 
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
-    if (!isAdmin || !hasFeature('user_management')) { router.push('/home'); return; }
+    if (!hasFeature('user_management')) { router.push('/home'); return; }
     loadData();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, isAdmin]);

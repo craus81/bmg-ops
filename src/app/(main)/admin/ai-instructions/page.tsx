@@ -40,7 +40,7 @@ export default function AiInstructionsPage() {
 
   useEffect(() => {
     if (authLoading || !user) return; // role flags aren't resolved until auth finishes loading
-    if (!isAdmin || !hasFeature('ai_instructions')) router.push('/home');
+    if (!hasFeature('ai_instructions')) router.push('/home');
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasFeature is stable per auth state
   }, [authLoading, user, isAdmin, router]);
 
@@ -131,7 +131,7 @@ export default function AiInstructionsPage() {
   };
 
   if (!user) return null;
-  if (!isAdmin || !hasFeature('ai_instructions')) return null;
+  if (!hasFeature('ai_instructions')) return null;
 
   return (
     <div>

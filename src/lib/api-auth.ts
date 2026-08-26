@@ -9,6 +9,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { resolveFeatures, type FeatureKey } from '@/lib/features';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -218,6 +219,37 @@ export async function requireSuperAdmin(req: NextRequest): Promise<AuthResult> {
   const roles = profileRoles(auth.profile);
   if (!roles.includes('super_admin')) {
     return { user: auth.user, profile: auth.profile, error: NextResponse.json({ error: 'Forbidden: super admin required' }, { status: 403 }) };
+  }
+
+  return auth;
+}
+
+/**
+ * Verify the request has a valid session AND the caller's EFFECTIVE features
+ * (role defaults + per-user overrides) include `key`. This is the server-side
+ * twin of the client `useRequireFeature`/`hasFeature`: it runs the SAME
+ * `resolveFeatures` over the caller's roles + their `user_feature_overrides`
+ * rows, so a per-user grant or revoke is finally enforced on the backend (until
+ * now overrides were resolved client-side only — pure UI theater).
+ */
+export async function requireFeature(req: NextRequest, key: FeatureKey): Promise<AuthResult> {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth;
+
+  const service = createClient(supabaseUrl, supabaseServiceKey);
+  const { data: overrides } = await service
+    .from('user_feature_overrides')
+    .select('feature, granted')
+    .eq('user_id', auth.user.id);
+
+  // Normalize the legacy 'production' role to 'graphics_production' so the
+  // server resolves the same feature set the client does (AuthProvider does
+  // this normalization); without it a 'production'-role account would resolve
+  // to zero features here while the UI shows it the graphics set.
+  const roles = profileRoles(auth.profile).map(r => (r === 'production' ? 'graphics_production' : r));
+  const features = resolveFeatures(roles, overrides || []);
+  if (!features.has(key)) {
+    return { user: auth.user, profile: auth.profile, error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) };
   }
 
   return auth;

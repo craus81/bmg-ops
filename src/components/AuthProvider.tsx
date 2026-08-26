@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import type { User } from '@supabase/supabase-js';
 import type { Profile } from '@/lib/types';
@@ -157,3 +158,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 }
 
 export const useAuth = () => useContext(AuthContext);
+
+/**
+ * Page-level feature gate: redirect to /home once auth has resolved and the
+ * caller lacks `feature`. One call replaces the ad-hoc `isAdmin || isSales…`
+ * guard blocks, so every page derives its gate from exactly one feature key
+ * (and honors per-user overrides, since `hasFeature` already applies them).
+ * Gates on `loading` — never on a role flag being false mid-load — so it can't
+ * bounce a valid deep link before roles arrive. Returns `{ loading, allowed }`
+ * for pages that also want to hold render until the check passes.
+ */
+export function useRequireFeature(feature: FeatureKey) {
+  const { hasFeature, loading } = useAuth();
+  const router = useRouter();
+  const allowed = !loading && hasFeature(feature);
+  useEffect(() => {
+    if (!loading && !hasFeature(feature)) router.push('/home');
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- gate on loading; hasFeature/router are stable within a resolved render
+  }, [loading, feature]);
+  return { loading, allowed };
+}
