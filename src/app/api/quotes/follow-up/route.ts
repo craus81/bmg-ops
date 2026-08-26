@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
-import { fetchAllRows } from '@/lib/fetch-all';
+import { loadQuoteListItems } from '@/lib/quote-list';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,133 +12,22 @@ const service = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
 );
 
-export interface FollowUpNote {
-  id: string;
-  note: string | null;
-  remindAt: string | null;
-  reminderSentAt: string | null;
-  createdBy: string | null;
-  creatorName: string | null;
-  createdAt: string;
-}
-
-export interface FollowUpItem {
-  type: 'estimate' | 'wrap';
-  id: string;
-  number: string;
-  title: string;
-  customer: string;
-  total: number;
-  repId: string | null;
-  repName: string | null;
-  sentAt: string | null;
-  lastFollowupAt: string | null;
-  followups: FollowUpNote[];
-  /** Earliest pending (undelivered, future-or-today) reminder date, if any. */
-  nextReminderAt: string | null;
-}
-
-/** GET — every sent-and-unanswered quote, both builders, oldest-quiet first. */
+/**
+ * GET — every sent-and-unanswered quote, both builders. Legacy endpoint:
+ * the combined list at GET /api/quotes supersedes it (this is that route
+ * with status=sent), kept for clients loaded before the /quotes page
+ * shipped. Same shared loader, so the two can't drift.
+ */
 export async function GET(req: NextRequest) {
   const auth = await requireRole(req, ['admin', 'sales']);
   if (auth.error) return auth.error;
 
-  const [estRes, wrapRes] = await Promise.all([
-    service
-      .from('estimates')
-      .select('id, estimate_number, title, customer_name, grand_total, created_by, sent_for_approval_at, updated_at, last_followup_at')
-      .eq('status', 'sent')
-      .order('updated_at', { ascending: true })
-      .limit(200),
-    service
-      .from('wrap_quotes')
-      .select('id, quote_number, vehicle_description, customer, total, created_by, sent_at, last_followup_at')
-      .eq('status', 'sent')
-      .is('archived_at', null)
-      .order('sent_at', { ascending: true })
-      .limit(200),
-  ]);
-  if (estRes.error) return NextResponse.json({ error: estRes.error.message }, { status: 500 });
-  if (wrapRes.error) return NextResponse.json({ error: wrapRes.error.message }, { status: 500 });
-
-  const items: FollowUpItem[] = [
-    ...(estRes.data || []).map(e => ({
-      type: 'estimate' as const,
-      id: e.id,
-      number: e.estimate_number,
-      title: e.title || '',
-      customer: e.customer_name || '—',
-      total: Number(e.grand_total) || 0,
-      repId: e.created_by,
-      repName: null,
-      sentAt: e.sent_for_approval_at || e.updated_at,
-      lastFollowupAt: e.last_followup_at,
-      followups: [] as FollowUpNote[],
-      nextReminderAt: null,
-    })),
-    ...(wrapRes.data || []).map(w => ({
-      type: 'wrap' as const,
-      id: w.id,
-      number: w.quote_number,
-      title: w.vehicle_description || '',
-      customer: (w.customer as any)?.name || '—',
-      total: Number(w.total) || 0,
-      repId: w.created_by,
-      repName: null,
-      sentAt: w.sent_at,
-      lastFollowupAt: w.last_followup_at,
-      followups: [] as FollowUpNote[],
-      nextReminderAt: null,
-    })),
-  ];
-
-  // Follow-up history (comments + reminders) for the open quotes. Best-effort
-  // — the queue must still load before migration 212 lands. History grows
-  // unboundedly, so paginate past the 1000-row cap.
-  const byKey = new Map(items.map(i => [`${i.type}-${i.id}`, i]));
-  if (items.length > 0) {
-    const { data: fuRows } = await fetchAllRows<any>((from, to) =>
-      service
-        .from('quote_followups')
-        .select('id, quote_type, quote_id, note, remind_at, reminder_sent_at, created_by, created_at')
-        .in('quote_id', items.map(i => i.id))
-        .order('created_at', { ascending: false })
-        .order('id')
-        .range(from, to),
-    );
-    const today = new Date().toISOString().slice(0, 10);
-    for (const r of fuRows || []) {
-      const item = byKey.get(`${r.quote_type}-${r.quote_id}`);
-      if (!item) continue;
-      item.followups.push({
-        id: r.id,
-        note: r.note,
-        remindAt: r.remind_at,
-        reminderSentAt: r.reminder_sent_at,
-        createdBy: r.created_by,
-        creatorName: null,
-        createdAt: r.created_at,
-      });
-      if (r.remind_at && !r.reminder_sent_at && r.remind_at >= today) {
-        if (!item.nextReminderAt || r.remind_at < item.nextReminderAt) item.nextReminderAt = r.remind_at;
-      }
-    }
+  try {
+    const items = await loadQuoteListItems(service, 'sent');
+    return NextResponse.json({ items });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
   }
-
-  const nameIds = [...new Set([
-    ...items.map(i => i.repId),
-    ...items.flatMap(i => i.followups.map(f => f.createdBy)),
-  ].filter(Boolean))] as string[];
-  if (nameIds.length > 0) {
-    const { data: reps } = await service.from('profiles').select('id, full_name').in('id', nameIds);
-    const names = new Map((reps || []).map(r => [r.id, r.full_name]));
-    for (const i of items) {
-      i.repName = i.repId ? names.get(i.repId) || null : null;
-      for (const f of i.followups) f.creatorName = f.createdBy ? names.get(f.createdBy) || null : null;
-    }
-  }
-
-  return NextResponse.json({ items });
 }
 
 const PostSchema = z.object({

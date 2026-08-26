@@ -340,7 +340,7 @@ export default function OpsDashboard() {
       rows(sentEstRes).filter(e => quoteQuiet(e.sent_for_approval_at || e.updated_at, e.last_followup_at)).length +
       rows(sentWrapRes).filter(w => quoteQuiet(w.sent_at, w.last_followup_at)).length;
     if (quietQuotes > 0) queue.push({
-      key: 'quotes', count: quietQuotes, tone: 'warn', path: '/admin/quote-followups',
+      key: 'quotes', count: quietQuotes, tone: 'warn', path: '/quotes',
       title: 'Quotes needing a follow-up', detail: 'Sent 5+ days ago with no answer',
     });
     const staleProofs = count(staleProofRes);
