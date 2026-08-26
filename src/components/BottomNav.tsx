@@ -38,7 +38,7 @@ export const allTabs: Tab[] = [
   { id: 'scan', path: '/scan', label: 'Scan', feature: 'scan', priority: 5 },
   { id: 'time', path: '/time', label: 'Time', feature: 'time', priority: 6 },
   { id: 'estimates', path: '/estimates', label: 'Estimates', feature: 'estimates', priority: 7 },
-  { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', feature: 'cni_management', priority: 8 },
+  { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', feature: 'cni_portal', priority: 8 },
   // Customer-only
   { id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', feature: 'home', priority: 0 },
 ];

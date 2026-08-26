@@ -15,7 +15,7 @@ export default function MorePage() {
   const [pendingUserCount, setPendingUserCount] = useState(0);
 
   useEffect(() => {
-    if (!hasFeature('user_management') && !hasFeature('photo_reviews')) return;
+    if (!hasFeature('user_management')) return;
     const load = async () => {
       if (hasFeature('user_management')) {
         const { count: userCount } = await supabase
@@ -55,7 +55,7 @@ export default function MorePage() {
         { title: 'Upfit Projects', sub: 'Track upfit jobs from estimate to completion', path: '/upfit', show: F('upfit_projects') },
         { title: 'Scan & Log', sub: 'Scan VINs and log work', path: '/scan', show: F('scan') },
         { title: 'Time Tracking', sub: 'Clock in/out & timesheets', path: '/time', show: F('time') },
-        { title: 'Proof Search', sub: 'Find proof artwork in Dropbox by customer or part', path: '/admin/proof-search', show: F('proof_hygiene') },
+        { title: 'Proof Search', sub: 'Find proof artwork in Dropbox by customer or part', path: '/admin/proof-search', show: F('proof_search') },
       ],
     },
     {
@@ -77,7 +77,7 @@ export default function MorePage() {
       items: [
         { title: 'Certified Network Installers', sub: 'Jobs, companies, installers & vendor payments', path: '/admin/cni', show: isAdmin },
         { title: 'Install Guides', sub: 'Dimension a 1:20 template & export a placement guide PDF for installers', path: '/graphics/install-guides', show: isAdmin || isSales || isGraphicsProduction },
-        { title: 'Installer Portal', sub: 'The CNI installer view — available jobs, bids & invoices', path: '/installer', show: F('cni_management') },
+        { title: 'Installer Portal', sub: 'The CNI installer view — available jobs, bids & invoices', path: '/installer', show: F('cni_portal') },
         { title: 'Import Installs', sub: 'Bulk-import installs from a spreadsheet, credited to a CNI installer', path: '/admin/import-installs', show: isAdmin },
         { title: 'Import Vendor Assets', sub: 'Pull product photos & descriptions from a vendor’s website onto matching parts', path: '/admin/import-vendor-assets', show: isAdmin },
         { title: 'Proof Sweep', sub: 'Search Gmail for proofs by part number and attach them to part records', path: '/admin/proof-sweep', show: isAdmin },
