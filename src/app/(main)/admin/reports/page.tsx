@@ -64,12 +64,14 @@ const REPORTS: ReportLink[] = [
 
 export default function ReportsIndexPage() {
   const router = useRouter();
-  const { user, isAdmin, isSales } = useAuth();
+  const { user, isAdmin, isSales, hasFeature } = useAuth();
 
   useEffect(() => {
     if (!user) return;
-    if (!isAdmin && !isSales) router.push('/home');
-  }, [user, isAdmin, isSales, router]);
+    // finance holds the `reports` feature and sees the Reports tile, but was
+    // bounced here (gate was sales/admin only) — the audit's finance dead-end.
+    if (!isAdmin && !isSales && !hasFeature('reports')) router.push('/home');
+  }, [user, isAdmin, isSales, hasFeature, router]);
 
   return (
     <div>
