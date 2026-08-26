@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -32,7 +32,7 @@ const CreateThreadSchema = z
  * latest message preview so the inbox can render without N+1 fetches.
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const url = new URL(req.url);
@@ -88,7 +88,7 @@ export async function GET(req: NextRequest) {
  *   { contactId | phone, customerId?, contextEntityType?, contextEntityId?, subject? }
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, CreateThreadSchema);

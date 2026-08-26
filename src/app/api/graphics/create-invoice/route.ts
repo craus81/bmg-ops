@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { createDirectInvoice, findItems, getItemBasePrices } from '@/lib/netsuite';
 import { resolveCustomerNsId } from '@/lib/graphics-invoice';
 import { notifyInvoiceCreated } from '@/lib/graphics-invoice-notify';
@@ -52,7 +52,7 @@ function getSupabase() {
  * Body: { jobId, userId?, lines?, prices? }
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

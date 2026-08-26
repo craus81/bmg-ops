@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -18,7 +18,7 @@ const AssignSchema = z.object({
 
 // GET: search POs for the "Link PO" picker on an already-created graphics job
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const q = req.nextUrl.searchParams.get('q')?.trim() || '';
@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
 // customer's PO arrives after the graphics job was already entered —
 // common with Bodewell.
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, AssignSchema);

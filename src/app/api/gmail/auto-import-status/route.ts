@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -9,7 +9,7 @@ export const revalidate = 0;
 // gmail_auto_import cron, so /admin/pos can show why POs aren't (or are)
 // landing without making the user dig through Vercel logs.
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   // Field evidence: this route's reads served a sync_state timestamp that

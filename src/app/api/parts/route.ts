@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 // and the pickers just look empty. Any approved non-customer account may read
 // — the same population the table's RLS intends.
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
   const roles: string[] = auth.profile?.roles?.length ? auth.profile.roles : [auth.profile?.role];
   // Customer-ONLY accounts are blocked. A multi-role account (e.g. an admin

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { notify } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { validateBody, z } from '@/lib/validate';
@@ -33,7 +33,7 @@ const DeleteSchema = z.object({ id: z.string().uuid() });
 
 /** GET /api/upfit-projects/tasks?projectId=xxx — list tasks for a project */
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const projectId = req.nextUrl.searchParams.get('projectId');
@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
 
 /** POST /api/upfit-projects/tasks — create a task */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, CreateSchema);
@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
 
 /** PATCH /api/upfit-projects/tasks — update a task (toggle complete, reassign, etc.) */
 export async function PATCH(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, PatchSchema);
@@ -168,7 +168,7 @@ export async function PATCH(req: NextRequest) {
 
 /** DELETE /api/upfit-projects/tasks — delete a task */
 export async function DELETE(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, DeleteSchema);

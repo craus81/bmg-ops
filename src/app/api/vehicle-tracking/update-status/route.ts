@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { notify, notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { createClient as createServiceClient } from '@supabase/supabase-js';
@@ -27,7 +27,7 @@ const LEGAL_TRANSITIONS: Record<string, string[]> = {
 const VALID_STATUSES = ['received', 'in_progress', 'stuck_parts', 'stuck_graphics', 'complete', 'shipped'];
 
 export async function POST(request: Request) {
-  const auth = await requireAuth(request as NextRequest);
+  const auth = await requireStaff(request as NextRequest);
   if (auth.error) return auth.error;
   const user = auth.user;
 

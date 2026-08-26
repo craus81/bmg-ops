@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { createClient as createServiceClient } from '@supabase/supabase-js';
 
 const serviceSupabase = createServiceClient(
@@ -23,7 +23,7 @@ const VALID_STATUSES = ['pending', 'in_progress', 'stuck', 'complete', 'n/a'];
  * Body: { vehicleId, newStatus, note? }
  */
 export async function POST(request: Request) {
-  const auth = await requireAuth(request as NextRequest);
+  const auth = await requireStaff(request as NextRequest);
   if (auth.error) return auth.error;
   const user = auth.user;
 

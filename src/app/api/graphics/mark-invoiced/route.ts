@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { suiteqlQuery } from '@/lib/netsuite';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { safeStringLiteral, SqlSafeError } from '@/lib/sql-safe';
 import { notifyInvoiceCreated } from '@/lib/graphics-invoice-notify';
 import { validateBody, z } from '@/lib/validate';
@@ -24,7 +24,7 @@ const Schema = z.object({
  * id 'external' — cleared out, but with no NetSuite record behind it.
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

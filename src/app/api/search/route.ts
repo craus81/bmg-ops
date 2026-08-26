@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,7 +12,11 @@ const supabase = createClient(
 const MAX_PER_GROUP = 5;
 
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  // Staff only. This route runs on the service-role client (bypasses RLS) and
+  // returns company-wide data — POs, estimates, customers, invoices; a bare
+  // requireAuth let any approved login, including customer/installer accounts,
+  // read all of it.
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const q = req.nextUrl.searchParams.get('q')?.trim();
@@ -21,6 +25,18 @@ export async function GET(req: NextRequest) {
   }
 
   const like = `%${q}%`;
+
+  // Private-message search is scoped to conversations the caller participates
+  // in — the service-role query would otherwise expose every staff member's
+  // DMs to every other staff member (a full-text extraction oracle). A sentinel
+  // id keeps the `.in(...)` well-formed when the caller has no conversations.
+  const callerId = auth.user.id;
+  const { data: myConvos } = await supabase
+    .from('conversations')
+    .select('id')
+    .or(`participant_1.eq.${callerId},participant_2.eq.${callerId}`);
+  const myConvoIds = (myConvos || []).map((c: any) => c.id);
+  const scopedConvoIds = myConvoIds.length ? myConvoIds : ['00000000-0000-0000-0000-000000000000'];
 
   // Run all searches in parallel
   const [pos, vehicles, graphicsJobs, estimates, parts, customers, messages, quotes, poInvoices, jobInvoices, scanInvoices] = await Promise.all([
@@ -72,10 +88,11 @@ export async function GET(req: NextRequest) {
       .order('company_name')
       .limit(MAX_PER_GROUP),
 
-    // Messages — search by body text
+    // Messages — search by body text, scoped to the caller's own conversations
     supabase
       .from('messages')
       .select('id, conversation_id, sender_id, body, created_at', { count: 'exact' })
+      .in('conversation_id', scopedConvoIds)
       .ilike('body', like)
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),

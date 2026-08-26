@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { exchangeCodeForTokens, isConnected } from '@/lib/dropbox';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
  * GET /api/dropbox/auth?action=url
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const code = req.nextUrl.searchParams.get('code');
