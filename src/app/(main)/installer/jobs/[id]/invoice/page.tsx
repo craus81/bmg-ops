@@ -45,6 +45,14 @@ export default function InstallerInvoicePage() {
     setLoading(false);
   };
 
+  const authHeaders = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return {
+      'Content-Type': 'application/json',
+      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+    };
+  };
+
   const uploadInvoice = async (file: File) => {
     if (!user || !job) return;
     setUploading(true);
@@ -62,10 +70,10 @@ export default function InstallerInvoicePage() {
       const result = await res.json();
 
       if (result.success) {
-        await supabase.from('cni_jobs').update({
-          invoice_file_path: result.key || path,
-          invoice_status: 'submitted',
-        }).eq('id', job.id);
+        await fetch('/api/cni/submit-invoice', {
+          method: 'POST', headers: await authHeaders(),
+          body: JSON.stringify({ jobId: job.id, invoiceFilePath: result.key || path }),
+        });
         await loadJob();
       }
     } catch (err) {
