@@ -63,6 +63,25 @@ for (Part 3), the "would help if fully built" list including the 3D configurator
 
 ---
 
+## Progress tracker
+
+_Living status of the Part 5 roadmap. Updated as fixes ship._
+
+**Legend:** ✅ done (shipped & merged) · ⚠️ partial (some sub-parts open) ·
+🔄 in progress · ❌ not started
+
+| Block | Status | Notes |
+|---|---|---|
+| **Now** — security & data-loss (1–9) | ✅ done | PRs #630–#634; item 9's `cni_jobs` half finished by the CNI hardening (#641–#646, migration 226). |
+| **Next** — close the workflow chain (10–16) | ⚠️ mostly done | PRs #635–#640; #14 CNI notifications fully wired (#640–#646), but "kill the legacy CNI invoice flow" and the "graphics→CNI job bridge" remain open. |
+| **Soon** — the role cleanup (17–20) | 🔄 in progress | The installer-exclusion half of #19 landed with migration 224; the rest is being built now. |
+| **Data-integrity bugs to fix in passing** | ❌ not started | 6 bugs. |
+| **Hygiene** — delete the dead set | ❌ not started | ~1,500 lines. |
+
+Per-item status is tagged inline in Part 5 below.
+
+---
+
 # Part 1 — The walkthrough, stage by stage
 
 ## Stage 1 — The phone rings: lead → customer record
@@ -564,47 +583,50 @@ biggest ones:
 
 # Part 5 — Prioritized fix roadmap
 
-### Now — security & data-loss (small, high-leverage)
+### Now — security & data-loss (small, high-leverage) — ✅ done
 
-1. `/api/search` → `requireStaff` and scope/drop the messages group.
-2. Storage API → bucket allowlist + record-scoped path check; drop
+1. ✅ (#632) `/api/search` → `requireStaff` and scope/drop the messages group.
+2. ✅ (#633) Storage API → bucket allowlist + record-scoped path check; drop
    arbitrary GET/DELETE.
-3. Drop the 001-era `fleet_checkins`/`vehicle_status_history` permissive
+3. ✅ (#634) Drop the 001-era `fleet_checkins`/`vehicle_status_history` permissive
    policies **and** change `is_internal_staff()` to a real staff allowlist.
-4. Add the `deactivated` check to `requireAuth`; add `requireSuperAdmin` and use
+4. ✅ (#631) Add the `deactivated` check to `requireAuth`; add `requireSuperAdmin` and use
    it in `create-user` (block admins from minting super_admins) and
    `user-settings`.
-5. Delete or env-wall `/api/admin/reset-data`.
-6. Strip `approval_token`/`internal_notes` from `GET /api/estimates`.
-7. Make webhook signature verification fail **closed**.
-8. Move the ~40 bare-`requireAuth` write/money/comms routes to
+5. ✅ (#630) Delete or env-wall `/api/admin/reset-data`.
+6. ✅ (#630) Strip `approval_token`/`internal_notes` from `GET /api/estimates`.
+7. ✅ (#630) Make webhook signature verification fail **closed**.
+8. ✅ (#632) Move the ~40 bare-`requireAuth` write/money/comms routes to
    `requireStaff`/role checks (graphics invoice/notify, vehicle-tracking,
    upfit-projects, jobs/assign, customer-threads, messages/send-sms).
-9. Tighten `USING(true)` RLS on the upfit-projects tables and the CNI
-   `cni_jobs` UPDATE policy (whitelist installer-writable columns).
+9. ✅ (#634 upfit half; #641–#646 CNI half) Tighten `USING(true)` RLS on the
+   upfit-projects tables and the CNI `cni_jobs` UPDATE policy (installer writes
+   rerouted to whitelisted API routes; RLS reduced to SELECT-only, migration 226).
 
-### Next — close the workflow chain
+### Next — close the workflow chain — ⚠️ mostly done
 
-10. **Auto-create the upfit project inside convert-to-SO** (find-or-create by
+10. ✅ (#636) **Auto-create the upfit project inside convert-to-SO** (find-or-create by
     `estimate_id`) — kills the biggest manual hop.
-11. Make the graphics-job prompt fire on wrap-fold/quick-graphics lines, or
+11. ✅ (#636/#637) Make the graphics-job prompt fire on wrap-fold/quick-graphics lines, or
     prompt at convert-to-SO time.
-12. Fix the checklist category-ordering inversion (both routes).
-13. Close the `received → complete` gate bypass.
-14. Wire CNI lifecycle notifications (one shared helper); kill the legacy CNI
-    invoice flow; add a "Create CNI job from graphics job / check-in" bridge.
-15. AR payment sync-back cron.
-16. Fix the assignment split-brain (write `assigned_to`, or read
+12. ✅ (#635) Fix the checklist category-ordering inversion (both routes).
+13. ✅ (#635) Close the `received → complete` gate bypass.
+14. ⚠️ Wire CNI lifecycle notifications (one shared helper) — ✅ (#640 payouts;
+    #641–#646 full assign→schedule→complete→photos→invoice set); **still open:**
+    kill the legacy CNI invoice flow; add a "Create CNI job from graphics job /
+    check-in" bridge.
+15. ✅ (#639) AR payment sync-back cron.
+16. ✅ (#638) Fix the assignment split-brain (write `assigned_to`, or read
     `job_assignments` everywhere).
 
-### Soon — the role cleanup
+### Soon — the role cleanup — 🔄 in progress
 
-17. `requireFeature` server helper + one `useRequireFeature` gate per page.
-18. Delete dead keys, rename `proof_hygiene`/`cni_management`, give the 10
+17. 🔄 `requireFeature` server helper + one `useRequireFeature` gate per page.
+18. 🔄 Delete dead keys, rename `proof_hygiene`/`cni_management`, give the 10
     raw-`isAdmin` tools real keys.
-19. Give `field_tech`/`shop_tech` the install surfaces; stop external installers
-    passing internal gates.
-20. Fix the finance and graphics dead-end menus.
+19. ⚠️ Give `field_tech`/`shop_tech` the install surfaces; stop external installers
+    passing internal gates (the installer-exclusion half landed with migration 224).
+20. 🔄 Fix the finance and graphics dead-end menus.
 
 ### Data-integrity bugs to fix in passing
 
