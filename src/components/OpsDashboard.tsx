@@ -189,9 +189,12 @@ export default function OpsDashboard() {
         .in('status', ['received', 'checked_in', 'in_progress', 'stuck_parts', 'stuck_graphics', 'complete'])
         .order('id')
         .range(from, to)),
+      // Open CNI jobs — the terminal status is 'approved_closed' (migration
+      // 037's CHECK; 'closed'/'cancelled' never existed on cni_jobs, so the
+      // old filter excluded nothing and the lane counted closed jobs).
       fetchAllRows<any>((from, to) => supabase.from('cni_jobs')
         .select('id, status')
-        .not('status', 'in', '("closed","cancelled")')
+        .neq('status', 'approved_closed')
         .order('id')
         .range(from, to)),
       // Schedule — next 7 days (same sources as the scheduler widget, 7-day window)
@@ -479,7 +482,9 @@ export default function OpsDashboard() {
         shopActive: shopRows.length,
         shopStuck: shopRows.filter((s: any) => String(s.status).startsWith('stuck')).length,
         cniOpen: cniRows.length,
-        cniUnassigned: cniRows.filter((c: any) => c.status === 'unassigned').length,
+        // 'unassigned' was never a real status — jobs without a company sit
+        // in awaiting_assignment or bidding_open, so this always read 0.
+        cniUnassigned: cniRows.filter((c: any) => ['awaiting_assignment', 'bidding_open'].includes(c.status)).length,
       },
       upfit: {
         received: shopRows.filter((s: any) => s.status === 'received' || s.status === 'checked_in').length,
