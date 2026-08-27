@@ -26,7 +26,7 @@ interface Notification {
 }
 
 export default function Header({ clockStatus, activePartNumber, activeEndCustomer }: HeaderProps) {
-  const { user, profile, isAdmin, isActualAdmin, viewAsRole, setViewAsRole, signOut } = useAuth();
+  const { user, profile, isAdmin, isActualAdmin, viewAsRole, setViewAsRole, hasFeature, signOut } = useAuth();
   const router = useRouter();
   const [showMenu, setShowMenu] = useState(false);
   const [showSwitchModal, setShowSwitchModal] = useState(false);
@@ -118,9 +118,11 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
     setUnreadCount(count || 0);
   };
 
-  // Load unread message count and subscribe to realtime changes
+  // Load unread message count and subscribe to realtime changes. Skipped
+  // entirely for roles without the messages feature (customer, executive) —
+  // their Chat button is hidden, so the polling would be dead weight.
   useEffect(() => {
-    if (!user) return;
+    if (!user || !hasFeature('messages')) return;
     loadUnreadMessages();
     const interval = setInterval(loadUnreadMessages, 30000);
 
@@ -422,7 +424,9 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
             Search
           </button>
 
-          {/* Chat / Messages */}
+          {/* Chat / Messages — hidden for roles without the feature (customer,
+              executive): /messages bounces them, so the button is a dead click. */}
+          {hasFeature('messages') && (
           <button
             onClick={() => router.push('/messages')}
             aria-label={unreadMessages > 0 ? `Chat, ${unreadMessages} unread messages` : 'Chat'}
@@ -451,6 +455,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
               </span>
             )}
           </button>
+          )}
 
           {/* Mentions */}
           <div ref={mentionsRef} style={{ position: 'relative' }}>

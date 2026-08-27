@@ -718,8 +718,11 @@ export default function VehiclePickListPage() {
         </div>
       )}
 
+      {/* Installers came from their ready queue; internal techs (admitted to
+          this runner by the role gate above) can't open that page — send them
+          back to the In-Shop board they navigate from instead. */}
       <button
-        onClick={() => router.push('/installer/ready-for-install')}
+        onClick={() => router.push(isInstaller || isAdmin ? '/installer/ready-for-install' : '/tracking')}
         style={{
           padding: '10px 14px', borderRadius: '10px',
           border: '1px solid var(--border)', background: 'var(--card)',
@@ -727,7 +730,7 @@ export default function VehiclePickListPage() {
           cursor: 'pointer', width: '100%',
         }}
       >
-        ← Back to ready queue
+        {isInstaller || isAdmin ? '← Back to ready queue' : '← Back to In-Shop board'}
       </button>
 
       {completionModalOpen && (

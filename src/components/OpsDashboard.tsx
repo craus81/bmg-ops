@@ -95,6 +95,21 @@ export default function OpsDashboard() {
   const router = useRouter();
   const { user, isAdmin, hasFeature } = useAuth();
   const supabase = createClient();
+
+  // The dashboard renders for every role that lands on /home (sales, finance,
+  // …), but its links point at feature-gated pages that bounce back here —
+  // so every navigation goes through one gate map. canOpen() decides whether
+  // a control renders/navigates; go() is the click handler. Paths not listed
+  // are open to anyone who can see the dashboard.
+  const canOpen = (path: string): boolean => {
+    if (path.startsWith('/tracking')) return hasFeature('in_shop') || hasFeature('fleet_checkin');
+    if (path.startsWith('/admin/scans')) return hasFeature('reports');
+    if (path.startsWith('/admin/schedule')) return hasFeature('schedule');
+    if (path.startsWith('/admin/cni')) return hasFeature('cni_admin');
+    if (path.startsWith('/upfit')) return hasFeature('upfit_projects');
+    return true;
+  };
+  const go = (path: string) => { if (canOpen(path)) router.push(path); };
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<DashData | null>(null);
   const [preset, setPreset] = useState<'ops' | 'sales'>('ops');
@@ -611,8 +626,8 @@ export default function OpsDashboard() {
             Nothing needs you — all caught up.
           </div>
         )}
-        {d.queue.map(q => (
-          <button key={q.key} onClick={() => router.push(q.path)} style={{
+        {d.queue.filter(q => canOpen(q.path)).map(q => (
+          <button key={q.key} onClick={() => go(q.path)} style={{
             display: 'flex', alignItems: 'center', gap: '12px', padding: '11px 16px', width: '100%',
             borderBottom: '1px solid var(--border)', background: 'transparent', border: 'none',
             borderTop: 'none', borderLeft: 'none', borderRight: 'none', cursor: 'pointer', textAlign: 'left',
@@ -650,7 +665,7 @@ export default function OpsDashboard() {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', padding: '2px 8px 12px' }}>
         {stageDefs.map((s, i) => (
-          <button key={s.l} onClick={() => router.push(s.path)} style={{ padding: '8px 10px', borderRadius: '8px', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left', position: 'relative' }}>
+          <button key={s.l} onClick={() => go(s.path)} style={{ padding: '8px 10px', borderRadius: '8px', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left', position: 'relative' }}>
             {i > 0 && <span style={{ position: 'absolute', left: '-4px', top: '38%', color: 'var(--text-muted)', opacity: 0.6, fontSize: '14px' }}>›</span>}
             <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{s.n}</div>
             <div style={{ fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginTop: '1px' }}>{s.l}</div>
@@ -668,7 +683,7 @@ export default function OpsDashboard() {
             st: `${d.lanes.gfxActive} active · ${d.stages.rush} rush`,
             dot: d.stages.rush > 0 ? 'var(--warning)' : 'var(--success)' },
         ]).map(lane => (
-          <button key={lane.tag} onClick={() => router.push(lane.path)} style={{
+          <button key={lane.tag} onClick={() => go(lane.path)} style={{
             display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 16px', width: '100%',
             background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)', cursor: 'pointer', textAlign: 'left',
           }}>
@@ -694,11 +709,11 @@ export default function OpsDashboard() {
     <div style={card}>
       <div style={cardHead}>
         <h2 style={headTitle}>Upfit — at a glance</h2>
-        <button onClick={() => router.push('/tracking')} style={headLink}>{d.lanes.shopActive} in shop →</button>
+        {canOpen('/tracking') ? <button onClick={() => go('/tracking')} style={headLink}>{d.lanes.shopActive} in shop →</button> : <span style={{ ...headLink, cursor: 'default' }}>{d.lanes.shopActive} in shop</span>}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', padding: '2px 8px 12px' }}>
         {upfitStages.map((s, i) => (
-          <button key={s.l} onClick={() => router.push('/tracking')} style={{ padding: '8px 10px', borderRadius: '8px', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left', position: 'relative' }}>
+          <button key={s.l} onClick={() => go('/tracking')} style={{ padding: '8px 10px', borderRadius: '8px', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left', position: 'relative' }}>
             {i > 0 && <span style={{ position: 'absolute', left: '-4px', top: '38%', color: 'var(--text-muted)', opacity: 0.6, fontSize: '14px' }}>›</span>}
             <div style={{ fontSize: '20px', fontWeight: 800, color: s.l === 'Stuck' && s.n > 0 ? 'var(--error)' : 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{s.n}</div>
             <div style={{ fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginTop: '1px' }}>{s.l}</div>
@@ -718,7 +733,7 @@ export default function OpsDashboard() {
             st: d.lanes.cniUnassigned > 0 ? `${d.lanes.cniUnassigned} unassigned` : 'all assigned',
             dot: d.lanes.cniUnassigned > 0 ? '#60a5fa' : 'var(--success)' },
         ]).map(lane => (
-          <button key={lane.tag} onClick={() => router.push(lane.path)} style={{
+          <button key={lane.tag} onClick={() => go(lane.path)} style={{
             display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 16px', width: '100%',
             background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)', cursor: 'pointer', textAlign: 'left',
           }}>
@@ -805,9 +820,9 @@ export default function OpsDashboard() {
     const tagLabels: Record<ScheduleItem['type'], string> = { graphics: 'GFX', upfit: 'SHOP', cni: 'CNI', event: 'CAL' };
     const goTo = () => {
       if (item.type === 'graphics') router.push(`/graphics?id=${item.id}`);
-      else if (item.type === 'upfit') router.push('/tracking');
-      else if (item.type === 'cni') router.push(`/admin/cni/jobs/${item.id}`);
-      else router.push('/admin/schedule');
+      else if (item.type === 'upfit') go('/tracking');
+      else if (item.type === 'cni') go(`/admin/cni/jobs/${item.id}`);
+      else go('/admin/schedule');
     };
     return (
       <button key={`${item.type}-${item.id}`} onClick={goTo} style={{
@@ -836,8 +851,10 @@ export default function OpsDashboard() {
         <div style={cardHead}>
           <h2 style={headTitle}>Next 7 days</h2>
           <span style={{ display: 'flex', gap: '10px' }}>
-            <button onClick={() => router.push('/admin/schedule')} style={headLink} title="Add a calendar event on the Schedule page">+ Add</button>
-            <button onClick={() => router.push('/admin/schedule')} style={headLink}>Schedule →</button>
+            {canOpen('/admin/schedule') && <>
+              <button onClick={() => go('/admin/schedule')} style={headLink} title="Add a calendar event on the Schedule page">+ Add</button>
+              <button onClick={() => go('/admin/schedule')} style={headLink}>Schedule →</button>
+            </>}
           </span>
         </div>
         <div style={{ borderTop: '1px solid var(--border)' }}>
@@ -853,12 +870,16 @@ export default function OpsDashboard() {
           {([
             // Land on the All Scans tab pre-filtered by scan date, so the list
             // matches the count regardless of what happened to each scan since
-            // (exported, archived, invoiced, ...).
-            { n: d.now.scansToday, l: 'Scans today', path: '/admin/scans?tab=all&range=today' },
-            { n: d.now.scansWeek, l: 'Scans · 7 days', path: '/admin/scans?tab=all&range=7d' },
-            { n: d.now.inShop, l: 'In shop', path: '/tracking' },
+            // (exported, archived, invoiced, ...). A tile only navigates when
+            // the viewer's features admit the destination — otherwise the
+            // gated page just bounces the tap back here (sales lacks
+            // `reports`, finance lacks `in_shop`), so it renders as a plain
+            // stat instead.
+            { n: d.now.scansToday, l: 'Scans today', path: '/admin/scans?tab=all&range=today', ok: canOpen('/admin/scans') },
+            { n: d.now.scansWeek, l: 'Scans · 7 days', path: '/admin/scans?tab=all&range=7d', ok: canOpen('/admin/scans') },
+            { n: d.now.inShop, l: 'In shop', path: '/tracking', ok: canOpen('/tracking') },
           ]).map(p => (
-            <button key={p.l} onClick={() => router.push(p.path)} style={{ flex: 1, background: 'var(--subtle-bg)', borderRadius: '9px', padding: '9px 11px', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
+            <button key={p.l} onClick={() => { if (p.ok) router.push(p.path); }} style={{ flex: 1, background: 'var(--subtle-bg)', borderRadius: '9px', padding: '9px 11px', border: 'none', cursor: p.ok ? 'pointer' : 'default', textAlign: 'left' }}>
               <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{p.n}</div>
               <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>{p.l}</div>
             </button>

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth, useRequireFeature } from '@/components/AuthProvider';
+import { ROLE_DEFAULT_FEATURES } from '@/lib/features';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import type { Profile, Conversation, Message } from '@/lib/types';
@@ -140,10 +141,17 @@ export default function MessagesPage() {
   const loadProfiles = async () => {
     const { data } = await supabase
       .from('profiles')
-      .select('id, full_name, email, role, status')
+      .select('id, full_name, email, role, roles, status')
       .eq('status', 'approved')
       .order('full_name');
-    setProfiles((data as Profile[]) || []);
+    // Only offer recipients who can actually open Messages — DMing a role
+    // without the feature (customer, executive) produces notifications whose
+    // links bounce and messages nobody will ever read.
+    const canMessage = (p: any) => {
+      const roles: string[] = p.roles?.length ? p.roles : [p.role];
+      return roles.some(r => r === 'admin' || r === 'super_admin' || (ROLE_DEFAULT_FEATURES[r] || []).includes('messages'));
+    };
+    setProfiles(((data as Profile[]) || []).filter(canMessage));
   };
 
   const loadConversations = async () => {
