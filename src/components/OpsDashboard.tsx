@@ -146,7 +146,7 @@ export default function OpsDashboard() {
       shopRes, cniRes,
       schedGfxRes, schedUpfitRes, schedCniRes, schedEventsRes,
       scansTodayRes, scansWeekRes, msgRes, unreadRes,
-      oppsRes, custRes, quotesRes, estRes, unpricedRes,
+      oppsRes, custRes, quotesRes, openEstRes, estRes, unpricedRes,
       apSubmittedRes, sentEstRes, sentWrapRes, staleProofRes, healthRes, atRiskRes,
     ] = await Promise.allSettled([
       // KPI 1 — NetSuite invoiced totals (authoritative revenue)
@@ -234,7 +234,21 @@ export default function OpsDashboard() {
         .order('id')
         .range(from, to)),
       supabase.from('customers').select('netsuite_id, company_name, ytd_spend').eq('active', true).gt('ytd_spend', 0).order('ytd_spend', { ascending: false }).limit(4),
-      supabase.from('wrap_quotes').select('total').in('status', ['draft', 'sent']),
+      // Open quotes = wrap quotes AND estimates, matching what /quotes lists
+      // (quote-list.ts: wraps draft/sent, estimates draft/pushed/sent) — the
+      // tile used to count wraps only, so it read near-zero while the quotes
+      // page was full.
+      fetchAllRows<any>((from, to) => supabase.from('wrap_quotes')
+        .select('total')
+        .in('status', ['draft', 'sent'])
+        .is('archived_at', null)
+        .order('id')
+        .range(from, to)),
+      fetchAllRows<any>((from, to) => supabase.from('estimates')
+        .select('grand_total')
+        .in('status', ['draft', 'pushed', 'sent'])
+        .order('id')
+        .range(from, to)),
       supabase.from('estimates').select('*', { count: 'exact', head: true }).gte('created_at', weekAgo.toISOString()),
       // Unpriced pay — credits with no dollar amount. Accumulating unseen is
       // how someone works for weeks before anyone notices they're unpaid.
@@ -309,6 +323,11 @@ export default function OpsDashboard() {
     });
     const wonValue = opps.filter((o: any) => o.stage === 'won').reduce((s: number, o: any) => s + (o.value || 0), 0);
     const quotes = rows(quotesRes);
+    const openEstimates = rows(openEstRes);
+    const openQuoteCount = quotes.length + openEstimates.length;
+    const openQuoteValue =
+      quotes.reduce((s: number, q: any) => s + (Number(q.total) || 0), 0)
+      + openEstimates.reduce((s: number, e: any) => s + (Number(e.grand_total) || 0), 0);
     const pipelineTotal = stageAgg.reduce((s, x) => s + x.value, 0);
     const pipelineDeals = stageAgg.reduce((s, x) => s + x.count, 0);
 
@@ -451,7 +470,7 @@ export default function OpsDashboard() {
         oldest: oldestDone ? (oldestDone.title || oldestDone.customer || null) : null,
       },
       poBacklog: { remaining: poRemaining, total: poTotal, count: openPos.length },
-      pipelineValue: { total: pipelineTotal, deals: pipelineDeals, quotes: quotes.length },
+      pipelineValue: { total: pipelineTotal, deals: pipelineDeals, quotes: openQuoteCount },
       queue,
       stages: {
         received: inStatus(RECEIVED),
@@ -488,7 +507,7 @@ export default function OpsDashboard() {
       sales: {
         stages: stageAgg, wonValue,
         topCustomers: rows(custRes).map((c: any) => ({ name: c.company_name, ytd: Number(c.ytd_spend) || 0, nsId: c.netsuite_id ? String(c.netsuite_id) : null })),
-        openQuotes: { count: quotes.length, value: quotes.reduce((s: number, q: any) => s + (q.total || 0), 0) },
+        openQuotes: { count: openQuoteCount, value: openQuoteValue },
         estimatesWeek: count(estRes),
       },
     });
@@ -823,7 +842,7 @@ export default function OpsDashboard() {
         </div>
         <div style={{ padding: '12px 16px' }}>
           <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: '8px' }}>Quotes &amp; estimates</div>
-          <button onClick={() => router.push('/admin/wrap-quote')} style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: '12px', padding: '3px 0', background: 'none', border: 'none', cursor: 'pointer', fontVariantNumeric: 'tabular-nums' }}>
+          <button onClick={() => router.push('/quotes')} style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: '12px', padding: '3px 0', background: 'none', border: 'none', cursor: 'pointer', fontVariantNumeric: 'tabular-nums' }}>
             <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>Open quotes</span>
             <span style={{ fontWeight: 800, color: 'var(--text-primary)' }}>{d.sales.openQuotes.count} · {fmtK(d.sales.openQuotes.value)}</span>
           </button>
