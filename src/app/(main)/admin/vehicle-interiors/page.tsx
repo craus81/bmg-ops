@@ -107,7 +107,8 @@ const fromForm = (f: GeoForm): InteriorGeometry => {
 
 export default function VehicleInteriorsPage() {
   const router = useRouter();
-  const { isAdmin, user, profile, loading: authLoading } = useAuth();
+  const { hasFeature, user, profile, loading: authLoading } = useAuth();
+  const canPartAdmin = hasFeature('part_admin');
   const dialog = useDialog();
   const supabase = useMemo(() => createClient(), []);
 
@@ -120,8 +121,8 @@ export default function VehicleInteriorsPage() {
 
   useEffect(() => {
     if (authLoading || !user) return;
-    if (!isAdmin) router.push('/home');
-  }, [authLoading, user, isAdmin, router]);
+    if (!canPartAdmin) router.push('/home');
+  }, [authLoading, user, canPartAdmin, router]);
 
   const load = async () => {
     const [{ data: plats }, { data: ints }] = await Promise.all([
@@ -133,10 +134,10 @@ export default function VehicleInteriorsPage() {
   };
 
   useEffect(() => {
-    if (authLoading || !user || !isAdmin) return;
+    if (authLoading || !user || !canPartAdmin) return;
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load once
-  }, [authLoading, user, isAdmin]);
+  }, [authLoading, user, canPartAdmin]);
 
   const selected = rows.find(r => r.id === selectedId) || null;
   const selectedPlatform = selected ? platforms.find(p => p.id === selected.platform_id) || null : null;
@@ -223,7 +224,7 @@ export default function VehicleInteriorsPage() {
     pick(data as InteriorRow);
   };
 
-  if (authLoading || !user || !isAdmin) return null;
+  if (authLoading || !user || !canPartAdmin) return null;
 
   const grouped = platforms
     .map(p => ({ platform: p, combos: rows.filter(r => r.platform_id === p.id).sort((a, b) => a.wheelbase_label.localeCompare(b.wheelbase_label, undefined, { numeric: true }) || a.roof_label.localeCompare(b.roof_label)) }))

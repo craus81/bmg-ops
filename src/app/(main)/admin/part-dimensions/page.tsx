@@ -52,7 +52,8 @@ const draftFor = (p: BrowsePart): RowDraft => ({
 
 export default function PartDimensionsPage() {
   const router = useRouter();
-  const { isAdmin, user, loading: authLoading } = useAuth();
+  const { hasFeature, user, loading: authLoading } = useAuth();
+  const canPartAdmin = hasFeature('part_admin');
 
   const [parts, setParts] = useState<BrowsePart[]>([]);
   const [total, setTotal] = useState(0);
@@ -76,8 +77,8 @@ export default function PartDimensionsPage() {
 
   useEffect(() => {
     if (authLoading || !user) return;
-    if (!isAdmin) router.push('/home');
-  }, [authLoading, user, isAdmin, router]);
+    if (!canPartAdmin) router.push('/home');
+  }, [authLoading, user, canPartAdmin, router]);
 
   // Debounce the search box so each keystroke doesn't hit the API.
   useEffect(() => {
@@ -118,15 +119,15 @@ export default function PartDimensionsPage() {
   }, [dimsFilter, categoryId, vendor, q]);
 
   useEffect(() => {
-    if (authLoading || !user || !isAdmin) return;
+    if (authLoading || !user || !canPartAdmin) return;
     setPage(0);
     load(0, false);
-  }, [authLoading, user, isAdmin, load]);
+  }, [authLoading, user, canPartAdmin, load]);
 
   // Coverage stat: how much of the upfit catalog is 3D-placeable. Two exact
   // head-counts, refreshed after each save (savedRow flips).
   useEffect(() => {
-    if (authLoading || !user || !isAdmin) return;
+    if (authLoading || !user || !canPartAdmin) return;
     (async () => {
       const { createClient } = await import('@/lib/supabase-browser');
       const supabase = createClient();
@@ -137,7 +138,7 @@ export default function PartDimensionsPage() {
       ]);
       setCoverage({ total: total || 0, withDims: withDims || 0 });
     })();
-  }, [authLoading, user, isAdmin, savedRow]);
+  }, [authLoading, user, canPartAdmin, savedRow]);
 
   const saveRow = async (p: BrowsePart) => {
     const d = drafts[p.id];
@@ -187,7 +188,7 @@ export default function PartDimensionsPage() {
   const setDraft = (id: string, patch: Partial<RowDraft>) =>
     setDrafts(prev => ({ ...prev, [id]: { ...prev[id], ...patch } }));
 
-  if (authLoading || !user || !isAdmin) return null;
+  if (authLoading || !user || !canPartAdmin) return null;
 
   const chip = (active: boolean): React.CSSProperties => ({
     padding: '5px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
