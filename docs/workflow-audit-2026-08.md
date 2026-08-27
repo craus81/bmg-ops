@@ -76,7 +76,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Next** — close the workflow chain (10–16) | ⚠️ mostly done | PRs #635–#640; #14 CNI notifications fully wired (#640–#646), but "kill the legacy CNI invoice flow" and the "graphics→CNI job bridge" remain open. |
 | **Soon** — the role cleanup (17–20) | ✅ done | #17 infra + owner-page gates (#649), #18a registry (#648), #18b all ten tools keyed (#652, #654, #655), #19 install roles (#650), #20 dead-end menus (#651). The ungated-by-URL pages are gated and the dev route deleted (#656). An adversarial gate audit (every tile/nav/redirect/deep-link entry point traced per role) confirmed 20 regressions, all fixed: client dead-clicks + two redirect loops (#657) and per-recipient vehicle notification links (#658). |
 | **Data-integrity bugs to fix in passing** | ✅ done | All 6 re-verified as live, then fixed: pushed-estimate delete (#660), Add-Graphics demotion (#661), stranded allocations — trigger + backfill, migration 228 (#662), graphics history trigger, migration 229 (#663), the 1000-row-cap sweep across payroll/payouts/credits/pay-rates/scans/invoices/pos/dashboard (#664), and the Open Quotes tile (#665). |
-| **Hygiene** — delete the dead set | ❌ not started | ~1,500 lines. |
+| **Hygiene** — delete the dead set | ⚠️ mostly done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification. Dormant tables intentionally not dropped (needs owner sign-off — data loss is irreversible). CI dead-code check still open. |
 
 Per-item status is tagged inline in Part 5 below.
 
@@ -576,8 +576,10 @@ biggest ones:
 - **The customer portal's missing 5%** — its only provisioning path
   (`/api/admin/link-customer`) has no UI, so a customer login can't be set up from
   the app; and the portal shows no invoices/balances.
-- **Offline scanning** — a finished IndexedDB queue (`offline-db.ts`) that was
-  never wired to the scanner; relevant if field techs scan VINs in dead zones.
+- **Offline scanning** — relevant if field techs scan VINs in dead zones. (The
+  unwired IndexedDB queue `offline-db.ts` this bullet originally pointed at was
+  deleted in the hygiene sweep after sitting unconnected; the scanner's own
+  localStorage retry queue is the surviving starting point.)
 
 ---
 
@@ -668,12 +670,24 @@ instead of bouncing off the In-Shop gate.
 
 ### Hygiene — delete the dead set (~1,500 lines, zero behavior change)
 
-Routes (`sales-order-pdf`, `invoice-pdf`, `create-invoice-direct`,
-`customer-purchases`, `contacts`, `push/send`), components (`SalesOrderPdf`,
-`StatusPipeline`, `SwipeToDelete`), libs (`offline-db`, `use-is-mobile`), the
-orphan `/fleet/update` page, dormant tables (`dashboard_layouts`,
-`customer_job_assignments`, `sales_cadences`), and the stale help docs. Add a
-CI dead-code check so the next audit starts at zero.
+✅ Deleted after a 14-agent adversarial reference sweep (imports, JSX, URL
+strings, service workers, crons, configs, migrations, git history) confirmed
+zero live references: routes `/api/netsuite/sales-order-pdf`,
+`/api/netsuite/invoice-pdf`, `/api/netsuite/create-invoice-direct`,
+`/api/netsuite/customer-purchases`, `/api/contacts`, `/api/push/send`
+(NOT `/api/netsuite/contacts/sync` — that one is live via the prospects
+page's Sync Contacts button); components `SalesOrderPdf`, `StatusPipeline`,
+`SwipeToDelete`; libs `offline-db`, `use-is-mobile` (plus the orphaned
+`getSalesOrderPdf`/`getInvoicePdf` wrappers in `lib/netsuite.ts`); the
+orphan `/fleet/update` page; and the two stale doc passages.
+
+Dormant tables: confirmed zero code references for `dashboard_layouts` and
+`customer_job_assignments` (`sales_cadences` was already dropped by
+migration 059) — the tables themselves are NOT dropped here; dropping
+production tables destroys whatever rows they hold and needs an explicit
+owner sign-off first.
+
+❌ Still open: the CI dead-code check so the next audit starts at zero.
 
 ---
 

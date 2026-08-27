@@ -2211,13 +2211,3 @@ export async function updateItemFields(
     return { success: false, error: e?.message || 'NetSuite update failed' };
   }
 }
-
-/** @deprecated Use getNetSuitePdf('salesOrder', id) instead */
-export async function getSalesOrderPdf(salesOrderId: string) {
-  return getNetSuitePdf('salesOrder', salesOrderId);
-}
-
-/** @deprecated Use getNetSuitePdf('invoice', id) instead */
-export async function getInvoicePdf(invoiceId: string) {
-  return getNetSuitePdf('invoice', invoiceId);
-}

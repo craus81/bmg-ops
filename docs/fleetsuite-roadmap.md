@@ -676,9 +676,9 @@ point-of-quote prompt in the estimate builder when a quote only covers one line 
 
 Machinery that exists and should be reused: the at-risk cron (`src/lib/at-risk.ts:44-93` +
 `cron/at-risk-check/route.ts`) is the exact right shape — a pure evaluator, a per-account owner, a
-dismiss action. Two dormant tables also exist: `sales_cadences` (migrations/054) has **zero code
-references**, and `prospect_reminders` (migrations/061) is written by AI voice notes but has **no
-cron**, so a due reminder never notifies anyone.
+dismiss action. One dormant table also exists: `prospect_reminders` (migrations/061) is written by
+AI voice notes but has **no cron**, so a due reminder never notifies anyone. (`sales_cadences`,
+created by migrations/054 with zero code references, was already dropped by migrations/059.)
 
 **Change.** **Phase 0 (XS, ships same day, de-risks everything):** a plain weekly recurring reminder
 with no detection — new cron, `notifyMany` over sales reps, linking to
