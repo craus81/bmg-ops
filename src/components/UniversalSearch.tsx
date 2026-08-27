@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePopout, PopoutType } from '@/components/Popout';
+import { useAuth } from '@/components/AuthProvider';
 
 interface UniversalSearchProps {
   open: boolean;
@@ -215,6 +216,21 @@ const valueStyle: React.CSSProperties = {
 
 export default function UniversalSearch({ open, onClose }: UniversalSearchProps) {
   const router = useRouter();
+  const { isAdmin, isSales, hasFeature } = useAuth();
+  // A "View all" link only renders when the viewer can open its list page —
+  // the gated destinations bounce to /home and discard the search otherwise.
+  const canViewAll = (group: string): boolean => {
+    switch (group) {
+      case 'vehicles': return hasFeature('in_shop') || hasFeature('fleet_checkin');
+      case 'purchase_orders': return hasFeature('purchase_orders');
+      case 'graphics_jobs': return hasFeature('graphics');
+      case 'estimates': return hasFeature('estimates');
+      case 'parts': return isAdmin || isSales || hasFeature('parts_catalog');
+      case 'customers': return hasFeature('prospects');
+      case 'invoices': return isAdmin || isSales;
+      default: return true;
+    }
+  };
   const { open: openPopout } = usePopout();
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
@@ -361,7 +377,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
             if (items.length === 0) return null;
             const total = totals[group] ?? items.length;
             const hasMore = total > items.length;
-            const viewAllUrl = hasMore && VIEW_ALL[group] ? VIEW_ALL[group](query) : null;
+            const viewAllUrl = hasMore && VIEW_ALL[group] && canViewAll(group) ? VIEW_ALL[group](query) : null;
 
             return (
               <div key={group}>

@@ -7,7 +7,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 // redirects here). Lazy so the board renders before the wizard loads.
 const VehicleCheckIn = lazy(() => import('@/components/VehicleCheckIn'));
 import { createClient } from '@/lib/supabase-browser';
-import { useAuth, useRequireFeature } from '@/components/AuthProvider';
+import { useAuth } from '@/components/AuthProvider';
 import { storage } from '@/lib/storage';
 import { fetchAllRows } from '@/lib/fetch-all';
 import StatusBadge from '@/components/StatusBadge';
@@ -33,8 +33,16 @@ type FilterStatus = VehicleTrackingStatus | 'all' | 'stuck';
 export default function TrackingPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isAdmin, user, profile, hasFeature } = useAuth();
-  useRequireFeature('in_shop');
+  const { isAdmin, user, profile, hasFeature, loading: authLoading } = useAuth();
+  // Same condition as the BottomNav In-Shop tab: in_shop OR fleet_checkin —
+  // a fleet_checkin-only user needs this page for the check-in panel, and
+  // gating on in_shop alone put a shop_tech with a revoked override into an
+  // infinite /home ↔ /tracking redirect loop (home redirects them here).
+  useEffect(() => {
+    if (authLoading) return;
+    if (!hasFeature('in_shop') && !hasFeature('fleet_checkin')) router.push('/home');
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- gate on auth resolution only
+  }, [authLoading, hasFeature]);
   const dialog = useDialog();
   const supabase = createClient();
 

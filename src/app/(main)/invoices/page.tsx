@@ -87,7 +87,7 @@ interface InvoiceVehiclesResult {
 export default function InvoicingHubPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, profile, isAdmin, isSales } = useAuth();
+  const { user, profile, isAdmin, isSales, hasFeature } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
 
@@ -662,9 +662,13 @@ export default function InvoicingHubPage() {
           {waitingScanCount > 0 && (
             <div style={{ ...card, marginBottom: '10px', fontSize: '12px', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
               <span>{waitingScanCount} scan{waitingScanCount !== 1 ? 's are' : ' is'} waiting for a PO match and can&apos;t be invoiced yet.</span>
-              <button onClick={() => router.push('/admin/scans')} style={smallBtn('#f59e0b', 'rgba(245,158,11,0.08)', 'rgba(245,158,11,0.3)')}>
-                Fix in Scan Log →
-              </button>
+              {/* /admin/scans requires the reports feature, which sales lacks —
+                  keep the warning but only offer the jump to those it admits. */}
+              {hasFeature('reports') && (
+                <button onClick={() => router.push('/admin/scans')} style={smallBtn('#f59e0b', 'rgba(245,158,11,0.08)', 'rgba(245,158,11,0.3)')}>
+                  Fix in Scan Log →
+                </button>
+              )}
             </div>
           )}
 

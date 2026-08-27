@@ -59,24 +59,32 @@ function AdminDashboard() {
 // ─── Main Export ────────────────────────────────────────────────
 export default function HomePage() {
   const router = useRouter();
-  const { profile } = useAuth();
+  const { profile, hasFeature } = useAuth();
 
   const role = profile?.role;
   const roles = profile?.roles || [];
   const isOnlyRole = (r: string) => role === r || (roles.includes(r as any) && !roles.includes('admin' as any));
+
+  // Redirect only when the destination's feature gate would admit the user —
+  // the gated pages bounce back to /home, so an unguarded redirect plus a
+  // per-user feature revoke forms an infinite /home ↔ page loop.
+  const scanOk = hasFeature('scan');
+  const trackingOk = hasFeature('in_shop') || hasFeature('fleet_checkin');
 
   useEffect(() => {
     if (!role) return;
     // Redirect roles to their dedicated home screens
     if (role === 'customer') { router.replace('/customer/dashboard'); return; }
     if (isOnlyRole('graphics_production')) { router.replace('/graphics'); return; }
-    if (isOnlyRole('field_tech') || isOnlyRole('installer')) { router.replace('/scan'); return; }
-    if (isOnlyRole('shop_tech')) { router.replace('/tracking?checkin=1'); return; }
+    if ((isOnlyRole('field_tech') || isOnlyRole('installer')) && scanOk) { router.replace('/scan'); return; }
+    if (isOnlyRole('shop_tech') && trackingOk) { router.replace('/tracking?checkin=1'); return; }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [role, roles]);
+  }, [role, roles, scanOk, trackingOk]);
 
   if (role === 'customer') return null;
-  if (isOnlyRole('graphics_production') || isOnlyRole('field_tech') || isOnlyRole('installer') || isOnlyRole('shop_tech')) return null;
+  if (isOnlyRole('graphics_production')) return null;
+  if ((isOnlyRole('field_tech') || isOnlyRole('installer')) && scanOk) return null;
+  if (isOnlyRole('shop_tech') && trackingOk) return null;
 
   // Admin, Sales, Super Admin, and Executive get the dashboard
   return <AdminDashboard />;

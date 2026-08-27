@@ -68,18 +68,25 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
     'upfit_configurator',
   ],
 
+  // upfit_projects: graphics and both tech roles get assigned upfit tasks and
+  // are @mentioned in project notes — their notification deep links land on
+  // /upfit, so they must hold its key (found by the gate audit: task-assignment
+  // pushes bounced every non-admin/sales assignee once /upfit was gated).
   graphics_production: [
     'home', 'in_shop', 'graphics', 'estimates',
-    'time', 'messages', 'customers', 'parts_catalog', 'schedule',
+    'time', 'messages', 'customers', 'parts_catalog', 'schedule', 'upfit_projects',
   ],
 
   shop_tech: [
     'home', 'scan', 'fleet_checkin', 'in_shop',
-    'time', 'messages', 'schedule',
+    'time', 'messages', 'schedule', 'upfit_projects',
   ],
 
+  // schedule: install events are about field techs and calendar-note mentions
+  // deep-link them to /admin/schedule (shop_tech already held it).
   field_tech: [
-    'home', 'scan', 'in_shop', 'fleet_checkin', 'time', 'messages',
+    'home', 'scan', 'in_shop', 'fleet_checkin', 'time', 'messages', 'schedule',
+    'upfit_projects',
   ],
 
   installer: [

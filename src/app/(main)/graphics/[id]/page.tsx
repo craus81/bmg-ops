@@ -118,7 +118,7 @@ export default function GraphicsJobRecordPage() {
   const router = useRouter();
   const params = useParams();
   const jobId = String(params?.id || '');
-  const { user, isAdmin, isProduction, isSales, isInstaller, isFieldTech, isShopTech, loading: authLoading } = useAuth();
+  const { user, isAdmin, isProduction, isSales, isInstaller, isFieldTech, isShopTech, hasFeature, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
 
@@ -943,7 +943,11 @@ export default function GraphicsJobRecordPage() {
               <span style={{ color: 'var(--text-body)', fontWeight: 600 }}>{upfit.project_name}</span>
               <span style={{ marginLeft: '6px', padding: '1px 6px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(249,115,22,0.12)', color: '#f97316', textTransform: 'uppercase', letterSpacing: '0.3px' }}>{upfit.status.replace(/_/g, ' ')}</span>
             </div>
-            <a href={`/upfit?id=${upfit.id}`} style={{ flexShrink: 0, padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, color: '#f97316', background: 'rgba(249,115,22,0.10)', border: '1px solid rgba(249,115,22,0.35)', textDecoration: 'none', whiteSpace: 'nowrap' }}>Open ↗</a>
+            {/* /upfit requires upfit_projects — installers (who can view this
+                page via deep links) lack it, so the link would bounce them. */}
+            {hasFeature('upfit_projects') && (
+              <a href={`/upfit?id=${upfit.id}`} style={{ flexShrink: 0, padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, color: '#f97316', background: 'rgba(249,115,22,0.10)', border: '1px solid rgba(249,115,22,0.35)', textDecoration: 'none', whiteSpace: 'nowrap' }}>Open ↗</a>
+            )}
           </div>
         )}
       </div>
