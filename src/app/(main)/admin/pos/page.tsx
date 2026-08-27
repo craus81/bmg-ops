@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { flashNote } from '@/lib/focus-note';
 import { createClient } from '@/lib/supabase-browser';
+import { fetchAllRows } from '@/lib/fetch-all';
 import { useAuth } from '@/components/AuthProvider';
 import { parseMasterackPO, type ParsedPO, type ParsedPOLine } from '@/lib/parsePO';
 import { resolvePoCustomer } from '@/lib/customer-match';
@@ -544,35 +545,20 @@ export default function POsPage() {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     const load = async () => {
-      const { data: poData } = await supabase
-        .from('purchase_orders')
-        .select('*, po_line_items(*), po_invoices(*)')
-        .order('created_at', { ascending: false });
-      const notesByPo = await fetchNoteCounts();
-
-      const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
-      const mapped = (poData || [])
-        .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
-        .map((po: any) => ({
-          ...po,
-          line_items: po.po_line_items || [],
-          po_notes: notesByPo[po.id] || [],
-          po_invoices: (po.po_invoices || []).sort((a: any, b: any) =>
-            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-          ),
-        }));
-      setPos(mapped);
+      setPos(await loadPoBook());
 
       // Graphics jobs linked to POs — powers the "has a graphics job" tag.
       // Cancelled jobs don't count: a PO whose only job was cancelled still
       // needs one created.
-      const { data: gfxJobs } = await supabase
+      const { data: gfxJobs } = await fetchAllRows<PoGfxJob>((from, to) => supabase
         .from('graphics_jobs')
         .select('id, job_number, title, status, po_id, po_line_item_id')
         .not('po_id', 'is', null)
-        .neq('status', 'cancelled');
+        .neq('status', 'cancelled')
+        .order('id')
+        .range(from, to));
       const byPo: Record<string, PoGfxJob[]> = {};
-      for (const j of (gfxJobs || []) as PoGfxJob[]) {
+      for (const j of gfxJobs) {
         (byPo[j.po_id] ||= []).push(j);
       }
       setGfxJobsByPo(byPo);
@@ -1110,12 +1096,37 @@ export default function POsPage() {
   const fetchNoteCounts = async (): Promise<Record<string, { id: string }[]>> => {
     const byPo: Record<string, { id: string }[]> = {};
     try {
-      const { data } = await supabase.from('po_notes').select('id, po_id');
-      for (const n of (data || []) as { id: string; po_id: string }[]) {
+      const { data } = await fetchAllRows<{ id: string; po_id: string }>((from, to) =>
+        supabase.from('po_notes').select('id, po_id').order('id').range(from, to));
+      for (const n of data) {
         (byPo[n.po_id] = byPo[n.po_id] || []).push({ id: n.id });
       }
     } catch { /* table may not exist yet */ }
     return byPo;
+  };
+
+  // The one canonical PO-book read, used by initial load and every refresh.
+  // Paginated: the book outgrew PostgREST's silent 1000-row cap, so the
+  // unpaginated pulls this replaces dropped the oldest POs from the page.
+  const loadPoBook = async () => {
+    const { data: poData } = await fetchAllRows<any>((from, to) => supabase
+      .from('purchase_orders')
+      .select('*, po_line_items(*), po_invoices(*)')
+      .order('created_at', { ascending: false })
+      .order('id')
+      .range(from, to));
+    const notesByPo = await fetchNoteCounts();
+    const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
+    return poData
+      .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
+      .map((po: any) => ({
+        ...po,
+        line_items: po.po_line_items || [],
+        po_notes: notesByPo[po.id] || [],
+        po_invoices: (po.po_invoices || []).sort((a: any, b: any) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        ),
+      }));
   };
 
   // Gmail import functions
@@ -1274,16 +1285,7 @@ export default function POsPage() {
   // Re-pull the PO book after a maintenance action (sync / billing check /
   // audit) so badges and invoice lists reflect what the server just wrote.
   const reloadPosAfterMaintenance = async () => {
-    const { data: poData } = await supabase
-      .from('purchase_orders')
-      .select('*, po_line_items(*), po_invoices(*)')
-      .order('created_at', { ascending: false });
-    const notesByPo = await fetchNoteCounts();
-    const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
-    const mapped = (poData || [])
-      .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
-      .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_notes: notesByPo[po.id] || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
-    setPos(mapped);
+    setPos(await loadPoBook());
   };
 
   // Check every PO's linked invoices against its ordered quantities and flag
@@ -1496,16 +1498,7 @@ export default function POsPage() {
       if (data.status === 'imported' || data.status === 'updated') {
         setPendingPOs(prev => prev.filter(p => p.message_id !== messageId));
         setEmailEmails(prev => prev.filter(e => e.messageId !== messageId));
-        const { data: poData } = await supabase
-          .from('purchase_orders')
-          .select('*, po_line_items(*), po_invoices(*)')
-          .order('created_at', { ascending: false });
-        const notesByPo = await fetchNoteCounts();
-        const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
-        const mapped = (poData || [])
-          .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
-          .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_notes: notesByPo[po.id] || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
-        setPos(mapped);
+        setPos(await loadPoBook());
       }
     } catch (err: any) {
       setEmailImportResults(prev => ({ ...prev, [messageId]: { status: 'error', error: err.message || 'Network error' } }));
@@ -1549,16 +1542,7 @@ export default function POsPage() {
             setPendingPOs(prev => prev.filter(p => p.message_id !== messageId));
             setEmailEmails(prev => prev.filter(e => e.messageId !== messageId));
           }
-          const { data: poData } = await supabase
-            .from('purchase_orders')
-            .select('*, po_line_items(*), po_invoices(*)')
-            .order('created_at', { ascending: false });
-          const notesByPo = await fetchNoteCounts();
-          const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
-          const mapped = (poData || [])
-            .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
-            .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_notes: notesByPo[po.id] || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
-          setPos(mapped);
+          setPos(await loadPoBook());
         }
         advanceReviewQueue();
       }
@@ -1623,16 +1607,7 @@ export default function POsPage() {
             setPendingPOs(prev => prev.filter(p => p.message_id !== overwriteMessageId));
             setEmailEmails(prev => prev.filter(e => e.messageId !== overwriteMessageId));
           }
-          const { data: poData } = await supabase
-            .from('purchase_orders')
-            .select('*, po_line_items(*), po_invoices(*)')
-            .order('created_at', { ascending: false });
-          const notesByPo = await fetchNoteCounts();
-          const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
-          const mapped = (poData || [])
-            .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
-            .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_notes: notesByPo[po.id] || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
-          setPos(mapped);
+          setPos(await loadPoBook());
         }
       }
     } catch (err: any) {

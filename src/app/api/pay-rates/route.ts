@@ -5,6 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { priceUnpricedCredits } from '@/lib/pay-credits';
 import { logAudit } from '@/lib/audit';
 import { canonicalizePartNumber, partNumberPattern } from '@/lib/part-number';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,11 +27,17 @@ export async function GET(req: NextRequest) {
     .select('id, part_number, rate_per_vehicle, active, updated_at')
     .order('part_number');
 
-  const { data: unpriced } = await service
+  // Paginated: unpriced credits accumulate unboundedly, and rows past the
+  // 1000-row cap would vanish from the needs-pricing queue unseen.
+  const { data: unpriced } = await fetchAllRows<{
+    part_number: string | null; source: string; vin: string | null; cni_job_vin_id: string | null;
+  }>((from, to) => service
     .from('install_credits')
     .select('part_number, source, vin, cni_job_vin_id')
     .is('amount', null)
-    .is('voided_at', null);
+    .is('voided_at', null)
+    .order('id')
+    .range(from, to));
 
   // Field credits price from install_pay_rates — that's this screen's queue.
   // CNI credits price from their job's pay_per_vehicle, and credits with no

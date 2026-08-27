@@ -205,86 +205,66 @@ export default function AdminScansPage() {
     setLoading(true);
     loadBillableCustomers(supabase).then(setBillableCustomers);
     const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes, posRes, cniVinsRes, companiesRes, creditsRes] = await Promise.all([
-      supabase.from('scan_logs').select('*').is('archived_at', null).order('scanned_at', { ascending: false }).limit(1000),
+      // Paginated — the active log can exceed the 1000-row cap (.limit doesn't
+      // lift it), which silently hid older un-archived scans from every tab.
+      fetchAllRows<any>((from, to) => supabase
+        .from('scan_logs').select('*')
+        .is('archived_at', null)
+        .order('scanned_at', { ascending: false })
+        .order('id')
+        .range(from, to)),
       // Paginate archived scans — Supabase caps responses at 1000 rows by default
-      (async () => {
-        let all: any[] = [];
-        let pg = 0;
-        let more = true;
-        while (more) {
-          const { data } = await supabase
-            .from('scan_logs').select('*')
-            .not('archived_at', 'is', null)
-            .order('archived_at', { ascending: false })
-            .range(pg * 1000, (pg + 1) * 1000 - 1);
-          all = [...all, ...(data || [])];
-          more = (data || []).length === 1000;
-          pg++;
-        }
-        return { data: all };
-      })(),
+      fetchAllRows<any>((from, to) => supabase
+        .from('scan_logs').select('*')
+        .not('archived_at', 'is', null)
+        .order('archived_at', { ascending: false })
+        .order('id')
+        .range(from, to)),
       supabase.from('profiles').select('id, full_name, role, roles, is_field_installer, company_id'),
       // Paginated: a truncated map shows "Waiting on PO" for scans whose
       // no-PO part sorts past the 1000-row cap.
       fetchAllRows<{ item_number: string; requires_po_match: boolean | null }>((from, to) =>
         supabase.from('netsuite_parts').select('item_number, requires_po_match').order('id').range(from, to)),
       // All active parts — paginate to get all
-      (async () => {
-        let all: any[] = [];
-        let pg = 0;
-        let more = true;
-        while (more) {
-          const { data } = await supabase.from('netsuite_parts').select('id, item_number, display_name, billable_customer, vehicle_type, graphic_package').eq('is_active', true).order('item_number').range(pg * 1000, (pg + 1) * 1000 - 1);
-          all = [...all, ...(data || [])];
-          more = (data || []).length === 1000;
-          pg++;
-        }
-        return { data: all };
-      })(),
+      fetchAllRows<any>((from, to) => supabase
+        .from('netsuite_parts')
+        .select('id, item_number, display_name, billable_customer, vehicle_type, graphic_package')
+        .eq('is_active', true)
+        .order('item_number')
+        .order('id')
+        .range(from, to)),
       supabase.from('work_locations').select('id, name').eq('is_active', true).order('name'),
-      supabase.from('purchase_orders').select('id, po_number, customer, line_items:po_line_items(id, part_number, quantity, installed)').in('status', ['open', 'complete']).order('po_number'),
+      // Paginated — the open/complete PO book outgrows the 1000-row cap, and a
+      // truncated read here made scans read "Waiting on PO" for POs that exist.
+      fetchAllRows<any>((from, to) => supabase
+        .from('purchase_orders')
+        .select('id, po_number, customer, line_items:po_line_items(id, part_number, quantity, installed)')
+        .in('status', ['open', 'complete'])
+        .order('po_number')
+        .order('id')
+        .range(from, to)),
       // CNI job VINs that produced a scan — maps scan_log_id → job number so the
       // Scan Log can flag CNI work and filter to it (§3.4). Paginated like the
       // archived scans, since this grows with every CNI vehicle completed.
-      (async () => {
-        let all: any[] = [];
-        let pg = 0;
-        let more = true;
-        while (more) {
-          const { data } = await supabase
-            .from('cni_job_vins')
-            .select('id, scan_log_id, completed_by, cni_jobs(job_number, assigned_company_id)')
-            .not('scan_log_id', 'is', null)
-            .range(pg * 1000, (pg + 1) * 1000 - 1);
-          all = [...all, ...(data || [])];
-          more = (data || []).length === 1000;
-          pg++;
-        }
-        return { data: all };
-      })(),
+      fetchAllRows<any>((from, to) => supabase
+        .from('cni_job_vins')
+        .select('id, scan_log_id, completed_by, cni_jobs(job_number, assigned_company_id)')
+        .not('scan_log_id', 'is', null)
+        .order('id')
+        .range(from, to)),
       // Vendor companies for the bulk tab's vendor picker (same list the
       // vendor-invoice flow uses).
       supabase.from('companies').select('id, name').order('name'),
       // Live pay credits — who was actually credited for each scanned vehicle.
       // Ordered so the pagination is stable; paginated like the other
       // per-vehicle tables since this grows with every completed install.
-      (async () => {
-        let all: any[] = [];
-        let pg = 0;
-        let more = true;
-        while (more) {
-          const { data } = await supabase
-            .from('install_credits')
-            .select('scan_log_id, cni_job_vin_id, profile_id')
-            .is('voided_at', null)
-            .order('created_at', { ascending: true })
-            .range(pg * 1000, (pg + 1) * 1000 - 1);
-          all = [...all, ...(data || [])];
-          more = (data || []).length === 1000;
-          pg++;
-        }
-        return { data: all };
-      })(),
+      fetchAllRows<any>((from, to) => supabase
+        .from('install_credits')
+        .select('scan_log_id, cni_job_vin_id, profile_id')
+        .is('voided_at', null)
+        .order('created_at', { ascending: true })
+        .order('id')
+        .range(from, to)),
     ]);
     setAllParts((fullPartsRes.data || []) as typeof allParts);
     setAllLocations((locsRes.data || []) as typeof allLocations);

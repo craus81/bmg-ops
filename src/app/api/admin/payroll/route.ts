@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { fromDateString } from '@/lib/payroll';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,17 +14,27 @@ const service = createClient(
 
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
-/** Field credits in [start, endExclusive) — the biweekly payroll window. */
+/**
+ * Field credits in [start, endExclusive) — the biweekly payroll window.
+ * Paginated: a busy period can exceed PostgREST's silent 1000-row cap, and a
+ * truncated read here means workers silently unpaid — so callers get the
+ * error alongside the rows and MUST fail closed on a partial read.
+ */
 async function periodCredits(start: string, endExclusive: string) {
-  const { data } = await service
+  return fetchAllRows<{
+    id: string; profile_id: string; vin: string | null; part_number: string | null;
+    rate_per_vehicle: number | null; share_weight: number; crew_size: number;
+    amount: number | null; payout_id: string | null; created_at: string;
+  }>((from, to) => service
     .from('install_credits')
     .select('id, profile_id, vin, part_number, rate_per_vehicle, share_weight, crew_size, amount, payout_id, created_at')
     .eq('source', 'field')
     .is('voided_at', null)
     .gte('created_at', fromDateString(start).toISOString())
     .lt('created_at', fromDateString(endExclusive).toISOString())
-    .order('created_at');
-  return data || [];
+    .order('created_at')
+    .order('id')
+    .range(from, to));
 }
 
 const GetSchema = z.object({ start: dateStr, endExclusive: dateStr });
@@ -40,7 +51,10 @@ export async function GET(req: NextRequest) {
   const q = validateSearchParams(req, GetSchema);
   if (q.error) return q.error;
 
-  const credits = await periodCredits(q.data.start, q.data.endExclusive);
+  const { data: credits, error: creditsErr } = await periodCredits(q.data.start, q.data.endExclusive);
+  if (creditsErr) {
+    return NextResponse.json({ error: 'Failed to load credits: ' + creditsErr.message }, { status: 500 });
+  }
   const profileIds = [...new Set(credits.map(c => c.profile_id))];
   const { data: profiles } = profileIds.length
     ? await service.from('profiles').select('id, full_name').in('id', profileIds)
@@ -76,7 +90,12 @@ export async function POST(req: NextRequest) {
   if (parsed.error) return parsed.error;
   const { start, endExclusive } = parsed.data;
 
-  const credits = await periodCredits(start, endExclusive);
+  const { data: credits, error: creditsErr } = await periodCredits(start, endExclusive);
+  if (creditsErr) {
+    // Never create payouts from a partial read — a truncated page means some
+    // people's credits are missing and they'd be paid short.
+    return NextResponse.json({ error: 'Failed to load credits: ' + creditsErr.message }, { status: 500 });
+  }
   const open = credits.filter(c => !c.payout_id);
   if (open.length === 0) {
     return NextResponse.json({ error: 'Nothing to pay — all credits in this period are already on a payout' }, { status: 400 });
