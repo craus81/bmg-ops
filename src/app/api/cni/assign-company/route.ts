@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAdmin } from '@/lib/api-auth';
+import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { getCompanyInstallerIds } from '@/lib/cni-access';
 import { notifyMany } from '@/lib/notify';
@@ -26,7 +26,9 @@ const Schema = z.object({
  * writes intact, so this route exists for the notification, not to gate the write.
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireAdmin(req);
+  // cni_admin, matching the console pages that call this — a delegated
+  // coordinator can assign, not just raw admins.
+  const auth = await requireFeature(req, 'cni_admin');
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

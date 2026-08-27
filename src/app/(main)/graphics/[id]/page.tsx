@@ -131,6 +131,8 @@ export default function GraphicsJobRecordPage() {
   const [poFiles, setPoFiles] = useState<PoFile[]>([]);
   const [assignments, setAssignments] = useState<string[]>([]);
   const [upfit, setUpfit] = useState<UpfitProject | null>(null);
+  // Bridge: the CNI job spawned from this graphics job, if one exists.
+  const [cniJob, setCniJob] = useState<{ id: string; job_number: string | null; title: string; status: string } | null>(null);
   const [views, setViews] = useState<GraphicsJobView[]>([]);
 
   // Edit mode — a working copy of the job, same as the board's editingJob.
@@ -213,6 +215,16 @@ export default function GraphicsJobRecordPage() {
         .eq('id', j.upfit_project_id)
         .maybeSingle();
       setUpfit((up as UpfitProject) || null);
+    }
+    // Bridge: a CNI job created from this graphics job (cni_admin only —
+    // the panel and button are hidden for everyone else anyway).
+    if (hasFeature('cni_admin')) {
+      const { data: cj } = await supabase
+        .from('cni_jobs')
+        .select('id, job_number, title, status')
+        .eq('source_graphics_job_id', jobId)
+        .maybeSingle();
+      setCniJob((cj as { id: string; job_number: string | null; title: string; status: string }) || null);
     }
   };
 
@@ -950,6 +962,26 @@ export default function GraphicsJobRecordPage() {
             )}
           </div>
         )}
+
+        {/* Bridge — the outsourced CNI install job created from this graphics
+            job, or the button to create one (prefilled, one per source). */}
+        {hasFeature('cni_admin') && (cniJob ? (
+          <div style={{ marginTop: '10px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(34,211,238,0.05)', border: '1px solid rgba(34,211,238,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+            <div style={{ fontSize: '11px', minWidth: 0 }}>
+              <span style={{ color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', fontSize: '9px', letterSpacing: '0.4px', marginRight: '6px' }}>CNI Install Job</span>
+              <span style={{ color: 'var(--text-body)', fontWeight: 600 }}>{cniJob.job_number || cniJob.title}</span>
+              <span style={{ marginLeft: '6px', padding: '1px 6px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(34,211,238,0.12)', color: '#22d3ee', textTransform: 'uppercase', letterSpacing: '0.3px' }}>{cniJob.status.replace(/_/g, ' ')}</span>
+            </div>
+            <a href={deepLinks.cniJob(cniJob.id)} style={{ flexShrink: 0, padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, color: '#22d3ee', background: 'rgba(34,211,238,0.10)', border: '1px solid rgba(34,211,238,0.35)', textDecoration: 'none', whiteSpace: 'nowrap' }}>Open ↗</a>
+          </div>
+        ) : job.status !== 'cancelled' && (
+          <button
+            onClick={() => router.push(`/admin/cni/jobs/new?fromGraphics=${job.id}`)}
+            style={{ marginTop: '10px', width: '100%', padding: '8px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, color: '#22d3ee', background: 'rgba(34,211,238,0.06)', border: '1px dashed rgba(34,211,238,0.35)', cursor: 'pointer', textAlign: 'center' }}
+          >
+            Outsource Install → Create CNI Job
+          </button>
+        ))}
       </div>
 
       {/* ── Status controls + actions ── */}
