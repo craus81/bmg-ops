@@ -74,7 +74,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 |---|---|---|
 | **Now** — security & data-loss (1–9) | ✅ done | PRs #630–#634; item 9's `cni_jobs` half finished by the CNI hardening (#641–#646, migration 226). |
 | **Next** — close the workflow chain (10–16) | ⚠️ mostly done | PRs #635–#640; #14 CNI notifications fully wired (#640–#646), but "kill the legacy CNI invoice flow" and the "graphics→CNI job bridge" remain open. |
-| **Soon** — the role cleanup (17–20) | ⚠️ mostly done | #17 infra + owner-page gates (#649), #18a registry (#648), #19 install roles (#650), #20 dead-end menus (#651) all shipped. #18b: the CNI console is keyed (#652); the remaining raw-`isAdmin` standalone tools (payroll, part/import/proof admin) and the ungated-by-URL page tightening are the last of it. |
+| **Soon** — the role cleanup (17–20) | ✅ done | #17 infra + owner-page gates (#649), #18a registry (#648), #18b all ten tools keyed (#652, #654, #655), #19 install roles (#650), #20 dead-end menus (#651). The ungated-by-URL pages are gated and the dev route deleted (#656). An adversarial gate audit (every tile/nav/redirect/deep-link entry point traced per role) confirmed 20 regressions, all fixed: client dead-clicks + two redirect loops (#657) and per-recipient vehicle notification links (#658). |
 | **Data-integrity bugs to fix in passing** | ❌ not started | 6 bugs. |
 | **Hygiene** — delete the dead set | ❌ not started | ~1,500 lines. |
 
@@ -619,21 +619,34 @@ biggest ones:
 16. ✅ (#638) Fix the assignment split-brain (write `assigned_to`, or read
     `job_assignments` everywhere).
 
-### Soon — the role cleanup — ⚠️ mostly done
+### Soon — the role cleanup — ✅ done
 
 17. ✅ (#649) `requireFeature` server helper + `useRequireFeature` page gate; the
-    five owner-level admin pages now gate purely on their feature key. (Broad
-    per-page adoption continues opportunistically alongside 18b.)
-18. ⚠️ 18a ✅ (#648) — deleted `photo_reviews`/`all_jobs`/`catalog_management`,
+    five owner-level admin pages gate purely on their feature key, and the
+    ungated-by-URL pages (#656: /tracking, /upfit, /time, /scan, /messages,
+    /fleet/update, /earnings, /invoices/bulk-download, /admin/scans,
+    /admin/inventory, /admin/parts-mail, /admin/schedule) each gate on their
+    tile's key; `/dev/button-demo` deleted.
+18. ✅ 18a (#648) — deleted `photo_reviews`/`all_jobs`/`catalog_management`,
     renamed `proof_hygiene`→`proof_search` and `cni_management`→`cni_portal`
-    (migration 227). 18b ⚠️ — the CNI admin console got a delegatable `cni_admin`
-    key (#652); the remaining raw-`isAdmin` standalone tools (payroll/pay-rates,
-    part-category-rules/dimensions/interiors, invoice-locations, import-*,
-    proof-sweep, install-checklists) still need their own keys.
+    (migration 227). 18b (#652, #654, #655) — all ten raw-`isAdmin` tools carry
+    delegatable keys: `cni_admin` (12 console pages), `payroll`, `invoice_admin`,
+    `data_import`, `proof_admin`, `install_admin`, `part_admin`.
 19. ✅ (#650) `field_tech`/`shop_tech` can now run the pick-list install runner;
     external installers gain no internal surface (exclusion half was migration 224).
 20. ✅ (#651) Finance lands on Reports; graphics lands (read-only) on Parts
     Catalog; the Invoicing tile is hidden from finance (they don't author invoices).
+
+**Post-gating verification (#657, #658):** an adversarial audit traced every
+entry point (tiles, nav tabs, home redirects, notification deep links,
+cross-links) against each new gate's admitted roles — 20 confirmed
+regressions, all fixed: audience-matching feature grants (`upfit_projects`
+to graphics/techs, `schedule` to field_tech), the /tracking gate widened to
+its nav-tab condition (killing an override-induced redirect loop),
+dashboard/header/search controls hidden where the destination would bounce,
+and vehicle notifications now build a per-recipient URL
+(`deepLinks.vehicleLinkFor`) so installer clicks land on the pick-list
+instead of bouncing off the In-Shop gate.
 
 ### Data-integrity bugs to fix in passing
 
