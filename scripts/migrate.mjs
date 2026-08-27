@@ -115,6 +115,11 @@ const client = new pg.Client({
   connectionTimeoutMillis: 15000,
 });
 
+// Surface RAISE NOTICE/WARNING from migrations in the build log — migrations
+// use them as their audit trail (e.g. 230's dependent-policy sweep reports
+// each policy it converted).
+client.on('notice', (msg) => console.log(`  NOTICE   ${msg.message}`));
+
 async function main() {
   try {
     await client.connect();
@@ -195,7 +200,11 @@ async function main() {
       console.log(`applied    ${f}`);
     } catch (err) {
       await client.query('ROLLBACK');
-      console.error(`\nFAILED     ${f}\n${err.message}`);
+      // err.message alone can hide the actionable part: Postgres puts the
+      // list of blocking objects in DETAIL (the 2026-08-27 deploy failures
+      // printed only "other objects depend on it" — the names were here).
+      const extra = [err.detail, err.hint].filter(Boolean).join('\n');
+      console.error(`\nFAILED     ${f}\n${err.message}${extra ? `\n${extra}` : ''}`);
       console.error('Migration rolled back; nothing after it was run.');
       process.exitCode = 1;
       return;
