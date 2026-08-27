@@ -810,50 +810,19 @@ export default function InstallerJobDetailPage() {
       ) : (
       <div style={sectionStyle}>
         <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>INVOICE</div>
-        {job.invoice_status === 'none' || !job.invoice_status ? (
-          <>
-            {['in_progress', 'completed_pending_review'].includes(job.status) ? (
-              <button
-                onClick={() => router.push(`/installer/jobs/${job.id}/invoice`)}
-                style={{
-                  width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-                  background: 'var(--orange)', color: '#fff', border: 'none',
-                }}
-              >
-                Upload Invoice
-              </button>
-            ) : (
-              <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-                Invoice upload available once job is in progress
-              </div>
-            )}
-          </>
-        ) : (
-          <>
-            <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '6px' }}>
-              {job.invoice_status === 'submitted' ? 'Submitted — Under Review' :
-               job.invoice_status === 'approved' ? 'Approved — Bill Pending' :
-               job.invoice_status === 'billed_in_netsuite' ? 'Billed in NetSuite' :
-               job.invoice_status}
-            </div>
-            {job.netsuite_bill_id && (
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                NetSuite Bill: {job.netsuite_bill_id}
-              </div>
-            )}
-            {job.invoice_status === 'submitted' && (
-              <button
-                onClick={() => router.push(`/installer/jobs/${job.id}/invoice`)}
-                style={{
-                  marginTop: '8px', padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 600,
-                  background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border)',
-                }}
-              >
-                View / Replace Invoice
-              </button>
-            )}
-          </>
-        )}
+        <div style={{ fontSize: '13px', color: 'var(--text-primary)', marginBottom: '10px' }}>
+          Bill BMG for this job from My Invoices — submit your company&apos;s invoice
+          there and track approval and payment.
+        </div>
+        <button
+          onClick={() => router.push('/installer/invoices')}
+          style={{
+            width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+            background: 'var(--orange)', color: '#fff', border: 'none',
+          }}
+        >
+          Go to My Invoices
+        </button>
       </div>
       )}
 

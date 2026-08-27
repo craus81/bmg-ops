@@ -142,7 +142,7 @@ export default function OpsDashboard() {
 
     const [
       invoicedRes, gfxRes, scansRes, partsRes, poRes,
-      importsRes, unpaidRes, usersRes, cniPhotosRes, cniInvRes,
+      importsRes, unpaidRes, usersRes, cniPhotosRes,
       shopRes, cniRes,
       schedGfxRes, schedUpfitRes, schedCniRes, schedEventsRes,
       scansTodayRes, scansWeekRes, msgRes, unreadRes,
@@ -183,7 +183,6 @@ export default function OpsDashboard() {
       supabase.from('fleet_checkins').select('*', { count: 'exact', head: true }).not('invoice_number', 'is', null).eq('is_paid', false),
       supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
       supabase.from('cni_job_photos').select('*', { count: 'exact', head: true }).eq('review_status', 'pending'),
-      supabase.from('cni_jobs').select('*', { count: 'exact', head: true }).eq('invoice_status', 'submitted'),
       // Lanes — paginated so the shop lane counts stay exact as history grows
       fetchAllRows<any>((from, to) => supabase.from('fleet_checkins')
         .select('id, status')
@@ -364,11 +363,6 @@ export default function OpsDashboard() {
     if (cniPhotos > 0) queue.push({
       key: 'cniphotos', count: cniPhotos, tone: 'blue', path: '/admin/cni',
       title: 'CNI photos to review', detail: 'Network installer submissions',
-    });
-    const cniInvoices = count(cniInvRes);
-    if (cniInvoices > 0) queue.push({
-      key: 'cniinv', count: cniInvoices, tone: 'warn', path: '/admin/cni',
-      title: 'CNI invoices submitted', detail: 'Waiting on coordinator approval',
     });
     const pendingUsers = count(usersRes);
     if (pendingUsers > 0 && hasFeature('user_management')) queue.push({

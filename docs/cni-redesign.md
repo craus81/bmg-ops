@@ -420,6 +420,14 @@ pre-loaded-list assumptions and *finishing* the company migration, not a rebuild
 | 5 | **Complete** | `completed_pending_review` | **Installer-driven** "End Shift / Mark Job Complete" — *not* auto-on-empty (see fix). Optional **target quantity** gives a countdown. |
 | 6 | **Review & close** | `approved_closed` | Admin reviews per-VIN photos → approves → closes → unlocks payout. Billing (Scan Log → invoice) runs independently. |
 
+> **Resolved 2026-08:** company-mode billing is now exclusively the
+> vendor_invoices AP flow — the legacy per-job invoice upload/approve flow is
+> deleted (installer page, `/api/cni/submit-invoice`, admin approve card),
+> and the closure gate reads AP coverage per completed vehicle via
+> `/api/cni/job-billing` (jobs approved under the legacy flow stay closable;
+> the legacy `cni_jobs` invoice columns are deprecated in place, migration
+> 231).
+
 **The one real bug to fix — premature auto-completion.** Today `complete-vin`
 (`route.ts:151-157`) and `scan-vehicle` advance the job to
 `completed_pending_review` the moment **no VIN is left in a non-completed
