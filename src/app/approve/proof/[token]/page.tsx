@@ -10,6 +10,7 @@
  */
 
 import ApprovalPageShell, { ApprovalHeader } from '@/components/ApprovalPageShell';
+import ZoomableImage from '@/components/ZoomableImage';
 
 // Proof-specific E-SIGN copy — approving artwork for production, not
 // authorizing quoted work (src/lib/approval-agreement.ts is the default).
@@ -63,8 +64,7 @@ function ProofDocument({ job, files }: { job: any; files: { id: string; file_nam
                   Open {f.file_name} (PDF) ↗
                 </a>
               ) : (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={f.url} alt={f.file_name} style={{ width: '100%', borderRadius: '8px', display: 'block' }} />
+                <ZoomableImage src={f.url} alt={f.file_name} style={{ width: '100%', borderRadius: '8px' }} />
               )}
               <div style={{ marginTop: '6px', fontSize: '11px', color: '#64748b' }}>{f.file_name}</div>
             </div>
