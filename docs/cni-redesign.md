@@ -298,6 +298,25 @@ Replace the **three** `More` menu entries that all open `/admin/cni`
 one feature flag. Sub-sections (Jobs, Companies, Installers, Pay) live as tabs
 on the CNI dashboard, not as separate top-level menu items.
 
+### 2.2b Graphics / check-in → CNI job bridge (shipped 2026-08)
+
+Outsourcing an install no longer means re-typing the job: the graphics job
+page and the tracking vehicle modal carry an "Outsource Install" button that
+opens `/admin/cni/jobs/new?fromGraphics=<id>` / `?fromCheckin=<id>`. The form
+prefills title, customer (matched to the billable-customers picker), scope
+(content + notes + PO reference; unparseable ship-to text lands here),
+target quantity, deadline, the default part (first part-number token, which
+re-arms Verizon device-capture detection), a parsed ship-to as the shipping
+address, and the check-in's site contact. Vehicles already tied to the
+source (the check-in itself, or every check-in matched to the graphics job)
+seed `cni_job_vins` as pending rows — the pay/photo/billing machinery picks
+them up unchanged. `cni_jobs.source_graphics_job_id` / `source_checkin_id`
+(migration 232) record provenance with partial unique indexes, so each
+source spawns at most one CNI job (the form find-or-creates, and both sides
+render a link to the other). Several check-ins → one job stays a manual
+flow: scan the extra VINs in the field, or a future "add to existing job"
+action can dedupe on `cni_job_vins.checkin_id`.
+
 ### 2.3 One onboarding/creation flow
 
 Today "invite installer" never creates a company and never sets `company_id`;

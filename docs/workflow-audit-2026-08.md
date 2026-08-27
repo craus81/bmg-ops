@@ -73,7 +73,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | Block | Status | Notes |
 |---|---|---|
 | **Now** — security & data-loss (1–9) | ✅ done | PRs #630–#634; item 9's `cni_jobs` half finished by the CNI hardening (#641–#646, migration 226). |
-| **Next** — close the workflow chain (10–16) | ⚠️ mostly done | PRs #635–#640; #14 CNI notifications fully wired (#640–#646), but "kill the legacy CNI invoice flow" and the "graphics→CNI job bridge" remain open. |
+| **Next** — close the workflow chain (10–16) | ✅ done | PRs #635–#640; #14 CNI notifications fully wired (#640–#646), the legacy CNI invoice flow killed (closure gate reads AP coverage, migration 231), and the graphics/check-in → CNI job bridge shipped (migration 232). |
 | **Soon** — the role cleanup (17–20) | ✅ done | #17 infra + owner-page gates (#649), #18a registry (#648), #18b all ten tools keyed (#652, #654, #655), #19 install roles (#650), #20 dead-end menus (#651). The ungated-by-URL pages are gated and the dev route deleted (#656). An adversarial gate audit (every tile/nav/redirect/deep-link entry point traced per role) confirmed 20 regressions, all fixed: client dead-clicks + two redirect loops (#657) and per-recipient vehicle notification links (#658). |
 | **Data-integrity bugs to fix in passing** | ✅ done | All 6 re-verified as live, then fixed: pushed-estimate delete (#660), Add-Graphics demotion (#661), stranded allocations — trigger + backfill, migration 228 (#662), graphics history trigger, migration 229 (#663), the 1000-row-cap sweep across payroll/payouts/credits/pay-rates/scans/invoices/pos/dashboard (#664), and the Open Quotes tile (#665). |
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables intentionally not dropped (needs owner sign-off — data loss is irreversible). |
@@ -418,9 +418,12 @@ shipped. **But the coordination layer is hollow:**
   vehicle, with legacy-approved jobs grandfathered. Correction to the
   original finding: the legacy flow was live, not dead, and individual-mode
   closure was already correct.)_
-- **MAJOR — No bridge from graphics/check-in to a CNI job** — outsourcing an
-  install means re-typing everything and losing the pay/photo/billing machinery
-  unless the crew happens to scan the right part.
+- ✅ **MAJOR — No bridge from graphics/check-in to a CNI job** — outsourcing an
+  install meant re-typing everything and losing the pay/photo/billing machinery
+  unless the crew happened to scan the right part. _(Fixed: "Outsource
+  Install" buttons on the graphics job page and tracking modal prefill the
+  CNI job form and seed VINs; one job per source, linked both ways —
+  migration 232.)_
 
 ---
 
@@ -610,7 +613,7 @@ biggest ones:
    upfit-projects tables and the CNI `cni_jobs` UPDATE policy (installer writes
    rerouted to whitelisted API routes; RLS reduced to SELECT-only, migration 226).
 
-### Next — close the workflow chain — ⚠️ mostly done
+### Next — close the workflow chain — ✅ done
 
 10. ✅ (#636) **Auto-create the upfit project inside convert-to-SO** (find-or-create by
     `estimate_id`) — kills the biggest manual hop.
@@ -624,8 +627,16 @@ biggest ones:
     closure gate reads AP coverage via /api/cni/job-billing with a legacy
     grandfather, columns deprecated in place by migration 231 — two audit
     corrections: the legacy flow was live, not dead, and individual-mode
-    closure was already handled; only company mode was broken); **still
-    open:** the "Create CNI job from graphics job / check-in" bridge.
+    closure was already handled; only company mode was broken); ✅ the
+    graphics/check-in → CNI job bridge shipped: "Outsource Install" buttons
+    on the graphics job page and the tracking vehicle modal prefill
+    /admin/cni/jobs/new (title, customer, scope, part, deadline, ship-to,
+    site contact) and seed the source's vehicles as pending VIN rows;
+    one CNI job per source enforced by DB unique indexes (migration 232,
+    `source_graphics_job_id`/`source_checkin_id` + find-or-create
+    redirect); both sides link to each other, and creation-time company
+    assignment now goes through /api/cni/assign-company so the
+    cni_assigned notification finally fires for it. **Item 14 closed.**
 15. ✅ (#639) AR payment sync-back cron.
 16. ✅ (#638) Fix the assignment split-brain (write `assigned_to`, or read
     `job_assignments` everywhere).

@@ -54,6 +54,8 @@ interface CniJob {
   invoice_status: string;
   invoice_file_path: string | null;
   netsuite_bill_id: string | null;
+  source_graphics_job_id?: string | null;
+  source_checkin_id?: string | null;
   payout_mode: 'company' | 'individual';
   distribution_type: string;
   published_at: string | null;
@@ -323,6 +325,9 @@ export default function CniJobDetailPage() {
   const [photoStats, setPhotoStats] = useState({ total: 0, pending: 0, approved: 0, denied: 0 });
   const [unreadMsgCount, setUnreadMsgCount] = useState(0);
 
+  // Bridge provenance back-link (graphics job or check-in this came from).
+  const [sourceInfo, setSourceInfo] = useState<{ url: string; label: string } | null>(null);
+
   // Phase 4: closure. Company-mode billing coverage from the AP flow
   // (vendor_invoices) — the legacy per-job invoice columns are read-only
   // history now.
@@ -429,6 +434,24 @@ export default function CniJobDetailPage() {
         .eq('id', jobData.assigned_company_id)
         .single();
       if (company) setCompanyName(company.name);
+    }
+
+    // Bridge provenance: the graphics job / check-in this job was created
+    // from, for the "Created from" back-link.
+    if (jobData.source_graphics_job_id) {
+      const { data: gj } = await supabase
+        .from('graphics_jobs')
+        .select('id, job_number, title')
+        .eq('id', jobData.source_graphics_job_id)
+        .maybeSingle();
+      if (gj) setSourceInfo({ url: deepLinks.graphicsJob(gj.id), label: `Graphics job ${gj.job_number || gj.title || ''}`.trim() });
+    } else if (jobData.source_checkin_id) {
+      const { data: fc } = await supabase
+        .from('fleet_checkins')
+        .select('id, vin')
+        .eq('id', jobData.source_checkin_id)
+        .maybeSingle();
+      if (fc) setSourceInfo({ url: deepLinks.vehicle(fc.id), label: `Check-in — VIN ${fc.vin || '?'}` });
     }
 
     // Load bid count + invited IDs
@@ -735,6 +758,14 @@ export default function CniJobDetailPage() {
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             {job.job_number} {job.customer_name ? `• ${job.customer_name}` : ''}
           </div>
+          {sourceInfo && (
+            <div style={{ fontSize: '11px', marginTop: '2px' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Created from </span>
+              <a href={sourceInfo.url} style={{ color: '#22d3ee', fontWeight: 700, textDecoration: 'none' }}>
+                {sourceInfo.label} ↗
+              </a>
+            </div>
+          )}
         </div>
       </div>
 

@@ -140,6 +140,8 @@ export default function TrackingPage() {
 
   // Matched graphics job (looked up via fleet_checkins.matched_graphics_job_id)
   const [graphicsJobs, setGraphicsJobs] = useState<Record<string, GraphicsJob | null>>({});
+  // Bridge: check-in id → the CNI job created from it (null = none exists).
+  const [cniJobsBySource, setCniJobsBySource] = useState<Record<string, { id: string; job_number: string | null; title: string; status: string } | null>>({});
 
   // Message Customer in-flight flag (per-vehicle so two clicks on different rows don't fight)
   const [messagingVehicleId, setMessagingVehicleId] = useState<string | null>(null);
@@ -580,14 +582,24 @@ export default function TrackingPage() {
     const gjId = (vehicle as any).matched_graphics_job_id;
     if (!gjId) {
       setGraphicsJobs(prev => ({ ...prev, [vehicle.id]: null }));
-      return;
+    } else {
+      const { data } = await supabase
+        .from('graphics_jobs')
+        .select('*')
+        .eq('id', gjId)
+        .maybeSingle();
+      setGraphicsJobs(prev => ({ ...prev, [vehicle.id]: (data as GraphicsJob | null) || null }));
     }
-    const { data } = await supabase
-      .from('graphics_jobs')
-      .select('*')
-      .eq('id', gjId)
-      .maybeSingle();
-    setGraphicsJobs(prev => ({ ...prev, [vehicle.id]: (data as GraphicsJob | null) || null }));
+    // Bridge: the outsourced CNI job created from this check-in, if any
+    // (cni_admin holders only — the modal panel is gated the same way).
+    if (hasFeature('cni_admin')) {
+      const { data: cj } = await supabase
+        .from('cni_jobs')
+        .select('id, job_number, title, status')
+        .eq('source_checkin_id', vehicle.id)
+        .maybeSingle();
+      setCniJobsBySource(prev => ({ ...prev, [vehicle.id]: (cj as { id: string; job_number: string | null; title: string; status: string } | null) || null }));
+    }
   };
 
   const messageCustomer = async (vehicle: FleetCheckin) => {
@@ -2263,6 +2275,43 @@ export default function TrackingPage() {
                         </div>
                       );
                     })()}
+
+                    {/* Bridge — the outsourced CNI install job created from
+                        this check-in, or the button to create one (prefilled;
+                        one per check-in, enforced by the DB). */}
+                    {hasFeature('cni_admin') && (cniJobsBySource[vehicle.id] ? (
+                      <div style={{ marginBottom: '12px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(34,211,238,0.05)', border: '1px solid rgba(34,211,238,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                        <div style={{ fontSize: '11px', minWidth: 0 }}>
+                          <span style={{ color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', fontSize: '9px', letterSpacing: '0.4px', marginRight: '6px' }}>CNI Install Job</span>
+                          <span style={{ color: 'var(--text-body)', fontWeight: 600 }}>{cniJobsBySource[vehicle.id]!.job_number || cniJobsBySource[vehicle.id]!.title}</span>
+                          <span style={{ marginLeft: '6px', padding: '1px 6px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(34,211,238,0.12)', color: '#22d3ee', textTransform: 'uppercase', letterSpacing: '0.3px' }}>{cniJobsBySource[vehicle.id]!.status.replace(/_/g, ' ')}</span>
+                        </div>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); router.push(deepLinks.cniJob(cniJobsBySource[vehicle.id]!.id)); }}
+                          style={{ flexShrink: 0, padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, color: '#22d3ee', background: 'rgba(34,211,238,0.10)', border: '1px solid rgba(34,211,238,0.35)', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                        >
+                          Open ↗
+                        </button>
+                      </div>
+                    ) : (
+                      <div style={{ marginBottom: '12px' }}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/admin/cni/jobs/new?fromCheckin=${vehicle.id}`);
+                          }}
+                          style={{
+                            width: '100%', padding: '10px', borderRadius: '10px',
+                            fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                            background: 'rgba(34,211,238,0.06)',
+                            border: '1px dashed rgba(34,211,238,0.35)',
+                            color: '#22d3ee',
+                          }}
+                        >
+                          + Outsource Install (Create CNI Job)
+                        </button>
+                      </div>
+                    ))}
 
                     {/* Estimates linked to this vehicle — via the estimate
                         builder's Link Checked-In Vehicle button, or the

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { DropZone } from '@/components/DropZone';
@@ -14,11 +14,22 @@ import { isVerizonRfidPart } from '@/lib/rfid';
 
 export default function CreateCniJobPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { isAdmin, user, hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [companies, setCompanies] = useState<CompanyOption[]>([]);
+
+  // Bridge: created from a graphics job or a fleet check-in (?fromGraphics= /
+  // ?fromCheckin=). The source is stamped on the job (find-or-create: the DB's
+  // partial unique index guarantees one CNI job per source), and any vehicles
+  // already tied to the source seed cni_job_vins as pending rows.
+  const [source, setSource] = useState<{ type: 'graphics_job' | 'fleet_checkin'; id: string; label: string } | null>(null);
+  const [sourceVins, setSourceVins] = useState<Array<{
+    vin: string; vehicle_year: string | null; vehicle_make: string | null;
+    vehicle_model: string | null; checkin_id: string | null;
+  }>>([]);
 
   // Job form state
   const [title, setTitle] = useState('');
@@ -74,12 +85,137 @@ export default function CreateCniJobPage() {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!hasFeature('cni_admin')) { router.push('/home'); return; }
     loadCompanies();
-    loadBillableCustomers(supabase).then(setBillableCustomers);
+    const customersPromise = loadBillableCustomers(supabase);
+    customersPromise.then(setBillableCustomers);
+    prefillFromSource(customersPromise);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, isAdmin]);
 
   const loadCompanies = async () => {
     setCompanies(await loadCompaniesWithCounts(supabase));
+  };
+
+  // Map a customer name onto the picker: canonical entry when it matches the
+  // billable_customers list (by name or label), free-text "Other…" otherwise.
+  const pickCustomer = (name: string | null, customers: BillableCustomer[]) => {
+    if (!name) return;
+    const hit = customers.find(c =>
+      c.name.toLowerCase() === name.toLowerCase() || c.label.toLowerCase() === name.toLowerCase());
+    if (hit) { setCustomerChoice(hit.name); }
+    else { setCustomerChoice('__other__'); setCustomerName(name); }
+  };
+
+  // Optional default part from the source's part number (first comma token) —
+  // going through netsuite_parts re-arms the Verizon device-capture detection.
+  const prefillPart = async (partNumber: string | null) => {
+    const first = (partNumber || '').split(',')[0].trim();
+    if (!first) return;
+    const { data: p } = await supabase
+      .from('netsuite_parts')
+      .select('item_number, display_name, description, billable_customer')
+      .ilike('item_number', first)
+      .limit(1)
+      .maybeSingle();
+    if (p) {
+      setPart({
+        part_number: p.item_number,
+        part_description: p.display_name || p.description || null,
+        billable_customer: p.billable_customer || null,
+      });
+    }
+  };
+
+  const prefillFromSource = async (customersPromise: Promise<BillableCustomer[]>) => {
+    const fromGraphics = searchParams.get('fromGraphics');
+    const fromCheckin = searchParams.get('fromCheckin');
+    if (!fromGraphics && !fromCheckin) return;
+    const customers = await customersPromise;
+
+    if (fromGraphics) {
+      // Find-or-create: one CNI job per graphics job.
+      const { data: existing } = await supabase
+        .from('cni_jobs').select('id').eq('source_graphics_job_id', fromGraphics).maybeSingle();
+      if (existing) { router.replace(`/admin/cni/jobs/${existing.id}`); return; }
+
+      const { data: gj } = await supabase
+        .from('graphics_jobs')
+        .select('id, job_number, title, customer, part_number, quantity, content, notes, po_number, due_date, scheduled_install_date, ship_to')
+        .eq('id', fromGraphics)
+        .maybeSingle();
+      if (!gj) return;
+
+      setTitle(gj.title || '');
+      pickCustomer(gj.customer, customers);
+      const scopeParts = [gj.content, gj.notes, gj.po_number ? `Customer PO #${gj.po_number}` : null];
+      setTargetQuantity(gj.quantity ? String(gj.quantity) : '');
+      setDeadline(
+        gj.scheduled_install_date && gj.scheduled_install_date !== 'N/A'
+          ? gj.scheduled_install_date
+          : (gj.due_date || ''));
+      await prefillPart(gj.part_number);
+
+      // ship_to is free text — best-effort parse into the shipping address
+      // (outsourced installs ship the printed graphics to the site). On
+      // parse failure the text lands verbatim in scope so nothing is lost.
+      if (gj.ship_to) {
+        const linesArr = String(gj.ship_to).split('\n').map((l: string) => l.trim()).filter(Boolean);
+        const m = linesArr.length > 1
+          ? linesArr[linesArr.length - 1].match(/^(.+?),\s*([A-Za-z]{2})\.?,?\s+(\d{5})(-\d{4})?$/)
+          : null;
+        if (m) {
+          const streetLines = linesArr.slice(0, -1).join(', ');
+          setStreet(streetLines); setCity(m[1]); setState(m[2].toUpperCase()); setZip(m[3]);
+          setRequiresShipment(true);
+          setShipStreet(streetLines); setShipCity(m[1]); setShipState(m[2].toUpperCase()); setShipZip(m[3]);
+        } else {
+          scopeParts.push(`Ship to:\n${gj.ship_to}`);
+        }
+      }
+      setScope(scopeParts.filter(Boolean).join('\n\n'));
+
+      // Vehicles already matched to this graphics job seed the VIN list.
+      const { data: checkins } = await supabase
+        .from('fleet_checkins')
+        .select('id, vin, vehicle_year, vehicle_make, vehicle_model')
+        .eq('matched_graphics_job_id', gj.id)
+        .is('archived_at', null);
+      type CheckinRow = { id: string; vin: string | null; vehicle_year: string | null; vehicle_make: string | null; vehicle_model: string | null };
+      setSourceVins(((checkins || []) as CheckinRow[]).filter(c => c.vin).map(c => ({
+        vin: c.vin as string, vehicle_year: c.vehicle_year, vehicle_make: c.vehicle_make,
+        vehicle_model: c.vehicle_model, checkin_id: c.id,
+      })));
+      setSource({ type: 'graphics_job', id: gj.id, label: `graphics job ${gj.job_number || gj.title || ''}`.trim() });
+      return;
+    }
+
+    if (fromCheckin) {
+      const { data: existing } = await supabase
+        .from('cni_jobs').select('id').eq('source_checkin_id', fromCheckin).maybeSingle();
+      if (existing) { router.replace(`/admin/cni/jobs/${existing.id}`); return; }
+
+      const { data: fc } = await supabase
+        .from('fleet_checkins')
+        .select('id, vin, vehicle_year, vehicle_make, vehicle_model, customer_name, notes, promised_back_date, scheduled_upfit_date, install_instructions, on_site_contact_name, on_site_contact_phone')
+        .eq('id', fromCheckin)
+        .maybeSingle();
+      if (!fc) return;
+
+      const vehicleLabel = [fc.vehicle_year, fc.vehicle_make, fc.vehicle_model].filter(Boolean).join(' ') || fc.vin;
+      setTitle(`${fc.customer_name || 'Install'} — ${vehicleLabel}`);
+      pickCustomer(fc.customer_name, customers);
+      setScope([fc.install_instructions, fc.notes].filter(Boolean).join('\n\n'));
+      setDeadline(fc.promised_back_date || fc.scheduled_upfit_date || '');
+      setTargetQuantity('1');
+      if (fc.on_site_contact_name) setSiteContactName(fc.on_site_contact_name);
+      if (fc.on_site_contact_phone) setSiteContactPhone(fc.on_site_contact_phone);
+      if (fc.vin) {
+        setSourceVins([{
+          vin: fc.vin, vehicle_year: fc.vehicle_year, vehicle_make: fc.vehicle_make,
+          vehicle_model: fc.vehicle_model, checkin_id: fc.id,
+        }]);
+      }
+      setSource({ type: 'fleet_checkin', id: fc.id, label: `check-in VIN ${fc.vin || '?'}` });
+    }
   };
 
   const handleSubmit = async () => {
@@ -101,7 +237,10 @@ export default function CreateCniJobPage() {
       const picked = billableCustomers.find(c => c.name === customerChoice) || null;
       const typedCustomer = customerChoice === '__other__' ? customerName.trim() : '';
 
-      // Create job
+      // Create job. Assignment happens AFTER the insert via the
+      // assign-company route so the cni_assigned notification fires for
+      // creation-time assignment too (it never did when the company was
+      // stamped directly on the insert).
       const { data: job, error: jobError } = await supabase
         .from('cni_jobs')
         .insert({
@@ -125,15 +264,42 @@ export default function CreateCniJobPage() {
           site_contact_email: siteContactEmail.trim() || null,
           requires_shipment: requiresShipment,
           shipping_address: requiresShipment ? { street: shipStreet, city: shipCity, state: shipState, zip: shipZip } : null,
-          assigned_company_id: assignCompany && selectedCompanyId ? selectedCompanyId : null,
-          assigned_at: assignCompany && selectedCompanyId ? new Date().toISOString() : null,
-          status: assignCompany && selectedCompanyId ? 'assigned_awaiting_scheduling' : 'awaiting_assignment',
+          status: 'awaiting_assignment',
+          source_graphics_job_id: source?.type === 'graphics_job' ? source.id : null,
+          source_checkin_id: source?.type === 'fleet_checkin' ? source.id : null,
           created_by: user.id,
         })
         .select()
         .single();
 
-      if (jobError) throw jobError;
+      if (jobError) {
+        // Unique-index race on the source link: someone else bridged this
+        // source first — go to their job instead of erroring.
+        if ((jobError as { code?: string }).code === '23505' && source) {
+          const col = source.type === 'graphics_job' ? 'source_graphics_job_id' : 'source_checkin_id';
+          const { data: winner } = await supabase
+            .from('cni_jobs').select('id').eq(col, source.id).maybeSingle();
+          if (winner) { router.replace(`/admin/cni/jobs/${winner.id}`); return; }
+        }
+        throw jobError;
+      }
+
+      // Seed the source's vehicles as pending VIN rows — they ride the
+      // existing machinery untouched (installer completes them, photos and
+      // credits attach per VIN). Non-fatal: vehicles can be added on the job
+      // page if this insert fails.
+      if (sourceVins.length > 0 && job) {
+        await supabase.from('cni_job_vins').insert(sourceVins.map((v, i) => ({
+          job_id: job.id,
+          vin: v.vin.toUpperCase(),
+          vehicle_year: v.vehicle_year,
+          vehicle_make: v.vehicle_make,
+          vehicle_model: v.vehicle_model,
+          status: 'pending',
+          sort_order: i,
+          checkin_id: v.checkin_id,
+        })));
+      }
 
       // Upload attachments under the new job's id, then save the list.
       if (jobFiles.length > 0 && job) {
@@ -143,6 +309,21 @@ export default function CreateCniJobPage() {
         }
       }
 
+      // Assign through the route so installers get the cni_assigned
+      // notification. Non-fatal: on failure the job page opens unassigned
+      // with the assign UI front and center.
+      if (assignCompany && selectedCompanyId && job) {
+        const { data: { session } } = await supabase.auth.getSession();
+        await fetch('/api/cni/assign-company', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+          },
+          body: JSON.stringify({ jobId: job.id, companyId: selectedCompanyId }),
+        }).catch(() => {});
+      }
+
       router.push(`/admin/cni/jobs/${job.id}`);
     } catch (err: any) {
       setError(err.message || 'Failed to create job');
@@ -150,7 +331,9 @@ export default function CreateCniJobPage() {
     }
   };
 
-  if (!isAdmin) return null;
+  // Render guard matches the effect's gate — cni_admin, not raw admin, so a
+  // delegated coordinator sees the form instead of a blank page.
+  if (authLoading || !hasFeature('cni_admin')) return null;
 
   const labelStyle: React.CSSProperties = {
     fontSize: '12px', fontWeight: 700, color: 'var(--text-label)',
@@ -191,6 +374,18 @@ export default function CreateCniJobPage() {
           color: 'var(--error)', fontSize: '13px', fontWeight: 600,
         }}>
           {error}
+        </div>
+      )}
+
+      {source && (
+        <div style={{
+          padding: '10px 14px', borderRadius: '10px', marginBottom: '14px',
+          background: 'var(--success-bg)', border: '1px solid var(--success-border)',
+          color: 'var(--text-primary)', fontSize: '12px', fontWeight: 600,
+        }}>
+          Prefilled from {source.label}
+          {sourceVins.length > 0 && ` — ${sourceVins.length} vehicle${sourceVins.length === 1 ? '' : 's'} will be added to the job`}
+          . Review and adjust anything below before creating.
         </div>
       )}
 
