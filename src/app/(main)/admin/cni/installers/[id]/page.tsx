@@ -142,7 +142,7 @@ export default function CniInstallerDetailPage() {
 
     const { data: jobsData } = await supabase
       .from('cni_jobs')
-      .select('id, job_number, title, status, customer_name, completed_at, invoice_status, deadline, confirmed_schedule_end')
+      .select('id, job_number, title, status, customer_name, completed_at, deadline, confirmed_schedule_end')
       .eq('assigned_installer_id', userId)
       .order('created_at', { ascending: false })
       .limit(20);
@@ -854,15 +854,6 @@ export default function CniInstallerDetailPage() {
               </div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
                 {j.job_number} {j.customer_name ? `• ${j.customer_name}` : ''}
-                {j.invoice_status && j.invoice_status !== 'none' && (
-                  <span style={{
-                    marginLeft: '6px',
-                    color: j.invoice_status === 'billed_in_netsuite' ? 'var(--success)' :
-                           j.invoice_status === 'approved' ? 'var(--success)' : 'var(--warning)',
-                  }}>
-                    • Invoice: {j.invoice_status.replace(/_/g, ' ')}
-                  </span>
-                )}
               </div>
             </button>
           ))}

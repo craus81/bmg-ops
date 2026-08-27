@@ -12,6 +12,7 @@ import VinScanner from '@/components/VinScanner';
 import { theme } from '@/lib/theme';
 import RecordChanges from '@/components/RecordChanges';
 import NumberInput from '@/components/NumberInput';
+import { deepLinks } from '@/lib/deep-links';
 
 interface CniJob {
   id: string;
@@ -322,9 +323,14 @@ export default function CniJobDetailPage() {
   const [photoStats, setPhotoStats] = useState({ total: 0, pending: 0, approved: 0, denied: 0 });
   const [unreadMsgCount, setUnreadMsgCount] = useState(0);
 
-  // Phase 4: invoice + closure
-  const [nsBillId, setNsBillId] = useState('');
+  // Phase 4: closure. Company-mode billing coverage from the AP flow
+  // (vendor_invoices) — the legacy per-job invoice columns are read-only
+  // history now.
   const [budgetExceeded, setBudgetExceeded] = useState(false);
+  const [billing, setBilling] = useState<{
+    completedVins: number; totalVins: number; coveredApproved: number; coveredAny: number;
+    invoices: { id: string; invoice_number: string | null; vendor_name: string; status: string; total_amount: number | null; vinsCovered: number }[];
+  } | null>(null);
 
   // Completed vehicles that still have no live pay credit — they need an
   // installer tagged in Crew & Pay. Surfaced here so retroactive crediting is
@@ -625,8 +631,16 @@ export default function CniJobDetailPage() {
     if (res.ok) setPayoutData(await res.json());
   };
 
+  // Company-mode billing lives in the AP flow (vendor_invoices); the closure
+  // checklist reads this coverage instead of the legacy per-job columns.
+  const loadBilling = async () => {
+    const res = await fetch(`/api/cni/job-billing?jobId=${jobId}`, { headers: await authHeaders() });
+    if (res.ok) setBilling(await res.json());
+  };
+
   useEffect(() => {
     if (job?.payout_mode === 'individual') loadPayouts();
+    else if (job?.payout_mode === 'company') loadBilling();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh when mode flips or job reloads
   }, [job?.payout_mode, jobId]);
 
@@ -1485,123 +1499,100 @@ export default function CniJobDetailPage() {
         </div>
       )}
 
-      {/* Invoice & Closure */}
+      {/* Company billing — the AP flow (vendor_invoices) is the one billing
+          path for company-mode jobs; this card shows how much of the job it
+          covers. The legacy per-job invoice columns render read-only below. */}
+      {job.payout_mode === 'company' && (job.assigned_company_id || job.assigned_installer_id) && (
+        <div style={{
+          padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
+          background: 'var(--card)', border: '1px solid var(--border)',
+        }}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>COMPANY BILLING (AP)</div>
+          {billing ? (
+            <>
+              <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '8px', color: billing.completedVins > 0 && billing.coveredApproved >= billing.completedVins ? 'var(--success)' : 'var(--text-primary)' }}>
+                {billing.coveredApproved} of {billing.completedVins} completed vehicle{billing.completedVins === 1 ? '' : 's'} on an approved invoice
+              </div>
+              {billing.invoices.map(inv => (
+                <div key={inv.id} style={{
+                  padding: '8px 12px', borderRadius: '8px', marginBottom: '6px',
+                  background: 'var(--input-bg)', border: '1px solid var(--border)',
+                  display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
+                }}>
+                  <div style={{ flex: 1, minWidth: '140px' }}>
+                    <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      {inv.vendor_name}{inv.invoice_number ? ` — #${inv.invoice_number}` : ''}
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      {inv.vinsCovered} vehicle{inv.vinsCovered === 1 ? '' : 's'} on this job
+                      {inv.total_amount != null ? ` · $${inv.total_amount.toLocaleString()}` : ''}
+                    </div>
+                  </div>
+                  <span style={{
+                    fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px',
+                    padding: '3px 8px', borderRadius: '6px',
+                    background: ['approved', 'billed', 'paid'].includes(inv.status)
+                      ? 'color-mix(in srgb, var(--success) 15%, transparent)'
+                      : inv.status === 'rejected'
+                        ? 'color-mix(in srgb, var(--error) 15%, transparent)'
+                        : 'color-mix(in srgb, var(--warning) 15%, transparent)',
+                    color: ['approved', 'billed', 'paid'].includes(inv.status)
+                      ? 'var(--success)' : inv.status === 'rejected' ? 'var(--error)' : 'var(--warning)',
+                  }}>
+                    {inv.status}
+                  </span>
+                  <button
+                    onClick={() => router.push(deepLinks.apInvoice(inv.id))}
+                    style={{
+                      padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                      background: 'transparent', color: 'var(--orange)', border: '1px solid var(--border)', cursor: 'pointer',
+                    }}
+                  >
+                    Open ↗
+                  </button>
+                </div>
+              ))}
+              {billing.invoices.length === 0 && (
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                  No AP invoice from {companyName || 'the assigned company'} covers this job&apos;s vehicles yet —
+                  the company submits from their portal (My Invoices), or staff record one in
+                  Admin › Scan Log › Vendor Invoices.
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Loading billing coverage…</div>
+          )}
+        </div>
+      )}
+
+      {/* Legacy per-job invoice (historical, read-only). The upload/approve
+          flow is gone — company billing goes through AP — but jobs closed
+          under the old flow keep rendering what they recorded. */}
       {job.invoice_status !== 'none' && (
         <div style={{
           padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
-          background: job.invoice_status === 'submitted'
-            ? 'color-mix(in srgb, var(--warning) 8%, var(--card))'
-            : 'var(--card)',
-          border: job.invoice_status === 'submitted'
-            ? '1px solid var(--warning-border)'
-            : '1px solid var(--border)',
+          background: 'var(--card)', border: '1px solid var(--border)',
         }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>INVOICE</div>
-          <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>
-            {job.invoice_status === 'submitted' ? 'Submitted — Awaiting Your Review' :
-             job.invoice_status === 'approved' ? 'Approved — Create Bill in NetSuite' :
-             job.invoice_status === 'billed_in_netsuite' ? 'Billed in NetSuite' : job.invoice_status}
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>LEGACY INVOICE (HISTORICAL)</div>
+          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+            {job.invoice_status === 'submitted' ? 'Submitted under the retired per-job flow' :
+             job.invoice_status === 'approved' ? 'Approved (legacy)' :
+             job.invoice_status === 'billed_in_netsuite' ? 'Billed in NetSuite (legacy)' : job.invoice_status}
           </div>
-
-          {/* Budget comparison warning */}
-          {job.invoice_status === 'submitted' && job.budget && (
-            <div style={{
-              padding: '8px 12px', borderRadius: '8px', marginBottom: '10px',
-              background: 'var(--subtle-bg)', border: '1px solid var(--border)',
-              fontSize: '12px', color: 'var(--text-muted)',
-            }}>
-              Job Budget: <strong style={{ color: 'var(--success)' }}>${Number(job.budget).toLocaleString()}</strong>
-              <span style={{ marginLeft: '8px', fontSize: '11px' }}>
-                (Review invoice against this amount)
-              </span>
-            </div>
-          )}
-
-          {/* Invoice file link */}
           {job.invoice_file_path && (
-            <div style={{
-              padding: '8px 12px', borderRadius: '8px', marginBottom: '10px',
-              background: 'var(--input-bg)', border: '1px solid var(--border)',
-              display: 'flex', alignItems: 'center', gap: '8px',
-            }}>
-              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>File</span>
-              <div style={{ flex: 1, fontSize: '12px', color: 'var(--text-primary)' }}>
-                {job.invoice_file_path.split('/').pop()}
-              </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+              File: {job.invoice_file_path.split('/').pop()}
             </div>
           )}
-
-          {/* Approve / reject actions for submitted invoices */}
-          {job.invoice_status === 'submitted' && (
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button
-                onClick={async () => {
-                  setUpdating(true);
-                  await supabase.from('cni_jobs').update({
-                    invoice_status: 'approved',
-                    invoice_approved_at: new Date().toISOString(),
-                    invoice_approved_by: user?.id,
-                  }).eq('id', job.id);
-                  await loadJob();
-                  setUpdating(false);
-                }}
-                disabled={updating}
-                style={{
-                  flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                  background: 'var(--success)', color: '#fff', border: 'none',
-                }}
-              >
-                ✓ Approve Invoice
-              </button>
-            </div>
-          )}
-
-          {/* NetSuite bill ID entry for approved invoices */}
-          {job.invoice_status === 'approved' && !job.netsuite_bill_id && (
-            <div style={{ marginTop: '8px' }}>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>
-                Enter NetSuite Bill ID after creating the bill manually:
-              </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <input
-                  type="text"
-                  placeholder="NS Bill ID (e.g. BILL-12345)"
-                  value={nsBillId}
-                  onChange={e => setNsBillId(e.target.value)}
-                  style={{
-                    flex: 1, padding: '10px 12px', borderRadius: '8px',
-                    border: '1px solid var(--border)', background: 'var(--input-bg)',
-                    color: 'var(--text-body)', fontSize: '13px',
-                  }}
-                />
-                <button
-                  onClick={async () => {
-                    if (!nsBillId.trim()) return;
-                    setUpdating(true);
-                    await supabase.from('cni_jobs').update({
-                      netsuite_bill_id: nsBillId.trim(),
-                      invoice_status: 'billed_in_netsuite',
-                    }).eq('id', job.id);
-                    setNsBillId('');
-                    await loadJob();
-                    setUpdating(false);
-                  }}
-                  disabled={!nsBillId.trim() || updating}
-                  style={{
-                    padding: '10px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                    background: nsBillId.trim() ? 'var(--orange)' : 'var(--text-muted)',
-                    color: '#fff', border: 'none',
-                  }}
-                >
-                  Save
-                </button>
-              </div>
-            </div>
-          )}
-
           {job.netsuite_bill_id && (
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px' }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
               NetSuite Bill: <strong>{job.netsuite_bill_id}</strong>
+            </div>
+          )}
+          {job.invoice_status === 'submitted' && (
+            <div style={{ fontSize: '11px', color: 'var(--warning)', marginTop: '6px' }}>
+              This flow is retired — record the invoice into AP (Admin › Scan Log › Vendor Invoices) to bill it.
             </div>
           )}
         </div>
@@ -1625,9 +1616,18 @@ export default function CniJobDetailPage() {
               && (payoutData?.pending || []).length === 0
               && (payoutData?.payouts || []).length > 0
               && (payoutData?.payouts || []).every(p => p.status !== 'draft');
+            // Company mode bills through the AP flow: every completed vehicle
+            // must sit on an approved-or-beyond vendor invoice. Jobs approved
+            // under the retired per-job flow stay closable (grandfathered) —
+            // a merely 'submitted' AP invoice does NOT satisfy the gate, same
+            // as legacy submission never did.
+            const legacyApproved = ['approved', 'billed_in_netsuite'].includes(job.invoice_status);
+            const modernApproved = !!billing
+              && billing.completedVins > 0
+              && billing.coveredApproved >= billing.completedVins;
             const invoiceApproved = individual
               ? payoutsSettled
-              : ['approved', 'billed_in_netsuite'].includes(job.invoice_status);
+              : (legacyApproved || modernApproved);
             const canClose = allVinsComplete && allPhotosApproved && invoiceApproved;
 
             return (
@@ -1642,7 +1642,9 @@ export default function CniJobDetailPage() {
                   <div style={{ fontSize: '13px', color: invoiceApproved ? 'var(--success)' : 'var(--error)' }}>
                     {individual
                       ? `${invoiceApproved ? '✓' : '✕'} Employee payouts ${invoiceApproved ? 'approved' : 'pending'}`
-                      : `${invoiceApproved ? '✓' : '✕'} Invoice ${invoiceApproved ? 'approved' : 'pending'}`}
+                      : legacyApproved && !modernApproved
+                        ? '✓ Invoice approved (legacy)'
+                        : `${invoiceApproved ? '✓' : '✕'} Company invoice approved in AP (${billing ? `${billing.coveredApproved}/${billing.completedVins}` : '…'} vehicles covered)`}
                   </div>
                 </div>
                 {canClose ? (

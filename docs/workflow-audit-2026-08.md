@@ -410,9 +410,14 @@ shipped. **But the coordination layer is hollow:**
   on phone calls.
 - **CRITICAL — RLS lets installers update any column of their jobs** from the
   browser: `pay_per_vehicle`, `invoice_status`, `netsuite_bill_id`, `status`.
-- **CRITICAL — Two competing company-mode invoice flows** exist; the closure
-  checklist only recognizes the dead legacy one, so a company using the modern AP
-  flow leaves its jobs permanently unclosable.
+- ✅ **CRITICAL — Two competing company-mode invoice flows** existed; the closure
+  checklist only recognized the legacy one, so a company using the modern AP
+  flow left its jobs permanently unclosable. _(Fixed: the legacy flow is
+  deleted — installer upload page, submit-invoice route, admin approve card,
+  dashboard tile — and the closure gate now reads AP coverage per completed
+  vehicle, with legacy-approved jobs grandfathered. Correction to the
+  original finding: the legacy flow was live, not dead, and individual-mode
+  closure was already correct.)_
 - **MAJOR — No bridge from graphics/check-in to a CNI job** — outsourcing an
   install means re-typing everything and losing the pay/photo/billing machinery
   unless the crew happens to scan the right part.
@@ -614,9 +619,13 @@ biggest ones:
 12. ✅ (#635) Fix the checklist category-ordering inversion (both routes).
 13. ✅ (#635) Close the `received → complete` gate bypass.
 14. ⚠️ Wire CNI lifecycle notifications (one shared helper) — ✅ (#640 payouts;
-    #641–#646 full assign→schedule→complete→photos→invoice set); **still open:**
-    kill the legacy CNI invoice flow; add a "Create CNI job from graphics job /
-    check-in" bridge.
+    #641–#646 full assign→schedule→complete→photos→invoice set); ✅ legacy CNI
+    invoice flow killed (installer upload page + submit-invoice route deleted,
+    closure gate reads AP coverage via /api/cni/job-billing with a legacy
+    grandfather, columns deprecated in place by migration 231 — two audit
+    corrections: the legacy flow was live, not dead, and individual-mode
+    closure was already handled; only company mode was broken); **still
+    open:** the "Create CNI job from graphics job / check-in" bridge.
 15. ✅ (#639) AR payment sync-back cron.
 16. ✅ (#638) Fix the assignment split-brain (write `assigned_to`, or read
     `job_assignments` everywhere).
