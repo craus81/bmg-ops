@@ -39,7 +39,7 @@ const Schema = z.object({
 // NetSuite — only a numeric internal id counts as a real NetSuite part.
 const isRealNsId = (id: string | null) => !!id && !/^(LOCAL-|bmg-)/i.test(id);
 
-const PART_COLS = 'id, netsuite_id, item_number, display_name, billable_customer, sales_price';
+const PART_COLS = 'id, netsuite_id, item_number, display_name, billable_customer, sales_price, catalog';
 
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);
@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
             updated_at: new Date().toISOString(),
           })
           .eq('id', upgradeTarget.id)
-          .select('id, item_number, display_name, billable_customer, sales_price')
+          .select('id, netsuite_id, item_number, display_name, billable_customer, sales_price, catalog')
           .single();
         return NextResponse.json({
           success: true,
@@ -131,7 +131,7 @@ export async function POST(req: NextRequest) {
           is_active: true,
           updated_at: new Date().toISOString(),
         })
-        .select('id, item_number, display_name, billable_customer, sales_price')
+        .select('id, netsuite_id, item_number, display_name, billable_customer, sales_price, catalog')
         .single();
       return NextResponse.json({
         success: true,
@@ -201,7 +201,7 @@ export async function POST(req: NextRequest) {
         updated_at: new Date().toISOString(),
       })
       .eq('id', upgradeTarget.id)
-      .select('id, item_number, display_name, billable_customer, sales_price')
+      .select('id, netsuite_id, item_number, display_name, billable_customer, sales_price, catalog')
       .single();
 
     if (updateError) {
@@ -238,7 +238,7 @@ export async function POST(req: NextRequest) {
       is_active: true,
       updated_at: new Date().toISOString(),
     })
-    .select('id, item_number, display_name, billable_customer, sales_price')
+    .select('id, netsuite_id, item_number, display_name, billable_customer, sales_price, catalog')
     .single();
 
   if (insertError) {

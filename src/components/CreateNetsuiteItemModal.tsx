@@ -4,10 +4,13 @@ import { useState } from 'react';
 
 export interface CreatedPart {
   id: string;
+  /** NetSuite internal id — what estimate/PO lines need to reference the item. */
+  netsuite_id: string | null;
   item_number: string;
   display_name: string | null;
   billable_customer: string | null;
   sales_price: number | null;
+  catalog?: string | null;
 }
 
 const ITEM_TYPES: { value: string; label: string }[] = [
@@ -26,6 +29,9 @@ interface Props {
   billableCustomer?: string | null;
   /** 'graphics' (default) or 'upfit' — which local catalog the mirror lands in */
   catalog?: 'graphics' | 'upfit';
+  /** Show a Catalog select (seeded from `catalog`) instead of pinning it —
+   *  for callers with no inherent catalog, like the estimate builder. */
+  chooseCatalog?: boolean;
   /**
    * Local netsuite_parts row this part already lives in (catalog flow). The
    * server links the new NetSuite record to that row instead of inserting a
@@ -43,11 +49,13 @@ export function CreateNetsuiteItemModal({
   initialPrice,
   billableCustomer,
   catalog = 'graphics',
+  chooseCatalog,
   existingPartId,
   onCreated,
   onClose,
 }: Props) {
   const [partNumber, setPartNumber] = useState(initialPartNumber);
+  const [cat, setCat] = useState<'graphics' | 'upfit'>(catalog);
   const [displayName, setDisplayName] = useState(initialDisplayName || initialDescription || initialPartNumber);
   const [description, setDescription] = useState(initialDescription || '');
   const [price, setPrice] = useState(initialPrice != null ? String(initialPrice) : '');
@@ -82,7 +90,7 @@ export function CreateNetsuiteItemModal({
           displayName: displayName.trim() || null,
           description: description.trim() || null,
           salesPrice: price.trim() ? Number(price) : null,
-          catalog,
+          catalog: cat,
           billableCustomer: billableCustomer || null,
           existingPartId: existingPartId || null,
         }),
@@ -94,14 +102,20 @@ export function CreateNetsuiteItemModal({
         return;
       }
       const info = data.priceWarning ? { priceWarning: data.priceWarning as string } : undefined;
-      // Created in NetSuite but local mirror failed — still let the caller proceed
-      const part: CreatedPart = data.part || {
-        id: data.internalId || partNumber.trim(),
-        item_number: partNumber.trim(),
-        display_name: displayName.trim() || null,
-        billable_customer: billableCustomer || null,
-        sales_price: price.trim() ? Number(price) : null,
-      };
+      // Created in NetSuite but local mirror failed — still let the caller
+      // proceed. Either way the NetSuite internal id and chosen catalog ride
+      // along (spread order: the server's part row wins where it has them).
+      const part: CreatedPart = data.part
+        ? { netsuite_id: data.internalId || null, catalog: cat, ...data.part }
+        : {
+            id: data.internalId || partNumber.trim(),
+            netsuite_id: data.internalId || null,
+            item_number: partNumber.trim(),
+            display_name: displayName.trim() || null,
+            billable_customer: billableCustomer || null,
+            sales_price: price.trim() ? Number(price) : null,
+            catalog: cat,
+          };
       if (data.mirrorWarning) console.warn(data.mirrorWarning);
       setDone({
         part,
@@ -199,6 +213,18 @@ export function CreateNetsuiteItemModal({
               {ITEM_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
             </select>
           </div>
+          {chooseCatalog && (
+            <div>
+              <label style={labelStyle}>Catalog</label>
+              <select value={cat} onChange={e => setCat(e.target.value as 'graphics' | 'upfit')} style={{ ...inputStyle, cursor: 'pointer' }}>
+                <option value="upfit">Upfit</option>
+                <option value="graphics">Graphics</option>
+              </select>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Which Visual Catalog tab the part files under in FleetSuite.
+              </div>
+            </div>
+          )}
           <div>
             <label style={labelStyle}>Display Name</label>
             <input value={displayName} onChange={e => setDisplayName(e.target.value)} style={inputStyle} />
