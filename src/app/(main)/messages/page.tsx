@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
-import { useAuth } from '@/components/AuthProvider';
+import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import type { Profile, Conversation, Message } from '@/lib/types';
@@ -18,6 +18,7 @@ export default function MessagesPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useAuth();
+  useRequireFeature('messages');
   const supabase = createClient();
   const dialog = useDialog();
   const messagesEndRef = useRef<HTMLDivElement>(null);

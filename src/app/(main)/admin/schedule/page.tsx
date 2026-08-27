@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
-import { useAuth } from '@/components/AuthProvider';
+import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { apiFetch } from '@/lib/api-client';
 import { theme } from '@/lib/theme';
@@ -60,6 +60,7 @@ export default function SchedulePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, isAdmin, isSales, profile } = useAuth();
+  useRequireFeature('schedule');
   const dialog = useDialog();
   const supabase = createClient();
 

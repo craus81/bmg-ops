@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
-import { useAuth } from '@/components/AuthProvider';
+import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { PartLabel } from '@/components/PartLabel';
 import { DropZone } from '@/components/DropZone';
@@ -62,6 +62,7 @@ const toLocalDateStr = (d: Date) =>
 
 export default function AdminScansPage() {
   const { user } = useAuth();
+  useRequireFeature('reports');
   const dialog = useDialog();
   const supabase = createClient();
 
