@@ -49,7 +49,15 @@ const STATUS_STYLE: Record<string, { label: string; color: string }> = {
  */
 export default function MyEarningsPage() {
   const router = useRouter();
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, isInstaller, isFieldTech, isShopTech, loading: authLoading } = useAuth();
+
+  // Pay credits accrue to CNI installers AND internal field/shop techs, so the
+  // gate is the credit-earning roles — not the cni_portal feature, which would
+  // lock techs out of their own pay history. Other roles have no rows here.
+  useEffect(() => {
+    if (authLoading) return;
+    if (!isInstaller && !isFieldTech && !isShopTech && !isAdmin) router.push('/home');
+  }, [authLoading, isInstaller, isFieldTech, isShopTech, isAdmin, router]);
   // Admin preview: show the previewed installer's earnings instead.
   const [preview] = useState(() => getInstallerPreview());
   const supabase = createClient();

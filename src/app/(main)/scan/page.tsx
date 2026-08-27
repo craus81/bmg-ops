@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
-import { useAuth } from '@/components/AuthProvider';
+import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import VinScanner from '@/components/VinScanner';
 import RfidCapture, { type RfidCompletion } from '@/components/RfidCapture';
@@ -47,6 +47,7 @@ interface ScanEntry {
 
 export default function ScanPage() {
   const { user, isAdmin } = useAuth();
+  useRequireFeature('scan');
   const supabase = createClient();
 
   // Step state

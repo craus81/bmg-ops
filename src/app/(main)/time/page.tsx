@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useApp } from '@/components/AppProvider';
-import { useAuth } from '@/components/AuthProvider';
+import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { fmtTime, fmtClock, fmtDate } from '@/lib/utils';
 import { theme } from '@/lib/theme';
@@ -10,6 +10,7 @@ import type { TimeEntry, TimeBreak } from '@/lib/types';
 
 export default function TimePage() {
   const { isAdmin } = useAuth();
+  useRequireFeature('time');
   const tabs = isAdmin
     ? [
         { id: 'team' as const, label: 'Team' },

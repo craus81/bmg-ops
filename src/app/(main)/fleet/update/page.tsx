@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { useAuth } from '@/components/AuthProvider';
+import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { isValidVIN } from '@/lib/vin-decoder';
 import StatusBadge from '@/components/StatusBadge';
@@ -11,6 +11,7 @@ import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS }
 
 export default function FleetUpdatePage() {
   const { user, profile } = useAuth();
+  useRequireFeature('fleet_checkin');
   const supabase = createClient();
 
   // Flow state

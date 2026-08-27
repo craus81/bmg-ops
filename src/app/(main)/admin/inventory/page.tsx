@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
+import { useRequireFeature } from '@/components/AuthProvider';
 import { fetchAllRows } from '@/lib/fetch-all';
 
 // Mirrors normalizeItemNumber in vendor-po-sync (server-only import there):
@@ -36,6 +37,7 @@ interface InvRow {
 const fmt = (d: string | null) => d ? new Date(`${d.slice(0, 10)}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' }) : null;
 
 export default function InventoryPage() {
+  useRequireFeature('parts_catalog');
   const supabase = createClient();
   const [rows, setRows] = useState<InvRow[]>([]);
   const [loading, setLoading] = useState(true);
