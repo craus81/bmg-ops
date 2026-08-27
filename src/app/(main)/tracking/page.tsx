@@ -7,7 +7,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 // redirects here). Lazy so the board renders before the wizard loads.
 const VehicleCheckIn = lazy(() => import('@/components/VehicleCheckIn'));
 import { createClient } from '@/lib/supabase-browser';
-import { useAuth } from '@/components/AuthProvider';
+import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { storage } from '@/lib/storage';
 import { fetchAllRows } from '@/lib/fetch-all';
 import StatusBadge from '@/components/StatusBadge';
@@ -34,6 +34,7 @@ export default function TrackingPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isAdmin, user, profile, hasFeature } = useAuth();
+  useRequireFeature('in_shop');
   const dialog = useDialog();
   const supabase = createClient();
 

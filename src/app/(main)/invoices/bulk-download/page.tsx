@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import JSZip from 'jszip';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
@@ -46,7 +47,16 @@ type OpenInvoice = {
 };
 
 export default function BulkInvoiceDownloadPage() {
-  const { loading: authLoading } = useAuth();
+  const router = useRouter();
+  const { isAdmin, isSales, hasFeature, loading: authLoading } = useAuth();
+
+  // Same audience as the Reports index that links here: admin, sales, and
+  // `reports` holders (finance). The parent /invoices gates on admin/sales,
+  // but this child was reachable by any account by URL.
+  useEffect(() => {
+    if (authLoading) return;
+    if (!isAdmin && !isSales && !hasFeature('reports')) router.push('/home');
+  }, [authLoading, isAdmin, isSales, hasFeature, router]);
 
   const [search, setSearch] = useState('');
   const [searching, setSearching] = useState(false);

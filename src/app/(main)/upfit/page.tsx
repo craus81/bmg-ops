@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { storage, storageDownloadUrl } from '@/lib/storage';
-import { useAuth } from '@/components/AuthProvider';
+import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { DropZone } from '@/components/DropZone';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
@@ -137,6 +137,7 @@ const STATUSES = [
 
 export default function UpfitProjectsPage() {
   const { user, isAdmin } = useAuth();
+  useRequireFeature('upfit_projects');
   const supabase = createClient();
   const dialog = useDialog();
   const searchParams = useSearchParams();

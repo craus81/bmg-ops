@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -59,10 +60,18 @@ interface InvoiceRow {
 }
 
 export default function PartsMailPage() {
+  const router = useRouter();
   const supabase = createClient();
-  const { isAdmin, hasFeature } = useAuth();
+  const { isAdmin, hasFeature, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const canBill = isAdmin || hasFeature('vendor_payments');
+
+  // The tile audience (upfit_projects: sales/admin) plus the billing audience
+  // canBill implies (vendor_payments: finance). Was reachable by any account.
+  useEffect(() => {
+    if (authLoading) return;
+    if (!hasFeature('upfit_projects') && !hasFeature('vendor_payments')) router.push('/home');
+  }, [authLoading, hasFeature, router]);
 
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
   const [invLinkInputs, setInvLinkInputs] = useState<Record<string, string>>({});
