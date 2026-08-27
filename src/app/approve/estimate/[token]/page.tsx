@@ -9,6 +9,7 @@
  */
 
 import ApprovalPageShell, { ApprovalHeader, Row, Section } from '@/components/ApprovalPageShell';
+import ZoomableImage from '@/components/ZoomableImage';
 
 export default function EstimateApprovalPage() {
   return (
@@ -50,52 +51,59 @@ function EstimateDocument({ estimate: est, lines, graphics }: { estimate: any; l
       </ApprovalHeader>
 
       <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px', marginBottom: '16px' }}>
-        <table style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ textAlign: 'left', color: '#64748b', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-              <th style={{ paddingBottom: '8px' }}>Item</th>
-              <th style={{ paddingBottom: '8px', textAlign: 'right' }}>Qty</th>
-              <th style={{ paddingBottom: '8px', textAlign: 'right' }}>Rate</th>
-              <th style={{ paddingBottom: '8px', textAlign: 'right' }}>Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lines.map((l: any) => (
-              <tr key={l.id} style={{ borderTop: '1px solid #e2e8f0' }}>
-                <td style={{ padding: '8px 0', color: '#0f172a' }}>
-                  <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
-                    {l.image_url && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={l.image_url}
-                        alt={l.item_number || 'Product'}
-                        style={{ width: '56px', height: '56px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #e2e8f0', flexShrink: 0 }}
-                      />
-                    )}
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 600 }}>{l.item_number || l.description || 'Item'}</div>
-                      {l.description && l.description !== l.item_number && (
-                        <div style={{ fontSize: '12px', color: '#475569' }}>{l.description}</div>
-                      )}
-                      {l.notes && <div style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic' }}>{l.notes}</div>}
-                      {l.product_url && (
-                        <a
-                          href={l.product_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{ fontSize: '11px', color: '#2563eb', textDecoration: 'underline' }}
-                        >View product ↗</a>
-                      )}
-                    </div>
-                  </div>
-                </td>
-                <td style={{ padding: '8px 0', textAlign: 'right' }}>{l.quantity}</td>
-                <td style={{ padding: '8px 0', textAlign: 'right' }}>${Number(l.unit_price).toFixed(2)}</td>
-                <td style={{ padding: '8px 0', textAlign: 'right' }}>${Number(l.line_total || l.unit_price * l.quantity).toFixed(2)}</td>
+        {/* overflowX guard: on a phone the Item column (56px photo + text)
+            can force the table past the card edge, silently pushing
+            Qty/Rate/Total out of view — scroll beats vanishing. */}
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ textAlign: 'left', color: '#64748b', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                <th style={{ paddingBottom: '8px' }}>Item</th>
+                <th style={{ paddingBottom: '8px', textAlign: 'right' }}>Qty</th>
+                <th style={{ paddingBottom: '8px', textAlign: 'right' }}>Rate</th>
+                <th style={{ paddingBottom: '8px', textAlign: 'right' }}>Total</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {lines.map((l: any) => (
+                <tr key={l.id} style={{ borderTop: '1px solid #e2e8f0' }}>
+                  <td style={{ padding: '8px 0', color: '#0f172a' }}>
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+                      {l.image_url && (
+                        <ZoomableImage
+                          src={l.image_url}
+                          alt={l.item_number || 'Product'}
+                          wrapStyle={{ flexShrink: 0 }}
+                          style={{ width: '56px', height: '56px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #e2e8f0' }}
+                        />
+                      )}
+                      {/* overflowWrap: long SKUs/URLs must break, or this cell's
+                          min-content width eats the numeric columns' room */}
+                      <div style={{ minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
+                        <div style={{ fontWeight: 600 }}>{l.item_number || l.description || 'Item'}</div>
+                        {l.description && l.description !== l.item_number && (
+                          <div style={{ fontSize: '12px', color: '#475569' }}>{l.description}</div>
+                        )}
+                        {l.notes && <div style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic' }}>{l.notes}</div>}
+                        {l.product_url && (
+                          <a
+                            href={l.product_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ fontSize: '11px', color: '#2563eb', textDecoration: 'underline' }}
+                          >View product ↗</a>
+                        )}
+                      </div>
+                    </div>
+                  </td>
+                  <td style={{ padding: '8px 0', textAlign: 'right' }}>{l.quantity}</td>
+                  <td style={{ padding: '8px 0', textAlign: 'right' }}>${Number(l.unit_price).toFixed(2)}</td>
+                  <td style={{ padding: '8px 0', textAlign: 'right' }}>${Number(l.line_total || l.unit_price * l.quantity).toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         <div style={{ borderTop: '2px solid #cbd5e1', marginTop: '10px', paddingTop: '10px', fontSize: '13px', color: '#0f172a' }}>
           <Row label="Subtotal" value={`$${subtotal.toFixed(2)}`} />
           {est.labor_total > 0 && <Row label={`Labor (${est.labor_hours_override ?? est.labor_hours} hrs @ $${est.labor_rate}/hr)`} value={`$${Number(est.labor_total).toFixed(2)}`} />}
@@ -133,11 +141,11 @@ function EstimateDocument({ estimate: est, lines, graphics }: { estimate: any; l
             </ul>
           )}
           {g.diagramUrl && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
+            <ZoomableImage
               src={g.diagramUrl}
               alt={`Coverage diagram — Quote ${g.quoteNumber}`}
-              style={{ maxWidth: '100%', border: '1px solid #e2e8f0', borderRadius: '8px', marginTop: '10px', display: 'block' }}
+              wrapStyle={{ marginTop: '10px' }}
+              style={{ maxWidth: '100%', border: '1px solid #e2e8f0', borderRadius: '8px' }}
             />
           )}
         </div>
