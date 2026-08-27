@@ -75,7 +75,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Now** — security & data-loss (1–9) | ✅ done | PRs #630–#634; item 9's `cni_jobs` half finished by the CNI hardening (#641–#646, migration 226). |
 | **Next** — close the workflow chain (10–16) | ⚠️ mostly done | PRs #635–#640; #14 CNI notifications fully wired (#640–#646), but "kill the legacy CNI invoice flow" and the "graphics→CNI job bridge" remain open. |
 | **Soon** — the role cleanup (17–20) | ✅ done | #17 infra + owner-page gates (#649), #18a registry (#648), #18b all ten tools keyed (#652, #654, #655), #19 install roles (#650), #20 dead-end menus (#651). The ungated-by-URL pages are gated and the dev route deleted (#656). An adversarial gate audit (every tile/nav/redirect/deep-link entry point traced per role) confirmed 20 regressions, all fixed: client dead-clicks + two redirect loops (#657) and per-recipient vehicle notification links (#658). |
-| **Data-integrity bugs to fix in passing** | ❌ not started | 6 bugs. |
+| **Data-integrity bugs to fix in passing** | ✅ done | All 6 re-verified as live, then fixed: pushed-estimate delete (#660), Add-Graphics demotion (#661), stranded allocations — trigger + backfill, migration 228 (#662), graphics history trigger, migration 229 (#663), the 1000-row-cap sweep across payroll/payouts/credits/pay-rates/scans/invoices/pos/dashboard (#664), and the Open Quotes tile (#665). |
 | **Hygiene** — delete the dead set | ❌ not started | ~1,500 lines. |
 
 Per-item status is tagged inline in Part 5 below.
@@ -650,13 +650,21 @@ instead of bouncing off the In-Shop gate.
 
 ### Data-integrity bugs to fix in passing
 
-- Deleting a pushed estimate always fails (forward auth).
-- "Add Graphics" demotes pushed estimates to draft (pass current status).
-- Ship-complete trigger strands allocations in `reserved` (release them).
-- Migration-092 trigger never writes graphics history on success.
-- Payroll/pos/scans/invoices/OpsDashboard unpaginated reads (violate the repo's
-  own 1000-row rule) — workers silently unpaid, billable scans hidden.
-- Open Quotes tile counts only `wrap_quotes` (excludes estimate dollars).
+- ✅ Deleting a pushed estimate always fails (forward auth). _(#660)_
+- ✅ "Add Graphics" demotes pushed estimates to draft (pass current status).
+  _(#661 — the sent/accepted/rejected half was already guarded server-side;
+  #661 closes the remaining pushed→draft path on both client and server)_
+- ✅ Ship-complete trigger strands allocations in `reserved` (release them).
+  _(#662, migration 228 — status-change trigger on `upfit_projects` +
+  backfill of already-stranded rows)_
+- ✅ Migration-092 trigger never writes graphics history on success.
+  _(#663, migration 229 — captures `from_status` before the update)_
+- ✅ Payroll/pos/scans/invoices/OpsDashboard unpaginated reads (violate the
+  repo's own 1000-row rule) — workers silently unpaid, billable scans hidden.
+  _(#664 — fetchAllRows everywhere with id tiebreakers; payroll/payouts/
+  credits APIs fail closed on partial reads)_
+- ✅ Open Quotes tile counts only `wrap_quotes` (excludes estimate dollars).
+  _(#665 — combined with estimates per quote-list.ts, deep-link → /quotes)_
 
 ### Hygiene — delete the dead set (~1,500 lines, zero behavior change)
 
