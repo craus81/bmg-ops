@@ -1190,7 +1190,11 @@ export default function EstimatesPage() {
   // builder, which returns here via /estimates?id= with the graphics lines
   // already written by /api/estimates/[id]/add-wrap-quote.
   const addGraphics = async () => {
-    const id = await saveEstimate();
+    // Preserve the record's current status — the bare saveEstimate() default
+    // is 'draft', which silently demoted a pushed estimate (dropping it from
+    // the sales-performance report) every time someone added graphics.
+    const currentStatus = estimates.find(e => e.id === editingId)?.status || 'draft';
+    const id = await saveEstimate(currentStatus);
     if (id) router.push(`/admin/wrap-quote?forEstimate=${id}`);
   };
 
