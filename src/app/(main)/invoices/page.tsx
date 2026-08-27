@@ -265,21 +265,30 @@ export default function InvoicingHubPage() {
   const loadAll = async () => {
     setLoading(true);
     const [uninvRes, invRes, scansRes, partsRes, scanInvRes] = await Promise.all([
-      supabase.from('graphics_jobs').select('*')
+      // Paginated: this is the billing work queue — a truncated read here
+      // silently drops uninvoiced jobs past the 1000-row cap (.limit(500) was
+      // an arbitrary bound on the same money path).
+      fetchAllRows<GraphicsJob>((from, to) => supabase
+        .from('graphics_jobs').select('*')
         .is('netsuite_invoice_id', null)
         .neq('status', 'cancelled')
         .order('updated_at', { ascending: false })
-        .limit(500),
+        .order('id')
+        .range(from, to)),
       supabase.from('graphics_jobs').select('*')
         .not('netsuite_invoice_id', 'is', null)
         .order('invoiced_at', { ascending: false })
         .limit(200),
-      supabase.from('scan_logs')
+      // Paginated: the ready-to-invoice queue — scans past the cap simply
+      // never got billed.
+      fetchAllRows<ScanRow>((from, to) => supabase
+        .from('scan_logs')
         .select('id, vin, part_number, part_description, billable_customer, location_name, po_id, po_number, exported_at, invoice_number')
         .is('archived_at', null)
         .is('invoice_number', null)
         .order('scanned_at', { ascending: false })
-        .limit(1000),
+        .order('id')
+        .range(from, to)),
       // Paginated: truncating this map makes parts past the 1000-row cap
       // default to "requires a PO", dropping their scans from Ready-to-invoice.
       fetchAllRows<{ item_number: string; requires_po_match: boolean | null }>((from, to) =>

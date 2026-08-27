@@ -6,6 +6,7 @@ import { findLocation, createVendorBill } from '@/lib/netsuite';
 import { logAudit } from '@/lib/audit';
 import { notify } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 /**
  * Tell the installer when their payout advances. The CNI lifecycle was a
@@ -62,18 +63,35 @@ const service = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
 );
 
-/** All live credits on a job (via its VINs), split into linked/unlinked. */
-async function jobCredits(cniJobId: string) {
-  const { data: vins } = await service
-    .from('cni_job_vins').select('id').eq('job_id', cniJobId);
-  if (!vins || vins.length === 0) return [];
-  const { data: credits } = await service
-    .from('install_credits')
-    .select('id, profile_id, vin, amount, share_weight, crew_size, payout_id, created_at')
-    .in('cni_job_vin_id', vins.map(v => v.id))
-    .is('voided_at', null)
-    .order('created_at');
-  return credits || [];
+type JobCredit = {
+  id: string; profile_id: string; vin: string | null; amount: number | null;
+  share_weight: number; crew_size: number; payout_id: string | null; created_at: string;
+};
+
+/**
+ * All live credits on a job (via its VINs), split into linked/unlinked.
+ * Paginated past the 1000-row cap and chunked so a big job's VIN list never
+ * overflows a single .in(); a partial read here would generate payouts that
+ * pay people short, so callers get the error and MUST fail closed.
+ */
+async function jobCredits(cniJobId: string): Promise<{ data: JobCredit[]; error: { message: string } | null }> {
+  const { data: vins, error: vinErr } = await fetchAllRows<{ id: string }>((from, to) => service
+    .from('cni_job_vins').select('id').eq('job_id', cniJobId).order('id').range(from, to));
+  if (vinErr) return { data: [], error: vinErr };
+  const all: JobCredit[] = [];
+  for (let i = 0; i < vins.length; i += 200) {
+    const { data, error } = await fetchAllRows<JobCredit>((from, to) => service
+      .from('install_credits')
+      .select('id, profile_id, vin, amount, share_weight, crew_size, payout_id, created_at')
+      .in('cni_job_vin_id', vins.slice(i, i + 200).map(v => v.id))
+      .is('voided_at', null)
+      .order('created_at')
+      .order('id')
+      .range(from, to));
+    if (error) return { data: all, error };
+    all.push(...data);
+  }
+  return { data: all, error: null };
 }
 
 async function nameAndVendorMaps(profileIds: string[]) {
@@ -103,7 +121,10 @@ export async function GET(req: NextRequest) {
   const q = validateSearchParams(req, GetSchema);
   if (q.error) return q.error;
 
-  const credits = await jobCredits(q.data.cniJobId);
+  const { data: credits, error: creditsErr } = await jobCredits(q.data.cniJobId);
+  if (creditsErr) {
+    return NextResponse.json({ error: 'Failed to load credits: ' + creditsErr.message }, { status: 500 });
+  }
 
   const { data: payouts } = await service
     .from('payouts')
@@ -182,7 +203,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Job is in company payout mode — switch it to individual first' }, { status: 400 });
     }
 
-    const credits = (await jobCredits(body.cniJobId)).filter(c => !c.payout_id);
+    const { data: allCredits, error: creditsErr } = await jobCredits(body.cniJobId);
+    if (creditsErr) {
+      // Never generate payouts from a partial read — missing credits mean
+      // someone gets paid short.
+      return NextResponse.json({ error: 'Failed to load credits: ' + creditsErr.message }, { status: 500 });
+    }
+    const credits = allCredits.filter(c => !c.payout_id);
     if (credits.length === 0) {
       return NextResponse.json({ error: 'No unassigned credits to pay out' }, { status: 400 });
     }

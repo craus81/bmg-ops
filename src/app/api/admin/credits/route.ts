@@ -5,6 +5,7 @@ import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { rewriteVehicleCredits, recomputeShiftCredits, backfillJobCredits, assignVehicleCredits } from '@/lib/pay-credits';
 import { memberViews } from '@/lib/shifts';
 import { logAudit } from '@/lib/audit';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,22 +33,44 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'cniJobId or shiftId required' }, { status: 400 });
   }
 
-  let shiftsQuery = service
-    .from('work_shifts')
-    .select('id, context, cni_job_id, part_number, location_name, started_by, started_at, ended_at')
-    .order('started_at', { ascending: false });
-  if (q.data.shiftId) shiftsQuery = shiftsQuery.eq('id', q.data.shiftId);
-  else shiftsQuery = shiftsQuery.eq('cni_job_id', q.data.cniJobId!);
-  const { data: shifts } = await shiftsQuery;
-  if (!shifts || shifts.length === 0) return NextResponse.json({ shifts: [] });
+  // Paginated: a long-running job's shift/credit history can exceed the
+  // 1000-row cap, and a truncated editor view hides credits an admin would
+  // then "correct" by re-adding — duplicating pay.
+  const { data: shifts, error: shiftsErr } = await fetchAllRows<{
+    id: string; context: string; cni_job_id: string | null; part_number: string | null;
+    location_name: string | null; started_by: string; started_at: string; ended_at: string | null;
+  }>((from, to) => {
+    let shiftsQuery = service
+      .from('work_shifts')
+      .select('id, context, cni_job_id, part_number, location_name, started_by, started_at, ended_at')
+      .order('started_at', { ascending: false })
+      .order('id');
+    if (q.data.shiftId) shiftsQuery = shiftsQuery.eq('id', q.data.shiftId);
+    else shiftsQuery = shiftsQuery.eq('cni_job_id', q.data.cniJobId!);
+    return shiftsQuery.range(from, to);
+  });
+  if (shiftsErr) {
+    return NextResponse.json({ error: 'Failed to load shifts: ' + shiftsErr.message }, { status: 500 });
+  }
+  if (shifts.length === 0) return NextResponse.json({ shifts: [] });
 
   const shiftIds = shifts.map(s => s.id);
-  const { data: credits } = await service
-    .from('install_credits')
-    .select('id, shift_id, profile_id, scan_log_id, cni_job_vin_id, vin, part_number, rate_per_vehicle, share_weight, crew_size, total_weight, amount, payout_id, voided_at, created_at, edited_by, edited_at')
-    .in('shift_id', shiftIds)
-    .is('voided_at', null)
-    .order('created_at');
+  // Chunked .in() + per-chunk pagination, same reason as above.
+  const credits: any[] = [];
+  for (let i = 0; i < shiftIds.length; i += 200) {
+    const { data, error } = await fetchAllRows<any>((from, to) => service
+      .from('install_credits')
+      .select('id, shift_id, profile_id, scan_log_id, cni_job_vin_id, vin, part_number, rate_per_vehicle, share_weight, crew_size, total_weight, amount, payout_id, voided_at, created_at, edited_by, edited_at')
+      .in('shift_id', shiftIds.slice(i, i + 200))
+      .is('voided_at', null)
+      .order('created_at')
+      .order('id')
+      .range(from, to));
+    if (error) {
+      return NextResponse.json({ error: 'Failed to load credits: ' + error.message }, { status: 500 });
+    }
+    credits.push(...data);
+  }
 
   const profileIds = [...new Set([
     ...(credits || []).map(c => c.profile_id),

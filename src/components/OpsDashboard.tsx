@@ -151,31 +151,50 @@ export default function OpsDashboard() {
     ] = await Promise.allSettled([
       // KPI 1 — NetSuite invoiced totals (authoritative revenue)
       fetch('/api/reports/invoiced-summary').then(r => r.json()),
-      // Graphics jobs (all uninvoiced non-cancelled — feeds stages, queue, lanes)
-      supabase.from('graphics_jobs')
+      // Graphics jobs (all uninvoiced non-cancelled — feeds stages, queue, lanes).
+      // Paginated: .limit(2000) never lifted the 1000-row cap, so the stage
+      // counts and lanes silently dropped jobs past it.
+      fetchAllRows<any>((from, to) => supabase.from('graphics_jobs')
         .select('id, title, customer, status, priority, due_date, po_number, netsuite_invoice_id, updated_at')
         .neq('status', 'cancelled')
         .is('netsuite_invoice_id', null)
-        .limit(2000),
-      // Ready-to-invoice scan batches (Invoicing hub semantics)
-      supabase.from('scan_logs')
+        .order('id')
+        .range(from, to)),
+      // Ready-to-invoice scan batches (Invoicing hub semantics) — paginated so
+      // the batch/queue counts match the Invoicing hub at any volume.
+      fetchAllRows<any>((from, to) => supabase.from('scan_logs')
         .select('id, billable_customer, po_id, po_number, part_number, exported_at')
-        .is('archived_at', null).is('invoice_number', null).limit(1000),
+        .is('archived_at', null).is('invoice_number', null)
+        .order('id')
+        .range(from, to)),
       // Paginated: a truncated map counts no-PO parts past the 1000-row cap
       // as "waiting on a PO" and skews the queue/batch numbers.
       fetchAllRows<{ item_number: string; requires_po_match: boolean | null }>((from, to) =>
         supabase.from('netsuite_parts').select('item_number, requires_po_match').order('id').range(from, to)),
-      // KPI 3 — open PO backlog
-      supabase.from('purchase_orders').select('id, po_line_items(quantity, installed, unit_price)').eq('status', 'open'),
+      // KPI 3 — open PO backlog (paginated: the backlog $ figure must not
+      // silently exclude POs past the 1000-row cap)
+      fetchAllRows<any>((from, to) => supabase.from('purchase_orders')
+        .select('id, po_line_items(quantity, installed, unit_price)')
+        .eq('status', 'open')
+        .order('id')
+        .range(from, to)),
       // Queue rows — same queries as each destination screen
       supabase.from('gmail_po_imports').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
       supabase.from('fleet_checkins').select('*', { count: 'exact', head: true }).not('invoice_number', 'is', null).eq('is_paid', false),
       supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
       supabase.from('cni_job_photos').select('*', { count: 'exact', head: true }).eq('review_status', 'pending'),
       supabase.from('cni_jobs').select('*', { count: 'exact', head: true }).eq('invoice_status', 'submitted'),
-      // Lanes
-      supabase.from('fleet_checkins').select('id, status').in('status', ['received', 'checked_in', 'in_progress', 'stuck_parts', 'stuck_graphics', 'complete']),
-      supabase.from('cni_jobs').select('id, status').not('status', 'in', '("closed","cancelled")'),
+      // Lanes — paginated so the shop lane counts stay exact as history grows
+      fetchAllRows<any>((from, to) => supabase.from('fleet_checkins')
+        .select('id, status')
+        .in('status', ['received', 'checked_in', 'in_progress', 'stuck_parts', 'stuck_graphics', 'complete'])
+        .order('id')
+        .range(from, to)),
+      fetchAllRows<any>((from, to) => supabase.from('cni_jobs')
+        .select('id, status')
+        .not('status', 'in', '("closed","cancelled")')
+        .order('id')
+        .range(from, to)),
       // Schedule — next 7 days (same sources as the scheduler widget, 7-day window)
       supabase.from('graphics_jobs')
         .select('id, title, customer, status, scheduled_install_date, quantity')
@@ -209,8 +228,11 @@ export default function OpsDashboard() {
       supabase.from('notifications').select('id, title, body, url, created_at')
         .eq('user_id', user?.id || '').is('read_at', null)
         .order('created_at', { ascending: false }).limit(50),
-      // Sales
-      supabase.from('prospect_opportunities').select('stage, value'),
+      // Sales — paginated: the pipeline $ total must count every opportunity
+      fetchAllRows<any>((from, to) => supabase.from('prospect_opportunities')
+        .select('stage, value')
+        .order('id')
+        .range(from, to)),
       supabase.from('customers').select('netsuite_id, company_name, ytd_spend').eq('active', true).gt('ytd_spend', 0).order('ytd_spend', { ascending: false }).limit(4),
       supabase.from('wrap_quotes').select('total').in('status', ['draft', 'sent']),
       supabase.from('estimates').select('*', { count: 'exact', head: true }).gte('created_at', weekAgo.toISOString()),
