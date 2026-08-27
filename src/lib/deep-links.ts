@@ -131,6 +131,27 @@ export const deepLinks = {
   },
 };
 
+import { resolveFeatures } from '@/lib/features';
+
+/**
+ * The vehicle deep link a given recipient can actually open. The In-Shop
+ * board (`vehicle`) requires the in_shop/fleet_checkin feature; external CNI
+ * installers lack both, so a /tracking URL bounces them to /home — but the
+ * pick-list page admits installers (and techs) by role, so their link lands
+ * on the same vehicle there. Falls back to the board URL when no VIN is on
+ * hand. Producers notifying a mixed audience about a vehicle should build
+ * each recipient's URL through this, not `vehicle()` directly.
+ */
+export function vehicleLinkFor(
+  roles: string[] | null | undefined,
+  checkinId: string,
+  vin: string | null | undefined,
+): string {
+  const features = resolveFeatures(roles?.length ? roles : [], []);
+  if (features.has('in_shop') || features.has('fleet_checkin')) return deepLinks.vehicle(checkinId);
+  return vin ? deepLinks.pickList(vin) : deepLinks.vehicle(checkinId);
+}
+
 /**
  * Vet a `pdfViewer` src before the viewer renders it in an iframe.
  *

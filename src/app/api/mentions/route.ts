@@ -3,7 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { notifyMany } from '@/lib/notify';
-import { mentionSourceUrl } from '@/lib/deep-links';
+import { mentionSourceUrl, deepLinks } from '@/lib/deep-links';
+import { resolveFeatures } from '@/lib/features';
 
 export const dynamic = 'force-dynamic';
 
@@ -92,6 +93,32 @@ export async function POST(req: NextRequest) {
   // '/home' is the last resort only when neither identifies the record.
   const deepUrl = contextUrl || mentionSourceUrl(sourceType, sourceId) || null;
 
+  // The canonical URL can land on a feature-gated page some recipients can't
+  // open (/tracking needs in_shop, /admin/schedule needs schedule, /upfit
+  // needs upfit_projects) — their click would bounce to /home and discard the
+  // record. Resolve per recipient: vehicle notes fall back to the pick-list
+  // (which admits installers/techs by role); otherwise /home, where the
+  // Mentions inbox still shows the excerpt.
+  let vehicleVin: string | null = null;
+  if (deepUrl?.startsWith('/tracking') && sourceId) {
+    const { data: checkin } = await service
+      .from('fleet_checkins').select('vin').eq('id', sourceId).maybeSingle();
+    vehicleVin = checkin?.vin || null;
+  }
+  const urlFor = (userId: string): string | null => {
+    if (!deepUrl) return null;
+    const p = staff.find(s => s.id === userId);
+    const roles: string[] = p?.roles?.length ? p.roles : (p?.role ? [p.role] : []);
+    const f = resolveFeatures(roles, []);
+    if (deepUrl.startsWith('/tracking') && !f.has('in_shop') && !f.has('fleet_checkin')) {
+      return vehicleVin ? deepLinks.pickList(vehicleVin) : '/home';
+    }
+    if (deepUrl.startsWith('/admin/schedule') && !f.has('schedule')) return '/home';
+    if ((deepUrl === '/upfit' || deepUrl.startsWith('/upfit?')) && !f.has('upfit_projects')) return '/home';
+    return deepUrl;
+  };
+  const recipientUrls = new Map<string, string | null>([...mentionedIds].map(id => [id, urlFor(id)]));
+
   await service.from('note_mentions').insert(
     [...mentionedIds].map(userId => ({
       mentioned_user_id: userId,
@@ -99,7 +126,7 @@ export async function POST(req: NextRequest) {
       source_type: sourceType,
       source_id: sourceId || null,
       context_label: contextLabel || null,
-      context_url: deepUrl,
+      context_url: recipientUrls.get(userId) ?? null,
       note_excerpt: excerpt,
     })),
   );
@@ -112,14 +139,21 @@ export async function POST(req: NextRequest) {
   if (!deepUrl) {
     console.warn(`mention with unresolvable url: sourceType=${sourceType || 'none'} sourceId=${sourceId || 'none'}`);
   }
-  await notifyMany([...mentionedIds], {
+  const payload = {
     type: 'mention',
     title: `${actorName} mentioned you${contextLabel ? ` — ${contextLabel}` : ''}`,
     body: excerpt,
-    url: deepUrl || '/home',
-    channels: ['in_app', 'push'],
+    channels: ['in_app', 'push'] as ('in_app' | 'push')[],
     forceChannels: true,
-  });
+  };
+  const byUrl = new Map<string, string[]>();
+  for (const id of mentionedIds) {
+    const url = recipientUrls.get(id) || '/home';
+    byUrl.set(url, [...(byUrl.get(url) || []), id]);
+  }
+  for (const [url, ids] of byUrl) {
+    await notifyMany(ids, { ...payload, url });
+  }
 
   return NextResponse.json({ mentioned: mentionedIds.size });
 }

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
-import { deepLinks } from '@/lib/deep-links';
+import { deepLinks, vehicleLinkFor } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
 
 export const dynamic = 'force-dynamic';
@@ -69,6 +69,17 @@ export async function GET(req: NextRequest) {
       .eq('status', 'approved');
     const adminIds = (admins || []).map(a => a.id);
 
+    // Assignees can be external installers whose /tracking link bounces off the
+    // in_shop gate — load their roles once so each alert can carry a URL the
+    // recipient can actually open (board for staff, pick-list for installers).
+    const assigneeIds = [...new Set((stuck || []).map(v => v.assigned_to).filter(Boolean))] as string[];
+    const { data: assigneeProfiles } = assigneeIds.length
+      ? await service.from('profiles').select('id, role, roles').in('id', assigneeIds)
+      : { data: [] as any[] };
+    const assigneeRoles = new Map<string, string[]>(
+      (assigneeProfiles || []).map((p: any) => [p.id, p.roles?.length ? p.roles : (p.role ? [p.role] : [])]),
+    );
+
     let alerted = 0;
     const activeIds = new Set<string>();
     for (const v of stuck || []) {
@@ -81,17 +92,24 @@ export async function GET(req: NextRequest) {
 
       const label = [v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ') || `VIN …${String(v.vin || '').slice(-8)}`;
       const reason = v.status === 'stuck_parts' ? 'waiting on parts' : 'waiting on graphics';
-      const targets = new Set<string>(adminIds);
-      if (v.assigned_to) targets.add(v.assigned_to);
-      if (targets.size > 0) {
-        await notifyMany([...targets], {
-          type: 'vehicle_stuck',
-          title: `🚩 ${label} stuck ${Math.floor(stuckHours / 24)}d — ${reason}`,
-          body: `${v.customer_name ? `${v.customer_name}'s ` : ''}${label} (VIN …${String(v.vin || '').slice(-8)}) has been ${reason} for ${Math.floor(stuckHours)} hours. Reach out to the customer before they call.`,
-          url: deepLinks.vehicle(v.id),
-          channels: ['in_app', 'push'],
-          forceChannels: true,
-        });
+      const payload = {
+        type: 'vehicle_stuck',
+        title: `🚩 ${label} stuck ${Math.floor(stuckHours / 24)}d — ${reason}`,
+        body: `${v.customer_name ? `${v.customer_name}'s ` : ''}${label} (VIN …${String(v.vin || '').slice(-8)}) has been ${reason} for ${Math.floor(stuckHours)} hours. Reach out to the customer before they call.`,
+        channels: ['in_app', 'push'] as ('in_app' | 'push')[],
+        forceChannels: true,
+      };
+      // Per-recipient URL: the board for admins, whatever the assignee can
+      // open for the assignee (an installer's board link would bounce).
+      const targetUrls = new Map<string, string>();
+      for (const id of adminIds) targetUrls.set(id, deepLinks.vehicle(v.id));
+      if (v.assigned_to) {
+        targetUrls.set(v.assigned_to, vehicleLinkFor(assigneeRoles.get(v.assigned_to), v.id, v.vin));
+      }
+      const byUrl = new Map<string, string[]>();
+      for (const [id, url] of targetUrls) byUrl.set(url, [...(byUrl.get(url) || []), id]);
+      for (const [url, ids] of byUrl) {
+        await notifyMany(ids, { ...payload, url });
       }
       lastAlerts[v.id] = new Date().toISOString();
       alerted++;
