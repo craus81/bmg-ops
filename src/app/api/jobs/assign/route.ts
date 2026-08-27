@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
-import { deepLinks } from '@/lib/deep-links';
+import { deepLinks, vehicleLinkFor } from '@/lib/deep-links';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
@@ -96,12 +96,30 @@ export async function POST(req: NextRequest) {
         : `You've been assigned to a new ${typeLabel.toLowerCase()}.`;
 
       console.log(`[assign] Sending assignment notification to ${userIds.length} users:`, userIds);
-      await notifyMany(userIds, {
-        type: 'assignment',
-        title,
-        body,
-        url: jobType === 'graphics_job' ? deepLinks.graphicsJob(jobId) : deepLinks.vehicle(jobId),
-      }).catch(err => console.warn('Assignment notification error:', err));
+      const payload = { type: 'assignment', title, body };
+      if (jobType === 'graphics_job') {
+        await notifyMany(userIds, { ...payload, url: deepLinks.graphicsJob(jobId) })
+          .catch(err => console.warn('Assignment notification error:', err));
+      } else {
+        // Vehicle assignees can be external installers, whose /tracking link
+        // would bounce off the in_shop gate — build each recipient's URL from
+        // their roles (board for staff, pick-list for installers).
+        const [{ data: checkin }, { data: recipients }] = await Promise.all([
+          supabase.from('fleet_checkins').select('vin').eq('id', jobId).maybeSingle(),
+          supabase.from('profiles').select('id, role, roles').in('id', userIds),
+        ]);
+        const rolesOf = (p: any): string[] => (p?.roles?.length ? p.roles : (p?.role ? [p.role] : []));
+        const byUrl = new Map<string, string[]>();
+        for (const uid of userIds) {
+          const p = (recipients || []).find(r => r.id === uid);
+          const url = vehicleLinkFor(rolesOf(p), jobId, checkin?.vin);
+          byUrl.set(url, [...(byUrl.get(url) || []), uid]);
+        }
+        for (const [url, ids] of byUrl) {
+          await notifyMany(ids, { ...payload, url })
+            .catch(err => console.warn('Assignment notification error:', err));
+        }
+      }
 
       // Mark as notified
       await supabase
