@@ -91,7 +91,8 @@ const BLANK = {
 
 export default function PartCategoryRulesPage() {
   const router = useRouter();
-  const { isAdmin, user, loading: authLoading } = useAuth();
+  const { hasFeature, user, loading: authLoading } = useAuth();
+  const canPartAdmin = hasFeature('part_admin');
   const dialog = useDialog();
 
   const [rules, setRules] = useState<Rule[]>([]);
@@ -109,8 +110,8 @@ export default function PartCategoryRulesPage() {
 
   useEffect(() => {
     if (authLoading || !user) return; // role flags resolve after auth loads
-    if (!isAdmin) router.push('/home');
-  }, [authLoading, user, isAdmin, router]);
+    if (!canPartAdmin) router.push('/home');
+  }, [authLoading, user, canPartAdmin, router]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -127,7 +128,7 @@ export default function PartCategoryRulesPage() {
     }
     setLoading(false);
   }, []);
-  useEffect(() => { if (isAdmin) load(); }, [isAdmin, load]);
+  useEffect(() => { if (canPartAdmin) load(); }, [canPartAdmin, load]);
 
   const categoryName = (id: string) => categories.find(c => c.id === id)?.name || 'Unknown category';
   const fieldList = (fields: string[]) =>
@@ -258,7 +259,7 @@ export default function PartCategoryRulesPage() {
     setSweeping(false);
   };
 
-  if (!user || !isAdmin) return null;
+  if (!user || !canPartAdmin) return null;
 
   const previewCount = preview
     ? preview.matchedByRule[preview.candidateRuleId || ''] ?? 0

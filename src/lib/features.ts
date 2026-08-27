@@ -30,6 +30,7 @@ export const FEATURES = {
   bulk_upload: 'Bulk Upload (Templates)',
   proof_search: 'Proof Search',
   payroll: 'Payroll & Pay Rates',
+  part_admin: 'Part Admin (rules, dimensions, interiors)',
   invoice_admin: 'Invoice Locations',
   data_import: 'Data Import',
   proof_admin: 'Proof Sweep',
