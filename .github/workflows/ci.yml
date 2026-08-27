@@ -30,6 +30,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Fails on files nothing imports (knip; config in knip.json). Keeps the
+      # dead set at zero after the 2026-08 audit's ~1,500-line cleanup.
+      - name: Dead code (unused files)
+        run: npm run deadcode
+
       - name: Test
         run: npm test
 

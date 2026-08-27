@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint --dir src",
     "typecheck": "tsc --noEmit",
+    "deadcode": "knip --include files",
     "test": "vitest run",
     "test:watch": "vitest",
     "cap:sync": "npx cap sync",
@@ -65,6 +66,7 @@
     "@types/three": "^0.169.0",
     "eslint": "^8.57.1",
     "eslint-config-next": "^14.2.35",
+    "knip": "^6.32.3",
     "pg": "^8.21.0",
     "typescript": "^5.5.0",
     "vitest": "^2.1.9"
