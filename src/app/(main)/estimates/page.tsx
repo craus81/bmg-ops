@@ -20,6 +20,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
 import NumberInput from '@/components/NumberInput';
+import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
 
 interface Part {
   id: string;
@@ -524,6 +525,11 @@ export default function EstimatesPage() {
   const [partResults, setPartResults] = useState<Part[]>([]);
   const [partSearching, setPartSearching] = useState(false);
   const partSearchRef = useRef<HTMLInputElement>(null);
+  // "+ New part" without leaving the estimate (admin-only — the create-item
+  // API requires the admin role). Launched from the part search dropdown
+  // (forLineKey null → lands as a new line) or from a custom line's matcher
+  // (forLineKey set → resolves that line to the just-created item).
+  const [createPartCtx, setCreatePartCtx] = useState<{ query: string; forLineKey: string | null } | null>(null);
 
   // Per-line NetSuite item matcher — lets a custom line (typed description +
   // price, no item) get resolved to a real catalog item without deleting and
@@ -854,7 +860,7 @@ export default function EstimatesPage() {
   const matchLineToPart = (key: string, part: Part) => {
     setLines(prev => prev.map(l => l.key === key ? {
       ...l,
-      part_id: part.id,
+      part_id: part.id || null,
       netsuite_item_id: part.netsuite_id,
       item_number: part.item_number,
       description: l.description || part.display_name || part.description,
@@ -867,11 +873,30 @@ export default function EstimatesPage() {
     setLineMatchResults([]);
   };
 
+  // A part just created in NetSuite (CreateNetsuiteItemModal) as a builder
+  // Part. When the local catalog mirror failed, `id` is NetSuite's internal
+  // id rather than a netsuite_parts uuid — it must not become part_id (the
+  // FK would reject the save), so blank it; netsuite_item_id alone still
+  // carries the line onto the pushed Estimate.
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const partFromCreated = (created: CreatedPart): Part => ({
+    id: UUID_RE.test(created.id) ? created.id : '',
+    netsuite_id: created.netsuite_id || '',
+    item_number: created.item_number,
+    display_name: created.display_name || created.item_number,
+    description: created.display_name || created.item_number,
+    sales_price: created.sales_price || 0,
+    labor_hours: 0,
+    catalog: created.catalog || 'upfit',
+    purchase_price: null,
+    avg_install_cost: null,
+  });
+
   // ── Add part as line item ──
   const addPartLine = (part: Part) => {
     const line: LineItem = {
       key: genKey(),
-      part_id: part.id,
+      part_id: part.id || null,
       netsuite_item_id: part.netsuite_id,
       item_number: part.item_number,
       description: part.display_name || part.description || part.item_number,
@@ -2640,7 +2665,7 @@ export default function EstimatesPage() {
                 Save as Package
               </button>
             )}
-            {partResults.length > 0 && (
+            {(partResults.length > 0 || (isAdmin && !partSearching && partSearch.trim().length >= 2)) && (
               <div style={{
                 position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
                 background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px',
@@ -2670,6 +2695,21 @@ export default function EstimatesPage() {
                     </div>
                   </button>
                 ))}
+                {/* Not in the catalog yet → create it in NetSuite right here
+                    and it lands as a line (admin-only: the create-item API
+                    requires the admin role). */}
+                {isAdmin && !partSearching && partSearch.trim().length >= 2 && (
+                  <button
+                    onClick={() => setCreatePartCtx({ query: partSearch.trim(), forLineKey: null })}
+                    style={{
+                      width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none',
+                      background: 'rgba(34,197,94,0.08)', color: '#22c55e', fontSize: '12px',
+                      fontWeight: 700, cursor: 'pointer',
+                    }}
+                  >
+                    ＋ {partResults.length === 0 ? 'No catalog match — create' : 'Not listed? Create'} &ldquo;{partSearch.trim()}&rdquo; as a new part…
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -2934,9 +2974,23 @@ export default function EstimatesPage() {
                           </div>
                         )}
                         {lineMatchQuery.length >= 2 && lineMatchResults.length === 0 && (
-                          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                            No catalog items match. Ask an admin to add it via Parts Sync.
-                          </div>
+                          isAdmin ? (
+                            <button
+                              onClick={() => setCreatePartCtx({ query: lineMatchQuery.trim(), forLineKey: line.key })}
+                              style={{
+                                width: '100%', textAlign: 'left', marginTop: '4px', padding: '8px 10px',
+                                borderRadius: '6px', border: '1px solid rgba(34,197,94,0.3)',
+                                background: 'rgba(34,197,94,0.08)', color: '#22c55e',
+                                fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                              }}
+                            >
+                              ＋ No catalog match — create &ldquo;{lineMatchQuery.trim()}&rdquo; in NetSuite and use it for this line…
+                            </button>
+                          ) : (
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                              No catalog items match. Ask an admin to add it via Parts Sync.
+                            </div>
+                          )
                         )}
                       </div>
                     )}
@@ -3593,6 +3647,30 @@ export default function EstimatesPage() {
           avg_install_cost: p.avg_install_cost,
         })}
       />
+
+      {/* "+ New part" from the search dropdown or a custom line's matcher:
+          creates the item in NetSuite + the local catalog, then lands it on
+          this estimate without leaving the builder. Seeded from the query —
+          and, for the line flow, from what the rep already typed on the line. */}
+      {createPartCtx && (() => {
+        const forLine = createPartCtx.forLineKey ? lines.find(l => l.key === createPartCtx.forLineKey) : undefined;
+        return (
+          <CreateNetsuiteItemModal
+            initialPartNumber={createPartCtx.query || forLine?.item_number || ''}
+            initialDisplayName={forLine?.description || null}
+            initialPrice={forLine && forLine.unit_price > 0 ? forLine.unit_price : null}
+            catalog="upfit"
+            chooseCatalog
+            onClose={() => setCreatePartCtx(null)}
+            onCreated={created => {
+              const p = partFromCreated(created);
+              if (createPartCtx.forLineKey) matchLineToPart(createPartCtx.forLineKey, p);
+              else addPartLine(p);
+              setCreatePartCtx(null);
+            }}
+          />
+        );
+      })()}
     </div>
   );
 }
