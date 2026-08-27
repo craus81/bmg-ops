@@ -185,6 +185,12 @@ export async function POST(req: NextRequest) {
           effectiveStatus = undefined;
         } else if (existing && SALES_STAGES.includes(existing.status)) {
           effectiveStatus = existing.status;
+        } else if (existing && existing.status === 'pushed' && requestedStatus === 'draft') {
+          // No flow legitimately demotes 'pushed' to 'draft' via this route —
+          // the Save button sends 'pushed' for pushed records and the push
+          // route documents "'pushed' only replaces 'draft'". A 'draft' here
+          // is a stale client default (the Add Graphics bug); keep 'pushed'.
+          effectiveStatus = 'pushed';
         }
       }
 
