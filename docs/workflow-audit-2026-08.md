@@ -76,7 +76,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Next** — close the workflow chain (10–16) | ⚠️ mostly done | PRs #635–#640; #14 CNI notifications fully wired (#640–#646), but "kill the legacy CNI invoice flow" and the "graphics→CNI job bridge" remain open. |
 | **Soon** — the role cleanup (17–20) | ✅ done | #17 infra + owner-page gates (#649), #18a registry (#648), #18b all ten tools keyed (#652, #654, #655), #19 install roles (#650), #20 dead-end menus (#651). The ungated-by-URL pages are gated and the dev route deleted (#656). An adversarial gate audit (every tile/nav/redirect/deep-link entry point traced per role) confirmed 20 regressions, all fixed: client dead-clicks + two redirect loops (#657) and per-recipient vehicle notification links (#658). |
 | **Data-integrity bugs to fix in passing** | ✅ done | All 6 re-verified as live, then fixed: pushed-estimate delete (#660), Add-Graphics demotion (#661), stranded allocations — trigger + backfill, migration 228 (#662), graphics history trigger, migration 229 (#663), the 1000-row-cap sweep across payroll/payouts/credits/pay-rates/scans/invoices/pos/dashboard (#664), and the Open Quotes tile (#665). |
-| **Hygiene** — delete the dead set | ⚠️ mostly done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification. Dormant tables intentionally not dropped (needs owner sign-off — data loss is irreversible). CI dead-code check still open. |
+| **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables intentionally not dropped (needs owner sign-off — data loss is irreversible). |
 
 Per-item status is tagged inline in Part 5 below.
 
@@ -687,7 +687,12 @@ migration 059) — the tables themselves are NOT dropped here; dropping
 production tables destroys whatever rows they hold and needs an explicit
 owner sign-off first.
 
-❌ Still open: the CI dead-code check so the next audit starts at zero.
+✅ CI dead-code check: knip (`npm run deadcode`, `--include files`, config in
+`knip.json` ignoring runtime-served `public/` and standalone `scripts/`) runs
+in ci.yml between Lint and Test and fails the build on any file nothing
+imports. Its first run caught two more orphans — `ui/Button.tsx` and
+`ui/ButtonShadcn.tsx`, the deleted button-demo page's subjects — now gone
+too. The next audit starts at zero.
 
 ---
 
