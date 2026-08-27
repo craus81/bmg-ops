@@ -357,9 +357,18 @@ export async function DELETE(req: NextRequest) {
     // If pushed to NetSuite, delete from NS first
     if (estimate?.netsuite_estimate_id) {
       try {
+        // Forward the caller's credentials: a server-side fetch carries no
+        // cookies, so without these the push route's requireStaff 401s and
+        // deleting a pushed estimate fails every time ("Failed to delete from
+        // NetSuite: Unauthorized"). The cookie header is how browser sessions
+        // authenticate; authorization covers bearer-token callers.
         const res = await fetch(new URL('/api/estimates/push', req.url).toString(), {
           method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(req.headers.get('cookie') ? { cookie: req.headers.get('cookie')! } : {}),
+            ...(req.headers.get('authorization') ? { authorization: req.headers.get('authorization')! } : {}),
+          },
           body: JSON.stringify({ estimateId: id }),
         });
         const nsResult = await res.json();
