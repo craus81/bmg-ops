@@ -1104,13 +1104,32 @@ export default function EstimatesPage() {
         created_by: user?.id,
       };
 
-      const res = await fetch('/api/estimates', {
+      let res = await fetch('/api/estimates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
 
-      const data = await res.json();
+      let data = await res.json();
+
+      // Revision lock: the customer signed this document, so its contents are
+      // frozen. An admin can still save with a recorded reason — ask for it
+      // and retry once. Anyone else gets the plain refusal below.
+      if (res.status === 409 && data.step === 'accepted_locked' && data.canOverride) {
+        const reason = await dialog.prompt(
+          'This estimate was accepted by the customer, so its contents are locked. Saving anyway is recorded in the audit log. Why are you changing it?',
+          '',
+          { placeholder: 'e.g. customer approved the added part by phone', confirmLabel: 'Save anyway' },
+        );
+        if (!reason?.trim()) { setSaving(false); return undefined; }
+        res = await fetch('/api/estimates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...body, overrideReason: reason.trim() }),
+        });
+        data = await res.json();
+      }
+
       if (data.success) {
         // The just-saved state is the new baseline — retire the local backup
         // ('new' on a first save, which then re-keys under the real id).

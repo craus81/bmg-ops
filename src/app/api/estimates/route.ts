@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
+import { logAudit } from '@/lib/audit';
 import { validateBody, z } from '@/lib/validate';
 import { computeTotals } from '@/lib/estimate-totals';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
@@ -62,6 +63,9 @@ const UpsertEstimateSchema = z.object({
   vehicle_roof: z.string().max(40).optional().nullable(),
   vehicle_cab: z.string().max(40).optional().nullable(),
   vehicle_bed: z.string().max(40).optional().nullable(),
+  // Admin override for the revision lock on a customer-accepted estimate.
+  // Recorded in the audit log; never stored on the estimate itself.
+  overrideReason: z.string().trim().max(500).optional(),
 });
 
 const DeleteSchema = z.object({ id: z.string().uuid() });
@@ -144,6 +148,7 @@ export async function POST(req: NextRequest) {
     vin, unit_number, po_number, expiration_date, fleet_checkin_id,
     vehicle_platform_id, vehicle_other, vehicle_year, vehicle_wheelbase,
     vehicle_roof, vehicle_cab, vehicle_bed,
+    overrideReason,
   } = parsed.data;
 
   try {
@@ -163,6 +168,59 @@ export async function POST(req: NextRequest) {
     const totals = computeTotals(lines, effectiveTaxRate, !!tax_exempt, effectiveLaborRate, override);
 
     if (id) {
+      // ── Revision lock ─────────────────────────────────────────────────
+      // The customer signs a hashed snapshot of this document; letting a
+      // later Save rewrite the lines, prices or totals means they approved
+      // one thing and the shop builds another, with the live approval link
+      // rendering whatever the rows say now. Once the estimate is accepted
+      // the content is frozen -- an admin can still save with a recorded
+      // reason (owner decision, 2026-08-28), matching the convert-to-SO
+      // override in ./convert-to-so/route.ts:84-104.
+      //
+      // The sibling add-lines route already refuses accepted estimates
+      // (add-lines/route.ts:61-63), so this closes the remaining door.
+      const { data: locked, error: lockReadErr } = await supabase
+        .from('estimates')
+        .select('customer_approved, status, estimate_number, grand_total')
+        .eq('id', id)
+        .maybeSingle();
+      if (lockReadErr) {
+        // Fail closed: never rewrite a document we cannot confirm is unsigned.
+        return NextResponse.json({ error: 'Could not verify the estimate before saving. Please try again.' }, { status: 503 });
+      }
+      // Gate on EITHER flag. The approval route sets both, but
+      // convert-to-so (:247) and graphics/from-estimate (:51) write
+      // status:'accepted' without touching customer_approved -- checking only
+      // the boolean would leave those estimates editable. add-lines gates on
+      // status for the same reason.
+      if (locked?.customer_approved || locked?.status === 'accepted') {
+        const roles: string[] = auth.profile?.roles?.length > 0 ? auth.profile.roles : [auth.profile?.role];
+        const isAdminActor = roles.includes('admin') || roles.includes('super_admin');
+        const reason = typeof overrideReason === 'string' ? overrideReason.trim() : '';
+        if (!isAdminActor || !reason) {
+          return NextResponse.json({
+            error: isAdminActor
+              ? 'This estimate was accepted by the customer and its contents are locked. Provide an override reason to save anyway.'
+              : 'This estimate was accepted by the customer and its contents are locked. Start a new estimate, or ask an admin to override with a recorded reason.',
+            step: 'accepted_locked',
+            canOverride: isAdminActor,
+          }, { status: 409 });
+        }
+        await logAudit(supabase, {
+          actorId: auth.user.id,
+          table: 'estimates',
+          recordId: id,
+          action: 'estimate_edit_after_approval',
+          detail: {
+            reason,
+            estimate_number: locked.estimate_number,
+            status: locked.status,
+            grand_total_before: locked.grand_total,
+            grand_total_after: totals.grand_total,
+          },
+        });
+      }
+
       // ── UPDATE existing estimate ──
       // A builder Save/Sync only ever submits 'draft' or 'pushed'. The sales
       // stages ('sent'/'accepted'/'rejected') are owned by the send-for-approval
