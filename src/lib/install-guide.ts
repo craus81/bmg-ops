@@ -214,7 +214,7 @@ export function drawAnnotations(
   // Divisors match the editor's (install-guides/[id]/page.tsx) so what you
   // draw is what prints. Field feedback: the original /60 text and /600
   // lines dwarfed the artwork.
-  const lineW = Math.max(1.5, imgW / 900);
+  const lineW = Math.max(1, imgW / 1400);
   const fontSize = Math.max(12, imgW / 110);
   const arrowLength = fontSize * 0.8;
   const arrowWidth = fontSize * 0.55;
