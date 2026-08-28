@@ -80,7 +80,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Soon** — the role cleanup (17–20) | ✅ done | #17 infra + owner-page gates (#649), #18a registry (#648), #18b all ten tools keyed (#652, #654, #655), #19 install roles (#650), #20 dead-end menus (#651). The ungated-by-URL pages are gated and the dev route deleted (#656). An adversarial gate audit (every tile/nav/redirect/deep-link entry point traced per role) confirmed 20 regressions, all fixed: client dead-clicks + two redirect loops (#657) and per-recipient vehicle notification links (#658). |
 | **Data-integrity bugs to fix in passing** | ✅ done | All 6 re-verified as live, then fixed: pushed-estimate delete (#660), Add-Graphics demotion (#661), stranded allocations — trigger + backfill, migration 228 (#662), graphics history trigger, migration 229 (#663), the 1000-row-cap sweep across payroll/payouts/credits/pay-rates/scans/invoices/pos/dashboard (#664), and the Open Quotes tile (#665). |
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
-| **Round 2** — re-verified 2026-08-28 (Part 6) | 🔄 in progress | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Two shipped since: profile privilege escalation (a CRITICAL this document never had — migration 233, #679) and graphics-job delete (migration 234, #680). Five Round 2 items are blocked on an owner decision. |
+| **Round 2** — re-verified 2026-08-28 (Part 6) | 🔄 in progress | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. The whole **Now** block plus the revision lock has since shipped (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. |
 
 Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap.
 
@@ -805,7 +805,7 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
 1. ✅ **Profile privilege escalation** — migration 233. _(#679)_
 2. ✅ **Any staff role could delete a graphics job** — migration 234, plus the
    client `.select()` that made a blocked delete look like a success. _(#680)_
-3. ❌ **`/api/auth/signup` profile takeover.** Unauthenticated service-role
+3. ✅ **`/api/auth/signup` profile takeover.** _(#682.)_ Unauthenticated service-role
    upsert on a client-supplied `userId` resets any existing user to
    `status:'pending'`, `role:'installer'` — an account-lockout primitive.
    Fix designed: narrow the write rather than reject it (prove ownership
@@ -814,31 +814,41 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
    update path). Rejecting outright risks orphaning accounts, because the
    `handle_new_user()` trigger this would rely on is defined but never
    attached to `auth.users`.
-4. ❌ **AI agent reaches sensitive tables.** The per-query gate is real now
+4. ✅ **AI agent reaches sensitive tables** — the sharpest edges. _(#683: credentials and approval tokens blocked for every role. Still a regex stopgap; the durable `ai_ro` view schema remains open below.)_ The per-query gate is real now
    (server-side roles, financial-table blocks, audit rows) but it is a
    *denylist* of five pay tables — so `credit_applications` (EINs, bank
    references) and `profiles` are still reachable through the chat by any
    non-customer role, including external installers. Needs an allowlist, and
    table extraction rather than a regex on the SQL string.
-5. ❌ **New-graphics-job notification fan-out is dead** — the browser reads
+5. ✅ **New-graphics-job notification fan-out is dead** — the browser read
    other users' `notification_preferences`, which RLS returns empty, so the
-   recipient list is always zero. A correct server-side precedent already
-   exists (`/api/graphics/notify-assignees`). _Owner decision: audience._
-6. ❌ **Printing is never gated on proof approval.** _Owner decision: who may
-   override, and what counts as a legitimate exception (reprints, internal
-   test prints)._
-7. ❌ **Graphics status: any state to any state, from the browser.** Precedent
-   exists in `vehicle-tracking/update-status`. _Owner decision: which
-   backward and skip-ahead transitions the floor actually uses._
+   recipient list was always zero and no such notification had ever been
+   delivered. _(#684 — moved onto `/api/graphics/notify-assignees` as a third
+   `created` audience, resolved BY ROLE: graphics production + admins. The
+   `notify_new_job` toggle is deliberately ignored; it defaults to true, so
+   honoring it would have silently opted in everyone who ever saved Settings.)_
+6. ✅ **Printing is never gated on proof approval.** _(#685 — printing without
+   an approved proof is now an admin override with a recorded reason, matching
+   the convert-to-SO and vehicle-completion precedents. Only the move INTO
+   `printing` is gated, so a late approval can't strand a job mid-pipeline.)_
+7. ✅ **Graphics status: any state to any state, from the browser.** _(#685 —
+   rules in a pure tested module: forward skips free (the floor runs ahead of
+   the buttons), backward moves need a typed reason into job history, and
+   flagged/revision/cancelled stay free in both directions. A test asserts
+   every value in `GRAPHICS_STATUS_ORDER` has a rule. Still a client-side
+   gate — the durable shape is a server route fronting the write, which is
+   why the rules live in a server-safe module.)_
 
 ### Next — estimate integrity
 
-8. ❌ **No revision lock on an accepted estimate.** The customer signs a hashed
-   snapshot; staff can then silently change what they signed, and the live
-   approval link renders current rows. _Owner decision: whether an admin may
-   override with a recorded reason (the `convert-to-SO` precedent) or the lock
-   is absolute — there is no clone/duplicate feature, so an absolute lock
-   means "start over"._
+8. ✅ **No revision lock on an accepted estimate.** _(#686 — contents freeze on
+   acceptance; an admin can still save with a typed reason, logged as
+   `estimate_edit_after_approval` with the before/after grand total. Gated on
+   `customer_approved` OR `status = 'accepted'`: `convert-to-so` and
+   `graphics/from-estimate` set the status without the boolean, so a
+   boolean-only check would have left exactly those estimates editable.
+   Still no clone/duplicate feature, so "start a new estimate" means retyping
+   — the natural companion to this lock.)_
 9. ❌ **All estimate APIs are `requireStaff` only** — shop/field techs and
    finance can price, push, email and delete any estimate.
 10. ❌ **Pushed NetSuite estimates are left open forever** (`createdfrom` NULL),
@@ -881,9 +891,19 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
     job the whole app exists to invoice.
 
 **How to read the ❌ items:** each was verified open at `0c48f1f` with
-`file:line` evidence. Items 3-8 have fix designs that survived adversarial
-review; the five marked _owner decision_ are blocked on a judgement call where
-both answers are defensible and guessing wrong disrupts real work.
+`file:line` evidence.
+
+**Shipped 2026-08-28 (items 1-8):** the entire Now block plus the revision
+lock — #679, #680, #682, #683, #684, #685, #686. Four owner decisions were
+taken that day and built the same session: signed estimates lock with an admin
+override, graphics forward-skips stay free while backward moves need a reason,
+printing without an approved proof is admin-with-reason, and new-job
+notifications go to the graphics team by role.
+
+Of the five items that needed a judgement call, only **R2 going private**
+(item 19) is still open — deliberately, because it breaks images in every
+customer email already sent and deserves its own conversation rather than a
+quick answer.
 
 ## Appendix — the sixteen source reports
 
