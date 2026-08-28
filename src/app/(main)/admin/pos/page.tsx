@@ -205,6 +205,9 @@ export default function POsPage() {
   const [parseError, setParseError] = useState('');
   const [importing, setImporting] = useState(false);
   const [pdfOverwriteExisting, setPdfOverwriteExisting] = useState<any>(null); // existing PO to overwrite
+  // Shared by both commit buttons in the import panel (import, and import +
+  // graphics job) so they can't drift on when they're clickable.
+  const importDisabled = importing || importLines.filter((l) => l.include).length === 0;
 
   // Gmail Import state
   const [showEmailImport, setShowEmailImport] = useState(false);
@@ -813,7 +816,7 @@ export default function POsPage() {
     setImportLines((prev) => prev.map((l, i) => i === idx ? { ...l, final_price: parseFloat(price) || 0 } : l));
   };
 
-  const handleImportPO = async () => {
+  const handleImportPO = async (andGraphics = false) => {
     if (!parsedPO || !user) return;
     const linesToImport = importLines.filter((l) => l.include);
     if (linesToImport.length === 0) return;
@@ -891,10 +894,11 @@ export default function POsPage() {
     setPdfOverwriteExisting(null);
     setShowImport(false);
     setImporting(false);
+    if (andGraphics) openGraphicsJobForPo(po.id);
   };
 
   // Overwrite existing PO with new PDF data
-  const handleOverwritePO = async () => {
+  const handleOverwritePO = async (andGraphics = false) => {
     if (!parsedPO || !user || !pdfOverwriteExisting) return;
     const linesToImport = importLines.filter((l) => l.include);
     if (linesToImport.length === 0) return;
@@ -969,6 +973,7 @@ export default function POsPage() {
     setPdfOverwriteExisting(null);
     setShowImport(false);
     setImporting(false);
+    if (andGraphics) openGraphicsJobForPo(existingPo.id);
   };
 
   const cancelImport = () => {
@@ -1039,6 +1044,14 @@ export default function POsPage() {
     setCreateShipTo({});
     setShowCreate(false);
     return po;
+  };
+
+  // Hand off from an import straight into the graphics wizard. Same deep
+  // link the PO detail page's "+ Graphics Job" buttons use: the wizard
+  // prefills itself from the PO and opens on its details step, so nothing is
+  // created behind the user's back — they review and submit there.
+  const openGraphicsJobForPo = (poId: string) => {
+    router.push(`/graphics?new=1&fromPo=${poId}`);
   };
 
   const handleCreateAndGraphics = async () => {
@@ -1507,7 +1520,7 @@ export default function POsPage() {
   };
 
   // Confirm import with reviewed/edited extraction data
-  const confirmReviewedImport = async () => {
+  const confirmReviewedImport = async (andGraphics = false) => {
     if (!reviewingExtraction) return;
     const { messageId, extracted, attachmentIds, attachmentFilenames } = reviewingExtraction;
     setImportingEmailId(messageId);
@@ -1543,6 +1556,13 @@ export default function POsPage() {
             setEmailEmails(prev => prev.filter(e => e.messageId !== messageId));
           }
           setPos(await loadPoBook());
+          if (andGraphics && data.poId) {
+            // Leaving mid-queue is safe: anything not yet reviewed stayed in
+            // pendingPOs above, so the queue is still there on return.
+            setImportingEmailId(null);
+            openGraphicsJobForPo(data.poId);
+            return;
+          }
         }
         advanceReviewQueue();
       }
@@ -2655,13 +2675,16 @@ export default function POsPage() {
               </div>
             )}
 
-            {/* Action buttons */}
-            <div style={{ display: 'flex', gap: '8px' }}>
+            {/* Action buttons — import on its own, and import + graphics job
+                in one go, since most reviewed POs need a job anyway and
+                finding the PO again afterwards to start one is the slow
+                part. Both run the same import. */}
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               <button
-                onClick={confirmReviewedImport}
+                onClick={() => confirmReviewedImport()}
                 disabled={importingEmailId !== null || !reviewingExtraction.extracted.lines?.length}
                 style={{
-                  flex: 1, padding: '12px', borderRadius: '10px',
+                  flex: '1 1 150px', padding: '12px', borderRadius: '10px',
                   background: importingEmailId ? 'var(--subtle-bg)' : '#22c55e',
                   color: '#fff', fontWeight: 800, fontSize: '13px', border: 'none', cursor: 'pointer',
                   opacity: importingEmailId || !reviewingExtraction.extracted.lines?.length ? 0.5 : 1,
@@ -2669,11 +2692,26 @@ export default function POsPage() {
               >
                 {importingEmailId ? 'Importing...' : `Import ${reviewingExtraction.extracted.lines?.length || 0} Lines`}
               </button>
+              <button
+                onClick={() => confirmReviewedImport(true)}
+                disabled={importingEmailId !== null || !reviewingExtraction.extracted.lines?.length}
+                title={reviewQueue.length > 0
+                  ? 'Import these lines, then open the graphics-job form filled in from this PO. The other POs in this review queue stay queued.'
+                  : 'Import these lines, then open the graphics-job form already filled in from this PO'}
+                style={{
+                  flex: '1 1 190px', padding: '12px', borderRadius: '10px',
+                  background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.4)',
+                  color: '#60a5fa', fontWeight: 800, fontSize: '13px', cursor: 'pointer',
+                  opacity: importingEmailId || !reviewingExtraction.extracted.lines?.length ? 0.5 : 1,
+                }}
+              >
+                {`Import ${reviewingExtraction.extracted.lines?.length || 0} Lines`} + Graphics Job
+              </button>
               {(reviewingExtraction.queuePos || reviewQueue.length > 0) && (
                 <button
                   onClick={advanceReviewQueue}
                   title="Skip this PO without importing and move to the next one. The email stays in the list so you can come back to it."
-                  style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.35)', color: '#60a5fa', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+                  style={{ flex: '1 1 110px', padding: '12px', borderRadius: '10px', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.35)', color: '#60a5fa', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
                 >
                   Skip {reviewQueue.length > 0 ? '→' : ''}
                 </button>
@@ -2971,18 +3009,35 @@ export default function POsPage() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+          {/* Import on its own, and import + graphics job in one go — most
+              imported POs need a job anyway, and doing it here saves finding
+              the PO again to start one. Both commit the same import; the
+              combined one then opens the prefilled wizard. */}
+          <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
             <button
-              onClick={pdfOverwriteExisting ? handleOverwritePO : handleImportPO}
-              disabled={importing || importLines.filter((l) => l.include).length === 0}
+              onClick={() => (pdfOverwriteExisting ? handleOverwritePO() : handleImportPO())}
+              disabled={importDisabled}
               style={{
-                flex: 1, padding: '12px', borderRadius: '10px',
+                flex: '1 1 150px', padding: '12px', borderRadius: '10px',
                 background: pdfOverwriteExisting ? '#f59e0b' : '#22c55e',
                 color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none',
-                opacity: importing || importLines.filter((l) => l.include).length === 0 ? 0.4 : 1,
+                opacity: importDisabled ? 0.4 : 1,
               }}
             >
               {importing ? (pdfOverwriteExisting ? 'Overwriting...' : 'Importing...') : (pdfOverwriteExisting ? 'Overwrite PO' : 'Import PO')}
+            </button>
+            <button
+              onClick={() => (pdfOverwriteExisting ? handleOverwritePO(true) : handleImportPO(true))}
+              disabled={importDisabled}
+              title="Import the lines, then open the graphics-job form already filled in from this PO"
+              style={{
+                flex: '1 1 190px', padding: '12px', borderRadius: '10px',
+                background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.4)',
+                color: '#60a5fa', fontWeight: 800, fontSize: '14px',
+                opacity: importDisabled ? 0.4 : 1,
+              }}
+            >
+              {pdfOverwriteExisting ? 'Overwrite PO' : 'Import PO'} + Graphics Job
             </button>
             <button
               onClick={cancelImport}
