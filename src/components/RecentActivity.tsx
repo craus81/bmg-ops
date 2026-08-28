@@ -22,6 +22,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { deepLinks } from '@/lib/deep-links';
 import { GRAPHICS_STATUS_LABELS, VEHICLE_STATUS_LABELS } from '@/lib/types';
+import { estimateHeadlineNumber } from '@/lib/estimate-number';
 
 interface ActivityItem {
   key: string;
@@ -99,7 +100,7 @@ export default function RecentActivity() {
           .eq('changed_by', uid).gte('created_at', cutoff)
           .order('created_at', { ascending: false }).limit(12),
         supabase.from('estimates')
-          .select('id, estimate_number, title, customer_name, created_at, updated_at')
+          .select('id, estimate_number, netsuite_estimate_number, title, customer_name, created_at, updated_at')
           .eq('created_by', uid).gte('updated_at', cutoff)
           .order('updated_at', { ascending: false }).limit(8),
         supabase.from('wrap_quotes')
@@ -155,7 +156,7 @@ export default function RecentActivity() {
       for (const e of rows(estRes)) {
         out.push({
           key: `est-${e.id}`, when: e.updated_at || e.created_at, tag: 'EST',
-          title: `${wasEdited(e.created_at, e.updated_at) ? 'Updated' : 'Created'} estimate ${e.estimate_number}`,
+          title: `${wasEdited(e.created_at, e.updated_at) ? 'Updated' : 'Created'} estimate ${estimateHeadlineNumber(e)}`,
           subtitle: [e.title, e.customer_name].filter(Boolean).join(' · '),
           path: deepLinks.estimate(e.id),
         });

@@ -13,6 +13,7 @@ import { createContext, useContext, useState, useCallback, ReactNode } from 'rea
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { deepLinks } from '@/lib/deep-links';
+import { estimateHeadlineNumber, estimateAltNumber } from '@/lib/estimate-number';
 
 export type PopoutType =
   | 'purchase_orders'
@@ -101,7 +102,7 @@ async function fetchItem(
     case 'estimates': {
       const { data } = await supabase
         .from('estimates')
-        .select('id, estimate_number, title, status, grand_total')
+        .select('id, estimate_number, netsuite_estimate_number, title, status, grand_total')
         .eq('id', id).maybeSingle();
       return data;
     }
@@ -254,7 +255,8 @@ export function renderDetail(type: PopoutType, item: any) {
     case 'estimates':
       return (
         <div>
-          {detailRow('Estimate #', item.estimate_number)}
+          {detailRow('Estimate #', estimateHeadlineNumber(item))}
+          {detailRow('FleetSuite #', estimateAltNumber(item))}
           {detailRow('Title', item.title)}
           {detailRow('Status', item.status)}
           {detailRow('Total', item.total > 0 ? formatCurrency(item.total) : null)}

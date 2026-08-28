@@ -13,6 +13,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from './fetch-all';
+import { estimateHeadlineNumber, estimateAltNumber } from './estimate-number';
 
 export type QuoteListStatus = 'working' | 'sent' | 'won' | 'lost' | 'all';
 
@@ -29,7 +30,11 @@ export interface QuoteFollowUpNote {
 export interface QuoteListItem {
   type: 'estimate' | 'wrap';
   id: string;
+  /** The number staff look for: NetSuite's once an estimate is pushed
+   *  (estimate-number.ts), the builder's own number otherwise. */
   number: string;
+  /** The other number when a pushed estimate has two; null for wrap quotes. */
+  altNumber: string | null;
   title: string;
   customer: string;
   total: number;
@@ -73,7 +78,7 @@ export async function loadQuoteListItems(
   const estQuery = () => {
     let q = service
       .from('estimates')
-      .select('id, estimate_number, title, customer_name, grand_total, status, created_by, created_at, sent_for_approval_at, updated_at, last_followup_at, customer_approved_at');
+      .select('id, estimate_number, netsuite_estimate_number, title, customer_name, grand_total, status, created_by, created_at, sent_for_approval_at, updated_at, last_followup_at, customer_approved_at');
     if (status !== 'all') q = q.in('status', EST_STATUSES[status]);
     return q.order('created_at', { ascending: false }).order('id');
   };
@@ -97,7 +102,8 @@ export async function loadQuoteListItems(
     ...(estRes.data || []).map((e: any) => ({
       type: 'estimate' as const,
       id: e.id,
-      number: e.estimate_number,
+      number: estimateHeadlineNumber(e),
+      altNumber: estimateAltNumber(e),
       title: e.title || '',
       customer: e.customer_name || '—',
       total: Number(e.grand_total) || 0,
@@ -117,6 +123,7 @@ export async function loadQuoteListItems(
       type: 'wrap' as const,
       id: w.id,
       number: w.quote_number,
+      altNumber: null,
       title: w.vehicle_description || '',
       customer: (w.customer as any)?.name || '—',
       total: Number(w.total) || 0,

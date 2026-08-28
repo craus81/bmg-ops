@@ -64,11 +64,12 @@ export async function GET(req: NextRequest) {
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
 
-    // Estimates — search by estimate number, customer name, title
+    // Estimates — search by either estimate number (FleetSuite's own and
+    // NetSuite's, since staff may have written down either), customer, title
     supabase
       .from('estimates')
-      .select('id, estimate_number, customer_id, title, status, total, created_at', { count: 'exact' })
-      .or(`estimate_number.ilike.${like},title.ilike.${like}`)
+      .select('id, estimate_number, netsuite_estimate_number, customer_id, title, status, total, created_at', { count: 'exact' })
+      .or(`estimate_number.ilike.${like},netsuite_estimate_number.ilike.${like},title.ilike.${like}`)
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
 
@@ -164,7 +165,7 @@ export async function GET(req: NextRequest) {
       if (customerIds.length > 0) {
         const { data: custEstimates } = await supabase
           .from('estimates')
-          .select('id, estimate_number, customer_id, title, status, total, created_at')
+          .select('id, estimate_number, netsuite_estimate_number, customer_id, title, status, total, created_at')
           .in('customer_id', customerIds)
           .order('created_at', { ascending: false })
           .limit(MAX_PER_GROUP);

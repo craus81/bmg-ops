@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePopout, PopoutType } from '@/components/Popout';
 import { useAuth } from '@/components/AuthProvider';
+import { estimateHeadlineNumber, estimateAltNumber } from '@/lib/estimate-number';
 
 interface UniversalSearchProps {
   open: boolean;
@@ -129,13 +130,15 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
       return (
         <button key={item.id} onClick={select} style={resultBtnStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-            <span style={titleStyle}>{item.estimate_number || 'Estimate'}</span>
+            <span style={titleStyle}>{estimateHeadlineNumber(item) || 'Estimate'}</span>
             <div>
               <span style={{ ...statusBadge, color: statusColor(item.status) }}>{item.status}</span>
               {item.total > 0 && <span style={valueStyle}>{formatCurrency(item.total)}</span>}
             </div>
           </div>
-          <div style={subtitleStyle}>{item.title || ''}{item.created_at ? ` · ${formatDate(item.created_at)}` : ''}</div>
+          <div style={subtitleStyle}>
+            {[item.title || '', estimateAltNumber(item), item.created_at ? formatDate(item.created_at) : ''].filter(Boolean).join(' · ')}
+          </div>
         </button>
       );
 
