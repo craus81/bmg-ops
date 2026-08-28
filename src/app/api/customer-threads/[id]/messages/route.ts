@@ -53,7 +53,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   // Load thread + contact
   const { data: thread, error: tErr } = await supabase
     .from('customer_threads')
-    .select('id, external_contact_id, status')
+    // customer_id rides along so an emailed message lands on that
+    // customer's account history like every other composed send.
+    .select('id, external_contact_id, status, customer_id')
     .eq('id', params.id)
     .single();
   if (tErr || !thread) {
@@ -116,7 +118,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       // delivered/failed — same as SMS already does.
       const { ok, id: resendId } = await sendEmailDetailed(
         contact.email, '[BMG Fleet] Message', html, undefined, undefined, auth.user?.email || undefined, undefined,
-        { kind: 'customer_thread', sentBy: auth.user?.id },
+        { kind: 'customer_thread', sentBy: auth.user?.id, customerId: thread.customer_id || null },
       );
       if (ok && resendId) providerSid = resendId;
       deliveryStatus = ok ? 'sent' : 'failed';
