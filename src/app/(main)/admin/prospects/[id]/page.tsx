@@ -507,31 +507,9 @@ export default function CustomerRecordPage() {
     loadFiles(data.id);
   };
 
-  const [tagInput, setTagInput] = useState('');
-  // Every tag already in use anywhere — the datalist under the + tag input,
-  // so desktop gets a dropdown of options instead of blind free text.
-  const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
-  useEffect(() => {
-    (async () => {
-      const { data } = await fetchAllRows<{ tag: string }>((from, to) =>
-        supabase.from('prospect_tags').select('tag').order('tag').order('id').range(from, to));
-      setTagSuggestions([...new Set((data || []).map(r => r.tag))]);
-    })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- vocabulary loads once
-  }, []);
-  const addTag = async () => {
-    const t = tagInput.trim().toLowerCase();
-    if (!t || !prospect) return;
-    // Already tagged — just clear the input instead of surfacing the raw
-    // unique-constraint error.
-    if (tags.some(x => x.tag === t)) { setTagInput(''); return; }
-    const { data, error } = await supabase.from('prospect_tags').insert({ prospect_id: prospect.id, tag: t }).select().single();
-    if (error || !data) { await dialog.alert(`Could not add the tag: ${error?.message || 'unknown error'}`); return; }
-    setTags(prev => [...prev, data as Tag]);
-    setTagSuggestions(prev => (prev.includes(t) ? prev : [...prev, t].sort()));
-    setTagInput('');
-  };
-
+  // No free-form add path any more: tags come from the controlled
+  // Industry/Partner vocabulary in the header. removeTag stays so the
+  // legacy prospect_tags (incl. auto-generated ones) can still be cleared.
   const removeTag = async (tag: Tag) => {
     const { error } = await supabase.from('prospect_tags').delete().eq('id', tag.id);
     if (error) { await dialog.alert(`Could not remove the tag: ${error.message}`); return; }
@@ -1483,33 +1461,60 @@ export default function CustomerRecordPage() {
           ) : (
             <span style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'var(--warning-bg)', color: 'var(--warning)' }}>Not tracked</span>
           )}
+          {/* Segmentation tags live here, by the name — ONE control, the
+              Industry/Partner vocabulary (customer_tags). The free-form
+              chip input that used to sit here is gone: free text defeats
+              segmentation (migration 187's own rationale for the
+              vocabulary), and having both on this screen meant two places
+              to tag the same customer.
+
+              Existing prospect_tags still show and can still be removed,
+              they just can't be added any more: some are auto-generated
+              ('multilocation' on a multi-location create) and the Customers
+              list still filters on them, so hiding them would strand a
+              filter with no visible cause. */}
+          {custTags.map(t => (
+            <button key={t.tag_id} onClick={() => removeCustTag(t.tag_id)} title={`${t.kind} tag — click to remove`}
+              style={{
+                fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '999px', cursor: 'pointer',
+                background: t.kind === 'partner' ? 'rgba(167,139,250,0.1)' : 'rgba(96,165,250,0.1)',
+                border: `1px solid ${t.kind === 'partner' ? 'rgba(167,139,250,0.3)' : 'rgba(96,165,250,0.3)'}`,
+                color: t.kind === 'partner' ? '#a78bfa' : '#60a5fa',
+              }}>
+              {t.label} ✕
+            </button>
+          ))}
           {tags.map(t => prospect ? (
-            <button key={t.id} onClick={() => removeTag(t)} title="Remove tag" style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '999px', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}>{t.tag} ✕</button>
+            <button key={t.id} onClick={() => removeTag(t)} title="Older free-form tag — click to remove (new tags come from the + tag list)" style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '999px', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}>{t.tag} ✕</button>
           ) : (
             <span key={t.id} style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '999px', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>{t.tag}</span>
           ))}
-          {prospect && (
-            <>
-              {/* Enter, blur, or the + button all commit — Enter used to be
-                  the ONLY save path, so a typed tag followed by a click
-                  anywhere else silently vanished ("it doesn't save"). The
-                  datalist offers every tag already in use. */}
-              <input value={tagInput} onChange={e => setTagInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') addTag(); }}
-                onBlur={() => { if (tagInput.trim()) addTag(); }}
-                list="prospect-tag-options"
-                placeholder="+ tag" style={{ width: '140px', padding: '3px 9px', borderRadius: '999px', fontSize: '10px', background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
-              <datalist id="prospect-tag-options">
-                {tagSuggestions.map(t => <option key={t} value={t} />)}
-              </datalist>
-              {tagInput.trim() && (
-                <button onMouseDown={e => e.preventDefault()} onClick={addTag} title="Add this tag" style={{
-                  padding: '3px 9px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
-                  background: 'rgba(96,165,250,0.12)', border: '1px solid rgba(96,165,250,0.4)', color: '#60a5fa',
-                }}>Add</button>
-              )}
-            </>
-          )}
+          {customer ? (
+            <select value="" onChange={e => {
+              const v = e.target.value;
+              if (v === '__new_industry') addVocabValue('industry');
+              else if (v === '__new_partner') addVocabValue('partner');
+              else if (v) addCustTag(v);
+            }} style={{ ...cInput, width: 'auto', padding: '3px 6px', fontSize: '10.5px' }}>
+              <option value="">+ tag</option>
+              <optgroup label="Industry">
+                {vocab.filter(v => v.kind === 'industry' && !custTags.some(t => t.tag_id === v.id)).map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                {isAdmin && <option value="__new_industry">+ New industry value…</option>}
+              </optgroup>
+              <optgroup label="Partner">
+                {vocab.filter(v => v.kind === 'partner' && !custTags.some(t => t.tag_id === v.id)).map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                {isAdmin && <option value="__new_partner">+ New partner value…</option>}
+              </optgroup>
+            </select>
+          ) : prospect && !isVendor ? (
+            /* Tags hang off the customer record, which only exists once
+               this prospect is in NetSuite — say so rather than leaving a
+               blank where the control used to be. Vendors never become
+               NetSuite customers, so they get no note. */
+            <span title="Industry/partner tags attach to the NetSuite customer record" style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+              Tagging available once it&apos;s in NetSuite
+            </span>
+          ) : null}
         </div>
         {(prospect?.contact_name || customer?.entity_id) && (
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
@@ -1711,40 +1716,6 @@ export default function CustomerRecordPage() {
                   <option value="">Unassigned</option>
                   {salesReps.map(r => <option key={r.id} value={r.id}>{r.full_name}</option>)}
                 </select>
-              </div>
-            )}
-            {customer && (
-              <div style={{ ...infoRow, alignItems: 'center' }}>
-                <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>Industry / Partner</span>
-                <span style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center' }}>
-                  {custTags.map(t => (
-                    <button key={t.tag_id} onClick={() => removeCustTag(t.tag_id)} title={`${t.kind} tag — click to remove`}
-                      style={{
-                        fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '999px', cursor: 'pointer',
-                        background: t.kind === 'partner' ? 'rgba(167,139,250,0.1)' : 'rgba(96,165,250,0.1)',
-                        border: `1px solid ${t.kind === 'partner' ? 'rgba(167,139,250,0.3)' : 'rgba(96,165,250,0.3)'}`,
-                        color: t.kind === 'partner' ? '#a78bfa' : '#60a5fa',
-                      }}>
-                      {t.label} ✕
-                    </button>
-                  ))}
-                  <select value="" onChange={e => {
-                    const v = e.target.value;
-                    if (v === '__new_industry') addVocabValue('industry');
-                    else if (v === '__new_partner') addVocabValue('partner');
-                    else if (v) addCustTag(v);
-                  }} style={{ ...cInput, width: 'auto', padding: '3px 6px', fontSize: '10.5px' }}>
-                    <option value="">+ tag</option>
-                    <optgroup label="Industry">
-                      {vocab.filter(v => v.kind === 'industry' && !custTags.some(t => t.tag_id === v.id)).map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
-                      {isAdmin && <option value="__new_industry">+ New industry value…</option>}
-                    </optgroup>
-                    <optgroup label="Partner">
-                      {vocab.filter(v => v.kind === 'partner' && !custTags.some(t => t.tag_id === v.id)).map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
-                      {isAdmin && <option value="__new_partner">+ New partner value…</option>}
-                    </optgroup>
-                  </select>
-                </span>
               </div>
             )}
             {prospect?.notes && (
