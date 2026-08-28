@@ -76,7 +76,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Next** — close the workflow chain (10–16) | ✅ done | PRs #635–#640; #14 CNI notifications fully wired (#640–#646), the legacy CNI invoice flow killed (closure gate reads AP coverage, migration 231), and the graphics/check-in → CNI job bridge shipped (migration 232). |
 | **Soon** — the role cleanup (17–20) | ✅ done | #17 infra + owner-page gates (#649), #18a registry (#648), #18b all ten tools keyed (#652, #654, #655), #19 install roles (#650), #20 dead-end menus (#651). The ungated-by-URL pages are gated and the dev route deleted (#656). An adversarial gate audit (every tile/nav/redirect/deep-link entry point traced per role) confirmed 20 regressions, all fixed: client dead-clicks + two redirect loops (#657) and per-recipient vehicle notification links (#658). |
 | **Data-integrity bugs to fix in passing** | ✅ done | All 6 re-verified as live, then fixed: pushed-estimate delete (#660), Add-Graphics demotion (#661), stranded allocations — trigger + backfill, migration 228 (#662), graphics history trigger, migration 229 (#663), the 1000-row-cap sweep across payroll/payouts/credits/pay-rates/scans/invoices/pos/dashboard (#664), and the Open Quotes tile (#665). |
-| **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables intentionally not dropped (needs owner sign-off — data loss is irreversible). |
+| **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
 
 Per-item status is tagged inline in Part 5 below.
 
@@ -701,11 +701,35 @@ page's Sync Contacts button); components `SalesOrderPdf`, `StatusPipeline`,
 `getSalesOrderPdf`/`getInvoicePdf` wrappers in `lib/netsuite.ts`); the
 orphan `/fleet/update` page; and the two stale doc passages.
 
-Dormant tables: confirmed zero code references for `dashboard_layouts` and
-`customer_job_assignments` (`sales_cadences` was already dropped by
-migration 059) — the tables themselves are NOT dropped here; dropping
-production tables destroys whatever rows they hold and needs an explicit
-owner sign-off first.
+✅ Dormant tables dropped (owner sign-off 2026-08-27): migration 230 (#669)
+recreates the three RLS policies that referenced `customer_job_assignments`
+in an OR arm as internal-staff-only, then drops it and `dashboard_layouts`
+(`sales_cadences` was already dropped by migration 059). Zero code
+references were re-confirmed for both before the drop.
+
+The drop surfaced a finding about production itself: the database was
+**baselined** from a hand-migrated state, and it held more legacy policies
+referencing `customer_job_assignments` than the migration files show. The
+deliberately non-CASCADE `DROP TABLE` refused (as designed), which failed
+the pre-build migrate step and blocked every production deploy from #669
+through #674 for ~4 hours — the gate did its job (no code shipped without
+its schema; production stayed consistent, just stale). Diagnosis was slowed
+by the runner printing only the Postgres error's summary line — the
+blocking-object names live in its DETAIL field. Fixed in #675, both halves:
+
+- Migration 230 now sweeps `pg_depend` for any *remaining* policy that
+  depends on either dormant table and recreates it internal-staff-only
+  (command type and permissive/restrictive preserved), RAISE NOTICEing each
+  conversion so the deploy log records exactly what production held.
+  Non-policy dependents (a view, an FK) still fail loudly. Verified against
+  a local Postgres 16 scaffold reproducing the drift; a fresh-database
+  replay is a no-op.
+- `scripts/migrate.mjs` now prints Postgres error DETAIL/HINT on failure
+  and surfaces migration RAISE NOTICEs into the build log.
+
+The drop lands with the first green production deploy after #675; the
+sweep's NOTICE lines in that deploy's build log are the record of which
+legacy policies production actually carried.
 
 ✅ CI dead-code check: knip (`npm run deadcode`, `--include files`, config in
 `knip.json` ignoring runtime-served `public/` and standalone `scripts/`) runs
