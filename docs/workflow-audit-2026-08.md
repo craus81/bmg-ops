@@ -49,7 +49,10 @@ TODO-rot.
 The rest of this document is the walkthrough (Part 1), the cross-cutting
 security findings (Part 2), the role-visibility audit the owner explicitly asked
 for (Part 3), the "would help if fully built" list including the 3D configurator
-(Part 4), and a prioritized fix roadmap (Part 5).
+(Part 4), and a prioritized fix roadmap (Part 5). **Part 6 is the 2026-08-28
+re-verification** — every finding above re-checked against the code as it
+actually stands after Round 1 shipped, with the Round 2 roadmap. Where Part 6
+and the prose above disagree, Part 6 is current.
 
 ---
 
@@ -77,8 +80,9 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Soon** — the role cleanup (17–20) | ✅ done | #17 infra + owner-page gates (#649), #18a registry (#648), #18b all ten tools keyed (#652, #654, #655), #19 install roles (#650), #20 dead-end menus (#651). The ungated-by-URL pages are gated and the dev route deleted (#656). An adversarial gate audit (every tile/nav/redirect/deep-link entry point traced per role) confirmed 20 regressions, all fixed: client dead-clicks + two redirect loops (#657) and per-recipient vehicle notification links (#658). |
 | **Data-integrity bugs to fix in passing** | ✅ done | All 6 re-verified as live, then fixed: pushed-estimate delete (#660), Add-Graphics demotion (#661), stranded allocations — trigger + backfill, migration 228 (#662), graphics history trigger, migration 229 (#663), the 1000-row-cap sweep across payroll/payouts/credits/pay-rates/scans/invoices/pos/dashboard (#664), and the Open Quotes tile (#665). |
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
+| **Round 2** — re-verified 2026-08-28 (Part 6) | 🔄 in progress | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Two shipped since: profile privilege escalation (a CRITICAL this document never had — migration 233, #679) and graphics-job delete (migration 234, #680). Five Round 2 items are blocked on an owner decision. |
 
-Per-item status is tagged inline in Part 5 below.
+Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap.
 
 ---
 
@@ -739,6 +743,147 @@ imports. Its first run caught two more orphans — `ui/Button.tsx` and
 too. The next audit starts at zero.
 
 ---
+
+---
+
+# Part 6 — Round 2 (re-verified 2026-08-28)
+
+Round 1 (Part 5) shipped in full. This part is what a **fresh, code-level
+re-verification** of this document found afterwards — not a re-reading of the
+prose above, which by then described a codebase that no longer existed in
+several places.
+
+**Method.** Twelve agents, one per section of Part 1 and Part 2, each extracted
+every tagged finding in its section (splitting multi-part bullets, so the count
+below is finer-grained than the 59 tagged lines) and re-checked it against the
+code at `0c48f1f`, with `file:line` proof of the state *now*. Nothing was
+accepted from the Part 5 checkmarks in either direction: a checkmark is not
+proof a specific finding closed, and audit prose is not proof one is still open.
+A parallel design pass then took the highest-priority open items through a
+fix design and two adversarial reviewers each — one hunting for workflows the
+fix would break, one hunting for bypasses it would leave open.
+
+## What the re-verification found
+
+| Severity | Open | Partial | Fixed | Total |
+|---|---|---|---|---|
+| CRITICAL | 19 | 12 | 18 | 49 |
+| MAJOR | 42 | 8 | 9 | 59 |
+| BUG | 4 | — | 4 | 8 |
+| MINOR | — | 1 | 1 | 2 |
+| **Total** | **65** | **21** | **32** | **118** |
+
+Round 1 closed the whole *systemic* layer — the "any login can do anything"
+era is over — and 32 findings with it. What remains is different in kind:
+per-feature integrity gaps and missing workflow software, not a broken
+authorization model. **PARTIAL** is its own verdict and matters: the sharp
+edge is closed but a real gap remains (e.g. `/api/estimates` no longer leaks
+`approval_token` to the list, but a token still reaches other surfaces).
+
+## The finding this document did not have
+
+**CRITICAL — any authenticated account could grant itself super_admin.**
+`profiles_update_own` (027:99-102) is `FOR UPDATE TO authenticated USING (id =
+auth.uid())`; RLS cannot scope columns, no column-level GRANTs existed in any
+of the 232 migrations, and no trigger guarded the table — so one statement
+against the browser's anon-key client (`role: 'super_admin', status:
+'approved'` on your own row) made a customer portal login or an external CNI
+installer a super_admin, since both `profileRoles()` and `get_my_roles()` read
+those columns straight back. `profiles_insert WITH CHECK (true)` was the same
+hole for an account with no profile row yet.
+
+It was found while adversarially reviewing an unrelated fix, which is the
+point worth keeping: the sixteen-agent audit that produced this document did
+not catch it. _(Fixed: migration 233, #679 — a BEFORE INSERT OR UPDATE trigger
+denying privilege-column changes from a normal signed-in user, verified by
+reproducing the escalation on the unpatched schema and blocking it after.)_
+
+## Round 2 roadmap
+
+### Now — the sharp, small ones
+
+1. ✅ **Profile privilege escalation** — migration 233. _(#679)_
+2. ✅ **Any staff role could delete a graphics job** — migration 234, plus the
+   client `.select()` that made a blocked delete look like a success. _(#680)_
+3. ❌ **`/api/auth/signup` profile takeover.** Unauthenticated service-role
+   upsert on a client-supplied `userId` resets any existing user to
+   `status:'pending'`, `role:'installer'` — an account-lockout primitive.
+   Fix designed: narrow the write rather than reject it (prove ownership
+   against `auth.users`, then INSERT when no row exists, no-op when the target
+   is approved/admin/deactivated, and stop writing `role`/`roles` on the
+   update path). Rejecting outright risks orphaning accounts, because the
+   `handle_new_user()` trigger this would rely on is defined but never
+   attached to `auth.users`.
+4. ❌ **AI agent reaches sensitive tables.** The per-query gate is real now
+   (server-side roles, financial-table blocks, audit rows) but it is a
+   *denylist* of five pay tables — so `credit_applications` (EINs, bank
+   references) and `profiles` are still reachable through the chat by any
+   non-customer role, including external installers. Needs an allowlist, and
+   table extraction rather than a regex on the SQL string.
+5. ❌ **New-graphics-job notification fan-out is dead** — the browser reads
+   other users' `notification_preferences`, which RLS returns empty, so the
+   recipient list is always zero. A correct server-side precedent already
+   exists (`/api/graphics/notify-assignees`). _Owner decision: audience._
+6. ❌ **Printing is never gated on proof approval.** _Owner decision: who may
+   override, and what counts as a legitimate exception (reprints, internal
+   test prints)._
+7. ❌ **Graphics status: any state to any state, from the browser.** Precedent
+   exists in `vehicle-tracking/update-status`. _Owner decision: which
+   backward and skip-ahead transitions the floor actually uses._
+
+### Next — estimate integrity
+
+8. ❌ **No revision lock on an accepted estimate.** The customer signs a hashed
+   snapshot; staff can then silently change what they signed, and the live
+   approval link renders current rows. _Owner decision: whether an admin may
+   override with a recorded reason (the `convert-to-SO` precedent) or the lock
+   is absolute — there is no clone/duplicate feature, so an absolute lock
+   means "start over"._
+9. ❌ **All estimate APIs are `requireStaff` only** — shop/field techs and
+   finance can price, push, email and delete any estimate.
+10. ❌ **Pushed NetSuite estimates are left open forever** (`createdfrom` NULL),
+    permanently degrading the SO↔estimate matcher.
+11. ❌ **The signed E-SIGN snapshot is write-only** — no viewer, download, or
+    verification anywhere, which is exactly what a dispute needs.
+
+### Soon — vehicle custody and the shop floor
+
+12. ❌ **Check-in photos are optional, with no damage capture** — the moment
+    liability transfers is unprotected, and `photo_type='damage'` still has no
+    writer.
+13. ❌ **A returning vehicle can never be checked in again** — the duplicate-VIN
+    guard matches archived and shipped rows.
+14. ❌ **Arrival and check-in remain two unlinked systems** —
+    `shop_inbound.fleet_checkin_id` has no writer in either direction, so
+    vehicles read "overdue, expected but not arrived" while sitting in the shop.
+15. ❌ **A stuck vehicle notifies nobody for 48 hours**, and **nothing notifies
+    anyone when a vehicle arrives**.
+16. ❌ **CNI notification vacuum** — invites, bids, declines and photo denials
+    all reach nobody, while the portal tells installers they will be notified.
+
+### Later — the builds, not the patches
+
+17. ❌ **Parts ordering and receiving** — still no software at all: no PO from
+    the readiness card, no purchase request, and no receiving flow.
+18. ❌ **The credit application black hole** — an unauthenticated, unrate-limited
+    public write path for EINs and bank references that nothing in the app
+    reads, while the customer is promised an answer in 2-3 business days.
+19. ❌ **R2 objects are world-readable.** A gated download route exists and
+    internal pages use it, but the bucket is public and `createSignedUrl` is a
+    no-op. _High risk, owner decision: going private breaks images in every
+    customer email already sent (logos, coverage diagrams, part photos), which
+    cannot carry a session._
+20. ❌ **The route→permission manifest** — the durable fix Part 2 called for.
+    The one guard regression test still covers 7 directories and accepts an
+    unguarded route.
+21. ❌ **Job-level labor capture** — nothing links shifts or time entries to a
+    vehicle, so actual install hours versus the estimate stay unknowable on the
+    job the whole app exists to invoice.
+
+**How to read the ❌ items:** each was verified open at `0c48f1f` with
+`file:line` evidence. Items 3-8 have fix designs that survived adversarial
+review; the five marked _owner decision_ are blocked on a judgement call where
+both answers are defensible and guessing wrong disrupts real work.
 
 ## Appendix — the sixteen source reports
 
