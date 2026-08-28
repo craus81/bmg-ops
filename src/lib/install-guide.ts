@@ -211,8 +211,11 @@ export function drawAnnotations(
 ): void {
   // The editor's SVG strokes are non-scaling (screen px); scale up for the
   // native-resolution raster so lines and text stay legible in the PDF.
-  const lineW = Math.max(2, imgW / 600);
-  const fontSize = Math.max(14, imgW / 60);
+  // Divisors match the editor's (install-guides/[id]/page.tsx) so what you
+  // draw is what prints. Field feedback: the original /60 text and /600
+  // lines dwarfed the artwork.
+  const lineW = Math.max(1.5, imgW / 900);
+  const fontSize = Math.max(12, imgW / 110);
   const arrowLength = fontSize * 0.8;
   const arrowWidth = fontSize * 0.55;
   ctx.font = `700 ${fontSize}px -apple-system, 'Segoe UI', Roboto, sans-serif`;

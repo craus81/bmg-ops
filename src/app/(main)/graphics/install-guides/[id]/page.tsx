@@ -847,8 +847,12 @@ export default function InstallGuideEditorPage() {
   }
 
   const selected = activePage?.dims.find(d => d.id === selId) || null;
-  const fontSize = activePage ? Math.max(12, activePage.image_w / 60) : 14;
-  const handleR = activePage ? Math.max(6, activePage.image_w / 140) : 7;
+  // Annotation sizing, in image px (the SVG viewBox is the image). Keep in
+  // step with drawAnnotations in lib/install-guide.ts so the editor matches
+  // the export. Field feedback: /60 text and /140 handles dwarfed the
+  // artwork — a label should read like a drafting annotation, not a headline.
+  const fontSize = activePage ? Math.max(10, activePage.image_w / 110) : 12;
+  const handleR = activePage ? Math.max(5, activePage.image_w / 280) : 6;
 
   const toolBtn = (t: Tool, label: string, title: string) => (
     <button
