@@ -5,7 +5,7 @@ import { requireAuth } from '@/lib/api-auth';
 import { logAudit } from '@/lib/audit';
 import {
   rolesOf, canQueryNetSuite as canQueryNetSuiteFor, canSeeFinancials as canSeeFinancialsFor,
-  touchesFinancialData, stripFinancialGuidance,
+  touchesFinancialData, touchesForbiddenData, stripFinancialGuidance,
 } from '@/lib/ai-agent-access';
 import { validateBody, z } from '@/lib/validate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
@@ -1211,7 +1211,10 @@ export async function POST(req: NextRequest) {
         const src = q.source || 'netsuite';
         let blocked: string | null = null;
 
-        if (src === 'netsuite' && !canQueryNetSuite) {
+        if (touchesForbiddenData(q.sql)) {
+          // Secrets and forgery material -- no role may reach these.
+          blocked = 'That query touches credentials or approval tokens, which are off limits to everyone. Ask about the record itself instead.';
+        } else if (src === 'netsuite' && !canQueryNetSuite) {
           blocked = 'NetSuite access is not available for your role. Use the knowledge base or app database instead.';
         } else if (src === 'action' && !canQueryNetSuite) {
           blocked = 'Actions (creating jobs or estimates, sending messages) aren\'t available for your role.';

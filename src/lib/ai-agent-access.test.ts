@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  rolesOf, canQueryNetSuite, canSeeFinancials, touchesFinancialData, stripFinancialGuidance,
+  rolesOf, canQueryNetSuite, canSeeFinancials, touchesFinancialData, touchesForbiddenData, stripFinancialGuidance,
 } from './ai-agent-access';
 
 describe('rolesOf', () => {
@@ -108,5 +108,43 @@ describe('stripFinancialGuidance', () => {
   it('is a no-op when the anchor headers are absent', () => {
     const prompt = 'no financial section here';
     expect(stripFinancialGuidance(prompt)).toBe(prompt);
+  });
+});
+
+describe('touchesForbiddenData — secrets and forgery material, every role', () => {
+  const blocked = [
+    "SELECT approval_token FROM estimates WHERE id = '1'",
+    'SELECT e.approval_token, e.customer_name FROM estimates e',
+    'select APPROVAL_TOKEN from graphics_jobs',
+    'SELECT portal_token, customer_portal_token FROM fleet_checkins',
+    'SELECT refresh_token FROM google_tokens',
+    'SELECT access_token FROM google_tokens',
+    'SELECT * FROM google_tokens',
+    'SELECT * FROM native_push_tokens',
+    'SELECT * FROM app_settings',
+    'SELECT tax_id, bank_name FROM credit_applications',
+    'SELECT * FROM credit_application',
+  ];
+  for (const sql of blocked) {
+    it(`blocks: ${sql.slice(0, 52)}`, () => {
+      expect(touchesForbiddenData(sql)).toBe(true);
+    });
+  }
+
+  const allowed = [
+    'SELECT id, customer_name, grand_total FROM estimates WHERE status = $1',
+    'SELECT job_number, status FROM graphics_jobs ORDER BY created_at DESC',
+    'SELECT vin, status FROM fleet_checkins',
+    'SELECT item_number, quantity_available FROM netsuite_parts',
+    'SELECT full_name, role FROM profiles WHERE status = $1',
+  ];
+  for (const sql of allowed) {
+    it(`allows: ${sql.slice(0, 52)}`, () => {
+      expect(touchesForbiddenData(sql)).toBe(false);
+    });
+  }
+
+  it('is undefined-safe (action blocks carry no sql)', () => {
+    expect(touchesForbiddenData(undefined)).toBe(false);
   });
 });
