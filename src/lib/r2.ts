@@ -231,6 +231,41 @@ export async function r2PresignGet(
 }
 
 // ── Get a file from R2 (for server-side reads) ──
+/**
+ * Read an object's bytes through R2 credentials instead of its public URL.
+ *
+ * Server-side callers (PDF assembly, email attachments) must use this rather
+ * than fetch()ing r2PublicUrl(). Two reasons, independent of any bucket
+ * privacy change: the server already holds credentials, so routing its own
+ * reads back out through the public internet is a pointless round trip; and a
+ * public fetch that returns an error page yields a 200 with HTML, which then
+ * gets embedded as a corrupt image instead of failing. It is also the
+ * prerequisite for the bucket ever becoming private -- a public-URL read
+ * starts 403ing the moment it does, silently, because these call sites swallow
+ * their errors.
+ */
+export async function r2GetBytes(
+  prefix: string,
+  path: string,
+  maxBytes?: number,
+): Promise<{ bytes: Buffer; contentType: string } | null> {
+  const res = await r2Get(prefix, path);
+  if (!res.success || !res.body) return null;
+  const body = res.body as any;
+  let bytes: Buffer;
+  if (typeof body.transformToByteArray === 'function') {
+    // AWS SDK v3 attaches this mixin to GetObject bodies.
+    bytes = Buffer.from(await body.transformToByteArray());
+  } else {
+    const chunks: Buffer[] = [];
+    for await (const chunk of body) chunks.push(Buffer.from(chunk));
+    bytes = Buffer.concat(chunks);
+  }
+  if (bytes.byteLength === 0) return null;
+  if (maxBytes && bytes.byteLength > maxBytes) return null;
+  return { bytes, contentType: (res.contentType || '').toLowerCase() };
+}
+
 export async function r2Get(
   prefix: string,
   path: string,
