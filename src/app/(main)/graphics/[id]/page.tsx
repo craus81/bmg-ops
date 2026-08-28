@@ -45,6 +45,7 @@ import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
   GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
 } from '@/lib/types';
+import { requiresReason, proofGateApplies } from '@/lib/graphics-status';
 
 // ── Date helpers (same behavior as the board — avoid UTC shift) ──────────
 function parseLocalDate(dateStr: string | null | undefined): Date | null {
@@ -422,6 +423,38 @@ export default function GraphicsJobRecordPage() {
     const oldStatus = job.status;
     if (oldStatus === newStatus) return;
 
+    // ── Transition rules (src/lib/graphics-status.ts) ────────────────────
+    // Forward skips are free; backward moves must carry a reason; printing
+    // without an approved proof is an admin override with a reason.
+    let gateNote = '';
+
+    if (proofGateApplies(newStatus, job)) {
+      if (!isAdmin) {
+        await dialog.alert(
+          'This proof has not been approved by the customer yet, so printing needs an admin. '
+          + 'Send the proof for approval, or ask an admin to override.',
+        );
+        return;
+      }
+      // Honor the comment they already typed in the status modal rather than
+      // asking twice; only prompt when they left it blank.
+      const why = note?.trim() || (await dialog.prompt(
+        'The customer has not approved this proof. Why are you printing anyway?',
+        '',
+        { placeholder: 'e.g. reprint of an already-approved run', confirmLabel: 'Print anyway' },
+      ))?.trim();
+      if (!why) return;
+      gateNote = `Printed without proof approval — ${why}`;
+    } else if (requiresReason(oldStatus, newStatus)) {
+      const why = note?.trim() || (await dialog.prompt(
+        `Moving back from ${GRAPHICS_STATUS_LABELS[oldStatus]} to ${GRAPHICS_STATUS_LABELS[newStatus]}. Why?`,
+        '',
+        { placeholder: 'e.g. customer changed the artwork', confirmLabel: 'Move back' },
+      ))?.trim();
+      if (!why) return;
+      gateNote = `Moved back — ${why}`;
+    }
+
     const shipFields: Partial<GraphicsJob> = {};
     if (ship?.tracking) shipFields.tracking_number = ship.tracking;
 
@@ -440,7 +473,9 @@ export default function GraphicsJobRecordPage() {
       from_status: oldStatus,
       to_status: newStatus,
       changed_by: user?.id,
-      note: note || null,
+      note: (gateNote && note?.trim() && gateNote.includes(note.trim())
+        ? gateNote
+        : [gateNote, note].filter(Boolean).join(' · ')) || null,
     });
 
     // Tracking number gets its own note row so it's findable in the history
