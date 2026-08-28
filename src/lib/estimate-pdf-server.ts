@@ -15,7 +15,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { enrichLinesWithPartAssets } from './estimate-line-parts';
 import { loadEstimateGraphics } from './estimate-graphics';
-import { r2PublicUrl } from './r2';
+import { r2GetBytes } from './r2';
 import { buildEstimatePdf, estimatePdfFilename, type EstimatePdfGraphics, type EstimatePdfImage, type EstimatePdfLine } from './estimate-pdf';
 
 // Keep the PDF (and the serverless memory bill) bounded: skip any single
@@ -44,6 +44,30 @@ async function fetchImage(url: string, remainingBudget: number): Promise<{ image
   } catch {
     return null;
   }
+}
+
+/** Same shape as fetchImage, but reads the object through R2 credentials.
+ *  Used for our own stored assets so PDF assembly does not depend on the
+ *  bucket being publicly readable. */
+async function readImage(
+  prefix: string,
+  path: string,
+  remainingBudget: number,
+): Promise<{ image: EstimatePdfImage; bytes: number } | null> {
+  const got = await r2GetBytes(prefix, path, Math.min(MAX_IMAGE_BYTES, remainingBudget));
+  if (!got) return null;
+  const format: EstimatePdfImage['format'] | null =
+    got.contentType.includes('png') ? 'PNG'
+      : (got.contentType.includes('jpeg') || got.contentType.includes('jpg')) ? 'JPEG'
+        : null;
+  if (!format) return null;
+  return {
+    image: {
+      dataUrl: `data:${format === 'PNG' ? 'image/png' : 'image/jpeg'};base64,${got.bytes.toString('base64')}`,
+      format,
+    },
+    bytes: got.bytes.byteLength,
+  };
 }
 
 export type EstimatePdfResult =
@@ -80,7 +104,7 @@ export async function generateEstimatePdf(
   const company = settings?.company || null;
   let logo: EstimatePdfImage | null = null;
   if (company?.logo_path) {
-    logo = (await fetchImage(r2PublicUrl('vehicle-templates', company.logo_path), MAX_IMAGE_BYTES))?.image || null;
+    logo = (await readImage('vehicle-templates', company.logo_path, MAX_IMAGE_BYTES))?.image || null;
   }
 
   // Inline the line thumbnails, deduped by URL (kits repeat parts).
@@ -167,21 +191,12 @@ async function mergeWrapAssets(base: Buffer, quotes: any[]): Promise<Buffer> {
     appended++;
   };
 
-  const fetchAsset = async (url: string): Promise<{ bytes: Buffer; contentType: string } | null> => {
-    try {
-      const res = await fetch(url);
-      if (!res.ok) return null;
-      const bytes = Buffer.from(await res.arrayBuffer());
-      if (bytes.byteLength === 0 || bytes.byteLength > MAX_MERGE_FILE_BYTES) return null;
-      return { bytes, contentType: (res.headers.get('content-type') || '').toLowerCase() };
-    } catch {
-      return null;
-    }
-  };
+  // Our own stored assets: read with credentials, not over the public URL.
+  const readAsset = async (prefix: string, path: string) => r2GetBytes(prefix, path, MAX_MERGE_FILE_BYTES);
 
   for (const q of quotes) {
     if (q.estimate_attach?.diagram && q.diagram_path) {
-      const asset = await fetchAsset(r2PublicUrl('vehicle-templates', q.diagram_path));
+      const asset = await readAsset('vehicle-templates', q.diagram_path);
       if (asset) {
         // Diagrams are rendered as PNG by the estimator.
         try { await addImagePage(asset.bytes, 'image/png', `Coverage — Quote ${q.quote_number}`); }
@@ -192,7 +207,7 @@ async function mergeWrapAssets(base: Buffer, quotes: any[]): Promise<Buffer> {
       for (const a of (Array.isArray(q.attachments) ? q.attachments : [])) {
         if (appended >= MAX_APPENDED_PAGES) break;
         if (!a?.path) continue;
-        const asset = await fetchAsset(r2PublicUrl('vehicle-templates', a.path));
+        const asset = await readAsset('vehicle-templates', a.path);
         if (!asset) continue;
         const label = `${a.name || 'Attachment'} — Quote ${q.quote_number}`;
         try {
