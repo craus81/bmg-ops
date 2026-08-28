@@ -14,7 +14,7 @@ const supabase = createClient(
 
 const Schema = z.object({
   jobId: z.string().uuid(),
-  kind: z.enum(['status', 'note']),
+  kind: z.enum(['status', 'note', 'created']),
   // Raw status value (for preference filtering) + display label (for message
   // text) — the label map lives client-side, so the caller supplies both.
   newStatus: z.string().max(50).optional(),
@@ -38,8 +38,16 @@ const Schema = z.object({
  * gets the preference-gated 'graphics_status' notification. Assignees are
  * excluded from that second set so nobody is notified twice.
  *
+ * kind 'created' is a third audience: the graphics production team and
+ * admins, resolved BY ROLE. It deliberately ignores notification_preferences
+ * .notify_new_job — that flag was read from the browser, where RLS is
+ * own-rows-only, so the recipient list was always empty and no new-job
+ * notification has ever been delivered. Role membership is the subscription
+ * now; it is predictable, and it matches who actually needs to know a job
+ * landed. (Owner decision, 2026-08-28.)
+ *
  * The actor is excluded everywhere — you don't need a ping about your own
- * note or status flip.
+ * note, status flip, or job.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireStaff(req);
@@ -53,7 +61,7 @@ export async function POST(req: NextRequest) {
   try {
     const { data: job } = await supabase
       .from('graphics_jobs')
-      .select('id, title, job_number, customer, created_by, assigned_to')
+      .select('id, title, job_number, customer, created_by, assigned_to, quantity, part_number')
       .eq('id', jobId)
       .single();
     if (!job) {
@@ -91,13 +99,53 @@ export async function POST(req: NextRequest) {
 
     const title = kind === 'note'
       ? `Note on ${jobLabel}`
-      : `${jobLabel} → ${statusLabel || newStatus || 'updated'}`;
+      : kind === 'created'
+        ? `New graphics job: ${jobLabel}`
+        : `${jobLabel} → ${statusLabel || newStatus || 'updated'}`;
     const body = kind === 'note'
       ? `${actorName ? `${actorName}: ` : ''}${(note || '').slice(0, 300)}`
-      : `Job #${job.job_number || job.id.slice(0, 8)}${job.customer ? ` (${job.customer})` : ''} status changed to ${statusLabel || newStatus}${actorName ? ` by ${actorName}` : ''}`;
+      : kind === 'created'
+        ? `${job.customer || 'Unknown customer'}${actorName ? ` · created by ${actorName}` : ''}`
+        : `Job #${job.job_number || job.id.slice(0, 8)}${job.customer ? ` (${job.customer})` : ''} status changed to ${statusLabel || newStatus}${actorName ? ` by ${actorName}` : ''}`;
 
     if (assigneeIds.size > 0) {
       await notifyMany(Array.from(assigneeIds), { type: 'graphics_activity', title, body, url });
+    }
+
+    // ----- Audience 3 (created only): the graphics team, by role -----
+    if (kind === 'created') {
+      const TEAM_ROLES = ['admin', 'super_admin', 'graphics_production', 'production'];
+      const { data: staff } = await supabase
+        .from('profiles')
+        .select('id, role, roles, status, deactivated')
+        .eq('status', 'approved');
+      const teamIds = (staff || [])
+        .filter((p: any) => {
+          if (p.deactivated) return false;
+          if (p.id === actorId) return false;
+          // Same roles[]-with-scalar-fallback rule as profileRoles() in
+          // src/lib/api-auth.ts, so this audience can't drift from authz.
+          const roles = p.roles?.length ? p.roles : [p.role];
+          return roles.some((r: string) => TEAM_ROLES.includes(r));
+        })
+        .map((p: any) => p.id);
+      // Assignees already got the 'graphics_activity' ping above; don't double up.
+      const freshIds = teamIds.filter((id: string) => !assigneeIds.has(id));
+      if (freshIds.length > 0) {
+        await notifyMany(freshIds, {
+          type: 'graphics_new',
+          title: `New graphics job: ${jobLabel}`,
+          body: [
+            job.customer || 'Unknown customer',
+            job.quantity ? `${job.quantity} unit${job.quantity !== 1 ? 's' : ''}` : '',
+            job.part_number || '',
+            actorName ? `created by ${actorName}` : '',
+          ].filter(Boolean).join(' · '),
+          url,
+        });
+      }
+      console.log('[notify-assignees] dispatch', { jobId, kind, assignees: assigneeIds.size, team: freshIds.length });
+      return NextResponse.json({ sent: assigneeIds.size + freshIds.length, assignees: assigneeIds.size, team: freshIds.length });
     }
 
     // ----- Audience 2 (status only): preference-gated status ping -----

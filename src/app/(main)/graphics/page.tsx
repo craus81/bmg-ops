@@ -19,7 +19,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
-import { deepLinks } from '@/lib/deep-links';
 import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -633,29 +632,16 @@ export default function GraphicsPage() {
         }).catch(() => {});
       }
 
-      // Notify users via all channels per their preferences
-      const { data: prefs } = await supabase
-        .from('notification_preferences')
-        .select('user_id, notify_new_job');
-      if (prefs) {
-        const notifyUserIds = prefs
-          .filter((p: any) => p.notify_new_job && p.user_id !== user?.id)
-          .map((p: any) => p.user_id);
-        if (notifyUserIds.length > 0) {
-          fetch('/api/notifications/send', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              userIds: notifyUserIds,
-              type: 'graphics_new',
-              title: `New Graphics Job: ${createForm.title || 'Untitled'}`,
-              body: `${createForm.customer || 'Unknown'} · ${createForm.quantity} unit${createForm.quantity !== 1 ? 's' : ''}${createForm.part_number ? ` · ${createForm.part_number}` : ''}`,
-              url: deepLinks.graphicsJob(data.id),
-              excludeUserId: user?.id,
-            }),
-          }).catch(() => {});
-        }
-      }
+      // Tell the graphics team a job landed. This runs server-side: the old
+      // version read every user's notification_preferences from the browser,
+      // but RLS on that table is own-rows-only, so the recipient list was
+      // always empty and no new-job notification was ever delivered. The
+      // route resolves the audience by role instead.
+      fetch('/api/graphics/notify-assignees', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: data.id, kind: 'created' }),
+      }).catch(() => {});
 
       // Assign team members if any selected
       if (createAssignees.length > 0) {
