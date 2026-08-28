@@ -1462,13 +1462,18 @@ export default function CustomerRecordPage() {
             <span style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'var(--warning-bg)', color: 'var(--warning)' }}>Not tracked</span>
           )}
           {/* Segmentation tags live here, by the name — ONE control, the
-              Industry/Partner vocabulary (customer_tags). The free-form
-              chip input that used to sit here is gone: free text defeats
-              segmentation (migration 187's own rationale for the
-              vocabulary), and having both on this screen meant two places
-              to tag the same customer.
+              industry vocabulary (customer_tags). The free-form chip input
+              that used to sit here is gone: free text defeats segmentation
+              (migration 187's own rationale for the vocabulary), and having
+              both on this screen meant two places to tag the same customer.
 
-              Existing prospect_tags still show and can still be removed,
+              Industry only for now. The 'partner' kind still exists in the
+              vocabulary and any partner tags already applied still show and
+              can be removed — the picker just doesn't offer them, so
+              bringing partner back is re-adding its optgroup, not a
+              migration.
+
+              Existing prospect_tags likewise show and can still be removed,
               they just can't be added any more: some are auto-generated
               ('multilocation' on a multi-location create) and the Customers
               list still filters on them, so hiding them would strand a
@@ -1493,25 +1498,18 @@ export default function CustomerRecordPage() {
             <select value="" onChange={e => {
               const v = e.target.value;
               if (v === '__new_industry') addVocabValue('industry');
-              else if (v === '__new_partner') addVocabValue('partner');
               else if (v) addCustTag(v);
             }} style={{ ...cInput, width: 'auto', padding: '3px 6px', fontSize: '10.5px' }}>
-              <option value="">+ tag</option>
-              <optgroup label="Industry">
-                {vocab.filter(v => v.kind === 'industry' && !custTags.some(t => t.tag_id === v.id)).map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
-                {isAdmin && <option value="__new_industry">+ New industry value…</option>}
-              </optgroup>
-              <optgroup label="Partner">
-                {vocab.filter(v => v.kind === 'partner' && !custTags.some(t => t.tag_id === v.id)).map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
-                {isAdmin && <option value="__new_partner">+ New partner value…</option>}
-              </optgroup>
+              <option value="">+ industry</option>
+              {vocab.filter(v => v.kind === 'industry' && !custTags.some(t => t.tag_id === v.id)).map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+              {isAdmin && <option value="__new_industry">+ New industry value…</option>}
             </select>
           ) : prospect && !isVendor ? (
             /* Tags hang off the customer record, which only exists once
                this prospect is in NetSuite — say so rather than leaving a
                blank where the control used to be. Vendors never become
                NetSuite customers, so they get no note. */
-            <span title="Industry/partner tags attach to the NetSuite customer record" style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+            <span title="Industry tags attach to the NetSuite customer record" style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
               Tagging available once it&apos;s in NetSuite
             </span>
           ) : null}
