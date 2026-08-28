@@ -51,58 +51,63 @@ function EstimateDocument({ estimate: est, lines, graphics }: { estimate: any; l
       </ApprovalHeader>
 
       <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px', marginBottom: '16px' }}>
-        {/* overflowX guard: on a phone the Item column (56px photo + text)
-            can force the table past the card edge, silently pushing
-            Qty/Rate/Total out of view — scroll beats vanishing. */}
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ textAlign: 'left', color: '#64748b', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                <th style={{ paddingBottom: '8px' }}>Item</th>
-                <th style={{ paddingBottom: '8px', textAlign: 'right' }}>Qty</th>
-                <th style={{ paddingBottom: '8px', textAlign: 'right' }}>Rate</th>
-                <th style={{ paddingBottom: '8px', textAlign: 'right' }}>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {lines.map((l: any) => (
-                <tr key={l.id} style={{ borderTop: '1px solid #e2e8f0' }}>
-                  <td style={{ padding: '8px 0', color: '#0f172a' }}>
-                    <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
-                      {l.image_url && (
-                        <ZoomableImage
-                          src={l.image_url}
-                          alt={l.item_number || 'Product'}
-                          wrapStyle={{ flexShrink: 0 }}
-                          style={{ width: '56px', height: '56px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #e2e8f0' }}
-                        />
-                      )}
-                      {/* overflowWrap: long SKUs/URLs must break, or this cell's
-                          min-content width eats the numeric columns' room */}
-                      <div style={{ minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
-                        <div style={{ fontWeight: 600 }}>{l.item_number || l.description || 'Item'}</div>
-                        {l.description && l.description !== l.item_number && (
-                          <div style={{ fontSize: '12px', color: '#475569' }}>{l.description}</div>
-                        )}
-                        {l.notes && <div style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic' }}>{l.notes}</div>}
-                        {l.product_url && (
-                          <a
-                            href={l.product_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{ fontSize: '11px', color: '#2563eb', textDecoration: 'underline' }}
-                          >View product ↗</a>
-                        )}
-                      </div>
-                    </div>
-                  </td>
-                  <td style={{ padding: '8px 0', textAlign: 'right' }}>{l.quantity}</td>
-                  <td style={{ padding: '8px 0', textAlign: 'right' }}>${Number(l.unit_price).toFixed(2)}</td>
-                  <td style={{ padding: '8px 0', textAlign: 'right' }}>${Number(l.line_total || l.unit_price * l.quantity).toFixed(2)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        {/* Lines are a CSS grid, not a table: the money columns are what the
+            customer is approving, so they must never be squeezed or pushed
+            off-screen. On phones each line stacks (see .appr-line). */}
+        <div>
+          <div
+            className="appr-line appr-line-head"
+            style={{ color: '#64748b', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', paddingBottom: '8px' }}
+          >
+            <div>Item</div>
+            <div className="appr-num">Qty</div>
+            <div className="appr-num">Rate</div>
+            <div className="appr-num">Total</div>
+          </div>
+          {lines.map((l: any) => (
+            <div
+              key={l.id}
+              className="appr-line"
+              style={{ borderTop: '1px solid #e2e8f0', padding: '8px 0', fontSize: '13px', color: '#0f172a' }}
+            >
+              <div className="appr-c-item" style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+                {l.image_url && (
+                  <ZoomableImage
+                    src={l.image_url}
+                    alt={l.item_number || 'Product'}
+                    wrapStyle={{ flexShrink: 0 }}
+                    style={{ width: '56px', height: '56px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #e2e8f0' }}
+                  />
+                )}
+                {/* overflowWrap: a long SKU or URL must break rather than
+                    widen the row past the card. */}
+                <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+                  <div style={{ fontWeight: 600 }}>{l.item_number || l.description || 'Item'}</div>
+                  {l.description && l.description !== l.item_number && (
+                    <div style={{ fontSize: '12px', color: '#475569' }}>{l.description}</div>
+                  )}
+                  {l.notes && <div style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic' }}>{l.notes}</div>}
+                  {l.product_url && (
+                    <a
+                      href={l.product_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ fontSize: '11px', color: '#2563eb', textDecoration: 'underline' }}
+                    >View product ↗</a>
+                  )}
+                </div>
+              </div>
+              <div className="appr-c-qty appr-num">
+                <span className="appr-cell-label">Qty</span>{l.quantity}
+              </div>
+              <div className="appr-c-rate appr-num">
+                <span className="appr-cell-label">Rate</span>${Number(l.unit_price || 0).toFixed(2)}
+              </div>
+              <div className="appr-c-total appr-num" style={{ fontWeight: 600 }}>
+                <span className="appr-cell-label">Total</span>${Number(l.line_total || (l.unit_price || 0) * (l.quantity || 0)).toFixed(2)}
+              </div>
+            </div>
+          ))}
         </div>
         <div style={{ borderTop: '2px solid #cbd5e1', marginTop: '10px', paddingTop: '10px', fontSize: '13px', color: '#0f172a' }}>
           <Row label="Subtotal" value={`$${subtotal.toFixed(2)}`} />
