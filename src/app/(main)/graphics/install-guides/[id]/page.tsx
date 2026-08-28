@@ -41,9 +41,7 @@ import { uploadJobFiles, type JobFile } from '@/lib/job-files';
 import { layoutDimension, pointToSegmentDistance, type Pt } from '@/lib/dimension-geometry';
 import {
   distancePx,
-  formatDimension,
   pxPerRealInchFromDpi,
-  realInchesFromPx,
   snapToAxis,
   type DimUnits,
 } from '@/lib/dimension-scale';
@@ -53,8 +51,12 @@ type Tool = 'select' | 'dim' | 'note' | 'calibrate';
 
 interface DragState {
   dimId: string;
-  part: 'p1' | 'p2' | 'offset';
+  // p1/p2 = endpoint resize; 'body' = grab anywhere on the line and move the
+  // whole annotation (its measured length — and label — stays the same).
+  part: 'p1' | 'p2' | 'body';
   start: Pt;
+  // Last pointer position, for translating the whole annotation by deltas.
+  last: Pt;
   moved: boolean;
 }
 
@@ -324,7 +326,7 @@ export default function InstallGuideEditorPage() {
       if (d.kind === 'dim') {
         const lay = layoutDimension(d.p1, d.p2, d.offset);
         dist = pointToSegmentDistance(p, lay.dim[0], lay.dim[1]);
-        part = 'offset';
+        part = 'body';
       } else {
         dist = Math.min(
           pointToSegmentDistance(p, d.p1, d.p2),
@@ -349,16 +351,28 @@ export default function InstallGuideEditorPage() {
       return;
     }
     if (tool === 'note') {
-      pushUndo();
-      const off = activePage.image_w * 0.06;
-      const note: DimAnnotation = {
-        id: makeId(), kind: 'note', p1: p,
-        p2: { x: p.x + off, y: Math.max(0, p.y - off * 0.7) },
-        offset: 0, label: 'Note',
-      };
-      updatePage(activePage.id, pg => ({ ...pg, dims: [...pg.dims, note] }));
-      setSelId(note.id);
-      setTool('select');
+      // Ask for the text right here — a pin that just says "Note" reads as
+      // broken, and the edit field below the canvas is easy to miss. Cancel
+      // places nothing.
+      const pageId = activePage.id;
+      (async () => {
+        const text = (await dialog.prompt(
+          'What should the note say? It points at the spot you tapped.',
+          '',
+          { title: 'Add note', placeholder: 'e.g. Follow the body line' },
+        ))?.trim();
+        if (!text) return;
+        pushUndo();
+        const off = activePage.image_w * 0.06;
+        const note: DimAnnotation = {
+          id: makeId(), kind: 'note', p1: p,
+          p2: { x: p.x + off, y: Math.max(0, p.y - off * 0.7) },
+          offset: 0, label: text,
+        };
+        updatePage(pageId, pg => ({ ...pg, dims: [...pg.dims, note] }));
+        setSelId(note.id);
+        setTool('select');
+      })();
       return;
     }
     // select tool
@@ -366,7 +380,7 @@ export default function InstallGuideEditorPage() {
     if (hit) {
       setSelId(hit.id);
       pushUndo();
-      dragRef.current = { dimId: hit.id, part: hit.part, start: p, moved: false };
+      dragRef.current = { dimId: hit.id, part: hit.part, start: p, last: p, moved: false };
     } else {
       setSelId(null);
     }
@@ -393,17 +407,20 @@ export default function InstallGuideEditorPage() {
       return;
     }
     drag.moved = true;
+    const delta = { x: p.x - drag.last.x, y: p.y - drag.last.y };
+    drag.last = p;
     updatePage(activePage.id, pg => ({
       ...pg,
       dims: pg.dims.map(d => {
         if (d.id !== drag.dimId) return d;
-        if (drag.part === 'offset' && d.kind === 'dim') {
-          const dx = d.p2.x - d.p1.x;
-          const dy = d.p2.y - d.p1.y;
-          const len = Math.hypot(dx, dy) || 1;
-          const nx = -dy / len;
-          const ny = dx / len;
-          return { ...d, offset: (p.x - d.p1.x) * nx + (p.y - d.p1.y) * ny };
+        if (drag.part === 'body' && d.kind === 'dim') {
+          // Grab the line, move the whole dimension — both endpoints ride
+          // the pointer, so the measured length (and label) never changes.
+          return {
+            ...d,
+            p1: { x: d.p1.x + delta.x, y: d.p1.y + delta.y },
+            p2: { x: d.p2.x + delta.x, y: d.p2.y + delta.y },
+          };
         }
         if (drag.part === 'p1') {
           const np = d.kind === 'dim' && !e.altKey ? snapToAxis(d.p2.x, d.p2.y, p.x, p.y) : p;
@@ -1099,7 +1116,7 @@ export default function InstallGuideEditorPage() {
                   const dir = d.p2.x >= d.p1.x ? 1 : -1;
                   return (
                     <g key={d.id}>
-                      <line x1={d.p2.x} y1={d.p2.y} x2={d.p1.x} y2={d.p1.y} stroke={NOTE_COLOR} strokeWidth={isSel ? 3 : 2} vectorEffect="non-scaling-stroke" />
+                      <line x1={d.p2.x} y1={d.p2.y} x2={d.p1.x} y2={d.p1.y} stroke={NOTE_COLOR} strokeWidth={isSel ? 2 : 1} vectorEffect="non-scaling-stroke" />
                       <circle cx={d.p1.x} cy={d.p1.y} r={handleR / 2} fill={NOTE_COLOR} />
                       <text
                         x={d.p2.x + dir * fontSize * 0.4}
@@ -1133,7 +1150,7 @@ export default function InstallGuideEditorPage() {
                       <line
                         key={i}
                         x1={seg[0].x} y1={seg[0].y} x2={seg[1].x} y2={seg[1].y}
-                        stroke={DIM_COLOR} strokeWidth={isSel ? 3 : 2} vectorEffect="non-scaling-stroke"
+                        stroke={DIM_COLOR} strokeWidth={isSel ? 2 : 1} vectorEffect="non-scaling-stroke"
                       />
                     ))}
                     {[lay.arrowA, lay.arrowB].map((tri, i) => (
@@ -1163,36 +1180,23 @@ export default function InstallGuideEditorPage() {
                   </g>
                 );
               })}
+              {/* Draft while dragging: a hairline only — no live measurement
+                  label (it covered exactly the spot being aimed at; the value
+                  appears on the finished dimension the moment you let go). */}
               {draft && (
-                <g>
-                  <line
-                    x1={draft.p1.x} y1={draft.p1.y} x2={draft.p2.x} y2={draft.p2.y}
-                    stroke={tool === 'calibrate' ? '#0891b2' : DIM_COLOR} strokeWidth={2}
-                    strokeDasharray="6 4" vectorEffect="non-scaling-stroke"
-                  />
-                  {activePage.px_per_in && tool !== 'calibrate' && (
-                    <text
-                      x={(draft.p1.x + draft.p2.x) / 2}
-                      y={(draft.p1.y + draft.p2.y) / 2 - fontSize * 0.5}
-                      fontSize={fontSize} fontWeight={700} fill={DIM_COLOR}
-                      stroke="#fff" strokeWidth={fontSize / 4} paintOrder="stroke" textAnchor="middle"
-                    >
-                      {formatDimension(
-                        realInchesFromPx(distancePx(draft.p1.x, draft.p1.y, draft.p2.x, draft.p2.y), activePage.px_per_in),
-                        guide.units,
-                        guide.fraction_denominator,
-                      )}
-                    </text>
-                  )}
-                </g>
+                <line
+                  x1={draft.p1.x} y1={draft.p1.y} x2={draft.p2.x} y2={draft.p2.y}
+                  stroke={tool === 'calibrate' ? '#0891b2' : DIM_COLOR} strokeWidth={1}
+                  strokeDasharray="6 4" vectorEffect="non-scaling-stroke"
+                />
               )}
             </svg>
           </div>
 
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px' }}>
-            Dimension tool: drag point-to-point (snaps square — hold Alt for a free angle). Select tool: drag the
-            dimension line to move it off the artwork, drag its endpoints to fine-tune, Delete removes it. Labels are
-            actual vehicle inches.
+            Dimension tool: drag point-to-point (snaps square — hold Alt for a free angle); the measurement appears
+            when you let go. Select tool: grab a dimension to move the whole thing, drag its round endpoints to make
+            it bigger or smaller, Delete removes it. Labels are actual vehicle inches.
           </div>
 
           {/* Selected annotation + page settings */}
