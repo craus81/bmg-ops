@@ -620,8 +620,19 @@ export default function GraphicsJobRecordPage() {
   const deleteJob = async () => {
     if (!job) return;
     if (!(await dialog.confirm('Delete this graphics job? This cannot be undone.', { destructive: true, confirmLabel: 'Delete' }))) return;
-    const { error } = await supabase.from('graphics_jobs').delete().eq('id', job.id);
+    // .select() matters: RLS refuses a non-admin delete by matching zero rows,
+    // not by erroring (migration 234). Without it a blocked delete looks like a
+    // success and routes back to the board as though the job were gone.
+    const { data: deleted, error } = await supabase
+      .from('graphics_jobs')
+      .delete()
+      .eq('id', job.id)
+      .select('id');
     if (error) { await dialog.alert('Delete failed: ' + error.message); return; }
+    if (!deleted || deleted.length === 0) {
+      await dialog.alert('Delete failed: only an admin can delete a graphics job.');
+      return;
+    }
     router.push('/graphics');
   };
 
