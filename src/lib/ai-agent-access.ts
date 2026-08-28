@@ -61,6 +61,48 @@ export const SUPABASE_FINANCIAL_PATTERNS: RegExp[] = [
   /\baudit_log\b/i,
 ];
 
+// Secrets and forgery material: blocked for EVERY role, including
+// super_admin and executive. This is a different question from the financial
+// gate above -- leadership may legitimately ask about money, but nobody
+// should be able to pull an OAuth refresh token or a customer's approval
+// token out of a chat box.
+//
+//   * approval_token authenticates the PUBLIC, unauthenticated approval
+//     endpoints (estimates, wrap quotes, graphics proofs). Anyone holding one
+//     can forge the customer's e-signature -- the exact record the
+//     sales-order gate trusts. Same for the fleet check-in portal token.
+//   * google_tokens / native_push_tokens / app_settings hold live
+//     integration credentials.
+//   * credit_applications holds EINs and bank references, and has no agent
+//     use case at all: nothing in the app reads that table.
+//
+// NOTE: this is a stopgap of the same shape as the patterns above -- a regex
+// over the SQL string, so it stops the model from asking, not a privilege
+// boundary. The durable fix is an `ai_ro` schema of security-barrier views
+// exposing only safe columns, with exec_readonly_sql running as a role that
+// can read nothing else; a table-level allowlist cannot express "estimates
+// minus approval_token", which is exactly what is needed here. Tracked in
+// docs/workflow-audit-2026-08.md Part 6.
+export const ALWAYS_BLOCKED_PATTERNS: RegExp[] = [
+  /\bapproval_token\b/i,
+  /\bcustomer_portal_token\b/i,
+  /\brefresh_token\b/i,
+  /\baccess_token\b/i,
+  /\bgoogle_tokens?\b/i,
+  /\bnative_push_tokens?\b/i,
+  /\bapp_settings\b/i,
+  /\bcredit_applications?\b/i,
+];
+
+/**
+ * True when a query reaches a secret or forgeable credential. Applies to
+ * every role -- there is no override.
+ */
+export function touchesForbiddenData(sql: string | undefined): boolean {
+  if (!sql) return false;
+  return ALWAYS_BLOCKED_PATTERNS.some(re => re.test(sql));
+}
+
 /** True when a query reaches financial data for the given source. */
 export function touchesFinancialData(source: string, sql: string | undefined): boolean {
   if (!sql) return false;
