@@ -139,7 +139,12 @@ export default function EmailComposeModal({
   const { user } = useAuth();
   const dialog = useDialog();
 
-  const [toInput, setToInput] = useState(initialTo || '');
+  const [toInput, setToInputState] = useState(initialTo || '');
+  // A preview can prefill To *while* a click on Send is already being
+  // handled, so the send path reads recipients from this ref — the click
+  // handler's closure still holds the pre-prefill value.
+  const toInputRef = useRef(toInput);
+  const setToInput = (value: string) => { toInputRef.current = value; setToInputState(value); };
   const toTouched = useRef(!!initialTo);
   const [bccSelf, setBccSelf] = useState(loadBccSelfPref);
   const [message, setMessage] = useState('');
@@ -147,12 +152,13 @@ export default function EmailComposeModal({
   const [preview, setPreview] = useState<EmailComposePreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
 
   const emails = parseEmailList(toInput);
   const badEntries = invalidEntries(toInput);
 
   const currentFields = (): EmailComposeFields => ({
-    emails,
+    emails: parseEmailList(toInputRef.current),
     bccSelf,
     message: message.trim(),
     attachmentIds,
@@ -163,27 +169,50 @@ export default function EmailComposeModal({
     (sum, id) => sum + (attachmentById.get(id)?.sizeBytes || 0), 0,
   );
 
-  const refreshPreview = async (fields?: EmailComposeFields) => {
-    if (!fetchPreview) return;
-    setPreviewLoading(true);
-    try {
-      const res = await fetchPreview(fields || currentFields());
-      if (res.preview) {
-        setPreview(res.preview);
-        // First resolved recipient prefills an untouched To field, so the
-        // sender sees (and can change) exactly who the server picked.
-        const resolvedTo = Array.isArray(res.preview.to) ? res.preview.to.join(', ') : res.preview.to;
-        if (!toTouched.current && resolvedTo) {
-          setToInput(resolvedTo);
-          toTouched.current = true;
+  // Fields the on-screen preview was built from, and the fetch still in
+  // flight — both let Send stay instant instead of racing the preview.
+  const previewSig = useRef<string | null>(null);
+  const previewInFlight = useRef<Promise<void> | null>(null);
+  const fieldsSig = (f: EmailComposeFields) =>
+    JSON.stringify([f.emails, f.bccSelf, f.message, f.attachmentIds]);
+
+  const refreshPreview = (fields?: EmailComposeFields): Promise<void> => {
+    if (!fetchPreview) return Promise.resolve();
+    const used = fields || currentFields();
+    const run = (async () => {
+      setPreviewLoading(true);
+      try {
+        const res = await fetchPreview(used);
+        if (res.preview) {
+          setPreview(res.preview);
+          // First resolved recipient prefills an untouched To field, so the
+          // sender sees (and can change) exactly who the server picked.
+          const resolvedTo = Array.isArray(res.preview.to) ? res.preview.to.join(', ') : res.preview.to;
+          if (!toTouched.current && resolvedTo) {
+            setToInput(resolvedTo);
+            toTouched.current = true;
+          }
+        } else if (res.error) {
+          await dialog.alert('Preview failed: ' + res.error);
         }
-      } else if (res.error) {
-        await dialog.alert('Preview failed: ' + res.error);
+      } catch {
+        await dialog.alert('Network error building preview — please try again.');
       }
-    } catch {
-      await dialog.alert('Network error building preview — please try again.');
-    }
-    setPreviewLoading(false);
+      // Recorded with recipients as they now stand: a server prefill is part
+      // of what this preview reflects, not an edit still waiting on one.
+      previewSig.current = fieldsSig({ ...used, emails: parseEmailList(toInputRef.current) });
+      setPreviewLoading(false);
+    })();
+    previewInFlight.current = run;
+    return run;
+  };
+
+  // Blur hook. Leaving a field on the way to Send is the common case and
+  // usually changed nothing, so don't spend a round trip on it.
+  const refreshPreviewIfChanged = () => {
+    const fields = currentFields();
+    if (previewSig.current !== null && fieldsSig(fields) === previewSig.current) return;
+    refreshPreview(fields);
   };
 
   // Initial preview + refetch when intro-owned inputs (previewKey) change.
@@ -212,19 +241,31 @@ export default function EmailComposeModal({
   };
 
   const handleSend = async () => {
-    if (sending) return;
-    if (badEntries.length > 0) {
-      await dialog.alert(`These aren't valid email addresses: ${badEntries.join(', ')}`);
-      return;
-    }
-    if (emails.length === 0 && !allowSendWithoutTo) {
-      await dialog.alert('Enter at least one recipient email address.');
-      return;
-    }
+    // Ref, not state: two fast clicks both run before a setSending re-render.
+    if (sendingRef.current) return;
+    sendingRef.current = true;
     setSending(true);
-    const result = await onSend(currentFields());
-    setSending(false);
-    if (result.ok) onClose();
+    try {
+      // The one thing a send needs from the preview is the server-resolved
+      // recipient for an untouched To field — so that's the only case that
+      // waits on an in-flight preview.
+      if (!toTouched.current && previewInFlight.current) await previewInFlight.current;
+      const fields = currentFields();
+      const bad = invalidEntries(toInputRef.current);
+      if (bad.length > 0) {
+        await dialog.alert(`These aren't valid email addresses: ${bad.join(', ')}`);
+        return;
+      }
+      if (fields.emails.length === 0 && !allowSendWithoutTo) {
+        await dialog.alert('Enter at least one recipient email address.');
+        return;
+      }
+      const result = await onSend(fields);
+      if (result.ok) onClose();
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
   };
 
   return (
@@ -254,7 +295,7 @@ export default function EmailComposeModal({
             type="text"
             value={toInput}
             onChange={e => { setToInput(e.target.value); toTouched.current = true; }}
-            onBlur={() => refreshPreview()}
+            onBlur={refreshPreviewIfChanged}
             placeholder="customer@company.com, ap@company.com"
             style={inputStyle}
           />
@@ -293,7 +334,7 @@ export default function EmailComposeModal({
           <textarea
             value={message}
             onChange={e => setMessage(e.target.value)}
-            onBlur={() => refreshPreview()}
+            onBlur={refreshPreviewIfChanged}
             rows={3}
             placeholder={messagePlaceholder || 'Optional note to the recipient…'}
             style={{ ...inputStyle, resize: 'vertical' }}
@@ -361,10 +402,14 @@ export default function EmailComposeModal({
               Refresh Preview
             </button>
           )}
+          {/* Send is never disabled by previewLoading: blurring a field on
+              the way here starts a preview, and a button that turns disabled
+              between mousedown and mouseup never receives the click — that's
+              what made Send need a second press. */}
           <button
             onClick={handleSend}
-            disabled={sending || previewLoading}
-            style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#22c55e', color: '#fff', fontWeight: 800, fontSize: '12px', cursor: 'pointer', opacity: (sending || previewLoading) ? 0.6 : 1 }}
+            disabled={sending}
+            style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#22c55e', color: '#fff', fontWeight: 800, fontSize: '12px', cursor: 'pointer', opacity: sending ? 0.6 : 1 }}
           >
             {sending ? 'Sending…' : sendLabel}
           </button>
