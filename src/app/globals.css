@@ -443,6 +443,45 @@ button {
   }
 }
 
+/* Approval-document line items (the public /approve pages): one row per line
+   on desktop; on phones each line stacks — the item on its own full-width
+   row, then qty / rate / total with mini-labels beneath, same idea as
+   .est-line above. As a 4-column table the item column got squeezed to a
+   one-letter-per-line tower while Total was pushed off the right edge, and
+   Large/XL text size made it worse (zoom shrinks the effective viewport).
+   Having to scroll sideways for the money columns reads to a customer as
+   "the totals aren't showing".
+
+   Colors here are hardcoded rather than themed: these pages render a fixed
+   light document whatever theme the reader's device is set to. */
+.appr-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 4px 14px;
+  align-items: start;
+}
+/* The money cells never wrap and never shrink — they're the point of the row. */
+.appr-num { text-align: right; white-space: nowrap; }
+.appr-cell-label { display: none; }
+@media (max-width: 640px) {
+  .appr-line-head { display: none; }
+  .appr-line {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-areas:
+      'item item item'
+      'qty  rate total';
+    row-gap: 8px;
+  }
+  .appr-c-item  { grid-area: item; }
+  .appr-c-qty   { grid-area: qty; text-align: left; }
+  .appr-c-rate  { grid-area: rate; }
+  .appr-c-total { grid-area: total; }
+  .appr-cell-label {
+    display: block; font-size: 8px; font-weight: 700; letter-spacing: 0.5px;
+    text-transform: uppercase; color: #64748b; margin-bottom: 2px;
+  }
+}
+
 /* Mention → note focus: when a Mentions-inbox deep link lands on a record,
    the target surface scroll-flashes the exact note it references (see
    src/lib/focus-note.ts). The class is toggled imperatively via classList,
