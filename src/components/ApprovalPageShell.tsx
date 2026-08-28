@@ -146,39 +146,39 @@ export default function ApprovalPageShell({
     setSubmitting(false);
   };
 
-  if (status === 'loading') return <Frame>Loading {noun}...</Frame>;
-  if (status === 'invalid') return <Frame>{copy?.invalid || 'Invalid approval link. Please contact BMG Fleet Installations.'}</Frame>;
-  if (status === 'expired') return <Frame>{copy?.expired || 'This approval link has expired. Please ask BMG Fleet Installations to re-send.'}</Frame>;
-  if (status === 'error') return <Frame>Something went wrong{message ? `: ${message}` : ''}. Please try again.</Frame>;
+  if (status === 'loading') return <ApprovalFrame>Loading {noun}...</ApprovalFrame>;
+  if (status === 'invalid') return <ApprovalFrame>{copy?.invalid || 'Invalid approval link. Please contact BMG Fleet Installations.'}</ApprovalFrame>;
+  if (status === 'expired') return <ApprovalFrame>{copy?.expired || 'This approval link has expired. Please ask BMG Fleet Installations to re-send.'}</ApprovalFrame>;
+  if (status === 'error') return <ApprovalFrame>Something went wrong{message ? `: ${message}` : ''}. Please try again.</ApprovalFrame>;
   if (status === 'already_approved' || status === 'submitted_accepted') {
     return (
-      <Frame>
+      <ApprovalFrame>
         <Decided
           tone="accepted"
           title={status === 'submitted_accepted' ? (copy?.acceptedTitle || 'Thank you — work authorized') : 'Already approved'}
           docLabel={docLabel(data)}
           timestamp={acceptedAt(data)}
         />
-      </Frame>
+      </ApprovalFrame>
     );
   }
   if (status === 'already_rejected' || status === 'submitted_rejected') {
     return (
-      <Frame>
+      <ApprovalFrame>
         <Decided
           tone="rejected"
           title={status === 'submitted_rejected' ? (copy?.rejectedTitle || 'Thanks — we’ll follow up') : 'Changes requested'}
           docLabel={docLabel(data)}
           timestamp={null}
         />
-      </Frame>
+      </ApprovalFrame>
     );
   }
 
   const acceptable = canAccept ? canAccept(data) : true;
 
   return (
-    <Frame>
+    <ApprovalFrame>
       {renderDocument(data)}
 
       {rejectMode ? (
@@ -236,7 +236,7 @@ export default function ApprovalPageShell({
       )}
 
       <Footer />
-    </Frame>
+    </ApprovalFrame>
   );
 }
 
@@ -266,7 +266,10 @@ function Decided({ tone, title, docLabel, timestamp }: {
   );
 }
 
-function Frame({ children }: { children: React.ReactNode }) {
+/** The page chrome every approval view sits in — also used by the staff
+ *  preview at /estimates/[id]/approval-preview, so a preview looks exactly
+ *  like the customer's page. */
+export function ApprovalFrame({ children }: { children: React.ReactNode }) {
   return (
     <div style={{ minHeight: 'calc(100vh / var(--ts))', background: '#f1f5f9', padding: '20px 16px' }}>
       <div style={{ maxWidth: '640px', margin: '0 auto', background: '#fff', borderRadius: '14px', padding: '22px', border: '1px solid #e2e8f0' }}>

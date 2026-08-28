@@ -3445,6 +3445,24 @@ export default function EstimatesPage() {
           </button>
         )}
 
+        {/* Preview the customer's approval page. Deliberately NOT a link to
+            the customer's own magic link: that URL carries the approval
+            token and anyone who opens it can accept, which would record an
+            E-SIGN acceptance in the customer's name from a staff look. This
+            route is staff-guarded, keyed by estimate id, and read-only. */}
+        {editingId && lines.length > 0 && (
+          <button
+            onClick={() => router.push(`/estimates/${editingId}/approval-preview`)}
+            style={{
+              width: '100%', padding: '10px', borderRadius: '10px',
+              background: 'transparent', border: '1px solid var(--border)',
+              color: 'var(--text-body)', fontWeight: 700, fontSize: '12px', cursor: 'pointer',
+            }}
+          >
+            Preview Customer Approval Page
+          </button>
+        )}
+
         {/* Delivery state of the latest approval email (Resend webhook).
             A bounce used to be invisible — the app said "sent" while the
             customer never saw the estimate. */}

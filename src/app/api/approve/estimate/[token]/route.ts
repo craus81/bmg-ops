@@ -13,7 +13,7 @@ import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { validateBody, z } from '@/lib/validate';
 import { renderEstimateDocument, escHtml } from '@/lib/estimate-document';
-import { enrichLinesWithPartAssets } from '@/lib/estimate-line-parts';
+import { publicEstimate, publicLines, loadApprovalLines } from '@/lib/estimate-approval-view';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,15 +40,10 @@ async function loadEstimateByToken(token: string) {
   if (error || !estimate) return { estimate: null, lines: [] as any[], error: error?.message || 'not_found' };
   // Flatten the platform label for the document's vehicle line.
   (estimate as any).vehicle_platform_label = (estimate as any).vehicle_platforms?.label || null;
-  const { data: lines } = await supabase
-    .from('estimate_line_items')
-    .select('*')
-    .eq('estimate_id', estimate.id)
-    .order('sort_order');
-  // Enhanced estimate: attach each line's catalog photo + vendor product
-  // link so the approval page and the signed snapshot both show them.
-  const enriched = await enrichLinesWithPartAssets(supabase, lines || []);
-  return { estimate, lines: enriched };
+  // Enhanced estimate: the lines carry each part's catalog photo + vendor
+  // product link, so the approval page and the signed snapshot both show them.
+  const lines = await loadApprovalLines(supabase, estimate.id);
+  return { estimate, lines };
 }
 
 /**
@@ -87,17 +82,7 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
     status: 'ready',
     estimate: publicEstimate(estimate),
     graphics,
-    lines: (lines || []).map((l: any) => ({
-      id: l.id,
-      item_number: l.item_number,
-      description: l.description,
-      quantity: l.quantity,
-      unit_price: l.unit_price,
-      line_total: l.line_total,
-      notes: l.notes,
-      image_url: l.part_image_url || null,
-      product_url: l.part_product_url || null,
-    })),
+    lines: publicLines(lines),
   });
 }
 
@@ -188,41 +173,6 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
 
   await notifySalesRep(estimate, 'accepted');
   return NextResponse.json({ status: 'submitted_accepted' });
-}
-
-function publicEstimate(est: any) {
-  return {
-    id: est.id,
-    estimate_number: est.estimate_number,
-    title: est.title,
-    customer_name: est.customer_name,
-    // Vehicle identity — the email/PDF/snapshot all show it; the approval
-    // page must identify the same vehicle the customer is approving.
-    vin: est.vin,
-    unit_number: est.unit_number,
-    vehicle_year: est.vehicle_year,
-    vehicle_other: est.vehicle_other,
-    vehicle_wheelbase: est.vehicle_wheelbase,
-    vehicle_roof: est.vehicle_roof,
-    po_number: est.po_number,
-    expiration_date: est.expiration_date,
-    tax_rate: est.tax_rate,
-    tax_exempt: est.tax_exempt,
-    tax_amount: est.tax_amount,
-    labor_rate: est.labor_rate,
-    labor_hours: est.labor_hours,
-    labor_hours_override: est.labor_hours_override,
-    labor_total: est.labor_total,
-    subtotal: est.subtotal,
-    grand_total: est.grand_total,
-    notes: est.notes,
-    install_instructions: est.install_instructions,
-    on_site_contact_name: est.on_site_contact_name,
-    on_site_contact_phone: est.on_site_contact_phone,
-    delivery_preferences: est.delivery_preferences,
-    customer_approved_at: est.customer_approved_at,
-    customer_rejected_at: est.customer_rejected_at,
-  };
 }
 
 async function notifySalesRep(estimate: any, verdict: 'accepted' | 'rejected', reason?: string) {
