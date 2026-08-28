@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import ProofThumbnail from '@/components/ProofThumbnail';
 import { DropZone } from '@/components/DropZone';
+import { estimateHeadlineNumber } from '@/lib/estimate-number';
 
 interface Task {
   id: string;
@@ -68,6 +69,7 @@ interface Props {
 interface LinkedEstimateLite {
   id: string;
   estimate_number: string;
+  netsuite_estimate_number: string | null;
   netsuite_so_id: string | null;
   netsuite_so_number: string | null;
   customer_approved: boolean | null;
@@ -124,7 +126,7 @@ export default function CompletionModal({
     (async () => {
       const { data } = await supabase
         .from('estimates')
-        .select('id, estimate_number, netsuite_so_id, netsuite_so_number, customer_approved, grand_total')
+        .select('id, estimate_number, netsuite_estimate_number, netsuite_so_id, netsuite_so_number, customer_approved, grand_total')
         .or(`fleet_checkin_id.eq.${vehicleId}${sourceEstimateId ? `,id.eq.${sourceEstimateId}` : ''}`)
         .order('created_at', { ascending: false });
       setLinkedEstimates((data || []) as LinkedEstimateLite[]);
@@ -611,8 +613,8 @@ export default function CompletionModal({
                         title={est.netsuite_so_id ? 'Bill the estimate’s sales order as a NetSuite invoice' : 'Convert the estimate to a sales order, then bill it as a NetSuite invoice'}
                         style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', opacity: invWorking ? 0.6 : 1 }}>
                         {invWorking === est.id || invWorking === est.netsuite_so_id ? 'Working…'
-                          : est.netsuite_so_id ? `Invoice SO ${est.netsuite_so_number || `#${est.netsuite_so_id}`} (${est.estimate_number})`
-                          : `Convert ${est.estimate_number} to SO & Invoice`}
+                          : est.netsuite_so_id ? `Invoice SO ${est.netsuite_so_number || `#${est.netsuite_so_id}`} (${estimateHeadlineNumber(est)})`
+                          : `Convert ${estimateHeadlineNumber(est)} to SO & Invoice`}
                       </button>
                       {overrideFor === est.id && (
                         <div style={{ marginTop: '6px', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { deepLinks } from '@/lib/deep-links';
 import type { BrowsePart, KitWithMembers } from '@/components/PartCatalogBrowser';
+import { estimateHeadlineNumber, estimateNumberMatches } from '@/lib/estimate-number';
 
 /**
  * "Add to estimate" chooser for the standalone catalog (the /parts Visual
@@ -22,6 +23,7 @@ import type { BrowsePart, KitWithMembers } from '@/components/PartCatalogBrowser
 interface EstimateLite {
   id: string;
   estimate_number: string;
+  netsuite_estimate_number?: string | null;
   title: string | null;
   customer_name: string | null;
   status: string;
@@ -83,7 +85,7 @@ export default function AddToEstimateModal({ part, kit, onClose }: {
     const list = estimates || [];
     const matched = s
       ? list.filter(e =>
-          e.estimate_number?.toLowerCase().includes(s) ||
+          estimateNumberMatches(e, s) ||
           e.title?.toLowerCase().includes(s) ||
           e.customer_name?.toLowerCase().includes(s))
       : list;
@@ -143,7 +145,7 @@ export default function AddToEstimateModal({ part, kit, onClose }: {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.success) throw new Error(data.error || 'Add failed');
-      setDone({ id: est.id, number: data.estimate_number || est.estimate_number, added: data.added || 0 });
+      setDone({ id: est.id, number: estimateHeadlineNumber(est) || data.estimate_number, added: data.added || 0 });
     } catch (err: any) {
       setError(err?.message || 'Network error — please try again');
     }
@@ -275,7 +277,7 @@ export default function AddToEstimateModal({ part, kit, onClose }: {
                 >
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ fontSize: '12px', fontWeight: 800, fontFamily: 'monospace', color: 'var(--text-primary)' }}>{e.estimate_number}</span>
+                      <span style={{ fontSize: '12px', fontWeight: 800, fontFamily: 'monospace', color: 'var(--text-primary)' }}>{estimateHeadlineNumber(e)}</span>
                       <span style={{ fontSize: '9px', fontWeight: 800, padding: '1px 6px', borderRadius: '5px', background: `${STATUS_COLORS[e.status] || '#94a3b8'}22`, color: STATUS_COLORS[e.status] || '#94a3b8', textTransform: 'uppercase' }}>{e.status}</span>
                     </div>
                     <div style={{ fontSize: '11px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
