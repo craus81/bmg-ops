@@ -72,7 +72,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     } else if (thread.context_entity_type === 'estimate') {
       const { data } = await supabase
         .from('estimates')
-        .select('id, estimate_number, title, customer_name, status')
+        .select('id, estimate_number, netsuite_estimate_number, title, customer_name, status')
         .eq('id', thread.context_entity_id)
         .maybeSingle();
       entity = data;

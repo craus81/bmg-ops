@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
+import { estimateHeadlineNumber } from '@/lib/estimate-number';
 
 type ThreadFilter = 'all' | 'unread' | 'mine' | 'unassigned' | 'archived';
 
@@ -307,7 +308,7 @@ export default function AdminInboxPage() {
                     )}
                     {detail.thread.context_entity_type === 'purchase_order' && `PO ${detail.entity.po_number}`}
                     {detail.thread.context_entity_type === 'graphics_job' && `Job ${detail.entity.job_number} · ${detail.entity.title || ''}`}
-                    {detail.thread.context_entity_type === 'estimate' && `Estimate ${detail.entity.estimate_number} · ${detail.entity.title || ''}`}
+                    {detail.thread.context_entity_type === 'estimate' && `Estimate ${estimateHeadlineNumber(detail.entity)} · ${detail.entity.title || ''}`}
                   </div>
                 )}
               </div>

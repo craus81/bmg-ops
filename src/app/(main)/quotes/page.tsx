@@ -31,6 +31,8 @@ interface QuoteItem {
   type: 'estimate' | 'wrap';
   id: string;
   number: string;
+  /** The estimate's other number when it has two (see estimate-number.ts). */
+  altNumber: string | null;
   title: string;
   customer: string;
   total: number;
@@ -201,6 +203,7 @@ export default function QuotesPage() {
     .filter(i => !mineOnly || i.repId === user?.id)
     .filter(i => !q
       || i.number.toLowerCase().includes(q)
+      || (i.altNumber || '').toLowerCase().includes(q)
       || i.customer.toLowerCase().includes(q)
       || i.title.toLowerCase().includes(q));
   const groupCounts = base.reduce((m, i) => { m[groupOf(i)] = (m[groupOf(i)] || 0) + 1; return m; }, {} as Record<Group, number>);
@@ -296,6 +299,9 @@ export default function QuotesPage() {
                       {item.type === 'estimate' ? 'Estimate' : 'Wrap'}
                     </span>
                     <span style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{item.number}</span>
+                    {item.altNumber && (
+                      <span title="FleetSuite's own estimate number — NetSuite's is the one shown first" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>{item.altNumber}</span>
+                    )}
                     <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{item.customer}</span>
                     <span style={{ fontSize: '13px', fontWeight: 800, color: '#f472b6' }}>{fmtMoney(item.total)}</span>
                     {(group === 'all' || !isSent) && (

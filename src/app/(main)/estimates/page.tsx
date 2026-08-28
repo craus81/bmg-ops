@@ -21,6 +21,7 @@ import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
 import NumberInput from '@/components/NumberInput';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
+import { estimateHeadlineNumber, estimateAltNumber, estimateNumberMatches } from '@/lib/estimate-number';
 
 interface Part {
   id: string;
@@ -2056,7 +2057,7 @@ export default function EstimatesPage() {
       if (!search) return true;
       const s = search.toLowerCase();
       return (
-        e.estimate_number?.toLowerCase().includes(s) ||
+        estimateNumberMatches(e, s) ||
         e.customer_name?.toLowerCase().includes(s) ||
         e.title?.toLowerCase().includes(s) ||
         e.vin?.toLowerCase().includes(s) ||
@@ -2106,15 +2107,15 @@ export default function EstimatesPage() {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
                         <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {est.title || est.estimate_number}
+                          {est.title || estimateHeadlineNumber(est)}
                         </div>
                       </div>
                       <div style={{ fontSize: '10px', color: 'var(--text-label)', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                        <span>#{est.estimate_number}</span>
+                        <span>#{estimateHeadlineNumber(est)}</span>
                         {est.customer_name && <span>{est.customer_name}</span>}
                         <span style={{ color: 'var(--text-body)', fontWeight: 700 }}>{fmt(est.grand_total)}</span>
                         <span>{new Date(est.created_at).toLocaleDateString()}</span>
-                        {est.netsuite_estimate_number && <span style={{ color: '#a78bfa' }}>NS: {est.netsuite_estimate_number}</span>}
+                        {estimateAltNumber(est) && <span style={{ color: '#a78bfa' }} title="FleetSuite's own estimate number — NetSuite's is the one shown first">FS: {estimateAltNumber(est)}</span>}
                         {est.netsuite_so_number && <span style={{ color: '#22c55e' }}>SO: {est.netsuite_so_number}</span>}
                       </div>
                     </div>
@@ -3575,7 +3576,7 @@ export default function EstimatesPage() {
           sending also logs the follow-up (resets the queue's quiet clock). */}
       {followupEmailFor && (
         <EmailComposeModal
-          title={`Follow Up — Estimate #${followupEmailFor.estimate_number}`}
+          title={`Follow Up — Estimate #${estimateHeadlineNumber(followupEmailFor)}`}
           sendLabel="Send Follow-Up"
           messagePlaceholder="Personal note — shown at the top of the follow-up email…"
           fetchPreview={fetchFollowupEmailPreview}
@@ -3595,7 +3596,7 @@ export default function EstimatesPage() {
             borderRadius: '14px', padding: '16px',
           }}>
             <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '2px' }}>
-              Log Follow-Up — #{followupNoteFor.estimate_number}
+              Log Follow-Up — #{estimateHeadlineNumber(followupNoteFor)}
             </div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>
               {followupNoteFor.customer_name || 'No customer'} · {fmt(followupNoteFor.grand_total)}

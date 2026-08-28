@@ -16,6 +16,7 @@ import { RollNesting, RollFilmInfo } from '@/components/RollNesting';
 import NumberInput from '@/components/NumberInput';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
+import { estimateHeadlineNumber } from '@/lib/estimate-number';
 import {
   DEFAULT_ROLL,
   MAX_ROLLS_PER_FILM,
@@ -390,7 +391,7 @@ export default function WrapQuotePage() {
     (async () => {
       const { data: est } = await supabase
         .from('estimates')
-        .select('id, estimate_number, customer_id, customer_name, vehicle_year, vehicle_roof, vehicle_wheelbase, vehicle_platform_id, vehicle_other, vin, unit_number, vehicle_platforms(label)')
+        .select('id, estimate_number, netsuite_estimate_number, customer_id, customer_name, vehicle_year, vehicle_roof, vehicle_wheelbase, vehicle_platform_id, vehicle_other, vin, unit_number, vehicle_platforms(label)')
         .eq('id', estId)
         .maybeSingle();
       if (!est) return;
@@ -403,7 +404,7 @@ export default function WrapQuotePage() {
         est.unit_number ? `Unit ${est.unit_number}` : null,
         est.vin ? `VIN ${est.vin}` : null,
       ].filter(Boolean).join(' · ') || null;
-      setForEstimate({ id: est.id, number: est.estimate_number, customerName: est.customer_name, vehicle });
+      setForEstimate({ id: est.id, number: estimateHeadlineNumber(est), customerName: est.customer_name, vehicle });
       // Prefill on a fresh quote only — never clobber a loaded one.
       if (!savedQuoteId) {
         // Customer: same fields the customer picker fills, so the quote tab
