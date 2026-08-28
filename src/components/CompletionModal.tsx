@@ -106,6 +106,9 @@ export default function CompletionModal({
   // ── Admin invoicing (turn the vehicle's SO or estimate into a NetSuite
   // invoice, right from the completion process) ──
   const [invNumber, setInvNumber] = useState<string | null>(invoiceNumber || null);
+  // The item fulfillment the invoice was billed from — worth showing, since
+  // fulfilling is what moved the stock.
+  const [invFulfillment, setInvFulfillment] = useState<string | null>(null);
   const [invWorking, setInvWorking] = useState<string | null>(null); // SO id in flight
   const [invError, setInvError] = useState<string | null>(null);
   const [linkedEstimates, setLinkedEstimates] = useState<LinkedEstimateLite[]>([]);
@@ -149,6 +152,7 @@ export default function CompletionModal({
         return;
       }
       setInvNumber(data.invoiceNumber || data.invoiceId || null);
+      setInvFulfillment(data.fulfillmentNumber || data.fulfillmentId || null);
       onInvoiced?.();
     } catch (e: any) {
       setInvError(e?.message || 'Network error creating the invoice');
@@ -588,16 +592,21 @@ export default function CompletionModal({
                 NetSuite Invoice <span style={{ fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>· admin</span>
               </div>
               {invNumber ? (
-                <div style={{ fontSize: '12px', fontWeight: 700, color: '#22c55e' }}>✓ Invoice #{invNumber} created for this vehicle.</div>
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#22c55e' }}>✓ Invoice #{invNumber} created for this vehicle.</div>
+                  {invFulfillment && (
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Fulfilled on {invFulfillment} — inventory relieved in NetSuite.</div>
+                  )}
+                </div>
               ) : invoiceSos.length > 0 ? (
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                   {invoiceSos.map(so => (
                     <button key={so.netsuite_sales_order_id}
                       onClick={() => invoiceSalesOrder(so.netsuite_sales_order_id)}
                       disabled={!!invWorking}
-                      title="Bill the full sales order as a NetSuite invoice and stamp it on this vehicle"
+                      title="Fulfill the full sales order in NetSuite — this relieves inventory and posts COGS — then bill it as an invoice and stamp it on this vehicle"
                       style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', opacity: invWorking ? 0.6 : 1 }}>
-                      {invWorking === so.netsuite_sales_order_id ? 'Invoicing…' : `Invoice SO ${so.sales_order_number || `#${so.netsuite_sales_order_id}`}`}
+                      {invWorking === so.netsuite_sales_order_id ? 'Fulfilling & invoicing…' : `Fulfill & Invoice SO ${so.sales_order_number || `#${so.netsuite_sales_order_id}`}`}
                     </button>
                   ))}
                 </div>
@@ -608,11 +617,13 @@ export default function CompletionModal({
                       <button
                         onClick={() => convertAndInvoice(est)}
                         disabled={!!invWorking}
-                        title={est.netsuite_so_id ? 'Bill the estimate’s sales order as a NetSuite invoice' : 'Convert the estimate to a sales order, then bill it as a NetSuite invoice'}
+                        title={est.netsuite_so_id
+                          ? 'Fulfill the estimate’s sales order (relieves inventory, posts COGS), then bill it as a NetSuite invoice'
+                          : 'Convert the estimate to a sales order, fulfill it (relieves inventory, posts COGS), then bill it as a NetSuite invoice'}
                         style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', opacity: invWorking ? 0.6 : 1 }}>
                         {invWorking === est.id || invWorking === est.netsuite_so_id ? 'Working…'
-                          : est.netsuite_so_id ? `Invoice SO ${est.netsuite_so_number || `#${est.netsuite_so_id}`} (${est.estimate_number})`
-                          : `Convert ${est.estimate_number} to SO & Invoice`}
+                          : est.netsuite_so_id ? `Fulfill & Invoice SO ${est.netsuite_so_number || `#${est.netsuite_so_id}`} (${est.estimate_number})`
+                          : `Convert ${est.estimate_number} to SO, Fulfill & Invoice`}
                       </button>
                       {overrideFor === est.id && (
                         <div style={{ marginTop: '6px', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>

@@ -129,6 +129,16 @@ they tell you to go back to auto-shipping.
   has caused repeated field bugs ("part not in catalog", stale
   inventory, inflated waiting-on-PO counts).
 
+- **Invoicing a sales order fulfills it first** — see
+  `docs/netsuite-fulfill-and-invoice.md`. This account runs Advanced
+  Shipping, so NetSuite's SO→Invoice transform carries ONLY non-fulfillable
+  lines (labor, freight); parts need an Item Fulfillment first, which
+  **relieves inventory and posts COGS**. Never fulfill a sales order twice:
+  `/api/vehicle-tracking/invoice` re-reads NetSuite's own `ItemShip` records
+  and holds the `UNIQUE(netsuite_so_id)` claim in `netsuite_so_fulfillments`
+  (migration 235) before creating one, and a failed fulfillment never falls
+  through to invoicing.
+
 - **CNI installer payouts → NetSuite vendor bills:** see
   `docs/cni-vendor-bills.md`. Key trap: an installer's
   `cni_profiles.netsuite_vendor_id` must be the vendor's numeric NetSuite
