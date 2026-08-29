@@ -81,6 +81,21 @@ interface LinkedGraphicsJob {
   title: string;
   status: string;
   assigned_to: string | null;
+  /** Which of this job's proof files ride on the estimate's customer
+   *  surfaces (migration 235) — seeds the compose screen's proof picker. */
+  estimate_attach?: { file_ids?: string[] } | null;
+  /** The file a proof-only send showed the customer — the picker's default
+   *  when nothing is stored yet. */
+  approval_proof_file_id?: string | null;
+}
+
+/** A linked job's file as the approval compose proof picker lists it. */
+interface JobProofFile {
+  id: string;
+  job_id: string;
+  file_name: string;
+  file_type: string | null;
+  file_size: number | null;
 }
 
 // A checked-in vehicle (fleet_checkins) as the link button/picker sees it.
@@ -511,6 +526,11 @@ export default function EstimatesPage() {
   // wrap quotes with estimate_attach) — from the preview response; null =
   // no attachment.
   const [approvalPdfName, setApprovalPdfName] = useState<string | null>(null);
+  // Proof picker for the approval compose (linked graphics jobs): each
+  // job's files, and which are checked to ride on the send. Approving the
+  // estimate will also approve the jobs whose proofs are included.
+  const [approvalProofFiles, setApprovalProofFiles] = useState<Record<string, JobProofFile[]>>({});
+  const [approvalProofSelections, setApprovalProofSelections] = useState<Record<string, string[]>>({});
   // Email-the-PDF compose modal (FleetSuite enhanced-estimate copy).
   const [pdfEmailModal, setPdfEmailModal] = useState(false);
   // Follow-up actions on sent estimates (list rows): compose modal target
@@ -1480,6 +1500,14 @@ export default function EstimatesPage() {
   // Compose + preview flow (E4): open the modal, persist edits so the preview
   // matches, then render the exact email before the staffer commits to send.
 
+  // The compose picker's selection as the API expects it — the FULL desired
+  // state across linked jobs (a job with nothing checked contributes
+  // nothing, and the send clears its stored selection).
+  const approvalProofSelectionPayload = () =>
+    Object.entries(approvalProofSelections)
+      .map(([jobId, fileIds]) => ({ jobId, fileIds }))
+      .filter(s => s.fileIds.length > 0);
+
   const fetchApprovalPreview = async (fields: EmailComposeFields) => {
     if (!editingId) return { error: 'No estimate open' };
     try {
@@ -1490,6 +1518,7 @@ export default function EstimatesPage() {
           preview: true,
           emails: fields.emails,
           message: fields.message || undefined,
+          proofSelections: approvalProofSelectionPayload(),
         }),
       });
       const data = await res.json();
@@ -1514,6 +1543,32 @@ export default function EstimatesPage() {
     setSendingForApproval(true);
     const currentStatus = estimates.find(e => e.id === editingId)?.status || 'draft';
     await saveEstimate(currentStatus);
+
+    // Proof picker: the linked graphics jobs' files, with defaults per job —
+    // the stored selection, else the file a proof-only send already showed
+    // the customer, else the newest upload (the artist's usual last step).
+    const files: Record<string, JobProofFile[]> = {};
+    const selections: Record<string, string[]> = {};
+    if (linkedGraphicsJobs.length > 0) {
+      const { data: fileRows } = await supabase
+        .from('graphics_job_files')
+        .select('id, job_id, file_name, file_type, file_size, uploaded_at')
+        .in('job_id', linkedGraphicsJobs.map(j => j.id))
+        .order('uploaded_at', { ascending: false });
+      for (const j of linkedGraphicsJobs) {
+        const jobFiles = ((fileRows || []) as (JobProofFile & { uploaded_at: string })[]).filter(f => f.job_id === j.id);
+        if (jobFiles.length === 0) continue;
+        files[j.id] = jobFiles;
+        const stored = (j.estimate_attach?.file_ids || []).filter(id => jobFiles.some(f => f.id === id));
+        const fallback = j.approval_proof_file_id && jobFiles.some(f => f.id === j.approval_proof_file_id)
+          ? [j.approval_proof_file_id]
+          : [jobFiles[0].id];
+        selections[j.id] = stored.length > 0 ? stored : fallback;
+      }
+    }
+    setApprovalProofFiles(files);
+    setApprovalProofSelections(selections);
+
     setSendingForApproval(false);
     setApprovalPdfName(null);
     setApprovalModal(true);
@@ -1530,6 +1585,7 @@ export default function EstimatesPage() {
           emails: fields.emails,
           bccSelf: fields.bccSelf,
           message: fields.message || undefined,
+          proofSelections: approvalProofSelectionPayload(),
         }),
       });
       data = await res.json();
@@ -1555,6 +1611,9 @@ export default function EstimatesPage() {
       : null;
     await dialog.alert(`Approval link sent. Link: ${data.approvalUrl}\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n')}`);
     loadEstimates(true);
+    // The send persisted the proof selection onto the linked jobs
+    // (estimate_attach) — refresh so the panel reflects it.
+    if (editingId) loadLinkedGraphicsJobs(editingId);
     return { ok: true };
   };
 
@@ -1840,7 +1899,7 @@ export default function EstimatesPage() {
   const loadLinkedGraphicsJobs = useCallback(async (estimateId: string) => {
     const { data } = await supabase
       .from('graphics_jobs')
-      .select('id, job_number, title, status, assigned_to')
+      .select('id, job_number, title, status, assigned_to, estimate_attach, approval_proof_file_id')
       .eq('estimate_id', estimateId)
       .order('created_at', { ascending: true });
     setLinkedGraphicsJobs((data as LinkedGraphicsJob[]) || []);
@@ -3561,9 +3620,68 @@ export default function EstimatesPage() {
           messagePlaceholder="Optional note to the customer — added above the estimate…"
           allowSendWithoutTo
           emptyToNote="No email on file — add a contact, or it sends by SMS only if a phone is on file."
-          intro={approvalPdfName ? (
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              📎 <b style={{ color: 'var(--text-secondary)' }}>{approvalPdfName}</b> is attached automatically — the merged estimate PDF with the linked wrap quote&apos;s coverage picture, proofs, and vinyl details.
+          previewKey={JSON.stringify(approvalProofSelections)}
+          intro={(approvalPdfName || Object.keys(approvalProofFiles).length > 0) ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {/* Proof picker: which linked graphics-job files ride on this
+                  send. Approving the estimate then also approves those
+                  jobs' proofs — one customer click for design + price. */}
+              {Object.keys(approvalProofFiles).length > 0 && (
+                <div style={{ padding: '10px', borderRadius: '8px', background: 'var(--bg)', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                    Include graphic proofs — customer approves design + price together
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '160px', overflowY: 'auto' }}>
+                    {linkedGraphicsJobs.filter(j => approvalProofFiles[j.id]?.length).map(j => (
+                      <div key={j.id}>
+                        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '3px' }}>
+                          {[j.job_number ? `Job #${j.job_number}` : null, j.title].filter(Boolean).join(' — ')}
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                          {approvalProofFiles[j.id].map(f => {
+                            const checked = (approvalProofSelections[j.id] || []).includes(f.id);
+                            return (
+                              <label key={f.id} style={{
+                                display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px',
+                                borderRadius: '6px', cursor: 'pointer', fontSize: '11px',
+                                background: checked ? 'rgba(59,130,246,0.08)' : 'var(--subtle-bg)',
+                                border: '1px solid ' + (checked ? 'rgba(59,130,246,0.3)' : 'var(--border)'),
+                                color: 'var(--text-secondary)',
+                              }}>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => setApprovalProofSelections(prev => {
+                                    const cur = prev[j.id] || [];
+                                    return {
+                                      ...prev,
+                                      [j.id]: checked ? cur.filter(id => id !== f.id) : [...cur, f.id],
+                                    };
+                                  })}
+                                  style={{ accentColor: '#3b82f6' }}
+                                />
+                                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.file_name}</span>
+                                {f.file_type && (
+                                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>{f.file_type.split('/')[1] || f.file_type}</span>
+                                )}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                    Checked files appear in the email, on the approval page, and in the attached PDF.
+                    When the customer accepts, the proof is approved for production too — no separate proof send needed.
+                  </div>
+                </div>
+              )}
+              {approvalPdfName && (
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  📎 <b style={{ color: 'var(--text-secondary)' }}>{approvalPdfName}</b> is attached automatically — the merged estimate PDF with the linked coverage pictures, proofs, and vinyl details.
+                </div>
+              )}
             </div>
           ) : undefined}
           fetchPreview={fetchApprovalPreview}

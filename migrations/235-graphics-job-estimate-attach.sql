@@ -1,0 +1,20 @@
+-- Migration 235: what a graphics job contributes to its linked estimate's
+-- customer-facing surfaces (the estimate approval email, the public
+-- approval page, the merged estimate PDF, and the frozen signed snapshot).
+--
+-- Mirrors wrap_quotes.estimate_attach (migration 223). Written by
+-- POST /api/estimates/[id]/send-for-approval from the compose screen's
+-- per-job proof picker:
+--
+--   { "file_ids": ["<graphics_job_files.id>", ...] }
+--
+-- NULL / empty = the job contributes nothing (pre-feature behavior: the
+-- estimate_id link is invoicing lineage only).
+--
+-- When the customer accepts an estimate whose send included a job's proof,
+-- the approval route propagates customer_approved onto that job — one
+-- click approves design + price together — so this column is also the
+-- record of WHICH jobs an estimate approval is allowed to approve.
+-- Owned by the estimate send/approval routes; the job edit form's
+-- EDITABLE_FIELDS allowlist must never include it.
+ALTER TABLE graphics_jobs ADD COLUMN IF NOT EXISTS estimate_attach JSONB;
