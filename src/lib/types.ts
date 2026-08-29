@@ -572,6 +572,11 @@ export interface GraphicsJob {
   updated_at: string;
   // Estimate & Invoice linkage
   estimate_id: string | null;
+  /** Proof files this job contributes to its linked estimate's customer
+   *  surfaces (migration 235, mirrors wrap_quotes.estimate_attach):
+   *  { file_ids: graphics_job_files ids }. Owned by the estimate
+   *  send/approval routes — never write it from an edit form. */
+  estimate_attach: { file_ids?: string[] } | null;
   // Source wrap quote (null unless spawned from / linked to one)
   wrap_quote_id: string | null;
   po_number: string | null;

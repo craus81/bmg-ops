@@ -83,6 +83,65 @@ describe('renderEstimateDocument vehicle identity (K5)', () => {
 // Enhanced-estimate line assets: photo thumbnail + vendor product link,
 // attached by enrichLinesWithPartAssets and rendered here for the email,
 // the approval page's sibling markup, and the signed snapshot alike.
+// Graphic proofs from linked graphics jobs (graphics_jobs.estimate_attach)
+// render into the same legal document — the combined design + price send.
+describe('renderEstimateDocument graphic proofs', () => {
+  const baseEst = {
+    estimate_number: 'EST-2608-TEST',
+    customer_name: 'Acme Fleet',
+    subtotal: 100,
+    grand_total: 100,
+  };
+
+  it('renders the Graphic Proofs section with an inline image and a PDF link', () => {
+    const html = renderEstimateDocument(baseEst, [], {
+      proofs: [{
+        jobNumber: '319',
+        jobTitle: 'JW Mechanical door logos',
+        files: [
+          { name: 'door-proof.png', url: 'https://pub.example.com/graphics-proofs/319/door-proof.png', isPdf: false },
+          { name: 'layout.pdf', url: 'https://pub.example.com/graphics-proofs/319/layout.pdf', isPdf: true },
+        ],
+      }],
+    });
+    expect(html).toContain('Graphic Proofs — For Your Approval');
+    expect(html).toContain('Job #319 — JW Mechanical door logos');
+    expect(html).toContain('graphics-proofs/319/door-proof.png');
+    expect(html).toContain('Open layout.pdf (PDF)');
+  });
+
+  it('lists a PDF proof by name when its url is withheld (frozen snapshot)', () => {
+    const html = renderEstimateDocument(baseEst, [], {
+      proofs: [{
+        jobNumber: '319',
+        jobTitle: null,
+        files: [{ name: 'layout.pdf', url: null, isPdf: true }],
+      }],
+    });
+    expect(html).toContain('Graphic Proof — For Your Approval');
+    expect(html).toContain('layout.pdf (PDF proof)');
+    expect(html).not.toContain('Open layout.pdf');
+  });
+
+  it('omits the section when no proofs are passed', () => {
+    const html = renderEstimateDocument(baseEst, []);
+    expect(html).not.toContain('Graphic Proof');
+  });
+
+  it('escapes proof names and urls', () => {
+    const html = renderEstimateDocument(baseEst, [], {
+      proofs: [{
+        jobNumber: null,
+        jobTitle: '<script>x</script>',
+        files: [{ name: '<img>.png', url: 'https://pub.example.com/a"b.png', isPdf: false }],
+      }],
+    });
+    expect(html).not.toContain('<script>x</script>');
+    expect(html).toContain('&lt;script&gt;');
+    expect(html).toContain('a&quot;b.png');
+  });
+});
+
 describe('renderEstimateDocument line assets', () => {
   const baseEst = { estimate_number: 'EST-1', customer_name: 'Acme', subtotal: 10, grand_total: 10 };
   const baseLine = { id: 'l1', item_number: 'RR-KIT-148', description: 'Shelving kit', quantity: 1, unit_price: 10, line_total: 10 };

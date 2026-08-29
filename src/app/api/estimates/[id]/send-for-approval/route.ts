@@ -8,7 +8,7 @@ import { sendSMS } from '@/lib/sms-provider';
 import { renderEstimateDocument } from '@/lib/estimate-document';
 import { getEmailSignature } from '@/lib/email-signature';
 import { enrichLinesWithPartAssets } from '@/lib/estimate-line-parts';
-import { loadEstimateGraphics } from '@/lib/estimate-graphics';
+import { loadEstimateGraphics, loadEstimateProofs, type EstimateProofBlock } from '@/lib/estimate-graphics';
 import { r2PublicUrl } from '@/lib/r2';
 import { validateBody, z } from '@/lib/validate';
 
@@ -38,6 +38,16 @@ const SendForApprovalSchema = z.object({
   // Preview: render exactly what would be sent (recipient, subject, HTML
   // body) WITHOUT minting a token, sending, or marking the estimate sent.
   preview: z.boolean().optional().default(false),
+  // Per-job proof picks from the compose screen — which graphics_job_files
+  // of each LINKED graphics job ride on this estimate's customer surfaces.
+  // The full desired state: a linked job absent from the list (or with an
+  // empty fileIds) contributes nothing. Persisted to
+  // graphics_jobs.estimate_attach on the real send (previews only render
+  // it); omit the field entirely to leave the stored selection untouched.
+  proofSelections: z.array(z.object({
+    jobId: z.string().uuid(),
+    fileIds: z.array(z.string().uuid()).max(10),
+  })).max(10).optional(),
 });
 
 /**
@@ -142,20 +152,85 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   // the frozen snapshot carry — one story on every surface.
   const { summaries: approvalGraphics } = await loadEstimateGraphics(supabase, estimate.id);
 
+  // ── Graphic proofs from linked graphics jobs ──────────────────────────
+  // The compose screen's per-job proof picker arrives as proofSelections —
+  // the full desired state. Validate it against the actual link graph
+  // (jobs linked to THIS estimate, files belonging to THAT job), persist
+  // it to graphics_jobs.estimate_attach on the real send, and render the
+  // same blocks into the email body the approval page / PDF / snapshot
+  // will load. Approving this send later approves exactly these jobs.
+  let proofBlocks: EstimateProofBlock[] = [];
+  {
+    const selections = body.proofSelections;
+    if (selections !== undefined) {
+      const { data: linkedJobs, error: linkErr } = await supabase
+        .from('graphics_jobs')
+        .select('id')
+        .eq('estimate_id', estimate.id);
+      if (linkErr) {
+        return NextResponse.json({ error: 'Could not load linked graphics jobs: ' + linkErr.message }, { status: 500 });
+      }
+      const linkedIds = new Set((linkedJobs || []).map(j => j.id));
+      const cleaned = selections
+        .map(s => ({ jobId: s.jobId, fileIds: [...new Set(s.fileIds)] }))
+        .filter(s => s.fileIds.length > 0);
+      for (const s of cleaned) {
+        if (!linkedIds.has(s.jobId)) {
+          return NextResponse.json({ error: 'A selected graphics job is not linked to this estimate. Reload and try again.' }, { status: 400 });
+        }
+      }
+      const allFileIds = [...new Set(cleaned.flatMap(s => s.fileIds))];
+      if (allFileIds.length > 0) {
+        const { data: fileRows } = await supabase
+          .from('graphics_job_files')
+          .select('id, job_id')
+          .in('id', allFileIds);
+        const fileJob = new Map((fileRows || []).map(f => [f.id, f.job_id]));
+        for (const s of cleaned) {
+          if (s.fileIds.some(id => fileJob.get(id) !== s.jobId)) {
+            return NextResponse.json({ error: 'Some selected proof files do not belong to their graphics job. Reload and try again.' }, { status: 400 });
+          }
+        }
+      }
+      if (!body.preview) {
+        // Persist the full desired state on every linked job — selected
+        // jobs get their file list, the rest are cleared.
+        const byJob = new Map(cleaned.map(s => [s.jobId, s.fileIds]));
+        for (const jobId of linkedIds) {
+          const fileIds = byJob.get(jobId);
+          const { error: attachErr } = await supabase
+            .from('graphics_jobs')
+            .update({ estimate_attach: fileIds ? { file_ids: fileIds } : null, updated_at: new Date().toISOString() })
+            .eq('id', jobId);
+          if (attachErr) {
+            return NextResponse.json({ error: 'Could not save the proof selection: ' + attachErr.message }, { status: 500 });
+          }
+        }
+        proofBlocks = await loadEstimateProofs(supabase, estimate.id);
+      } else {
+        proofBlocks = await loadEstimateProofs(supabase, estimate.id, cleaned);
+      }
+    } else {
+      // Legacy caller without the picker — the stored selection still rides.
+      proofBlocks = await loadEstimateProofs(supabase, estimate.id);
+    }
+  }
+
   // Preview: show exactly what would go out (message, line items, totals,
   // Approve button) without minting a token, sending, or touching status.
   // The CTA points at a placeholder — the real link is minted on send.
   if (body.preview) {
     // Predict the auto-attachment so the compose screen can say so: linked
-    // wrap quotes with estimate_attach mean the merged estimate PDF rides
-    // along on the real send (generated then, not here — this only names it).
+    // wrap quotes with estimate_attach — or included graphics-job proofs —
+    // mean the merged estimate PDF rides along on the real send (generated
+    // then, not here — this only names it).
     let attachments: string[] = [];
     const { count: attachCount } = await supabase
       .from('wrap_quotes')
       .select('id', { count: 'exact', head: true })
       .eq('estimate_id', estimate.id)
       .not('estimate_attach', 'is', null);
-    if ((attachCount || 0) > 0) {
+    if ((attachCount || 0) > 0 || proofBlocks.length > 0) {
       const { estimatePdfFilename } = await import('@/lib/estimate-pdf');
       attachments = [estimatePdfFilename(estimate)];
     }
@@ -168,6 +243,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       ctaNote: `A unique, secure link is generated when you send. It expires in ${expiryDays} days.`,
       signature,
       graphics: approvalGraphics,
+      proofs: proofBlocks,
     });
     return NextResponse.json({ preview: true, to: emailList.join(', ') || null, subject, html, attachments });
   }
@@ -208,13 +284,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       ctaNote: `This link expires in ${expiryDays} days.`,
       signature,
       graphics: approvalGraphics,
+      proofs: proofBlocks,
     });
     const bcc = body.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
 
     // When linked wrap quotes contribute assets (estimate_attach — coverage
-    // diagram, proofs, vinyl details), attach the merged estimate PDF so
-    // the customer approves ONE document carrying all of it. Best-effort:
-    // a PDF hiccup never blocks the approval email itself.
+    // diagram, proofs, vinyl details) or linked graphics jobs contribute
+    // proof files, attach the merged estimate PDF so the customer approves
+    // ONE document carrying all of it. Best-effort: a PDF hiccup never
+    // blocks the approval email itself.
     let approvalAttachments: { filename: string; content: Buffer; contentType: string }[] | undefined;
     try {
       const { count: attachCount } = await supabase
@@ -222,7 +300,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         .select('id', { count: 'exact', head: true })
         .eq('estimate_id', estimate.id)
         .not('estimate_attach', 'is', null);
-      if ((attachCount || 0) > 0) {
+      if ((attachCount || 0) > 0 || proofBlocks.length > 0) {
         const { generateEstimatePdf } = await import('@/lib/estimate-pdf-server');
         const pdf = await generateEstimatePdf(supabase, estimate.id);
         if (pdf.ok) {

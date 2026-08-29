@@ -13,6 +13,14 @@ How customers approve estimates and proofs without logging in.
 
 The customer gets a link. Valid for 30 days.
 
+**Estimate + proof in one send.** If the estimate has a linked graphics
+job with files on it, the compose screen shows an **Include graphic
+proofs** picker (the job's newest proof is pre-checked). Checked files
+appear in the email, on the approval page, and in the attached PDF —
+and when the customer accepts, the proof is **approved for production
+at the same time**. No separate proof send, no price surprise after
+the design is loved.
+
 ---
 
 ## Sending a proof for approval (graphics)
@@ -38,7 +46,8 @@ No login. No account.
 ## After they accept
 
 - **Estimate**: flips to **Accepted**. You can now convert it to a
-  Sales Order.
+  Sales Order. If the send included graphic proofs, the linked
+  graphics jobs are marked customer-approved too — production can run.
 - **Proof**: graphics job flips to **Approved**. Production can run.
 
 You're notified either way.

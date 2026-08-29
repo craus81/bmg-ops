@@ -21,6 +21,7 @@ import {
   escHtml,
   renderQuoteDocument,
   type QuoteDocGraphicsBlock,
+  type QuoteDocProofBlock,
   type QuoteDocRow,
   type QuoteDocSection,
   type QuoteDocTotalRow,
@@ -110,6 +111,11 @@ export interface EstimateDocumentOptions {
    *  snapshots must pass data-URI diagrams (inlineDiagrams) — the R2
    *  object is mutable. */
   graphics?: QuoteDocGraphicsBlock[] | null;
+  /** Graphic proofs from linked graphics jobs (graphics_jobs.estimate_attach
+   *  — loadEstimateProofs). Rendered as a Graphic Proofs section so the
+   *  customer approves design + price on ONE document. Frozen snapshots
+   *  must pass inlineProofImages output — the R2 objects are mutable. */
+  proofs?: QuoteDocProofBlock[] | null;
 }
 
 /**
@@ -184,6 +190,7 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
       totals,
       sections,
       graphics: opts.graphics || null,
+      proofs: opts.proofs || null,
     },
     {
       company: opts.company,

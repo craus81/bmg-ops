@@ -14,7 +14,7 @@
 import { ApprovalHeader, Row, Section } from '@/components/ApprovalPageShell';
 import ZoomableImage from '@/components/ZoomableImage';
 
-export default function EstimateApprovalDocument({ estimate: est, lines, graphics }: { estimate: any; lines: any[]; graphics: any[] }) {
+export default function EstimateApprovalDocument({ estimate: est, lines, graphics, proofs = [] }: { estimate: any; lines: any[]; graphics: any[]; proofs?: any[] }) {
   const subtotal = lines.reduce((s: number, l: any) => s + (l.line_total || l.unit_price * l.quantity || 0), 0);
 
   return (
@@ -143,6 +143,41 @@ export default function EstimateApprovalDocument({ estimate: est, lines, graphic
               style={{ maxWidth: '100%', border: '1px solid #e2e8f0', borderRadius: '8px' }}
             />
           )}
+        </div>
+      ))}
+
+      {/* Graphic proofs from linked graphics jobs — approving this page
+          approves them for production (same blocks the emailed PDF and
+          the frozen snapshot carry). */}
+      {proofs.map((p: any) => (
+        <div key={p.jobId} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px', marginTop: '14px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+            Graphic Proof{(p.files || []).length !== 1 ? 's' : ''} — For Your Approval
+          </div>
+          <div style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a' }}>
+            {[p.jobNumber ? `Job #${p.jobNumber}` : null, p.jobTitle].filter(Boolean).join(' — ') || 'Graphics job'}
+          </div>
+          {(p.files || []).map((f: any) => (
+            <div key={f.id} style={{ marginTop: '10px' }}>
+              {f.isPdf ? (
+                f.url && (
+                  <a href={f.url} target="_blank" rel="noopener noreferrer" style={{
+                    display: 'block', padding: '12px 16px', background: '#0f172a', color: '#fff',
+                    borderRadius: '10px', textAlign: 'center', textDecoration: 'none', fontWeight: 700, fontSize: '13px',
+                  }}>
+                    Open {f.name} (PDF) ↗
+                  </a>
+                )
+              ) : f.url ? (
+                <ZoomableImage
+                  src={f.url}
+                  alt={`Proof — ${f.name}`}
+                  style={{ maxWidth: '100%', border: '1px solid #e2e8f0', borderRadius: '8px' }}
+                />
+              ) : null}
+              <div style={{ marginTop: '4px', fontSize: '11px', color: '#64748b' }}>{f.name}</div>
+            </div>
+          ))}
         </div>
       ))}
     </>
