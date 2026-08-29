@@ -80,7 +80,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Soon** — the role cleanup (17–20) | ✅ done | #17 infra + owner-page gates (#649), #18a registry (#648), #18b all ten tools keyed (#652, #654, #655), #19 install roles (#650), #20 dead-end menus (#651). The ungated-by-URL pages are gated and the dev route deleted (#656). An adversarial gate audit (every tile/nav/redirect/deep-link entry point traced per role) confirmed 20 regressions, all fixed: client dead-clicks + two redirect loops (#657) and per-recipient vehicle notification links (#658). |
 | **Data-integrity bugs to fix in passing** | ✅ done | All 6 re-verified as live, then fixed: pushed-estimate delete (#660), Add-Graphics demotion (#661), stranded allocations — trigger + backfill, migration 228 (#662), graphics history trigger, migration 229 (#663), the 1000-row-cap sweep across payroll/payouts/credits/pay-rates/scans/invoices/pos/dashboard (#664), and the Open Quotes tile (#665). |
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
-| **Round 2** — re-verified 2026-08-28 (Part 6) | 🔄 in progress | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. The whole **Now** block plus the revision lock has since shipped (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. |
+| **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 9–21 remain open**, each re-checked against `4cc8507` on 2026-08-29 — see the roadmap re-verification note at the end of Part 6. |
 
 Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap.
 
@@ -555,40 +555,54 @@ A full recommended role→feature table is in the per-slice `roleaudit` detail.
 # Part 4 — "Would help if fully built" (including the 3D configurator)
 
 The owner asked specifically about features that would help if finished. The
-biggest ones:
+biggest ones. _(Status re-checked 2026-08-29 at `4cc8507`; ✅/❌ added then.)_
 
-- **The 3D Upfit Designer → shop bridge.** The designer is already a complete v1
-  that produces a priced, to-scale 3D BOM and hands it to an estimate. What's
-  missing: (1) auto-create the upfit project on SO conversion, and (2) a
-  `design_id` link so the **shop builds from the approved 3D layout** instead of
-  re-planning from tasks and file attachments. Per-SKU 3D meshes (the seam is
+- ❌ **The 3D Upfit Designer → shop bridge.** The designer is already a complete v1
+  that produces a priced, to-scale 3D BOM and hands it to an estimate. Of the two
+  things missing when this was written, (1) auto-create the upfit project on SO
+  conversion **has since shipped** in `convert-to-so`; (2) the `design_id` link
+  that would let the **shop build from the approved 3D layout** instead of
+  re-planning from tasks and file attachments **has not** — `design_id` appears
+  nowhere in the repo. Per-SKU 3D meshes (the seam is
   already built: `resolveItemMesh`) and seeded trade packages would turn it into
   a real closing tool. A magic-link 3D viewer (the scene already has a read-only
   mode) would let customers see their van.
-- **Auto-create the upfit project + parts-order queue on conversion** (roadmap
-  N2) — removes the single biggest manual gap in the whole workflow.
-- **In-app parts ordering & receiving** — a "Request purchase" action on `short`
-  parts and a "Receive against PO" screen; today both happen entirely in NetSuite
-  by hand with a 2-hour blind spot.
-- **AR payment sync-back** — a cron mapping NetSuite invoice status onto
-  `is_paid` (the AP side already has one), turning the "awaiting payment" tile
-  into fact.
-- **Signed-document viewer** — the storage path + hash columns exist for
-  estimates, quotes, and proofs; only the read side is missing.
-- **RingCentral SMS provider (`SMS_PROVIDER_ENABLED`)** — the entire SMS channel
-  (approval links, pickup/complete customer texts, staff DM texts) is wired and
-  waiting behind one flag; turning it on fixes several dead spots at once.
-- **CNI lifecycle notifications + `sync-cni` calendar + a graphics→CNI job
-  bridge** — the CNI machinery is built; it just doesn't talk. One shared
-  `notifyCompanyInstallers` helper and a "Create CNI job from this graphics job"
-  button close most of the coordination gap.
-- **CEO dashboard plan** (~5% built) — the daily `metric_snapshots` cron is the
-  time-sensitive one ("history can't be backfilled"); the RESTlet P&L/collections
-  work is the only route to the owner's margin/cash metrics.
-- **The customer portal's missing 5%** — its only provisioning path
-  (`/api/admin/link-customer`) has no UI, so a customer login can't be set up from
-  the app; and the portal shows no invoices/balances.
-- **Offline scanning** — relevant if field techs scan VINs in dead zones. (The
+- ⚠️ **Auto-create the upfit project + parts-order queue on conversion**
+  (roadmap N2) — removes the single biggest manual gap in the whole workflow.
+  **The project half shipped:** `convert-to-so` now find-or-creates the
+  `upfit_projects` row keyed on `estimate_id`. The **parts-order queue half has
+  not** — it needs the ordering software in Round 2 item 17.
+- ❌ **In-app parts ordering & receiving** — a "Request purchase" action on
+  `short` parts and a "Receive against PO" screen; today both happen entirely in
+  NetSuite by hand with a 2-hour blind spot. _(= Round 2 item 17, still the
+  largest unbuilt thing in the workflow.)_
+- ✅ **AR payment sync-back** — **shipped**: `src/lib/ar-payment-sync.ts`, run
+  from the `netsuite-sync` cron, flips `fleet_checkins.is_paid` and
+  `scan_logs.is_paid` from NetSuite's Paid-In-Full status, so the "awaiting
+  payment" tile no longer inflates forever.
+- ❌ **Signed-document viewer** — the storage path + hash columns exist for
+  estimates, quotes, and proofs; only the read side is missing. _(= Round 2
+  item 11.)_
+- 🔑 **RingCentral SMS provider (`SMS_PROVIDER_ENABLED`)** — the entire SMS
+  channel (approval links, pickup/complete customer texts, staff DM texts) is
+  wired and still waiting behind one flag; turning it on fixes several dead
+  spots at once. **This is a config decision, not a build.**
+- ⚠️ **CNI lifecycle notifications + `sync-cni` calendar + a graphics→CNI job
+  bridge** — **mostly shipped**: assignment, schedule proposal/accept/decline,
+  photos-ready, job-complete, docs-complete and invoice-submitted all notify
+  now (#640–#646), and the graphics/check-in → CNI job bridge landed in #671
+  (migration 232). What is left is Round 2 item 16 — the job invite/bid loop and
+  photo denials.
+- ❌ **CEO dashboard plan** (~5% built) — the daily `metric_snapshots` cron is
+  the time-sensitive one ("history can't be backfilled") and **still has zero
+  references anywhere in the repo**; every day it stays unbuilt is a day of
+  history that cannot be recovered. The RESTlet P&L/collections work is the only
+  route to the owner's margin/cash metrics.
+- ❌ **The customer portal's missing 5%** — its only provisioning path
+  (`/api/admin/link-customer`) still has no UI (the route is its sole
+  reference), so a customer login can't be set up from the app; and the portal
+  shows no invoices/balances.
+- ❌ **Offline scanning** — relevant if field techs scan VINs in dead zones. (The
   unwired IndexedDB queue `offline-db.ts` this bullet originally pointed at was
   deleted in the hygiene sweep after sitting unconnected; the scanner's own
   localStorage retry queue is the surviving starting point.)
@@ -867,9 +881,25 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
     `shop_inbound.fleet_checkin_id` has no writer in either direction, so
     vehicles read "overdue, expected but not arrived" while sitting in the shop.
 15. ❌ **A stuck vehicle notifies nobody for 48 hours**, and **nothing notifies
-    anyone when a vehicle arrives**.
-16. ❌ **CNI notification vacuum** — invites, bids, declines and photo denials
-    all reach nobody, while the portal tells installers they will be notified.
+    anyone when a vehicle arrives**. _(Read this precisely: the sweep exists
+    and works — `/api/cron/stuck-vehicle-check` runs daily at 14:15 UTC per
+    `vercel.json`, alerts admins plus the assignee with per-recipient deep
+    links, and re-alerts every 48h. The finding is the **latency floor**
+    (`STUCK_HOURS = 48`, and only for `stuck_parts`/`stuck_graphics`) plus the
+    arrival half, which is genuinely absent: nothing in
+    `src/app/api/shop-inbound/route.ts`, `src/lib/shop-inbound.ts`, or
+    `ShopArrivals.tsx` calls `notify`.)_
+16. ❌ **CNI notification vacuum** — job invites, bids and photo denials reach
+    nobody, while the portal tells installers they will be notified.
+    `cni_job_invites` and `cni_job_bids` are written straight from the browser
+    (`admin/cni/jobs/[id]/page.tsx:718`, `installer/available/[id]/page.tsx:117`)
+    with no `notify` on either side, and the photo review screen writes
+    `review_status` inline (`admin/cni/jobs/[id]/photos/page.tsx:88`) so a denial
+    never reaches the installer who has to reshoot. _(Scope correction, verified
+    2026-08-29: **schedule** declines are NOT in this gap — `update-schedule`
+    sends `cni_schedule_declined` to the coordinator. Account invites do send a
+    branded email. What is missing is the job-level invite/bid loop and the
+    photo denial.)_
 
 ### Later — the builds, not the patches
 
@@ -882,7 +912,10 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
     internal pages use it, but the bucket is public and `createSignedUrl` is a
     no-op. _High risk, owner decision: going private breaks images in every
     customer email already sent (logos, coverage diagrams, part photos), which
-    cannot carry a session._
+    cannot carry a session._ **One prerequisite has since shipped:** #688 moved
+    PDF assembly off `r2PublicUrl()` onto credentialed reads, so the server no
+    longer depends on the bucket being public to build its own documents — one
+    fewer thing that breaks on the day the call is made.
 20. ❌ **The route→permission manifest** — the durable fix Part 2 called for.
     The one guard regression test still covers 7 directories and accepts an
     unguarded route.
@@ -891,7 +924,24 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
     job the whole app exists to invoice.
 
 **How to read the ❌ items:** each was verified open at `0c48f1f` with
-`file:line` evidence.
+`file:line` evidence, and **re-verified still open at `4cc8507` on
+2026-08-29** — the evidence below is the state at that commit:
+
+| # | Still open because |
+|---|---|
+| 9 | Every route under `src/app/api/estimates/` guards with `requireStaff` and nothing narrower — `route.ts`, `push`, `convert-to-so`, `email-pdf`, `send-for-approval`, `pdf`, `add-lines`, `add-wrap-quote`, `approval-preview`. |
+| 10 | No NetSuite estimate status write exists anywhere; `createdfrom` is only ever *read*, by the SO matcher (`src/lib/sales-order-sync.ts:41-43`). |
+| 11 | `signed_document_storage_path` has three writers (the estimate, quote and proof approve routes) and no reader outside `src/lib/types.ts:608`. |
+| 12 | `VehicleCheckIn.tsx:118` — "optional, never required"; `'damage'` appears only in type unions and the timeline's filter, never as a value any writer sets. |
+| 13 | `VehicleCheckIn.tsx:210-218` still matches on `.eq('vin', v)` alone, with no status filter, so archived and shipped rows block a return visit. |
+| 14 | `shop_inbound.fleet_checkin_id` (migration 160:34) has zero writers in `src/`. |
+| 15 | Arrival half only — see the note on the item. |
+| 16 | Job invite / bid / photo-denial paths only — see the note on the item. |
+| 17 | No purchase-request or receiving route exists; everything under `src/app/api/pos/` imports, syncs or audits NetSuite POs rather than creating one. |
+| 18 | `credit_applications` has exactly one writer (the public page) and no reader. _(#683 did at least block it from the AI chat — `src/lib/ai-agent-access.ts:94`.)_ |
+| 19 | `R2_PUBLIC_URL` still backs `r2PublicUrl()` (`src/lib/r2.ts:157-160`); the bucket is unchanged. |
+| 20 | `api-auth-guard.test.ts` still covers 7 directories and only asserts *not* bare `requireAuth` — a route with **no** guard at all still passes. |
+| 21 | `work_shifts` links to `cni_job_id` only (migration 110:56); nothing ties a shift to a `fleet_checkins` row. |
 
 **Shipped 2026-08-28 (items 1-8):** the entire Now block plus the revision
 lock — #679, #680, #682, #683, #684, #685, #686. Four owner decisions were
@@ -904,6 +954,13 @@ Of the five items that needed a judgement call, only **R2 going private**
 (item 19) is still open — deliberately, because it breaks images in every
 customer email already sent and deserves its own conversation rather than a
 quick answer.
+
+**Shipped since this part was written (2026-08-28 → 29), none of it from the
+list above:** the estimate/proof merge (#699, migration 235), NetSuite's
+estimate number as the headline (#696), thread emails on account history
+(#695), PO import + graphics job (#694), customer tagging (#692, #693), the
+staff approval preview (#691), the approval-page column fix (#690), the
+double-click Send fix (#689), and #688 above.
 
 ## Appendix — the sixteen source reports
 
