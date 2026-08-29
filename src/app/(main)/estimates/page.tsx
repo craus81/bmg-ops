@@ -22,6 +22,8 @@ import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimat
 import NumberInput from '@/components/NumberInput';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
 import { estimateHeadlineNumber, estimateAltNumber, estimateNumberMatches } from '@/lib/estimate-number';
+import { storageDownloadUrl } from '@/lib/storage';
+import ProofThumbnail from '@/components/ProofThumbnail';
 
 interface Part {
   id: string;
@@ -87,6 +89,10 @@ interface LinkedGraphicsJob {
   /** The file a proof-only send showed the customer — the picker's default
    *  when nothing is stored yet. */
   approval_proof_file_id?: string | null;
+  // Proof approval state, for the panel's status chips.
+  customer_approved?: boolean;
+  customer_rejected_at?: string | null;
+  sent_for_approval_at?: string | null;
 }
 
 /** A linked job's file as the approval compose proof picker lists it. */
@@ -569,6 +575,8 @@ export default function EstimatesPage() {
 
   // Graphics-job linkage (for spawning / linking a graphics job to this estimate)
   const [linkedGraphicsJobs, setLinkedGraphicsJobs] = useState<LinkedGraphicsJob[]>([]);
+  // Per linked job: the proof shown as a thumbnail in the panel.
+  const [panelProofFiles, setPanelProofFiles] = useState<Record<string, { url: string; isPdf: boolean; name: string }>>({});
   const [graphicsLinking, setGraphicsLinking] = useState(false);
   const [showGraphicsPicker, setShowGraphicsPicker] = useState(false);
   const [graphicsPickerSearch, setGraphicsPickerSearch] = useState('');
@@ -1899,10 +1907,35 @@ export default function EstimatesPage() {
   const loadLinkedGraphicsJobs = useCallback(async (estimateId: string) => {
     const { data } = await supabase
       .from('graphics_jobs')
-      .select('id, job_number, title, status, assigned_to, estimate_attach, approval_proof_file_id')
+      .select('id, job_number, title, status, assigned_to, estimate_attach, approval_proof_file_id, customer_approved, customer_rejected_at, sent_for_approval_at')
       .eq('estimate_id', estimateId)
       .order('created_at', { ascending: true });
-    setLinkedGraphicsJobs((data as LinkedGraphicsJob[]) || []);
+    const jobRows = (data as LinkedGraphicsJob[]) || [];
+    setLinkedGraphicsJobs(jobRows);
+
+    // One representative proof thumbnail per job: the file riding on the
+    // estimate, else the file the customer was sent, else the newest upload.
+    if (jobRows.length === 0) { setPanelProofFiles({}); return; }
+    const { data: fileRows } = await supabase
+      .from('graphics_job_files')
+      .select('id, job_id, file_name, file_type, storage_path, uploaded_at')
+      .in('job_id', jobRows.map(j => j.id))
+      .order('uploaded_at', { ascending: false });
+    const allFiles = (fileRows || []) as { id: string; job_id: string; file_name: string; file_type: string | null; storage_path: string }[];
+    const map: Record<string, { url: string; isPdf: boolean; name: string }> = {};
+    for (const j of jobRows) {
+      const files = allFiles.filter(f => f.job_id === j.id);
+      if (files.length === 0) continue;
+      const pick = files.find(f => f.id === j.estimate_attach?.file_ids?.[0])
+        || files.find(f => f.id === j.approval_proof_file_id)
+        || files[0];
+      map[j.id] = {
+        url: storageDownloadUrl('graphics-proofs', pick.storage_path, pick.file_name),
+        isPdf: (pick.file_type || '').includes('pdf') || /\.pdf$/i.test(pick.file_name),
+        name: pick.file_name,
+      };
+    }
+    setPanelProofFiles(map);
   }, [supabase]);
 
   const spawnGraphicsJob = async () => {
@@ -2011,6 +2044,7 @@ export default function EstimatesPage() {
     savedInternalNotesRef.current = '';
     setCustomerDefaults(null);
     setLinkedGraphicsJobs([]);
+    setPanelProofFiles({});
     setShowGraphicsPicker(false);
     setGraphicsPickerSearch('');
     setGraphicsPickerResults([]);
@@ -3142,12 +3176,31 @@ export default function EstimatesPage() {
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                    {panelProofFiles[j.id] && (
+                      panelProofFiles[j.id].isPdf
+                        ? <ProofThumbnail pdfUrl={panelProofFiles[j.id].url} label={panelProofFiles[j.id].name} thumbSize={34} />
+                        : <ProofThumbnail imageUrl={panelProofFiles[j.id].url} label={panelProofFiles[j.id].name} thumbSize={34} />
+                    )}
                     <span style={{ fontWeight: 700, fontSize: '11px' }}>{j.job_number || j.id.slice(0, 8)}</span>
                     <span style={{
                       fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px',
                       background: GRAPHICS_STATUS_COLORS[j.status] || '#94a3b8', color: '#fff',
                       textTransform: 'uppercase',
                     }}>{j.status.replace(/_/g, ' ')}</span>
+                    {/* Where the proof stands with the customer. */}
+                    {j.customer_approved ? (
+                      <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(34,197,94,0.15)', color: '#22c55e', whiteSpace: 'nowrap' }}>PROOF ✓</span>
+                    ) : j.customer_rejected_at ? (
+                      <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(248,113,113,0.15)', color: '#f87171', whiteSpace: 'nowrap' }}>CHANGES REQ.</span>
+                    ) : j.sent_for_approval_at ? (
+                      <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(245,158,11,0.15)', color: '#f59e0b', whiteSpace: 'nowrap' }}>PROOF SENT</span>
+                    ) : null}
+                    {(j.estimate_attach?.file_ids?.length || 0) > 0 && (
+                      <span
+                        title="This job's proof rides on the estimate approval send — customer acceptance approves the proof too."
+                        style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(96,165,250,0.15)', color: '#60a5fa', whiteSpace: 'nowrap' }}
+                      >📎 ON ESTIMATE</span>
+                    )}
                     <span style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{j.title}</span>
                   </div>
                   <button

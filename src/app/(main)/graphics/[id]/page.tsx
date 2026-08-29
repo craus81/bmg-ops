@@ -163,6 +163,24 @@ export default function GraphicsJobRecordPage() {
   // Estimate & Invoice actions
   const [creatingEstimate, setCreatingEstimate] = useState(false);
   const [fetchingPdf, setFetchingPdf] = useState(false);
+  // The linked estimate's summary for the Estimate & Invoice card — number,
+  // total, and where it stands with the customer. Safe columns only: the
+  // approval token must never reach this page.
+  const [linkedEstimate, setLinkedEstimate] = useState<{
+    id: string; estimate_number: string; title: string | null; status: string;
+    grand_total: number | null; customer_approved: boolean;
+    customer_approved_at: string | null; customer_rejected_at: string | null;
+    sent_for_approval_at: string | null; netsuite_so_number: string | null;
+  } | null>(null);
+
+  const loadLinkedEstimate = async (estimateId: string) => {
+    const { data } = await supabase
+      .from('estimates')
+      .select('id, estimate_number, title, status, grand_total, customer_approved, customer_approved_at, customer_rejected_at, sent_for_approval_at, netsuite_so_number')
+      .eq('id', estimateId)
+      .maybeSingle();
+    setLinkedEstimate((data as any) || null);
+  };
 
   // Customer approval — proof picker + standard compose modal
   const [approvalPickerOpen, setApprovalPickerOpen] = useState(false);
@@ -209,6 +227,7 @@ export default function GraphicsJobRecordPage() {
     loadFiles(j.po_id);
     loadAssignments();
     recordJobView();
+    if (j.estimate_id) loadLinkedEstimate(j.estimate_id);
     if (j.upfit_project_id) {
       const { data: up } = await supabase
         .from('upfit_projects')
@@ -765,6 +784,7 @@ export default function GraphicsJobRecordPage() {
       if (data.success) {
         await dialog.alert(`Estimate created: ${data.estimate_number}\n${data.line_item_count} line item${data.line_item_count !== 1 ? 's' : ''}\nTotal: $${data.grand_total?.toFixed(2) || '0.00'}\n\nYou can edit this estimate on the Estimates page.`);
         setJob(prev => prev ? { ...prev, estimate_id: data.estimate_id, updated_at: new Date().toISOString() } : prev);
+        loadLinkedEstimate(data.estimate_id);
         loadHistory();
       } else {
         await dialog.alert('Failed to create estimate: ' + (data.error || 'Unknown error'));
@@ -1395,16 +1415,58 @@ export default function GraphicsJobRecordPage() {
         <div style={labelStyle}>Estimate &amp; Invoice</div>
 
         {job.estimate_id && (
-          <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.15)', marginBottom: '6px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ fontSize: '11px', color: '#60a5fa', fontWeight: 700 }}>Estimate Linked</div>
+          <div style={{ padding: '10px 12px', borderRadius: '8px', background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.15)', marginBottom: '6px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '12px', color: '#60a5fa', fontWeight: 700 }}>
+                  {linkedEstimate ? `Estimate #${linkedEstimate.estimate_number}` : 'Estimate Linked'}
+                  {linkedEstimate?.grand_total != null && (
+                    <span style={{ color: 'var(--text-primary)', marginLeft: '8px' }}>
+                      ${Number(linkedEstimate.grand_total).toFixed(2)}
+                    </span>
+                  )}
+                </div>
+                {linkedEstimate?.title && (
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {linkedEstimate.title}
+                  </div>
+                )}
+                {linkedEstimate && (
+                  <div style={{
+                    fontSize: '10px', fontWeight: 700, marginTop: '4px',
+                    color: linkedEstimate.customer_approved ? '#22c55e'
+                      : linkedEstimate.customer_rejected_at ? '#f87171'
+                        : linkedEstimate.sent_for_approval_at ? '#f59e0b'
+                          : 'var(--text-muted)',
+                  }}>
+                    {linkedEstimate.customer_approved
+                      ? `✓ Customer approved${linkedEstimate.customer_approved_at ? ` ${new Date(linkedEstimate.customer_approved_at).toLocaleDateString()}` : ''}`
+                      : linkedEstimate.customer_rejected_at
+                        ? 'Customer requested changes'
+                        : linkedEstimate.sent_for_approval_at
+                          ? 'Sent — awaiting customer approval'
+                          : 'Not sent to customer yet'}
+                    {linkedEstimate.netsuite_so_number ? ` · SO #${linkedEstimate.netsuite_so_number}` : ''}
+                  </div>
+                )}
+              </div>
               <button
-                onClick={() => router.push('/estimates')}
-                style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}
+                onClick={() => router.push(linkedEstimate ? `/estimates?id=${linkedEstimate.id}` : '/estimates')}
+                style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer', flexShrink: 0 }}
               >
-                Open Estimates
+                Open
               </button>
             </div>
+            {/* How the proof and the estimate approval relate for THIS job. */}
+            {(job.estimate_attach?.file_ids?.length || 0) > 0 ? (
+              <div style={{ fontSize: '10px', color: '#60a5fa', marginTop: '6px' }}>
+                📎 This job&apos;s proof rides on the estimate approval — when the customer accepts, the proof is approved too.
+              </div>
+            ) : (!job.customer_approved && linkedEstimate && !linkedEstimate.customer_approved) ? (
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                Tip: include this job&apos;s proof when sending the estimate for approval — one customer click approves design + price together.
+              </div>
+            ) : null}
           </div>
         )}
 
