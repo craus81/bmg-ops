@@ -45,7 +45,7 @@ import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
   GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
 } from '@/lib/types';
-import { requiresReason, proofGateApplies } from '@/lib/graphics-status';
+import { requiresReason, proofGateApplies, priceReminderApplies } from '@/lib/graphics-status';
 
 // ── Date helpers (same behavior as the board — avoid UTC shift) ──────────
 function parseLocalDate(dateStr: string | null | undefined): Date | null {
@@ -474,6 +474,25 @@ export default function GraphicsJobRecordPage() {
       gateNote = `Moved back — ${why}`;
     }
 
+    // ── Price reminder (never a block) ───────────────────────────────────
+    // Printing with the linked estimate still unapproved: one heads-up so
+    // the graphics team knows pricing may be outstanding, a timeline note,
+    // and (after the write succeeds) a nudge to the estimate's owner to
+    // chase the approval. When the proof gate above already interrupted
+    // this same click, skip the second dialog — the note still lands.
+    let priceNote = '';
+    if (priceReminderApplies(newStatus, job, linkedEstimate)) {
+      const estLabel = `Estimate #${linkedEstimate!.estimate_number}`;
+      if (!gateNote) {
+        const proceed = await dialog.confirm(
+          `${estLabel} hasn't been approved by the customer yet — pricing may still be outstanding. `
+          + 'Printing is not blocked; this is just a heads-up. The estimate owner will be nudged to chase the approval.',
+        );
+        if (!proceed) return;
+      }
+      priceNote = `${estLabel} still awaiting customer approval when printing began — pricing outstanding`;
+    }
+
     const shipFields: Partial<GraphicsJob> = {};
     if (ship?.tracking) shipFields.tracking_number = ship.tracking;
 
@@ -487,15 +506,25 @@ export default function GraphicsJobRecordPage() {
     }
 
     // Log the transition
+    const statusNote = (gateNote && note?.trim() && gateNote.includes(note.trim())
+      ? gateNote
+      : [gateNote, note].filter(Boolean).join(' · '));
     await supabase.from('graphics_status_history').insert({
       job_id: job.id,
       from_status: oldStatus,
       to_status: newStatus,
       changed_by: user?.id,
-      note: (gateNote && note?.trim() && gateNote.includes(note.trim())
-        ? gateNote
-        : [gateNote, note].filter(Boolean).join(' · ')) || null,
+      note: [statusNote, priceNote].filter(Boolean).join(' · ') || null,
     });
+
+    // The estimate owner is the one who can actually resolve outstanding
+    // pricing — tell them production started without an approved number.
+    if (priceNote) {
+      apiFetch('/api/graphics/notify-price-outstanding', {
+        method: 'POST',
+        body: JSON.stringify({ jobId: job.id }),
+      }).catch(() => {});
+    }
 
     // Tracking number gets its own note row so it's findable in the history
     // independent of the status-change comment.

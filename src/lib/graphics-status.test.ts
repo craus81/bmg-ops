@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  classifyTransition, requiresReason, proofGateApplies,
+  classifyTransition, requiresReason, proofGateApplies, priceReminderApplies,
   GRAPHICS_PIPELINE, GRAPHICS_SIDE_STATES,
 } from './graphics-status';
 import { GRAPHICS_STATUS_ORDER } from './types';
@@ -57,6 +57,29 @@ describe('proofGateApplies', () => {
   it('does not re-gate a job already past printing', () => {
     expect(proofGateApplies('cutting', { customer_approved: false })).toBe(false);
     expect(proofGateApplies('shipped', { customer_approved: false })).toBe(false);
+  });
+});
+
+describe('priceReminderApplies', () => {
+  it('reminds when printing starts with a linked, unapproved estimate', () => {
+    expect(priceReminderApplies('printing', { estimate_id: 'e1' }, { customer_approved: false })).toBe(true);
+    expect(priceReminderApplies('printing', { estimate_id: 'e1' }, { customer_approved: null })).toBe(true);
+  });
+
+  it('stays quiet when the estimate is approved', () => {
+    expect(priceReminderApplies('printing', { estimate_id: 'e1' }, { customer_approved: true })).toBe(false);
+  });
+
+  it('never nags jobs without a linked estimate, or when the row has not loaded', () => {
+    expect(priceReminderApplies('printing', { estimate_id: null }, null)).toBe(false);
+    expect(priceReminderApplies('printing', {}, { customer_approved: false })).toBe(false);
+    expect(priceReminderApplies('printing', { estimate_id: 'e1' }, null)).toBe(false);
+    expect(priceReminderApplies('printing', { estimate_id: 'e1' }, undefined)).toBe(false);
+  });
+
+  it('only fires on the move INTO printing', () => {
+    expect(priceReminderApplies('cutting', { estimate_id: 'e1' }, { customer_approved: false })).toBe(false);
+    expect(priceReminderApplies('shipped', { estimate_id: 'e1' }, { customer_approved: false })).toBe(false);
   });
 });
 

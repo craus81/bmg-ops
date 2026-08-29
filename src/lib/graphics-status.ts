@@ -72,3 +72,20 @@ export function proofGateApplies(
 ): boolean {
   return to === 'printing' && !job?.customer_approved;
 }
+
+/**
+ * The price reminder: moving INTO `printing` while the job's linked
+ * estimate is still awaiting the customer's approval gets a heads-up —
+ * NEVER a block (owner decision, 2026-08-28: production isn't stopped
+ * over pricing; the point is that the graphics team knows pricing may
+ * still be outstanding, and the estimate's owner gets nudged to chase
+ * it). Same into-printing trigger shape as the proof gate above; jobs
+ * with no linked estimate (PO-priced or ad-hoc) are never nagged.
+ */
+export function priceReminderApplies(
+  to: GraphicsJobStatus,
+  job: { estimate_id?: string | null },
+  estimate: { customer_approved?: boolean | null } | null | undefined,
+): boolean {
+  return to === 'printing' && !!job?.estimate_id && !!estimate && !estimate.customer_approved;
+}

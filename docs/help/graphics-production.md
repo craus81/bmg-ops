@@ -72,6 +72,17 @@ After the customer approves:
 2. Tap the status chip.
 3. Pick **Mark In Production**.
 
+Two checks can appear when moving into **Printing**:
+
+- **Proof not approved** — printing needs an admin with a recorded
+  reason (or send the proof / the estimate-with-proof for approval
+  first).
+- **Estimate not approved** — if the job's linked estimate is still
+  awaiting the customer, you get a heads-up that pricing may be
+  outstanding. **It never blocks printing** — confirm and go. The note
+  lands on the job's timeline and the estimate's owner is nudged to
+  chase the approval.
+
 ---
 
 ## Mark a job ready to pick up
