@@ -80,7 +80,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Soon** — the role cleanup (17–20) | ✅ done | #17 infra + owner-page gates (#649), #18a registry (#648), #18b all ten tools keyed (#652, #654, #655), #19 install roles (#650), #20 dead-end menus (#651). The ungated-by-URL pages are gated and the dev route deleted (#656). An adversarial gate audit (every tile/nav/redirect/deep-link entry point traced per role) confirmed 20 regressions, all fixed: client dead-clicks + two redirect loops (#657) and per-recipient vehicle notification links (#658). |
 | **Data-integrity bugs to fix in passing** | ✅ done | All 6 re-verified as live, then fixed: pushed-estimate delete (#660), Add-Graphics demotion (#661), stranded allocations — trigger + backfill, migration 228 (#662), graphics history trigger, migration 229 (#663), the 1000-row-cap sweep across payroll/payouts/credits/pay-rates/scans/invoices/pos/dashboard (#664), and the Open Quotes tile (#665). |
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
-| **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 9–17 and 19–21 remain open** (12), re-checked against `4cc8507` on 2026-08-29 — see the roadmap re-verification note at the end of Part 6. Item 18 (the credit-application black hole) shipped 2026-08-30 in the Stage 1 build-out: #701 reminders, #702 credit application, #703 duplicate guard, #704 phone intake. |
+| **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 12–17 and 19–21 remain open** (9). Shipped 2026-08-30: the Stage 1 build-out (#701–#704, closing item 18), the two Stage 1 owner decisions (#706 lead tier, #707 deletion→NetSuite), and the whole **Next — estimate integrity** block (#708 route auth, #709 estimate close, #710 signed-document viewer — items 9–11). |
 
 Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap.
 
@@ -98,8 +98,8 @@ lead straight to the estimate builder.
 
 **What breaks at the edges:** _(All four findings below were built and
 merged 2026-08-30 — #701 reminders, #702 credit application, #703 duplicate
-guard, #704 phone intake. Annotations inline; two sub-findings deliberately
-remain open.)_
+guard, #704 phone intake; the two design leftovers followed the same day as
+#706 lead tier and #707 deletion propagation. Annotations inline.)_
 
 - ✅ **CRITICAL — The credit application is a black hole.** The public
   `/credit-application` form writes rows into `credit_applications` (EINs, bank
@@ -130,16 +130,21 @@ remain open.)_
   sweep, migration 236 notified_at dedupe, admin fallback for creator-less
   voice-note rows, 30-day stale guard so the first run doesn't blast a year
   of backlog.)_
-- ⚠️ **MAJOR — Duplicate guard is exact-name-only**, client-side, and inconsistent
+- ✅ **MAJOR — Duplicate guard is exact-name-only**, client-side, and inconsistent
   across the four customer-create paths; phone/email are never checked. Every
   inquiry instantly becomes a NetSuite customer (no lead tier), and deleting a
   linked record only deletes the CRM row — it resurrects on the next sync.
   _(Guard fixed: #703 — one shared server-side checker (normalized name +
   email + phone digits, prospects AND the customers mirror, migration 238)
-  wired into all four create paths with an explicit force override. Still
-  open, deliberately: the **lead tier** — every inquiry is still an instant
-  NetSuite customer — and the **delete/resurrect asymmetry**; both are design
-  conversations, not patches.)_
+  wired into all four create paths with an explicit force override. The two
+  design conversations were then decided by the owner 2026-08-30 and built
+  the same day: the **lead tier** (#706 — a record without `netsuite_id` IS
+  a lead, promoted explicitly from its record page or automatically when its
+  first estimate is pushed/converted; no schema change) and the
+  **delete/resurrect asymmetry** (#707 — deleting a linked record deletes
+  the NetSuite customer, falling back to deactivation when NetSuite refuses;
+  both syncs filter `isinactive='F'`, so nothing flows back; admin-gated per
+  the #680 precedent). This bullet is now fully closed.)_
 
 ## Stage 2 — Building the estimate (upfit parts + graphics)
 
@@ -601,9 +606,8 @@ biggest ones. _(Status re-checked 2026-08-29 at `4cc8507`; ✅/❌ added then.)_
   from the `netsuite-sync` cron, flips `fleet_checkins.is_paid` and
   `scan_logs.is_paid` from NetSuite's Paid-In-Full status, so the "awaiting
   payment" tile no longer inflates forever.
-- ❌ **Signed-document viewer** — the storage path + hash columns exist for
-  estimates, quotes, and proofs; only the read side is missing. _(= Round 2
-  item 11.)_
+- ✅ **Signed-document viewer** — **shipped** (#710): `/signed/[type]/[id]`
+  with sha256 integrity verdicts, linked from all three record surfaces.
 - 🔑 **RingCentral SMS provider (`SMS_PROVIDER_ENABLED`)** — the entire SMS
   channel (approval links, pickup/complete customer texts, staff DM texts) is
   wired and still waiting behind one flag; turning it on fixes several dead
@@ -884,12 +888,32 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
    boolean-only check would have left exactly those estimates editable.
    Still no clone/duplicate feature, so "start a new estimate" means retyping
    — the natural companion to this lock.)_
-9. ❌ **All estimate APIs are `requireStaff` only** — shop/field techs and
-   finance can price, push, email and delete any estimate.
-10. ❌ **Pushed NetSuite estimates are left open forever** (`createdfrom` NULL),
-    permanently degrading the SO↔estimate matcher.
-11. ❌ **The signed E-SIGN snapshot is write-only** — no viewer, download, or
-    verification anywhere, which is exactly what a dispute needs.
+9. ✅ **All estimate APIs are `requireStaff` only** — shop/field techs and
+   finance can price, push, email and delete any estimate. _(Fixed 2026-08-30,
+   #708 — all nine routes now `requireFeature(req, 'estimates')` (super_admin,
+   admin, sales, graphics_production; per-user overridable). The estimates
+   page URL itself was never gated — only the nav tab was — so the page and
+   the approval-preview page gained `useRequireFeature`. The guard test now
+   asserts the feature guard verbatim per route (`FEATURE_GATED_DIRS`), so
+   the tightening can't silently regress.)_
+10. ✅ **Pushed NetSuite estimates are left open forever** (`createdfrom` NULL),
+    permanently degrading the SO↔estimate matcher. _(Fixed 2026-08-30, #709 —
+    NetSuite derives an estimate's Document Status, so the supported write is
+    probability-0 (→ Closed): `convert-to-so` closes the pushed estimate at
+    conversion, and a stateless netsuite-sync sweep drains the historical
+    backlog at 25 per run, keyed on NetSuite's own status. A transform rework
+    (native `createdfrom`) was deliberately not attempted — it reshapes the
+    money path and can't be validated offline; the matcher's memo tier
+    already covers FS-created SOs.)_
+11. ✅ **The signed E-SIGN snapshot is write-only** — no viewer, download, or
+    verification anywhere, which is exactly what a dispute needs. _(Fixed
+    2026-08-30, #710 — `/api/signed-documents` reads the snapshot from the
+    private R2 prefix through credentials and re-hashes the bytes against the
+    sha256 recorded at approval, so tampering reads `verified:false`; the
+    `/signed/[type]/[id]` viewer shows the integrity badge, the acceptance
+    timestamp, a download, and the document in a fully sandboxed iframe.
+    Linked from approved estimates, accepted wrap quotes, and approved
+    proofs.)_
 
 ### Soon — vehicle custody and the shop floor
 
@@ -955,9 +979,9 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
 
 | # | Still open because |
 |---|---|
-| 9 | Every route under `src/app/api/estimates/` guards with `requireStaff` and nothing narrower — `route.ts`, `push`, `convert-to-so`, `email-pdf`, `send-for-approval`, `pdf`, `add-lines`, `add-wrap-quote`, `approval-preview`. |
-| 10 | No NetSuite estimate status write exists anywhere; `createdfrom` is only ever *read*, by the SO matcher (`src/lib/sales-order-sync.ts:41-43`). |
-| 11 | `signed_document_storage_path` has three writers (the estimate, quote and proof approve routes) and no reader outside `src/lib/types.ts:608`. |
+| 9 | ~~Open~~ **Fixed 2026-08-30 (#708)**: all nine routes gated `requireFeature(req, 'estimates')`, the page URL gated client-side, verbatim-guard regression test added. |
+| 10 | ~~Open~~ **Fixed 2026-08-30 (#709)**: probability-0 close at conversion + a capped stateless backlog sweep in the netsuite-sync cron. |
+| 11 | ~~Open~~ **Fixed 2026-08-30 (#710)**: `/api/signed-documents` + the `/signed/[type]/[id]` viewer with sha256 integrity verdicts, linked from all three record surfaces. |
 | 12 | `VehicleCheckIn.tsx:118` — "optional, never required"; `'damage'` appears only in type unions and the timeline's filter, never as a value any writer sets. |
 | 13 | `VehicleCheckIn.tsx:210-218` still matches on `.eq('vin', v)` alone, with no status filter, so archived and shipped rows block a return visit. |
 | 14 | `shop_inbound.fleet_checkin_id` (migration 160:34) has zero writers in `src/`. |
