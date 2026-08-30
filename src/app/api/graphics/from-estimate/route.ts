@@ -43,14 +43,20 @@ function getSupabase() {
 /**
  * An estimate that turned into (or got linked to) a graphics job is won —
  * mark it accepted (same status convert-to-so uses) so it drops out of the
- * follow-up nudge queue, which only watches status='sent'.
+ * follow-up nudge queue, which only watches status='sent'. Skipped while a
+ * customer approval request is unanswered: the "Accepted" badge means the
+ * customer signed off, so once an approval is in flight only the customer's
+ * response (or an explicit admin override) may set it — pre-staging
+ * production work must not repaint a pending estimate as accepted or pull
+ * it out of the follow-up queue.
  */
 async function markEstimateWon(supabase: any, estimateId: string) {
   await supabase
     .from('estimates')
     .update({ status: 'accepted' })
     .eq('id', estimateId)
-    .neq('status', 'accepted');
+    .neq('status', 'accepted')
+    .or('sent_for_approval_at.is.null,customer_approved.is.true');
 }
 
 export async function POST(req: NextRequest) {
