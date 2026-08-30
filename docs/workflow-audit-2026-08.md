@@ -80,7 +80,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Soon** — the role cleanup (17–20) | ✅ done | #17 infra + owner-page gates (#649), #18a registry (#648), #18b all ten tools keyed (#652, #654, #655), #19 install roles (#650), #20 dead-end menus (#651). The ungated-by-URL pages are gated and the dev route deleted (#656). An adversarial gate audit (every tile/nav/redirect/deep-link entry point traced per role) confirmed 20 regressions, all fixed: client dead-clicks + two redirect loops (#657) and per-recipient vehicle notification links (#658). |
 | **Data-integrity bugs to fix in passing** | ✅ done | All 6 re-verified as live, then fixed: pushed-estimate delete (#660), Add-Graphics demotion (#661), stranded allocations — trigger + backfill, migration 228 (#662), graphics history trigger, migration 229 (#663), the 1000-row-cap sweep across payroll/payouts/credits/pay-rates/scans/invoices/pos/dashboard (#664), and the Open Quotes tile (#665). |
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
-| **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 9–21 remain open**, each re-checked against `4cc8507` on 2026-08-29 — see the roadmap re-verification note at the end of Part 6. |
+| **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 9–17 and 19–21 remain open** (12), re-checked against `4cc8507` on 2026-08-29 — see the roadmap re-verification note at the end of Part 6. Item 18 (the credit-application black hole) shipped 2026-08-30 in the Stage 1 build-out: #701 reminders, #702 credit application, #703 duplicate guard, #704 phone intake. |
 
 Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap.
 
@@ -96,29 +96,50 @@ a deals pipeline, AI voice-note logging, statements with A/R aging, and a rich
 single-surface customer record. A "Create + Start Estimate" button takes a phone
 lead straight to the estimate builder.
 
-**What breaks at the edges:**
+**What breaks at the edges:** _(All four findings below were built and
+merged 2026-08-30 — #701 reminders, #702 credit application, #703 duplicate
+guard, #704 phone intake. Annotations inline; two sub-findings deliberately
+remain open.)_
 
-- **CRITICAL — The credit application is a black hole.** The public
+- ✅ **CRITICAL — The credit application is a black hole.** The public
   `/credit-application` form writes rows into `credit_applications` (EINs, bank
   references) that **nothing in the app ever reads** — no review queue, no API,
   no notification. The customer is promised review "within 2–3 business days" by
   a workflow that does not exist. The migration's `status`/`reviewed_by`/
   `review_notes` columns are dead. Staff can't even send a customer the form URL
-  from inside the app.
-- **MAJOR — Phone-intake basics are missing.** No lead-source field on the
+  from inside the app. _(Fixed: #702 — hardened public submit route
+  (trusted-IP rate limit + global ceiling + honeypot, service-role write,
+  migration 237 made the table service-role-only), reviewer notifications,
+  the gated review queue at /admin/credit-applications working every dead
+  column, review-time prospect linking, and a "Credit App" send flow on the
+  record page per the email standard.)_
+- ✅ **MAJOR — Phone-intake basics are missing.** No lead-source field on the
   *create* form (it's edit-only, with an odd hardcoded option list), **no
   phone-number search anywhere** (the first thing you'd do with caller ID), no
   structured "what do they want" capture — a combined upfit+graphics inquiry
   can't be represented (single deal `type`), so it all lives in free-text notes
-  and gets re-typed into the estimate later.
-- **MAJOR — Follow-up reminders never notify.** Manual and AI-voice-note
+  and gets re-typed into the estimate later. _(Fixed: #704 — caller-ID search
+  across prospect/contact/NetSuite-mirror phones in any stored format
+  (migrations 238/239 phone_digits), lead source on the create form from a
+  shared vocabulary, and an "Interested in" chip row that starts one deal per
+  selected type — upfit+graphics is two deals.)_
+- ✅ **MAJOR — Follow-up reminders never notify.** Manual and AI-voice-note
   reminders are written and displayed but **no cron fires them** — they surface
   only if someone happens to open the record or the Schedule page. The roadmap
-  flagged this a year ago.
-- **MAJOR — Duplicate guard is exact-name-only**, client-side, and inconsistent
+  flagged this a year ago. _(Fixed: #701 — daily /api/cron/prospect-reminder-check
+  sweep, migration 236 notified_at dedupe, admin fallback for creator-less
+  voice-note rows, 30-day stale guard so the first run doesn't blast a year
+  of backlog.)_
+- ⚠️ **MAJOR — Duplicate guard is exact-name-only**, client-side, and inconsistent
   across the four customer-create paths; phone/email are never checked. Every
   inquiry instantly becomes a NetSuite customer (no lead tier), and deleting a
   linked record only deletes the CRM row — it resurrects on the next sync.
+  _(Guard fixed: #703 — one shared server-side checker (normalized name +
+  email + phone digits, prospects AND the customers mirror, migration 238)
+  wired into all four create paths with an explicit force override. Still
+  open, deliberately: the **lead tier** — every inquiry is still an instant
+  NetSuite customer — and the **delete/resurrect asymmetry**; both are design
+  conversations, not patches.)_
 
 ## Stage 2 — Building the estimate (upfit parts + graphics)
 
@@ -905,9 +926,14 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
 
 17. ❌ **Parts ordering and receiving** — still no software at all: no PO from
     the readiness card, no purchase request, and no receiving flow.
-18. ❌ **The credit application black hole** — an unauthenticated, unrate-limited
+18. ✅ **The credit application black hole** — an unauthenticated, unrate-limited
     public write path for EINs and bank references that nothing in the app
     reads, while the customer is promised an answer in 2-3 business days.
+    _(Fixed 2026-08-30, #702, as part of the Stage 1 build-out — see the
+    Stage 1 annotations. The design took three adversarial review passes
+    before build; migration 237 made the table service-role-only after the
+    bypass reviewer showed the staff RLS policy left EINs readable from any
+    staff browser console.)_
 19. ❌ **R2 objects are world-readable.** A gated download route exists and
     internal pages use it, but the bucket is public and `createSignedUrl` is a
     no-op. _High risk, owner decision: going private breaks images in every
@@ -938,7 +964,7 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
 | 15 | Arrival half only — see the note on the item. |
 | 16 | Job invite / bid / photo-denial paths only — see the note on the item. |
 | 17 | No purchase-request or receiving route exists; everything under `src/app/api/pos/` imports, syncs or audits NetSuite POs rather than creating one. |
-| 18 | `credit_applications` has exactly one writer (the public page) and no reader. _(#683 did at least block it from the AI chat — `src/lib/ai-agent-access.ts:94`.)_ |
+| 18 | ~~Open~~ **Fixed 2026-08-30 (#702)**: submit moved to a hardened service-role route, review queue + notifications + audit-logged decisions shipped, RLS policies dropped (migration 237). |
 | 19 | `R2_PUBLIC_URL` still backs `r2PublicUrl()` (`src/lib/r2.ts:157-160`); the bucket is unchanged. |
 | 20 | `api-auth-guard.test.ts` still covers 7 directories and only asserts *not* bare `requireAuth` — a route with **no** guard at all still passes. |
 | 21 | `work_shifts` links to `cni_job_id` only (migration 110:56); nothing ties a shift to a `fleet_checkins` row. |
