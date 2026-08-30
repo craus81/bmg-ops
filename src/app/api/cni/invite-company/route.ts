@@ -41,14 +41,23 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
   if (!job) return NextResponse.json({ error: 'Job not found' }, { status: 404 });
 
-  const { error } = await supabase.from('cni_job_invites').upsert({
+  // Plain insert, not upsert: the only unique index on (job_id, company_id)
+  // is PARTIAL (WHERE company_id IS NOT NULL, migration 111), and Postgres
+  // refuses to infer a partial index for ON CONFLICT without its predicate —
+  // which PostgREST cannot send — so the upsert form 42P10'd on EVERY call
+  // (Round 3 finding: the invite button 500'd in production since #715).
+  // A duplicate invite trips the index as 23505; treat that as "already
+  // invited" and still re-notify — a deliberate re-invite is a re-ping.
+  const { error } = await supabase.from('cni_job_invites').insert({
     job_id: jobId,
     company_id: companyId,
     installer_id: null,
     invite_type: 'direct',
     invited_by: auth.user.id,
-  }, { onConflict: 'job_id,company_id' });
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  });
+  if (error && error.code !== '23505') {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
 
   // The point of the invite: the company's installers hear about it.
   let notified = 0;

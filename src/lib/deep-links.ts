@@ -122,6 +122,13 @@ export const deepLinks = {
    *  Accept/Decline schedule controls, so it needs no extra param. Distinct
    *  from `cniJob`, which is the admin-side record an installer can't open. */
   installerJob: (jobId: string) => `/installer/jobs/${jobId}`,
+  /** Installer photo upload/review page — where denial badges and reviewer
+   *  notes actually render (installerJob lands one page short of them). */
+  installerJobPhotos: (jobId: string) => `/installer/jobs/${jobId}/photos`,
+  /** In-Shop board's arrivals section — scroll-flashes one inbound row
+   *  (ShopArrivals reads ?arrival=). The landing for arrival pings with no
+   *  check-in to open yet. */
+  shopArrival: (inboundId: string) => `/tracking?arrival=${inboundId}`,
   /** Installer-portal AVAILABLE job — where an invited company responds to
    *  a bid invitation (distinct from installerJob, the assigned-work page). */
   installerAvailableJob: (jobId: string) => `/installer/available/${jobId}`,

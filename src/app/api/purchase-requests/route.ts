@@ -111,23 +111,38 @@ export async function POST(req: NextRequest) {
   const catalog = new Map((catalogRows || []).map((c: any) => [normalizeItemNumber(c.item_number), c]));
 
   // Vendor fallback: who we LAST bought each item from (the PO mirror) —
-  // the catalog's vendor field is blank for most parts.
+  // the catalog's vendor field is blank for most parts. POs first, newest
+  // first, then their lines: the old shape read an UNORDERED 400-line
+  // slice and sorted that, so "latest purchase wins" was only true when
+  // the latest purchase happened to be in the arbitrary slice (Round 3
+  // finding) — wrong vendors got stamped on requests.
   const missingVendor = itemNumbers.filter(n => !catalog.get(n)?.vendor);
   const lastVendor = new Map<string, { name: string | null; id: string | null }>();
   if (missingVendor.length > 0) {
-    const { data: lines } = await supabase
-      .from('netsuite_vendor_po_lines')
-      .select('item_number, netsuite_vendor_pos!inner(vendor_name, vendor_netsuite_id, trandate)')
-      .in('item_number', missingVendor)
-      .limit(400);
-    // Latest purchase wins per item — PostgREST can't order the parent by an
-    // embedded column, so sort here.
-    const sorted = ((lines || []) as any[]).sort((a, b) =>
-      String(b.netsuite_vendor_pos?.trandate || '').localeCompare(String(a.netsuite_vendor_pos?.trandate || '')));
-    for (const l of sorted) {
-      const key = normalizeItemNumber(l.item_number);
-      if (!lastVendor.has(key) && l.netsuite_vendor_pos?.vendor_name) {
-        lastVendor.set(key, { name: l.netsuite_vendor_pos.vendor_name, id: l.netsuite_vendor_pos.vendor_netsuite_id || null });
+    const { data: recentPos } = await supabase
+      .from('netsuite_vendor_pos')
+      .select('id, vendor_name, vendor_netsuite_id')
+      .order('trandate', { ascending: false, nullsFirst: false })
+      .order('id')
+      .limit(80);
+    const poOrder = (recentPos || []).map((p: any) => p.id as string);
+    const poById = new Map((recentPos || []).map((p: any) => [p.id as string, p]));
+    if (poOrder.length > 0) {
+      const { data: lines } = await supabase
+        .from('netsuite_vendor_po_lines')
+        .select('item_number, po_id')
+        .in('po_id', poOrder)
+        .in('item_number', missingVendor)
+        .limit(1000);
+      const rank = new Map(poOrder.map((id, i) => [id, i]));
+      const sorted = ((lines || []) as any[]).sort((a, b) =>
+        (rank.get(a.po_id) ?? 999) - (rank.get(b.po_id) ?? 999));
+      for (const l of sorted) {
+        const key = normalizeItemNumber(l.item_number);
+        const po: any = poById.get(l.po_id);
+        if (!lastVendor.has(key) && po?.vendor_name) {
+          lastVendor.set(key, { name: po.vendor_name, id: po.vendor_netsuite_id || null });
+        }
       }
     }
   }

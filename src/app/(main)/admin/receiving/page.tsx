@@ -274,7 +274,13 @@ export default function ReceivingPage() {
       {visible.map(po => {
         const lines = linesByPo.get(po.id) || [];
         const isOpen = expanded.has(po.id);
-        const openQty = lines.reduce((s, l) => s + Math.max(0, (Number(l.quantity) || 0) - (Number(l.quantity_received) || 0)), 0);
+        // Open = mirror open minus what's already on the manual NetSuite-entry
+        // worklist — those arrivals are physically here even though NetSuite
+        // doesn't know yet (Round 3 finding: ignoring them invited a double
+        // receipt of the same box).
+        const lineRemaining = (l: LineRow) => Math.max(0,
+          (Number(l.quantity) || 0) - (Number(l.quantity_received) || 0) - localFor(po.id, l.item_number).manual);
+        const openQty = lines.reduce((s, l) => s + lineRemaining(l), 0);
         const anyInput = lines.some(l => parseFloat(inputs[`${po.id}:${l.line_id}`] || '') > 0);
         return (
           <div key={po.id} id={`po-${po.id}`} style={{ marginBottom: '14px', background: theme.card, border: `1px solid ${flashPo === po.id ? 'rgba(96,165,250,0.6)' : theme.border}`, borderRadius: '14px', overflow: 'hidden', transition: 'border-color 0.6s' }}>
@@ -302,7 +308,7 @@ export default function ReceivingPage() {
                     </thead>
                     <tbody>
                       {lines.map(l => {
-                        const remaining = Math.max(0, (Number(l.quantity) || 0) - (Number(l.quantity_received) || 0));
+                        const remaining = lineRemaining(l);
                         const chips = localFor(po.id, l.item_number);
                         const key = `${po.id}:${l.line_id}`;
                         return (
@@ -335,7 +341,7 @@ export default function ReceivingPage() {
                   <button onClick={() => setInputs(prev => {
                     const next = { ...prev };
                     for (const l of lines) {
-                      const remaining = Math.max(0, (Number(l.quantity) || 0) - (Number(l.quantity_received) || 0));
+                      const remaining = lineRemaining(l);
                       if (remaining > 0) next[`${po.id}:${l.line_id}`] = String(remaining);
                     }
                     return next;

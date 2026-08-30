@@ -929,7 +929,10 @@ export default function UpfitProjectsPage() {
                             disabled={requesting}
                             onClick={() => requestParts(selected.id, unrequested.map((p: any) => ({
                               itemNumber: p.item_number,
-                              quantity: Math.max(1, p.short - (p.requested || 0)),
+                              // The TARGET outstanding ask, not a delta: the server raises
+                              // a pending row to max(existing, quantity), so a delta could
+                              // go stale and no-op forever (Round 3 finding).
+                              quantity: p.short,
                               description: p.description,
                               netsuiteItemId: p.netsuite_item_id,
                             })))}
@@ -1010,7 +1013,7 @@ export default function UpfitProjectsPage() {
                               ) : (
                                 <button
                                   disabled={requesting}
-                                  onClick={() => requestParts(selected.id, [{ itemNumber: p.item_number, quantity: Math.max(1, p.short - (p.requested || 0)), description: p.description, netsuiteItemId: p.netsuite_item_id }])}
+                                  onClick={() => requestParts(selected.id, [{ itemNumber: p.item_number, quantity: p.short, description: p.description, netsuiteItemId: p.netsuite_item_id }])}
                                   title="Ask purchasing to order the short quantity"
                                   style={{ marginLeft: '4px', fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '6px', background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.4)', color: '#f59e0b', cursor: requesting ? 'default' : 'pointer', whiteSpace: 'nowrap' }}
                                 >
