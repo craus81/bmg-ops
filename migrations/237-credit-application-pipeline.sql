@@ -1,0 +1,25 @@
+-- Migration 237: close the credit-application black hole (audit Stage 1
+-- CRITICAL / Round 2 item 18).
+--
+-- credit_applications was written by an unauthenticated browser insert
+-- (anon-key client on the public /credit-application page) and read by
+-- nothing. Submissions now go through POST /api/credit-application/submit
+-- (service role: server-side validation, trusted-IP rate limit, honeypot,
+-- staff notification) and the review UI reads/writes through
+-- requireFeature('credit_applications') routes — so NO client path touches
+-- this table any more, and both authenticated policies come off:
+--
+--  * "Anyone can submit credit applications" (055:64-66) allowed unlimited
+--    anonymous inserts — the write moved server-side.
+--  * "Internal staff can manage credit applications" (055:60-62) let all
+--    eight staff roles read EINs and bank references from the browser
+--    console, far wider than the finance/admin feature gate the review UI
+--    enforces. UI-gate-wider-than-RLS is the exact mismatch migration 234
+--    documents; with every access now service-role, the policy serves no
+--    workflow at all.
+--
+-- RLS stays enabled (055:58), so with no policies the table is
+-- service-role-only. If a browser read path is ever wanted, add a policy
+-- scoped to the feature-holding roles then.
+DROP POLICY IF EXISTS "Anyone can submit credit applications" ON credit_applications;
+DROP POLICY IF EXISTS "Internal staff can manage credit applications" ON credit_applications;

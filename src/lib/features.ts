@@ -36,6 +36,7 @@ export const FEATURES = {
   proof_admin: 'Proof Sweep',
   install_admin: 'Install Checklist Templates',
   prospects: 'Customers (Sales CRM)',
+  credit_applications: 'Credit Applications',
   upfit_projects: 'Upfit Projects',
   upfit_configurator: 'Upfit Designer (3D)',
   audit_log: 'Audit Log',
@@ -97,6 +98,7 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
   // being paid — without admin's user management or data tools.
   finance: [
     'home', 'messages', 'time', 'reports', 'vendor_payments', 'customers',
+    'credit_applications',
   ],
 
   // Leadership: the Home dashboard's Financials tab and nothing else — no
