@@ -3597,6 +3597,20 @@ export default function EstimatesPage() {
           );
         })()}
 
+        {/* Signed E-SIGN snapshot — the frozen document the customer accepted,
+            with an integrity verdict (audit item 11). */}
+        {editingId && (estimates.find(e => e.id === editingId) as any)?.customer_approved && (
+          <button
+            onClick={() => router.push(deepLinks.signedDocument('estimate', editingId))}
+            style={{
+              width: '100%', padding: '10px', borderRadius: '10px', marginBottom: '8px',
+              background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.25)',
+              color: '#60a5fa', fontWeight: 700, fontSize: '12px', cursor: 'pointer',
+            }}
+          >
+            View signed acceptance snapshot
+          </button>
+        )}
         {/* Convert to Sales Order — gated on customer approval; admins can
             override with a recorded reason (phone/email/PO approvals). */}
         {editingId && customerNsId && lines.length > 0 && !estimates.find(e => e.id === editingId)?.netsuite_so_id && (() => {

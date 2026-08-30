@@ -23,6 +23,8 @@ const SENSITIVE_DIRS = [
   // service-role write with rate limit + honeypot, so it is NOT listed.)
   'src/app/api/credit-applications',
   'src/app/api/estimates',
+  // E-SIGN snapshots (approval evidence) — feature-gated per record type.
+  'src/app/api/signed-documents',
 ];
 
 // Routes in these directories must be gated on a specific FEATURE, not just
