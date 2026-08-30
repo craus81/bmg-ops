@@ -140,6 +140,8 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
 
   // Duplicate vehicle found
   const [duplicateVehicle, setDuplicateVehicle] = useState<any>(null);
+  // Info banner for a vehicle with prior terminal visits (returning fleet van).
+  const [returningNote, setReturningNote] = useState('');
   const [updatingDupStatus, setUpdatingDupStatus] = useState(false);
 
   // Recent check-ins
@@ -207,11 +209,19 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
     setVinError('');
     setVinLoading(true);
     try {
-      // Check for duplicate VIN in fleet_checkins
+      // Duplicate-VIN guard — ACTIVE custody only (audit item 13). The old
+      // guard matched ANY fleet_checkins row, so a vehicle that shipped or
+      // was archived could never be checked in again: fleet customers'
+      // returning vans hit "Duplicate VIN" forever. Active = not archived
+      // and not shipped ('complete' still blocks — a finished vehicle
+      // awaiting pickup is still in our custody).
       const { data: existing } = await supabase
         .from('fleet_checkins')
         .select('id, vin, vehicle_year, vehicle_make, vehicle_model, customer_name, sales_order_number, status, created_at')
         .eq('vin', v)
+        .is('archived_at', null)
+        .neq('status', 'shipped')
+        .order('created_at', { ascending: false })
         .limit(1);
       if (existing && existing.length > 0) {
         setDuplicateVehicle(existing[0]);
@@ -220,6 +230,23 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
         return;
       }
       setDuplicateVehicle(null);
+      // A prior TERMINAL visit is a returning vehicle: proceed with a new
+      // check-in, note the history, and prefill the customer from last time.
+      const { data: prior } = await supabase
+        .from('fleet_checkins')
+        .select('customer_name, status, archived_at, created_at')
+        .eq('vin', v)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      const lastVisit = prior?.[0] || null;
+      if (lastVisit) {
+        setReturningNote(`Returning vehicle — last visit ${new Date(lastVisit.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}${lastVisit.customer_name ? ` for ${lastVisit.customer_name}` : ''}. This starts a new visit; the old record stays in history.`);
+        if (lastVisit.customer_name && !manualCustomerName.trim()) {
+          setManualCustomerName(lastVisit.customer_name);
+        }
+      } else {
+        setReturningNote('');
+      }
       const vehicle = await decodeVIN(v);
       setVehicleData({ vin: v, vehicle });
       setStep(1);
@@ -768,6 +795,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
     setStep(0);
     setVin('');
     setVinError('');
+    setReturningNote('');
     setSaveError(null);
     setVehicleData(null);
     setCustomerSearch('');
@@ -1333,6 +1361,12 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
     return (
       <div ref={rootRef}>
         <StepIndicator current={1} />
+
+        {returningNote && (
+          <div style={{ marginBottom: '10px', padding: '10px 12px', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.25)', borderRadius: '10px', color: '#60a5fa', fontSize: '12px', fontWeight: 600 }}>
+            ↩ {returningNote}
+          </div>
+        )}
 
         {/* Vehicle summary card */}
         <div style={{
