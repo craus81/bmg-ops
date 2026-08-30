@@ -319,6 +319,7 @@ export default function CniJobDetailPage() {
   const [showInvite, setShowInvite] = useState(false);
   const [inviteCompanies, setInviteCompanies] = useState<{ id: string; name: string; memberCount: number }[]>([]);
   const [invitedIds, setInvitedIds] = useState<string[]>([]); // invited company ids
+  const [inviteError, setInviteError] = useState('');
   const [bidCount, setBidCount] = useState(0);
 
   // Phase 3: photos + messages
@@ -715,14 +716,21 @@ export default function CniJobDetailPage() {
   const sendInvite = async (companyId: string) => {
     if (!job || !user) return;
     setUpdating(true);
-    await supabase.from('cni_job_invites').upsert({
-      job_id: job.id,
-      company_id: companyId,
-      installer_id: null,
-      invite_type: 'direct',
-      invited_by: user.id,
-    }, { onConflict: 'job_id,company_id' });
-    setInvitedIds(prev => [...prev, companyId]);
+    // Through the API (audit item 16): the route writes the invite AND
+    // notifies the company's installers — the browser upsert notified
+    // nobody, so invites sat unseen until someone opened the board.
+    try {
+      const res = await fetch('/api/cni/invite-company', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: job.id, companyId }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      setInvitedIds(prev => [...prev, companyId]);
+      setInviteError('');
+    } catch (e: any) {
+      setInviteError(`Invite failed: ${e?.message || 'unknown error'}`);
+    }
     setUpdating(false);
   };
 
@@ -1752,6 +1760,9 @@ export default function CniJobDetailPage() {
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
               Send direct invites — every installer at the company will see the job and can respond
             </div>
+            {inviteError && (
+              <div style={{ marginBottom: '10px', padding: '8px 12px', borderRadius: '8px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>{inviteError}</div>
+            )}
             {inviteCompanies.length === 0 ? (
               <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
                 No CNI companies available

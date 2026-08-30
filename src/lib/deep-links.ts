@@ -114,6 +114,9 @@ export const deepLinks = {
    *  Accept/Decline schedule controls, so it needs no extra param. Distinct
    *  from `cniJob`, which is the admin-side record an installer can't open. */
   installerJob: (jobId: string) => `/installer/jobs/${jobId}`,
+  /** Installer-portal AVAILABLE job — where an invited company responds to
+   *  a bid invitation (distinct from installerJob, the assigned-work page). */
+  installerAvailableJob: (jobId: string) => `/installer/available/${jobId}`,
   /** System health dashboard (checks are keyed by sync type, not record ids). */
   systemHealth: () => '/admin/system-health',
   /** System health's Email delivery section — flashes one email_log row.

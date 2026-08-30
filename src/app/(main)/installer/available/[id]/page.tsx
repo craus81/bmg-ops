@@ -97,38 +97,30 @@ export default function AvailableJobDetailPage() {
     if (!user || !job || submitting) return;
     setSubmitting(true);
 
-    // Upsert bid
-    const bidData: any = {
-      job_id: job.id,
-      installer_id: (isAdmin && preview?.profileId) || user.id,
-      company_id: myCompanyId,
-      response: responseType,
-      responded_at: new Date().toISOString(),
-    };
-
-    if (responseType === 'interested') {
-      bidData.proposed_start = propStart || null;
-      bidData.proposed_end = propEnd || null;
-      bidData.notes = notes || null;
-    } else {
-      bidData.decline_reason = declineReason || null;
-    }
-
-    const { error } = await supabase.from('cni_job_bids').upsert(bidData, {
-      onConflict: 'job_id,installer_id',
-    });
-
-    if (!error) {
-      // Update bid_count on the job
-      const { count } = await supabase
-        .from('cni_job_bids')
-        .select('*', { count: 'exact', head: true })
-        .eq('job_id', job.id);
-      await supabase.from('cni_jobs').update({ bid_count: count || 0 }).eq('id', job.id);
-
-      await loadJob();
-      setShowResponseForm(false);
-    }
+    // Through the API (audit item 16): the route writes the bid, keeps
+    // bid_count fresh, and notifies the coordinators — the browser upsert
+    // told nobody, so interested bids sat unseen until someone re-opened
+    // the job page on a hunch.
+    try {
+      const res = await fetch('/api/cni/bid', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobId: job.id,
+          response: responseType,
+          proposedStart: responseType === 'interested' ? (propStart || null) : null,
+          proposedEnd: responseType === 'interested' ? (propEnd || null) : null,
+          notes: responseType === 'interested' ? (notes || null) : null,
+          declineReason: responseType === 'declined' ? (declineReason || null) : null,
+          // Admin preview bids on behalf of the previewed installer.
+          installerId: (isAdmin && preview?.profileId) || null,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok && body.success) {
+        await loadJob();
+        setShowResponseForm(false);
+      }
+    } catch { /* leave the form open — the installer can retry */ }
     setSubmitting(false);
   };
 
