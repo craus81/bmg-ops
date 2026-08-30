@@ -22,6 +22,7 @@ const ProspectFields = {
   website: z.string().max(500).optional().nullable(),
   notes: z.string().max(5000).optional().nullable(),
   source: z.string().max(40).optional(),
+  lead_source: z.string().max(120).optional().nullable(),
   created_by: z.string().uuid().optional().nullable(),
 } as const;
 
@@ -105,6 +106,7 @@ export async function POST(req: NextRequest) {
       website: body.website || null,
       notes: body.notes || null,
       source: body.source || 'manual',
+      lead_source: body.lead_source || null,
       created_by: body.created_by || null,
     })
     .select()

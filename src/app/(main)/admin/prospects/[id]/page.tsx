@@ -35,6 +35,7 @@ import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailCo
 import PhoneInput from '@/components/PhoneInput';
 import { exportProspectPDF } from '@/lib/prospect-pdf';
 import { deepLinks } from '@/lib/deep-links';
+import { LEAD_SOURCES, OPP_TYPES } from '@/lib/lead-sources';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import { usd2 } from '@/lib/financials-print';
 import { exportStatementPDF } from '@/lib/statement-pdf';
@@ -162,11 +163,9 @@ const DOC_SORT_COLS = {
   amount: (d: CustDocument) => d.total,
 };
 
-const OPP_TYPES: Record<string, string> = { tech_install: 'Tech Install', graphics: 'Graphics', rebrand: 'Rebrand', fleet_wrap: 'Fleet Wrap', other: 'Other' };
 const OPP_STAGES: Record<string, string> = { lead: 'Lead', quoted: 'Quoted', negotiating: 'Negotiating', won: 'Won', lost: 'Lost' };
 const STAGE_COLORS: Record<string, string> = { lead: '#60a5fa', quoted: '#a78bfa', negotiating: '#fbbf24', won: '#4ade80', lost: '#f87171' };
 // status_change stays in the icon map so historical feed entries still render.
-const LEAD_SOURCES = ['Cold Call', 'Lead', 'Maryland Heights Chamber of Commerce', 'Little Black Book', 'Other'];
 const DOCS_PAGE_SIZE = 100;
 const ACTS_PAGE_SIZE = 30;
 

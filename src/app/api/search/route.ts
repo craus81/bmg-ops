@@ -26,6 +26,16 @@ export async function GET(req: NextRequest) {
 
   const like = `%${q}%`;
 
+  // Caller-ID search (audit Stage 1: no phone search existed anywhere).
+  // A phone-shaped query — digits with phone punctuation only — searches
+  // the digit-stripped phone_digits columns (migrations 238/239) so
+  // "(555) 123-4567", "555.123.4567" and a bare "5551234567" all match
+  // regardless of how the number was stored. The name/email predicates are
+  // skipped for these queries: a phone-shaped string isn't a name, and its
+  // parens/commas would corrupt the .or() filter syntax anyway.
+  const qDigits = q.replace(/\D/g, '');
+  const phoneLike = qDigits.length >= 4 && /^[\d\s\-().+/#*]+$/.test(q);
+
   // Private-message search is scoped to conversations the caller participates
   // in — the service-role query would otherwise expose every staff member's
   // DMs to every other staff member (a full-text extraction oracle). A sentinel
@@ -81,13 +91,21 @@ export async function GET(req: NextRequest) {
       .or(`item_number.ilike.${like},display_name.ilike.${like},billable_customer.ilike.${like},vehicle_type.ilike.${like},graphic_package.ilike.${like}`)
       .limit(MAX_PER_GROUP * 4),
 
-    // Customers — search by company name, contact, email
-    supabase
-      .from('prospects')
-      .select('id, company_name, contact_name, email, phone, netsuite_id', { count: 'exact' })
-      .or(`company_name.ilike.${like},contact_name.ilike.${like},email.ilike.${like}`)
-      .order('company_name')
-      .limit(MAX_PER_GROUP),
+    // Customers — search by company name, contact, email; phone-shaped
+    // queries match the record's phone digits instead (see phoneLike above)
+    phoneLike
+      ? supabase
+          .from('prospects')
+          .select('id, company_name, contact_name, email, phone, netsuite_id', { count: 'exact' })
+          .like('phone_digits', `%${qDigits}%`)
+          .order('company_name')
+          .limit(MAX_PER_GROUP)
+      : supabase
+          .from('prospects')
+          .select('id, company_name, contact_name, email, phone, netsuite_id', { count: 'exact' })
+          .or(`company_name.ilike.${like},contact_name.ilike.${like},email.ilike.${like}`)
+          .order('company_name')
+          .limit(MAX_PER_GROUP),
 
     // Messages — search by body text, scoped to the caller's own conversations
     supabase
@@ -153,11 +171,54 @@ export async function GET(req: NextRequest) {
   // Merge PO results
   const allPOs = [...(pos.data || []), ...poFromLineItems].slice(0, MAX_PER_GROUP);
 
+  // Phone hits beyond the prospect's own number: a CONTACT's cell is often
+  // the number on caller ID, and a NetSuite-mirror customer may have no CRM
+  // row at all until a sync backfills it. Both fold into the customers
+  // group — contacts mapped to their parent record, mirror rows under the
+  // ns-<id> pseudo id the record page already serves.
+  const customerRows: any[] = [...(customers.data || [])];
+  let customerCount = customers.count ?? customerRows.length;
+  if (phoneLike) {
+    const [contactHits, mirrorHits] = await Promise.all([
+      supabase
+        .from('prospect_contacts')
+        .select('name, phone, prospect_id, prospects(id, company_name, email, phone, netsuite_id)')
+        .like('phone_digits', `%${qDigits}%`)
+        .limit(MAX_PER_GROUP),
+      supabase
+        .from('customers')
+        .select('id, company_name, email, phone, netsuite_id')
+        .like('phone_digits', `%${qDigits}%`)
+        .limit(MAX_PER_GROUP),
+    ]);
+    const seenProspects = new Set(customerRows.map((r: any) => r.id));
+    const seenNs = new Set(customerRows.map((r: any) => r.netsuite_id).filter(Boolean).map(String));
+    for (const c of contactHits.data || []) {
+      const p = (c as any).prospects;
+      if (!p || seenProspects.has(p.id)) continue;
+      seenProspects.add(p.id);
+      if (p.netsuite_id) seenNs.add(String(p.netsuite_id));
+      customerRows.push({
+        id: p.id, company_name: p.company_name, contact_name: (c as any).name,
+        email: p.email, phone: (c as any).phone || p.phone, netsuite_id: p.netsuite_id,
+      });
+    }
+    for (const m of mirrorHits.data || []) {
+      if (!m.netsuite_id || seenNs.has(String(m.netsuite_id))) continue;
+      seenNs.add(String(m.netsuite_id));
+      customerRows.push({
+        id: `ns-${m.netsuite_id}`, company_name: m.company_name, contact_name: null,
+        email: m.email, phone: m.phone, netsuite_id: m.netsuite_id,
+      });
+    }
+    customerCount = Math.max(customerCount, customerRows.length);
+  }
+
   // Also search estimates by customer name through the prospects/customers table
   let estimatesByCustomer: any[] = [];
-  if (customers.data && customers.data.length > 0) {
+  if (customerRows.length > 0) {
     // Prospects that came from NetSuite have netsuite_id which maps to customers.netsuite_id → estimates.customer_id
-    const nsIds = customers.data.filter((c: any) => c.netsuite_id).map((c: any) => c.netsuite_id);
+    const nsIds = customerRows.filter((c: any) => c.netsuite_id).map((c: any) => c.netsuite_id);
     if (nsIds.length > 0) {
       // Look up the old customer IDs by netsuite_id
       const { data: oldCustomers } = await supabase.from('customers').select('id').in('netsuite_id', nsIds);
@@ -268,9 +329,9 @@ export async function GET(req: NextRequest) {
         graphic_package: p.graphic_package,
       }));
   }
-  if (customers.data?.length) {
-    results.customers = customers.data;
-    totals.customers = customers.count ?? customers.data.length;
+  if (customerRows.length) {
+    results.customers = customerRows.slice(0, MAX_PER_GROUP * 2);
+    totals.customers = customerCount;
   }
   if (messages.data?.length) {
     results.messages = messages.data;
