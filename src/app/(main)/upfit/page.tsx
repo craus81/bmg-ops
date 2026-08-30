@@ -561,6 +561,28 @@ export default function UpfitProjectsPage() {
     setReadinessLoading(false);
   };
 
+  // Audit item 17A: a short readiness row finally has an action. POSTs a
+  // purchase request (server enriches item id/vendor and notifies
+  // purchasing) and repaints the card from the returned readiness — the
+  // allocations-route one-round-trip pattern.
+  const [requesting, setRequesting] = useState(false);
+  const requestParts = async (projectId: string, items: { itemNumber: string; quantity: number; description?: string | null; netsuiteItemId?: string | null }[]) => {
+    if (items.length === 0 || requesting) return;
+    setRequesting(true);
+    try {
+      const res = await fetch('/api/purchase-requests', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items, projectId, returnReadiness: true }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      if (body.readiness) setReadiness(body.readiness);
+    } catch (e: any) {
+      await dialog.alert(`Could not request the part${items.length !== 1 ? 's' : ''}: ${e?.message || 'unknown error'}`);
+    }
+    setRequesting(false);
+  };
+
   const editAllocation = async (p: any) => {
     const answer = await dialog.prompt(
       `Reserve how many ${p.item_number} for this job? (0 releases; ${p.allocated + p.free} max)`,
@@ -897,6 +919,26 @@ export default function UpfitProjectsPage() {
                       {v === 'ready' && '✓ All parts available — reserve them so another job can\'t claim them'}
                       {v === 'waiting' && `⏳ Waiting on parts already on order${readiness.summary.lastEta ? ` — last ETA ${fmt(readiness.summary.lastEta)}` : ''}`}
                       {v === 'short' && `✗ ${readiness.summary.short} part${readiness.summary.short !== 1 ? 's' : ''} not in stock or on order — don't schedule yet`}
+                      {v === 'short' && (() => {
+                        const unrequested = readiness.parts.filter((p: any) => p.short > 0 && (p.requested || 0) < p.short);
+                        if (unrequested.length === 0) {
+                          return <div style={{ marginTop: '5px', fontWeight: 700, color: '#f59e0b' }}>🛒 All short parts are requested — waiting on purchasing.</div>;
+                        }
+                        return (
+                          <button
+                            disabled={requesting}
+                            onClick={() => requestParts(selected.id, unrequested.map((p: any) => ({
+                              itemNumber: p.item_number,
+                              quantity: Math.max(1, p.short - (p.requested || 0)),
+                              description: p.description,
+                              netsuiteItemId: p.netsuite_item_id,
+                            })))}
+                            style={{ display: 'block', marginTop: '6px', padding: '6px 10px', borderRadius: '7px', background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.4)', color: '#f59e0b', fontSize: '11px', fontWeight: 800, cursor: requesting ? 'default' : 'pointer', opacity: requesting ? 0.6 : 1 }}
+                          >
+                            {requesting ? 'Requesting…' : `🛒 Request ${unrequested.length} short part${unrequested.length !== 1 ? 's' : ''} from purchasing`}
+                          </button>
+                        );
+                      })()}
                     </div>
                   );
                 })()}
@@ -961,8 +1003,20 @@ export default function UpfitProjectsPage() {
                             </td>
                             <td style={{ padding: '5px 6px', textAlign: 'right', color: theme.textSecondary }}>{p.free ?? p.on_hand}</td>
                             <td style={{ padding: '5px 6px', textAlign: 'right', color: theme.textSecondary }}>{p.on_order}</td>
-                            <td style={{ padding: '5px 6px' }}>
+                            <td style={{ padding: '5px 6px', whiteSpace: 'nowrap' }}>
                               <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: `${state.color}20`, color: state.color, whiteSpace: 'nowrap' }}>{state.label}</span>
+                              {p.short > 0 && ((p.requested || 0) >= p.short ? (
+                                <span title="A purchase request is pending for this part" style={{ marginLeft: '4px', fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: 'rgba(251,191,36,0.15)', color: '#f59e0b', whiteSpace: 'nowrap' }}>🛒 Requested</span>
+                              ) : (
+                                <button
+                                  disabled={requesting}
+                                  onClick={() => requestParts(selected.id, [{ itemNumber: p.item_number, quantity: Math.max(1, p.short - (p.requested || 0)), description: p.description, netsuiteItemId: p.netsuite_item_id }])}
+                                  title="Ask purchasing to order the short quantity"
+                                  style={{ marginLeft: '4px', fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '6px', background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.4)', color: '#f59e0b', cursor: requesting ? 'default' : 'pointer', whiteSpace: 'nowrap' }}
+                                >
+                                  Order
+                                </button>
+                              ))}
                             </td>
                           </tr>
                         );

@@ -9,6 +9,7 @@ import { syncSalesOrders } from '@/lib/sales-order-sync';
 import { syncInventoryQuantities } from '@/lib/inventory-sync';
 import { syncVendorBillPayments } from '@/lib/vendor-bill-sync';
 import { syncArInvoicePayments } from '@/lib/ar-payment-sync';
+import { closeConvertedEstimates } from '@/lib/estimate-close-sync';
 import { recordHeartbeat } from '@/lib/system-health';
 
 export const dynamic = 'force-dynamic';
@@ -423,6 +424,19 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     console.error('[cron] AR payment sweep error:', err.message);
     results.arPayments = { error: err.message };
+  }
+
+  // ═══════════ 3f. CONVERTED-ESTIMATE CLOSE SWEEP ═══════════
+  // Pushed estimates never auto-processed (FleetSuite SOs are standalone),
+  // so converted estimates sat Open in NetSuite forever — audit Round 2
+  // item 10. convert-to-so closes them at conversion time now; this drains
+  // the pre-fix backlog, capped per run, keyed on NetSuite's own status so
+  // it needs no local state.
+  try {
+    results.estimateClose = await closeConvertedEstimates(supabase);
+  } catch (err: any) {
+    console.error('[cron] Converted-estimate close sweep error:', err.message);
+    results.estimateClose = { error: err.message };
   }
 
   // ═══════════ 4. INVOICED-QUANTITY CHECK ═══════════

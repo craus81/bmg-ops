@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createSalesOrder, findLocation, suiteqlQuery } from '@/lib/netsuite';
+import { createSalesOrder, findLocation, suiteqlQuery, closeNetSuiteEstimate } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
-import { requireStaff } from '@/lib/api-auth';
+import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { safeStringLiteral } from '@/lib/sql-safe';
 import { logAudit } from '@/lib/audit';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { syncShopInboundForSalesOrder } from '@/lib/shop-inbound';
 import { estimateContextMemo } from '@/lib/estimate-document';
+import { resolveOrPromoteByName } from '@/lib/promote-prospect';
 
 const ConvertSchema = z.object({
   estimateId: z.string().uuid(),
@@ -38,7 +38,7 @@ async function findCustomItemId(): Promise<string | null> {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requireStaff(req);
+  const auth = await requireFeature(req, 'estimates');
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, ConvertSchema);
@@ -106,15 +106,16 @@ export async function POST(req: NextRequest) {
     // Verify we have a customer NetSuite ID
     let customerId = estimate.customer_netsuite_id;
     if (!customerId && estimate.customer_name) {
-      try {
-        const safeName = safeStringLiteral(estimate.customer_name, 200);
-        const result = await suiteqlQuery(
-          `SELECT c.id FROM customer c WHERE UPPER(c.companyname) = UPPER('${safeName}') FETCH FIRST 1 ROWS ONLY`
-        );
-        if (result?.items?.[0]?.id) {
-          customerId = result.items[0].id.toString();
-        }
-      } catch { /* fallback failed */ }
+      // Same resolver as the estimate push: an existing NetSuite customer
+      // with this exact name, else promote the matching CRM lead (lead
+      // tier). Stamp the estimate so the linkage survives for invoicing.
+      const resolved = await resolveOrPromoteByName(supabase, estimate.customer_name, null);
+      if (resolved) {
+        customerId = resolved.netsuiteId;
+        await supabase.from('estimates')
+          .update({ customer_netsuite_id: resolved.netsuiteId })
+          .eq('id', estimateId);
+      }
     }
 
     if (!customerId) {
@@ -278,6 +279,21 @@ export async function POST(req: NextRequest) {
       }, { status: 409 });
     }
 
+    // ── Close the pushed NetSuite estimate (audit Round 2 item 10) ──
+    // FleetSuite SOs are standalone, so NetSuite's own estimate->Processed
+    // transition never fires and pushed estimates sat Open forever. Closing
+    // is a probability-0 PATCH (Document Status is derived — see
+    // closeNetSuiteEstimate). Best-effort: the SO exists either way, and
+    // the netsuite-sync sweep (closeConvertedEstimates) retires any miss.
+    let nsEstimateClosed: boolean | null = null;
+    if (estimate.netsuite_estimate_id) {
+      const closed = await closeNetSuiteEstimate(String(estimate.netsuite_estimate_id));
+      nsEstimateClosed = closed.success;
+      if (!closed.success) {
+        console.warn(`convert-to-so: NS estimate ${estimate.netsuite_estimate_id} close failed:`, closed.error);
+      }
+    }
+
     // ── Auto-create/link the upfit project (roadmap N2 phase 1) ──
     // Conversion used to create nothing downstream: someone had to know to
     // open Upfit Projects, hand-create a project, and re-type the SO number
@@ -393,6 +409,7 @@ export async function POST(req: NextRequest) {
       unmappedLines: unmappedLineDescriptions.length > 0 ? unmappedLineDescriptions : undefined,
       laborSkipped: laborSkipped || undefined,
       upfitProject: upfitProject || undefined,
+      nsEstimateClosed: nsEstimateClosed === null ? undefined : nsEstimateClosed,
       memoUsed: memo,
     });
   } catch (err: any) {

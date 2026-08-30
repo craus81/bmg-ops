@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireStaff } from '@/lib/api-auth';
+import { requireFeature } from '@/lib/api-auth';
 import { generateToken } from '@/lib/magic-link-approval';
 import { sendEmailDetailed } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
@@ -62,7 +62,7 @@ const SendForApprovalSchema = z.object({
  * synced customer.email / customer.phone.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireStaff(req);
+  const auth = await requireFeature(req, 'estimates');
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, SendForApprovalSchema);

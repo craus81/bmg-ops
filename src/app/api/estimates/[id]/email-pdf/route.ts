@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireStaff } from '@/lib/api-auth';
+import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
 import { sendEmailDetailed, buildNotificationEmail } from '@/lib/resend';
@@ -34,7 +34,7 @@ function getSupabase() {
  * renderer as GET /api/estimates/[id]/pdf and Reply-To's the sender.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireStaff(req);
+  const auth = await requireFeature(req, 'estimates');
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

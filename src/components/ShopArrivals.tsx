@@ -98,7 +98,18 @@ export default function ShopArrivals() {
 
   const markArrived = async (row: InboundRow) => {
     setInbound(prev => prev.filter(r => r.id !== row.id));
-    await supabase.from('shop_inbound').update({ status: 'arrived', updated_at: new Date().toISOString() }).eq('id', row.id);
+    // Through the arrival route (audit items 14+15): it back-links any
+    // active check-in for this VIN onto fleet_checkin_id and sends the
+    // arrival notification server-side. Optimistic removal stands even if
+    // the call fails — the row can be re-marked from a refreshed board.
+    try {
+      await fetch('/api/shop-inbound/arrival', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inboundId: row.id }),
+      });
+    } catch {
+      await supabase.from('shop_inbound').update({ status: 'arrived', updated_at: new Date().toISOString() }).eq('id', row.id);
+    }
   };
   const cancelRow = async (row: InboundRow) => {
     setInbound(prev => prev.filter(r => r.id !== row.id));

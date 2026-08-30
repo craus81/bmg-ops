@@ -1548,6 +1548,13 @@ export default function GraphicsJobRecordPage() {
         {ja.customer_approved ? (
           <div style={{ fontSize: '11px', color: '#22c55e', fontWeight: 700 }}>
             ✓ Approved {ja.customer_approved_at ? ` · ${new Date(ja.customer_approved_at).toLocaleString()}` : ''}
+            {ja.signed_document_storage_path && (
+              <button
+                onClick={() => router.push(deepLinks.signedDocument('proof', job.id))}
+                title="View the frozen approval snapshot with its integrity check"
+                style={{ marginLeft: '10px', padding: '3px 9px', borderRadius: '6px', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}
+              >⎙ Signed Doc</button>
+            )}
           </div>
         ) : ja.customer_rejected_at ? (
           <div>

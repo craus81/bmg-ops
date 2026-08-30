@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireStaff } from '@/lib/api-auth';
+import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { computeTotals } from '@/lib/estimate-totals';
 import { findItems } from '@/lib/netsuite';
@@ -38,7 +38,7 @@ const Schema = z.object({
  * recomputed server-side (the builder reloads the record on return).
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireStaff(req);
+  const auth = await requireFeature(req, 'estimates');
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

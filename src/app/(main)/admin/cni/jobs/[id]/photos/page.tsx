@@ -83,26 +83,16 @@ export default function PhotoReviewPage() {
   const reviewPhoto = async (photoId: string, status: string) => {
     if (!user) return;
     setUpdating(true);
-
-    await supabase.from('cni_job_photos').update({
-      review_status: status,
-      reviewed_by: user.id,
-      reviewed_at: new Date().toISOString(),
-      review_notes: reviewNotes[photoId] || null,
-    }).eq('id', photoId);
-
-    // If denied, auto-log internal note
-    if (status === 'denied' && job?.assigned_installer_id) {
-      const photo = photos.find(p => p.id === photoId);
-      await supabase.from('cni_internal_notes').insert({
-        installer_id: job.assigned_installer_id,
-        note_type: 'qc',
-        content: `Photo denied (${TYPE_LABELS[photo?.photo_type || ''] || 'unknown'}): ${reviewNotes[photoId] || 'No notes'}`,
-        auto_generated: true,
-        source_job_id: job.id,
-        created_by: user.id,
+    // Through the API (audit item 16): the route writes the verdict, keeps
+    // the deny-side QC note, and — the part the browser write could never
+    // do — notifies the installer who has to reshoot. Before this, a denial
+    // surfaced only when their invoice stalled.
+    try {
+      await fetch('/api/cni/review-photo', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ photoId, status, note: reviewNotes[photoId] || null }),
       });
-    }
+    } catch { /* loadData below shows the true state either way */ }
 
     await loadData();
     setUpdating(false);

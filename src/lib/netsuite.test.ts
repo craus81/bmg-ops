@@ -6,6 +6,7 @@ import {
   createDirectInvoice,
   createInvoiceFromSO,
   createBillFromPo,
+  createItemReceiptFromPo,
   createCustomerOrLead,
   getItemBasePrices,
 } from './netsuite';
@@ -377,6 +378,44 @@ describe('createBillFromPo', () => {
       memo: 'Parts invoice INV-9 (via FleetSuite parts mail)',
     });
     expect(result).toEqual({ success: true, billId: '700', billNumber: 'VB-88' });
+  });
+});
+
+describe('createItemReceiptFromPo', () => {
+  it('lists EVERY line explicitly — received with quantities, the rest itemReceive:false — so the transform cannot default a line to fully received', async () => {
+    fetchMock
+      // itemReceipt transform POST
+      .mockResolvedValueOnce(new Response(null, {
+        status: 204,
+        headers: { Location: 'https://x/services/rest/record/v1/itemReceipt/500' },
+      }))
+      // tranid lookup
+      .mockResolvedValueOnce(jsonResponse({ items: [{ tranid: 'IR-42' }] }));
+
+    const result = await createItemReceiptFromPo({
+      purchaseOrderId: '321',
+      receiveLines: [{ orderLine: 2, quantity: 3 }],
+      excludeOrderLines: [1, 3],
+      memo: 'Received via FleetSuite',
+      tranDate: '2026-08-30',
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      'https://1234567-sb1.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseOrder/321/!transform/itemReceipt'
+    );
+    expect(JSON.parse(init.body)).toEqual({
+      item: {
+        items: [
+          { orderLine: 2, quantity: 3, itemReceive: true },
+          { orderLine: 1, itemReceive: false },
+          { orderLine: 3, itemReceive: false },
+        ],
+      },
+      memo: 'Received via FleetSuite',
+      tranDate: '2026-08-30',
+    });
+    expect(result).toEqual({ success: true, receiptId: '500', receiptNumber: 'IR-42' });
   });
 });
 

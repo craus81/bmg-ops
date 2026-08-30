@@ -80,7 +80,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Soon** — the role cleanup (17–20) | ✅ done | #17 infra + owner-page gates (#649), #18a registry (#648), #18b all ten tools keyed (#652, #654, #655), #19 install roles (#650), #20 dead-end menus (#651). The ungated-by-URL pages are gated and the dev route deleted (#656). An adversarial gate audit (every tile/nav/redirect/deep-link entry point traced per role) confirmed 20 regressions, all fixed: client dead-clicks + two redirect loops (#657) and per-recipient vehicle notification links (#658). |
 | **Data-integrity bugs to fix in passing** | ✅ done | All 6 re-verified as live, then fixed: pushed-estimate delete (#660), Add-Graphics demotion (#661), stranded allocations — trigger + backfill, migration 228 (#662), graphics history trigger, migration 229 (#663), the 1000-row-cap sweep across payroll/payouts/credits/pay-rates/scans/invoices/pos/dashboard (#664), and the Open Quotes tile (#665). |
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
-| **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 9–17 and 19–21 remain open** (12), re-checked against `4cc8507` on 2026-08-29 — see the roadmap re-verification note at the end of Part 6. Item 18 (the credit-application black hole) shipped 2026-08-30 in the Stage 1 build-out: #701 reminders, #702 credit application, #703 duplicate guard, #704 phone intake. |
+| **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 19 and 21 remain open** (2 — R2-goes-private, labor capture). Shipped 2026-08-30: the Stage 1 build-out (#701–#704, closing item 18), the two Stage 1 owner decisions (#706 lead tier, #707 deletion→NetSuite), and estimate integrity (#708–#710, items 9–11). Shipped 2026-08-30: the whole **vehicle custody** block (#712–#715, items 12–16). Shipped 2026-08-30 (second wave): **parts ordering & receiving** (#717–#719, item 17 — the audit's largest build: request queue → NetSuite PO → receiving with item receipts) and the **route→permission manifest** (#721, item 20 — all 251 routes declare + prove their guard; the sweep fixed the unauthenticated Google OAuth pair). |
 
 Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap.
 
@@ -98,8 +98,8 @@ lead straight to the estimate builder.
 
 **What breaks at the edges:** _(All four findings below were built and
 merged 2026-08-30 — #701 reminders, #702 credit application, #703 duplicate
-guard, #704 phone intake. Annotations inline; two sub-findings deliberately
-remain open.)_
+guard, #704 phone intake; the two design leftovers followed the same day as
+#706 lead tier and #707 deletion propagation. Annotations inline.)_
 
 - ✅ **CRITICAL — The credit application is a black hole.** The public
   `/credit-application` form writes rows into `credit_applications` (EINs, bank
@@ -130,16 +130,21 @@ remain open.)_
   sweep, migration 236 notified_at dedupe, admin fallback for creator-less
   voice-note rows, 30-day stale guard so the first run doesn't blast a year
   of backlog.)_
-- ⚠️ **MAJOR — Duplicate guard is exact-name-only**, client-side, and inconsistent
+- ✅ **MAJOR — Duplicate guard is exact-name-only**, client-side, and inconsistent
   across the four customer-create paths; phone/email are never checked. Every
   inquiry instantly becomes a NetSuite customer (no lead tier), and deleting a
   linked record only deletes the CRM row — it resurrects on the next sync.
   _(Guard fixed: #703 — one shared server-side checker (normalized name +
   email + phone digits, prospects AND the customers mirror, migration 238)
-  wired into all four create paths with an explicit force override. Still
-  open, deliberately: the **lead tier** — every inquiry is still an instant
-  NetSuite customer — and the **delete/resurrect asymmetry**; both are design
-  conversations, not patches.)_
+  wired into all four create paths with an explicit force override. The two
+  design conversations were then decided by the owner 2026-08-30 and built
+  the same day: the **lead tier** (#706 — a record without `netsuite_id` IS
+  a lead, promoted explicitly from its record page or automatically when its
+  first estimate is pushed/converted; no schema change) and the
+  **delete/resurrect asymmetry** (#707 — deleting a linked record deletes
+  the NetSuite customer, falling back to deactivation when NetSuite refuses;
+  both syncs filter `isinactive='F'`, so nothing flows back; admin-gated per
+  the #680 precedent). This bullet is now fully closed.)_
 
 ## Stage 2 — Building the estimate (upfit parts + graphics)
 
@@ -225,11 +230,14 @@ strong.
   project, no graphics job. The user must go create the project by hand and
   **re-type the SO number the app just generated** into a lookup box before any
   readiness math is reachable. (Roadmap N2 phase 1, still unbuilt.)
-- **CRITICAL — "Order the upfit parts" has no software at all.** The readiness
-  card can say "✗ 3 parts not in stock or on order — don't schedule yet" and
-  offers *nothing*: no PO creation, no purchase request, no notification to
-  purchasing. You place the vendor PO in NetSuite by hand and wait up to 2 hours
-  for it to mirror back. **There is no receiving flow either.**
+- ~~**CRITICAL — "Order the upfit parts" has no software at all.**~~ **Fixed
+  2026-08-30 (#717–#719, Round 2 item 17):** short readiness rows now carry an
+  Order button that raises purchase requests into a vendor-grouped queue at
+  `/admin/purchasing`; admins turn a group into a **real NetSuite PO** from the
+  queue (immediately mirrored locally, so readiness flips to "on order" without
+  the 2-hour wait); and `/admin/receiving` checks arrivals in, posting the
+  NetSuite item receipt — with a manual-entry worklist when the transform can't
+  run. Requesters are notified at ordered and at arrived.
 - **MAJOR — NetSuite sync failures are invisible to the people who act on the
   data.** System Health is super-admin-only by default; per-row sync errors are
   silently `continue`d; a degraded `quantityshiprecv` fallback zeroes received
@@ -515,6 +523,15 @@ UI feature gates and the server guards, so the two can be proven consistent
 instead of hand-synced per file, plus coarse RLS as a backstop on the tables the
 service role writes.
 
+_(Shipped 2026-08-30, #721: `src/lib/route-permissions.ts` declares all 251
+routes and the rewritten guard test proves each file carries its declared
+guard — unlisted routes, downgrades, stale entries, and undeclared bare
+`requireAuth` all fail. Feature keys are typed against the same
+`src/lib/features.ts` registry the UI resolves, which is the
+consistency proof at the registry level. The coarse-RLS-backstop aside
+remains a separate hardening idea; the sweep itself found and fixed one
+live hole — the unauthenticated Google OAuth pair.)_
+
 ---
 
 # Part 3 — Role × feature visibility audit (the explicit ask)
@@ -591,19 +608,22 @@ biggest ones. _(Status re-checked 2026-08-29 at `4cc8507`; ✅/❌ added then.)_
 - ⚠️ **Auto-create the upfit project + parts-order queue on conversion**
   (roadmap N2) — removes the single biggest manual gap in the whole workflow.
   **The project half shipped:** `convert-to-so` now find-or-creates the
-  `upfit_projects` row keyed on `estimate_id`. The **parts-order queue half has
-  not** — it needs the ordering software in Round 2 item 17.
-- ❌ **In-app parts ordering & receiving** — a "Request purchase" action on
-  `short` parts and a "Receive against PO" screen; today both happen entirely in
-  NetSuite by hand with a 2-hour blind spot. _(= Round 2 item 17, still the
+  `upfit_projects` row keyed on `estimate_id`. **The ordering software now
+  exists** (item 17, #717–#719) and the readiness card feeds the purchasing
+  queue; what's still manual is *raising* the requests — someone clicks the
+  Order button on the card rather than conversion auto-queuing shortages.
+- ✅ **In-app parts ordering & receiving** — **shipped 2026-08-30 (#717–#719)**:
+  the "Request purchase" action on `short` parts, the purchasing queue that
+  turns a vendor group into a real NetSuite PO, and the "Receive against PO"
+  screen that posts the NetSuite item receipt — the 2-hour blind spot closed by
+  immediate local mirroring in both directions. _(Was Round 2 item 17, the
   largest unbuilt thing in the workflow.)_
 - ✅ **AR payment sync-back** — **shipped**: `src/lib/ar-payment-sync.ts`, run
   from the `netsuite-sync` cron, flips `fleet_checkins.is_paid` and
   `scan_logs.is_paid` from NetSuite's Paid-In-Full status, so the "awaiting
   payment" tile no longer inflates forever.
-- ❌ **Signed-document viewer** — the storage path + hash columns exist for
-  estimates, quotes, and proofs; only the read side is missing. _(= Round 2
-  item 11.)_
+- ✅ **Signed-document viewer** — **shipped** (#710): `/signed/[type]/[id]`
+  with sha256 integrity verdicts, linked from all three record surfaces.
 - 🔑 **RingCentral SMS provider (`SMS_PROVIDER_ENABLED`)** — the entire SMS
   channel (approval links, pickup/complete customer texts, staff DM texts) is
   wired and still waiting behind one flag; turning it on fixes several dead
@@ -884,25 +904,61 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
    boolean-only check would have left exactly those estimates editable.
    Still no clone/duplicate feature, so "start a new estimate" means retyping
    — the natural companion to this lock.)_
-9. ❌ **All estimate APIs are `requireStaff` only** — shop/field techs and
-   finance can price, push, email and delete any estimate.
-10. ❌ **Pushed NetSuite estimates are left open forever** (`createdfrom` NULL),
-    permanently degrading the SO↔estimate matcher.
-11. ❌ **The signed E-SIGN snapshot is write-only** — no viewer, download, or
-    verification anywhere, which is exactly what a dispute needs.
+9. ✅ **All estimate APIs are `requireStaff` only** — shop/field techs and
+   finance can price, push, email and delete any estimate. _(Fixed 2026-08-30,
+   #708 — all nine routes now `requireFeature(req, 'estimates')` (super_admin,
+   admin, sales, graphics_production; per-user overridable). The estimates
+   page URL itself was never gated — only the nav tab was — so the page and
+   the approval-preview page gained `useRequireFeature`. The guard test now
+   asserts the feature guard verbatim per route (`FEATURE_GATED_DIRS`), so
+   the tightening can't silently regress.)_
+10. ✅ **Pushed NetSuite estimates are left open forever** (`createdfrom` NULL),
+    permanently degrading the SO↔estimate matcher. _(Fixed 2026-08-30, #709 —
+    NetSuite derives an estimate's Document Status, so the supported write is
+    probability-0 (→ Closed): `convert-to-so` closes the pushed estimate at
+    conversion, and a stateless netsuite-sync sweep drains the historical
+    backlog at 25 per run, keyed on NetSuite's own status. A transform rework
+    (native `createdfrom`) was deliberately not attempted — it reshapes the
+    money path and can't be validated offline; the matcher's memo tier
+    already covers FS-created SOs.)_
+11. ✅ **The signed E-SIGN snapshot is write-only** — no viewer, download, or
+    verification anywhere, which is exactly what a dispute needs. _(Fixed
+    2026-08-30, #710 — `/api/signed-documents` reads the snapshot from the
+    private R2 prefix through credentials and re-hashes the bytes against the
+    sha256 recorded at approval, so tampering reads `verified:false`; the
+    `/signed/[type]/[id]` viewer shows the integrity badge, the acceptance
+    timestamp, a download, and the document in a fully sandboxed iframe.
+    Linked from approved estimates, accepted wrap quotes, and approved
+    proofs.)_
 
 ### Soon — vehicle custody and the shop floor
 
-12. ❌ **Check-in photos are optional, with no damage capture** — the moment
+12. ✅ **Check-in photos are optional, with no damage capture** — the moment
     liability transfers is unprotected, and `photo_type='damage'` still has no
-    writer.
-13. ❌ **A returning vehicle can never be checked in again** — the duplicate-VIN
-    guard matches archived and shipped rows.
-14. ❌ **Arrival and check-in remain two unlinked systems** —
+    writer. _(Fixed 2026-08-30, #713 — at least one photo required before a
+    check-in saves (upload stays best-effort so a flaky connection can't
+    strand it), plus an amber Damage-on-Arrival section: damage photos land
+    as `photo_type 'damage'` — its first writer ever — with a required
+    what-and-where note folded into the check-in notes.)_
+13. ✅ **A returning vehicle can never be checked in again** — the duplicate-VIN
+    guard matches archived and shipped rows. _(Fixed 2026-08-30, #712 — the
+    guard blocks only ACTIVE custody (`archived_at IS NULL AND status !=
+    'shipped'`); terminal-only vehicles start a new visit with a
+    returning-vehicle banner and the customer prefilled from last time.)_
+14. ✅ **Arrival and check-in remain two unlinked systems** —
     `shop_inbound.fleet_checkin_id` has no writer in either direction, so
     vehicles read "overdue, expected but not arrived" while sitting in the shop.
-15. ❌ **A stuck vehicle notifies nobody for 48 hours**, and **nothing notifies
-    anyone when a vehicle arrives**. _(Read this precisely: the sweep exists
+    _(Fixed 2026-08-30, #714 — POST /api/shop-inbound/arrival is the one
+    arrival brain: a check-in matches its expected row (VIN → SO numbers →
+    unique customer) and links it; the Shop Board's Arrived button back-links
+    any active check-in for the VIN. Idempotent both directions.)_
+15. ✅ **A stuck vehicle notifies nobody for 48 hours**, and **nothing notifies
+    anyone when a vehicle arrives**. _(Arrival half fixed 2026-08-30, #714 —
+    every arrival notifies admins in-app; push fires only for EXPECTED
+    vehicles (a matched Shop Board row), so routine walk-ins don't buzz
+    phones. Same-day board-arrival + check-in dedupes to one ping. The 48h
+    stuck-latency floor below stands as designed — the daily sweep exists
+    and works.)_ _(Read this precisely: the sweep exists
     and works — `/api/cron/stuck-vehicle-check` runs daily at 14:15 UTC per
     `vercel.json`, alerts admins plus the assignee with per-recipient deep
     links, and re-alerts every 48h. The finding is the **latency floor**
@@ -910,8 +966,14 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
     arrival half, which is genuinely absent: nothing in
     `src/app/api/shop-inbound/route.ts`, `src/lib/shop-inbound.ts`, or
     `ShopArrivals.tsx` calls `notify`.)_
-16. ❌ **CNI notification vacuum** — job invites, bids and photo denials reach
+16. ✅ **CNI notification vacuum** — job invites, bids and photo denials reach
     nobody, while the portal tells installers they will be notified.
+    _(Fixed 2026-08-30, #715 — three routes own the writes and notify
+    server-side: invite-company pings the invited roster, bid pings the
+    coordinators (interested with proposed start, or declined with reason),
+    review-photo pings the assigned installer on denial with a reshoot deep
+    link. RLS on invites/bids deliberately unchanged — the migration-226
+    read-only treatment is the follow-up once the routes soak.)_
     `cni_job_invites` and `cni_job_bids` are written straight from the browser
     (`admin/cni/jobs/[id]/page.tsx:718`, `installer/available/[id]/page.tsx:117`)
     with no `notify` on either side, and the photo review screen writes
@@ -924,8 +986,20 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
 
 ### Later — the builds, not the patches
 
-17. ❌ **Parts ordering and receiving** — still no software at all: no PO from
+17. ✅ **Parts ordering and receiving** — still no software at all: no PO from
     the readiness card, no purchase request, and no receiving flow.
+    _(Fixed 2026-08-30, #717–#719, in three PRs: purchase requests from short
+    readiness rows into the vendor-grouped queue at `/admin/purchasing`
+    (migration 240); the queue's Create PO button placing a real NetSuite PO —
+    `createPurchaseOrder()` on the proven SO POST pattern, race-proof claim on
+    the request rows, immediate local mirror so readiness flips to "on order"
+    instantly, and the never-written `upfit_projects` PO columns finally
+    stamped; and `/admin/receiving` (migration 241) checking arrivals in while
+    posting the NetSuite item receipt via the purchaseOrder→itemReceipt
+    transform — every line sent explicitly so nothing defaults to
+    fully-received, with a manual-entry worklist when the transform can't run.
+    Requesters are notified at ordered and at arrived, deep-linked to the
+    record each time.)_
 18. ✅ **The credit application black hole** — an unauthenticated, unrate-limited
     public write path for EINs and bank references that nothing in the app
     reads, while the customer is promised an answer in 2-3 business days.
@@ -942,9 +1016,18 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
     PDF assembly off `r2PublicUrl()` onto credentialed reads, so the server no
     longer depends on the bucket being public to build its own documents — one
     fewer thing that breaks on the day the call is made.
-20. ❌ **The route→permission manifest** — the durable fix Part 2 called for.
+20. ✅ **The route→permission manifest** — the durable fix Part 2 called for.
     The one guard regression test still covers 7 directories and accepts an
     unguarded route.
+    _(Fixed 2026-08-30, #721: `src/lib/route-permissions.ts` maps every one
+    of the 251 API routes to its required guard — staff/admin/role/feature
+    plus reviewed authScoped/token/cron/webhook/public entries, each weak
+    kind carrying a one-sentence why — and the rewritten test fails on
+    unlisted routes, missing guard markers, stale entries, and undeclared
+    bare `requireAuth`. Building it surfaced one live hole, fixed in the
+    same PR: the Google OAuth connect pair was unauthenticated and its
+    callback overwrites the shared `google_tokens` row; both now
+    `requireStaff`.)_
 21. ❌ **Job-level labor capture** — nothing links shifts or time entries to a
     vehicle, so actual install hours versus the estimate stay unknowable on the
     job the whole app exists to invoice.
@@ -955,18 +1038,18 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
 
 | # | Still open because |
 |---|---|
-| 9 | Every route under `src/app/api/estimates/` guards with `requireStaff` and nothing narrower — `route.ts`, `push`, `convert-to-so`, `email-pdf`, `send-for-approval`, `pdf`, `add-lines`, `add-wrap-quote`, `approval-preview`. |
-| 10 | No NetSuite estimate status write exists anywhere; `createdfrom` is only ever *read*, by the SO matcher (`src/lib/sales-order-sync.ts:41-43`). |
-| 11 | `signed_document_storage_path` has three writers (the estimate, quote and proof approve routes) and no reader outside `src/lib/types.ts:608`. |
-| 12 | `VehicleCheckIn.tsx:118` — "optional, never required"; `'damage'` appears only in type unions and the timeline's filter, never as a value any writer sets. |
-| 13 | `VehicleCheckIn.tsx:210-218` still matches on `.eq('vin', v)` alone, with no status filter, so archived and shipped rows block a return visit. |
-| 14 | `shop_inbound.fleet_checkin_id` (migration 160:34) has zero writers in `src/`. |
-| 15 | Arrival half only — see the note on the item. |
-| 16 | Job invite / bid / photo-denial paths only — see the note on the item. |
-| 17 | No purchase-request or receiving route exists; everything under `src/app/api/pos/` imports, syncs or audits NetSuite POs rather than creating one. |
+| 9 | ~~Open~~ **Fixed 2026-08-30 (#708)**: all nine routes gated `requireFeature(req, 'estimates')`, the page URL gated client-side, verbatim-guard regression test added. |
+| 10 | ~~Open~~ **Fixed 2026-08-30 (#709)**: probability-0 close at conversion + a capped stateless backlog sweep in the netsuite-sync cron. |
+| 11 | ~~Open~~ **Fixed 2026-08-30 (#710)**: `/api/signed-documents` + the `/signed/[type]/[id]` viewer with sha256 integrity verdicts, linked from all three record surfaces. |
+| 12 | ~~Open~~ **Fixed 2026-08-30 (#713)**: ≥1 photo required at save; damage photos write `photo_type 'damage'` with a required note. |
+| 13 | ~~Open~~ **Fixed 2026-08-30 (#712)**: guard filters to active custody; terminal rows start a new visit with history noted. |
+| 14 | ~~Open~~ **Fixed 2026-08-30 (#714)**: written from both directions by the /api/shop-inbound/arrival brain. |
+| 15 | ~~Open~~ **Fixed 2026-08-30 (#714)**: arrival notifications, push reserved for expected vehicles. |
+| 16 | ~~Open~~ **Fixed 2026-08-30 (#715)**: invite/bid/review-photo routes notify roster, coordinators, and installer respectively. |
+| 17 | ~~Open~~ **Fixed 2026-08-30 (#717–#719)**: `/api/purchase-requests` (+ `create-po`) and `/api/po-receipts` exist, feature-gated on `parts_ordering`; the queue creates real NetSuite POs and receiving posts item receipts. |
 | 18 | ~~Open~~ **Fixed 2026-08-30 (#702)**: submit moved to a hardened service-role route, review queue + notifications + audit-logged decisions shipped, RLS policies dropped (migration 237). |
 | 19 | `R2_PUBLIC_URL` still backs `r2PublicUrl()` (`src/lib/r2.ts:157-160`); the bucket is unchanged. |
-| 20 | `api-auth-guard.test.ts` still covers 7 directories and only asserts *not* bare `requireAuth` — a route with **no** guard at all still passes. |
+| 20 | ~~Open~~ **Fixed 2026-08-30 (#721)**: `route-permissions.ts` declares all 251 routes; the test fails on unlisted routes, missing declared guards, stale entries, and undeclared bare `requireAuth`. |
 | 21 | `work_shifts` links to `cni_job_id` only (migration 110:56); nothing ties a shift to a `fleet_checkins` row. |
 
 **Shipped 2026-08-28 (items 1-8):** the entire Now block plus the revision

@@ -1,41 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync, statSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join, relative } from 'path';
+import { ROUTE_GUARDS } from './route-permissions';
 
 /**
- * Guard-regression check: routes in these directories touch money (NetSuite
- * invoices/bills, the install ledger's billing stamps, revenue reports) or
- * can message users. A bare requireAuth() admits ANY approved login —
- * including customer and external-installer accounts — so these must use
- * requireStaff / requireAdmin / requireRole.
+ * The route→permission manifest check (audit Round 2 item 20).
+ *
+ * Its predecessor spot-checked 7 directories and only asserted "not bare
+ * requireAuth" — a route with NO guard at all passed, and 190+ routes were
+ * never looked at. Now every route.ts under src/app/api must have an entry
+ * in src/lib/route-permissions.ts declaring its guard, the file must
+ * actually contain the declared guard markers, stale entries fail, and
+ * bare requireAuth( is allowed only where the manifest consciously
+ * declares it (requireAuth admits ANY approved login — customer and
+ * external-installer accounts included).
  */
-const SENSITIVE_DIRS = [
-  'src/app/api/netsuite',
-  'src/app/api/reports',
-  'src/app/api/scans',
-  'src/app/api/pos',
-  'src/app/api/notifications',
-  'src/app/api/vendor-invoices',
-  'src/app/api/admin',
-  // EINs + bank references — requireFeature-gated; a downgrade to bare
-  // requireAuth must trip this test. (src/app/api/credit-application,
-  // singular, is the public submit endpoint — intentionally unauthenticated,
-  // service-role write with rate limit + honeypot, so it is NOT listed.)
-  'src/app/api/credit-applications',
-];
-
-// Deliberate exceptions, with the reason they are safe as-is.
-// (The executive financials routes use requireFinancials — super_admin/
-// executive only, which requireRole can't express since it auto-passes any
-// admin — so they pass this check without an exemption.)
-const ALLOWLIST = new Set([
-  // External installer companies log field scans by design; the route
-  // enforces approved-account + non-customer-role checks itself.
-  'src/app/api/scans/log/route.ts',
-  // Completion photos ride the same field-scanner flow (K8) and enforce the
-  // same approved-account + non-customer-role checks as scans/log.
-  'src/app/api/scans/photos/route.ts',
-]);
 
 const repoRoot = join(__dirname, '..', '..');
 
@@ -55,18 +34,54 @@ function routeFiles(dir: string): string[] {
   return out;
 }
 
-describe('sensitive API routes use staff/admin guards', () => {
-  for (const dir of SENSITIVE_DIRS) {
-    for (const file of routeFiles(join(repoRoot, dir))) {
-      const rel = relative(repoRoot, file).replace(/\\/g, '/');
-      if (ALLOWLIST.has(rel)) continue;
-      it(rel, () => {
-        const src = readFileSync(file, 'utf8');
+const files = routeFiles(join(repoRoot, 'src/app/api'))
+  .map(f => relative(repoRoot, f).replace(/\\/g, '/'))
+  .sort();
+
+describe('route→permission manifest', () => {
+  it('walks a plausible number of routes', () => {
+    // A refactor that breaks the walker would make everything below
+    // vacuously green — fail loudly instead.
+    expect(files.length).toBeGreaterThan(200);
+  });
+
+  it('has no stale entries (deleted or moved routes still declared)', () => {
+    const stale = Object.keys(ROUTE_GUARDS).filter(k => !existsSync(join(repoRoot, k)));
+    expect(stale, 'remove these from src/lib/route-permissions.ts — their route files no longer exist').toEqual([]);
+  });
+
+  it('every entry weaker than a staff wall says why it is safe', () => {
+    const missingWhy = Object.entries(ROUTE_GUARDS)
+      .filter(([, e]) => ['authScoped', 'token', 'webhook', 'public'].includes(e.kind))
+      .filter(([, e]) => (e.why || '').trim().length < 10)
+      .map(([k]) => k);
+    expect(missingWhy, 'these manifest entries need a real why: sentence').toEqual([]);
+  });
+
+  for (const rel of files) {
+    it(rel, () => {
+      const entry = ROUTE_GUARDS[rel];
+      expect(
+        entry,
+        `${rel} has no entry in src/lib/route-permissions.ts. Every API route declares its guard there — pick the strongest that fits (staff/admin/role/feature/…), or an authScoped/token/webhook/public entry WITH a why. This failing is the point: a forgotten guard becomes a red test, not a production hole.`,
+      ).toBeDefined();
+      if (!entry) return;
+
+      const src = readFileSync(join(repoRoot, rel), 'utf8');
+      for (const needle of entry.contains) {
         expect(
-          /\brequireAuth\(/.test(src),
-          `${rel} uses bare requireAuth — any approved login (incl. customer/installer) passes. Use requireStaff, requireAdmin, or requireRole, or add to the ALLOWLIST with a reason.`,
-        ).toBe(false);
-      });
-    }
+          src.includes(needle),
+          `${rel} no longer contains its declared guard marker ${JSON.stringify(needle)} (manifest kind: ${entry.kind}) — restore the guard, or consciously change the manifest entry in the same PR so the downgrade is visible in review.`,
+        ).toBe(true);
+      }
+
+      // Bare requireAuth( only where the manifest declares it on purpose.
+      const callsBareAuth = /\brequireAuth\(/.test(src);
+      const declaresBareAuth = entry.contains.includes('requireAuth(');
+      expect(
+        !callsBareAuth || declaresBareAuth,
+        `${rel} calls bare requireAuth( but its manifest entry (${entry.kind}) doesn't declare it. requireAuth admits any approved login — including customer and external-installer accounts. Use requireStaff/requireAdmin/requireRole/requireFeature, or make this an authScoped entry with the in-route check named.`,
+      ).toBe(true);
+    });
   }
 });

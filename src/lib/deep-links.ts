@@ -36,10 +36,15 @@ export const deepLinks = {
   estimate: (estimateId: string, opts?: { flashNotes?: boolean }) =>
     `/estimates?id=${estimateId}${opts?.flashNotes ? '&note=field' : ''}`,
   /** Estimates page — opens the builder on a fresh estimate, optionally
-   *  pre-selecting a customer (local customers.id). The straight path from
-   *  entering a new client to quoting them. */
-  newEstimate: (customerId?: string | null) =>
-    `/estimates?new=1${customerId ? `&customer=${customerId}` : ''}`,
+   *  pre-selecting a customer (local customers.id) or a CRM lead
+   *  (prospects.id, for records not yet promoted to NetSuite). The straight
+   *  path from entering a new client to quoting them. */
+  newEstimate: (customerId?: string | null, prospectId?: string | null) =>
+    `/estimates?new=1${customerId ? `&customer=${customerId}` : ''}${!customerId && prospectId ? `&prospect=${prospectId}` : ''}`,
+  /** Signed E-SIGN snapshot viewer — the frozen approval document with its
+   *  integrity verdict (type: estimate | wrap_quote | proof). */
+  signedDocument: (type: 'estimate' | 'wrap_quote' | 'proof', id: string) =>
+    `/signed/${type}/${id}`,
   /** 3D upfit designer — opens a saved design (page reads ?design=). */
   upfitDesign: (designId: string) => `/upfit-designer?design=${designId}`,
   /** 3D upfit designer — starts a fresh design, optionally pre-selecting the
@@ -78,6 +83,14 @@ export const deepLinks = {
     `/admin/cni/installers/${userId}${noteId ? `?note=${noteId}` : ''}`,
   /** Dedicated prospect / customer record page. */
   prospect: (prospectId: string) => `/admin/prospects/${prospectId}`,
+  /** Purchasing queue — pending purchase requests grouped by vendor;
+   *  ?req= scroll-flashes one request's row. */
+  purchaseRequests: (requestId?: string | null) =>
+    `/admin/purchasing${requestId ? `?req=${requestId}` : ''}`,
+  /** Receiving page — ?po= expands and flashes one vendor PO (the local
+   *  netsuite_vendor_pos row id). */
+  receiving: (poId?: string | null) =>
+    `/admin/receiving${poId ? `?po=${poId}` : ''}`,
   /** Credit application review queue — opens the application's detail. */
   creditApplication: (appId: string) => `/admin/credit-applications?app=${appId}`,
   /** Users admin — opens the user's edit modal (e.g. a pending access request). */
@@ -109,6 +122,9 @@ export const deepLinks = {
    *  Accept/Decline schedule controls, so it needs no extra param. Distinct
    *  from `cniJob`, which is the admin-side record an installer can't open. */
   installerJob: (jobId: string) => `/installer/jobs/${jobId}`,
+  /** Installer-portal AVAILABLE job — where an invited company responds to
+   *  a bid invitation (distinct from installerJob, the assigned-work page). */
+  installerAvailableJob: (jobId: string) => `/installer/available/${jobId}`,
   /** System health dashboard (checks are keyed by sync type, not record ids). */
   systemHealth: () => '/admin/system-health',
   /** System health's Email delivery section — flashes one email_log row.

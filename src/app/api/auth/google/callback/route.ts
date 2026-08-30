@@ -1,8 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/api-auth';
 import { exchangeCode } from '@/lib/google';
 import { createClient } from '@supabase/supabase-js';
 
 export async function GET(req: NextRequest) {
+  // The redirect back from Google rides the connecting staffer's own browser
+  // session, so their cookies are present here. Without this gate anyone on
+  // the internet could complete the flow and OVERWRITE the single shared
+  // google_tokens row — breaking the PO-import mailbox, or pointing it at a
+  // mailbox they control.
+  const auth = await requireStaff(req);
+  if (auth.error) {
+    return NextResponse.redirect(new URL('/admin/pos?google_auth=error&reason=forbidden', req.url));
+  }
+
   const code = req.nextUrl.searchParams.get('code');
   const error = req.nextUrl.searchParams.get('error');
 

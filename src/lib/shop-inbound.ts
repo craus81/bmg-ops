@@ -171,3 +171,50 @@ export async function syncShopInboundForUpfitProject(
     need_back_date: project.need_back_date,
   });
 }
+
+/**
+ * Link an expected arrival to the check-in that fulfilled it (audit item
+ * 14 — shop_inbound.fleet_checkin_id existed since migration 160 with no
+ * writer, so vehicles read "overdue, expected but not arrived" while
+ * sitting in the shop).
+ *
+ * Match order, strongest first: exact VIN, then the check-in's SO numbers
+ * against netsuite_so_number, then customer name — the last only when it
+ * matches EXACTLY ONE expected row (guessing between two expected vans for
+ * the same fleet would link the wrong custody record). Returns the row it
+ * marked arrived, or null when nothing matched.
+ */
+export async function linkInboundToCheckin(
+  service: SupabaseClient,
+  checkin: { id: string; vin?: string | null; customer_name?: string | null; soNumbers?: string[] },
+): Promise<{ id: string; vehicle_desc: string | null; expected_date: string | null } | null> {
+  const { data: expected } = await service
+    .from('shop_inbound')
+    .select('id, vin, netsuite_so_number, customer_name, vehicle_desc, expected_date')
+    .eq('status', 'expected');
+  if (!expected || expected.length === 0) return null;
+
+  const vin = (checkin.vin || '').trim().toUpperCase();
+  const soNumbers = (checkin.soNumbers || []).map(n => n.trim()).filter(Boolean);
+  const custName = (checkin.customer_name || '').trim().toLowerCase();
+
+  let match =
+    (vin && expected.find(r => (r.vin || '').trim().toUpperCase() === vin)) ||
+    (soNumbers.length > 0 && expected.find(r => r.netsuite_so_number && soNumbers.includes(String(r.netsuite_so_number).trim()))) ||
+    null;
+  if (!match && custName) {
+    const byCustomer = expected.filter(r => (r.customer_name || '').trim().toLowerCase() === custName);
+    if (byCustomer.length === 1) match = byCustomer[0];
+  }
+  if (!match) return null;
+
+  await service
+    .from('shop_inbound')
+    .update({
+      status: 'arrived',
+      fleet_checkin_id: checkin.id,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', match.id);
+  return { id: match.id, vehicle_desc: match.vehicle_desc, expected_date: match.expected_date };
+}

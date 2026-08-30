@@ -10,11 +10,13 @@
  * to "just look" risks recording a real E-SIGN acceptance — staff IP, staff
  * user-agent — against the customer's name. So the token never reaches a
  * client (stripApprovalSecrets in the estimates route), and this page reads
- * the document by estimate id through a requireStaff endpoint instead.
+ * the document by estimate id through an estimates-feature-gated endpoint
+ * instead.
  */
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useRequireFeature } from '@/components/AuthProvider';
 import { ApprovalFrame } from '@/components/ApprovalPageShell';
 import EstimateApprovalDocument from '@/components/EstimateApprovalDocument';
 
@@ -28,6 +30,8 @@ interface ApprovalView {
 }
 
 export default function EstimateApprovalPreviewPage() {
+  // Same key as the estimates page and every /api/estimates route.
+  useRequireFeature('estimates');
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const id = params?.id || '';
