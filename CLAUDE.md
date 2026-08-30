@@ -11,6 +11,18 @@ tsc's, so failures read as exit 0. Capture output to a file and check
 tsc's own exit code. The authoritative check is `npx next build` (its
 "checking validity of types" phase) — exactly what the Vercel build runs.
 
+One container gotcha: in a session box with no Supabase env vars,
+`next build`'s later "Collecting page data" phase flakes
+NONDETERMINISTICALLY — ~121 routes create module-scope Supabase clients,
+each throws "supabaseUrl is required" when evaluated, and Next's retries
+usually (not always) swallow it, so the same tree can build green one run
+and exit 1 the next on a route the diff never touched. Don't chase these
+as real failures and don't call them a reason to skip the build: run it
+with placeholder env and it's deterministic —
+`NEXT_PUBLIC_SUPABASE_URL="https://placeholder.supabase.co"
+NEXT_PUBLIC_SUPABASE_ANON_KEY="x" SUPABASE_SERVICE_ROLE_KEY="x" npx next
+build`. The types phase (the part #568 was about) is unaffected either way.
+
 ## Git workflow
 
 Pushes to `main` are currently broken (the local git proxy returns
