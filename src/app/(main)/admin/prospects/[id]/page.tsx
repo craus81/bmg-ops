@@ -35,6 +35,7 @@ import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailCo
 import PhoneInput from '@/components/PhoneInput';
 import { exportProspectPDF } from '@/lib/prospect-pdf';
 import { deepLinks } from '@/lib/deep-links';
+import { LEAD_SOURCES, OPP_TYPES } from '@/lib/lead-sources';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import { usd2 } from '@/lib/financials-print';
 import { exportStatementPDF } from '@/lib/statement-pdf';
@@ -162,11 +163,9 @@ const DOC_SORT_COLS = {
   amount: (d: CustDocument) => d.total,
 };
 
-const OPP_TYPES: Record<string, string> = { tech_install: 'Tech Install', graphics: 'Graphics', rebrand: 'Rebrand', fleet_wrap: 'Fleet Wrap', other: 'Other' };
 const OPP_STAGES: Record<string, string> = { lead: 'Lead', quoted: 'Quoted', negotiating: 'Negotiating', won: 'Won', lost: 'Lost' };
 const STAGE_COLORS: Record<string, string> = { lead: '#60a5fa', quoted: '#a78bfa', negotiating: '#fbbf24', won: '#4ade80', lost: '#f87171' };
 // status_change stays in the icon map so historical feed entries still render.
-const LEAD_SOURCES = ['Cold Call', 'Lead', 'Maryland Heights Chamber of Commerce', 'Little Black Book', 'Other'];
 const DOCS_PAGE_SIZE = 100;
 const ACTS_PAGE_SIZE = 30;
 
@@ -1298,7 +1297,15 @@ export default function CustomerRecordPage() {
   const [composeTo, setComposeTo] = useState('');
   const [composeSubject, setComposeSubject] = useState('');
   const [composeSubjectKey, setComposeSubjectKey] = useState(0);
-  const openCompose = (to: string) => { setComposeTo(to); setComposeSubject(''); setComposeSubjectKey(k => k + 1); setComposeOpen(true); };
+  // Credit-app invite rides the same compose flow: the flag makes the
+  // server append its templated "Complete your credit application" CTA and
+  // log the send as credit_app_invite (audit Stage 1 — staff previously
+  // had no way to send the form's URL from inside the app).
+  const [composeCreditApp, setComposeCreditApp] = useState(false);
+  const openCompose = (to: string, creditApp = false) => {
+    setComposeTo(to); setComposeSubject(''); setComposeCreditApp(creditApp);
+    setComposeSubjectKey(k => k + 1); setComposeOpen(true);
+  };
 
   // ?compose=1&to=… — the Contacts directory's email addresses land here
   // with the compose pre-opened (they were mailto: links before).
@@ -1324,6 +1331,7 @@ export default function CustomerRecordPage() {
         bccSelf: fields.bccSelf,
         subject: composeSubject,
         message: fields.message,
+        includeCreditAppLink: composeCreditApp,
         preview,
       }),
     });
@@ -1525,6 +1533,11 @@ export default function CustomerRecordPage() {
             <button onClick={() => openCompose(email)}
               title="Email this record from FleetSuite — sends from the company address with replies to your inbox, and lands on the activity history"
               style={btnSm}>Email</button>
+          )}
+          {!isVendor && (
+            <button onClick={() => openCompose(email || '', true)}
+              title="Email the net-terms credit application form — the message gets a Complete-your-credit-application button linking to the public form"
+              style={btnSm}>Credit App</button>
           )}
           {prospect && <button onClick={openEdit} title="Edit company details, lead source, and notes" style={btnSm}>✎ Edit</button>}
           {prospect && !prospect.netsuite_id && !isVendor && (
@@ -2418,10 +2431,14 @@ export default function CustomerRecordPage() {
           button and contact addresses (formerly mailto: links). */}
       {composeOpen && (
         <EmailComposeModal
-          title={`Email — ${prospect?.company_name || customer?.company_name || ''}`}
-          sendLabel="Send Email"
+          title={composeCreditApp
+            ? `Send credit application — ${prospect?.company_name || customer?.company_name || ''}`
+            : `Email — ${prospect?.company_name || customer?.company_name || ''}`}
+          sendLabel={composeCreditApp ? 'Send Credit Application' : 'Send Email'}
           initialTo={composeTo}
-          messagePlaceholder="Write your message…"
+          messagePlaceholder={composeCreditApp
+            ? 'Optional note — the email carries the credit-application button either way…'
+            : 'Write your message…'}
           intro={
             <div>
               <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '3px' }}>Subject</div>

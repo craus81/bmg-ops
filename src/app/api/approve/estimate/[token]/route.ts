@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { loadEstimateGraphics, inlineDiagrams } from '@/lib/estimate-graphics';
+import {
+  loadEstimateGraphics,
+  inlineDiagrams,
+  loadEstimateProofs,
+  inlineProofImages,
+  type EstimateProofBlock,
+} from '@/lib/estimate-graphics';
 import {
   validateExpiry,
   captureMetadata,
@@ -9,11 +15,13 @@ import {
   getRequestIp,
   AGREEMENT_TEXT,
 } from '@/lib/magic-link-approval';
+import { COMBINED_AGREEMENT_TEXT } from '@/lib/approval-agreement';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { validateBody, z } from '@/lib/validate';
 import { renderEstimateDocument, escHtml } from '@/lib/estimate-document';
-import { publicEstimate, publicLines, loadApprovalLines } from '@/lib/estimate-approval-view';
+import { publicEstimate, publicLines, publicProofs, loadApprovalLines } from '@/lib/estimate-approval-view';
+import { r2GetBytes, r2Upload } from '@/lib/r2';
 
 export const dynamic = 'force-dynamic';
 
@@ -75,13 +83,16 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
 
   // Wrap content from linked wrap quotes (estimate_attach) — the customer
   // must SEE on this page the same vinyl/coverage content they're approving
-  // (it's in the emailed PDF and the frozen snapshot).
+  // (it's in the emailed PDF and the frozen snapshot). Same for graphic
+  // proofs from linked graphics jobs: accepting this page approves them.
   const { summaries: graphics } = await loadEstimateGraphics(supabase, estimate.id);
+  const proofs = await loadEstimateProofs(supabase, estimate.id);
 
   return NextResponse.json({
     status: 'ready',
     estimate: publicEstimate(estimate),
     graphics,
+    proofs: publicProofs(proofs),
     lines: publicLines(lines),
   });
 }
@@ -112,6 +123,12 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
 
   const metadata = captureMetadata(req, body);
 
+  // The proof blocks this approval covers (graphics_jobs.estimate_attach —
+  // the same loader every other surface uses). Loaded once here: they pick
+  // the agreement default, freeze into the snapshot, and decide which
+  // linked graphics jobs an acceptance propagates to.
+  const proofBlocks = await loadEstimateProofs(supabase, estimate.id);
+
   if (action === 'reject') {
     const reason = (body.reason || '').trim();
     if (!reason) return NextResponse.json({ error: 'reason required' }, { status: 400 });
@@ -131,12 +148,22 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
       })
       .eq('id', estimate.id);
 
+    // Leave the change request on each included job's timeline so the
+    // graphics team sees it — but do NOT flip the job to revision or stamp
+    // a rejection: the customer may be pushing back on price, not design.
+    // The sales rep (notified below) routes it.
+    await noteRejectionOnLinkedJobs(estimate, proofBlocks, reason);
+
     await notifySalesRep(estimate, 'rejected', reason);
     return NextResponse.json({ status: 'submitted_rejected' });
   }
 
-  // Accept path — snapshot the signed document first, then record approval
-  const snapshotHtml = await renderSignedSnapshot(estimate, lines, metadata, body.agreementText || AGREEMENT_TEXT);
+  // Accept path — snapshot the signed document first, then record approval.
+  // When proofs were included, the default agreement is the combined
+  // design + price sentence (the page sends the exact text it displayed;
+  // this fallback only covers clients that omit it).
+  const agreement = body.agreementText || (proofBlocks.length > 0 ? COMBINED_AGREEMENT_TEXT : AGREEMENT_TEXT);
+  const snapshotHtml = await renderSignedSnapshot(estimate, lines, metadata, agreement, proofBlocks);
   let signedPath: string | null = null;
   let signedHash: string | null = null;
   try {
@@ -171,8 +198,156 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
     })
     .eq('id', estimate.id);
 
+  // One click approved design + price: propagate the acceptance onto the
+  // graphics jobs whose proofs were part of this document, so the printing
+  // proof-gate opens without a second customer round-trip.
+  await approveLinkedGraphicsJobs(estimate, proofBlocks, metadata, approvedAt, signedPath, signedHash);
+
   await notifySalesRep(estimate, 'accepted');
   return NextResponse.json({ status: 'submitted_accepted' });
+}
+
+/**
+ * Propagate an estimate acceptance onto the linked graphics jobs whose
+ * proofs rode on the approved document (exactly the loadEstimateProofs
+ * blocks the customer saw — never jobs whose proofs weren't included).
+ *
+ * Mirrors the proof-only approval flow (/api/approve/proof): archive the
+ * as-approved proof files to immutable storage, stamp customer_approved +
+ * the E-SIGN audit metadata, point the job's signed-document fields at the
+ * estimate's combined snapshot, leave a timeline note, and tell the
+ * graphics team. Best-effort throughout — the customer's acceptance is
+ * already recorded on the estimate and must never fail over propagation.
+ */
+async function approveLinkedGraphicsJobs(
+  estimate: any,
+  proofBlocks: EstimateProofBlock[],
+  metadata: any,
+  approvedAt: string,
+  signedPath: string | null,
+  signedHash: string | null,
+) {
+  for (const block of proofBlocks) {
+    try {
+      const { data: job } = await supabase
+        .from('graphics_jobs')
+        .select('id, job_number, title, customer, status, created_by, assigned_to, sent_for_approval_by, customer_approved, estimate_id')
+        .eq('id', block.jobId)
+        .maybeSingle();
+      // Re-check the link and skip jobs already approved (an earlier
+      // proof-only approval stands — don't overwrite its audit trail).
+      if (!job || job.estimate_id !== estimate.id || job.customer_approved) continue;
+
+      // Clone the as-approved proof files to the immutable archive, same
+      // destination shape as the proof-only flow.
+      const signedProofPaths: string[] = [];
+      for (const f of block.files) {
+        try {
+          const got = await r2GetBytes('graphics-proofs', f.storagePath);
+          if (!got) {
+            console.error('combined approval: proof file fetch failed:', f.storagePath);
+            continue;
+          }
+          const destPath = `proofs/${job.id}/${Date.now()}-${f.name}`;
+          const uploaded = await r2Upload('signed-documents', destPath, got.bytes, got.contentType || 'application/octet-stream');
+          if (uploaded.success) signedProofPaths.push(uploaded.key);
+          else console.error('combined approval: proof archive upload failed:', destPath, uploaded.error);
+        } catch (err) {
+          console.error('combined approval: proof clone failed:', err);
+        }
+      }
+
+      const patch: Record<string, unknown> = {
+        customer_approved: true,
+        customer_approved_at: approvedAt,
+        customer_approved_ip: metadata.ip,
+        customer_approved_user_agent: metadata.userAgent,
+        customer_approved_via: metadata.deliveryChannel,
+        customer_approved_delivery_target: metadata.deliveryTarget,
+        customer_approved_time_on_page_seconds: metadata.timeOnPageSeconds,
+        // A prior revision request is superseded by this approval.
+        customer_rejected_at: null,
+        customer_rejection_reason: null,
+        updated_at: approvedAt,
+      };
+      // The estimate's snapshot IS the signed record covering this proof —
+      // point the job at it (skip if that upload failed; never null out).
+      if (signedPath) {
+        patch.signed_document_storage_path = signedPath;
+        patch.signed_document_hash = signedHash;
+      }
+      if (signedProofPaths.length > 0) patch.signed_proof_storage_paths = signedProofPaths;
+
+      const { error: updErr } = await supabase.from('graphics_jobs').update(patch).eq('id', job.id);
+      if (updErr) {
+        console.error('combined approval: job update failed:', job.id, updErr.message);
+        continue;
+      }
+
+      await supabase.from('graphics_status_history').insert({
+        job_id: job.id,
+        from_status: job.status,
+        to_status: job.status,
+        note: `Customer approved proof together with Estimate #${estimate.estimate_number} via magic link`,
+      });
+
+      await notifyGraphicsTeamCombined(job, estimate);
+    } catch (err) {
+      console.error('graphics-job approval propagation failed:', err);
+    }
+  }
+}
+
+/** Same audience as the proof-only flow's approval notification. */
+async function notifyGraphicsTeamCombined(job: any, estimate: any) {
+  try {
+    const targetIds = new Set<string>();
+    if (job.created_by) targetIds.add(job.created_by);
+    if (job.assigned_to) targetIds.add(job.assigned_to);
+    if (job.sent_for_approval_by) targetIds.add(job.sent_for_approval_by);
+    const { data: prod } = await supabase
+      .from('profiles')
+      .select('id')
+      .in('role', ['admin', 'graphics_production', 'production'])
+      .eq('status', 'approved');
+    for (const p of prod || []) targetIds.add(p.id);
+    if (targetIds.size === 0) return;
+
+    await notifyMany(Array.from(targetIds), {
+      type: 'proof_approved',
+      title: `Proof approved: ${job.title || `Job #${job.job_number}`}`,
+      body: `${job.customer || 'Customer'} approved the proof together with Estimate #${estimate.estimate_number}. You can move to production.`,
+      url: deepLinks.graphicsJob(job.id),
+    });
+  } catch (err) {
+    console.error('combined approval notification failed:', err);
+  }
+}
+
+/**
+ * A rejection of an estimate that carried proofs lands as a timeline note
+ * on each included job (no status change, no rejection stamp — the reason
+ * may be price, not design; the sales rep routes it).
+ */
+async function noteRejectionOnLinkedJobs(estimate: any, proofBlocks: EstimateProofBlock[], reason: string) {
+  for (const block of proofBlocks) {
+    try {
+      const { data: job } = await supabase
+        .from('graphics_jobs')
+        .select('id, status, estimate_id, customer_approved')
+        .eq('id', block.jobId)
+        .maybeSingle();
+      if (!job || job.estimate_id !== estimate.id || job.customer_approved) continue;
+      await supabase.from('graphics_status_history').insert({
+        job_id: job.id,
+        from_status: job.status,
+        to_status: job.status,
+        note: `Customer requested changes on Estimate #${estimate.estimate_number} (this job's proof was included): ${reason}`,
+      });
+    } catch (err) {
+      console.error('graphics-job rejection note failed:', err);
+    }
+  }
 }
 
 async function notifySalesRep(estimate: any, verdict: 'accepted' | 'rejected', reason?: string) {
@@ -214,13 +389,15 @@ async function notifySalesRep(estimate: any, verdict: 'accepted' | 'rejected', r
   });
 }
 
-async function renderSignedSnapshot(est: any, lines: any[], meta: any, agreement: string): Promise<string> {
+async function renderSignedSnapshot(est: any, lines: any[], meta: any, agreement: string, proofBlocks: EstimateProofBlock[]): Promise<string> {
   // The snapshot is the shared customer-facing document (the same renderer
   // the approval email uses — if they drift, the legal record stops
   // matching what the customer was sent) plus the E-SIGN audit block.
   // Wrap content rides along with the coverage diagram INLINED as a data
   // URI: the R2 diagram is mutable, and a frozen legal record must never
-  // reference state a later quote save can rewrite.
+  // reference state a later quote save can rewrite. Graphic-proof images
+  // inline the same way; PDF proofs freeze as named entries (their
+  // as-approved bytes live in the acceptance archive on each job).
   const approvedAt = new Date().toISOString();
   const { data: settings } = await supabase
     .from('wrap_quote_settings')
@@ -230,6 +407,7 @@ async function renderSignedSnapshot(est: any, lines: any[], meta: any, agreement
   const company = settings?.company || {};
   const { summaries } = await loadEstimateGraphics(supabase, est.id);
   const graphics = await inlineDiagrams(summaries);
+  const proofs = await inlineProofImages(proofBlocks);
   const signedBlockHtml = `
   <div style="margin-top:20px;padding:14px;border:1px solid #16a34a;background:#dcfce7;border-radius:10px;font-size:12px;">
     <strong style="color:#14532d;">ACCEPTED</strong>
@@ -242,5 +420,5 @@ async function renderSignedSnapshot(est: any, lines: any[], meta: any, agreement
       ${typeof meta.timeOnPageSeconds === 'number' ? `<div>Time on page: ${meta.timeOnPageSeconds}s</div>` : ''}
     </div>
   </div>`;
-  return renderEstimateDocument(est, lines, { company, signedBlockHtml, graphics });
+  return renderEstimateDocument(est, lines, { company, signedBlockHtml, graphics, proofs });
 }

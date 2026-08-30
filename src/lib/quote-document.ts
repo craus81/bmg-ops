@@ -64,6 +64,14 @@ export interface QuoteDocGraphicsBlock {
   diagramUrl: string | null;
 }
 
+export interface QuoteDocProofBlock {
+  jobNumber: string | null;
+  jobTitle: string | null;
+  /** Image files render inline; PDFs render as a link (url) or, on frozen
+   *  snapshots where url is null, as a named line item. */
+  files: { name: string; url: string | null; isPdf: boolean }[];
+}
+
 export interface QuoteDocModel {
   /** Plain text — 'Estimate #123', 'Wrap Quote', 'Wrap Coverage'. */
   docTitle: string;
@@ -87,6 +95,9 @@ export interface QuoteDocModel {
   sections?: QuoteDocSection[];
   /** Wrap content blocks on estimates (loadEstimateGraphics summaries). */
   graphics?: QuoteDocGraphicsBlock[] | null;
+  /** Graphic-proof blocks from linked graphics jobs on estimates
+   *  (loadEstimateProofs — graphics_jobs.estimate_attach). */
+  proofs?: QuoteDocProofBlock[] | null;
   /** Pre-escaped small print after the totals (film usage, nesting note). */
   footnotesHtml?: string[];
 }
@@ -199,6 +210,19 @@ export function renderQuoteDocument(model: QuoteDocModel, opts: QuoteDocRenderOp
       ${g.films.length > 0 ? `<ul style="margin:6px 0 0;padding-left:18px;">${g.films.map(f =>
         `<li style="margin-top:2px;">${escHtml(f.name)}${f.areas.length > 0 ? ` — ${escHtml(f.areas.join(', '))}` : ''}</li>`).join('')}</ul>` : ''}
       ${g.diagramUrl ? `<img src="${escHtml(g.diagramUrl)}" alt="Coverage diagram — Quote ${escHtml(g.quoteNumber)}" style="max-width:100%;border:1px solid #e5e7eb;border-radius:8px;margin-top:10px;display:block;">` : ''}
+    </div>`).join('')}
+
+    ${(model.proofs || []).map(p => `
+    <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px;margin-top:12px;font-size:13px;color:#111827;">
+      <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Graphic Proof${p.files.length !== 1 ? 's' : ''} — For Your Approval</div>
+      <div style="font-weight:700;">${escHtml([p.jobNumber ? `Job #${p.jobNumber}` : null, p.jobTitle].filter(Boolean).join(' — ') || 'Graphics job')}</div>
+      ${p.files.map(f => f.isPdf
+        ? (f.url
+          ? `<div style="margin-top:8px;"><a href="${escHtml(f.url)}" target="_blank" rel="noopener noreferrer" style="font-size:13px;color:#2563eb;text-decoration:underline;">Open ${escHtml(f.name)} (PDF) &#8599;</a></div>`
+          : `<div style="margin-top:8px;font-size:12px;color:#374151;">${escHtml(f.name)} (PDF proof)</div>`)
+        : (f.url
+          ? `<img src="${escHtml(f.url)}" alt="Proof — ${escHtml(f.name)}" style="max-width:100%;border:1px solid #e5e7eb;border-radius:8px;margin-top:10px;display:block;">`
+          : `<div style="margin-top:8px;font-size:12px;color:#374151;">${escHtml(f.name)} (image unavailable)</div>`)).join('')}
     </div>`).join('')}
 
     ${cta}

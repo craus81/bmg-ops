@@ -14,7 +14,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { enrichLinesWithPartAssets } from './estimate-line-parts';
-import { loadEstimateGraphics } from './estimate-graphics';
+import { loadEstimateGraphics, loadEstimateProofs, type EstimateProofBlock } from './estimate-graphics';
 import { r2GetBytes } from './r2';
 import { buildEstimatePdf, estimatePdfFilename, type EstimatePdfGraphics, type EstimatePdfImage, type EstimatePdfLine } from './estimate-pdf';
 
@@ -141,12 +141,17 @@ export async function generateEstimatePdf(
   if (opts.print) doc.autoPrint();
   let buffer: Buffer = Buffer.from(doc.output('arraybuffer'));
 
-  const needsMerge = (wrapQuotes || []).some(q =>
+  // Graphic proofs from linked graphics jobs (graphics_jobs.estimate_attach)
+  // merge on the same way — images as pages, PDFs page-by-page — so the
+  // customer approves ONE file carrying design + price.
+  const proofBlocks = await loadEstimateProofs(supabase, estimateId);
+
+  const needsMerge = proofBlocks.length > 0 || (wrapQuotes || []).some(q =>
     (q.estimate_attach?.diagram && q.diagram_path)
     || (q.estimate_attach?.attachments && Array.isArray(q.attachments) && q.attachments.length > 0));
   if (needsMerge) {
     try {
-      buffer = await mergeWrapAssets(buffer, wrapQuotes || []);
+      buffer = await mergeWrapAssets(buffer, wrapQuotes || [], proofBlocks);
     } catch (err: any) {
       // The base document is still a complete quote — ship it rather than
       // failing the whole request over an unreadable attachment.
@@ -162,16 +167,17 @@ export async function generateEstimatePdf(
   };
 }
 
-// Append the selected wrap assets to the base PDF: the coverage diagram and
-// image attachments as full letter pages (fitted, with a small caption),
-// PDF attachments merged page-by-page. Per-file failures skip that file.
+// Append the selected wrap assets and graphics-job proofs to the base PDF:
+// the coverage diagram and image files as full letter pages (fitted, with a
+// small caption), PDF files merged page-by-page. Per-file failures skip
+// that file.
 const PAGE_W = 612;
 const PAGE_H = 792;
 const PAGE_MARGIN = 36;
 const MAX_MERGE_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_APPENDED_PAGES = 30;
 
-async function mergeWrapAssets(base: Buffer, quotes: any[]): Promise<Buffer> {
+async function mergeWrapAssets(base: Buffer, quotes: any[], proofBlocks: EstimateProofBlock[] = []): Promise<Buffer> {
   const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
   const out = await PDFDocument.load(base);
   const font = await out.embedFont(StandardFonts.Helvetica);
@@ -223,6 +229,29 @@ async function mergeWrapAssets(base: Buffer, quotes: any[]): Promise<Buffer> {
         } catch (err: any) {
           console.warn(`[estimate-pdf] attachment merge failed (${a.name}):`, err?.message);
         }
+      }
+    }
+  }
+
+  // Graphics-job proofs, after the wrap content, in loader order.
+  for (const block of proofBlocks) {
+    const jobLabel = [block.jobNumber ? `Job #${block.jobNumber}` : null, block.jobTitle].filter(Boolean).join(' — ') || 'Graphics job';
+    for (const f of block.files) {
+      if (appended >= MAX_APPENDED_PAGES) break;
+      const asset = await readAsset('graphics-proofs', f.storagePath);
+      if (!asset) continue;
+      const label = `Proof: ${f.name} — ${jobLabel}`;
+      try {
+        if (asset.contentType.includes('pdf') || f.isPdf) {
+          const src = await PDFDocument.load(asset.bytes, { ignoreEncryption: true });
+          const idx = src.getPageIndices().slice(0, MAX_APPENDED_PAGES - appended);
+          const pages = await out.copyPages(src, idx);
+          for (const p of pages) { out.addPage(p); appended++; }
+        } else if (asset.contentType.includes('png') || asset.contentType.includes('jpeg') || asset.contentType.includes('jpg')) {
+          await addImagePage(asset.bytes, asset.contentType, label);
+        }
+      } catch (err: any) {
+        console.warn(`[estimate-pdf] proof merge failed (${f.name}):`, err?.message);
       }
     }
   }
