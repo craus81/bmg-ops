@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { usePopout } from '@/components/Popout';
 import { createClient } from '@/lib/supabase-browser';
-import { useAuth } from '@/components/AuthProvider';
+import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
@@ -254,6 +254,10 @@ export default function EstimatesPage() {
   const { open: openPopout } = usePopout();
   const searchParams = useSearchParams();
   const { user, isAdmin, isSales, isGraphicsProduction, profile, loading: authLoading } = useAuth();
+  // The nav tab was feature-gated but the URL itself was open — the exact
+  // gated-by-nav-only pattern the role cleanup ended (audit item 9). Same
+  // key now guards every /api/estimates route server-side.
+  useRequireFeature('estimates');
   const dialog = useDialog();
   const supabase = createClient();
 
