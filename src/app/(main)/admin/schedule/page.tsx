@@ -12,6 +12,7 @@ import { DropZone } from '@/components/DropZone';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
+import { deepLinks } from '@/lib/deep-links';
 import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
 
 interface CalendarEvent {
@@ -197,7 +198,7 @@ export default function SchedulePage() {
       (rems || []).forEach((r: any) => allEvents.push({
         id: `rem-${r.id}`, title: r.title, subtitle: r.description,
         date: r.due_at.split('T')[0], type: 'reminder', color: TYPE_COLORS.reminder,
-        linkTo: r.prospect_id ? `/admin/prospects/${r.prospect_id}` : '/admin/prospects',
+        linkTo: r.prospect_id ? deepLinks.prospect(r.prospect_id) : '/admin/prospects',
       }));
     }
 
