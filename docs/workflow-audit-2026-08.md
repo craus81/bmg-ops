@@ -80,7 +80,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Soon** — the role cleanup (17–20) | ✅ done | #17 infra + owner-page gates (#649), #18a registry (#648), #18b all ten tools keyed (#652, #654, #655), #19 install roles (#650), #20 dead-end menus (#651). The ungated-by-URL pages are gated and the dev route deleted (#656). An adversarial gate audit (every tile/nav/redirect/deep-link entry point traced per role) confirmed 20 regressions, all fixed: client dead-clicks + two redirect loops (#657) and per-recipient vehicle notification links (#658). |
 | **Data-integrity bugs to fix in passing** | ✅ done | All 6 re-verified as live, then fixed: pushed-estimate delete (#660), Add-Graphics demotion (#661), stranded allocations — trigger + backfill, migration 228 (#662), graphics history trigger, migration 229 (#663), the 1000-row-cap sweep across payroll/payouts/credits/pay-rates/scans/invoices/pos/dashboard (#664), and the Open Quotes tile (#665). |
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
-| **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 19–21 remain open** (3 — R2-goes-private, the route manifest, labor capture). Shipped 2026-08-30: the Stage 1 build-out (#701–#704, closing item 18), the two Stage 1 owner decisions (#706 lead tier, #707 deletion→NetSuite), and estimate integrity (#708–#710, items 9–11). Shipped 2026-08-30: the whole **vehicle custody** block (#712–#715, items 12–16). Shipped 2026-08-30 (second wave): **parts ordering & receiving** (#717–#719, item 17 — the audit's largest build: request queue → NetSuite PO → receiving with item receipts). |
+| **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 19 and 21 remain open** (2 — R2-goes-private, labor capture). Shipped 2026-08-30: the Stage 1 build-out (#701–#704, closing item 18), the two Stage 1 owner decisions (#706 lead tier, #707 deletion→NetSuite), and estimate integrity (#708–#710, items 9–11). Shipped 2026-08-30: the whole **vehicle custody** block (#712–#715, items 12–16). Shipped 2026-08-30 (second wave): **parts ordering & receiving** (#717–#719, item 17 — the audit's largest build: request queue → NetSuite PO → receiving with item receipts) and the **route→permission manifest** (#721, item 20 — all 251 routes declare + prove their guard; the sweep fixed the unauthenticated Google OAuth pair). |
 
 Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap.
 
@@ -522,6 +522,15 @@ guards. **The durable fix is a route→permission manifest** consumed by both th
 UI feature gates and the server guards, so the two can be proven consistent
 instead of hand-synced per file, plus coarse RLS as a backstop on the tables the
 service role writes.
+
+_(Shipped 2026-08-30, #721: `src/lib/route-permissions.ts` declares all 251
+routes and the rewritten guard test proves each file carries its declared
+guard — unlisted routes, downgrades, stale entries, and undeclared bare
+`requireAuth` all fail. Feature keys are typed against the same
+`src/lib/features.ts` registry the UI resolves, which is the
+consistency proof at the registry level. The coarse-RLS-backstop aside
+remains a separate hardening idea; the sweep itself found and fixed one
+live hole — the unauthenticated Google OAuth pair.)_
 
 ---
 
@@ -1007,9 +1016,18 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
     PDF assembly off `r2PublicUrl()` onto credentialed reads, so the server no
     longer depends on the bucket being public to build its own documents — one
     fewer thing that breaks on the day the call is made.
-20. ❌ **The route→permission manifest** — the durable fix Part 2 called for.
+20. ✅ **The route→permission manifest** — the durable fix Part 2 called for.
     The one guard regression test still covers 7 directories and accepts an
     unguarded route.
+    _(Fixed 2026-08-30, #721: `src/lib/route-permissions.ts` maps every one
+    of the 251 API routes to its required guard — staff/admin/role/feature
+    plus reviewed authScoped/token/cron/webhook/public entries, each weak
+    kind carrying a one-sentence why — and the rewritten test fails on
+    unlisted routes, missing guard markers, stale entries, and undeclared
+    bare `requireAuth`. Building it surfaced one live hole, fixed in the
+    same PR: the Google OAuth connect pair was unauthenticated and its
+    callback overwrites the shared `google_tokens` row; both now
+    `requireStaff`.)_
 21. ❌ **Job-level labor capture** — nothing links shifts or time entries to a
     vehicle, so actual install hours versus the estimate stay unknowable on the
     job the whole app exists to invoice.
@@ -1031,7 +1049,7 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
 | 17 | ~~Open~~ **Fixed 2026-08-30 (#717–#719)**: `/api/purchase-requests` (+ `create-po`) and `/api/po-receipts` exist, feature-gated on `parts_ordering`; the queue creates real NetSuite POs and receiving posts item receipts. |
 | 18 | ~~Open~~ **Fixed 2026-08-30 (#702)**: submit moved to a hardened service-role route, review queue + notifications + audit-logged decisions shipped, RLS policies dropped (migration 237). |
 | 19 | `R2_PUBLIC_URL` still backs `r2PublicUrl()` (`src/lib/r2.ts:157-160`); the bucket is unchanged. |
-| 20 | `api-auth-guard.test.ts` still covers 7 directories and only asserts *not* bare `requireAuth` — a route with **no** guard at all still passes. |
+| 20 | ~~Open~~ **Fixed 2026-08-30 (#721)**: `route-permissions.ts` declares all 251 routes; the test fails on unlisted routes, missing declared guards, stale entries, and undeclared bare `requireAuth`. |
 | 21 | `work_shifts` links to `cni_job_id` only (migration 110:56); nothing ties a shift to a `fleet_checkins` row. |
 
 **Shipped 2026-08-28 (items 1-8):** the entire Now block plus the revision
