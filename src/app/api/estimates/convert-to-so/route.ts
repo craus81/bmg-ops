@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createSalesOrder, findLocation, suiteqlQuery } from '@/lib/netsuite';
+import { createSalesOrder, findLocation, suiteqlQuery, closeNetSuiteEstimate } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
@@ -279,6 +279,21 @@ export async function POST(req: NextRequest) {
       }, { status: 409 });
     }
 
+    // ── Close the pushed NetSuite estimate (audit Round 2 item 10) ──
+    // FleetSuite SOs are standalone, so NetSuite's own estimate->Processed
+    // transition never fires and pushed estimates sat Open forever. Closing
+    // is a probability-0 PATCH (Document Status is derived — see
+    // closeNetSuiteEstimate). Best-effort: the SO exists either way, and
+    // the netsuite-sync sweep (closeConvertedEstimates) retires any miss.
+    let nsEstimateClosed: boolean | null = null;
+    if (estimate.netsuite_estimate_id) {
+      const closed = await closeNetSuiteEstimate(String(estimate.netsuite_estimate_id));
+      nsEstimateClosed = closed.success;
+      if (!closed.success) {
+        console.warn(`convert-to-so: NS estimate ${estimate.netsuite_estimate_id} close failed:`, closed.error);
+      }
+    }
+
     // ── Auto-create/link the upfit project (roadmap N2 phase 1) ──
     // Conversion used to create nothing downstream: someone had to know to
     // open Upfit Projects, hand-create a project, and re-type the SO number
@@ -394,6 +409,7 @@ export async function POST(req: NextRequest) {
       unmappedLines: unmappedLineDescriptions.length > 0 ? unmappedLineDescriptions : undefined,
       laborSkipped: laborSkipped || undefined,
       upfitProject: upfitProject || undefined,
+      nsEstimateClosed: nsEstimateClosed === null ? undefined : nsEstimateClosed,
       memoUsed: memo,
     });
   } catch (err: any) {

@@ -1118,6 +1118,63 @@ export async function deactivateCustomer(customerId: string): Promise<{ success:
 }
 
 /**
+ * Close a NetSuite estimate by zeroing its probability.
+ *
+ * An estimate's Document Status (Open/Processed/Closed/Expired) is DERIVED,
+ * not directly writable: NetSuite computes it from the Probability field
+ * (0% -> Closed) and from transform linkage (an SO created FROM the
+ * estimate -> Processed). FleetSuite's convert-to-so deliberately creates
+ * standalone SOs — the estimate lines live here, and an offline-untestable
+ * transform rework of the money path wasn't worth the risk (audit Round 2
+ * item 10) — so pushed estimates never auto-processed and sat Open forever.
+ * Zeroing probability is the one supported REST write that retires them:
+ * status flips to Closed ('C'), which drops the estimate out of every
+ * open-transaction surface (the app's own open set is 'A','B','E','X' —
+ * see getOpenSalesOrdersByCustomer above).
+ */
+export async function closeNetSuiteEstimate(nsEstimateId: string): Promise<{ success: boolean; error?: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/estimate/${nsEstimateId}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'PATCH' });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify({ probability: 0 }),
+      signal: controller.signal,
+    });
+
+    // 404 counts as success — the estimate is already gone, which retires
+    // it from open lists just as thoroughly as closing it.
+    if (!response.ok && response.status !== 404) {
+      const text = await response.text();
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+
+    return { success: true };
+  } catch (e: any) {
+    const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';
+    return { success: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Create a vendor record in NetSuite (for CNI installer payouts / bills).
  * The returned internalId is the numeric Internal ID that vendor-bill
  * creation needs in `entity.id` — store THAT, never the Entity ID/name
