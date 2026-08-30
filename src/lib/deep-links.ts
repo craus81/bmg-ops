@@ -36,10 +36,11 @@ export const deepLinks = {
   estimate: (estimateId: string, opts?: { flashNotes?: boolean }) =>
     `/estimates?id=${estimateId}${opts?.flashNotes ? '&note=field' : ''}`,
   /** Estimates page — opens the builder on a fresh estimate, optionally
-   *  pre-selecting a customer (local customers.id). The straight path from
-   *  entering a new client to quoting them. */
-  newEstimate: (customerId?: string | null) =>
-    `/estimates?new=1${customerId ? `&customer=${customerId}` : ''}`,
+   *  pre-selecting a customer (local customers.id) or a CRM lead
+   *  (prospects.id, for records not yet promoted to NetSuite). The straight
+   *  path from entering a new client to quoting them. */
+  newEstimate: (customerId?: string | null, prospectId?: string | null) =>
+    `/estimates?new=1${customerId ? `&customer=${customerId}` : ''}${!customerId && prospectId ? `&prospect=${prospectId}` : ''}`,
   /** 3D upfit designer — opens a saved design (page reads ?design=). */
   upfitDesign: (designId: string) => `/upfit-designer?design=${designId}`,
   /** 3D upfit designer — starts a fresh design, optionally pre-selecting the

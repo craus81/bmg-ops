@@ -217,9 +217,11 @@ type VinStatus =
 
 interface Customer {
   id: string;
-  netsuite_id: string;
+  netsuite_id: string | null;
   company_name: string;
   entity_id: string;
+  /** True for CRM leads (prospects with no NetSuite record yet). */
+  isLead?: boolean;
 }
 
 type ViewMode = 'list' | 'builder';
@@ -633,18 +635,33 @@ export default function EstimatesPage() {
       // from the deep link when the builder really starts blank.
       if (await openNewEstimate()) return;
       const custId = searchParams.get('customer');
-      if (!custId) return;
-      const { data } = await supabase
-        .from('customers')
-        .select('id, netsuite_id, company_name, entity_id')
-        .eq('id', custId)
+      if (custId) {
+        const { data } = await supabase
+          .from('customers')
+          .select('id, netsuite_id, company_name, entity_id')
+          .eq('id', custId)
+          .maybeSingle();
+        // No match (bad/stale id) degrades to a blank builder — the customer
+        // search is right there.
+        if (data) {
+          setCustomerId(data.id);
+          setCustomerName(data.company_name || data.entity_id || '');
+          setCustomerNsId(data.netsuite_id);
+        }
+        return;
+      }
+      // ?prospect= — a CRM lead (no NetSuite record yet). The estimate rides
+      // on the name alone; pushing it to NetSuite promotes the lead then.
+      const prospectId = searchParams.get('prospect');
+      if (!prospectId) return;
+      const { data: lead } = await supabase
+        .from('prospects')
+        .select('id, company_name, netsuite_id')
+        .eq('id', prospectId)
         .maybeSingle();
-      // No match (bad/stale id) degrades to a blank builder — the customer
-      // search is right there.
-      if (data) {
-        setCustomerId(data.id);
-        setCustomerName(data.company_name || data.entity_id || '');
-        setCustomerNsId(data.netsuite_id);
+      if (lead?.company_name) {
+        setCustomerName(lead.company_name);
+        setCustomerNsId(lead.netsuite_id || null);
       }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: apply once after load
@@ -664,12 +681,30 @@ export default function EstimatesPage() {
   const searchCustomers = useCallback(async (q: string) => {
     if (q.length < 2) { setCustResults([]); return; }
     setCustSearching(true);
-    const { data } = await supabase
-      .from('customers')
-      .select('id, netsuite_id, company_name, entity_id')
-      .or(`company_name.ilike.%${q}%,entity_id.ilike.%${q}%`)
-      .limit(8);
-    setCustResults((data as Customer[]) || []);
+    // Two sources: the NetSuite mirror, and CRM leads (lead tier — records
+    // not yet promoted). A lead's estimate rides on the name; pushing it to
+    // NetSuite promotes the lead automatically.
+    const [mirror, leads] = await Promise.all([
+      supabase
+        .from('customers')
+        .select('id, netsuite_id, company_name, entity_id')
+        .or(`company_name.ilike.%${q}%,entity_id.ilike.%${q}%`)
+        .limit(8),
+      supabase
+        .from('prospects')
+        .select('id, company_name')
+        .ilike('company_name', `%${q}%`)
+        .is('netsuite_id', null)
+        .neq('record_type', 'vendor')
+        .limit(5),
+    ]);
+    const rows: Customer[] = [
+      ...((mirror.data as Customer[]) || []),
+      ...((leads.data || []).map((l: { id: string; company_name: string }) => ({
+        id: l.id, netsuite_id: null, company_name: l.company_name, entity_id: '', isLead: true,
+      }))),
+    ];
+    setCustResults(rows);
     setCustSearching(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
@@ -1536,7 +1571,7 @@ export default function EstimatesPage() {
 
   const openApprovalModal = async () => {
     if (!editingId || sendingForApproval) return;
-    if (!customerId) { await dialog.alert('Pick a customer first.'); return; }
+    if (!customerName.trim()) { await dialog.alert('Pick a customer first.'); return; }
     // Persist current edits so the preview and the sent email match. Keep the
     // estimate's current status — the send itself flips draft → sent
     // server-side, so opening a preview never marks anything sent.
@@ -2331,9 +2366,11 @@ export default function EstimatesPage() {
                   <button
                     key={c.id}
                     onClick={() => {
-                      setCustomerId(c.id);
+                      // A lead has no customers-mirror row: the estimate
+                      // carries the name only until push promotes it.
+                      setCustomerId(c.isLead ? null : c.id);
                       setCustomerName(c.company_name);
-                      setCustomerNsId(c.netsuite_id);
+                      setCustomerNsId(c.isLead ? null : c.netsuite_id);
                       setCustSearch('');
                       setShowCustDropdown(false);
                     }}
@@ -2344,7 +2381,9 @@ export default function EstimatesPage() {
                     }}
                   >
                     <div style={{ fontWeight: 700 }}>{c.company_name}</div>
-                    <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>{c.entity_id} · NS #{c.netsuite_id}</div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>
+                      {c.isLead ? 'Lead — not in NetSuite yet' : `${c.entity_id} · NS #${c.netsuite_id}`}
+                    </div>
                   </button>
                 ))}
               </div>

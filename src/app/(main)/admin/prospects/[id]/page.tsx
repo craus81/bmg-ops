@@ -8,11 +8,11 @@
  * voice notes, delete — so nothing requires a round-trip to the CRM list
  * (which is just the index/pipeline view).
  *
- * Prospects and customers are unified: records are created in NetSuite as
- * customers at creation time, so there is no prospect status or convert
- * step here. The one remaining distinction is a record whose NetSuite
- * create failed (netsuite_id is null) — it gets an "Add to NetSuite" retry
- * button.
+ * Prospects and customers are unified, with a lead tier (owner decision
+ * 2026-08-30): a record with no netsuite_id IS a lead — creating it no
+ * longer creates a NetSuite customer. Promotion happens here (the
+ * "Promote to NetSuite Customer" button) or automatically the first time
+ * an estimate for the lead is pushed to NetSuite / converted to an SO.
  *
  * Routes:
  *   /admin/prospects/<uuid>       — CRM prospect id
@@ -468,7 +468,7 @@ export default function CustomerRecordPage() {
   const addToNetSuite = async () => {
     if (!prospect || converting) return;
     if (prospect.netsuite_id) { await dialog.alert('Already in NetSuite.'); return; }
-    if (!(await dialog.confirm(`Add "${prospect.company_name}" to NetSuite as a customer?`, { confirmLabel: 'Add' }))) return;
+    if (!(await dialog.confirm(`Promote "${prospect.company_name}" to a NetSuite customer? This creates the NetSuite record — until now the lead has lived only in FleetSuite.`, { confirmLabel: 'Promote' }))) return;
     setConverting(true);
     try {
       const res = await fetch('/api/prospects/push-to-netsuite', {
@@ -1464,7 +1464,7 @@ export default function CustomerRecordPage() {
             isVendor ? (
               <span title="Supplier/partner contact — FleetSuite only, never created in NetSuite as a customer" style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>Vendor</span>
             ) : !prospect.netsuite_id && (
-              <span title="The NetSuite create failed or hasn't run — use Add to NetSuite below" style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'var(--warning-bg)', color: 'var(--warning)' }}>Not in NetSuite yet</span>
+              <span title="A lead lives in FleetSuite only — promote it below, or it promotes itself when its first estimate is pushed to NetSuite" style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'rgba(96,165,250,0.12)', color: '#60a5fa' }}>Lead</span>
             )
           ) : (
             <span style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'var(--warning-bg)', color: 'var(--warning)' }}>Not tracked</span>
@@ -1541,8 +1541,8 @@ export default function CustomerRecordPage() {
           )}
           {prospect && <button onClick={openEdit} title="Edit company details, lead source, and notes" style={btnSm}>✎ Edit</button>}
           {prospect && !prospect.netsuite_id && !isVendor && (
-            <button onClick={addToNetSuite} disabled={converting} title="Create this customer in NetSuite (normally automatic at creation — this retries)" style={{ ...btnSm, opacity: converting ? 0.6 : 1 }}>
-              {converting ? 'Adding…' : 'Add to NetSuite'}
+            <button onClick={addToNetSuite} disabled={converting} title="Promote this lead: create the NetSuite customer and link it (also happens automatically when the lead's first estimate is pushed)" style={{ ...btnSm, opacity: converting ? 0.6 : 1 }}>
+              {converting ? 'Promoting…' : 'Promote to NetSuite Customer'}
             </button>
           )}
           {!prospect && customer && (
@@ -1550,8 +1550,8 @@ export default function CustomerRecordPage() {
               {addingToCrm ? 'Adding…' : '+ Add Record'}
             </button>
           )}
-          {customer && !isVendor && (
-            <button onClick={() => router.push(deepLinks.newEstimate(customer.id))}
+          {(customer || (prospect && !prospect.netsuite_id)) && !isVendor && (
+            <button onClick={() => router.push(customer ? deepLinks.newEstimate(customer.id) : deepLinks.newEstimate(null, prospect!.id))}
               title="Start a new estimate with this customer pre-selected"
               style={btnSm}>
               + New Estimate

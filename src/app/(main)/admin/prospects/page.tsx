@@ -16,9 +16,10 @@
  * for their contact info live under the Vendors tab and are never pushed to
  * NetSuite as customers. The legacy
  * prospects.status column persists in the DB but is no longer surfaced;
- * the only distinction that matters is whether the record is linked to
- * NetSuite yet (netsuite_id), and the record page offers a retry when the
- * NetSuite create failed.
+ * the distinction that matters is the lead tier (owner decision
+ * 2026-08-30): a record with no netsuite_id is a LEAD — creating it no
+ * longer creates a NetSuite customer. It's promoted from its record page,
+ * or automatically when its first estimate is pushed to NetSuite.
  *
  * Legacy deep links (?id= / ?ns=) predate the record pages and are
  * forwarded there so old notification URLs and bookmarks keep working.
@@ -402,23 +403,10 @@ export default function ProspectsPage() {
         })),
       );
     }
-    let localCustomerId: string | null = null;
-    if (!isVendor) {
-      try {
-        const res = await fetch('/api/prospects/push-to-netsuite', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          // force: the pre-flight above already put any matches in front of
-          // the user — without it the route's own guard would re-block and
-          // strand the just-created CRM row.
-          body: JSON.stringify({ prospectId: data.id, type: 'customer', userId: user?.id, force: true }),
-        });
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
-        localCustomerId = body.localCustomerId || null;
-      } catch (e: any) {
-        await dialog.alert(`Saved locally, but the NetSuite customer could not be created: ${e?.message || 'unknown error'}\n\nUse "Add to NetSuite" on the record to retry.`);
-      }
-    }
+    // Lead tier (owner decision 2026-08-30): creating a record no longer
+    // creates a NetSuite customer. The record IS the lead (netsuite_id
+    // null); it's promoted from its record page, or automatically the first
+    // time an estimate for it is pushed to NetSuite / converted to an SO.
     // The contact person (typed or scanned off a card) becomes a real
     // contact row on the record — and a NetSuite contact when linked — not
     // just the header contact field. Best-effort: the record is already
@@ -432,8 +420,8 @@ export default function ProspectsPage() {
         }),
       }).catch(() => {});
     }
-    if (startEstimate && localCustomerId) {
-      router.push(deepLinks.newEstimate(localCustomerId));
+    if (startEstimate && !isVendor) {
+      router.push(deepLinks.newEstimate(null, data.id));
       return;
     }
     router.push(`/admin/prospects/${data.id}`);
@@ -946,7 +934,9 @@ export default function ProspectsPage() {
                           {prospect.is_hot && badge('HOT', '#ef4444', 'rgba(239,68,68,0.1)')}
                           {prospect.email_campaign && badge('EMAIL', '#60a5fa', 'rgba(59,130,246,0.1)')}
                           {prospect.multi_location && badge('MULTI-LOC', '#f59e0b', 'rgba(251,191,36,0.1)')}
-                          {prospect.netsuite_id && badge('NS', '#a78bfa', 'rgba(167,139,250,0.1)')}
+                          {prospect.netsuite_id
+                            ? badge('NS', '#a78bfa', 'rgba(167,139,250,0.1)')
+                            : prospect.record_type !== 'vendor' && badge('LEAD', '#60a5fa', 'rgba(96,165,250,0.1)')}
                         </td>
                         <td style={tdStyle}>
                           {prospect.contact_name ? (
