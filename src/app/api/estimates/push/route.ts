@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { estimateContextMemo } from '@/lib/estimate-document';
+import { resolveOrPromoteByName } from '@/lib/promote-prospect';
 
 export const dynamic = 'force-dynamic';
 
@@ -298,7 +299,20 @@ export async function POST(req: NextRequest) {
     const isUpdate = !!estimate.netsuite_estimate_id;
 
     if (!estimate.customer_netsuite_id) {
-      return NextResponse.json({ error: 'No NetSuite customer linked to this estimate' }, { status: 400 });
+      // Lead tier: an estimate built for a CRM lead carries a name and no
+      // NetSuite id. Pushing to NetSuite is the promotion moment — resolve
+      // the name to an existing NetSuite customer, or promote the matching
+      // lead. Stamp the estimate so later pushes/converts skip this.
+      const resolved = await resolveOrPromoteByName(supabase, estimate.customer_name || '', userId || null);
+      if (!resolved) {
+        return NextResponse.json({
+          error: 'No NetSuite customer linked to this estimate, and no CRM lead matches the customer name. Promote the record from its CRM page, or pick a NetSuite customer.',
+        }, { status: 400 });
+      }
+      estimate.customer_netsuite_id = resolved.netsuiteId;
+      await supabase.from('estimates')
+        .update({ customer_netsuite_id: resolved.netsuiteId })
+        .eq('id', estimateId);
     }
 
     // Load line items
