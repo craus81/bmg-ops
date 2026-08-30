@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { findCustomerDuplicates } from '@/lib/customer-dupes';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -24,7 +25,11 @@ const ProspectFields = {
   created_by: z.string().uuid().optional().nullable(),
 } as const;
 
-const CreateProspectSchema = z.object(ProspectFields);
+const CreateProspectSchema = z.object({
+  ...ProspectFields,
+  /** Skip the duplicate guard — set only after a human saw the matches. */
+  force: z.boolean().optional().default(false),
+});
 const UpdateProspectSchema = z
   .object({
     id: z.string().uuid(),
@@ -67,6 +72,24 @@ export async function POST(req: NextRequest) {
   const parsed = await validateBody(req, CreateProspectSchema);
   if (parsed.error) return parsed.error;
   const body = parsed.data;
+
+  // Shared duplicate guard (audit Stage 1: this path previously had NO
+  // check of any kind). 409 carries the matches; a deliberate re-submit
+  // with force:true proceeds.
+  if (!body.force) {
+    const matches = await findCustomerDuplicates(supabase, {
+      companyName: body.company_name,
+      email: body.email,
+      phone: body.phone,
+    });
+    if (matches.length > 0) {
+      return NextResponse.json({
+        error: 'A record with the same name, email, or phone already exists.',
+        matches,
+      }, { status: 409 });
+    }
+  }
+
   const { data, error } = await supabase
     .from('prospects')
     .insert({

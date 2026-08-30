@@ -327,37 +327,48 @@ export default function ProspectsPage() {
     const isVendor = form.record_type === 'vendor';
     const name = form.company_name.trim();
 
-    // Duplicate guard (same rule as wrap-quote's create-customer): a
-    // same-named record created again becomes a second NetSuite customer
-    // that splits spend history, statements, and estimate search. Match CRM
-    // rows of the same type, and — for customers — the synced NetSuite
-    // mirror, which can hold customers that have no CRM row at all.
-    const existingProspect = prospects.find(p =>
-      (p.record_type === 'vendor') === isVendor &&
-      p.company_name.trim().toLowerCase() === name.toLowerCase()) || null;
-    let existingLabel = existingProspect?.company_name || null;
-    let existingUrl = existingProspect ? `/admin/prospects/${existingProspect.id}` : null;
-    if (!existingUrl && !isVendor) {
-      const escaped = name.replace(/[\\%_]/g, '\\$&');
-      const { data: cust } = await supabase
-        .from('customers')
-        .select('netsuite_id, company_name')
-        .ilike('company_name', escaped)
-        .limit(1)
-        .maybeSingle();
-      if (cust?.netsuite_id) {
-        existingLabel = cust.company_name || name;
-        existingUrl = `/admin/prospects/ns-${cust.netsuite_id}`;
-      }
-    }
-    if (existingUrl) {
+    // Duplicate guard, now the shared SERVER-side check (audit Stage 1):
+    // the old guard matched exact name against the in-memory list plus one
+    // ilike on customers — phone and email were never checked, and records
+    // loaded after page mount were invisible. The server sees everything:
+    // name + email + phone digits across the CRM and the NetSuite mirror.
+    // Best-effort here (the create routes run the same checker again), so
+    // a pre-flight hiccup can't block creation outright.
+    let dupes: { source: string; id: string; company_name: string | null; netsuite_id: string | null; matchedOn: string[] }[] = [];
+    try {
+      const res = await fetch('/api/prospects/check-duplicate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyName: name, email: form.email || null, phone: form.phone || null, recordType: form.record_type }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) dupes = body.matches || [];
+    } catch { /* pre-flight only */ }
+
+    const dupeUrl = (m: typeof dupes[number]) =>
+      m.source === 'prospects' ? `/admin/prospects/${m.id}` : m.netsuite_id ? `/admin/prospects/ns-${m.netsuite_id}` : null;
+    const nameMatch = dupes.find(m => m.matchedOn.includes('name')) || null;
+    if (nameMatch) {
+      // Same-name: block, as before — a re-create splits spend history,
+      // statements, and estimate search.
       setSaving(false);
+      const url = dupeUrl(nameMatch);
       const open = await dialog.confirm(
-        `"${existingLabel}" already exists${!existingProspect ? ' in NetSuite' : ''}.${isVendor ? '' : ' Creating it again would make a duplicate NetSuite customer that splits spend history and statements.'}\n\nOpen the existing record instead? If this really is a different company, go back and adjust the name (e.g. add the city).`,
+        `"${nameMatch.company_name || name}" already exists${nameMatch.source === 'customers' ? ' in NetSuite' : ''}.${isVendor ? '' : ' Creating it again would make a duplicate NetSuite customer that splits spend history and statements.'}\n\nOpen the existing record instead? If this really is a different company, go back and adjust the name (e.g. add the city).`,
         { confirmLabel: 'Open Existing', cancelLabel: 'Go Back' },
       );
-      if (open) router.push(existingUrl);
+      if (open && url) router.push(url);
       return;
+    }
+    if (dupes.length > 0) {
+      // Same phone/email under a different name — a softer signal (shared
+      // AP lines, franchises). Surface it, let the human decide.
+      const top = dupes[0];
+      const what = top.matchedOn.map(f => f === 'email' ? 'email' : 'phone number').join(' and ');
+      const anyway = await dialog.confirm(
+        `"${top.company_name || 'An existing record'}" already has this ${what}. If it's the same company, open it from the list instead of creating a duplicate.\n\nCreate "${name}" anyway?`,
+        { confirmLabel: 'Create Anyway', cancelLabel: 'Go Back' },
+      );
+      if (!anyway) { setSaving(false); return; }
     }
 
     const { data, error } = await supabase.from('prospects')
@@ -376,7 +387,10 @@ export default function ProspectsPage() {
       try {
         const res = await fetch('/api/prospects/push-to-netsuite', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prospectId: data.id, type: 'customer', userId: user?.id }),
+          // force: the pre-flight above already put any matches in front of
+          // the user — without it the route's own guard would re-block and
+          // strand the just-created CRM row.
+          body: JSON.stringify({ prospectId: data.id, type: 'customer', userId: user?.id, force: true }),
         });
         const body = await res.json().catch(() => ({}));
         if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);

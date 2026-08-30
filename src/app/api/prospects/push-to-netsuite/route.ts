@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { createCustomerOrLead } from '@/lib/netsuite';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { findCustomerDuplicates } from '@/lib/customer-dupes';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -15,6 +16,9 @@ const Schema = z.object({
   // CUSTOMER. The lead/prospect stages remain accepted for API compat.
   type: z.enum(['customer', 'lead', 'prospect']).optional().default('customer'),
   userId: z.string().uuid().optional().nullable(),
+  /** Skip the NetSuite-double guard — the CRM create flow sets this after
+   *  its own pre-flight showed the user the matches. */
+  force: z.boolean().optional().default(false),
 });
 
 /**
@@ -27,7 +31,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
-  const { prospectId, type, userId } = parsed.data;
+  const { prospectId, type, userId, force } = parsed.data;
 
   try {
 
@@ -50,6 +54,27 @@ export async function POST(req: NextRequest) {
     // make a supplier's rep a NetSuite Customer.
     if (prospect.record_type === 'vendor') {
       return NextResponse.json({ error: 'This is a vendor record — vendors are never created in NetSuite as customers' }, { status: 400 });
+    }
+
+    // NetSuite-double guard (audit Stage 1): this route had no duplicate
+    // check at all, so any caller that skipped the CRM page's pre-flight
+    // created a second NetSuite customer. A same-named row in the local
+    // customers mirror means the NetSuite record already exists — block
+    // unless the caller already put the matches in front of a human.
+    if (!force) {
+      const matches = await findCustomerDuplicates(supabase, {
+        companyName: prospect.company_name,
+        email: prospect.email,
+        phone: prospect.phone,
+        excludeProspectId: prospectId,
+      });
+      const nsNameMatch = matches.find(m => m.source === 'customers' && m.matchedOn.includes('name'));
+      if (nsNameMatch) {
+        return NextResponse.json({
+          error: `"${nsNameMatch.company_name}" already exists in NetSuite. Link this record to it instead of creating a double — or retry with force if it truly is a different company.`,
+          matches,
+        }, { status: 409 });
+      }
     }
 
     // Push to NetSuite
