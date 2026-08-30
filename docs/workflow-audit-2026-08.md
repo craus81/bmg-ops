@@ -80,7 +80,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Soon** — the role cleanup (17–20) | ✅ done | #17 infra + owner-page gates (#649), #18a registry (#648), #18b all ten tools keyed (#652, #654, #655), #19 install roles (#650), #20 dead-end menus (#651). The ungated-by-URL pages are gated and the dev route deleted (#656). An adversarial gate audit (every tile/nav/redirect/deep-link entry point traced per role) confirmed 20 regressions, all fixed: client dead-clicks + two redirect loops (#657) and per-recipient vehicle notification links (#658). |
 | **Data-integrity bugs to fix in passing** | ✅ done | All 6 re-verified as live, then fixed: pushed-estimate delete (#660), Add-Graphics demotion (#661), stranded allocations — trigger + backfill, migration 228 (#662), graphics history trigger, migration 229 (#663), the 1000-row-cap sweep across payroll/payouts/credits/pay-rates/scans/invoices/pos/dashboard (#664), and the Open Quotes tile (#665). |
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
-| **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 12–17 and 19–21 remain open** (9). Shipped 2026-08-30: the Stage 1 build-out (#701–#704, closing item 18), the two Stage 1 owner decisions (#706 lead tier, #707 deletion→NetSuite), and the whole **Next — estimate integrity** block (#708 route auth, #709 estimate close, #710 signed-document viewer — items 9–11). |
+| **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 17 and 19–21 remain open** (4 — the big builds: parts ordering, R2-goes-private, the route manifest, labor capture). Shipped 2026-08-30: the Stage 1 build-out (#701–#704, closing item 18), the two Stage 1 owner decisions (#706 lead tier, #707 deletion→NetSuite), and estimate integrity (#708–#710, items 9–11). Shipped 2026-08-31: the whole **vehicle custody** block (#712–#715, items 12–16). |
 
 Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap.
 
@@ -917,16 +917,32 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
 
 ### Soon — vehicle custody and the shop floor
 
-12. ❌ **Check-in photos are optional, with no damage capture** — the moment
+12. ✅ **Check-in photos are optional, with no damage capture** — the moment
     liability transfers is unprotected, and `photo_type='damage'` still has no
-    writer.
-13. ❌ **A returning vehicle can never be checked in again** — the duplicate-VIN
-    guard matches archived and shipped rows.
-14. ❌ **Arrival and check-in remain two unlinked systems** —
+    writer. _(Fixed 2026-08-31, #713 — at least one photo required before a
+    check-in saves (upload stays best-effort so a flaky connection can't
+    strand it), plus an amber Damage-on-Arrival section: damage photos land
+    as `photo_type 'damage'` — its first writer ever — with a required
+    what-and-where note folded into the check-in notes.)_
+13. ✅ **A returning vehicle can never be checked in again** — the duplicate-VIN
+    guard matches archived and shipped rows. _(Fixed 2026-08-31, #712 — the
+    guard blocks only ACTIVE custody (`archived_at IS NULL AND status !=
+    'shipped'`); terminal-only vehicles start a new visit with a
+    returning-vehicle banner and the customer prefilled from last time.)_
+14. ✅ **Arrival and check-in remain two unlinked systems** —
     `shop_inbound.fleet_checkin_id` has no writer in either direction, so
     vehicles read "overdue, expected but not arrived" while sitting in the shop.
-15. ❌ **A stuck vehicle notifies nobody for 48 hours**, and **nothing notifies
-    anyone when a vehicle arrives**. _(Read this precisely: the sweep exists
+    _(Fixed 2026-08-31, #714 — POST /api/shop-inbound/arrival is the one
+    arrival brain: a check-in matches its expected row (VIN → SO numbers →
+    unique customer) and links it; the Shop Board's Arrived button back-links
+    any active check-in for the VIN. Idempotent both directions.)_
+15. ✅ **A stuck vehicle notifies nobody for 48 hours**, and **nothing notifies
+    anyone when a vehicle arrives**. _(Arrival half fixed 2026-08-31, #714 —
+    every arrival notifies admins in-app; push fires only for EXPECTED
+    vehicles (a matched Shop Board row), so routine walk-ins don't buzz
+    phones. Same-day board-arrival + check-in dedupes to one ping. The 48h
+    stuck-latency floor below stands as designed — the daily sweep exists
+    and works.)_ _(Read this precisely: the sweep exists
     and works — `/api/cron/stuck-vehicle-check` runs daily at 14:15 UTC per
     `vercel.json`, alerts admins plus the assignee with per-recipient deep
     links, and re-alerts every 48h. The finding is the **latency floor**
@@ -934,8 +950,14 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
     arrival half, which is genuinely absent: nothing in
     `src/app/api/shop-inbound/route.ts`, `src/lib/shop-inbound.ts`, or
     `ShopArrivals.tsx` calls `notify`.)_
-16. ❌ **CNI notification vacuum** — job invites, bids and photo denials reach
+16. ✅ **CNI notification vacuum** — job invites, bids and photo denials reach
     nobody, while the portal tells installers they will be notified.
+    _(Fixed 2026-08-31, #715 — three routes own the writes and notify
+    server-side: invite-company pings the invited roster, bid pings the
+    coordinators (interested with proposed start, or declined with reason),
+    review-photo pings the assigned installer on denial with a reshoot deep
+    link. RLS on invites/bids deliberately unchanged — the migration-226
+    read-only treatment is the follow-up once the routes soak.)_
     `cni_job_invites` and `cni_job_bids` are written straight from the browser
     (`admin/cni/jobs/[id]/page.tsx:718`, `installer/available/[id]/page.tsx:117`)
     with no `notify` on either side, and the photo review screen writes
@@ -982,11 +1004,11 @@ reproducing the escalation on the unpatched schema and blocking it after.)_
 | 9 | ~~Open~~ **Fixed 2026-08-30 (#708)**: all nine routes gated `requireFeature(req, 'estimates')`, the page URL gated client-side, verbatim-guard regression test added. |
 | 10 | ~~Open~~ **Fixed 2026-08-30 (#709)**: probability-0 close at conversion + a capped stateless backlog sweep in the netsuite-sync cron. |
 | 11 | ~~Open~~ **Fixed 2026-08-30 (#710)**: `/api/signed-documents` + the `/signed/[type]/[id]` viewer with sha256 integrity verdicts, linked from all three record surfaces. |
-| 12 | `VehicleCheckIn.tsx:118` — "optional, never required"; `'damage'` appears only in type unions and the timeline's filter, never as a value any writer sets. |
-| 13 | `VehicleCheckIn.tsx:210-218` still matches on `.eq('vin', v)` alone, with no status filter, so archived and shipped rows block a return visit. |
-| 14 | `shop_inbound.fleet_checkin_id` (migration 160:34) has zero writers in `src/`. |
-| 15 | Arrival half only — see the note on the item. |
-| 16 | Job invite / bid / photo-denial paths only — see the note on the item. |
+| 12 | ~~Open~~ **Fixed 2026-08-31 (#713)**: ≥1 photo required at save; damage photos write `photo_type 'damage'` with a required note. |
+| 13 | ~~Open~~ **Fixed 2026-08-31 (#712)**: guard filters to active custody; terminal rows start a new visit with history noted. |
+| 14 | ~~Open~~ **Fixed 2026-08-31 (#714)**: written from both directions by the /api/shop-inbound/arrival brain. |
+| 15 | ~~Open~~ **Fixed 2026-08-31 (#714)**: arrival notifications, push reserved for expected vehicles. |
+| 16 | ~~Open~~ **Fixed 2026-08-31 (#715)**: invite/bid/review-photo routes notify roster, coordinators, and installer respectively. |
 | 17 | No purchase-request or receiving route exists; everything under `src/app/api/pos/` imports, syncs or audits NetSuite POs rather than creating one. |
 | 18 | ~~Open~~ **Fixed 2026-08-30 (#702)**: submit moved to a hardened service-role route, review queue + notifications + audit-logged decisions shipped, RLS policies dropped (migration 237). |
 | 19 | `R2_PUBLIC_URL` still backs `r2PublicUrl()` (`src/lib/r2.ts:157-160`); the bucket is unchanged. |
