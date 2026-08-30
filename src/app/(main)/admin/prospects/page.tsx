@@ -36,6 +36,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { SortableTh, useTableSort, type SortState } from '@/components/ui/SortableTh';
 import NumberInput from '@/components/NumberInput';
+import { LEAD_SOURCES, OPP_TYPES } from '@/lib/lead-sources';
 import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
 
 interface Prospect {
@@ -146,9 +147,14 @@ export default function ProspectsPage() {
 
   // Create form (creation only — editing lives on the record page).
   // record_type 'vendor' = supplier/partner rep: same record, no NetSuite push.
-  const emptyForm = { company_name: '', contact_name: '', title: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1, record_type: 'customer' };
+  const emptyForm = { company_name: '', contact_name: '', title: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1, record_type: 'customer', lead_source: '' };
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  // "What do they want" — one deal per checked type at create time, so a
+  // combined upfit+graphics inquiry is two deals, not a free-text note that
+  // gets re-typed into the estimate later. UI-only state: `form` spreads
+  // straight into the prospects insert, so this must not live there.
+  const [interestedIn, setInterestedIn] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
@@ -372,7 +378,7 @@ export default function ProspectsPage() {
     }
 
     const { data, error } = await supabase.from('prospects')
-      .insert({ ...form, company_name: name, location_count: form.location_count || 1, created_by: user?.id })
+      .insert({ ...form, company_name: name, lead_source: form.lead_source || null, location_count: form.location_count || 1, created_by: user?.id })
       .select().single();
     if (error || !data) {
       setSaving(false);
@@ -381,6 +387,20 @@ export default function ProspectsPage() {
     }
     if (form.location_count > 1) {
       await supabase.from('prospect_tags').insert({ prospect_id: data.id, tag: 'multilocation', auto_generated: true });
+    }
+    // One deal per checked interest — the pipeline starts at intake instead
+    // of being reconstructed later from the notes. Best-effort: the record
+    // exists and deals can be added on its page.
+    if (!isVendor && interestedIn.length > 0) {
+      await supabase.from('prospect_opportunities').insert(
+        interestedIn.map(t => ({
+          prospect_id: data.id,
+          title: `${OPP_TYPES[t] || t} — ${name}`,
+          type: t,
+          stage: 'lead',
+          created_by: user?.id,
+        })),
+      );
     }
     let localCustomerId: string | null = null;
     if (!isVendor) {
@@ -612,7 +632,7 @@ export default function ProspectsPage() {
           }}>{scanning ? 'Scanning...' : 'Scan Card'}</button>
           </DropZone>
           <button onClick={() => {
-            if (showCreate) { setShowCreate(false); setForm(emptyForm); return; }
+            if (showCreate) { setShowCreate(false); setForm(emptyForm); setInterestedIn([]); return; }
             // Open matching the active tab — on Vendors, the form starts as a
             // vendor (it used to open as Customer there, hiding the vendor
             // path behind the small type pills).
@@ -655,6 +675,33 @@ export default function ProspectsPage() {
               <div><div style={labelStyle}>Zip</div><input style={inputStyle} value={form.zip} onChange={e => setForm({ ...form, zip: e.target.value })} /></div>
             </div>
             <div><div style={labelStyle}># of Locations</div><NumberInput min="1" style={inputStyle} value={form.location_count} onChange={e => setForm({ ...form, location_count: parseInt(e.target.value) || 1 })} /></div>
+            {form.record_type !== 'vendor' && (
+              <div>
+                <div style={labelStyle}>How did they find us?</div>
+                <select style={inputStyle} value={form.lead_source} onChange={e => setForm({ ...form, lead_source: e.target.value })}>
+                  <option value="">Lead source…</option>
+                  {LEAD_SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            )}
+            {form.record_type !== 'vendor' && (
+              <div style={{ gridColumn: '1 / -1' }}>
+                <div style={labelStyle}>Interested in — starts a deal per selection</div>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {Object.entries(OPP_TYPES).map(([k, label]) => {
+                    const on = interestedIn.includes(k);
+                    return (
+                      <button key={k} type="button" onClick={() => setInterestedIn(prev => on ? prev.filter(t => t !== k) : [...prev, k])} style={{
+                        padding: '5px 12px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                        background: on ? 'var(--tab-active-bg)' : 'var(--subtle-bg)',
+                        border: `1px solid ${on ? 'var(--tab-active-border)' : 'var(--border)'}`,
+                        color: on ? 'var(--text-primary)' : 'var(--text-muted)',
+                      }}>{label}</button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <div style={{ gridColumn: '1 / -1' }}><div style={labelStyle}>Notes</div><textarea style={{ ...inputStyle, minHeight: '50px', resize: 'vertical' }} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
           </div>
           <div style={{ display: 'flex', gap: '8px' }}>
