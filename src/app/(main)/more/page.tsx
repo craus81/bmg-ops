@@ -65,6 +65,7 @@ export default function MorePage() {
         { title: 'Purchase Orders', sub: 'Manage POs', path: '/admin/pos', show: F('purchase_orders') },
         { title: 'Scan Log', sub: 'Review scans, match POs, export & invoice', path: '/admin/scans', show: F('reports') },
         { title: 'Purchasing', sub: 'Requested parts waiting to be ordered, grouped by vendor', path: '/admin/purchasing', show: F('parts_ordering') },
+        { title: 'Receiving', sub: 'Check arriving parts in against vendor POs', path: '/admin/receiving', show: F('parts_ordering') },
         { title: 'Parts Catalog', sub: 'Upfit & graphic parts from NetSuite', path: '/parts', show: F('parts_catalog') },
         { title: 'Inventory', sub: 'On hand · allocated to jobs · free · on order, at a glance', path: '/admin/inventory', show: F('parts_catalog') },
         { title: 'Part Tagging Rules', sub: 'Auto-categorize parts by vendor & name instead of one dropdown at a time', path: '/admin/part-category-rules', show: F('part_admin') },

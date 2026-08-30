@@ -87,6 +87,10 @@ export const deepLinks = {
    *  ?req= scroll-flashes one request's row. */
   purchaseRequests: (requestId?: string | null) =>
     `/admin/purchasing${requestId ? `?req=${requestId}` : ''}`,
+  /** Receiving page — ?po= expands and flashes one vendor PO (the local
+   *  netsuite_vendor_pos row id). */
+  receiving: (poId?: string | null) =>
+    `/admin/receiving${poId ? `?po=${poId}` : ''}`,
   /** Credit application review queue — opens the application's detail. */
   creditApplication: (appId: string) => `/admin/credit-applications?app=${appId}`,
   /** Users admin — opens the user's edit modal (e.g. a pending access request). */

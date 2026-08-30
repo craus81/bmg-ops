@@ -2036,6 +2036,86 @@ export async function createBillFromPo(payload: {
 }
 
 /**
+ * Create an Item Receipt in NetSuite from a Purchase Order (audit item
+ * 17C — the receiving page's "Receive" button).
+ * Uses: POST /services/rest/record/v1/purchaseOrder/{poId}/!transform/itemReceipt
+ * (the same documented transform pattern as createBillFromPo /
+ * createInvoiceFromSO). CRITICAL shape note: the transform's default is to
+ * receive EVERY line in full, so the body lists every line explicitly —
+ * received ones with quantity + itemReceive:true, everything else with
+ * itemReceive:false. orderLine is the PO line's linesequencenumber
+ * (callers map mirror line ids via mapReceiptLines in po-receiving.ts).
+ */
+export async function createItemReceiptFromPo(payload: {
+  purchaseOrderId: string | number;
+  receiveLines: { orderLine: number; quantity: number }[];
+  excludeOrderLines: number[];
+  memo?: string;
+  tranDate?: string;
+}): Promise<{ success: boolean; receiptId?: string; receiptNumber?: string; error?: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/purchaseOrder/${payload.purchaseOrderId}/!transform/itemReceipt`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  const body: any = {
+    item: {
+      items: [
+        ...payload.receiveLines.map(l => ({ orderLine: l.orderLine, quantity: l.quantity, itemReceive: true })),
+        ...payload.excludeOrderLines.map(seq => ({ orderLine: seq, itemReceive: false })),
+      ],
+    },
+    ...(payload.memo ? { memo: payload.memo } : {}),
+    ...(payload.tranDate ? { tranDate: payload.tranDate } : {}),
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite item-receipt-from-PO error:', text, '\nrequest body:', JSON.stringify(body));
+      return { success: false, error: `NetSuite error (${response.status}): ${text}` };
+    }
+
+    const location = response.headers.get('Location');
+    let receiptId = '';
+    if (location) {
+      const match = location.match(/\/(\d+)$/);
+      receiptId = match?.[1] || '';
+    }
+    let receiptNumber = '';
+    try {
+      const result = await response.json();
+      receiptId = receiptId || result.id?.toString() || '';
+      receiptNumber = result.tranId || result.tranid || '';
+    } catch {
+      // 204 No Content
+    }
+    if (receiptId && !receiptNumber) {
+      try {
+        const lookup = await suiteqlQuery(`SELECT tranid FROM transaction WHERE id = ${receiptId}`);
+        receiptNumber = lookup?.items?.[0]?.tranid || '';
+      } catch {
+        // Non-critical — the internal id is enough to record the receipt.
+      }
+    }
+    return { success: true, receiptId, receiptNumber };
+  } catch (e: any) {
+    return { success: false, error: `Failed to create item receipt: ${e.message}` };
+  }
+}
+
+/**
  * Create an Invoice in NetSuite by transforming a Sales Order
  * Uses: POST /services/rest/record/v1/invoice
  * The transform endpoint creates an invoice from an existing SO

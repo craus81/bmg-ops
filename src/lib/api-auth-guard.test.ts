@@ -35,6 +35,7 @@ const SENSITIVE_DIRS = [
 const FEATURE_GATED_DIRS: Record<string, string> = {
   'src/app/api/estimates': "requireFeature(req, 'estimates')",
   'src/app/api/purchase-requests': "requireFeature(req, 'parts_ordering')",
+  'src/app/api/po-receipts': "requireFeature(req, 'parts_ordering')",
 };
 
 // Deliberate exceptions, with the reason they are safe as-is.
