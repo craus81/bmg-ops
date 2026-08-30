@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
   if (!po) return NextResponse.json({ error: 'PO not found' }, { status: 404 });
   if (!isOpenPoStatus(po.status)) {
-    return NextResponse.json({ error: `PO ${po.tranid || ''} is ${po.status === 'H' ? 'closed' : 'fully billed/closed'} in NetSuite — nothing left to receive.` }, { status: 409 });
+    return NextResponse.json({ error: `PO ${po.tranid || ''} is ${po.status === 'H' ? 'cancelled' : 'fully billed/closed'} in NetSuite — nothing left to receive.` }, { status: 409 });
   }
 
   const { data: mirrorLines } = await supabase
@@ -93,6 +93,28 @@ export async function POST(req: NextRequest) {
     .select('line_id, item_netsuite_id, item_number, description, quantity, quantity_received')
     .eq('po_id', po.id);
   const mirrorByLineId = new Map((mirrorLines || []).map((l: any) => [l.line_id as string, l]));
+
+  // Receipts sitting on the manual worklist are real arrivals NetSuite
+  // doesn't know about yet — without counting them, a part received into
+  // the worklist still showed fully open and invited a double receipt
+  // (Round 3 finding). Keyed by line_id; rows whose line_id no longer
+  // exists in the (resynced) mirror fall back to their item number.
+  const { data: manualRows } = await supabase
+    .from('po_receipts')
+    .select('line_id, item_number, quantity')
+    .eq('po_id', po.id)
+    .eq('ns_status', 'manual_needed');
+  const manualByLine = new Map<string, number>();
+  const manualByItem = new Map<string, number>();
+  for (const m of (manualRows || []) as any[]) {
+    const qty = Number(m.quantity) || 0;
+    if (m.line_id && mirrorByLineId.has(m.line_id)) {
+      manualByLine.set(m.line_id, (manualByLine.get(m.line_id) || 0) + qty);
+    } else {
+      const key = normalizeItemNumber(m.item_number);
+      manualByItem.set(key, (manualByItem.get(key) || 0) + qty);
+    }
+  }
 
   // Asks must reference lines the mirror knows, one ask per line, within
   // the mirror's open quantity (NetSuite's own open quantity is enforced
@@ -107,9 +129,13 @@ export async function POST(req: NextRequest) {
     if (!mirror) {
       return NextResponse.json({ error: `${ask.itemNumber}: this PO line is no longer on the synced PO — refresh the page.` }, { status: 422 });
     }
-    const open = (Number(mirror.quantity) || 0) - (Number(mirror.quantity_received) || 0);
+    const manualHeld = (manualByLine.get(ask.lineId) || 0)
+      + (manualByItem.get(normalizeItemNumber(ask.itemNumber)) || 0);
+    const open = (Number(mirror.quantity) || 0) - (Number(mirror.quantity_received) || 0) - manualHeld;
     if (ask.quantity > open + 1e-9) {
-      return NextResponse.json({ error: `${ask.itemNumber}: receiving ${ask.quantity} but only ${Math.max(0, open)} is still open.` }, { status: 422 });
+      return NextResponse.json({
+        error: `${ask.itemNumber}: receiving ${ask.quantity} but only ${Math.max(0, open)} is still open${manualHeld > 0 ? ` (${manualHeld} already received onto the manual NetSuite-entry worklist)` : ''}.`,
+      }, { status: 422 });
     }
   }
 

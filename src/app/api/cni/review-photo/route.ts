@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
 
   const { data: photo } = await supabase
     .from('cni_job_photos')
-    .select('id, job_id, photo_type')
+    .select('id, job_id, vin_id, photo_type')
     .eq('id', photoId)
     .maybeSingle();
   if (!photo) return NextResponse.json({ error: 'Photo not found' }, { status: 404 });
@@ -57,6 +57,16 @@ export async function POST(req: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   if (status === 'denied' && job) {
+    // Re-arm the submission flow: submit-photos short-circuits (and skips
+    // its "photos ready for review" notification) while photos_submitted
+    // is true — without this reset a reshoot after denial notified nobody
+    // and the job sat blocked until someone reopened the review page
+    // (Round 3 finding).
+    if (photo.vin_id) {
+      await supabase.from('cni_job_vins')
+        .update({ photos_submitted: false })
+        .eq('id', photo.vin_id);
+    }
     // QC paper trail (ported from the review page — it lived browser-side).
     if (job.assigned_installer_id) {
       await supabase.from('cni_internal_notes').insert({
@@ -81,7 +91,9 @@ export async function POST(req: NextRequest) {
           type: 'cni_photo_denied',
           title: `📷 Photo needs a reshoot — ${job.job_number}`,
           body: `A ${photo.photo_type || 'job'} photo on "${job.title}" was denied.${note ? ` Reviewer: ${note}` : ''} Retake and resubmit from the job page.`,
-          url: deepLinks.installerJob(job.id),
+          // The denial badge and reviewer notes render on the PHOTOS page —
+          // installerJob(job.id) landed one page short of them.
+          url: deepLinks.installerJobPhotos(job.id),
           channels: ['in_app', 'push'],
           forceChannels: true,
         });

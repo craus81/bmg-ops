@@ -8,8 +8,8 @@
  * merged so the whole vehicle lifecycle lives on one screen.
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { deepLinks } from '@/lib/deep-links';
 import { IN_SHOP_STATUSES } from '@/lib/types';
@@ -60,6 +60,7 @@ const inputStyle: React.CSSProperties = { boxSizing: 'border-box', padding: '8px
 
 export default function ShopArrivals() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
   const { user } = useAuth();
 
@@ -71,6 +72,9 @@ export default function ShopArrivals() {
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState({ vehicle_desc: '', customer_name: '', work_summary: '', expected_date: '', need_back_date: '' });
   const [addSaving, setAddSaving] = useState(false);
+  const [flashId, setFlashId] = useState<string | null>(null);
+  const [arrivalNotice, setArrivalNotice] = useState<string | null>(null);
+  const landedRef = useRef(false);
 
   const load = useCallback(async () => {
     const [inboundRes, backRes] = await Promise.all([
@@ -87,6 +91,44 @@ export default function ShopArrivals() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // ?arrival= (deepLinks.shopArrival) — the landing for arrival pings. The
+  // row has usually already flipped to 'arrived' by the time anyone clicks,
+  // so it won't be in the expected list: fetch its fate and say so instead
+  // of landing on nothing. Still-expected rows scroll-flash.
+  useEffect(() => {
+    if (!loaded || landedRef.current) return;
+    const target = searchParams.get('arrival');
+    if (!target) return;
+    landedRef.current = true;
+    if (inbound.some(r => r.id === target)) {
+      setFlashId(target);
+      setTimeout(() => {
+        document.getElementById(`arr-${target}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 100);
+      setTimeout(() => setFlashId(null), 3500);
+      return;
+    }
+    (async () => {
+      try {
+        const { data: row } = await supabase
+          .from('shop_inbound')
+          .select('vehicle_desc, customer_name, status, fleet_checkin_id')
+          .eq('id', target)
+          .maybeSingle();
+        if (!row) { setArrivalNotice('That arrival row no longer exists.'); return; }
+        const label = [row.vehicle_desc, row.customer_name].filter(Boolean).join(' — ') || 'That vehicle';
+        if (row.fleet_checkin_id) {
+          setArrivalNotice(`${label} arrived and is checked in — it's on the board below.`);
+        } else if (row.status === 'arrived') {
+          setArrivalNotice(`${label} arrived (marked on this board) — no formal check-in yet.`);
+        } else if (row.status === 'cancelled') {
+          setArrivalNotice(`${label}: that expected arrival was cancelled.`);
+        }
+      } catch { /* banner is best-effort */ }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot landing; supabase is a stable singleton
+  }, [loaded, inbound, searchParams]);
 
   const today = todayStr();
   const weekOut = (() => { const d = new Date(); d.setDate(d.getDate() + 7); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })();
@@ -147,7 +189,7 @@ export default function ShopArrivals() {
       {rows.map(r => {
         const badge = SOURCE_BADGES[r.source_type];
         return (
-          <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 11px', borderRadius: '10px', background: 'var(--input-bg)', border: `1px solid ${tone || 'var(--border)'}` }}>
+          <div key={r.id} id={`arr-${r.id}`} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 11px', borderRadius: '10px', background: flashId === r.id ? 'rgba(96,165,250,0.14)' : 'var(--input-bg)', border: `1px solid ${flashId === r.id ? 'rgba(96,165,250,0.6)' : (tone || 'var(--border)')}`, transition: 'background 0.6s, border-color 0.6s' }}>
             <div style={{ flex: 1, minWidth: 0, cursor: r.source_type !== 'manual' ? 'pointer' : 'default' }} onClick={() => openSource(r)}>
               <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                 {r.vehicle_desc || 'Vehicle'}
@@ -209,6 +251,13 @@ export default function ShopArrivals() {
 
   return (
     <div style={{ background: 'var(--card)', border: `1px solid ${overdue.length > 0 ? 'rgba(239,68,68,0.4)' : 'var(--border)'}`, borderRadius: '14px', marginBottom: '14px', padding: '12px 14px' }}>
+      {arrivalNotice && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '9px 12px', marginBottom: '10px', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: '10px' }}>
+          <div style={{ flex: 1, fontSize: '12px', color: 'var(--text-body)' }}>{arrivalNotice}</div>
+          <button onClick={() => setArrivalNotice(null)} title="Dismiss"
+            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '12px', padding: 0 }}>✕</button>
+        </div>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
         <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>
           Arriving{counts ? <span style={{ color: overdue.length > 0 ? '#ef4444' : 'var(--text-muted)', fontWeight: 700 }}> — {counts}</span> : <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}> — nothing scheduled</span>}

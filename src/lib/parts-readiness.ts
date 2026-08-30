@@ -45,9 +45,11 @@ export interface PartRow {
    *  request / vendor PO line needs. Null for items the SO carried
    *  without a resolvable id. */
   netsuite_item_id: string | null;
-  /** Quantity sitting in PENDING purchase requests for this item (all
-   *  projects — a request serves the shared pool). Display-only: it does
-   *  not change the state math, it tells the card "already asked for". */
+  /** Quantity sitting in PENDING purchase requests for this item raised
+   *  from THIS project. Per-project on purpose: a pool-wide sum let one
+   *  project's ask suppress another's Order button while nobody ordered
+   *  the second job's parts (Round 3 finding). Display-only: it does not
+   *  change the state math. */
   requested: number;
 }
 
@@ -100,6 +102,11 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
   // ── What the sales order needs (live) ──
   let soLines: any[];
   try {
+    // Physical parts only: conversion deliberately pushes labor hours and
+    // FS-CUSTOM placeholder lines as real item lines, and service/other-
+    // charge items have no inventory — without this filter every converted
+    // job with labor read "short LABOR ×N" forever, and the Order button
+    // would put LABOR on a real vendor PO (Round 3 finding).
     soLines = await suiteqlQueryAll(`
       SELECT tl.item, i.itemid AS item_number, tl.memo AS description, tl.quantity
       FROM transactionline tl
@@ -108,6 +115,8 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
         AND tl.mainline = 'F'
         AND tl.taxline = 'F'
         AND tl.item IS NOT NULL
+        AND i.itemtype IN ('InvtPart', 'NonInvtPart', 'Assembly', 'Kit')
+        AND UPPER(i.itemid) <> 'FS-CUSTOM'
     `);
   } catch (e: any) {
     return { available: false, reason: 'netsuite_error', error: String(e?.message || e).slice(0, 200) };
@@ -212,14 +221,17 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
   }
 
   // Pending purchase requests per item (audit item 17A) — so the card can
-  // show "Requested" instead of a dead-end Short badge. Bounded by this
-  // SO's part list, so no pagination needed.
+  // show "Requested" instead of a dead-end Short badge. Scoped to THIS
+  // project's requests: pool-wide, project A's ask suppressed project B's
+  // Order button while B's parts were never ordered (Round 3 finding).
+  // Bounded by this SO's part list, so no pagination needed.
   const requestedByItem = new Map<string, number>();
   try {
     const { data: reqs } = await service
       .from('purchase_requests')
       .select('item_number, quantity')
       .eq('status', 'pending')
+      .eq('source_project_id', projectId)
       .in('item_number', [...parts.keys()]);
     for (const r of reqs || []) {
       const key = normalizeItemNumber(r.item_number);

@@ -87,18 +87,23 @@ export async function POST(req: NextRequest) {
     .is('ordered_by', null)
     .select('id');
   if (claimErr) return NextResponse.json({ error: claimErr.message }, { status: 500 });
+  // Release ONLY the rows THIS request claimed. Filtering by ordered_by
+  // matched the rows a concurrent request by the SAME admin was still
+  // holding while it talked to NetSuite — the loser's release un-claimed
+  // the winner's rows, reopening the double-order window (Round 3 finding).
+  const claimedIds = (claimed || []).map((r: any) => r.id as string);
   const releaseClaim = async () => {
+    if (claimedIds.length === 0) return;
     try {
       await supabase.from('purchase_requests')
         .update({ ordered_by: null })
-        .in('id', requestIds)
-        .eq('ordered_by', admin.user.id)
+        .in('id', claimedIds)
         .eq('status', 'pending');
     } catch (err) {
       console.error('create-po: claim release failed:', err);
     }
   };
-  if ((claimed || []).length !== requestIds.length) {
+  if (claimedIds.length !== requestIds.length) {
     await releaseClaim();
     return NextResponse.json({ error: 'Another PO is already being created for some of these requests — refresh the queue.' }, { status: 409 });
   }
@@ -144,16 +149,26 @@ export async function POST(req: NextRequest) {
   const today = new Date().toISOString().slice(0, 10);
   const memo = body.memo?.trim() || `FleetSuite purchase requests${soList ? ` — for SO ${soList}` : ''}`;
 
-  const locationId = await resolveDefaultLocationId();
-  const po = await createPurchaseOrder({
-    vendorId: body.vendorNetsuiteId,
-    locationId: locationId || undefined,
-    tranDate: today,
-    memo,
-    lineItems: lines.map(l => ({
-      itemId: l.itemId, quantity: l.quantity, rate: l.rate, description: l.description,
-    })),
-  });
+  // Anything thrown between claim and PO left rows permanently "being
+  // ordered" with no unclaim lever (resolveDefaultLocationId throws on any
+  // SuiteQL error — Round 3 finding). From here to the NetSuite verdict,
+  // every exit releases the claim.
+  let po: Awaited<ReturnType<typeof createPurchaseOrder>>;
+  try {
+    const locationId = await resolveDefaultLocationId();
+    po = await createPurchaseOrder({
+      vendorId: body.vendorNetsuiteId,
+      locationId: locationId || undefined,
+      tranDate: today,
+      memo,
+      lineItems: lines.map(l => ({
+        itemId: l.itemId, quantity: l.quantity, rate: l.rate, description: l.description,
+      })),
+    });
+  } catch (err: any) {
+    await releaseClaim();
+    return NextResponse.json({ error: `NetSuite call failed before the PO was created: ${String(err?.message || err).slice(0, 300)}` }, { status: 502 });
+  }
   if (!po.success) {
     await releaseClaim();
     return NextResponse.json({ error: po.error || 'NetSuite rejected the purchase order.' }, { status: 502 });
@@ -236,8 +251,13 @@ export async function POST(req: NextRequest) {
         await supabase.from('upfit_projects').update({
           netsuite_vendor_po_id: po.purchaseOrderId,
           netsuite_vendor_po_number: po.purchaseOrderNumber || null,
-          parts_ordered_date: today,
         }).in('id', unstamped);
+        // Separate write: a human-entered parts_ordered_date must not be
+        // overwritten by a later PO (Round 3 finding).
+        await supabase.from('upfit_projects')
+          .update({ parts_ordered_date: today })
+          .in('id', unstamped)
+          .is('parts_ordered_date', null);
       }
     } catch (err) {
       console.error('create-po: project stamp failed:', err);
