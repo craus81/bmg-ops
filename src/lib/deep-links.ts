@@ -78,6 +78,8 @@ export const deepLinks = {
     `/admin/cni/installers/${userId}${noteId ? `?note=${noteId}` : ''}`,
   /** Dedicated prospect / customer record page. */
   prospect: (prospectId: string) => `/admin/prospects/${prospectId}`,
+  /** Credit application review queue — opens the application's detail. */
+  creditApplication: (appId: string) => `/admin/credit-applications?app=${appId}`,
   /** Users admin — opens the user's edit modal (e.g. a pending access request). */
   adminUser: (userId: string) => `/admin/users?user=${userId}`,
   /** Invoices hub, Invoiced tab — optionally prefilters to one invoice number. */

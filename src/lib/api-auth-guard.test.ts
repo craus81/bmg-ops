@@ -17,6 +17,11 @@ const SENSITIVE_DIRS = [
   'src/app/api/notifications',
   'src/app/api/vendor-invoices',
   'src/app/api/admin',
+  // EINs + bank references — requireFeature-gated; a downgrade to bare
+  // requireAuth must trip this test. (src/app/api/credit-application,
+  // singular, is the public submit endpoint — intentionally unauthenticated,
+  // service-role write with rate limit + honeypot, so it is NOT listed.)
+  'src/app/api/credit-applications',
 ];
 
 // Deliberate exceptions, with the reason they are safe as-is.
