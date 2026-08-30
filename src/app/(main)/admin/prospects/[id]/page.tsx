@@ -439,13 +439,28 @@ export default function CustomerRecordPage() {
 
   const deleteRecord = async () => {
     if (!prospect || editSaving) return;
+    // Deletion propagates (owner decision 2026-08-30): a linked record's
+    // NetSuite customer is deleted too — or deactivated when NetSuite
+    // refuses (existing transactions) — so the next sync can't resurrect
+    // it. Routed through the API so the propagation can't be skipped.
     const ok = await dialog.confirm(
-      `Delete ${prospect.company_name} and all associated contacts, deals, reminders, and activity?`,
+      prospect.netsuite_id
+        ? `Delete ${prospect.company_name} and all associated contacts, deals, reminders, and activity?\n\nThis also deletes the linked NetSuite customer (or marks it inactive if NetSuite refuses because it has transactions). Admins only.`
+        : `Delete ${prospect.company_name} and all associated contacts, deals, reminders, and activity?`,
       { destructive: true, confirmLabel: 'Delete', title: 'Delete record' },
     );
     if (!ok) return;
-    const { error } = await supabase.from('prospects').delete().eq('id', prospect.id);
-    if (error) { await dialog.alert(`Could not delete: ${error.message}`); return; }
+    try {
+      const res = await fetch(`/api/prospects?id=${prospect.id}`, { method: 'DELETE' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      if (body.netsuite === 'deactivated') {
+        await dialog.alert('Deleted here. NetSuite refused a hard delete (the customer has transactions), so it was marked inactive there instead.');
+      }
+    } catch (e: any) {
+      await dialog.alert(`Could not delete: ${e?.message || 'unknown error'}`);
+      return;
+    }
     router.push('/admin/prospects');
   };
 

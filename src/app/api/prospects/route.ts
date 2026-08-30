@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireStaff } from '@/lib/api-auth';
+import { requireStaff, requireAdmin } from '@/lib/api-auth';
+import { deleteCustomer, deactivateCustomer } from '@/lib/netsuite';
+import { logAudit } from '@/lib/audit';
 import { validateBody, z } from '@/lib/validate';
 import { findCustomerDuplicates } from '@/lib/customer-dupes';
 
@@ -8,6 +10,11 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+// DELETE can make two sequential NetSuite calls (delete, then the
+// deactivate fallback), each with a 25s client timeout — give the function
+// room beyond the platform default.
+export const maxDuration = 60;
 
 const ProspectFields = {
   company_name: z.string().trim().max(200),
@@ -136,7 +143,26 @@ export async function PUT(req: NextRequest) {
   return NextResponse.json({ success: true, prospect: data });
 }
 
-/** DELETE /api/prospects — delete a prospect */
+/**
+ * DELETE /api/prospects — delete a record, propagating to NetSuite.
+ *
+ * Owner decision 2026-08-30: a deletion in FleetSuite deletes in NetSuite.
+ * Before this, deleting a linked record removed only the prospects row —
+ * the NetSuite customer and the local customers mirror survived, and the
+ * next sync resurrected the row (both syncs upsert prospects keyed on
+ * netsuite_id).
+ *
+ * For a linked record: try the NetSuite DELETE first; NetSuite refuses
+ * when the customer has transactions, so fall back to marking it inactive
+ * — both syncs filter isinactive = 'F', so an inactive customer stops
+ * flowing back. If NetSuite can do neither, the local rows are kept and
+ * the caller gets the error: deleting locally anyway would recreate the
+ * exact resurrection bug this closes.
+ *
+ * Unlinked leads stay staff-deletable (a rep can remove their own typo);
+ * deleting a linked record destroys/deactivates a real NetSuite customer,
+ * so it needs an admin (#680 precedent).
+ */
 export async function DELETE(req: NextRequest) {
   const auth = await requireStaff(req);
   if (auth.error) return auth.error;
@@ -145,7 +171,55 @@ export async function DELETE(req: NextRequest) {
   const id = searchParams.get('id');
   if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 });
 
+  const { data: row } = await supabase
+    .from('prospects')
+    .select('id, company_name, netsuite_id, record_type')
+    .eq('id', id)
+    .maybeSingle();
+  if (!row) return NextResponse.json({ error: 'Record not found' }, { status: 404 });
+
+  let netsuite: 'deleted' | 'deactivated' | null = null;
+  if (row.netsuite_id) {
+    const adminAuth = await requireAdmin(req);
+    if (adminAuth.error) {
+      return NextResponse.json({
+        error: 'This record is linked to a NetSuite customer — deleting it also deletes (or deactivates) the NetSuite record, which needs an admin.',
+      }, { status: 403 });
+    }
+
+    const del = await deleteCustomer(String(row.netsuite_id));
+    if (del.success) {
+      netsuite = 'deleted';
+    } else {
+      // Almost always "has transactions" — deactivate instead.
+      const deact = await deactivateCustomer(String(row.netsuite_id));
+      if (!deact.success) {
+        return NextResponse.json({
+          error: `NetSuite refused to delete (${del.error}) and to deactivate (${deact.error}). Nothing was removed — fix the NetSuite side first, or unlink the record.`,
+        }, { status: 502 });
+      }
+      netsuite = 'deactivated';
+    }
+
+    // The mirror row would resurrect the CRM record on the next sync run
+    // that still sees the customer cached — remove it with the prospect.
+    await supabase.from('customers').delete().eq('netsuite_id', row.netsuite_id);
+  }
+
   const { error } = await supabase.from('prospects').delete().eq('id', id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ success: true });
+
+  await logAudit(supabase, {
+    actorId: auth.user.id,
+    table: 'prospects',
+    recordId: id,
+    action: 'prospect_delete',
+    detail: {
+      company_name: row.company_name,
+      netsuite_id: row.netsuite_id || null,
+      netsuite: netsuite || 'not_linked',
+    },
+  });
+
+  return NextResponse.json({ success: true, netsuite });
 }
