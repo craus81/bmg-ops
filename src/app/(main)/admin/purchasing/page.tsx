@@ -1,13 +1,15 @@
 'use client';
 
 /**
- * Purchasing queue (audit item 17A) — every pending purchase request,
+ * Purchasing queue (audit item 17A/B) — every pending purchase request,
  * grouped by vendor, so "we're short, someone should order this" finally
  * has a place to land. Requests arrive from the parts-readiness card's
- * short rows (or the API); phase 17B adds "Create PO in NetSuite" per
- * vendor group. Until then the queue is the purchaser's worklist: fix the
- * vendor, adjust quantities, cancel noise — then place the PO in NetSuite
- * and mark the group ordered from the PO flow.
+ * short rows (or the API); admins turn a vendor group into a REAL
+ * NetSuite purchase order right here (17B): pick the NetSuite vendor,
+ * hit Create PO, and the create-po route places the PO, mirrors it
+ * locally so readiness flips to "on order" immediately, and stamps the
+ * source projects' PO columns. Non-admins keep the queue as a worklist:
+ * fix vendors, adjust quantities, cancel noise.
  *
  * ?req=<id> (deepLinks.purchaseRequests) scroll-flashes one row — the
  * landing for the "parts requested" notification.
@@ -15,8 +17,9 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useRequireFeature } from '@/components/AuthProvider';
+import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
+import NetsuiteVendorSearch from '@/components/NetsuiteVendorSearch';
 import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
 
@@ -35,12 +38,15 @@ interface RequestRow {
   created_at: string;
   upfit_projects?: { id: string; project_name: string | null; netsuite_so_number: string | null } | null;
   requester?: { full_name: string | null } | null;
+  /** Joined only on the ?id= single-row lookup, for rows already ordered. */
+  ordered_po?: { tranid: string | null; vendor_name: string | null } | null;
 }
 
 const UNASSIGNED = 'No vendor — assign one';
 
 export default function PurchasingQueuePage() {
   useRequireFeature('parts_ordering');
+  const { isAdmin } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const dialog = useDialog();
@@ -49,7 +55,14 @@ export default function PurchasingQueuePage() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
+  const [reqNotice, setReqNotice] = useState<string | null>(null);
   const flashedRef = useRef(false);
+
+  // 17B: per-group NetSuite vendor selection + PO creation.
+  const [vendorSel, setVendorSel] = useState<Record<string, { id: string; name: string }>>({});
+  const [pickerOpen, setPickerOpen] = useState<string | null>(null);
+  const [creatingPo, setCreatingPo] = useState<string | null>(null);
+  const [lastPo, setLastPo] = useState<{ number: string; url: string | null; mirrored: boolean; stamped: boolean } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -62,18 +75,37 @@ export default function PurchasingQueuePage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // ?req= — scroll-flash the notified row once loaded.
+  // ?req= — scroll-flash the notified row once loaded. A row that already
+  // left the pending queue (ordered/cancelled) can't flash, so fetch its
+  // fate and say so instead — the deep link must never land on nothing.
   useEffect(() => {
     if (loading || flashedRef.current) return;
     const req = searchParams.get('req');
     if (!req) return;
     flashedRef.current = true;
-    setFlashId(req);
-    setTimeout(() => {
-      document.getElementById(`preq-${req}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 100);
-    setTimeout(() => setFlashId(null), 3500);
-  }, [loading, searchParams]);
+    if (requests.some(r => r.id === req)) {
+      setFlashId(req);
+      setTimeout(() => {
+        document.getElementById(`preq-${req}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 100);
+      setTimeout(() => setFlashId(null), 3500);
+      return;
+    }
+    (async () => {
+      try {
+        const res = await fetch(`/api/purchase-requests?id=${req}`);
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.success) return;
+        const r: RequestRow | undefined = body.requests?.[0];
+        if (!r) { setReqNotice('That request no longer exists.'); return; }
+        if (r.status === 'ordered') {
+          setReqNotice(`${r.quantity}× ${r.item_number} was ordered${r.ordered_po?.tranid ? ` on PO ${r.ordered_po.tranid}` : ''}${r.ordered_po?.vendor_name ? ` from ${r.ordered_po.vendor_name}` : ''}.`);
+        } else if (r.status === 'cancelled') {
+          setReqNotice(`The request for ${r.quantity}× ${r.item_number} was cancelled.`);
+        }
+      } catch { /* banner is best-effort */ }
+    })();
+  }, [loading, requests, searchParams]);
 
   const patch = async (id: string, fields: Record<string, unknown>, confirmText?: string) => {
     if (confirmText && !(await dialog.confirm(confirmText, { destructive: true, confirmLabel: 'Cancel Request' }))) return;
@@ -105,6 +137,44 @@ export default function PurchasingQueuePage() {
     await patch(r.id, { vendorName: name });
   };
 
+  /** The NetSuite vendor a group's PO would go to: an explicit pick wins;
+   *  otherwise, if every row already agrees on one vendor id (the
+   *  last-purchase enrichment), that's the default. */
+  const groupVendor = (vendor: string, rows: RequestRow[]): { id: string; name: string } | null => {
+    if (vendorSel[vendor]) return vendorSel[vendor];
+    const ids = [...new Set(rows.map(r => r.vendor_netsuite_id).filter(Boolean))] as string[];
+    if (ids.length === 1 && vendor !== UNASSIGNED) return { id: ids[0], name: vendor };
+    return null;
+  };
+
+  const createPo = async (vendor: string, rows: RequestRow[], gv: { id: string; name: string }) => {
+    const ok = await dialog.confirm(
+      `Create a NetSuite purchase order with ${gv.name} for ${rows.length} line${rows.length !== 1 ? 's' : ''}? This places a real PO in NetSuite.`,
+      { confirmLabel: 'Create PO' },
+    );
+    if (!ok) return;
+    setCreatingPo(vendor);
+    try {
+      const res = await fetch('/api/purchase-requests/create-po', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestIds: rows.map(r => r.id), vendorNetsuiteId: gv.id, vendorName: gv.name }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      setLastPo({
+        number: body.poNumber || (body.poId ? `#${body.poId}` : '(number pending)'),
+        url: body.netsuiteUrl || null,
+        mirrored: !!body.mirrored,
+        stamped: !!body.stamped,
+      });
+      setVendorSel(prev => { const next = { ...prev }; delete next[vendor]; return next; });
+      await load();
+    } catch (e: any) {
+      await dialog.alert(`PO creation failed: ${e?.message || 'unknown error'}\n\nNothing was ordered — the requests are still in the queue.`);
+    }
+    setCreatingPo(null);
+  };
+
   // Group by vendor for the purchaser's eye — one group = one future PO.
   const groups = new Map<string, RequestRow[]>();
   for (const r of requests) {
@@ -128,9 +198,39 @@ export default function PurchasingQueuePage() {
         )}
       </div>
       <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '18px' }}>
-        Parts requested from short readiness cards land here, grouped by vendor. Place the vendor PO in
-        NetSuite; the 2-hourly sync mirrors it back and the readiness cards flip to “on order”.
+        Parts requested from short readiness cards land here, grouped by vendor.
+        {isAdmin
+          ? ' Pick the NetSuite vendor on a group and create the PO right here — readiness cards flip to “on order” immediately.'
+          : ' An admin turns a vendor group into a NetSuite PO; readiness cards flip to “on order” once it’s placed.'}
       </div>
+
+      {reqNotice && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '12px 14px', marginBottom: '16px', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: '12px' }}>
+          <div style={{ flex: 1, fontSize: '12px', color: 'var(--text-body)' }}>{reqNotice}</div>
+          <button onClick={() => setReqNotice(null)} title="Dismiss"
+            style={{ background: 'none', border: 'none', color: theme.textMuted, cursor: 'pointer', fontSize: '13px', padding: 0 }}>✕</button>
+        </div>
+      )}
+
+      {lastPo && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '12px 14px', marginBottom: '16px', background: 'rgba(74,222,128,0.08)', border: '1px solid rgba(74,222,128,0.3)', borderRadius: '12px' }}>
+          <div style={{ flex: 1, fontSize: '12px', color: 'var(--text-body)' }}>
+            <span style={{ fontWeight: 800, color: '#4ade80' }}>✓ PO {lastPo.number} created in NetSuite.</span>{' '}
+            {lastPo.mirrored
+              ? 'Readiness cards show these parts on order now.'
+              : 'The 2-hourly sync will mirror it into FleetSuite shortly.'}
+            {!lastPo.stamped && ' Heads up: the queue rows could not be marked ordered — refresh, and cancel them by hand so they aren’t ordered twice.'}
+            {lastPo.url && (
+              <>
+                {' '}
+                <a href={lastPo.url} target="_blank" rel="noreferrer" style={{ color: '#60a5fa', fontWeight: 700 }}>Open in NetSuite ↗</a>
+              </>
+            )}
+          </div>
+          <button onClick={() => setLastPo(null)} title="Dismiss"
+            style={{ background: 'none', border: 'none', color: theme.textMuted, cursor: 'pointer', fontSize: '13px', padding: 0 }}>✕</button>
+        </div>
+      )}
 
       {loading && <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading…</div>}
       {!loading && requests.length === 0 && (
@@ -142,12 +242,54 @@ export default function PurchasingQueuePage() {
       {groupNames.map(vendor => {
         const rows = groups.get(vendor)!;
         const unassigned = vendor === UNASSIGNED;
+        const gv = groupVendor(vendor, rows);
+        const noId = rows.filter(r => !r.netsuite_item_id).length;
         return (
           <div key={vendor} style={{ marginBottom: '18px', background: theme.card, border: `1px solid ${unassigned ? 'rgba(251,191,36,0.4)' : theme.border}`, borderRadius: '14px', overflow: 'hidden' }}>
-            <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '10px', borderBottom: `1px solid ${theme.border}`, background: unassigned ? 'rgba(251,191,36,0.06)' : 'var(--subtle-bg)' }}>
+            <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', borderBottom: `1px solid ${theme.border}`, background: unassigned ? 'rgba(251,191,36,0.06)' : 'var(--subtle-bg)' }}>
               <div style={{ fontSize: '13px', fontWeight: 800, color: unassigned ? '#f59e0b' : 'var(--text-primary)' }}>{vendor}</div>
               <div style={{ fontSize: '11px', color: theme.textMuted }}>{rows.length} part{rows.length !== 1 ? 's' : ''}</div>
+              {isAdmin && (
+                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  {gv && pickerOpen !== vendor && (
+                    <span style={{ fontSize: '10px', color: theme.textMuted }}>
+                      PO vendor: <b style={{ color: 'var(--text-body)' }}>{gv.name}</b> #{gv.id}
+                      <button onClick={() => setPickerOpen(vendor)}
+                        style={{ marginLeft: '6px', background: 'none', border: 'none', padding: 0, color: '#60a5fa', fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}>
+                        change
+                      </button>
+                    </span>
+                  )}
+                  {!gv && pickerOpen !== vendor && (
+                    <button onClick={() => setPickerOpen(vendor)}
+                      style={{ padding: '5px 10px', borderRadius: '7px', background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textSecondary, fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                      Pick NetSuite vendor…
+                    </button>
+                  )}
+                  {gv && (
+                    <button onClick={() => createPo(vendor, rows, gv)} disabled={creatingPo !== null || noId > 0}
+                      title={noId > 0 ? `${noId} row${noId !== 1 ? 's have' : ' has'} no NetSuite item id — match in the parts catalog or cancel them first` : `Create a NetSuite PO with ${gv.name}`}
+                      style={{ padding: '5px 12px', borderRadius: '7px', background: noId > 0 ? 'var(--subtle-bg)' : 'rgba(74,222,128,0.12)', border: `1px solid ${noId > 0 ? theme.border : 'rgba(74,222,128,0.4)'}`, color: noId > 0 ? theme.textMuted : '#4ade80', fontSize: '11px', fontWeight: 800, cursor: noId > 0 ? 'not-allowed' : 'pointer' }}>
+                      {creatingPo === vendor ? 'Creating PO…' : '📦 Create PO in NetSuite'}
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
+            {isAdmin && pickerOpen === vendor && (
+              <div style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.border}`, background: 'var(--subtle-bg)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>Which NetSuite vendor gets this PO?</div>
+                  <button onClick={() => setPickerOpen(null)} title="Close"
+                    style={{ background: 'none', border: 'none', color: theme.textMuted, cursor: 'pointer', fontSize: '12px', padding: 0 }}>✕</button>
+                </div>
+                <NetsuiteVendorSearch autoFocus placeholder={unassigned ? 'Search NetSuite vendors by name…' : `Search NetSuite for “${vendor}”…`}
+                  onSelect={v => {
+                    setVendorSel(prev => ({ ...prev, [vendor]: { id: v.id, name: v.companyName || v.entityId } }));
+                    setPickerOpen(null);
+                  }} />
+              </div>
+            )}
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>

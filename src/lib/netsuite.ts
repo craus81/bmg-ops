@@ -563,8 +563,8 @@ export function itemUrl(internalId: string | number): string {
   return `https://${accountForUrl}.app.netsuite.com/app/common/item/item.nl?id=${internalId}`;
 }
 
-/** NetSuite UI link for a transaction record (customer invoice, vendor bill). */
-export function transactionUrl(page: 'custinvc' | 'vendbill', internalId: string | number): string {
+/** NetSuite UI link for a transaction record (customer invoice, vendor bill, purchase order). */
+export function transactionUrl(page: 'custinvc' | 'vendbill' | 'purchord', internalId: string | number): string {
   const accountForUrl = getConfig().accountId.replace(/-/g, '_').toUpperCase();
   return `https://${accountForUrl}.app.netsuite.com/app/accounting/transactions/${page}.nl?id=${internalId}`;
 }
@@ -1374,6 +1374,99 @@ export async function createSalesOrder(payload: {
     };
   } catch (e: any) {
     return { success: false, error: `Failed to create sales order: ${e.message}` };
+  }
+}
+
+/**
+ * Create a purchase order in NetSuite (audit item 17B — the purchasing
+ * queue's "Create PO" button). Same REST pattern as createSalesOrder:
+ * POST /record/v1/purchaseOrder, id from the Location header, tranid via
+ * SuiteQL when the 204 body is empty. Purchase transactions have no price
+ * levels, so lines carry a plain `rate` when we know the cost (no
+ * price:{id:'-1'} pin like the SO path); rate-less lines let NetSuite
+ * source the item's default purchase price. No subsidiary is sent —
+ * matching the SO/estimate creates, the account derives it from the entity.
+ */
+export async function createPurchaseOrder(payload: {
+  vendorId: string | number;
+  locationId?: string | number;
+  tranDate?: string;
+  memo?: string;
+  lineItems: {
+    itemId: string | number;
+    quantity: number;
+    rate?: number | null;
+    description?: string | null;
+  }[];
+}): Promise<{
+  success: boolean;
+  purchaseOrderId?: string;
+  purchaseOrderNumber?: string;
+  error?: string;
+}> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/purchaseOrder`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  const body: any = {
+    entity: { id: payload.vendorId },
+    item: {
+      items: payload.lineItems.map((li) => ({
+        item: { id: li.itemId },
+        quantity: li.quantity,
+        ...(li.rate && li.rate > 0 ? { rate: li.rate } : {}),
+        ...(li.description ? { description: li.description } : {}),
+      })),
+    },
+    ...(payload.locationId ? { location: { id: payload.locationId } } : {}),
+    ...(payload.tranDate ? { tranDate: payload.tranDate } : {}),
+    ...(payload.memo ? { memo: payload.memo } : {}),
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create PO error:', text, '\nrequest body:', JSON.stringify(body));
+      return { success: false, error: `NetSuite error (${response.status}): ${text}` };
+    }
+
+    const location = response.headers.get('Location');
+    let poId = '';
+    if (location) {
+      const match = location.match(/\/(\d+)$/);
+      poId = match?.[1] || '';
+    }
+    let poNumber = '';
+    try {
+      const result = await response.json();
+      poId = poId || result.id?.toString() || '';
+      poNumber = result.tranId || result.tranid || '';
+    } catch {
+      // 204 No Content — the Location header carried the id
+    }
+    if (poId && !poNumber) {
+      try {
+        const lookup = await suiteqlQuery(`SELECT tranid FROM transaction WHERE id = ${poId}`);
+        poNumber = lookup?.items?.[0]?.tranid || '';
+      } catch {
+        // Non-critical — the internal id is enough
+      }
+    }
+    return { success: true, purchaseOrderId: poId, purchaseOrderNumber: poNumber };
+  } catch (e: any) {
+    return { success: false, error: `Failed to create purchase order: ${e.message}` };
   }
 }
 

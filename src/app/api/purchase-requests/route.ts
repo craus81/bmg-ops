@@ -49,12 +49,29 @@ const UpdateSchema = z.object({
   cancel: z.boolean().optional().default(false),
 });
 
-/** GET /api/purchase-requests?status=pending — the purchasing queue. */
+/** GET /api/purchase-requests?status=pending — the purchasing queue.
+ *  ?id=<uuid> instead returns that one request whatever its status (with
+ *  its PO, if ordered) — the ?req= deep-link landing needs the row's fate
+ *  even after it left the pending queue. */
 export async function GET(req: NextRequest) {
   const auth = await requireFeature(req, 'parts_ordering');
   if (auth.error) return auth.error;
 
   const { searchParams } = new URL(req.url);
+  const id = searchParams.get('id');
+  if (id) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      return NextResponse.json({ error: 'Invalid id' }, { status: 400 });
+    }
+    const { data, error } = await supabase
+      .from('purchase_requests')
+      .select('*, upfit_projects(id, project_name, netsuite_so_number), requester:profiles!purchase_requests_requested_by_fkey(full_name), ordered_po:netsuite_vendor_pos(tranid, vendor_name)')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, requests: data ? [data] : [] });
+  }
+
   const status = searchParams.get('status') || 'pending';
 
   const { data, error } = await supabase
