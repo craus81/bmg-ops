@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { deepLinks } from '@/lib/deep-links';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -3199,6 +3200,13 @@ export default function WrapQuotePage() {
                     </>
                   );
                 })()}
+                {q.status === 'accepted' && (
+                  <button
+                    onClick={e => { e.stopPropagation(); router.push(deepLinks.signedDocument('wrap_quote', q.id)); }}
+                    title="View the frozen acceptance snapshot with its integrity check"
+                    style={btnStyle('#60a5fa', 'transparent')}
+                  >⎙ Signed Doc</button>
+                )}
                 {q.status === 'sent' && q.approval_token && (
                   <button
                     onClick={async e => {
