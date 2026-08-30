@@ -706,6 +706,16 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
       return;
     }
 
+    // Arrival brain (audit items 14+15): links the fulfilled Shop Board row
+    // and sends the arrival notification — server-side, where recipients
+    // can actually be resolved. Best-effort: the check-in is already saved.
+    if (data?.id) {
+      fetch('/api/shop-inbound/arrival', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checkinId: data.id }),
+      }).catch(() => {});
+    }
+
     // Notify teammates @mentioned in the check-in notes.
     if (data?.id && notes.includes('@')) {
       const vehicleDesc = [vehicleData.vehicle.year, vehicleData.vehicle.make, vehicleData.vehicle.model].filter(Boolean).join(' ') || 'Vehicle';
