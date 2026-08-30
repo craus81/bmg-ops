@@ -82,7 +82,9 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
 | **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 19 and 21 remain open** (2 — R2-goes-private, labor capture). Shipped 2026-08-30: the Stage 1 build-out (#701–#704, closing item 18), the two Stage 1 owner decisions (#706 lead tier, #707 deletion→NetSuite), and estimate integrity (#708–#710, items 9–11). Shipped 2026-08-30: the whole **vehicle custody** block (#712–#715, items 12–16). Shipped 2026-08-30 (second wave): **parts ordering & receiving** (#717–#719, item 17 — the audit's largest build: request queue → NetSuite PO → receiving with item receipts) and the **route→permission manifest** (#721, item 20 — all 251 routes declare + prove their guard; the sweep fixed the unauthenticated Google OAuth pair). |
 
-Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap.
+| **Round 3** — re-audit 2026-08-30 (Part 7) | 🔄 roadmap open | Nine-probe re-verification at `1ea2015`, every MAJOR+ finding re-verified by hand. **Round 2 holds** — all 19 ships confirmed at HEAD (5 partial caveats). ~90 new findings distilled into the Part 7 roadmap: 6 CRITICAL truncation bugs that move money/state, 8 E-SIGN forgery/loss holes, 7 non-idempotent NetSuite money paths (zero unique-index backing), 3 custody/CNI blockers — one, CNI company invites, failing 500 in production since #715 — the `forceChannels` no-op, and this week's parts-loop regressions (hotfixed same day). Items 19 and 21 now carry written decision packages (the R2-flip tier checklist, the labor-capture touch-map). |
+
+Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap; Part 7 carries Round 3.
 
 ---
 
@@ -1079,3 +1081,358 @@ estimates. The slices were: intake, estimate, approval, salesorder, graphicsjob,
 installguide, checkin, install, completion, upfit3d, cni (walkthrough); roleaudit,
 apiguard, comms, deadends (audit); plus a completeness critique that verified the
 high-severity claims and surfaced the payroll/PO-hub/schedule gaps.
+
+
+---
+
+# Part 7 — Round 3: the re-audit (2026-08-30, at `1ea2015`)
+
+**Method.** Nine parallel code probes over the tree as it stands after #722:
+four re-verification passes covering every Round 2 ship, three cross-cutting
+hunts (silently truncated reads, the deep-link contract, external-write
+idempotence), and a fresh two-half workflow walkthrough. Probe output was then
+**re-verified by hand**: every CRITICAL/BLOCKER/MAJOR below was confirmed by
+reading the cited code directly; MINORs carry the probe's citation. The
+`file:line` is the evidence — audit prose never is.
+
+## 7.1 Does Round 2 hold?
+
+Yes. All 19 shipped items (1–18, 20) verified present and working at HEAD —
+the gates gate, the crons cap, the manifest covers all 251 routes exactly, the
+claim in create-po serializes correctly for two different admins, the
+provisional mirror converges with the 2-hourly sync. Five caveats worth
+recording:
+
+| # | Verdict | Caveat |
+|---|---|---|
+| 3 (dupe guard) | ⚠️ partial | The guard is real in every API create path — but the main CRM create never calls one: `admin/prospects/page.tsx:381` inserts from the browser, and its pre-flight check is swallowed by `catch {}` (`:352`). See 7.2.5. |
+| 6 (deletion→NS) | ⚠️ partial | CRM records covered; but the `customers`-mirror delete is unchecked and FK-blocked by `wrap_quotes`/`fleet_checkins` (no `ON DELETE` clause), and when it *does* succeed it cascades away `customer_files` (W-9s, tax certs) without the confirm ever mentioning them. See 7.2.5. |
+| 12 (photos) | ⚠️ partial | The ≥1-photo and damage-note gates are browser-only. There is no check-in API route and no DB constraint — a photo-less `fleet_checkins` row inserts fine under staff RLS (`migrations/224:95`). |
+| 14 (arrival link) | ⚠️ partial | Back-link and dedupe match on VIN only, and only `sales_order` inbound rows carry a VIN (`shop-inbound.ts:146`) — graphics/upfit/manual arrivals can never link, and double-notify past the dedupe. |
+| 20 (manifest) | ⚠️ note | Markers are file-wide, not per HTTP method (no live gap today — all 251 files scanned method-by-method), and two `authScoped` whys oversell: `cni/bid` checks *visibility*, not membership (`bid/route.ts:65-79`), and the storage ACL is prefix-level — any approved login can write/delete under another customer's prefix (`storage-guard.ts:51`). |
+
+## 7.2 New findings
+
+The build waves themselves hold; the new findings cluster in the seams. In
+severity order:
+
+### 7.2.1 Shipped-this-week regressions — hotfixed same day
+
+Round 3's first job is eating its own cooking. These are bugs in the
+2026-08-30 waves, verified and fixed in the follow-up hotfix PR:
+
+- **CNI company invites 500 on every click** — `invite-company/route.ts:44-50`
+  upserts `onConflict: 'job_id,company_id'`, but the only matching unique
+  index is *partial* (`WHERE company_id IS NOT NULL`, migration 111) and the
+  table constraint is `(job_id, installer_id)` — Postgres can't infer the
+  partial index without its predicate, which PostgREST can't send → `42P10`
+  at plan time, every call. The invite half of #715 never worked in
+  production. (The pre-#715 browser upsert ignored its error, which is why
+  nobody saw it.)
+- **The Order button can silently do nothing forever** — the readiness card
+  sends a *delta* (`short − requested`, `upfit/page.tsx:932`) to a server
+  that treats quantity as a *maximum* (`purchase-requests/route.ts:157`
+  raises only when greater). Once the pending row exceeds the next delta,
+  clicks no-op with no feedback.
+- **One project's request suppresses another's** — `parts-readiness.ts:219`
+  sums pending requests across ALL projects, and the card uses that as a
+  per-project "already asked" test — project B renders "🛒 Requested" on the
+  strength of project A's ask, and B's parts are never ordered.
+- **A second submit by the same admin releases the first's in-flight PO
+  claim** — `create-po`'s `releaseClaim` filters on `ordered_by = me`
+  (`:90-100`), which matches exactly the rows the first request is still
+  holding while it talks to NetSuite; a third attempt then double-orders.
+  And `resolveDefaultLocationId()` sits outside any try/catch (`:147`) — a
+  NetSuite hiccup there 500s with the claim still set, leaving rows
+  permanently "being ordered" with no unclaim lever anywhere.
+- **Readiness counts labor and FS-CUSTOM as short parts** — the readiness
+  SuiteQL has no `itemtype` filter (`parts-readiness.ts:103-111`) while
+  conversion deliberately pushes labor and custom lines as items — so every
+  converted job with labor reads perpetually short, and the Order button
+  will happily put `LABOR` on a real vendor PO.
+- **manual_needed receipts are invisible to every over-receive guard** —
+  `po-receipts` deliberately skips the mirror bump for worklist rows, but
+  the open-quantity checks (server `:110-113`, client prefill) read only
+  the mirror — so a part received into the worklist still shows fully open,
+  inviting a double receipt.
+- **Arrival pings deep-link the wrong board** — the common no-check-in
+  branch sends `/upfit` (`arrival/route.ts:170`); the arrivals board lives
+  on `/tracking`.
+- **Denied CNI photos: the reshoot notifies nobody** — `submit-photos`
+  short-circuits on `photos_submitted` (`:62-64`) and `review-photo` never
+  resets it on deny; the denial link also lands one page short of the
+  review UI.
+- Smaller: `parts_ordered_date` overwritten on stamped projects; the
+  "last vendor" enrichment sorts an arbitrary unordered 400-row slice
+  (`purchase-requests/route.ts:119`); status H mislabeled "closed".
+
+### 7.2.2 CRITICAL — truncation that silently moves money or state
+
+PostgREST caps every read at 1000 rows (`.limit(N>1000)` does not lift it).
+Six reads where that cap changes money or writes wrong state:
+
+1. **Duplicate PO imports** — `gmail/search-pos/route.ts:45-48`: the
+   "already imported" set is a bare unpaginated read of `purchase_orders`
+   (already past 1000 rows); missing POs re-import as duplicates with
+   duplicate line items and graphics jobs.
+2. **Scan matching starves** — `scan-match.ts:106-117`: open POs + all
+   their lines read unbounded; truncated lines make scans unmatchable and
+   inflate "waiting on PO", non-deterministically.
+3. **POs flipped `complete` with unreceived lines** —
+   `scan-match.ts:53-63` (`recomputePoFulfillment`): a PO whose lines are
+   partially truncated has all *surviving* lines satisfied → wrong state
+   written to the DB.
+4. **The billing sweep never reaches POs past the cap** —
+   `po-invoice-verify.ts:211-218`: unpaginated whole-book select (with
+   embedded line items burning the row budget faster); POs past the cap
+   keep stale `invoice_check_status` forever, deterministically.
+5. **The monthly accountant package under-sums** —
+   `reports/accounting-package/route.ts:68-88`: `.limit(1000/2000/10000)`
+   all cap at 1000; totals and CSVs silently drop rows.
+6. **Duplicate installer pay** — `cni/import-scans/route.ts:57-58`: the
+   org-wide "already imported" VIN set is unbounded; past 1000 links, the
+   same VIN imports twice → duplicate `install_credits`.
+
+Behind these, ~15 MAJOR truncation findings (at-risk snapshot, weekly digest,
+quote nudges, sales-performance and graphics/installer-cost reports, the
+wrap-quote "already converted" map, `backfillCniJobPayout`, the parts pages'
+missing `.order('id')` tiebreaker on non-unique `item_number`, prospects
+sync loops with `range()` and **no order at all**) — the full list lives in
+the Round 3 roadmap below.
+
+### 7.2.3 The E-SIGN record can be forged, altered, or lost
+
+Eight verified holes in the approval/signature chain items 9–11 built on:
+
+1. **Staff can forge a customer acceptance** — `send-for-approval` returns
+   the live token/URL to the caller (`:358-364`) and the UI displays it in
+   an alert (`estimates/page.tsx:1651`) — defeating `stripApprovalSecrets`,
+   whose comment names this exact threat. Any estimates-feature user can
+   open the customer's page and click Accept; the convert gate opens with
+   no override, no audit row.
+2. **The "signed" sentence is client-supplied** — the approve route accepts
+   `agreementText` (≤2000 chars) and freezes it verbatim into the snapshot
+   (`approve/estimate/[token]/route.ts:31,165`); it never compares against
+   the canonical text. A link-holder can accept with "received for review
+   only; no commitment" as the assented sentence — hash-verified green.
+   Same in proof and quote approvals.
+3. **The heaviest evidence is unviewable** — snapshots inline proof images
+   at up to 4 MB *per asset* (`estimate-graphics.ts:173,205`) but the
+   viewer read caps at 5 MB total (`signed-documents/route.ts:58`) → the
+   disputes with the most photos 502 forever, with no download fallback.
+4. **`add-wrap-quote` bypasses the revision lock entirely** — zero
+   approval/SO checks in the route; it rewrites lines and totals on any
+   estimate id, signed and converted ones included.
+5. **Save can silently wipe every line** — `estimates/route.ts:297` deletes
+   all lines, then the re-insert's error is discarded on both paths
+   (`:315`, `:392`) and the handler returns success.
+6. **Quantity 0 becomes quantity 1 in NetSuite** — stored lines use
+   `parseFloat(l.quantity || 1)` while the totals lib uses `|| 0`: a
+   "$0 / included" qty-0 line totals to nothing on the signed document and
+   bills one full unit on the pushed estimate and SO.
+7. **An accepted/converted estimate can be deleted outright** — the DELETE
+   handler has the feature gate and nothing else; deleting destroys the
+   only row holding `signed_document_storage_path` (orphaning the snapshot)
+   and the SO↔project `estimate_id` link, unaudited.
+8. **Linking a graphics job freezes a draft** — `from-estimate`'s
+   `markEstimateWon` writes `status:'accepted'` on any linked estimate; the
+   revision lock keys on exactly that, so a never-sent quote becomes
+   uneditable.
+
+Plus the structural gap: **the edit-during-approval window** — while a link
+is live, lines remain editable and both the approval page and snapshot read
+current rows; nothing captures a send-time content hash, so what the
+customer saw and what got frozen can differ.
+
+### 7.2.4 Money paths: one good idempotence pattern, used exactly once
+
+`create-po`'s claim → 409 → release-on-failure → success-after-NetSuite shape
+exists nowhere else. Verified consequences:
+
+- `netsuite/create-invoice` **re-bills the same installed units on every
+  POST** — nothing consumes or checks anything (`:161-170`, `:220-240`).
+- `graphics/create-invoice` and `netsuite/create-sales-order` stamp
+  **falsy ids** when NetSuite's Location header can't be parsed — which
+  defeats their own truthy guards on the next click → duplicates. Both
+  stamps are unchecked; both guards are check-then-act.
+- `estimates/push` shows "pushed!" while the unchecked write-back can fail →
+  the next push takes the CREATE branch → guaranteed duplicate NS estimate.
+- `netsuite/invoice-vehicles` gates ALL bookkeeping on a truthy
+  `invoiceNumber` (`:310`) — a successful invoice whose tranid lookup
+  failed leaves the scans looking un-invoiced and re-billable.
+- `wrap-quote/create-customer` returns **502 "create failed" on a
+  successful create** whose id didn't parse (`:77-79`) — the textbook
+  retry-to-duplicate invitation.
+- `parts-mail/create-bill` stamps `billed` **unchecked** after the bill
+  exists (`:54-60`) — a failed stamp leaves the invoice re-billable.
+- `promote-prospect` is a read-then-write race: two concurrent pushes of
+  the same lead mint two NetSuite customers (`promote-prospect.ts:59,86`).
+- **No unique index backs any of it**: `netsuite_so_id`,
+  `netsuite_estimate_id`, `netsuite_invoice_id`, `netsuite_bill_id`,
+  `netsuite_vendor_id` — none are unique columns anywhere.
+
+### 7.2.5 CRM lifecycle
+
+- The main CRM create (`admin/prospects/page.tsx:381`) and `addToCrm`
+  (`[id]/page.tsx:512`) insert from the browser, bypassing the server dupe
+  guard entirely (its pre-flight is `catch {}`-swallowed).
+- `PUT /api/prospects` is `.passthrough()` + `requireStaff`, no audit: any
+  staff can re-point `netsuite_id` at an arbitrary NetSuite customer — and
+  the delete path then hard-deletes *that* NetSuite record.
+- Deleting a customer: the mirror delete is unchecked and FK-blocked by
+  `wrap_quotes`/`fleet_checkins` (stale mirror resurrects the record); when
+  it succeeds, `customer_files` (W-9s, tax certs) cascade away unmentioned.
+- The credit-app reviewer's "candidate matches" honors `*` as a wildcard
+  (`[id]/route.ts:37` strips `%_,()` but not `*`) — a hostile submitter
+  steers which real customers appear as link candidates. The per-IP rate
+  limit also fails open when no IP header is present.
+
+### 7.2.6 Custody & CNI
+
+- **The photo reviewer QCs blind** — the review page builds every image URL
+  as `/api/storage/view?…` (`photos/page.tsx:135-138`), a route that does
+  not exist; `onError` hides the img, so reviewers see grey boxes with
+  Approve/Deny buttons. The installer side renders no thumbnails at all.
+- **One denied photo bricks the job** — closure requires `denied === 0`
+  (`[id]/page.tsx:1650`) but review buttons render only on `pending`
+  (`photos/page.tsx:288`); no un-deny, no photo delete exists → permanent
+  `completed_pending_review`, payout blocked.
+- `photos_approved` is written only by a browser-side bulk loop; the
+  route-level per-photo path never sets it.
+- `update-status`'s admin force-override reads the scalar `role` only —
+  an admin whose grant lives in `roles[]` can't override; and the
+  completion gate is route-level only (a direct browser status write
+  bypasses photos/tasks/QC entirely).
+- The scans in-route gate rejects only customer-ONLY accounts —
+  `['customer','executive']` or a bare `executive` passes and can log
+  scans and mint pay credits (`scans/log/route.ts:56`).
+- Post-#712, VIN-keyed surfaces (pick-list, `/api/vehicles/[vin]/photos`,
+  `pickList` deep links) resolve to the *newest* visit — links about the
+  old visit open the new one; no per-visit link exists.
+- The In-Shop board never empties (nothing auto-archives; archive is
+  admin-only), so returning vehicles now double-list.
+
+### 7.2.7 Notifications & deep links
+
+- **`forceChannels` is a no-op** — `notify.ts:64`'s condition reduces to
+  `!channels`: ANY caller passing explicit channels bypasses user
+  preferences (38 of 63 call sites do). Combined with per-VIN fan-out in
+  the CNI loop (`submit-photos` pushes+emails every admin per VIN), a
+  30-VIN job = 30 pushes + 30 emails to every admin, preferences ignored.
+- CNI notify audiences are "every admin" (`getCniStaffIds`) while the
+  routes themselves gate on the narrower `cni_admin` feature; and
+  super_admin membership differs between call sites.
+- Four broken deep-link contracts: CNI chat mentions store the *sender's*
+  portal path (cross-portal recipients bounce; no `cniJobLinkFor` exists);
+  "graphics ready" sends shop/field techs to a page that ejects them;
+  customer-thread reply emails CTA to the bare app origin instead of
+  `customerPortal()`; `deepLinks.scanPhotos` targets a route that doesn't
+  exist. Thirteen more sites hand-build correct URLs outside the builders.
+
+### 7.2.8 Assorted sharp edges (selected)
+
+Estimate resend erases the rejection while `status='rejected'` keeps it out
+of every follow-up queue; two different labor-item resolvers
+(`'%LABOR%'` vs `'LABOR%'`) can bill the same job's labor to different GL
+items; `pushed_by` is client-asserted; the estimates list API and
+`AddToEstimateModal` read the newest-1000 only; the receiving page downloads
+the entire PO mirror history per interaction; `vehicle-tracking/invoice`
+stamps the internal id when tranid lookup fails, so AR sync can never mark
+it paid; four dead `r2PublicUrl` imports.
+
+## 7.3 The Round 3 roadmap
+
+### Now — verified bugs, small fixes
+
+1. **R3-1 · The truncation set** — fix all six CRITICALs (7.2.2) with
+   `fetchAllRows` + tiebreakers; add the `.order('id')` tiebreaker to
+   `parts/page.tsx` / `parts-cache` / `ar-payment-sync`; give the
+   prospects sync loops an ORDER BY. Then sweep the MAJOR list.
+2. **R3-2 · CNI photo review** — point images at `storageDownloadUrl`;
+   allow re-review of non-pending photos (count newest per vin+type);
+   installer thumbnails; fold bulk-approve into the route.
+3. **R3-3 · This week's regressions** — the 7.2.1 hotfix (shipping now).
+4. **R3-4 · notify repair** — fix the `forceChannels` condition; scope CNI
+   audiences to `cni_admin`; collapse per-VIN events into per-job digests
+   (the `po-billing-notify` threshold pattern).
+5. **R3-5 · Deep links** — `cniJobLinkFor` per-recipient; widen the
+   ready-for-install gate or send per-audience URLs; `customerPortal()` on
+   thread replies; delete `scanPhotos`; migrate the 13 hand-built strings.
+6. **R3-6 · Estimate quick set** — `|| 0` quantity consistency; check the
+   line re-insert errors; resend sets `status='sent'` and preserves
+   rejection history; one configured labor item; `pushed_by` from auth;
+   uuid-validate GET ids.
+
+### Next — integrity programs
+
+7. **R3-7 · E-SIGN hardening** — server-held agreement text; stop echoing
+   the token to staff (or audit-log link opens); fix the 5 MB read cap vs
+   4 MB assets; extend the revision lock to `add-wrap-quote` and DELETE;
+   decouple `markEstimateWon` from the lock; capture a send-time content
+   hash to close the edit-during-approval window; conditional accept.
+8. **R3-8 · Money-path idempotence** — unique indexes on every
+   `netsuite_*_id` column; roll the create-po claim/checked-stamp pattern
+   across the seven paths in 7.2.4; a written policy for
+   success-with-unparseable-id (never report failure, never stamp falsy).
+9. **R3-9 · CRM lifecycle** — route the CRM creates through
+   `POST /api/prospects`; drop `.passthrough()` and make `netsuite_id`
+   admin-only + audited; decide the deletion policy for files/mirror
+   (checked deletes, honest confirm); escape `*`; rate-limit fail-closed.
+10. **R3-10 · Custody hardening** — a server-side check-in route that
+    enforces photos; per-visit deep links (pick-list by check-in id);
+    `profileRoles` in update-status; tighten the scans role gate;
+    auto-archive shipped visits off the board.
+
+### Later — the workflow builds
+
+11. **R3-11 · Projects for PO-driven SOs** — the find-or-create block from
+    convert-to-so, in `create-sales-order` + the SO sync (kills the last
+    SO-number re-type).
+12. **R3-12 · Readiness that pushes** — compute at conversion (+ one-click
+    request shorts), a daily aging sweep over pending requests, verdicts on
+    the schedule board, ETA-change notifications, multi-PO project links.
+13. **R3-13 · Receiving → allocation** — auto-reserve received quantities
+    to the requesting project.
+14. **R3-14 · Completion→invoice** — widen the gate off requireAdmin,
+    per-SO invoices, a send step, and a "complete but never invoiced"
+    tile + sweep for vehicles.
+15. **R3-15 · CNI writeback** — VIN completion flips the linked check-in's
+    graphics lane (closes the one-way bridge).
+16. **R3-16 · Promote carries everything** — contacts + notes to NetSuite
+    on promote; estimate↔lead link by id, not name.
+17. **R3-17 · Change orders** — duplicate-as-revision with
+    `supersedes_estimate_id`; surface `expiration_date`; customer-facing
+    estimate status in the portal.
+18. **R3-18 · Lead lifecycle** — lost/nurture outcomes with reasons, wired
+    into reminders and tiles.
+19. **R3-19 · The job-margin report** — parts cost (receipts/bills) +
+    labor (once R3-21 lands) against the invoice, per vehicle; cycle-time
+    and damage-volume reports from data that already exists.
+20. **R3-20 · Floor ergonomics** — graphics lane on the pick-list;
+    pickup-path billing prompt; purchasing/receiving count badges.
+
+### Carried decisions
+
+21. **R3-21 (= item 21) · Job-level labor capture** — the touch-map is now
+    written: migration (add `fleet_checkin_id` + `'shop'` context to
+    `work_shifts`, relax both CHECKs), the shifts routes' context enums and
+    rate resolution, `ensureCniShift`/`getOpenCniShift` generalization,
+    `CompletionRef` accepting a check-in, and start/stop on the pick-list.
+    The browser-only `time_entries` day-clock stays a separate system or
+    gets absorbed.
+22. **R3-22 (= item 19) · R2 goes private** — the flip checklist is now
+    written, tiered: (A) 13 client `<img>` surfaces off `getPublicUrl()`
+    — the fallback `/api/storage` path can't authenticate an `<img>` tag
+    reliably; (B) token-scoped proxies for the sessionless approval pages
+    and PDF assembly inputs; (C) the irreversible part — images inside
+    already-sent emails — which is the actual owner decision; (D) two easy
+    internal swaps; (E) a `public_url` **column** on prospect files that
+    needs a backfill; (F) four dead imports to delete now. #688 already
+    moved server-side PDF assembly onto credentialed reads.
+
+**Reading the numbers:** Round 2 shipped 19 of 21 and every ship held.
+Round 3's ~90 findings are narrower but sharper: almost everything above is
+a seam *between* working systems — a guard that lives client-side, a read
+that silently truncates, a stamp that isn't checked, a link that lands one
+page short. The Now column is a week of small fixes; Next is where the
+audit's remaining risk actually lives.
