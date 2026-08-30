@@ -35,12 +35,29 @@ const Schema = z.object({
   subject: z.string().trim().max(200).optional().default(''),
   message: z.string().trim().max(10_000).optional().default(''),
   preview: z.boolean().optional().default(false),
+  /**
+   * Appends the server-templated "Complete your credit application" CTA
+   * (the public form's URL is never client-supplied — this flag is the
+   * only way the link gets in). Used by the record page's "Send credit
+   * application" action; the send is logged as kind credit_app_invite.
+   */
+  includeCreditAppLink: z.boolean().optional().default(false),
 });
 
 const esc = (s: string) => s
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-function buildEmailHtml(company: any, logoUrl: string | null, message: string, signature: EmailSignature | null): string {
+function creditAppCtaHtml(): string {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+  const link = `${appUrl}/credit-application`;
+  return `
+      <div style="margin:20px 0;text-align:center;">
+        <a href="${esc(link)}" style="display:inline-block;background:#1a2b36;color:#ffffff;text-decoration:none;font-size:14px;font-weight:700;padding:12px 28px;border-radius:8px;">Complete your credit application</a>
+        <div style="font-size:11px;color:#9ca3af;margin-top:8px;">Or copy this link: ${esc(link)}</div>
+      </div>`;
+}
+
+function buildEmailHtml(company: any, logoUrl: string | null, message: string, signature: EmailSignature | null, ctaHtml = ''): string {
   const companyLines = [
     company?.name, company?.address,
     [company?.city, company?.state, company?.zip].filter(Boolean).join(', '),
@@ -54,6 +71,7 @@ function buildEmailHtml(company: any, logoUrl: string | null, message: string, s
     <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:28px;">
       ${logoUrl ? `<img src="${esc(logoUrl)}" alt="${esc(company?.name || 'Company logo')}" height="44" style="height:44px;max-width:220px;display:block;margin-bottom:14px;">` : ''}
       <div style="font-size:13px;color:#374151;white-space:pre-wrap;line-height:1.6;">${esc(message)}</div>
+      ${ctaHtml}
       ${renderSignatureHtml(signature, 'light')}
       <div style="font-size:12px;color:#6b7280;margin-top:18px;border-top:1px solid #e5e7eb;padding-top:12px;line-height:1.5;">${companyLines}</div>
     </div>
@@ -79,8 +97,15 @@ export async function POST(req: NextRequest) {
     // Sender's signature — in the preview too, so what they see is what goes.
     const signature = await getEmailSignature(supabase, auth.user?.id);
 
-    const subject = p.subject || `Message from ${company?.name || 'BMG Fleet'}`;
-    const html = buildEmailHtml(company, logoUrl, p.message || '', signature);
+    const subject = p.subject
+      || (p.includeCreditAppLink ? `Credit application — ${company?.name || 'BMG Fleet'}` : `Message from ${company?.name || 'BMG Fleet'}`);
+    const defaultInviteMsg = 'To set up net payment terms with us, please complete our credit application using the button below. It takes about ten minutes, and our team reviews applications within 2-3 business days.';
+    const html = buildEmailHtml(
+      company, logoUrl,
+      p.message || (p.includeCreditAppLink ? defaultInviteMsg : ''),
+      signature,
+      p.includeCreditAppLink ? creditAppCtaHtml() : '',
+    );
 
     if (p.preview) {
       return NextResponse.json({ preview: true, to: p.emails.join(', ') || null, subject, html });
@@ -89,7 +114,9 @@ export async function POST(req: NextRequest) {
     if (p.emails.length === 0) {
       return NextResponse.json({ error: 'Enter at least one recipient email address.' }, { status: 400 });
     }
-    if (!p.message.trim()) {
+    // A credit-app invite's substance is the CTA button; the personal
+    // message is optional there (the preview shows the default line).
+    if (!p.message.trim() && !p.includeCreditAppLink) {
       return NextResponse.json({ error: 'Write a message before sending.' }, { status: 400 });
     }
 
@@ -100,7 +127,7 @@ export async function POST(req: NextRequest) {
     const { ok } = await sendEmailDetailed(
       p.emails, subject, html, undefined, undefined, auth.user?.email || undefined, bcc,
       {
-        kind: 'customer_email',
+        kind: p.includeCreditAppLink ? 'credit_app_invite' : 'customer_email',
         sentBy: auth.user?.id,
         contextUrl,
         customerId: p.customerId,

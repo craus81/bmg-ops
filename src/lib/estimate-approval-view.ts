@@ -14,7 +14,7 @@
  * Server-only: callers pass a service-role Supabase client.
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { loadEstimateGraphics } from './estimate-graphics';
+import { loadEstimateGraphics, loadEstimateProofs, type EstimateProofBlock } from './estimate-graphics';
 import { enrichLinesWithPartAssets } from './estimate-line-parts';
 
 /** The estimate fields the customer-facing document is allowed to show. */
@@ -68,6 +68,17 @@ export function publicLines(lines: any[]) {
   }));
 }
 
+/** Proof blocks with the R2 storage keys stripped — clients render by
+ *  public URL only. */
+export function publicProofs(blocks: EstimateProofBlock[]) {
+  return blocks.map(b => ({
+    jobId: b.jobId,
+    jobNumber: b.jobNumber,
+    jobTitle: b.jobTitle,
+    files: b.files.map(f => ({ id: f.id, name: f.name, url: f.url, isPdf: f.isPdf })),
+  }));
+}
+
 /** Lines with their catalog photo + product link, in document order. */
 export async function loadApprovalLines(service: SupabaseClient, estimateId: string) {
   const { data: lines } = await service
@@ -93,11 +104,13 @@ export async function loadEstimateApprovalView(service: SupabaseClient, estimate
 
   const lines = await loadApprovalLines(service, estimate.id);
   const { summaries: graphics } = await loadEstimateGraphics(service, estimate.id);
+  const proofs = await loadEstimateProofs(service, estimate.id);
 
   return {
     estimate: publicEstimate(estimate),
     lines: publicLines(lines),
     graphics,
+    proofs: publicProofs(proofs),
     /** Terminal state, so the preview can say the link is already spent. */
     decided: estimate.customer_approved
       ? ('approved' as const)

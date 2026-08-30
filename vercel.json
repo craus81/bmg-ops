@@ -29,6 +29,10 @@
       "schedule": "0 13 * * *"
     },
     {
+      "path": "/api/cron/prospect-reminder-check",
+      "schedule": "15 13 * * *"
+    },
+    {
       "path": "/api/cron/quote-followup-check",
       "schedule": "30 13 * * *"
     },

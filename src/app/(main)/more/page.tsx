@@ -40,6 +40,7 @@ export default function MorePage() {
       header: 'Sales & Quoting',
       items: [
         { title: 'Customers', sub: 'Customers & sales pipeline', path: '/admin/prospects', show: F('prospects') },
+        { title: 'Credit Applications', sub: 'Review net-terms applications from the public form', path: '/admin/credit-applications', show: F('credit_applications') },
         { title: 'Estimates', sub: 'Build estimates & push to NetSuite', path: '/estimates', show: F('estimates') },
         { title: 'Upfit Designer', sub: 'Design a van upfit in 3D & turn it into an estimate', path: '/upfit-designer', show: F('upfit_configurator') },
         { title: 'Wrap Quotes', sub: 'Measure a vehicle template by hand & email the quote', path: '/admin/wrap-quote', show: isAdmin || isSales || isGraphicsProduction },

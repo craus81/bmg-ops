@@ -22,6 +22,7 @@ interface ApprovalView {
   estimate: any;
   lines: any[];
   graphics: any[];
+  proofs?: any[];
   decided: 'approved' | 'rejected' | null;
   sentAt: string | null;
 }
@@ -81,7 +82,7 @@ export default function EstimateApprovalPreviewPage() {
         </div>
       </div>
 
-      <EstimateApprovalDocument estimate={view.estimate} lines={view.lines} graphics={view.graphics} />
+      <EstimateApprovalDocument estimate={view.estimate} lines={view.lines} graphics={view.graphics} proofs={view.proofs || []} />
 
       <div style={{ marginTop: '18px', textAlign: 'center' }}>
         <button

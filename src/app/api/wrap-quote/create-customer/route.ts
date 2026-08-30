@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { createCustomerOrLead } from '@/lib/netsuite';
 import { validateBody, z } from '@/lib/validate';
+import { findCustomerDuplicates, describeMatch } from '@/lib/customer-dupes';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,6 +20,8 @@ const Schema = z.object({
   city: z.string().trim().max(120).optional(),
   state: z.string().trim().max(60).optional(),
   zip: z.string().trim().max(20).optional(),
+  /** Skip the duplicate guard — set only after a human saw the matches. */
+  force: z.boolean().optional().default(false),
 });
 
 /**
@@ -38,21 +41,36 @@ export async function POST(req: NextRequest) {
   if (parsed.error) return parsed.error;
   const p = parsed.data;
 
-  // Don't create a NetSuite double when the name already exists locally —
-  // the local table mirrors NetSuite, so a hit here means the customer is a
-  // search-pick away.
-  const escaped = p.companyName.replace(/[\\%_]/g, '\\$&');
-  const { data: existing } = await supabase
-    .from('customers')
-    .select('id, company_name, netsuite_id')
-    .ilike('company_name', escaped)
-    .limit(1)
-    .maybeSingle();
-  if (existing) {
-    return NextResponse.json({
-      error: `"${existing.company_name}" already exists in NetSuite — pick it from the customer search instead.`,
-      existingCustomerId: existing.id,
-    }, { status: 409 });
+  // Don't create a NetSuite double when the customer already exists —
+  // previously an exact-name ilike on customers only; now the shared
+  // checker (name + email + phone digits, prospects AND customers).
+  //
+  // Only a NAME match hard-blocks: this route's callers (check-in, PO
+  // forms, graphics invoice review, upfit designer) have no "create
+  // anyway" UI, and a shared phone/email under a different name is a real
+  // pattern (franchises, shared AP lines) — those surface as a warning on
+  // the created record instead. The 409 keeps `existingCustomerId` (first
+  // customers-table match) so the existing link-the-existing-record flows
+  // keep working; `matches` carries the full picture.
+  let contactWarning: string | null = null;
+  if (!p.force) {
+    const matches = await findCustomerDuplicates(supabase, {
+      companyName: p.companyName, email: p.email, phone: p.phone,
+    });
+    const nameMatches = matches.filter(m => m.matchedOn.includes('name'));
+    if (nameMatches.length > 0) {
+      const customerMatch = nameMatches.find(m => m.source === 'customers');
+      return NextResponse.json({
+        error: customerMatch
+          ? `"${customerMatch.company_name}" already exists in NetSuite — pick it from the customer search instead.`
+          : `"${nameMatches[0].company_name}" already exists in the CRM (no NetSuite record yet) — open it under Customers and use Add to NetSuite instead of creating a second record.`,
+        existingCustomerId: customerMatch?.id || null,
+        matches,
+      }, { status: 409 });
+    }
+    if (matches.length > 0) {
+      contactWarning = `Heads up: ${describeMatch(matches[0])} already exists — check it isn't the same company.`;
+    }
   }
 
   const result = await createCustomerOrLead({ ...p, type: 'customer' });
@@ -93,5 +111,6 @@ export async function POST(req: NextRequest) {
     netsuiteId: result.customerId,
     entityId: result.entityId || null,
     netsuiteUrl: result.netsuiteUrl || null,
+    warning: contactWarning,
   });
 }

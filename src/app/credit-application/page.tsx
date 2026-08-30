@@ -1,13 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
 import PhoneInput from '@/components/PhoneInput';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
 
 const TERMS_OPTIONS = [
   { value: 'net_15', label: 'Net 15' },
@@ -41,6 +35,9 @@ export default function CreditApplicationPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');
+  // Honeypot — hidden from humans; bots that fill it get a silent no-op
+  // server-side.
+  const [website, setWebsite] = useState('');
 
   const u = (field: string, value: string) => setForm(prev => ({ ...prev, [field]: value }));
 
@@ -53,14 +50,22 @@ export default function CreditApplicationPage() {
     setSubmitting(true);
     setError('');
 
-    const { error: dbError } = await supabase.from('credit_applications').insert({
-      ...form,
-      years_in_business: form.years_in_business ? parseInt(form.years_in_business) : null,
-      estimated_monthly_volume: form.estimated_monthly_volume ? parseFloat(form.estimated_monthly_volume) : null,
-    });
-
-    if (dbError) {
-      setError('Failed to submit. Please try again.');
+    // Server-side submit (validation, rate limit, staff notification) —
+    // the browser no longer writes the table directly.
+    try {
+      const res = await fetch('/api/credit-application/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...form, website }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        setError(data.error || 'Failed to submit. Please try again.');
+        setSubmitting(false);
+        return;
+      }
+    } catch {
+      setError('Failed to submit. Please check your connection and try again.');
       setSubmitting(false);
       return;
     }
@@ -86,6 +91,11 @@ export default function CreditApplicationPage() {
   return (
     <div style={{ minHeight: 'calc(100vh / var(--ts))', background: '#f4f5f7', padding: '20px' }}>
       <form onSubmit={handleSubmit} style={{ maxWidth: '680px', margin: '0 auto' }}>
+        {/* Honeypot — off-screen, not display:none (some bots skip hidden
+            inputs), tabIndex -1 + aria-hidden so humans never reach it. */}
+        <div style={{ position: 'absolute', left: '-9999px', top: 'auto', width: '1px', height: '1px', overflow: 'hidden' }} aria-hidden="true">
+          <label>Website<input type="text" name="website" tabIndex={-1} autoComplete="off" value={website} onChange={e => setWebsite(e.target.value)} /></label>
+        </div>
         <div style={{ textAlign: 'center', marginBottom: '24px' }}>
           <div style={{ fontSize: '26px', fontWeight: 800, color: '#1a2b36' }}>Credit Application</div>
           <div style={{ fontSize: '14px', color: '#5a6e7c', marginTop: '4px' }}>BMG Fleet — Net Payment Terms</div>

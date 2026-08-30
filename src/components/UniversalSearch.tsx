@@ -160,7 +160,7 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
         <button key={item.id} onClick={select} style={resultBtnStyle}>
           <span style={titleStyle}>{item.company_name}</span>
           <div style={subtitleStyle}>
-            {item.contact_name || ''}{item.email ? ` · ${item.email}` : ''}
+            {[item.contact_name, item.email, item.phone].filter(Boolean).join(' · ')}
           </div>
         </button>
       );

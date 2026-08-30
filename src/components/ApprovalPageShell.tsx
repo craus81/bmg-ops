@@ -48,8 +48,11 @@ export interface ApprovalShellProps {
   /** Lowercase noun for the loading line ('Loading estimate...'). */
   noun: string;
   /** The sentence beside the checkbox, sent with the accept POST. Defaults
-   *  to the canonical AGREEMENT_TEXT; the proof flow passes its own. */
-  agreementText?: string;
+   *  to the canonical AGREEMENT_TEXT; the proof flow passes its own. The
+   *  function form picks the sentence from the loaded payload (the
+   *  estimate flow switches to the combined design+price copy when the
+   *  document carries graphic proofs). */
+  agreementText?: string | ((data: any) => string);
   copy?: ApprovalShellCopy;
   /** Pluck this flow's payload out of the GET response body. */
   parsePayload: (json: any) => any;
@@ -91,6 +94,13 @@ export default function ApprovalPageShell({
   const [error, setError] = useState<string | null>(null);
   const pageLoadedAt = useRef<number>(Date.now());
 
+  // The exact sentence the customer checks — resolved from the payload for
+  // the function form; used in the label AND the accept POST so the frozen
+  // snapshot records what was actually on screen.
+  const resolvedAgreement = typeof agreementText === 'function'
+    ? (data ? agreementText(data) : AGREEMENT_TEXT)
+    : agreementText;
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -130,7 +140,7 @@ export default function ApprovalPageShell({
           reason: action === 'reject' ? rejectReason.trim() : undefined,
           // The exact sentence the customer checked — frozen into the
           // signed snapshot server-side.
-          agreementText: action === 'accept' ? agreementText : undefined,
+          agreementText: action === 'accept' ? resolvedAgreement : undefined,
         }),
       });
       const json = await res.json();
@@ -212,7 +222,7 @@ export default function ApprovalPageShell({
               onChange={e => setAgreed(e.target.checked)}
               style={{ marginTop: '2px', flexShrink: 0 }}
             />
-            <span style={{ fontSize: '12px', color: '#0f172a', lineHeight: 1.5 }}>{agreementText}</span>
+            <span style={{ fontSize: '12px', color: '#0f172a', lineHeight: 1.5 }}>{resolvedAgreement}</span>
           </label>
           <div style={{ display: 'flex', gap: '8px', marginTop: '14px' }}>
             <button

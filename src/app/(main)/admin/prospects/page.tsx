@@ -36,6 +36,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { SortableTh, useTableSort, type SortState } from '@/components/ui/SortableTh';
 import NumberInput from '@/components/NumberInput';
+import { LEAD_SOURCES, OPP_TYPES } from '@/lib/lead-sources';
 import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
 
 interface Prospect {
@@ -146,9 +147,14 @@ export default function ProspectsPage() {
 
   // Create form (creation only — editing lives on the record page).
   // record_type 'vendor' = supplier/partner rep: same record, no NetSuite push.
-  const emptyForm = { company_name: '', contact_name: '', title: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1, record_type: 'customer' };
+  const emptyForm = { company_name: '', contact_name: '', title: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1, record_type: 'customer', lead_source: '' };
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  // "What do they want" — one deal per checked type at create time, so a
+  // combined upfit+graphics inquiry is two deals, not a free-text note that
+  // gets re-typed into the estimate later. UI-only state: `form` spreads
+  // straight into the prospects insert, so this must not live there.
+  const [interestedIn, setInterestedIn] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
@@ -327,41 +333,52 @@ export default function ProspectsPage() {
     const isVendor = form.record_type === 'vendor';
     const name = form.company_name.trim();
 
-    // Duplicate guard (same rule as wrap-quote's create-customer): a
-    // same-named record created again becomes a second NetSuite customer
-    // that splits spend history, statements, and estimate search. Match CRM
-    // rows of the same type, and — for customers — the synced NetSuite
-    // mirror, which can hold customers that have no CRM row at all.
-    const existingProspect = prospects.find(p =>
-      (p.record_type === 'vendor') === isVendor &&
-      p.company_name.trim().toLowerCase() === name.toLowerCase()) || null;
-    let existingLabel = existingProspect?.company_name || null;
-    let existingUrl = existingProspect ? `/admin/prospects/${existingProspect.id}` : null;
-    if (!existingUrl && !isVendor) {
-      const escaped = name.replace(/[\\%_]/g, '\\$&');
-      const { data: cust } = await supabase
-        .from('customers')
-        .select('netsuite_id, company_name')
-        .ilike('company_name', escaped)
-        .limit(1)
-        .maybeSingle();
-      if (cust?.netsuite_id) {
-        existingLabel = cust.company_name || name;
-        existingUrl = `/admin/prospects/ns-${cust.netsuite_id}`;
-      }
-    }
-    if (existingUrl) {
+    // Duplicate guard, now the shared SERVER-side check (audit Stage 1):
+    // the old guard matched exact name against the in-memory list plus one
+    // ilike on customers — phone and email were never checked, and records
+    // loaded after page mount were invisible. The server sees everything:
+    // name + email + phone digits across the CRM and the NetSuite mirror.
+    // Best-effort here (the create routes run the same checker again), so
+    // a pre-flight hiccup can't block creation outright.
+    let dupes: { source: string; id: string; company_name: string | null; netsuite_id: string | null; matchedOn: string[] }[] = [];
+    try {
+      const res = await fetch('/api/prospects/check-duplicate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyName: name, email: form.email || null, phone: form.phone || null, recordType: form.record_type }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) dupes = body.matches || [];
+    } catch { /* pre-flight only */ }
+
+    const dupeUrl = (m: typeof dupes[number]) =>
+      m.source === 'prospects' ? `/admin/prospects/${m.id}` : m.netsuite_id ? `/admin/prospects/ns-${m.netsuite_id}` : null;
+    const nameMatch = dupes.find(m => m.matchedOn.includes('name')) || null;
+    if (nameMatch) {
+      // Same-name: block, as before — a re-create splits spend history,
+      // statements, and estimate search.
       setSaving(false);
+      const url = dupeUrl(nameMatch);
       const open = await dialog.confirm(
-        `"${existingLabel}" already exists${!existingProspect ? ' in NetSuite' : ''}.${isVendor ? '' : ' Creating it again would make a duplicate NetSuite customer that splits spend history and statements.'}\n\nOpen the existing record instead? If this really is a different company, go back and adjust the name (e.g. add the city).`,
+        `"${nameMatch.company_name || name}" already exists${nameMatch.source === 'customers' ? ' in NetSuite' : ''}.${isVendor ? '' : ' Creating it again would make a duplicate NetSuite customer that splits spend history and statements.'}\n\nOpen the existing record instead? If this really is a different company, go back and adjust the name (e.g. add the city).`,
         { confirmLabel: 'Open Existing', cancelLabel: 'Go Back' },
       );
-      if (open) router.push(existingUrl);
+      if (open && url) router.push(url);
       return;
+    }
+    if (dupes.length > 0) {
+      // Same phone/email under a different name — a softer signal (shared
+      // AP lines, franchises). Surface it, let the human decide.
+      const top = dupes[0];
+      const what = top.matchedOn.map(f => f === 'email' ? 'email' : 'phone number').join(' and ');
+      const anyway = await dialog.confirm(
+        `"${top.company_name || 'An existing record'}" already has this ${what}. If it's the same company, open it from the list instead of creating a duplicate.\n\nCreate "${name}" anyway?`,
+        { confirmLabel: 'Create Anyway', cancelLabel: 'Go Back' },
+      );
+      if (!anyway) { setSaving(false); return; }
     }
 
     const { data, error } = await supabase.from('prospects')
-      .insert({ ...form, company_name: name, location_count: form.location_count || 1, created_by: user?.id })
+      .insert({ ...form, company_name: name, lead_source: form.lead_source || null, location_count: form.location_count || 1, created_by: user?.id })
       .select().single();
     if (error || !data) {
       setSaving(false);
@@ -371,12 +388,29 @@ export default function ProspectsPage() {
     if (form.location_count > 1) {
       await supabase.from('prospect_tags').insert({ prospect_id: data.id, tag: 'multilocation', auto_generated: true });
     }
+    // One deal per checked interest — the pipeline starts at intake instead
+    // of being reconstructed later from the notes. Best-effort: the record
+    // exists and deals can be added on its page.
+    if (!isVendor && interestedIn.length > 0) {
+      await supabase.from('prospect_opportunities').insert(
+        interestedIn.map(t => ({
+          prospect_id: data.id,
+          title: `${OPP_TYPES[t] || t} — ${name}`,
+          type: t,
+          stage: 'lead',
+          created_by: user?.id,
+        })),
+      );
+    }
     let localCustomerId: string | null = null;
     if (!isVendor) {
       try {
         const res = await fetch('/api/prospects/push-to-netsuite', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prospectId: data.id, type: 'customer', userId: user?.id }),
+          // force: the pre-flight above already put any matches in front of
+          // the user — without it the route's own guard would re-block and
+          // strand the just-created CRM row.
+          body: JSON.stringify({ prospectId: data.id, type: 'customer', userId: user?.id, force: true }),
         });
         const body = await res.json().catch(() => ({}));
         if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
@@ -598,7 +632,7 @@ export default function ProspectsPage() {
           }}>{scanning ? 'Scanning...' : 'Scan Card'}</button>
           </DropZone>
           <button onClick={() => {
-            if (showCreate) { setShowCreate(false); setForm(emptyForm); return; }
+            if (showCreate) { setShowCreate(false); setForm(emptyForm); setInterestedIn([]); return; }
             // Open matching the active tab — on Vendors, the form starts as a
             // vendor (it used to open as Customer there, hiding the vendor
             // path behind the small type pills).
@@ -641,6 +675,33 @@ export default function ProspectsPage() {
               <div><div style={labelStyle}>Zip</div><input style={inputStyle} value={form.zip} onChange={e => setForm({ ...form, zip: e.target.value })} /></div>
             </div>
             <div><div style={labelStyle}># of Locations</div><NumberInput min="1" style={inputStyle} value={form.location_count} onChange={e => setForm({ ...form, location_count: parseInt(e.target.value) || 1 })} /></div>
+            {form.record_type !== 'vendor' && (
+              <div>
+                <div style={labelStyle}>How did they find us?</div>
+                <select style={inputStyle} value={form.lead_source} onChange={e => setForm({ ...form, lead_source: e.target.value })}>
+                  <option value="">Lead source…</option>
+                  {LEAD_SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            )}
+            {form.record_type !== 'vendor' && (
+              <div style={{ gridColumn: '1 / -1' }}>
+                <div style={labelStyle}>Interested in — starts a deal per selection</div>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {Object.entries(OPP_TYPES).map(([k, label]) => {
+                    const on = interestedIn.includes(k);
+                    return (
+                      <button key={k} type="button" onClick={() => setInterestedIn(prev => on ? prev.filter(t => t !== k) : [...prev, k])} style={{
+                        padding: '5px 12px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                        background: on ? 'var(--tab-active-bg)' : 'var(--subtle-bg)',
+                        border: `1px solid ${on ? 'var(--tab-active-border)' : 'var(--border)'}`,
+                        color: on ? 'var(--text-primary)' : 'var(--text-muted)',
+                      }}>{label}</button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <div style={{ gridColumn: '1 / -1' }}><div style={labelStyle}>Notes</div><textarea style={{ ...inputStyle, minHeight: '50px', resize: 'vertical' }} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
           </div>
           <div style={{ display: 'flex', gap: '8px' }}>
