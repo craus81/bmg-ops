@@ -1029,6 +1029,95 @@ export async function deleteContact(contactId: string): Promise<{ success: boole
 }
 
 /**
+ * Delete a NetSuite customer record.
+ * DELETE /services/rest/record/v1/customer/{id}. A 404 counts as success —
+ * the customer is already gone, which is the state the caller wants.
+ * NetSuite refuses to delete a customer with transactions (estimates,
+ * SOs, invoices); callers should fall back to deactivateCustomer then.
+ */
+export async function deleteCustomer(customerId: string): Promise<{ success: boolean; error?: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/customer/${customerId}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'DELETE' });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: { 'Authorization': authHeader, 'Prefer': 'respondAsync=false' },
+      signal: controller.signal,
+    });
+
+    if (!response.ok && response.status !== 404) {
+      const text = await response.text();
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+
+    return { success: true };
+  } catch (e: any) {
+    const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';
+    return { success: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Mark a NetSuite customer inactive — the fallback when deleteCustomer is
+ * refused (the record has transactions). Both syncs filter
+ * isinactive = 'F', so an inactive customer stops flowing back into the
+ * local mirror.
+ * PATCH /services/rest/record/v1/customer/{id} with {isInactive: true}.
+ */
+export async function deactivateCustomer(customerId: string): Promise<{ success: boolean; error?: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/customer/${customerId}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'PATCH' });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify({ isInactive: true }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+
+    return { success: true };
+  } catch (e: any) {
+    const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';
+    return { success: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Create a vendor record in NetSuite (for CNI installer payouts / bills).
  * The returned internalId is the numeric Internal ID that vendor-bill
  * creation needs in `entity.id` — store THAT, never the Entity ID/name
