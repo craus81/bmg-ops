@@ -20,6 +20,7 @@ export const FEATURES = {
   purchase_orders: 'Purchase Orders',
   customers: 'Customers & Contacts',
   parts_catalog: 'Parts Catalog',
+  parts_ordering: 'Parts Ordering',
   schedule: 'Schedule',
   reports: 'Reports',
   user_management: 'User Management',
@@ -66,7 +67,7 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
   sales: [
     'home', 'fleet_checkin', 'in_shop', 'graphics', 'estimates',
     'time', 'messages', 'customers', 'parts_catalog', 'schedule', 'prospects', 'upfit_projects',
-    'upfit_configurator',
+    'upfit_configurator', 'parts_ordering',
   ],
 
   // upfit_projects: graphics and both tech roles get assigned upfit tasks and
@@ -78,9 +79,11 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
     'time', 'messages', 'customers', 'parts_catalog', 'schedule', 'upfit_projects',
   ],
 
+  // parts_ordering: shop techs are the ones staring at a short readiness
+  // card — raising the purchase request is exactly their moment.
   shop_tech: [
     'home', 'scan', 'fleet_checkin', 'in_shop',
-    'time', 'messages', 'schedule', 'upfit_projects',
+    'time', 'messages', 'schedule', 'upfit_projects', 'parts_ordering',
   ],
 
   // schedule: install events are about field techs and calendar-note mentions

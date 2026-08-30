@@ -83,6 +83,10 @@ export const deepLinks = {
     `/admin/cni/installers/${userId}${noteId ? `?note=${noteId}` : ''}`,
   /** Dedicated prospect / customer record page. */
   prospect: (prospectId: string) => `/admin/prospects/${prospectId}`,
+  /** Purchasing queue — pending purchase requests grouped by vendor;
+   *  ?req= scroll-flashes one request's row. */
+  purchaseRequests: (requestId?: string | null) =>
+    `/admin/purchasing${requestId ? `?req=${requestId}` : ''}`,
   /** Credit application review queue — opens the application's detail. */
   creditApplication: (appId: string) => `/admin/credit-applications?app=${appId}`,
   /** Users admin — opens the user's edit modal (e.g. a pending access request). */

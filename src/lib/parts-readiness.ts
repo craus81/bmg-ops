@@ -41,6 +41,14 @@ export interface PartRow {
   /** What "Reserve available" would take: min(needed - allocated, free). */
   allocatable: number;
   pos: PoRef[];
+  /** NetSuite item internal id (from the SO line) — what a purchase
+   *  request / vendor PO line needs. Null for items the SO carried
+   *  without a resolvable id. */
+  netsuite_item_id: string | null;
+  /** Quantity sitting in PENDING purchase requests for this item (all
+   *  projects — a request serves the shared pool). Display-only: it does
+   *  not change the state math, it tells the card "already asked for". */
+  requested: number;
 }
 
 export interface Readiness {
@@ -203,6 +211,22 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
     });
   }
 
+  // Pending purchase requests per item (audit item 17A) — so the card can
+  // show "Requested" instead of a dead-end Short badge. Bounded by this
+  // SO's part list, so no pagination needed.
+  const requestedByItem = new Map<string, number>();
+  try {
+    const { data: reqs } = await service
+      .from('purchase_requests')
+      .select('item_number, quantity')
+      .eq('status', 'pending')
+      .in('item_number', [...parts.keys()]);
+    for (const r of reqs || []) {
+      const key = normalizeItemNumber(r.item_number);
+      requestedByItem.set(key, (requestedByItem.get(key) || 0) + (Number(r.quantity) || 0));
+    }
+  } catch { /* requests table optional pre-migration — card just shows Short */ }
+
   const rows: PartRow[] = [...parts.values()].map(w => {
     const m = allocationMath({
       needed: w.needed, availPool: w.availPool,
@@ -214,6 +238,8 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
       allocated: w.allocatedHere, free: m.free, usable: m.usable,
       on_hand: w.availPool, on_order: w.on_order,
       short: m.short, state: m.state, allocatable: m.allocatable, pos: w.pos,
+      netsuite_item_id: [...w.itemIds][0] || null,
+      requested: requestedByItem.get(w.item_number) || 0,
     };
   });
   const stateRank: Record<PartState, number> = { short: 0, waiting: 1, available: 2, reserved: 3 };
