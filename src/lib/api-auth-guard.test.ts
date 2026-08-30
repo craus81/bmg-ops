@@ -22,7 +22,17 @@ const SENSITIVE_DIRS = [
   // singular, is the public submit endpoint — intentionally unauthenticated,
   // service-role write with rate limit + honeypot, so it is NOT listed.)
   'src/app/api/credit-applications',
+  'src/app/api/estimates',
 ];
+
+// Routes in these directories must be gated on a specific FEATURE, not just
+// "is staff": requireStaff admits every internal role, and audit item 9 was
+// exactly that — shop/field techs and finance could price, push, email and
+// delete any estimate. The value is the guard call every route.ts in the
+// directory must contain verbatim.
+const FEATURE_GATED_DIRS: Record<string, string> = {
+  'src/app/api/estimates': "requireFeature(req, 'estimates')",
+};
 
 // Deliberate exceptions, with the reason they are safe as-is.
 // (The executive financials routes use requireFinancials — super_admin/
@@ -66,6 +76,27 @@ describe('sensitive API routes use staff/admin guards', () => {
           /\brequireAuth\(/.test(src),
           `${rel} uses bare requireAuth — any approved login (incl. customer/installer) passes. Use requireStaff, requireAdmin, or requireRole, or add to the ALLOWLIST with a reason.`,
         ).toBe(false);
+      });
+    }
+  }
+});
+
+describe('feature-gated API routes carry their feature guard', () => {
+  for (const [dir, guard] of Object.entries(FEATURE_GATED_DIRS)) {
+    const files = routeFiles(join(repoRoot, dir));
+    it(`${dir} has routes to check`, () => {
+      // An empty directory would make the loop below vacuously green — a
+      // rename/move must fail loudly, not silently stop checking.
+      expect(files.length).toBeGreaterThan(0);
+    });
+    for (const file of files) {
+      const rel = relative(repoRoot, file).replace(/\\/g, '/');
+      it(rel, () => {
+        const src = readFileSync(file, 'utf8');
+        expect(
+          src.includes(guard),
+          `${rel} is missing ${guard} — requireStaff admits every internal role (shop/field techs, finance); this directory is feature-gated.`,
+        ).toBe(true);
       });
     }
   }

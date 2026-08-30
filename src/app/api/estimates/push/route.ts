@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireStaff } from '@/lib/api-auth';
+import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { estimateContextMemo } from '@/lib/estimate-document';
 import { resolveOrPromoteByName } from '@/lib/promote-prospect';
@@ -267,7 +267,7 @@ async function deleteNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
 
 // POST — push estimate to NetSuite
 export async function POST(req: NextRequest) {
-  const auth = await requireStaff(req);
+  const auth = await requireFeature(req, 'estimates');
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, PushEstimateSchema);
@@ -483,7 +483,7 @@ export async function POST(req: NextRequest) {
 
 // DELETE — delete estimate from NetSuite
 export async function DELETE(req: NextRequest) {
-  const auth = await requireStaff(req);
+  const auth = await requireFeature(req, 'estimates');
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, DeleteEstimateSchema);

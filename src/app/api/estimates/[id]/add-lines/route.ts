@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireStaff } from '@/lib/api-auth';
+import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { computeTotals } from '@/lib/estimate-totals';
 
@@ -37,7 +37,7 @@ const Schema = z.object({ line_items: z.array(LineItemSchema).min(1).max(100) })
  * add-wrap-quote.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireStaff(req);
+  const auth = await requireFeature(req, 'estimates');
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

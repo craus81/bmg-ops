@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireStaff } from '@/lib/api-auth';
+import { requireFeature } from '@/lib/api-auth';
 import { logAudit } from '@/lib/audit';
 import { validateBody, z } from '@/lib/validate';
 import { computeTotals } from '@/lib/estimate-totals';
@@ -74,7 +74,7 @@ const DeleteSchema = z.object({ id: z.string().uuid() });
 // never reach any client: a staff holder could open the customer's approval
 // page (/approve/estimate/<token>) and forge an acceptance — the E-SIGN record
 // the convert-to-SO gate trusts. Strip it (and its expiry) from every GET
-// response. internal_notes is intentionally kept: this route is requireStaff,
+// response. internal_notes is intentionally kept: this route is gated on the estimates feature,
 // and those ops-only notes are what the builder loads and edits.
 const APPROVAL_SECRET_FIELDS = ['approval_token', 'approval_token_expires_at'] as const;
 function stripApprovalSecrets<T extends Record<string, any>>(row: T | null): T | null {
@@ -94,7 +94,7 @@ function getSupabase() {
 
 // GET — list estimates
 export async function GET(req: NextRequest) {
-  const auth = await requireStaff(req);
+  const auth = await requireFeature(req, 'estimates');
   if (auth.error) return auth.error;
 
   try {
@@ -129,7 +129,7 @@ export async function GET(req: NextRequest) {
 
 // POST — create or update estimate
 export async function POST(req: NextRequest) {
-  const auth = await requireStaff(req);
+  const auth = await requireFeature(req, 'estimates');
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, UpsertEstimateSchema);
@@ -401,7 +401,7 @@ export async function POST(req: NextRequest) {
 
 // DELETE — delete an estimate (also deletes from NetSuite if pushed)
 export async function DELETE(req: NextRequest) {
-  const auth = await requireStaff(req);
+  const auth = await requireFeature(req, 'estimates');
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, DeleteSchema);
@@ -422,7 +422,7 @@ export async function DELETE(req: NextRequest) {
     if (estimate?.netsuite_estimate_id) {
       try {
         // Forward the caller's credentials: a server-side fetch carries no
-        // cookies, so without these the push route's requireStaff 401s and
+        // cookies, so without these the push route's guard 401s and
         // deleting a pushed estimate fails every time ("Failed to delete from
         // NetSuite: Unauthorized"). The cookie header is how browser sessions
         // authenticate; authorization covers bearer-token callers.
