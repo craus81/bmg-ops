@@ -88,7 +88,7 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
   // (it's in the emailed PDF and the frozen snapshot). Same for graphic
   // proofs from linked graphics jobs: accepting this page approves them.
   const { summaries: graphics } = await loadEstimateGraphics(supabase, estimate.id);
-  const proofs = await loadEstimateProofs(supabase, estimate.id);
+  const proofs = await loadEstimateProofs(supabase, estimate.id, undefined, { presign: true });
 
   return NextResponse.json({
     status: 'ready',
@@ -129,7 +129,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   // the same loader every other surface uses). Loaded once here: they pick
   // the agreement default, freeze into the snapshot, and decide which
   // linked graphics jobs an acceptance propagates to.
-  const proofBlocks = await loadEstimateProofs(supabase, estimate.id);
+  const proofBlocks = await loadEstimateProofs(supabase, estimate.id, undefined, { presign: true });
 
   if (action === 'reject') {
     const reason = (body.reason || '').trim();

@@ -180,6 +180,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/graphics/from-wrap-quote/route.ts': staff(),
   'src/app/api/graphics/invoice-pdf/route.ts': staff(),
   'src/app/api/graphics/invoice-preview/route.ts': staff(),
+  'src/app/api/graphics/packing-list/route.ts': staff(),
   'src/app/api/graphics/mark-invoiced/route.ts': staff(),
   'src/app/api/graphics/notify-assignees/route.ts': staff(),
   'src/app/api/graphics/notify-pickup/route.ts': staff(),
