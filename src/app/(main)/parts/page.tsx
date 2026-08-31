@@ -239,6 +239,7 @@ export default function PartsPage() {
         .eq('catalog', catalog)
         .eq('is_active', true)
         .order('item_number', { ascending: true })
+        .order('id')
         .range(from, to);
       const batch = (data || []) as Part[];
       allParts = allParts.concat(batch);
@@ -298,7 +299,9 @@ export default function PartsPage() {
       let pg = 0;
       let more = true;
       while (more) {
-        const { data } = await supabase.from(table).select(cols).range(pg * 1000, pg * 1000 + 999);
+        // Ordered: offset pagination without a deterministic order can skip
+        // or duplicate rows at page boundaries (every table here has id).
+        const { data } = await supabase.from(table).select(cols).order('id').range(pg * 1000, pg * 1000 + 999);
         const batch = data || [];
         all = all.concat(batch);
         more = batch.length === 1000;

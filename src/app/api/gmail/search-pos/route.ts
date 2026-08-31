@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { searchPOEmails, getMessage, getPdfAttachments, getHeader } from '@/lib/google';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,10 +42,20 @@ export async function GET(req: NextRequest) {
       .in('message_id', messageIds);
     const importedSet = new Set((existing || []).map((e: any) => e.message_id));
 
-    // Also get existing PO numbers to detect duplicates
-    const { data: existingPOs } = await supabase
-      .from('purchase_orders')
-      .select('po_number');
+    // Also get existing PO numbers to detect duplicates. Paginated: the
+    // book is past PostgREST's 1000-row cap, and a truncated set re-imports
+    // old POs as duplicates (Round 3 CRITICAL, R3-1). A read error must not
+    // degrade to "nothing exists" for the same reason.
+    const { data: existingPOs, error: existingErr } = await fetchAllRows<{ po_number: string | null }>((from, to) =>
+      supabase
+        .from('purchase_orders')
+        .select('po_number')
+        .order('id')
+        .range(from, to),
+    );
+    if (existingErr) {
+      return NextResponse.json({ error: `Could not load existing POs (${existingErr.message}) — refusing to list emails without duplicate protection.` }, { status: 502 });
+    }
     const existingPoNumbers = new Set((existingPOs || []).map((p: any) => p.po_number));
 
     // Fetch details for unimported messages

@@ -33,6 +33,7 @@ async function loadParts(): Promise<Map<string, PartInfo>> {
       .select('id, item_number, display_name, description, billable_customer')
       .eq('is_active', true)
       .order('item_number')
+      .order('id')
       .range(offset, offset + 999);
     if (error || !data || data.length === 0) break;
     for (const p of data) {
