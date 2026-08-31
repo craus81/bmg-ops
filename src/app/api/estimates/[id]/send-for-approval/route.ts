@@ -257,8 +257,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       approval_token_expires_at: expiresAt,
       sent_for_approval_at: new Date().toISOString(),
       sent_for_approval_by: auth.user.id,
-      status: estimate.status === 'draft' ? 'sent' : estimate.status,
-      // Clear any prior rejection so the resent link is actionable.
+      // 'rejected' also flips back to 'sent': a resent-after-rejection
+      // estimate previously KEPT status 'rejected', dropping out of the
+      // follow-up cron and the open-quotes math while its link was live
+      // (Round 3 finding).
+      status: ['draft', 'rejected'].includes(estimate.status) ? 'sent' : estimate.status,
+      // Clear any prior rejection so the resent link is actionable — but
+      // keep the objection: it was the only record of WHY the customer
+      // said no, and nulling it erased that silently.
+      ...(estimate.customer_rejected_at ? {
+        internal_notes: `${estimate.internal_notes ? `${estimate.internal_notes}\n` : ''}[${new Date().toISOString().slice(0, 10)}] Resent after rejection (${String(estimate.customer_rejected_at).slice(0, 10)}): ${estimate.customer_rejection_reason || 'no reason given'}`.slice(0, 5000),
+      } : {}),
       customer_rejected_at: null,
       customer_rejection_reason: null,
       updated_at: new Date().toISOString(),
