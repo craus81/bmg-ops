@@ -1247,34 +1247,10 @@ export async function createVendor(payload: {
 }
 
 /**
- * Resolve THE labor item every estimate/SO bills labor to. Push and
- * convert-to-SO previously ran two different first-match lookups
- * (`LIKE '%LABOR%'` vs `LIKE 'LABOR%'`, no ORDER BY), so the same job's
- * labor could land on different NetSuite items — including "Graphics
- * Install Labor" — and move between GL accounts (Round 1 finding, closed
- * in Round 3). One resolver, deterministic: the NETSUITE_LABOR_ITEM_ID
- * env override wins; else the item named exactly LABOR; else the
- * alphabetically-first active LABOR-prefixed item. Never a leading
- * wildcard. Returns null when no labor item exists — callers already
- * handle that (push warns, convert reports laborSkipped).
+ * The labor item resolver moved to src/lib/labor-item.ts, where it can also
+ * read the configured item out of quote_settings (migration 247) and tell
+ * callers WHICH item labor billed to. Importing suiteqlQuery from here.
  */
-export async function resolveLaborItemId(): Promise<string | null> {
-  const override = process.env.NETSUITE_LABOR_ITEM_ID;
-  if (override && /^\d+$/.test(override)) return override;
-  try {
-    const exact = await suiteqlQuery(
-      "SELECT i.id FROM item i WHERE UPPER(i.itemid) = 'LABOR' AND i.isinactive = 'F' FETCH FIRST 1 ROWS ONLY"
-    );
-    if (exact?.items?.[0]?.id) return String(exact.items[0].id);
-    const prefixed = await suiteqlQuery(
-      "SELECT i.id FROM item i WHERE UPPER(i.itemid) LIKE 'LABOR%' AND i.isinactive = 'F' ORDER BY i.itemid FETCH FIRST 1 ROWS ONLY"
-    );
-    if (prefixed?.items?.[0]?.id) return String(prefixed.items[0].id);
-  } catch {
-    // Callers treat null as "no labor item" and say so.
-  }
-  return null;
-}
 
 export async function createSalesOrder(payload: {
   customerId: string | number;

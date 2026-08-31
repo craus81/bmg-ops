@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createSalesOrder, findLocation, suiteqlQuery, closeNetSuiteEstimate, resolveLaborItemId } from '@/lib/netsuite';
+import { createSalesOrder, findLocation, suiteqlQuery, closeNetSuiteEstimate } from '@/lib/netsuite';
+import { resolveLaborItem } from '@/lib/labor-item';
 import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
@@ -208,15 +209,17 @@ export async function POST(req: NextRequest) {
     const laborHours = parseFloat(estimate.labor_hours_override ?? estimate.labor_hours) || 0;
     const laborRate = parseFloat(estimate.labor_rate) || 85;
     let laborSkipped = false;
+    let laborItemNumber: string | null = null;
     if (laborHours > 0) {
       try {
         // Same resolver as estimates/push — the two routes used different
         // LIKE patterns, so the pushed estimate and its SO could bill labor
         // to different NetSuite items (Round 1 finding, closed in Round 3).
-        const laborItemId = await resolveLaborItemId();
-        if (laborItemId) {
+        const { item: laborItem } = await resolveLaborItem(supabase);
+        if (laborItem) {
+          laborItemNumber = laborItem.itemNumber;
           soLineItems.push({
-            itemId: laborItemId,
+            itemId: laborItem.id,
             quantity: laborHours,
             rate: laborRate,
             description: `Labor - ${laborHours} hrs @ $${laborRate}/hr`,
@@ -505,6 +508,9 @@ export async function POST(req: NextRequest) {
       customLines: customLineDescriptions.length > 0 ? customLineDescriptions : undefined,
       unmappedLines: unmappedLineDescriptions.length > 0 ? unmappedLineDescriptions : undefined,
       laborSkipped: laborSkipped || undefined,
+      laborHours: laborSkipped ? laborHours : undefined,
+      laborAmount: laborSkipped ? Math.round(laborHours * laborRate * 100) / 100 : undefined,
+      laborItem: laborItemNumber || undefined,
       upfitProject: upfitProject || undefined,
       nsEstimateClosed: nsEstimateClosed === null ? undefined : nsEstimateClosed,
       memoUsed: memo,

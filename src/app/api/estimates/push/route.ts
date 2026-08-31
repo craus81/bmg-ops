@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { estimateContextMemo } from '@/lib/estimate-document';
-import { resolveLaborItemId } from '@/lib/netsuite';
+import { resolveLaborItem } from '@/lib/labor-item';
 import { resolveOrPromoteByName } from '@/lib/promote-prospect';
 
 export const dynamic = 'force-dynamic';
@@ -370,25 +370,41 @@ export async function POST(req: NextRequest) {
       customLineDescriptions.push(label);
     }
 
-    // Add labor as a line item if there are labor hours
-    const effectiveLaborHours = estimate.labor_hours_override ?? estimate.labor_hours;
-    if (effectiveLaborHours > 0 && estimate.labor_rate > 0) {
+    // Add labor as a line item if there are labor hours. When no labor item
+    // can be resolved the NetSuite copy is short by the entire labor amount,
+    // so this is REPORTED (laborSkipped) rather than console.warn'd — the
+    // silent version shipped estimates missing their labor line.
+    const effectiveLaborHours = parseFloat(String(estimate.labor_hours_override ?? estimate.labor_hours)) || 0;
+    const laborRate = parseFloat(String(estimate.labor_rate)) || 0;
+    let laborSkipped = false;
+    let laborItemNumber: string | null = null;
+    if (effectiveLaborHours > 0 && laborRate > 0) {
       // One shared resolver with convert-to-so — the two routes used
       // different LIKE patterns with no ORDER BY, so the same job's labor
       // could bill to different NetSuite items (Round 1 finding, closed in
       // Round 3).
-      const laborItemId = await resolveLaborItemId();
-      if (laborItemId) {
+      const { item: laborItem } = await resolveLaborItem(supabase);
+      if (laborItem) {
+        laborItemNumber = laborItem.itemNumber;
         nsLineItems.push({
-          itemId: laborItemId,
+          itemId: laborItem.id,
           quantity: effectiveLaborHours,
-          rate: estimate.labor_rate,
-          description: `Labor (${effectiveLaborHours} hrs @ $${estimate.labor_rate}/hr)`,
+          rate: laborRate,
+          description: `Labor (${effectiveLaborHours} hrs @ $${laborRate}/hr)`,
         });
       } else {
-        console.warn('Could not find Labor item in NetSuite');
+        laborSkipped = true;
+        console.warn('Could not resolve a NetSuite labor item — labor not pushed');
       }
     }
+    // Echoed on both responses so the builder can name the money that did
+    // not make it (or the item it billed to).
+    const laborReport = {
+      laborSkipped: laborSkipped || undefined,
+      laborHours: laborSkipped ? effectiveLaborHours : undefined,
+      laborAmount: laborSkipped ? Math.round(effectiveLaborHours * laborRate * 100) / 100 : undefined,
+      laborItem: laborItemNumber || undefined,
+    };
 
     if (nsLineItems.length === 0) {
       return NextResponse.json({
@@ -432,6 +448,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         updated: true,
+        ...laborReport,
         netsuite_estimate_id: estimate.netsuite_estimate_id,
         netsuite_estimate_number: estimate.netsuite_estimate_number,
         customLines: customLineDescriptions.length > 0 ? customLineDescriptions : undefined,
@@ -469,6 +486,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      ...laborReport,
       netsuite_estimate_id: result.estimateId,
       netsuite_estimate_number: result.estimateNumber,
       customLines: customLineDescriptions.length > 0 ? customLineDescriptions : undefined,
