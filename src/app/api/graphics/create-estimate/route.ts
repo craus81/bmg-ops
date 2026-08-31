@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
+import { getSalesTaxRate } from '@/lib/sales-tax';
 import { partNumberPattern } from '@/lib/part-number';
 
 export const dynamic = 'force-dynamic';
@@ -139,7 +140,8 @@ export async function POST(req: NextRequest) {
     const autoLaborHours = lineItems.reduce((sum: number, l: any) => sum + l.labor_hours, 0);
     const laborRate = 120; // default
     const laborTotal = autoLaborHours * laborRate;
-    const taxRate = 0.0795;
+    // One company sales tax rate (Settings → Sales Tax, super admin only).
+    const taxRate = await getSalesTaxRate(supabase);
     const taxAmount = subtotal * taxRate;
     const grandTotal = subtotal + laborTotal + taxAmount;
 
