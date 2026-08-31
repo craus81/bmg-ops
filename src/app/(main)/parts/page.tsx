@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
@@ -95,6 +95,7 @@ const bestKeeperId = (g: Part[]) => [...g].sort((a, b) => partScore(b) - partSco
 
 export default function PartsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, isAdmin, isSales, hasFeature, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
@@ -196,9 +197,12 @@ export default function PartsPage() {
   // Deep-link to one record: /parts?part=<netsuite_parts.id> (deepLinks.part)
   // — resolves the part first so we can land on the right catalog tab, then
   // reuses the same search + focus machinery as ?q=.
+  // Keyed on searchParams, not mount: global search sits in the header on this
+  // page too, so picking a part from it pushes a new ?part= onto the page
+  // that's already mounted — reading the URL once would ignore that click.
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const params = new URLSearchParams(window.location.search);
+    const params = searchParams;
+    if (!params) return;
     const c = params.get('catalog');
     const q = params.get('q');
     const partId = params.get('part');
@@ -219,8 +223,8 @@ export default function PartsPage() {
         setPendingFocus(data.item_number.toUpperCase());
       })();
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- read URL once on mount
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- re-runs on URL change only
+  }, [searchParams]);
 
   const loadParts = async () => {
     const reqId = ++loadReqRef.current;

@@ -55,9 +55,10 @@ export function pathFor(type: PopoutType, item: any): string {
     case 'vehicles': return deepLinks.vehicle(item.id);
     case 'graphics_jobs': return deepLinks.graphicsJob(item.id);
     case 'estimates': return deepLinks.estimate(item.id);
-    // Parts previews land on a filtered search — not a record page, so no
-    // entity builder exists for this one.
-    case 'parts': return `/parts?catalog=${item.catalog || 'upfit'}&q=${encodeURIComponent(item.part_number || '')}`;
+    // The builder's ?part=<id> resolves the part itself, so it honors a
+    // catalog_override the search row doesn't carry (the old ?catalog=&q=
+    // form could open the wrong catalog tab and find nothing).
+    case 'parts': return deepLinks.part(item.id);
     case 'customers': return deepLinks.prospect(item.id);
     case 'messages': return deepLinks.conversation(item.conversation_id);
     case 'quotes': return deepLinks.wrapQuote(item.id);
