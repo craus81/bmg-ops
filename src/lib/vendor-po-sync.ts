@@ -27,6 +27,11 @@ export interface VendorPoSyncResult {
   modified: number;
   synced: number;
   lines: number;
+  /** Header upserts that failed (those POs' mirrors are stale this run). */
+  headerErrors?: number;
+  /** POs served by the no-quantityshiprecv fallback — their previous
+   *  received quantities were preserved rather than zeroed. */
+  receivedDegraded?: number;
   error?: string;
   /** Outcome of the sync_state heartbeat write — not persisted, only reported. */
   syncStateWrite?: HeartbeatResult;
@@ -78,11 +83,19 @@ export async function syncVendorPos(
 
   let synced = 0;
   let lineCount = 0;
+  let headerErrors = 0;
+  const headerErrorSamples: string[] = [];
 
   // Line detail for the modified POs, chunked to keep SuiteQL happy.
   // quantityshiprecv (received so far) may not exist on every account
-  // version — fall back to a query without it.
+  // version — fall back to a query without it. POs served by the fallback
+  // are tracked as DEGRADED: their rows carry no received quantities, and
+  // writing them as-is would zero quantity_received across the PO —
+  // readiness then re-counts already-arrived parts as still on order
+  // (Stage 4 finding: "a degraded fallback zeroes received quantities with
+  // no flag"). Degraded POs keep their previous received values instead.
   const linesByPo = new Map<string, any[]>();
+  const degradedPoIds = new Set<string>();
   const poIds = pos.map(p => String(p.id));
   for (let i = 0; i < poIds.length; i += 50) {
     const chunk = poIds.slice(i, i + 50);
@@ -110,6 +123,7 @@ export async function syncVendorPos(
           AND tl.taxline = 'F'
           AND tl.item IS NOT NULL
       `);
+      for (const id of chunk) degradedPoIds.add(id);
     }
     for (const row of rows) {
       const key = String(row.po_id);
@@ -136,7 +150,27 @@ export async function syncVendorPos(
       }, { onConflict: 'netsuite_id' })
       .select('id')
       .single();
-    if (error || !header) continue;
+    if (error || !header) {
+      // A skipped header means this PO's mirror is silently stale — count
+      // it into the heartbeat instead of burying it (Stage 4 finding:
+      // "per-row sync errors are silently continued").
+      headerErrors++;
+      if (headerErrorSamples.length < 5) {
+        headerErrorSamples.push(`${po.tranid || nsId}: ${error?.message || 'no header row returned'}`);
+      }
+      continue;
+    }
+
+    // Degraded read: carry the previous received quantities forward, keyed
+    // by NetSuite line id, rather than zeroing them.
+    let priorReceived: Map<string, number> | null = null;
+    if (degradedPoIds.has(nsId)) {
+      const { data: prior } = await service
+        .from('netsuite_vendor_po_lines')
+        .select('line_id, quantity_received')
+        .eq('po_id', header.id);
+      priorReceived = new Map((prior || []).map(r => [String(r.line_id), Number(r.quantity_received) || 0]));
+    }
 
     // Replace lines wholesale — quantities move as receipts/bills post, and
     // a line can be deleted in NetSuite; delete+insert keeps us exact.
@@ -147,7 +181,9 @@ export async function syncVendorPos(
       item_number: normalizeItemNumber(l.item_number),
       description: l.description || null,
       quantity: Math.abs(parseFloat(l.quantity || '0')) || 0,
-      quantity_received: Math.abs(parseFloat(l.quantityshiprecv || '0')) || 0,
+      quantity_received: priorReceived
+        ? (priorReceived.get(String(l.line_id)) ?? 0)
+        : Math.abs(parseFloat(l.quantityshiprecv || '0')) || 0,
       quantity_billed: Math.abs(parseFloat(l.quantitybilled || '0')) || 0,
       rate: l.rate != null ? Math.abs(parseFloat(l.rate)) || null : null,
       amount: l.netamount != null ? Math.abs(parseFloat(l.netamount)) || null : null,
@@ -160,8 +196,18 @@ export async function syncVendorPos(
     synced++;
   }
 
+  const degradedSynced = [...degradedPoIds].filter(id => linesByPo.has(id)).length;
+  if (degradedSynced > 0) {
+    console.warn(`vendor-po-sync: quantityshiprecv unavailable for ${degradedSynced} PO(s) — previous received quantities preserved`);
+  }
   const syncStateWrite = await recordHeartbeat(
-    service, 'netsuite_vendor_pos', { modified: pos.length, synced, lines: lineCount },
+    service, 'netsuite_vendor_pos', {
+      modified: pos.length, synced, lines: lineCount,
+      // Both surface in System Health so degraded/stale mirror data is a
+      // visible condition, not a silent one.
+      ...(headerErrors > 0 ? { headerErrors, headerErrorSamples } : {}),
+      ...(degradedSynced > 0 ? { receivedDegraded: degradedSynced } : {}),
+    },
   );
-  return { modified: pos.length, synced, lines: lineCount, syncStateWrite };
+  return { modified: pos.length, synced, lines: lineCount, headerErrors, receivedDegraded: degradedSynced, syncStateWrite };
 }
