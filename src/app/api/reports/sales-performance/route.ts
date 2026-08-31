@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireRole } from '@/lib/api-auth';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -42,20 +43,29 @@ export async function GET(req: NextRequest) {
   const endNext = new Date(new Date(end + 'T00:00:00Z').getTime() + 86_400_000).toISOString().slice(0, 10);
 
   try {
+    // Paginated (R3-1 MAJOR sweep): PostgREST caps each response at 1000
+    // rows regardless of .limit(2000) — a busy window under-reported rep
+    // performance, silently.
     const [estRes, wrapRes] = await Promise.all([
-      service
-        .from('estimates')
-        .select('id, estimate_number, customer_name, grand_total, created_by, status, sent_for_approval_at, customer_approved_at, customer_rejected_at, updated_at, created_at')
-        .neq('status', 'draft')
-        .or(`and(created_at.gte.${start},created_at.lt.${endNext}),and(sent_for_approval_at.gte.${start},sent_for_approval_at.lt.${endNext})`)
-        .limit(2000),
-      service
-        .from('wrap_quotes')
-        .select('id, quote_number, customer, total, created_by, status, sent_at, accepted_at, rejected_at, created_at')
-        .neq('status', 'draft')
-        .gte('sent_at', start)
-        .lt('sent_at', endNext)
-        .limit(2000),
+      fetchAllRows<any>((from, to) =>
+        service
+          .from('estimates')
+          .select('id, estimate_number, customer_name, grand_total, created_by, status, sent_for_approval_at, customer_approved_at, customer_rejected_at, updated_at, created_at')
+          .neq('status', 'draft')
+          .or(`and(created_at.gte.${start},created_at.lt.${endNext}),and(sent_for_approval_at.gte.${start},sent_for_approval_at.lt.${endNext})`)
+          .order('created_at')
+          .order('id')
+          .range(from, to)),
+      fetchAllRows<any>((from, to) =>
+        service
+          .from('wrap_quotes')
+          .select('id, quote_number, customer, total, created_by, status, sent_at, accepted_at, rejected_at, created_at')
+          .neq('status', 'draft')
+          .gte('sent_at', start)
+          .lt('sent_at', endNext)
+          .order('sent_at')
+          .order('id')
+          .range(from, to)),
     ]);
     if (estRes.error) return NextResponse.json({ error: estRes.error.message }, { status: 500 });
     if (wrapRes.error) return NextResponse.json({ error: wrapRes.error.message }, { status: 500 });

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireRole } from '@/lib/api-auth';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -29,23 +30,32 @@ export async function GET(req: NextRequest) {
   const endNext = new Date(new Date(end + 'T00:00:00Z').getTime() + 86_400_000).toISOString().slice(0, 10);
 
   try {
-    const { data: jobs, error: jobsErr } = await service
-      .from('graphics_jobs')
-      .select('id, job_number, title, status, job_category, invoice_amount, netsuite_invoice_number, invoiced_at, created_at')
-      .gte('created_at', start)
-      .lt('created_at', endNext)
-      .neq('status', 'cancelled')
-      .order('created_at', { ascending: false })
-      .limit(2000);
+    // Paginated (R3-1 MAJOR sweep): the .limit(2000) capped at 1000 rows,
+    // silently dropping the window's oldest jobs from the cost report.
+    const { data: jobs, error: jobsErr } = await fetchAllRows<any>((from, to) =>
+      service
+        .from('graphics_jobs')
+        .select('id, job_number, title, status, job_category, invoice_amount, netsuite_invoice_number, invoiced_at, created_at')
+        .gte('created_at', start)
+        .lt('created_at', endNext)
+        .neq('status', 'cancelled')
+        .order('created_at', { ascending: false })
+        .order('id')
+        .range(from, to));
     if (jobsErr) return NextResponse.json({ error: jobsErr.message }, { status: 500 });
 
     const jobIds = (jobs || []).map(j => j.id);
     const materials: { graphics_job_id: string; material_name: string; category: string; quantity_sqft: number | null; cost: number | null }[] = [];
     for (let i = 0; i < jobIds.length; i += 200) {
-      const { data } = await service
-        .from('graphics_job_materials')
-        .select('graphics_job_id, material_name, category, quantity_sqft, cost')
-        .in('graphics_job_id', jobIds.slice(i, i + 200));
+      // Each chunk paginated too: 200 jobs' materials can pass 1000 rows.
+      const { data, error: matErr } = await fetchAllRows<any>((from, to) =>
+        service
+          .from('graphics_job_materials')
+          .select('graphics_job_id, material_name, category, quantity_sqft, cost')
+          .in('graphics_job_id', jobIds.slice(i, i + 200))
+          .order('id')
+          .range(from, to));
+      if (matErr) return NextResponse.json({ error: matErr.message }, { status: 500 });
       materials.push(...((data || []) as typeof materials));
     }
 
