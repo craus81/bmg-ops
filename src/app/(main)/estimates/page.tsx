@@ -294,6 +294,7 @@ export default function EstimatesPage() {
   const [lines, setLines] = useState<LineItem[]>([]);
   // Margin floor (%) below which a quote gets flagged — admin-set, shared
   // with the wrap-quote builder via the quote_settings singleton.
+  const [linkingSO, setLinkingSO] = useState(false);
   const [marginFloor, setMarginFloor] = useState(30);
   // K5: vehicle identity — prints on the estimate document, pushes to
   // NetSuite's VIN field, and feeds the Shop Board's Arriving row.
@@ -1790,6 +1791,18 @@ export default function EstimatesPage() {
         await loadEstimates(true);
       } else if (data.status === 'already_created') {
         await dialog.alert(data.message);
+      } else if (data.status === 'created_unlinked') {
+        // The SO is REAL in NetSuite, we just couldn't record it. Offer the
+        // repair right here with the number prefilled — telling someone to
+        // "link it by hand" and then giving them no way to do it is how
+        // SO1064 sat orphaned.
+        const fix = await dialog.confirm(
+          `${data.error}\n\nLink SO #${data.salesOrderNumber || data.salesOrderId} to this estimate now?`,
+          { confirmLabel: 'Link it now' },
+        );
+        setConvertingToSO(false);
+        if (fix) await linkExistingSalesOrder(data.salesOrderNumber || '');
+        return;
       } else {
         await dialog.alert('Failed: ' + (data.error || 'Unknown error'));
       }
@@ -1797,6 +1810,37 @@ export default function EstimatesPage() {
       await dialog.alert('Network error — please try again');
     }
     setConvertingToSO(false);
+  };
+
+  // Attach an SO that already exists in NetSuite. Recovery for a conversion
+  // that created the order but couldn't write it back, and the only way to
+  // clear an estimate that is otherwise one click from a duplicate SO.
+  const linkExistingSalesOrder = async (prefill: string = '') => {
+    if (!editingId) return;
+    const entered = await dialog.prompt(
+      'Enter the Sales Order number exactly as NetSuite shows it (e.g. SO1064). It is verified against NetSuite before anything is saved.',
+      prefill,
+      { title: 'Link an existing Sales Order', confirmLabel: 'Link' },
+    );
+    if (entered === null || !entered.trim()) return;
+    setLinkingSO(true);
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/link-so`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ salesOrderNumber: entered.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        await dialog.alert(data.error || 'Could not link that Sales Order.');
+      } else {
+        await dialog.alert(data.message);
+        await loadEstimates(true);
+      }
+    } catch {
+      await dialog.alert('Network error — please try again');
+    }
+    setLinkingSO(false);
   };
 
   // ── Load customer-level operations defaults ──
@@ -3861,6 +3905,26 @@ export default function EstimatesPage() {
             </button>
           );
         })()}
+
+        {/* Link an SO that already exists in NetSuite. Shown alongside
+            Convert because the case it repairs — an SO created but not
+            recorded — leaves the estimate looking unconverted. */}
+        {editingId && !estimates.find(e => e.id === editingId)?.netsuite_so_id && (
+          <button
+            onClick={() => linkExistingSalesOrder()}
+            disabled={linkingSO || convertingToSO}
+            title="Use this when a Sales Order already exists in NetSuite for this estimate but isn't showing here."
+            style={{
+              width: '100%', padding: '9px', borderRadius: '10px', marginTop: '8px',
+              background: 'transparent', border: '1px solid var(--border)',
+              color: 'var(--text-label)', fontWeight: 700, fontSize: '12px',
+              cursor: linkingSO || convertingToSO ? 'not-allowed' : 'pointer',
+              opacity: linkingSO ? 0.5 : 1,
+            }}
+          >
+            {linkingSO ? 'Linking...' : 'Link an existing Sales Order'}
+          </button>
+        )}
 
         {/* Show SO number if already converted */}
         {editingId && estimates.find(e => e.id === editingId)?.netsuite_so_id && (

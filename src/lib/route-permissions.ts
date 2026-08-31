@@ -154,6 +154,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/estimates/[id]/approval-preview/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/duplicate/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/email-pdf/route.ts': feature('estimates'),
+  'src/app/api/estimates/[id]/link-so/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/pdf/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/send-for-approval/route.ts': feature('estimates'),
   'src/app/api/estimates/convert-to-so/route.ts': feature('estimates'),
