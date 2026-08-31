@@ -82,7 +82,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
 | **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 19 and 21 remain open** (2 — R2-goes-private, labor capture). Shipped 2026-08-30: the Stage 1 build-out (#701–#704, closing item 18), the two Stage 1 owner decisions (#706 lead tier, #707 deletion→NetSuite), and estimate integrity (#708–#710, items 9–11). Shipped 2026-08-30: the whole **vehicle custody** block (#712–#715, items 12–16). Shipped 2026-08-30 (second wave): **parts ordering & receiving** (#717–#719, item 17 — the audit's largest build: request queue → NetSuite PO → receiving with item receipts) and the **route→permission manifest** (#721, item 20 — all 251 routes declare + prove their guard; the sweep fixed the unauthenticated Google OAuth pair). |
 
-| **Round 3** — re-audit 2026-08-30 (Part 7) | 🔄 roadmap open | Nine-probe re-verification at `1ea2015`, every MAJOR+ finding re-verified by hand. **Round 2 holds** — all 19 ships confirmed at HEAD (5 partial caveats). ~90 new findings distilled into the Part 7 roadmap: 6 CRITICAL truncation bugs that move money/state, 8 E-SIGN forgery/loss holes, 7 non-idempotent NetSuite money paths (zero unique-index backing), 3 custody/CNI blockers — one, CNI company invites, failing 500 in production since #715 — the `forceChannels` no-op, and this week's parts-loop regressions (hotfixed same day, #724). Items 19 and 21 now carry written decision packages (the R2-flip tier checklist, the labor-capture touch-map). Shipped 2026-08-31: **Stage 2 closed** — the estimate correctness set (#726) and E-SIGN hardening (#727, migration 242) retire R3-6, R3-7, and every remaining Stage 2 walkthrough finding, and #729 ships the R3-17 change-order core (Duplicate + duplicate-as-revision with `supersedes_estimate_id` lineage, migration 243) — Stage 2 closed outright. **R3-1 closed in full** (#732 the six CRITICALs with fail-closed reads, #733 the MAJOR sweep) — every §7.2.2 truncation finding fixed. **Stage 3 closed** (#735 wrap-quote reconciliation + honest win counting + visible provenance, #736 customer reminders w/ migration 244) — all six capture-side findings shipped. |
+| **Round 3** — re-audit 2026-08-30 (Part 7) | 🔄 roadmap open | Nine-probe re-verification at `1ea2015`, every MAJOR+ finding re-verified by hand. **Round 2 holds** — all 19 ships confirmed at HEAD (5 partial caveats). ~90 new findings distilled into the Part 7 roadmap: 6 CRITICAL truncation bugs that move money/state, 8 E-SIGN forgery/loss holes, 7 non-idempotent NetSuite money paths (zero unique-index backing), 3 custody/CNI blockers — one, CNI company invites, failing 500 in production since #715 — the `forceChannels` no-op, and this week's parts-loop regressions (hotfixed same day, #724). Items 19 and 21 now carry written decision packages (the R2-flip tier checklist, the labor-capture touch-map). Shipped 2026-08-31: **Stage 2 closed** — the estimate correctness set (#726) and E-SIGN hardening (#727, migration 242) retire R3-6, R3-7, and every remaining Stage 2 walkthrough finding, and #729 ships the R3-17 change-order core (Duplicate + duplicate-as-revision with `supersedes_estimate_id` lineage, migration 243) — Stage 2 closed outright. **R3-1 closed in full** (#732 the six CRITICALs with fail-closed reads, #733 the MAJOR sweep) — every §7.2.2 truncation finding fixed. **Stage 3 closed** (#735 wrap-quote reconciliation + honest win counting + visible provenance, #736 customer reminders w/ migration 244) — all six capture-side findings shipped. **Stage 4 closed** (#740 atomic conversion claim + vendor-PO sync honesty, #741 schema-cache hardening after the live SO1064 stranding that #738/#739 repaired in parallel with migration 246 + a manual SO link) — the earlier findings were verified already fixed at HEAD (N2 phase 1 auto-project, item 9 staff walls, item 10 estimate closing, 17A–C ordering) and the dead-list re-verdicted. |
 
 Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap; Part 7 carries Round 3.
 
@@ -287,10 +287,14 @@ strong.
 
 **But the chain between them is held together by humans:**
 
-- **CRITICAL — Converting an estimate creates nothing downstream.** No upfit
+- ✅ **CRITICAL — Converting an estimate creates nothing downstream.** No upfit
   project, no graphics job. The user must go create the project by hand and
   **re-type the SO number the app just generated** into a lookup box before any
   readiness math is reachable. (Roadmap N2 phase 1, still unbuilt.)
+  _(Fixed since: N2 phase 1 landed — convert-to-so finds-or-creates the upfit
+  project with the SO number stamped (migration 225's unique index guards the
+  race), and #726's graphics wall refuses conversion when graphics lines have
+  no linked job. Nothing is re-typed by hand.)_
 - ~~**CRITICAL — "Order the upfit parts" has no software at all.**~~ **Fixed
   2026-08-30 (#717–#719, Round 2 item 17):** short readiness rows now carry an
   Order button that raises purchase requests into a vendor-grouped queue at
@@ -299,21 +303,46 @@ strong.
   the 2-hour wait); and `/admin/receiving` checks arrivals in, posting the
   NetSuite item receipt — with a manual-entry worklist when the transform can't
   run. Requesters are notified at ordered and at arrived.
-- **MAJOR — NetSuite sync failures are invisible to the people who act on the
+- ✅ **MAJOR — NetSuite sync failures are invisible to the people who act on the
   data.** System Health is super-admin-only by default; per-row sync errors are
   silently `continue`d; a degraded `quantityshiprecv` fallback zeroes received
   quantities with no flag — and stale on-order data then drives scheduling
   verdicts.
-- **MAJOR — Convert-to-SO isn't idempotent.** The post-create write-back is
+  _(Fixed: System Health is admin-visible; #740 makes the degraded fallback
+  carry each PO's previous received quantities forward instead of zeroing
+  them, and counts both the degradation and header-upsert failures (with
+  samples) into the sync heartbeat — a stale mirror is now a visible
+  condition.)_
+- ✅ **MAJOR — Convert-to-SO isn't idempotent.** The post-create write-back is
   unchecked and there's no lock, so a failed write or a double-click makes a
   **second real SO in NetSuite**. Pushed NS estimates are left open forever
   (`createdfrom` NULL), permanently degrading the SO↔estimate matcher.
-- **MAJOR — Upfit-project APIs are `requireAuth` + `.passthrough()`** —
+  _(Fixed in layers: the Round 2 work made the write-back conditional and
+  checked (first-writer-wins, duplicates loudly reported) and item 10 closes
+  pushed NS estimates; #740 + migration 245 add the atomic conversion claim
+  so the second request turns away BEFORE a duplicate SO exists (R3-8's
+  flagship path); #741 hardens the claim against PostgREST schema-cache lag
+  after the real SO1064 stranding, which #739 + migration 246 repaired,
+  adding a manual SO link for strandings.)_
+- ✅ **MAJOR — Upfit-project APIs are `requireAuth` + `.passthrough()`** —
   customer/installer accounts can read, arbitrarily edit, or **delete** any
   project.
+  _(Fixed: item 9 moved all five upfit-project routes to `requireStaff`,
+  manifest-pinned by #721 — customer/installer accounts are out. The
+  `.passthrough()` body remains, now behind the staff wall.)_
 - **Dead:** the `netsuite_sales_orders` mirror is synced every 2h and rendered
   nowhere; `SalesOrderPdf` + its route are orphaned; the parts-ETA→project
   propagation keys on a column no UI ever writes.
+  _(Re-verdicts 2026-08-31: `SalesOrderPdf` was already removed; the SO
+  mirror now feeds item 10's `closeConvertedEstimates` sweep — no longer
+  dead; and #718's PO stamp writes `netsuite_vendor_po_number` on projects,
+  lighting up the parts-ETA propagation this note said no UI ever fed.)_
+
+**Stage 4 status (2026-08-31): CLOSED.** The conversion chain now runs
+gate → claim → SO → checked stamp → NS-estimate close → auto project, the
+parts machinery (17A/B/C) covers order-through-receive, sync degradation is
+visible, and the upfit APIs are staff-walled. Nothing remains open against
+this stage.
 
 ## Stage 5 — Graphics production (design → proof → print → pack)
 
