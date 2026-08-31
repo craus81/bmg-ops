@@ -17,6 +17,7 @@ import { resolvePlatform, matchQualifiersToConfig } from '@/lib/vin-platform';
 import { sameVehicleVin, vinMatchOrFilter } from '@/lib/vin-match';
 import { IN_SHOP_STATUSES } from '@/lib/types';
 import { deepLinks } from '@/lib/deep-links';
+import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
 import NumberInput from '@/components/NumberInput';
@@ -57,23 +58,9 @@ interface LineItem {
   avg_install_cost?: number | null;
 }
 
-// Does this line represent graphics work, for the "spawn or link a graphics
-// job" panel? `catalog === 'graphics'` only covers part-backed catalog lines —
-// the two MAIN graphics paths never satisfied it, so a combined upfit+graphics
-// estimate could sail to a Sales Order with no graphics job and no prompt:
-//   - Add Graphics (wrap-quote fold) lines have no part row, so catalog stays
-//     undefined after reload; wrap_quote_id (which round-trips through save)
-//     and the fold's two fixed NetSuite item names are the durable markers.
-//   - Quick Graphics lines are bare customs; they're stamped
-//     catalog:'graphics' at creation and matched after reload by the exact
-//     machine-generated descriptions addQuickGraphicsLines writes.
-const isGraphicsLine = (l: LineItem): boolean =>
-  l.catalog === 'graphics'
-  || !!l.wrap_quote_id
-  || l.item_number === '3M Vinyl'
-  || l.item_number === 'Graphics Install Labor'
-  || /\d+(\.\d+)? sqft @ \$/.test(l.description || '')
-  || /^Graphics install labor/i.test(l.description || '');
+// Shared with convert-to-so's blocking graphics gate — one predicate, so the
+// panel here and the server-side wall can never disagree about what counts
+// as graphics work.
 
 interface LinkedGraphicsJob {
   id: string;
@@ -1690,12 +1677,24 @@ export default function EstimatesPage() {
 
     setConvertingToSO(true);
     try {
-      const res = await fetch('/api/estimates/convert-to-so', {
+      let res = await fetch('/api/estimates/convert-to-so', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ estimateId: editingId, ...(overrideReason ? { overrideReason } : {}) }),
       });
-      const data = await res.json();
+      let data = await res.json();
+      // Graphics gate: the server refuses when graphics lines have no linked
+      // graphics job. "Convert anyway" is a conscious choice, not a default.
+      if (res.status === 409 && data.step === 'graphics_job_missing' && data.canSkip) {
+        const anyway = await dialog.confirm(`${data.error}`, { confirmLabel: 'Convert anyway', destructive: true });
+        if (!anyway) { setConvertingToSO(false); return; }
+        res = await fetch('/api/estimates/convert-to-so', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ estimateId: editingId, skipGraphicsCheck: true, ...(overrideReason ? { overrideReason } : {}) }),
+        });
+        data = await res.json();
+      }
       if (res.ok && data.status === 'created') {
         // NOTE: the API's dropped-lines key is `unmappedLines` — this dialog
         // read `skippedItems` (a key the API never sent), so dropped custom
@@ -2110,12 +2109,29 @@ export default function EstimatesPage() {
 
     setDeleting(true);
     try {
-      const res = await fetch('/api/estimates', {
+      let res = await fetch('/api/estimates', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id }),
       });
-      const data = await res.json();
+      let data = await res.json();
+      // Accepted/converted estimates are delete-locked like the Save path;
+      // an admin can proceed with a recorded reason (audited, and the audit
+      // row preserves the signed snapshot's storage key).
+      if (res.status === 409 && data.step === 'accepted_locked' && data.canOverride) {
+        const reason = await dialog.prompt(
+          'This estimate was accepted (or already has a Sales Order) — deleting it destroys the signed record. Deleting anyway is recorded in the audit log. Why?',
+          '',
+          { placeholder: 'e.g. duplicate of EST-1042, customer re-signed there', confirmLabel: 'Delete anyway' },
+        );
+        if (!reason?.trim()) { setDeleting(false); return; }
+        res = await fetch('/api/estimates', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, overrideReason: reason.trim() }),
+        });
+        data = await res.json();
+      }
       if (!data.success && data.error) {
         await dialog.alert('Delete failed: ' + data.error);
       } else {

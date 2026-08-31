@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createSalesOrder, findLocation, suiteqlQuery, closeNetSuiteEstimate } from '@/lib/netsuite';
+import { createSalesOrder, findLocation, suiteqlQuery, closeNetSuiteEstimate, resolveLaborItemId } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
@@ -9,6 +9,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { syncShopInboundForSalesOrder } from '@/lib/shop-inbound';
 import { estimateContextMemo } from '@/lib/estimate-document';
 import { resolveOrPromoteByName } from '@/lib/promote-prospect';
+import { isGraphicsLine } from '@/lib/graphics-lines';
 
 const ConvertSchema = z.object({
   estimateId: z.string().uuid(),
@@ -16,6 +17,9 @@ const ConvertSchema = z.object({
    *  reason recorded in the audit log (phone/email/PO approvals never touch
    *  the magic link, so a hard gate would block legitimate conversions). */
   overrideReason: z.string().trim().min(3).max(500).optional(),
+  /** Set by the UI's "Convert anyway" confirm after the graphics-line gate
+   *  409s — the gate is a blocking check, not a silent pass. */
+  skipGraphicsCheck: z.boolean().optional().default(false),
 });
 
 /**
@@ -43,7 +47,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, ConvertSchema);
   if (parsed.error) return parsed.error;
-  const { estimateId, overrideReason } = parsed.data;
+  const { estimateId, overrideReason, skipGraphicsCheck } = parsed.data;
 
   try {
     const supabase = createClient(
@@ -72,6 +76,31 @@ export async function POST(req: NextRequest) {
         salesOrderNumber: estimate.netsuite_so_number || '',
         message: `Sales Order already exists (SO #${estimate.netsuite_so_number || estimate.netsuite_so_id})`,
       });
+    }
+
+    // ── Graphics gate ──
+    // The estimate builder's "spawn graphics job" panel is only a prompt;
+    // this is the wall (Stage 2 finding): an estimate carrying graphics
+    // lines must have a linked graphics job before it becomes a Sales
+    // Order, or production never hears about the work. The UI's
+    // "Convert anyway" confirm retries with skipGraphicsCheck.
+    if (!skipGraphicsCheck) {
+      const gfxLines = (estimate.estimate_line_items || []).filter(isGraphicsLine);
+      if (gfxLines.length > 0) {
+        const { data: gjob } = await supabase
+          .from('graphics_jobs')
+          .select('id')
+          .eq('estimate_id', estimateId)
+          .limit(1);
+        if (!gjob || gjob.length === 0) {
+          return NextResponse.json({
+            error: `This estimate carries ${gfxLines.length} graphics line${gfxLines.length !== 1 ? 's' : ''} but no linked graphics job — production would never hear about the work. Create it first (the Graphics panel on the estimate), or convert anyway.`,
+            step: 'graphics_job_missing',
+            graphicsLineCount: gfxLines.length,
+            canSkip: true,
+          }, { status: 409 });
+        }
+      }
     }
 
     // ── Acceptance gate ──
@@ -135,13 +164,16 @@ export async function POST(req: NextRequest) {
     let customItemId: string | null = null;
 
     for (const li of lineItems) {
+      // qty-0 "included" lines total to $0 on the signed document — skip
+      // them rather than coercing to 1 unit at full rate (Round 3 finding).
+      if ((parseFloat(li.quantity) || 0) <= 0) continue;
       if (li.netsuite_item_id) {
         const lineDesc = [li.description, li.notes].filter(Boolean).join(' — ')
           || li.item_number
           || undefined;
         soLineItems.push({
           itemId: li.netsuite_item_id,
-          quantity: parseFloat(li.quantity) || 1,
+          quantity: parseFloat(li.quantity),
           rate: parseFloat(li.unit_price) || 0,
           description: lineDesc,
         });
@@ -163,7 +195,7 @@ export async function POST(req: NextRequest) {
       const fullDesc = li.notes ? `${label} (${li.notes})` : label;
       soLineItems.push({
         itemId: customItemId,
-        quantity: parseFloat(li.quantity) || 1,
+        quantity: parseFloat(li.quantity),
         rate: parseFloat(li.unit_price) || 0,
         description: fullDesc,
       });
@@ -178,12 +210,13 @@ export async function POST(req: NextRequest) {
     let laborSkipped = false;
     if (laborHours > 0) {
       try {
-        const laborResult = await suiteqlQuery(
-          "SELECT i.id FROM item i WHERE UPPER(i.itemid) LIKE 'LABOR%' FETCH FIRST 1 ROWS ONLY"
-        );
-        if (laborResult?.items?.[0]?.id) {
+        // Same resolver as estimates/push — the two routes used different
+        // LIKE patterns, so the pushed estimate and its SO could bill labor
+        // to different NetSuite items (Round 1 finding, closed in Round 3).
+        const laborItemId = await resolveLaborItemId();
+        if (laborItemId) {
           soLineItems.push({
-            itemId: laborResult.items[0].id.toString(),
+            itemId: laborItemId,
             quantity: laborHours,
             rate: laborRate,
             description: `Labor - ${laborHours} hrs @ $${laborRate}/hr`,
