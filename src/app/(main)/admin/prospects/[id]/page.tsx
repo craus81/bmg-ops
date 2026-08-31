@@ -35,6 +35,7 @@ import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailCo
 import PhoneInput from '@/components/PhoneInput';
 import { exportProspectPDF } from '@/lib/prospect-pdf';
 import { deepLinks } from '@/lib/deep-links';
+import { estimateAltNumber } from '@/lib/estimate-number';
 import { LEAD_SOURCES, OPP_TYPES } from '@/lib/lead-sources';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import { usd2 } from '@/lib/financials-print';
@@ -120,6 +121,10 @@ interface Tag { id: string; tag: string }
 interface CustDocument {
   id: string;
   number: string;
+  /** The other number this record is known by — the FleetSuite estimate
+   *  number behind a pushed NetSuite estimate. Shown beside the headline
+   *  and searchable, so neither number is a dead end. */
+  altNumber?: string | null;
   date: string | null; // ISO
   dueDate: string | null; // ISO
   status: string; // display string from NetSuite
@@ -128,6 +133,13 @@ interface CustDocument {
   total: number;
   type: 'invoice' | 'salesOrder' | 'estimate';
   typeLabel: string;
+  /** The FleetSuite estimate behind this row, when there is one: the number
+   *  becomes a link into the enhanced estimate. Set for a NetSuite estimate
+   *  we pushed AND for one that hasn't been pushed yet. */
+  fleetsuiteId?: string | null;
+  /** False for a FleetSuite estimate with no NetSuite record yet — there is
+   *  no PDF to fetch and nothing to include in the ZIP. */
+  inNetsuite: boolean;
 }
 
 /** Normalize NetSuite dates ('YYYY-MM-DD' or 'M/D/YYYY') to ISO, else null. */
@@ -167,6 +179,9 @@ const OPP_STAGES: Record<string, string> = { lead: 'Lead', quoted: 'Quoted', neg
 const STAGE_COLORS: Record<string, string> = { lead: '#60a5fa', quoted: '#a78bfa', negotiating: '#fbbf24', won: '#4ade80', lost: '#f87171' };
 // status_change stays in the icon map so historical feed entries still render.
 const DOCS_PAGE_SIZE = 100;
+// Estimates feed the transaction ledger (not just a 6-row teaser card), so
+// pull a working window of them per customer.
+const ESTIMATES_LIMIT = 50;
 const ACTS_PAGE_SIZE = 30;
 
 const fmtMoney = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -285,7 +300,7 @@ export default function CustomerRecordPage() {
 
   // FleetSuite-side quotes & estimates for this customer.
   interface WrapQuoteRow { id: string; quote_number: string; vehicle_description: string | null; project_type: string | null; total: number | null; status: string; sent_at: string | null; created_at: string }
-  interface EstimateRow { id: string; estimate_number: string; title: string | null; status: string; grand_total: number | null; created_at: string }
+  interface EstimateRow { id: string; estimate_number: string; netsuite_estimate_id: string | null; netsuite_estimate_number: string | null; title: string | null; status: string; grand_total: number | null; created_at: string }
   const [wrapQuotes, setWrapQuotes] = useState<WrapQuoteRow[] | null>(null);
   const [estimatesList, setEstimatesList] = useState<EstimateRow[] | null>(null);
 
@@ -1121,19 +1136,19 @@ export default function CustomerRecordPage() {
     const found = new Map<string, EstimateRow>();
     if (nsId) {
       const { data } = await supabase.from('estimates')
-        .select('id, estimate_number, title, status, grand_total, created_at')
+        .select('id, estimate_number, netsuite_estimate_id, netsuite_estimate_number, title, status, grand_total, created_at')
         .eq('customer_netsuite_id', nsId)
-        .order('created_at', { ascending: false }).limit(6);
+        .order('created_at', { ascending: false }).order('id').limit(ESTIMATES_LIMIT);
       for (const e of (data || []) as EstimateRow[]) found.set(e.id, e);
     }
     if (companyName) {
       const { data } = await supabase.from('estimates')
-        .select('id, estimate_number, title, status, grand_total, created_at')
+        .select('id, estimate_number, netsuite_estimate_id, netsuite_estimate_number, title, status, grand_total, created_at')
         .ilike('customer_name', companyName)
-        .order('created_at', { ascending: false }).limit(6);
+        .order('created_at', { ascending: false }).order('id').limit(ESTIMATES_LIMIT);
       for (const e of (data || []) as EstimateRow[]) found.set(e.id, e);
     }
-    setEstimatesList([...found.values()].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 6));
+    setEstimatesList([...found.values()].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, ESTIMATES_LIMIT));
   };
 
   const loadPayments = async (nsId: string) => {
@@ -1187,6 +1202,7 @@ export default function CustomerRecordPage() {
         return {
           id: String(t.id),
           number: t.tranid || String(t.id),
+          inNetsuite: true,
           date: toIso(t.trandate),
           dueDate,
           status,
@@ -1225,11 +1241,12 @@ export default function CustomerRecordPage() {
     });
   };
   const toggleAllDocsSelected = () => {
-    setSelectedDocKeys(prev =>
-      sortedDocs.length > 0 && sortedDocs.every(d => prev.has(docKey(d)))
-        ? new Set()
-        : new Set(sortedDocs.map(docKey))
-    );
+    setSelectedDocKeys(prev => {
+      const selectable = sortedDocs.filter(d => d.inNetsuite);
+      return selectable.length > 0 && selectable.every(d => prev.has(docKey(d)))
+        ? new Set<string>()
+        : new Set(selectable.map(docKey));
+    });
   };
   // Fetch each selected document's PDF individually (capped concurrency) and
   // zip them client-side — mirrors src/app/(main)/invoices/bulk-download's
@@ -1423,18 +1440,65 @@ export default function CustomerRecordPage() {
     setStWorking(false);
   };
 
+  // The customer's transactions in ONE list (field ask: "estimates built in
+  // FleetSuite should live in the customer record with the rest of the
+  // transactions"). A pushed estimate IS its NetSuite row — it just gains a
+  // link to the enhanced estimate and the FleetSuite number beside it. An
+  // estimate that hasn't been pushed has no NetSuite row, so it's added as
+  // its own; keying on netsuite_estimate_id means a record can never appear
+  // twice, whichever page of history is loaded.
+  const ledgerDocs = useMemo(() => {
+    const byNsId = new Map(
+      (estimatesList || [])
+        .filter(e => e.netsuite_estimate_id)
+        .map(e => [String(e.netsuite_estimate_id), e] as const),
+    );
+    const linked: CustDocument[] = (docs || []).map(d => {
+      if (d.type !== 'estimate') return d;
+      const est = byNsId.get(d.id);
+      return est ? { ...d, fleetsuiteId: est.id, altNumber: estimateAltNumber({ ...est, netsuite_estimate_number: d.number }) } : d;
+    });
+    const notPushed: CustDocument[] = (estimatesList || [])
+      .filter(e => !e.netsuite_estimate_id)
+      .map(e => ({
+        id: `fs-${e.id}`,
+        number: e.estimate_number,
+        date: e.created_at ? e.created_at.slice(0, 10) : null,
+        dueDate: null,
+        status: e.status ? e.status.charAt(0).toUpperCase() + e.status.slice(1) : 'Draft',
+        statusNorm: 'other' as const,
+        daysPastDue: 0,
+        total: Number(e.grand_total) || 0,
+        type: 'estimate' as const,
+        typeLabel: 'Estimate',
+        fleetsuiteId: e.id,
+        inNetsuite: false,
+      }));
+    return [...linked, ...notPushed];
+  }, [docs, estimatesList]);
+
   // Documents: filter chips + search narrow the loaded set; headers sort it.
   const filteredDocs = useMemo(() => {
-    let list = docs || [];
+    let list = ledgerDocs;
     if (docFilter !== 'all') list = list.filter(d => d.type === docFilter);
     if (docStatus !== 'all') list = list.filter(d => d.statusNorm === docStatus);
     const q = docSearch.trim().toLowerCase();
-    if (q) list = list.filter(d => d.number.toLowerCase().includes(q) || d.status.toLowerCase().includes(q));
+    if (q) list = list.filter(d =>
+      d.number.toLowerCase().includes(q)
+      || (d.altNumber || '').toLowerCase().includes(q)
+      || d.status.toLowerCase().includes(q));
     return list;
-  }, [docs, docFilter, docStatus, docSearch]);
+  }, [ledgerDocs, docFilter, docStatus, docSearch]);
   const { sorted: sortedDocs, sort: docSort, toggle: toggleDocSort } = useTableSort(filteredDocs, DOC_SORT_COLS, { key: 'date', dir: 'desc' });
-  const allDocsSelected = sortedDocs.length > 0 && sortedDocs.every(d => selectedDocKeys.has(docKey(d)));
+  // Only NetSuite-backed rows have a PDF to fetch, so they alone are
+  // selectable for the ZIP — a not-yet-pushed estimate would 404.
+  const selectableDocs = useMemo(() => sortedDocs.filter(d => d.inNetsuite), [sortedDocs]);
+  const allDocsSelected = selectableDocs.length > 0 && selectableDocs.every(d => selectedDocKeys.has(docKey(d)));
   const openBalance = stInvoices ? stInvoices.reduce((s, i) => s + i.unpaid, 0) : null;
+  // The transactions ledger only renders for a NetSuite-linked record. Where
+  // it does, estimates live in it — the card above keeps the wrap quotes
+  // (which have no NetSuite transaction) so nothing is listed twice.
+  const hasLedger = !!(prospect?.netsuite_id || customer);
 
   if (loading) {
     return (
@@ -2005,13 +2069,13 @@ export default function CustomerRecordPage() {
             ))}
           </div>
 
-          {((wrapQuotes?.length || 0) > 0 || (estimatesList?.length || 0) > 0) && (
+          {((wrapQuotes?.length || 0) > 0 || (!hasLedger && (estimatesList?.length || 0) > 0)) && (
             <div style={card}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                <div style={{ ...eyebrow, marginBottom: 0 }}>Quotes &amp; estimates</div>
+                <div style={{ ...eyebrow, marginBottom: 0 }}>{hasLedger ? 'Wrap quotes' : 'Quotes & estimates'}</div>
                 <span style={{ display: 'flex', gap: '10px' }}>
                   {(wrapQuotes?.length || 0) > 0 && <button onClick={() => router.push('/admin/wrap-quote')} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10.5px', fontWeight: 700, color: '#60a5fa', padding: 0 }}>Wrap quotes ›</button>}
-                  {(estimatesList?.length || 0) > 0 && <button onClick={() => router.push('/estimates')} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10.5px', fontWeight: 700, color: '#60a5fa', padding: 0 }}>Estimates ›</button>}
+                  {!hasLedger && (estimatesList?.length || 0) > 0 && <button onClick={() => router.push('/estimates')} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10.5px', fontWeight: 700, color: '#60a5fa', padding: 0 }}>Estimates ›</button>}
                 </span>
               </div>
               {/* Rows deep-link to the record — a quote you can see but not
@@ -2030,7 +2094,7 @@ export default function CustomerRecordPage() {
                   <span style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', flexShrink: 0, color: 'var(--text-primary)' }}>{q.total ? usd2(q.total) : '—'}</span>
                 </button>
               ))}
-              {(estimatesList || []).map(e => (
+              {(hasLedger ? [] : (estimatesList || [])).map(e => (
                 <button
                   key={e.id}
                   onClick={() => router.push(deepLinks.estimate(e.id))}
@@ -2206,7 +2270,7 @@ export default function CustomerRecordPage() {
       {(prospect?.netsuite_id || customer) && (
         <div style={card}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '6px' }}>
-            <div style={{ ...eyebrow, marginBottom: 0 }}>NetSuite documents {docs ? `· ${docs.length}${docsHasMore ? '+' : ''}` : ''}</div>
+            <div style={{ ...eyebrow, marginBottom: 0 }}>Transactions {docs ? `· ${ledgerDocs.length}${docsHasMore ? '+' : ''}` : ''}</div>
             {openBalance !== null && stInvoices && stInvoices.length > 0 && (
               <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
                 · open balance <strong style={{ color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{usd2(openBalance)}</strong> ({stInvoices.length} invoice{stInvoices.length === 1 ? '' : 's'})
@@ -2245,7 +2309,7 @@ export default function CustomerRecordPage() {
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '8px' }}>
                 <button onClick={toggleAllDocsSelected} style={{ ...btnSm, padding: '4px 10px' }}>
-                  {allDocsSelected ? 'Deselect all' : 'Select all'} ({selectedDocKeys.size}/{sortedDocs.length})
+                  {allDocsSelected ? 'Deselect all' : 'Select all'} ({selectedDocKeys.size}/{selectableDocs.length})
                 </button>
                 {selectedDocKeys.size > 0 && (
                   <button onClick={downloadSelectedPdfs} disabled={bulkDownloading} style={{ ...btnSm, padding: '4px 10px', background: 'var(--success)', color: '#fff', border: 'none', opacity: bulkDownloading ? 0.6 : 1 }}>
@@ -2259,7 +2323,7 @@ export default function CustomerRecordPage() {
                   <thead>
                     <tr>
                       <th style={docTh}>
-                        <input type="checkbox" checked={allDocsSelected} onChange={toggleAllDocsSelected} style={{ cursor: 'pointer' }} />
+                        <input type="checkbox" checked={allDocsSelected} disabled={selectableDocs.length === 0} onChange={toggleAllDocsSelected} style={{ cursor: selectableDocs.length === 0 ? 'default' : 'pointer' }} />
                       </th>
                       <SortableTh label="Type" sortKey="type" sort={docSort} onToggle={toggleDocSort} style={docTh} />
                       <SortableTh label="Number" sortKey="number" sort={docSort} onToggle={toggleDocSort} style={docTh} />
@@ -2274,12 +2338,30 @@ export default function CustomerRecordPage() {
                     {sortedDocs.map(doc => (
                       <tr key={`${doc.type}-${doc.id}`}>
                         <td style={docTd}>
-                          <input type="checkbox" checked={selectedDocKeys.has(docKey(doc))} onChange={() => toggleDocSelected(doc)} style={{ cursor: 'pointer' }} />
+                          {doc.inNetsuite && (
+                            <input type="checkbox" checked={selectedDocKeys.has(docKey(doc))} onChange={() => toggleDocSelected(doc)} style={{ cursor: 'pointer' }} />
+                          )}
                         </td>
                         <td style={docTd}>
                           <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', display: 'inline-block', minWidth: '76px', textAlign: 'center', background: 'var(--subtle-bg)', color: 'var(--text-muted)' }}>{doc.typeLabel}</span>
                         </td>
-                        <td style={{ ...docTd, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{doc.number}</td>
+                        <td style={{ ...docTd, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
+                          {doc.fleetsuiteId ? (
+                            <button
+                              onClick={() => router.push(deepLinks.estimate(doc.fleetsuiteId!))}
+                              title={doc.inNetsuite
+                                ? 'Open the FleetSuite estimate — the NetSuite PDF is the button on the right'
+                                : 'Open the FleetSuite estimate — this one has not been pushed to NetSuite yet'}
+                              style={{ padding: 0, background: 'none', border: 'none', font: 'inherit', color: '#60a5fa', cursor: 'pointer', textDecoration: 'underline' }}
+                            >{doc.number}</button>
+                          ) : doc.number}
+                          {doc.altNumber && (
+                            <span title="FleetSuite's own estimate number" style={{ marginLeft: '6px', fontSize: '10.5px', fontWeight: 600, color: 'var(--text-muted)' }}>{doc.altNumber}</span>
+                          )}
+                          {!doc.inNetsuite && (
+                            <span title="Built in FleetSuite — not pushed to NetSuite yet, so there is no NetSuite PDF" style={{ marginLeft: '6px', fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px', background: 'var(--subtle-bg)', color: 'var(--text-muted)' }}>FLEETSUITE</span>
+                          )}
+                        </td>
                         <td style={{ ...docTd, whiteSpace: 'nowrap' }}>{fmtDate(doc.date)}</td>
                         <td style={{ ...docTd, whiteSpace: 'nowrap' }}>{fmtDate(doc.dueDate)}</td>
                         <td style={docTd}>
@@ -2295,9 +2377,13 @@ export default function CustomerRecordPage() {
                         </td>
                         <td style={{ ...docTd, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{usd2(doc.total)}</td>
                         <td style={{ ...docTd, textAlign: 'right' }}>
-                          <button onClick={() => viewPdf(doc)} disabled={pdfBusy === doc.id} style={{ ...btnSm, padding: '4px 10px', opacity: pdfBusy === doc.id ? 0.6 : 1 }}>
-                            {pdfBusy === doc.id ? '…' : 'PDF'}
-                          </button>
+                          {doc.inNetsuite ? (
+                            <button onClick={() => viewPdf(doc)} disabled={pdfBusy === doc.id} style={{ ...btnSm, padding: '4px 10px', opacity: pdfBusy === doc.id ? 0.6 : 1 }}>
+                              {pdfBusy === doc.id ? '…' : 'PDF'}
+                            </button>
+                          ) : (
+                            <span title="No NetSuite PDF until this estimate is pushed" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>—</span>
+                          )}
                         </td>
                       </tr>
                     ))}
