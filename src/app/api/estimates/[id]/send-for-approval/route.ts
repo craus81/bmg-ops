@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { generateToken, approvalContentHash } from '@/lib/magic-link-approval';
+import { reconcileLinkedWrapQuotes } from '@/lib/wrap-quote-reconcile';
 import { sendEmailDetailed } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { sendSMS } from '@/lib/sms-provider';
@@ -280,6 +281,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .eq('id', estimate.id);
   if (updErr) {
     return NextResponse.json({ error: 'Failed to mint token: ' + updErr.message }, { status: 500 });
+  }
+
+  // A resend-after-rejection reopens the estimate (status back to 'sent'
+  // above) — folded wrap quotes that were auto-rejected with it come back
+  // too, so the whole document is live again, not just the upfit half.
+  if (estimate.customer_rejected_at) {
+    await reconcileLinkedWrapQuotes(supabase, estimate.id, 'reopened', new Date().toISOString());
   }
 
   const dispatch: Record<string, any> = { email: null, sms: null };
