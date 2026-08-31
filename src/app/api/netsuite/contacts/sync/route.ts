@@ -38,6 +38,7 @@ export async function POST(req: NextRequest) {
         .from('prospects')
         .select('id, netsuite_id')
         .not('netsuite_id', 'is', null)
+        .order('id')
         .range(pPage * 1000, (pPage + 1) * 1000 - 1);
       allProspectRows = [...allProspectRows, ...(batch || [])];
       pHasMore = (batch || []).length === 1000;

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
+import { fetchAllRows } from '@/lib/fetch-all';
 import { assignVehicleCredits, getOpenCniShift } from '@/lib/pay-credits';
 
 export const dynamic = 'force-dynamic';
@@ -57,12 +58,28 @@ async function candidates(cniJobId: string, partLike?: string): Promise<{ jobPar
   const { data: scans } = await query;
   if (!scans || scans.length === 0) return { jobPart, rows: [] };
 
-  const { data: linked } = await service
-    .from('cni_job_vins').select('scan_log_id').not('scan_log_id', 'is', null);
-  const linkedSet = new Set((linked || []).map(l => l.scan_log_id));
+  // Which of THESE scans are already linked to a job VIN. Scoped to the
+  // candidate ids (chunked — a long .in() blows the URL limit) instead of
+  // the old org-wide read: that read truncated at PostgREST's 1000-row cap,
+  // so older links fell out of the set and the same scan imported twice —
+  // duplicate install_credits (Round 3 CRITICAL, R3-1). This set is also
+  // the POST path's dup guard, so a failed read must fail closed: report
+  // every candidate as linked rather than none.
+  const linkedSet = new Set<string>();
+  for (let i = 0; i < scans.length; i += 200) {
+    const ids = scans.slice(i, i + 200).map((s: any) => s.id);
+    const { data: linked, error: linkedErr } = await service
+      .from('cni_job_vins').select('scan_log_id').in('scan_log_id', ids);
+    if (linkedErr) return { jobPart, rows: [] };
+    for (const l of linked || []) linkedSet.add(l.scan_log_id);
+  }
 
-  const { data: jobVins } = await service
-    .from('cni_job_vins').select('vin').eq('job_id', cniJobId);
+  // Same dup guard, same rules: paginate (a big fleet job can pass 1000
+  // VINs) and fail closed on error.
+  const { data: jobVins, error: jobVinsErr } = await fetchAllRows<{ vin: string }>((from, to) =>
+    service.from('cni_job_vins').select('vin').eq('job_id', cniJobId).order('id').range(from, to),
+  );
+  if (jobVinsErr) return { jobPart, rows: [] };
   const jobVinSet = new Set((jobVins || []).map(v => v.vin));
 
   return {

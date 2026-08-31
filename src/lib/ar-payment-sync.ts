@@ -44,6 +44,7 @@ async function unpaidInvoiceNumbers(
       .not('invoice_number', 'is', null)
       .eq('is_paid', false)
       .order('invoice_number')
+      .order('id')
       .range(from, to),
   );
   const set = new Set<string>();

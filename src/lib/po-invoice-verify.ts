@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { fetchAllRows } from '@/lib/fetch-all';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { recomputePoFulfillment } from '@/lib/scan-match';
 import { notifyPoBillingAttention, type FlaggedPoAlert } from '@/lib/po-billing-notify';
@@ -208,14 +209,19 @@ export function computeOverbillProblems(
  * covered.
  */
 export async function verifyPoInvoiceQuantities(service: SupabaseClient, poIds?: string[]): Promise<PoInvoiceVerifyResult> {
-  let query = service
-    .from('purchase_orders')
-    .select('id, po_number, status, invoice_check_status, po_line_items(id, part_number, quantity, installed), po_invoices(netsuite_invoice_id)')
-    .neq('status', 'cancelled');
-  // Scoped mode: recheck just these POs (the per-PO "Recheck billing"
-  // button) instead of sweeping the whole book.
-  if (poIds && poIds.length > 0) query = query.in('id', poIds);
-  const { data: pos, error: posErr } = await query;
+  // Paginated: the whole-book sweep is past PostgREST's 1000-row cap, and
+  // POs beyond it kept a stale invoice_check_status forever (Round 3
+  // CRITICAL, R3-1). The embedded line/invoice arrays are per-PO and small.
+  const { data: pos, error: posErr } = await fetchAllRows<any>((from, to) => {
+    let query = service
+      .from('purchase_orders')
+      .select('id, po_number, status, invoice_check_status, po_line_items(id, part_number, quantity, installed), po_invoices(netsuite_invoice_id)')
+      .neq('status', 'cancelled');
+    // Scoped mode: recheck just these POs (the per-PO "Recheck billing"
+    // button) instead of sweeping the whole book.
+    if (poIds && poIds.length > 0) query = query.in('id', poIds);
+    return query.order('id').range(from, to);
+  });
   if (posErr) {
     throw new Error('Failed to load POs: ' + posErr.message);
   }

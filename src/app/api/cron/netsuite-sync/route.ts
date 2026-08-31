@@ -287,7 +287,7 @@ export async function GET(req: NextRequest) {
     let pPage = 0;
     let pHasMore = true;
     while (pHasMore) {
-      const { data: batch } = await supabase.from('prospects').select('id, netsuite_id').not('netsuite_id', 'is', null).range(pPage * 1000, (pPage + 1) * 1000 - 1);
+      const { data: batch } = await supabase.from('prospects').select('id, netsuite_id').not('netsuite_id', 'is', null).order('id').range(pPage * 1000, (pPage + 1) * 1000 - 1);
       allProspectRows = [...allProspectRows, ...(batch || [])];
       pHasMore = (batch || []).length === 1000;
       pPage++;
