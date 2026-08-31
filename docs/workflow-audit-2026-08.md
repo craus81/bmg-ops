@@ -82,7 +82,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
 | **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 19 and 21 remain open** (2 — R2-goes-private, labor capture). Shipped 2026-08-30: the Stage 1 build-out (#701–#704, closing item 18), the two Stage 1 owner decisions (#706 lead tier, #707 deletion→NetSuite), and estimate integrity (#708–#710, items 9–11). Shipped 2026-08-30: the whole **vehicle custody** block (#712–#715, items 12–16). Shipped 2026-08-30 (second wave): **parts ordering & receiving** (#717–#719, item 17 — the audit's largest build: request queue → NetSuite PO → receiving with item receipts) and the **route→permission manifest** (#721, item 20 — all 251 routes declare + prove their guard; the sweep fixed the unauthenticated Google OAuth pair). |
 
-| **Round 3** — re-audit 2026-08-30 (Part 7) | 🔄 roadmap open | Nine-probe re-verification at `1ea2015`, every MAJOR+ finding re-verified by hand. **Round 2 holds** — all 19 ships confirmed at HEAD (5 partial caveats). ~90 new findings distilled into the Part 7 roadmap: 6 CRITICAL truncation bugs that move money/state, 8 E-SIGN forgery/loss holes, 7 non-idempotent NetSuite money paths (zero unique-index backing), 3 custody/CNI blockers — one, CNI company invites, failing 500 in production since #715 — the `forceChannels` no-op, and this week's parts-loop regressions (hotfixed same day, #724). Items 19 and 21 now carry written decision packages (the R2-flip tier checklist, the labor-capture touch-map). Shipped 2026-08-31: **Stage 2 closed** — the estimate correctness set (#726) and E-SIGN hardening (#727, migration 242) retire R3-6, R3-7, and every remaining Stage 2 walkthrough finding, and #729 ships the R3-17 change-order core (Duplicate + duplicate-as-revision with `supersedes_estimate_id` lineage, migration 243) — Stage 2 closed outright. **R3-1 closed in full** (#732 the six CRITICALs with fail-closed reads, #733 the MAJOR sweep) — every §7.2.2 truncation finding fixed. **Stage 3 closed** (#735 wrap-quote reconciliation + honest win counting + visible provenance, #736 customer reminders w/ migration 244) — all six capture-side findings shipped. **Stage 4 closed** (#740 atomic conversion claim + vendor-PO sync honesty, #741 schema-cache hardening after the live SO1064 stranding that #738/#739 repaired in parallel with migration 246 + a manual SO link) — the earlier findings were verified already fixed at HEAD (N2 phase 1 auto-project, item 9 staff walls, item 10 estimate closing, 17A–C ordering) and the dead-list re-verdicted. |
+| **Round 3** — re-audit 2026-08-30 (Part 7) | 🔄 roadmap open | Nine-probe re-verification at `1ea2015`, every MAJOR+ finding re-verified by hand. **Round 2 holds** — all 19 ships confirmed at HEAD (5 partial caveats). ~90 new findings distilled into the Part 7 roadmap: 6 CRITICAL truncation bugs that move money/state, 8 E-SIGN forgery/loss holes, 7 non-idempotent NetSuite money paths (zero unique-index backing), 3 custody/CNI blockers — one, CNI company invites, failing 500 in production since #715 — the `forceChannels` no-op, and this week's parts-loop regressions (hotfixed same day, #724). Items 19 and 21 now carry written decision packages (the R2-flip tier checklist, the labor-capture touch-map). Shipped 2026-08-31: **Stage 2 closed** — the estimate correctness set (#726) and E-SIGN hardening (#727, migration 242) retire R3-6, R3-7, and every remaining Stage 2 walkthrough finding, and #729 ships the R3-17 change-order core (Duplicate + duplicate-as-revision with `supersedes_estimate_id` lineage, migration 243) — Stage 2 closed outright. **R3-1 closed in full** (#732 the six CRITICALs with fail-closed reads, #733 the MAJOR sweep) — every §7.2.2 truncation finding fixed. **Stage 3 closed** (#735 wrap-quote reconciliation + honest win counting + visible provenance, #736 customer reminders w/ migration 244) — all six capture-side findings shipped. **Stage 4 closed** (#740 atomic conversion claim + vendor-PO sync honesty, #741 schema-cache hardening after the live SO1064 stranding that #738/#739 repaired in parallel with migration 246 + a manual SO link) — the earlier findings were verified already fixed at HEAD (N2 phase 1 auto-project, item 9 staff walls, item 10 estimate closing, 17A–C ordering) and the dead-list re-verdicted. **Stage 5 closed** (#746 + migration 247: graphics_jobs UPDATE wall, presigned proof artwork, pre-invoice packing list; fan-out/transition-rules/proof-gate verified already shipped) — roll-nesting for production stays as the stage's one open enhancement. |
 
 Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap; Part 7 carries Round 3.
 
@@ -354,26 +354,57 @@ all converge on one pipeline.
 
 **But the pipeline itself is honor-system:**
 
-- **CRITICAL — The "New Graphics Job" notification fan-out is dead.** It reads
+- ✅ **CRITICAL — The "New Graphics Job" notification fan-out is dead.** It reads
   other users' `notification_preferences` from the browser, but RLS is
   own-rows-only, so the target list is always empty and `notify_new_job` never
   sends. Nobody is told when a job is created.
-- **CRITICAL — No status state machine, and RLS lets every staff role update or
+  _(Fixed since: creation now calls the server-side `notify-assignees` route
+  (kind `created`), which resolves the audience by role — the browser never
+  reads other users' preferences.)_
+- ✅ **CRITICAL — No status state machine, and RLS lets every staff role update or
   *delete* graphics jobs.** The record page renders a flat button row — any
   status jumps to any status in either direction — and the "admin-only Delete"
   is JSX-only; the DB allows any internal staff to delete. A sales rep opening a
   notification link can flip a job from Designing straight to Shipped.
-- **MAJOR — Printing is never gated on proof approval.** A rejected or never-sent
+  _(Fixed in layers: `src/lib/graphics-status.ts` (2026-08-28, owner decision)
+  encodes the floor's real rules — forward skips free, backward moves require
+  a typed reason landing in the status history; migration 234 made delete
+  admin/super_admin at the DB with a drift-safe pg_policies sweep; and #746 +
+  migration 247 close the last gap, tightening UPDATE to
+  admin/super_admin/graphics_production so the client-side rules can't be
+  bypassed from a non-graphics console.)_
+- ✅ **MAJOR — Printing is never gated on proof approval.** A rejected or never-sent
   proof can move to `printing` with zero warning — defeating the entire point of
   the E-SIGN loop.
-- **MAJOR — The packing stage has no packing list.** The packing-list PDF only
+  _(Fixed 2026-08-28: `proofGateApplies` — entering `printing` without
+  `customer_approved` takes an admin plus a recorded reason, matching the
+  convert-to-SO override pattern; jobs already past printing aren't re-gated
+  so a late approval can't strand work. Migration 247 backs it server-side.)_
+- ✅ **MAJOR — The packing stage has no packing list.** The packing-list PDF only
   renders *after* an invoice exists, and there's no pick/pack checklist. A packer
   at the `packing` stage of a not-yet-invoiced job has nothing.
+  _(Fixed: #746 — `GET /api/graphics/packing-list` renders a printable
+  pick/pack sheet from the job + material log (checkbox rows, description,
+  ship-to, packed-by sign-off), invoice-free; the job page header carries the
+  button.)_
 - **MAJOR — Roll-nesting never reaches production.** The excellent RollNesting
   component is wrap-quote-only; production jobs get a flattened text summary and
   the material log is manual, inventory-blind typing.
-- **MAJOR — Proof files are served from public R2 URLs** — the token gates the
+  _(Remaining enhancement — the stage's one build-scale item, same posture
+  R3-17 held for Stage 2 until pulled. Porting RollNesting into production
+  jobs' material planning is scoped in the Round 3 roadmap's build tier.)_
+- ✅ **MAJOR — Proof files are served from public R2 URLs** — the token gates the
   *page*, not the *artwork*.
+  _(Fixed: #746 — the customer proof page and estimate approval page mint
+  1-hour presigned links per load. Two deliberate exceptions: approval-email
+  image embeds stay public (mail clients fetch days later, beyond presign
+  life) and signed snapshots never depended on URLs (artwork is inlined as
+  data URIs).)_
+
+**Stage 5 status (2026-08-31): CLOSED** — every correctness/security finding
+shipped (fan-out, transition rules + DB walls via 234/247, the proof gate,
+presigned artwork, the pre-invoice packing list). One enhancement remains
+open by design: roll-nesting for production jobs.
 
 ## Stage 6 — The graphics install guide
 
