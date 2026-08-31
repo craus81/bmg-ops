@@ -9,6 +9,7 @@ import {
 } from '@/lib/ai-agent-access';
 import { validateBody, z } from '@/lib/validate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
+import { getSalesTaxRate } from '@/lib/sales-tax';
 
 export const dynamic = 'force-dynamic';
 
@@ -179,7 +180,7 @@ SUPABASE TABLES (BMG Fleet App)
     - id (uuid), estimate_number (text, e.g. 'EST-2603-0001')
     - customer_id (FK customers), customer_name, customer_netsuite_id
     - title, notes, status ('draft'|'sent'|'accepted'|'rejected'|'pushed')
-    - tax_rate (numeric), tax_exempt (boolean), labor_rate (numeric, default $120/hr)
+    - tax_rate (numeric — the COMPANY rate from quote_settings, not caller-supplied), tax_exempt (boolean), labor_rate (numeric, default $120/hr)
     - labor_hours (numeric, auto-summed), subtotal, labor_total, tax_amount, grand_total
     - netsuite_estimate_id, netsuite_estimate_number (after push)
     - created_by (FK profiles), created_at, updated_at
@@ -350,7 +351,6 @@ Actions let you modify data in the app. Use them when the user asks you to DO so
      customer_netsuite_id?: string (NetSuite internal ID, optional if name provided),
      title?: string (estimate title/description),
      notes?: string,
-     tax_rate?: number (default 0.0795 = 7.95%),
      tax_exempt?: boolean (default false),
      labor_rate?: number (default $120/hour),
      created_by?: string (user UUID),
@@ -880,7 +880,7 @@ async function executeAction(action: string, params: Record<string, any>): Promi
     case 'create_estimate': {
       const {
         customer_name, customer_netsuite_id, title: estTitle, notes,
-        tax_rate, tax_exempt, labor_rate, line_items, created_by
+        tax_exempt, labor_rate, line_items, created_by
       } = params;
 
       if (!line_items || !Array.isArray(line_items) || line_items.length === 0) {
@@ -961,7 +961,9 @@ async function executeAction(action: string, params: Record<string, any>): Promi
       }
 
       const effectiveLaborRate = Number(labor_rate) || 120;
-      const effectiveTaxRate = tax_exempt ? 0 : (Number(tax_rate) || 0.0795);
+      // The company sales tax rate, never a rate the model made up: it is set
+      // only by a super admin in Settings → Sales Tax.
+      const effectiveTaxRate = tax_exempt ? 0 : await getSalesTaxRate(supabase);
       const laborTotal = totalLaborHours * effectiveLaborRate;
       const taxAmount = subtotal * effectiveTaxRate;
       const grandTotal = subtotal + laborTotal + taxAmount;

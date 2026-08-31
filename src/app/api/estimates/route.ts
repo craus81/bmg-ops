@@ -4,6 +4,7 @@ import { requireFeature } from '@/lib/api-auth';
 import { logAudit } from '@/lib/audit';
 import { validateBody, z } from '@/lib/validate';
 import { computeTotals } from '@/lib/estimate-totals';
+import { getSalesTaxRate } from '@/lib/sales-tax';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 
 export const dynamic = 'force-dynamic';
@@ -31,6 +32,8 @@ const UpsertEstimateSchema = z.object({
   title: z.string().max(300).optional().nullable(),
   notes: z.string().max(10_000).optional().nullable(),
   status: z.string().max(40).optional(),
+  // Accepted for backwards compatibility and then IGNORED — the sales tax
+  // rate is a company setting only a super admin can change (see below).
   tax_rate: z.union([z.number(), z.string()]).optional(),
   tax_exempt: z.boolean().optional(),
   labor_rate: z.union([z.number(), z.string()]).optional(),
@@ -146,7 +149,7 @@ export async function POST(req: NextRequest) {
     id, // if present, update existing
     customer_id, customer_name, customer_netsuite_id,
     title, notes, status,
-    tax_rate, tax_exempt,
+    tax_exempt,
     labor_rate, labor_hours_override,
     line_items, // array of line item objects
     created_by,
@@ -167,7 +170,18 @@ export async function POST(req: NextRequest) {
     const normalizedUnit = unit_number?.trim() || null;
 
     const lines = line_items || [];
-    const effectiveTaxRate = parseFloat(String(tax_rate ?? 0.0795));
+    // Sales tax rate is NEVER taken from the request body: it is one company
+    // setting, changed only by a super admin in Settings → Sales Tax
+    // (quote_settings, migration 245). An estimate that already exists keeps
+    // the rate it was quoted at, so re-saving an old draft can't silently
+    // reprice a document the customer has already seen.
+    const existingRate = id
+      ? await supabase.from('estimates').select('tax_rate').eq('id', id).maybeSingle()
+          .then(({ data }: any) => (data?.tax_rate != null ? Number(data.tax_rate) : null))
+      : null;
+    const effectiveTaxRate = existingRate != null && Number.isFinite(existingRate)
+      ? existingRate
+      : await getSalesTaxRate(supabase);
     const effectiveLaborRate = parseFloat(String(labor_rate ?? 85));
     const override = labor_hours_override !== undefined && labor_hours_override !== null
       ? parseFloat(String(labor_hours_override))
