@@ -250,6 +250,15 @@ export async function POST(req: NextRequest) {
     // Claim atomically before touching NetSuite — same pattern as
     // create-po's request claim. A stale claim (crashed request) is taken
     // over after 5 minutes; a live one turns the second request away here.
+    // claimActive stays false when the claim column isn't visible to
+    // PostgREST (schema-cache lag — the exact failure mode migration 246
+    // documents from the SO1064 incident). Blocking every conversion on a
+    // cache hiccup would be worse than running one request unclaimed: the
+    // detect-and-report guards below still catch a duplicate. Crucially,
+    // the success stamp must then NOT carry the claim column either — a
+    // cache-lagged column in that update would fail the whole write-back
+    // and strand the SO exactly like SO1064.
+    let claimActive = false;
     const staleClaimCutoff = new Date(Date.now() - 5 * 60_000).toISOString();
     const { data: claimedRows, error: claimErr } = await supabase
       .from('estimates')
@@ -259,16 +268,24 @@ export async function POST(req: NextRequest) {
       .or(`so_conversion_claimed_at.is.null,so_conversion_claimed_at.lt.${staleClaimCutoff}`)
       .select('id');
     if (claimErr) {
-      return NextResponse.json({ error: 'Could not start the conversion: ' + claimErr.message }, { status: 503 });
-    }
-    if ((claimedRows || []).length === 0) {
+      if ((claimErr as any).code === 'PGRST204') {
+        console.warn('convert-to-so: so_conversion_claimed_at not in the schema cache yet — proceeding without the claim');
+      } else {
+        return NextResponse.json({ error: 'Could not start the conversion: ' + claimErr.message }, { status: 503 });
+      }
+    } else if ((claimedRows || []).length === 0) {
       return NextResponse.json({
         error: 'Another conversion for this estimate is already in progress (or just finished). Refresh to see its result before trying again.',
         step: 'conversion_in_progress',
       }, { status: 409 });
+    } else {
+      claimActive = true;
     }
     const releaseClaim = async () => {
-      await supabase.from('estimates').update({ so_conversion_claimed_at: null }).eq('id', estimateId);
+      if (!claimActive) return;
+      try {
+        await supabase.from('estimates').update({ so_conversion_claimed_at: null }).eq('id', estimateId);
+      } catch { /* best-effort — the claim expires on its own in 5 minutes */ }
     };
 
     let result: Awaited<ReturnType<typeof createSalesOrder>>;
@@ -314,8 +331,10 @@ export async function POST(req: NextRequest) {
       .update({
         netsuite_so_id: result.salesOrderId,
         netsuite_so_number: result.salesOrderNumber || null,
-        // Conversion is done — retire the claim in the same write.
-        so_conversion_claimed_at: null,
+        // Conversion is done — retire the claim in the same write. Only
+        // when the claim actually took: including a cache-invisible column
+        // here would fail the entire write-back and strand the SO.
+        ...(claimActive ? { so_conversion_claimed_at: null } : {}),
         // With the acceptance gate above, conversion only happens once the
         // customer approved (or an admin overrode with a recorded reason) —
         // so 'accepted' is now a truthful consequence, and the funnel report
