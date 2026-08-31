@@ -16,6 +16,7 @@ import {
   AGREEMENT_TEXT,
 } from '@/lib/magic-link-approval';
 import { COMBINED_AGREEMENT_TEXT } from '@/lib/approval-agreement';
+import { approvalContentHash } from '@/lib/magic-link-approval';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { validateBody, z } from '@/lib/validate';
@@ -158,11 +159,29 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
     return NextResponse.json({ status: 'submitted_rejected' });
   }
 
+  // What the customer is accepting must be what was SENT. The send stamped
+  // a fingerprint of the items + money (migration 242); if the estimate
+  // changed since — a save landing while the link was live — refuse rather
+  // than freeze a "signed" record showing prices the customer never saw
+  // (Round 3 finding). Estimates sent before the migration have no hash
+  // and skip the check.
+  if ((estimate as any).approval_sent_hash) {
+    const nowHash = approvalContentHash(estimate, lines || []);
+    if (nowHash !== (estimate as any).approval_sent_hash) {
+      return NextResponse.json({
+        error: 'This estimate was changed after the approval link was sent. Please ask BMG Fleet Installations for a fresh link so you can review the current version.',
+        step: 'content_changed',
+      }, { status: 409 });
+    }
+  }
+
   // Accept path — snapshot the signed document first, then record approval.
-  // When proofs were included, the default agreement is the combined
-  // design + price sentence (the page sends the exact text it displayed;
-  // this fallback only covers clients that omit it).
-  const agreement = body.agreementText || (proofBlocks.length > 0 ? COMBINED_AGREEMENT_TEXT : AGREEMENT_TEXT);
+  // The agreement sentence is SERVER-HELD: the client's copy is ignored,
+  // because a link-holder could otherwise freeze any 2000-character text of
+  // their choosing into the hash-verified legal record (Round 3 finding —
+  // the page displays these exact canonical strings, so nothing changes for
+  // real customers).
+  const agreement = proofBlocks.length > 0 ? COMBINED_AGREEMENT_TEXT : AGREEMENT_TEXT;
   const snapshotHtml = await renderSignedSnapshot(estimate, lines, metadata, agreement, proofBlocks);
   let signedPath: string | null = null;
   let signedHash: string | null = null;
@@ -181,7 +200,9 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   }
 
   const approvedAt = new Date().toISOString();
-  await supabase
+  // Conditional: two rapid Accepts both passed the read-check above — the
+  // second overwrote the first's snapshot hash and re-ran the notify fan-out.
+  const { data: acceptedRows } = await supabase
     .from('estimates')
     .update({
       customer_approved: true,
@@ -196,7 +217,12 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
       status: 'accepted',
       updated_at: approvedAt,
     })
-    .eq('id', estimate.id);
+    .eq('id', estimate.id)
+    .eq('customer_approved', false)
+    .select('id');
+  if (!acceptedRows || acceptedRows.length === 0) {
+    return NextResponse.json({ error: 'Already approved' }, { status: 409 });
+  }
 
   // One click approved design + price: propagate the acceptance onto the
   // graphics jobs whose proofs were part of this document, so the printing

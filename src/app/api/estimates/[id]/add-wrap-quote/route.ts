@@ -47,11 +47,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   try {
     const [{ data: estimate }, { data: quote }] = await Promise.all([
-      supabase.from('estimates').select('id, tax_rate, tax_exempt, labor_rate, labor_hours_override').eq('id', params.id).maybeSingle(),
+      supabase.from('estimates').select('id, tax_rate, tax_exempt, labor_rate, labor_hours_override, customer_approved, status, netsuite_so_id').eq('id', params.id).maybeSingle(),
       supabase.from('wrap_quotes').select('id, quote_number, vehicle_description, materials_total, labor_total, package_qty').eq('id', wrapQuoteId).maybeSingle(),
     ]);
     if (!estimate) return NextResponse.json({ error: 'Estimate not found' }, { status: 404 });
     if (!quote) return NextResponse.json({ error: 'Wrap quote not found' }, { status: 404 });
+
+    // The same wall add-lines has (its :58-63) — this route deletes and
+    // rewrites lines AND totals, and had no lock at all: anyone could click
+    // "Add Graphics" on a signed or even CONVERTED estimate and move its
+    // grand total under the frozen snapshot (Round 3 finding).
+    if (estimate.netsuite_so_id) {
+      return NextResponse.json({ error: 'This estimate was already converted to a Sales Order — start a new estimate instead.' }, { status: 409 });
+    }
+    if (estimate.customer_approved || estimate.status === 'accepted') {
+      return NextResponse.json({ error: 'This estimate was accepted by the customer — its contents are locked. Start a new estimate instead.' }, { status: 409 });
+    }
 
     const materials = parseFloat(quote.materials_total) || 0;
     const labor = parseFloat(quote.labor_total) || 0;

@@ -188,7 +188,10 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
     }
   }
 
-  const snapshotHtml = renderProofHtml(job, files || [], metadata, body.agreementText || AGREEMENT_TEXT, signedProofPaths);
+  // Server-held: a link-holder could otherwise freeze arbitrary text into
+  // the hash-verified record (Round 3 finding). The page displays this
+  // exact canonical sentence, so real customers see no change.
+  const snapshotHtml = renderProofHtml(job, files || [], metadata, AGREEMENT_TEXT, signedProofPaths);
   let signedPath: string | null = null;
   let signedHash: string | null = null;
   try {

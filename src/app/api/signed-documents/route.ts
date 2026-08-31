@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { sha256Hex } from '@/lib/magic-link-approval';
-import { r2GetBytes } from '@/lib/r2';
+import { r2GetBytes, r2PresignGet } from '@/lib/r2';
 import type { FeatureKey } from '@/lib/features';
 
 const supabase = createClient(
@@ -55,7 +55,17 @@ const TYPES: Record<string, {
   },
 };
 
-const MAX_SNAPSHOT_BYTES = 5 * 1024 * 1024;
+// Read-and-hash cap. Snapshots inline proof images and coverage diagrams
+// as data URIs at up to 4 MB per asset (estimate-graphics.ts) — the old
+// 5 MB cap made exactly the evidence-heaviest acceptances unviewable
+// forever (Round 3 finding). 24 MB comfortably covers the worst realistic
+// snapshot while still bounding memory.
+const MAX_SNAPSHOT_BYTES = 24 * 1024 * 1024;
+// Response ceiling: serverless JSON responses cap out well under the
+// snapshot cap, so anything bigger ships as a short-lived presigned R2
+// URL the viewer renders directly (sandboxed iframe src) instead of
+// inline html.
+const INLINE_MAX_BYTES = 2_500_000;
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -95,13 +105,27 @@ export async function GET(req: NextRequest) {
   // (uploadSignedDocument) — re-derive it the same way.
   const verified = !!storedHash && sha256Hex(html) === storedHash;
 
-  return NextResponse.json({
+  const base = {
     success: true,
     label: spec.label(row),
     approvedAt: spec.approvedAt(row),
     storagePath: stored,
     hash: storedHash,
     verified,
-    html,
-  });
+  };
+
+  if (got.bytes.length > INLINE_MAX_BYTES) {
+    // Too big to ship inline: the verdict above was still computed on the
+    // full bytes server-side; the viewer renders the presigned object in
+    // its sandboxed iframe.
+    try {
+      const snapshotUrl = await r2PresignGet(prefix, path, { disposition: 'inline', expiresIn: 600 });
+      return NextResponse.json({ ...base, snapshotUrl });
+    } catch (err) {
+      console.error('signed-documents presign failed:', err);
+      return NextResponse.json({ error: 'The snapshot is too large to ship inline and a direct link could not be minted.' }, { status: 502 });
+    }
+  }
+
+  return NextResponse.json({ ...base, html });
 }

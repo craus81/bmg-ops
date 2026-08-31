@@ -1635,7 +1635,7 @@ export default function EstimatesPage() {
             ? `SMS sent to ${data.dispatch.sms.target}`
             : `SMS failed: ${data.dispatch.sms.error || 'unknown'}`)
       : null;
-    await dialog.alert(`Approval link sent. Link: ${data.approvalUrl}\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n')}`);
+    await dialog.alert(`Approval link sent.\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n') || 'Delivery is on its way to the customer.'}`);
     loadEstimates(true);
     // The send persisted the proof selection onto the linked jobs
     // (estimate_attach) — refresh so the panel reflects it.
