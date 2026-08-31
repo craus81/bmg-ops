@@ -1427,7 +1427,12 @@ export default function CustomerRecordPage() {
   const filteredDocs = useMemo(() => {
     let list = docs || [];
     if (docFilter !== 'all') list = list.filter(d => d.type === docFilter);
-    if (docStatus !== 'all') list = list.filter(d => d.statusNorm === docStatus);
+    // "Open" is the superset, not a sibling of "Past due": a past-due invoice
+    // is still open (NetSuite keeps it status 'A'), so the Open chip shows the
+    // whole unpaid set and the Past due chip narrows it to the late ones. The
+    // row badge still distinguishes them.
+    if (docStatus === 'open') list = list.filter(d => d.statusNorm === 'open' || d.statusNorm === 'pastdue');
+    else if (docStatus !== 'all') list = list.filter(d => d.statusNorm === docStatus);
     const q = docSearch.trim().toLowerCase();
     if (q) list = list.filter(d => d.number.toLowerCase().includes(q) || d.status.toLowerCase().includes(q));
     return list;
