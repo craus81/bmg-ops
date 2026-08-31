@@ -539,7 +539,13 @@ export default function WrapQuotePage() {
       supabase.from('wrap_quote_settings').select('*').eq('id', 1).maybeSingle(),
       supabase.from('wrap_quotes').select('*').order('created_at', { ascending: false }).limit(200),
       supabase.from('quote_settings').select('margin_floor_pct').eq('id', 1).maybeSingle(),
-      supabase.from('graphics_jobs').select('id, job_number, wrap_quote_id').not('wrap_quote_id', 'is', null).neq('status', 'cancelled').order('created_at', { ascending: true }),
+      // Paginated (R3-1 MAJOR sweep): this map is the "already converted"
+      // guard — a quote whose job fell past the 1000-row cap looked
+      // unconverted, inviting a duplicate graphics job. Ascending order is
+      // load-bearing: with several jobs per quote, the NEWEST must win the
+      // map, so keep created_at asc (+id) and let later rows overwrite.
+      fetchAllRows<{ id: string; job_number: string | null; wrap_quote_id: string | null }>((from, to) =>
+        supabase.from('graphics_jobs').select('id, job_number, wrap_quote_id').not('wrap_quote_id', 'is', null).neq('status', 'cancelled').order('created_at', { ascending: true }).order('id').range(from, to)),
     ]);
     const jobMap: Record<string, { id: string; job_number: string | null }> = {};
     for (const j of jobsRes.data || []) {

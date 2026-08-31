@@ -15,9 +15,45 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 function normalizePart(p: string | null | undefined): string {
   return (p || '').trim().toUpperCase();
+}
+
+const chunk = <T,>(arr: T[], size: number): T[][] => {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+};
+
+/**
+ * All po_line_items for the given POs, immune to both truncation traps: the
+ * id list is chunked (a long `.in()` blows the URL limit) and each chunk is
+ * paginated past PostgREST's 1000-row cap (Round 3 CRITICAL, R3-1 — a PO
+ * whose lines fell past the cap had every *surviving* line satisfied, so it
+ * was flipped 'complete' with unreceived lines). Returns null on any read
+ * error: callers must treat "couldn't read the lines" as "don't decide".
+ */
+async function fetchLinesForPos<T>(
+  service: SupabaseClient,
+  poIds: string[],
+  columns: string,
+): Promise<T[] | null> {
+  const all: T[] = [];
+  for (const ids of chunk(poIds, 200)) {
+    const { data, error } = await fetchAllRows<T>((from, to) =>
+      service
+        .from('po_line_items')
+        .select(columns)
+        .in('po_id', ids)
+        .order('id')
+        .range(from, to) as any,
+    );
+    if (error) return null;
+    all.push(...data);
+  }
+  return all;
 }
 
 /**
@@ -50,20 +86,29 @@ export async function recomputePoFulfillment(service: SupabaseClient, poIds: str
   const ids = [...new Set(poIds)].filter(Boolean);
   if (ids.length === 0) return;
 
-  const { data: posRows } = await service
-    .from('purchase_orders')
-    .select('id, status')
-    .in('id', ids)
-    .in('status', ['open', 'complete']);
-  if (!posRows || posRows.length === 0) return;
+  // Chunked: callers can pass an arbitrarily long touched-PO list.
+  const posRows: { id: string; status: string }[] = [];
+  for (const batch of chunk(ids, 200)) {
+    const { data, error } = await service
+      .from('purchase_orders')
+      .select('id, status')
+      .in('id', batch)
+      .in('status', ['open', 'complete']);
+    if (error) return; // can't see the POs → change nothing
+    posRows.push(...(data || []));
+  }
+  if (posRows.length === 0) return;
 
-  const { data: lines } = await service
-    .from('po_line_items')
-    .select('po_id, quantity, installed')
-    .in('po_id', posRows.map(p => p.id));
+  const lines = await fetchLinesForPos<{ po_id: string; quantity: number | null; installed: number | null }>(
+    service, posRows.map(p => p.id), 'po_id, quantity, installed',
+  );
+  // A partial/failed line read must never drive a flip: with lines missing,
+  // a complete PO reads as unfulfilled (flipped back open) or an open PO's
+  // surviving lines all read satisfied (flipped complete) — both wrong.
+  if (lines === null) return;
 
   for (const po of posRows) {
-    const poLines = (lines || []).filter(l => l.po_id === po.id);
+    const poLines = lines.filter(l => l.po_id === po.id);
     const fulfilled =
       poLines.length > 0 &&
       poLines.reduce((sum, l) => sum + (l.quantity || 0), 0) > 0 &&
@@ -89,32 +134,44 @@ export async function matchScansToOpenPos(
   service: SupabaseClient,
   scanIds?: string[],
 ): Promise<MatchResult> {
-  let query = service
-    .from('scan_logs')
-    .select('id, part_number, location_name, exported_at')
-    .is('po_id', null)
-    .is('archived_at', null);
-  if (scanIds && scanIds.length > 0) query = query.in('id', scanIds);
-
-  const { data: unmatched } = await query;
-  if (!unmatched || unmatched.length === 0) return { matched: 0, total: 0 };
+  // Paginated: the outstanding-scans sweep is unbounded and a truncated
+  // read left scans past the cap permanently unmatchable (Round 3 CRITICAL,
+  // R3-1). Scoped calls (scanIds) stay small but ride the same path.
+  const { data: unmatched, error: unmatchedErr } = await fetchAllRows<{
+    id: string; part_number: string | null; location_name: string | null; exported_at: string | null;
+  }>((from, to) => {
+    let query = service
+      .from('scan_logs')
+      .select('id, part_number, location_name, exported_at')
+      .is('po_id', null)
+      .is('archived_at', null);
+    if (scanIds && scanIds.length > 0) query = query.in('id', scanIds);
+    return query.order('id').range(from, to);
+  });
+  if (unmatchedErr || !unmatched || unmatched.length === 0) return { matched: 0, total: 0 };
 
   // When PO capacity is scarce, active (unexported) scans claim lines first —
   // they need the match to reach "Ready"; for exported scans it's enrichment.
   unmatched.sort((a, b) => (a.exported_at ? 1 : 0) - (b.exported_at ? 1 : 0));
 
-  const { data: pos } = await service
-    .from('purchase_orders')
-    .select('id, po_number, ship_to')
-    .eq('status', 'open');
-  if (!pos || pos.length === 0) return { matched: 0, total: unmatched.length };
+  const { data: pos, error: posErr } = await fetchAllRows<{ id: string; po_number: string | null; ship_to: any }>((from, to) =>
+    service
+      .from('purchase_orders')
+      .select('id, po_number, ship_to')
+      .eq('status', 'open')
+      .order('id')
+      .range(from, to),
+  );
+  if (posErr || !pos || pos.length === 0) return { matched: 0, total: unmatched.length };
 
   const poById = new Map(pos.map(p => [p.id, p]));
-  const { data: allLines } = await service
-    .from('po_line_items')
-    .select('id, po_id, part_number, quantity, installed')
-    .in('po_id', pos.map(p => p.id));
-  const lines = allLines || [];
+  const allLines = await fetchLinesForPos<{ id: string; po_id: string; part_number: string | null; quantity: number | null; installed: number | null }>(
+    service, pos.map(p => p.id), 'id, po_id, part_number, quantity, installed',
+  );
+  // Partial lines would mis-route scans to the wrong PO and bump the wrong
+  // line's installed count — skip the sweep and let the next run match.
+  if (allLines === null) return { matched: 0, total: unmatched.length };
+  const lines = allLines;
 
   let matched = 0;
   const touchedPoIds: string[] = [];

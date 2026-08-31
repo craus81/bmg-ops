@@ -5,6 +5,7 @@ import { validateSearchParams, z } from '@/lib/validate';
 import { suiteqlQuery } from '@/lib/netsuite';
 import { safeStringLiteral } from '@/lib/sql-safe';
 import { fetchPartRowsCI } from '@/lib/part-number';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -129,15 +130,26 @@ export async function GET(req: NextRequest) {
       d.setUTCDate(d.getUTCDate() + 1);
       return d.toISOString().slice(0, 10);
     })();
+    // Paginated (R3-1 MAJOR sweep): the lines below were already chunked +
+    // paginated, but these two top-level reads still truncated at 1000 —
+    // dropping whole invoices from the report.
     const [byDate, byCreated] = await Promise.all([
-      service.from('vendor_invoices')
-        .select('id, invoice_number, invoice_date, vendor_name, location_name, created_at')
-        .gte('invoice_date', start).lte('invoice_date', end),
-      service.from('vendor_invoices')
-        .select('id, invoice_number, invoice_date, vendor_name, location_name, created_at')
-        .is('invoice_date', null)
-        .gte('created_at', `${start}T00:00:00Z`).lt('created_at', `${endNext}T00:00:00Z`),
+      fetchAllRows<any>((from, to) =>
+        service.from('vendor_invoices')
+          .select('id, invoice_number, invoice_date, vendor_name, location_name, created_at')
+          .gte('invoice_date', start).lte('invoice_date', end)
+          .order('invoice_date').order('id')
+          .range(from, to)),
+      fetchAllRows<any>((from, to) =>
+        service.from('vendor_invoices')
+          .select('id, invoice_number, invoice_date, vendor_name, location_name, created_at')
+          .is('invoice_date', null)
+          .gte('created_at', `${start}T00:00:00Z`).lt('created_at', `${endNext}T00:00:00Z`)
+          .order('created_at').order('id')
+          .range(from, to)),
     ]);
+    const invReadErr = byDate.error || byCreated.error;
+    if (invReadErr) return NextResponse.json({ error: invReadErr.message }, { status: 500 });
     const invoices = [...(byDate.data || []), ...(byCreated.data || [])];
     const invoiceById = new Map(invoices.map(i => [i.id, i]));
 

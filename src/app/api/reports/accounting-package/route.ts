@@ -4,6 +4,7 @@ import JSZip from 'jszip';
 import { requireRole } from '@/lib/api-auth';
 import { r2Get } from '@/lib/r2';
 import { logAudit } from '@/lib/audit';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -63,30 +64,46 @@ export async function GET(req: NextRequest) {
   const endNext = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`;
 
   try {
+    // Paginated (fetchAllRows): PostgREST caps every response at 1000 rows
+    // regardless of .limit(2000/10000), so a busy month's totals and CSVs
+    // silently dropped rows (Round 3 CRITICAL, R3-1). This is the package
+    // the accountant books from — a short read must be an error, never a
+    // smaller number.
     const [invoicesRes, payoutsRes, creditsRes] = await Promise.all([
       // Business date wins; fall back to record date for undated invoices.
-      service
-        .from('vendor_invoices')
-        .select('id, invoice_number, invoice_date, vendor_name, total_amount, status, netsuite_bill_id, file_name, storage_path, created_at, submitted_at, approved_at, billed_at, paid_at, lines:vendor_invoice_lines(amount)')
-        .or(`and(invoice_date.gte.${start},invoice_date.lt.${endNext}),and(invoice_date.is.null,created_at.gte.${start},created_at.lt.${endNext})`)
-        .order('invoice_date', { ascending: true })
-        .limit(1000),
-      service
-        .from('payouts')
-        .select('id, profile_id, kind, cni_job_id, period_start, period_end, total_amount, status, netsuite_bill_id, paid_at, created_at')
-        .gte('paid_at', start)
-        .lt('paid_at', endNext)
-        .order('paid_at', { ascending: true })
-        .limit(2000),
-      service
-        .from('install_credits')
-        .select('id, vin, part_number, source, profile_id, rate_per_vehicle, share_weight, crew_size, amount, payout_id, voided_at, created_at')
-        .gte('created_at', start)
-        .lt('created_at', endNext)
-        .is('voided_at', null)
-        .order('created_at', { ascending: true })
-        .limit(10000),
+      fetchAllRows<any>((from, to) =>
+        service
+          .from('vendor_invoices')
+          .select('id, invoice_number, invoice_date, vendor_name, total_amount, status, netsuite_bill_id, file_name, storage_path, created_at, submitted_at, approved_at, billed_at, paid_at, lines:vendor_invoice_lines(amount)')
+          .or(`and(invoice_date.gte.${start},invoice_date.lt.${endNext}),and(invoice_date.is.null,created_at.gte.${start},created_at.lt.${endNext})`)
+          .order('invoice_date', { ascending: true })
+          .order('id')
+          .range(from, to)),
+      fetchAllRows<any>((from, to) =>
+        service
+          .from('payouts')
+          .select('id, profile_id, kind, cni_job_id, period_start, period_end, total_amount, status, netsuite_bill_id, paid_at, created_at')
+          .gte('paid_at', start)
+          .lt('paid_at', endNext)
+          .order('paid_at', { ascending: true })
+          .order('id')
+          .range(from, to)),
+      fetchAllRows<any>((from, to) =>
+        service
+          .from('install_credits')
+          .select('id, vin, part_number, source, profile_id, rate_per_vehicle, share_weight, crew_size, amount, payout_id, voided_at, created_at')
+          .gte('created_at', start)
+          .lt('created_at', endNext)
+          .is('voided_at', null)
+          .order('created_at', { ascending: true })
+          .order('id')
+          .range(from, to)),
     ]);
+
+    const readErr = invoicesRes.error || payoutsRes.error || creditsRes.error;
+    if (readErr) {
+      return NextResponse.json({ error: `Could not read the month's records (${readErr.message}) — refusing to build a partial package.` }, { status: 502 });
+    }
 
     const invoices = invoicesRes.data || [];
     const payouts = payoutsRes.data || [];
@@ -101,8 +118,8 @@ export async function GET(req: NextRequest) {
     }
     const jobIds = [...new Set(payouts.map(p => p.cni_job_id).filter(Boolean))] as string[];
     const jobLabels = new Map<string, string>();
-    if (jobIds.length > 0) {
-      const { data } = await service.from('cni_jobs').select('id, job_number, title').in('id', jobIds);
+    for (let i = 0; i < jobIds.length; i += 200) {
+      const { data } = await service.from('cni_jobs').select('id, job_number, title').in('id', jobIds.slice(i, i + 200));
       for (const j of data || []) jobLabels.set(j.id, j.title || j.job_number || '');
     }
 

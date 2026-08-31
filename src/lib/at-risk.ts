@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 /**
  * At-risk customer detection over the NetSuite-synced spend columns on
@@ -46,11 +47,16 @@ export async function evaluateAtRiskCustomers(
   opts: AtRiskOptions = {},
 ): Promise<{ flagged: AtRiskCustomer[]; scanned: number; options: Required<AtRiskOptions> }> {
   const options = { ...AT_RISK_DEFAULTS, ...opts };
-  const { data: rows } = await service
-    .from('customers')
-    .select('id, netsuite_id, company_name, entity_id, last_year_spend, ytd_spend, total_spend, last_order_date, account_owner_id, internal_notes, at_risk_dismissed_at')
-    .gte('last_year_spend', options.minLastYearSpend)
-    .eq('active', true);
+  // Paginated (R3-1 MAJOR sweep): an unbounded read capped at 1000 rows,
+  // so customers past the cap were never evaluated and `scanned` lied.
+  const { data: rows } = await fetchAllRows<any>((from, to) =>
+    service
+      .from('customers')
+      .select('id, netsuite_id, company_name, entity_id, last_year_spend, ytd_spend, total_spend, last_order_date, account_owner_id, internal_notes, at_risk_dismissed_at')
+      .gte('last_year_spend', options.minLastYearSpend)
+      .eq('active', true)
+      .order('id')
+      .range(from, to));
 
   const now = Date.now();
   const startOfYear = new Date(new Date().getFullYear(), 0, 1).getTime();

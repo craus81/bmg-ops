@@ -23,6 +23,24 @@ with placeholder env and it's deterministic —
 NEXT_PUBLIC_SUPABASE_ANON_KEY="x" SUPABASE_SERVICE_ROLE_KEY="x" npx next
 build`. The types phase (the part #568 was about) is unaffected either way.
 
+## Database migrations apply themselves — don't hand-apply, don't advise it
+
+Files in `migrations/` auto-apply to production: Vercel's build command is
+`node scripts/migrate.mjs --deploy && next build` (wired in #648), which
+applies pending files in filename order inside transactions, records them
+in `schema_migrations`, and FAILS the deploy if one fails — code whose
+schema didn't apply never goes live. So a merged migration is live once
+its production deploy is; do NOT tell the user to run it in the Supabase
+SQL editor (stale advice given repeatedly before this note), and write
+every migration idempotent (`IF NOT EXISTS` etc.) since preview builds
+skip it but a re-deploy re-runs the pipeline.
+
+Don't try to apply or verify one from a session container either:
+`SUPABASE_DB_URL` is present here, but the egress policy blocks Postgres
+(port 5432) — `npm run migrate` and `psql` both time out — and HTTPS to
+`ops.bmgfleet.com` is rejected too. To confirm a migration landed, check
+the latest production build log on Vercel for `applied <file>.sql`.
+
 ## Git workflow
 
 Pushes to `main` are currently broken (the local git proxy returns

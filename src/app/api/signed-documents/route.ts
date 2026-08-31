@@ -25,6 +25,13 @@ const supabase = createClient(
  * themselves; the snapshot HTML is rendered client-side inside a
  * sandboxed iframe, never as a live page.
  */
+// Same audit columns on all three tables (migrations 082/084/153) — the
+// when/how of the acceptance, captured server-side at approval time. This
+// is dispute evidence, so the viewer shows it beside the snapshot instead
+// of leaving it buried in the row (Stage 3 finding: "approval provenance
+// vanishes from the UI").
+const PROVENANCE_COLUMNS = 'customer_approved_via, customer_approved_ip, customer_approved_user_agent, customer_approved_delivery_target, customer_approved_time_on_page_seconds';
+
 const TYPES: Record<string, {
   table: string;
   feature: FeatureKey;
@@ -35,21 +42,21 @@ const TYPES: Record<string, {
   estimate: {
     table: 'estimates',
     feature: 'estimates',
-    select: 'id, estimate_number, customer_name, customer_approved_at, customer_approved_via, signed_document_storage_path, signed_document_hash',
+    select: `id, estimate_number, customer_name, customer_approved_at, signed_document_storage_path, signed_document_hash, ${PROVENANCE_COLUMNS}`,
     label: r => `Estimate ${r.estimate_number}${r.customer_name ? ` — ${r.customer_name}` : ''}`,
     approvedAt: r => r.customer_approved_at,
   },
   wrap_quote: {
     table: 'wrap_quotes',
     feature: 'estimates',
-    select: 'id, quote_number, customer, accepted_at, signed_document_storage_path, signed_document_hash',
+    select: `id, quote_number, customer, accepted_at, signed_document_storage_path, signed_document_hash, ${PROVENANCE_COLUMNS}`,
     label: r => `Wrap quote ${r.quote_number}${(r.customer as any)?.name ? ` — ${(r.customer as any).name}` : ''}`,
     approvedAt: r => r.accepted_at,
   },
   proof: {
     table: 'graphics_jobs',
     feature: 'graphics',
-    select: 'id, job_number, customer, customer_approved_at, signed_document_storage_path, signed_document_hash',
+    select: `id, job_number, customer, customer_approved_at, signed_document_storage_path, signed_document_hash, ${PROVENANCE_COLUMNS}`,
     label: r => `Proof approval ${r.job_number || ''}${r.customer ? ` — ${r.customer}` : ''}`.trim(),
     approvedAt: r => r.customer_approved_at,
   },
@@ -112,6 +119,13 @@ export async function GET(req: NextRequest) {
     storagePath: stored,
     hash: storedHash,
     verified,
+    provenance: {
+      via: (row as any).customer_approved_via || null,
+      deliveryTarget: (row as any).customer_approved_delivery_target || null,
+      ip: (row as any).customer_approved_ip || null,
+      userAgent: (row as any).customer_approved_user_agent || null,
+      timeOnPageSeconds: (row as any).customer_approved_time_on_page_seconds ?? null,
+    },
   };
 
   if (got.bytes.length > INLINE_MAX_BYTES) {

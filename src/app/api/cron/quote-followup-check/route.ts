@@ -4,6 +4,8 @@ import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
+import { fetchAllRows } from '@/lib/fetch-all';
+import { sendEstimateApprovalReminder, type EstimateReminderRow } from '@/lib/estimate-approval-reminder';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -47,12 +49,16 @@ export async function GET(req: NextRequest) {
     // Best-effort: the sweep below must run even before migration 212 lands.
     let reminded = 0;
     try {
+      // Oldest first so a backlog over the per-run cap drains fairly
+      // instead of in arbitrary order.
       const { data: due } = await service
         .from('quote_followups')
         .select('id, quote_type, quote_id, note, created_by, remind_at')
         .is('reminder_sent_at', null)
         .not('remind_at', 'is', null)
         .lte('remind_at', today)
+        .order('remind_at')
+        .order('id')
         .limit(200);
       for (const r of due || []) {
         const table = r.quote_type === 'estimate' ? 'estimates' : 'wrap_quotes';
@@ -94,12 +100,17 @@ export async function GET(req: NextRequest) {
     // until the reminder fires.
     const deferred = new Set<string>();
     try {
-      const { data: pending } = await service
-        .from('quote_followups')
-        .select('quote_type, quote_id')
-        .is('reminder_sent_at', null)
-        .gt('remind_at', today)
-        .limit(1000);
+      // Paginated (R3-1 MAJOR sweep): a deferral that falls past the
+      // 1000-row cap silently drops out of this set, and the quote the rep
+      // deliberately parked gets nudged anyway.
+      const { data: pending } = await fetchAllRows<{ quote_type: string; quote_id: string }>((from, to) =>
+        service
+          .from('quote_followups')
+          .select('quote_type, quote_id')
+          .is('reminder_sent_at', null)
+          .gt('remind_at', today)
+          .order('id')
+          .range(from, to));
       for (const p of pending || []) {
         deferred.add(`${p.quote_type === 'estimate' ? 'estimates' : 'wrap_quotes'}:${p.quote_id}`);
       }
@@ -121,13 +132,17 @@ export async function GET(req: NextRequest) {
       return quietDays;
     };
 
+    // Paginated (R3-1 MAJOR sweep): with >500 sent quotes the .limit(500)
+    // reads silently dropped the tail, and those quotes were never nudged.
     const [estRes, wrapRes] = await Promise.all([
-      service.from('estimates')
-        .select('id, estimate_number, customer_name, grand_total, created_by, sent_for_approval_at, updated_at, last_followup_at, followup_nudged_at')
-        .eq('status', 'sent').limit(500),
-      service.from('wrap_quotes')
-        .select('id, quote_number, customer, total, created_by, sent_at, last_followup_at, followup_nudged_at')
-        .eq('status', 'sent').is('archived_at', null).limit(500),
+      fetchAllRows<any>((from, to) =>
+        service.from('estimates')
+          .select('id, estimate_number, title, customer_name, customer_id, customer_netsuite_id, grand_total, created_by, sent_for_approval_at, sent_for_approval_by, updated_at, last_followup_at, followup_nudged_at, approval_email_to, approval_token, approval_token_expires_at, approval_reminder_sent_at, approval_reminder_count, approval_escalated_at')
+          .eq('status', 'sent').order('id').range(from, to)),
+      fetchAllRows<any>((from, to) =>
+        service.from('wrap_quotes')
+          .select('id, quote_number, customer, total, created_by, sent_at, last_followup_at, followup_nudged_at')
+          .eq('status', 'sent').is('archived_at', null).order('id').range(from, to)),
     ]);
 
     for (const e of estRes.data || []) {
@@ -189,11 +204,62 @@ export async function GET(req: NextRequest) {
       if (wrapIds.length > 0) await service.from('wrap_quotes').update({ followup_nudged_at: nudgeStamp }).in('id', wrapIds);
     }
 
+    // ── Customer-facing reminders + internal escalation (Stage 3) ─────────
+    // Same cadence as the proof cron: quiet 3+ days → automatic reminder
+    // email to the original approval recipients (capped at 3); waiting 7+
+    // days total → internal escalation, re-escalated at most weekly. A
+    // rep-set deferral ("customer answers in September") suppresses BOTH —
+    // pestering a customer the rep deliberately parked burns goodwill. A
+    // logged manual follow-up (last_followup_at) also resets the reminder
+    // clock so the customer isn't emailed the morning after a phone call.
+    const REMIND_AFTER_DAYS = 3;
+    const MAX_REMINDERS = 3;
+    const ESCALATE_AFTER_DAYS = 7;
+    let customerReminded = 0;
+    let escalated = 0;
+    const reminderFailures: string[] = [];
+    for (const e of estRes.data || []) {
+      if (!e.sent_for_approval_at) continue;
+      if (deferred.has(`estimates:${e.id}`)) continue;
+      const sentDays = (now - new Date(e.sent_for_approval_at).getTime()) / dayMs;
+
+      const lastTouch = Math.max(
+        new Date(e.sent_for_approval_at).getTime(),
+        e.approval_reminder_sent_at ? new Date(e.approval_reminder_sent_at).getTime() : 0,
+        e.last_followup_at ? new Date(e.last_followup_at).getTime() : 0,
+      );
+      const quietSinceTouch = (now - lastTouch) / dayMs;
+      if (quietSinceTouch >= REMIND_AFTER_DAYS && (e.approval_reminder_count || 0) < MAX_REMINDERS) {
+        const result = await sendEstimateApprovalReminder(service, e as EstimateReminderRow);
+        if (result.ok) customerReminded++;
+        else if (!result.skipped) reminderFailures.push(`${e.estimate_number}: ${result.error}`);
+      }
+
+      const escalatedDays = e.approval_escalated_at ? (now - new Date(e.approval_escalated_at).getTime()) / dayMs : null;
+      if (sentDays >= ESCALATE_AFTER_DAYS && (escalatedDays == null || escalatedDays >= ESCALATE_AFTER_DAYS)) {
+        const targets = [...new Set([e.sent_for_approval_by, e.created_by].filter(Boolean))] as string[];
+        if (targets.length > 0) {
+          await notifyMany(targets, {
+            type: 'quote_followup',
+            title: `Estimate stuck ${Math.floor(sentDays)}d — ${e.estimate_number}`,
+            body: `${e.customer_name || 'The customer'} hasn't answered ${e.estimate_number} in ${Math.floor(sentDays)} days (${e.approval_reminder_count || 0} automatic reminder${(e.approval_reminder_count || 0) !== 1 ? 's' : ''} sent). Worth a call.`,
+            url: deepLinks.quoteFollowUps('estimate', e.id),
+            channels: ['in_app', 'push'],
+            forceChannels: true,
+          });
+        }
+        await service.from('estimates')
+          .update({ approval_escalated_at: new Date().toISOString() })
+          .eq('id', e.id);
+        escalated++;
+      }
+    }
+
     const syncStateWrite = await recordHeartbeat(
-      service, 'quote_followup_check', { status: 'ok', quiet: quiet.length, notified, reminded },
+      service, 'quote_followup_check', { status: 'ok', quiet: quiet.length, notified, reminded, customerReminded, escalated, reminderFailures: reminderFailures.slice(0, 10) },
     );
 
-    return NextResponse.json({ status: 'ok', quiet: quiet.length, notified, reminded, syncStateWrite });
+    return NextResponse.json({ status: 'ok', quiet: quiet.length, notified, reminded, customerReminded, escalated, reminderFailures, syncStateWrite });
   } catch (e: any) {
     console.error('quote-followup-check failed:', e);
     await recordHeartbeat(service, 'quote_followup_check', { error: e.message || 'quote follow-up check failed' }); // never throws; failure already logged

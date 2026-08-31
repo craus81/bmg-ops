@@ -4,6 +4,7 @@ import { requireAdmin } from '@/lib/api-auth';
 import { sendEmail, buildCustomerDigestEmail } from '@/lib/resend';
 import { resolveCustomerContact } from '@/lib/customer-notify';
 import { recordHeartbeat } from '@/lib/system-health';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -54,23 +55,37 @@ export async function GET(req: NextRequest) {
 
     // Active vehicles + last week's completions/ships (precise transitions
     // come from the status history) + last week's invoicing stamps.
+    // Paginated (R3-1 MAJOR sweep): PostgREST caps each response at 1000
+    // rows regardless of .limit(2000), so a busy week's digest silently
+    // dropped vehicles. A failed read skips the send — a short digest that
+    // omits a customer's vehicles reads as "nothing happening" to them.
     const [activeRes, historyRes, invoicedRes] = await Promise.all([
-      service.from('fleet_checkins')
-        .select('id, vin, vehicle_year, vehicle_make, vehicle_model, status, customer_name')
-        .in('status', ACTIVE_STATUSES)
-        .not('customer_name', 'is', null)
-        .limit(2000),
-      service.from('vehicle_status_history')
-        .select('vehicle_id, to_status, created_at')
-        .in('to_status', ['complete', 'shipped'])
-        .gte('created_at', weekAgo)
-        .limit(2000),
-      service.from('fleet_checkins')
-        .select('id, vin, vehicle_year, vehicle_make, vehicle_model, customer_name, invoice_number, date_invoiced')
-        .gte('date_invoiced', weekAgo.slice(0, 10))
-        .not('customer_name', 'is', null)
-        .limit(2000),
+      fetchAllRows<any>((from, to) =>
+        service.from('fleet_checkins')
+          .select('id, vin, vehicle_year, vehicle_make, vehicle_model, status, customer_name')
+          .in('status', ACTIVE_STATUSES)
+          .not('customer_name', 'is', null)
+          .order('id')
+          .range(from, to)),
+      fetchAllRows<any>((from, to) =>
+        service.from('vehicle_status_history')
+          .select('vehicle_id, to_status, created_at')
+          .in('to_status', ['complete', 'shipped'])
+          .gte('created_at', weekAgo)
+          .order('id')
+          .range(from, to)),
+      fetchAllRows<any>((from, to) =>
+        service.from('fleet_checkins')
+          .select('id, vin, vehicle_year, vehicle_make, vehicle_model, customer_name, invoice_number, date_invoiced')
+          .gte('date_invoiced', weekAgo.slice(0, 10))
+          .not('customer_name', 'is', null)
+          .order('id')
+          .range(from, to)),
     ]);
+    const digestReadErr = activeRes.error || historyRes.error || invoicedRes.error;
+    if (digestReadErr) {
+      return NextResponse.json({ error: `digest reads failed (${digestReadErr.message}) — no emails sent` }, { status: 502 });
+    }
 
     // Resolve the vehicles behind last week's transitions.
     const eventVehicleIds = [...new Set((historyRes.data || []).map(h => h.vehicle_id))];
