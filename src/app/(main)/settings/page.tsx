@@ -45,6 +45,21 @@ export default function SettingsPage() {
   const [taxSaved, setTaxSaved] = useState(false);
   const [taxError, setTaxError] = useState('');
 
+  // NetSuite labor item — the ONE item every pushed estimate and sales order
+  // bills labor to. Unset means the server picks the best-matching LABOR item
+  // in NetSuite; when nothing matches, labor never reaches NetSuite at all,
+  // so this panel always states which of the two is happening.
+  const [laborItem, setLaborItem] = useState<{
+    configured_item_number: string | null;
+    resolved: { id: string; itemNumber: string | null; source: string } | null;
+    error?: string;
+    candidates: { id: string; itemNumber: string }[];
+  } | null>(null);
+  const [laborInput, setLaborInput] = useState('');
+  const [laborBusy, setLaborBusy] = useState(false);
+  const [laborSaved, setLaborSaved] = useState(false);
+  const [laborError, setLaborError] = useState('');
+
   // Push notification state
   const [pushSupported, setPushSupported] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -76,6 +91,9 @@ export default function SettingsPage() {
       .catch(() => {});
   }, [isSuperAdmin]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once, when the Company section becomes visible
+  useEffect(() => { if (isSuperAdmin) loadLaborItem(); }, [isSuperAdmin]);
+
   const handleSaveTax = async () => {
     setTaxSaving(true);
     setTaxError('');
@@ -96,6 +114,46 @@ export default function SettingsPage() {
     } finally {
       setTaxSaving(false);
     }
+  };
+
+  const loadLaborItem = async () => {
+    setLaborBusy(true);
+    setLaborError('');
+    try {
+      const res = await apiFetch('/api/admin/labor-item');
+      const data = await res.json();
+      if (!res.ok) { setLaborError(data?.error || 'Could not read the labor item.'); return; }
+      setLaborItem(data);
+      setLaborInput(data.configured_item_number || '');
+    } catch (e: any) {
+      setLaborError(e?.message || 'Could not read the labor item.');
+    } finally {
+      setLaborBusy(false);
+    }
+  };
+
+  const handleSaveLaborItem = async () => {
+    setLaborBusy(true);
+    setLaborError('');
+    try {
+      const res = await apiFetch('/api/admin/labor-item', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ item_number: laborInput.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setLaborError(data?.error || 'Could not save the labor item.'); return; }
+      setLaborSaved(true);
+      setTimeout(() => setLaborSaved(false), 2500);
+    } catch (e: any) {
+      setLaborError(e?.message || 'Could not save the labor item.');
+      return;
+    } finally {
+      setLaborBusy(false);
+    }
+    // Re-read so the panel shows what the push will actually use, not what
+    // was typed.
+    await loadLaborItem();
   };
 
   const handleSaveSignature = async () => {
@@ -461,6 +519,72 @@ export default function SettingsPage() {
             </div>
             {taxError && (
               <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{taxError}</div>
+            )}
+          </div>
+
+          <div style={sectionStyle}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>NetSuite Labor Item</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
+              Estimate labor (hours × the shop rate) pushes to NetSuite as one line on this item. Leave it
+              blank and the server picks the best-matching active LABOR item; naming it here pins which GL
+              account labor posts to. If NetSuite has no labor item at all, labor is left off every pushed
+              estimate and sales order.
+            </div>
+
+            <div style={{ fontSize: '11px', marginBottom: '10px', color: 'var(--text-label)' }}>
+              {laborBusy && !laborItem ? 'Checking NetSuite…' : laborItem?.resolved ? (
+                <>Labor currently bills to{' '}
+                  <b style={{ color: 'var(--text-body)' }}>{laborItem.resolved.itemNumber || `internal id ${laborItem.resolved.id}`}</b>
+                  {laborItem.resolved.source === 'search' && ' — auto-picked, save it below to pin it'}
+                  {laborItem.resolved.source === 'env' && ' — set by NETSUITE_LABOR_ITEM_ID'}
+                  {laborItem.resolved.source === 'setting' && ' — pinned here'}.
+                </>
+              ) : laborItem ? (
+                <b style={{ color: '#ef4444' }}>
+                  ⚠ No labor item found in NetSuite — labor is NOT reaching NetSuite on any estimate or sales order.
+                </b>
+              ) : 'Not checked yet.'}
+            </div>
+
+            <div style={labelStyle}>NetSuite item name</div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                value={laborInput}
+                onChange={e => setLaborInput(e.target.value)}
+                placeholder="Exact item name (blank = auto)"
+                style={{ ...inputStyle, width: '240px' }}
+              />
+              <button
+                onClick={handleSaveLaborItem}
+                disabled={laborBusy}
+                style={{
+                  padding: '8px 16px', borderRadius: '8px', border: 'none',
+                  background: laborSaved ? '#22c55e' : '#3b82f6', color: '#fff',
+                  fontSize: '12px', fontWeight: 800,
+                  cursor: laborBusy ? 'default' : 'pointer', opacity: laborBusy ? 0.5 : 1,
+                }}
+              >
+                {laborBusy ? 'Working...' : laborSaved ? 'Saved!' : 'Save Item'}
+              </button>
+              <button
+                onClick={loadLaborItem}
+                disabled={laborBusy}
+                style={{
+                  padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border-color)',
+                  background: 'transparent', color: 'var(--text-body)',
+                  fontSize: '12px', fontWeight: 700, cursor: laborBusy ? 'default' : 'pointer',
+                }}
+              >
+                Re-check
+              </button>
+            </div>
+            {(laborItem?.candidates?.length || 0) > 1 && (
+              <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '8px' }}>
+                Other labor items in NetSuite: {laborItem!.candidates.slice(1, 6).map(c => c.itemNumber).join(', ')}
+              </div>
+            )}
+            {laborError && (
+              <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{laborError}</div>
             )}
           </div>
         </>
