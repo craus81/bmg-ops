@@ -172,6 +172,12 @@ interface Estimate {
   // R3-17 lineage: set when this estimate was duplicated off a locked
   // (accepted/converted) one — the builder shows the chain both directions.
   supersedes_estimate_id: string | null;
+  // Approval provenance + rejection record (Stage 3: these lived only in
+  // the DB and one push notification — the builder now shows them).
+  customer_approved_at: string | null;
+  customer_approved_via: string | null;
+  customer_rejected_at: string | null;
+  customer_rejection_reason: string | null;
 }
 
 // Allowed qualifier options per platform, from vehicle_platforms.config —
@@ -3748,6 +3754,40 @@ export default function EstimatesPage() {
               ))}
             </div>
           );
+        })()}
+
+        {/* Approval provenance / rejection record (Stage 3): the customer's
+            decision and its when/how, previously invisible in-app. */}
+        {editingId && (() => {
+          const est = estimates.find(e => e.id === editingId);
+          if (!est) return null;
+          if (est.customer_rejected_at) {
+            return (
+              <div style={{
+                width: '100%', padding: '10px 12px', borderRadius: '10px',
+                background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.25)',
+                fontSize: '12px', color: '#f87171',
+              }}>
+                <div style={{ fontWeight: 800 }}>✗ Customer declined {new Date(est.customer_rejected_at).toLocaleDateString()}</div>
+                <div style={{ marginTop: '3px', fontWeight: 500, color: 'var(--text-body)' }}>
+                  “{est.customer_rejection_reason || 'No reason given'}”
+                </div>
+              </div>
+            );
+          }
+          if ((est as any).customer_approved && est.customer_approved_at) {
+            return (
+              <div style={{
+                width: '100%', padding: '8px 12px', borderRadius: '10px', textAlign: 'center',
+                background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)',
+                fontSize: '11px', fontWeight: 700, color: '#22c55e',
+              }}>
+                ✓ Approved by the customer {new Date(est.customer_approved_at).toLocaleString()}
+                {est.customer_approved_via ? ` via ${est.customer_approved_via === 'sms_link' ? 'SMS link' : 'email link'}` : ''}
+              </div>
+            );
+          }
+          return null;
         })()}
 
         {/* Signed E-SIGN snapshot — the frozen document the customer accepted,

@@ -23,6 +23,15 @@ interface SignedDoc {
   storagePath: string;
   hash: string | null;
   verified: boolean;
+  /** When/how the customer accepted — dispute evidence captured at
+   *  approval time (channel, target, IP, browser, time on page). */
+  provenance?: {
+    via: string | null;
+    deliveryTarget: string | null;
+    ip: string | null;
+    userAgent: string | null;
+    timeOnPageSeconds: number | null;
+  } | null;
   html?: string | null;
   /** Presigned R2 URL when the snapshot is too large to ship inline —
    *  the integrity verdict was still computed server-side on the full
@@ -101,10 +110,26 @@ export default function SignedDocumentPage() {
             )}
             <button onClick={download} style={{ marginLeft: 'auto', padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', cursor: 'pointer' }}>Download .html</button>
           </div>
-          <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '14px' }}>
+          <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: doc.provenance ? '4px' : '14px' }}>
             {doc.approvedAt ? `Accepted ${new Date(doc.approvedAt).toLocaleString()}` : 'Acceptance date not recorded'}
             {doc.hash && <span style={{ marginLeft: '10px', fontFamily: 'monospace', fontSize: '10px', color: 'var(--text-muted)' }}>sha256 {doc.hash.slice(0, 16)}…</span>}
           </div>
+          {/* Approval provenance — the when/how captured server-side at the
+              moment of acceptance (Stage 3: this existed only in the DB). */}
+          {doc.provenance && (doc.provenance.via || doc.provenance.ip || doc.provenance.timeOnPageSeconds != null) && (
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '14px', display: 'flex', flexWrap: 'wrap', gap: '4px 14px' }}>
+              {doc.provenance.via && (
+                <span>Via {doc.provenance.via === 'sms_link' ? 'SMS link' : 'email link'}{doc.provenance.deliveryTarget ? ` to ${doc.provenance.deliveryTarget}` : ''}</span>
+              )}
+              {doc.provenance.ip && <span>IP {doc.provenance.ip}</span>}
+              {doc.provenance.timeOnPageSeconds != null && <span>{Math.round(doc.provenance.timeOnPageSeconds)}s on page</span>}
+              {doc.provenance.userAgent && (
+                <span title={doc.provenance.userAgent} style={{ maxWidth: '340px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {doc.provenance.userAgent}
+                </span>
+              )}
+            </div>
+          )}
           {/* Historical captured markup — sandboxed, no scripts, no navigation. */}
           <iframe
             sandbox=""

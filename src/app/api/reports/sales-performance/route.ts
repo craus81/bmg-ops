@@ -61,6 +61,11 @@ export async function GET(req: NextRequest) {
           .from('wrap_quotes')
           .select('id, quote_number, customer, total, created_by, status, sent_at, accepted_at, rejected_at, created_at')
           .neq('status', 'draft')
+          // A wrap quote folded into an estimate is not its own sales fact:
+          // the estimate's grand total carries its money and the customer
+          // decides on the estimate. Counting both double-books the win
+          // (and before reconciliation, folded quotes hung 'open' forever).
+          .is('estimate_id', null)
           .gte('sent_at', start)
           .lt('sent_at', endNext)
           .order('sent_at')
@@ -76,7 +81,11 @@ export async function GET(req: NextRequest) {
     for (const e of estRes.data || []) {
       const sentAt = e.sent_for_approval_at || e.updated_at;
       if (!inRange(sentAt)) continue;
-      const outcome = e.status === 'accepted' || e.status === 'pushed' ? 'won'
+      // Won means the CUSTOMER decided: accepted status or a recorded
+      // approval. 'pushed' only says we mirrored the estimate to NetSuite —
+      // counting it as won pre-credited every pushed quote before the
+      // customer answered (Stage 3 finding).
+      const outcome = e.status === 'accepted' || e.customer_approved_at ? 'won'
         : e.status === 'rejected' ? 'lost' : 'open';
       facts.push({
         type: 'estimate',

@@ -17,6 +17,7 @@ import {
 } from '@/lib/magic-link-approval';
 import { COMBINED_AGREEMENT_TEXT } from '@/lib/approval-agreement';
 import { approvalContentHash } from '@/lib/magic-link-approval';
+import { reconcileLinkedWrapQuotes } from '@/lib/wrap-quote-reconcile';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { validateBody, z } from '@/lib/validate';
@@ -155,6 +156,11 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
     // The sales rep (notified below) routes it.
     await noteRejectionOnLinkedJobs(estimate, proofBlocks, reason);
 
+    // Folded wrap quotes follow the estimate's fate — otherwise they sit
+    // 'sent' forever, nudging reps about a decision the customer already
+    // made (Stage 3 finding). Quotes separately accepted keep standing.
+    await reconcileLinkedWrapQuotes(supabase, estimate.id, 'rejected', new Date().toISOString());
+
     await notifySalesRep(estimate, 'rejected', reason);
     return NextResponse.json({ status: 'submitted_rejected' });
   }
@@ -228,6 +234,11 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   // graphics jobs whose proofs were part of this document, so the printing
   // proof-gate opens without a second customer round-trip.
   await approveLinkedGraphicsJobs(estimate, proofBlocks, metadata, approvedAt, signedPath, signedHash);
+
+  // Folded wrap quotes ride the same acceptance: the estimate's grand total
+  // already carries their money, and leaving them 'sent' kept them in the
+  // follow-up queue and the open pipeline forever (Stage 3 finding).
+  await reconcileLinkedWrapQuotes(supabase, estimate.id, 'accepted', approvedAt);
 
   await notifySalesRep(estimate, 'accepted');
   return NextResponse.json({ status: 'submitted_accepted' });
