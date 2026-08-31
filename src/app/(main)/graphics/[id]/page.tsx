@@ -951,6 +951,17 @@ export default function GraphicsJobRecordPage() {
           {job.priority !== 'normal' && <span style={chip(priorityColor(job.priority))}>{job.priority}</span>}
           {category !== 'production' && <span style={chip(GRAPHICS_CATEGORY_COLORS[category])}>{GRAPHICS_CATEGORY_LABELS[category]}</span>}
           <span style={chip(statusColor)}>{GRAPHICS_STATUS_LABELS[job.status]}</span>
+          {/* Pre-invoice pick/pack sheet (Stage 5): the invoice-based packing
+              list only exists after billing — the bench needs one at the
+              packing stage, so this renders from the job + material log. */}
+          <a
+            href={`/api/graphics/packing-list?jobId=${job.id}&print=1`}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ marginLeft: 'auto', padding: '5px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', whiteSpace: 'nowrap', textDecoration: 'none' }}
+          >
+            🖨 Packing List
+          </a>
         </div>
         {job.job_number && (
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '3px', fontFamily: 'monospace' }}>#{job.job_number}</div>

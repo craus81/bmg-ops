@@ -3033,7 +3033,7 @@ export default function WrapQuotePage() {
                 </div>
               ))}
             </>)}
-            {sectionHead('Job Pricing')}
+          {sectionHead('Job Pricing')}
             <div style={{ display: 'flex', gap: '8px', marginBottom: '6px' }}>
               <div>
                 <div style={labelStyle}>Kits (qty)</div>

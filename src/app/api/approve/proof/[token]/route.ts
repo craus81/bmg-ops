@@ -6,7 +6,7 @@ import {
 } from '@/lib/magic-link-approval';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
-import { r2Get, r2PublicUrl, r2Upload } from '@/lib/r2';
+import { r2Get, r2PresignGet, r2Upload } from '@/lib/r2';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -93,13 +93,15 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
   }
 
   // Files live in R2 under the graphics-proofs prefix (see src/lib/storage.ts).
-  // R2 public URLs are directly fetchable, no signing needed.
-  const fileEntries = (files || []).map((f: any) => ({
+  // Served presigned (Stage 5 finding: the token gated the PAGE while the
+  // artwork sat on permanent public URLs anyone could share or crawl). An
+  // hour comfortably covers a review sitting; a reload mints fresh links.
+  const fileEntries = await Promise.all((files || []).map(async (f: any) => ({
     id: f.id,
     file_name: f.file_name,
-    url: r2PublicUrl('graphics-proofs', f.storage_path),
+    url: await r2PresignGet('graphics-proofs', f.storage_path, { disposition: 'inline', expiresIn: 3600 }),
     is_pdf: isPdf(f),
-  }));
+  })));
 
   return NextResponse.json({ status: 'ready', job: publicJob(job), files: fileEntries });
 }

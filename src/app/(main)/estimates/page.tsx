@@ -1425,6 +1425,17 @@ export default function EstimatesPage() {
         if (data.unmappedItems?.length) {
           msg += `\n\n⚠ Could NOT push (FS-CUSTOM item missing in NetSuite): ${data.unmappedItems.join(', ')}`;
         }
+        // Labor is a whole line the NetSuite copy either has or doesn't.
+        // It used to be dropped silently when no labor item resolved, so
+        // NetSuite estimates went out short by the labor amount with the
+        // push reporting success — say which it was, every time.
+        if (data.laborSkipped) {
+          msg += `\n\n⚠ Labor was NOT sent — no labor item is set up in NetSuite, so the NetSuite copy is short ${data.laborHours} hrs`
+            + `${data.laborAmount ? ` ($${Number(data.laborAmount).toFixed(2)})` : ''}.`
+            + ` Set Settings → NetSuite Labor Item, then Sync again.`;
+        } else if (data.laborItem) {
+          msg += `\n\nLabor billed to NetSuite item "${data.laborItem}".`;
+        }
         await dialog.alert(msg);
         // Stay in the estimate — the NetSuite banner re-derives from the
         // refreshed list, and bouncing to the list view lost the user's place.
@@ -1783,7 +1794,11 @@ export default function EstimatesPage() {
         // lines were never surfaced to the person clicking Convert.
         const warnings = [
           data.unmappedLines?.length ? `⚠ Dropped (create FS-CUSTOM in NetSuite): ${data.unmappedLines.join(', ')}` : '',
-          data.laborSkipped ? '⚠ Labor was NOT pushed — no LABOR item exists in NetSuite, so the SO total is short by the labor amount.' : '',
+          data.laborSkipped
+            ? `⚠ Labor was NOT pushed — no labor item is set up in NetSuite, so the SO is short ${data.laborHours ?? ''} hrs`
+              + `${data.laborAmount ? ` ($${Number(data.laborAmount).toFixed(2)})` : ''}.`
+              + ' Set Settings → NetSuite Labor Item and add the line in NetSuite.'
+            : (data.laborItem ? `Labor billed to NetSuite item "${data.laborItem}".` : ''),
           data.upfitProject?.created ? 'Upfit project created — parts readiness is on the Upfit tab.' : '',
         ].filter(Boolean).join('\n');
         await dialog.alert(`Sales Order created!\nSO #: ${data.salesOrderNumber || data.salesOrderId}\nLine items: ${data.lineItemCount}${warnings ? '\n\n' + warnings : ''}`);

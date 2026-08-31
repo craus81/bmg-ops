@@ -150,6 +150,20 @@ they tell you to go back to auto-shipping.
   `dialog.prompt` recipients. Update the doc's flow table when adding a
   flow.
 
+- **Labor reaches NetSuite as ONE line on ONE item — resolve it through
+  `src/lib/labor-item.ts`.** Estimate/SO labor is `labor_hours_override ??
+  labor_hours` × `labor_rate`, pushed as a single line item; NetSuite has no
+  free-text line, so with no labor item resolved the whole labor amount just
+  vanishes from the pushed copy. That shipped twice: two different `LIKE`
+  patterns billing the same job to different GL accounts, then a narrowing to
+  `LABOR`/`LABOR%` that matched nothing in this account and silently dropped
+  labor off every push. `resolveLaborItem()` is the only resolver — env
+  `NETSUITE_LABOR_ITEM_ID`, then the item configured in Settings → NetSuite
+  Labor Item (`quote_settings`, migration 247), then a ranked search. Never
+  add a second lookup, and never let a caller treat "no labor item" as a
+  no-op: report it (`laborSkipped`) so the person pushing sees the money that
+  didn't go.
+
 - **Supabase reads silently cap at 1000 rows** (PostgREST default —
   `.limit(N > 1000)` does NOT raise it). Any read of a table that can
   grow unboundedly (netsuite_parts, scan_logs, po/invoice line items,

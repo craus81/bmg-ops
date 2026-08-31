@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { usePopout, PopoutType } from '@/components/Popout';
+import { pathFor, PopoutType } from '@/components/Popout';
 import { useAuth } from '@/components/AuthProvider';
 import { estimateHeadlineNumber, estimateAltNumber } from '@/lib/estimate-number';
 
@@ -234,7 +234,6 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
       default: return true;
     }
   };
-  const { open: openPopout } = usePopout();
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Record<string, any[]>>({});
@@ -242,17 +241,14 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
   const [searching, setSearching] = useState(false);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Tapping a result closes the search and pops out the shared detail view.
-  // Customers skip the popout and go straight to the customer record page —
-  // the record shows far more than the popout's five fields ever did.
+  // Tapping a result closes the search and goes straight to the record's own
+  // page. It used to stop at the shared popout preview first — a few fields
+  // and an "Open full page" button — which was a wasted tap now that every
+  // entity here has a real page; customers already skipped it for that reason.
   const openDetail = useCallback((group: string, item: any) => {
     onClose();
-    if (group === 'customers') {
-      router.push(`/admin/prospects/${item.id}`);
-      return;
-    }
-    openPopout(group as PopoutType, item);
-  }, [onClose, openPopout, router]);
+    router.push(pathFor(group as PopoutType, item));
+  }, [onClose, router]);
 
   // Focus input when opened
   useEffect(() => {

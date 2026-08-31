@@ -75,6 +75,10 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/delete-template/route.ts': admin(),
   'src/app/api/admin/delete-user/route.ts': admin(),
   'src/app/api/admin/import-installs/route.ts': admin(),
+  // Reading which NetSuite item labor bills to is admin (it exposes item
+  // ids); setting it is super-admin, like the tax rate — it decides which
+  // GL account every labor dollar posts to.
+  'src/app/api/admin/labor-item/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   'src/app/api/admin/link-customer/route.ts': admin(),
   'src/app/api/admin/payouts/route.ts': admin(),
   'src/app/api/admin/payroll/route.ts': admin(),
@@ -180,6 +184,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/graphics/from-wrap-quote/route.ts': staff(),
   'src/app/api/graphics/invoice-pdf/route.ts': staff(),
   'src/app/api/graphics/invoice-preview/route.ts': staff(),
+  'src/app/api/graphics/packing-list/route.ts': staff(),
   'src/app/api/graphics/mark-invoiced/route.ts': staff(),
   'src/app/api/graphics/notify-assignees/route.ts': staff(),
   'src/app/api/graphics/notify-pickup/route.ts': staff(),
