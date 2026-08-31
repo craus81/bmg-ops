@@ -25,7 +25,7 @@ const supabase = createClient(
  * fulfillment — every part has to pass through an Item Fulfillment first.
  * Fulfilling relieves inventory and posts COGS, so it happens at most once
  * per sales order, ever: NetSuite's own fulfillment records are the source
- * of truth and the UNIQUE claim in netsuite_so_fulfillments (migration 242)
+ * of truth and the UNIQUE claim in netsuite_so_fulfillments (migration 244)
  * closes the race between two clicks.
  *
  * Bills the FULL sales order via NetSuite's SO→invoice transform (memo and

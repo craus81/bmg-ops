@@ -39,7 +39,7 @@ silently fell off the bill.
    | C cancelled · G billed · H closed | **block** |
    | anything unrecognized | **block** — never guess with inventory |
 
-3. **Claim** — insert into `netsuite_so_fulfillments` (migration 242), which is
+3. **Claim** — insert into `netsuite_so_fulfillments` (migration 244), which is
    `UNIQUE(netsuite_so_id)`. A second click gets 23505 and never reaches
    NetSuite.
 4. **Fulfill** — `POST /record/v1/salesOrder/{id}/!transform/itemFulfillment`
