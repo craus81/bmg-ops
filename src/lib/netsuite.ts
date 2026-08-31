@@ -6,6 +6,7 @@
 import OAuth from 'oauth-1.0a';
 import CryptoJS from 'crypto-js';
 import { safeStringLiteral } from './sql-safe';
+import { describeFulfillmentError, isShipStatusRejection } from './so-fulfillment';
 
 interface NetSuiteConfig {
   accountId: string;
@@ -2118,6 +2119,185 @@ export async function createItemReceiptFromPo(payload: {
     return { success: true, receiptId, receiptNumber };
   } catch (e: any) {
     return { success: false, error: `Failed to create item receipt: ${e.message}` };
+  }
+}
+
+/**
+ * What NetSuite currently thinks about this sales order's shipping: its
+ * status, and every Item Fulfillment already created from it.
+ *
+ * Item Fulfillments are transaction type 'ItemShip', linked back to their
+ * sales order by createdfrom (the same column the SO sync reads for the
+ * Estimate→SO link). This is the read the fulfil-then-invoice flow trusts
+ * before it creates anything — the claim row in netsuite_so_fulfillments
+ * only closes the race window around it.
+ */
+export async function getSalesOrderFulfillmentState(salesOrderId: string | number): Promise<{
+  success: boolean;
+  status?: string;
+  statusLabel?: string;
+  fulfillments: { id: string; tranid: string | null; status: string | null }[];
+  error?: string;
+}> {
+  const soId = String(salesOrderId).replace(/[^0-9]/g, '');
+  if (!soId) return { success: false, fulfillments: [], error: 'Invalid sales order id' };
+
+  try {
+    const header = await suiteqlQuery(`
+      SELECT t.status, BUILTIN.DF(t.status) AS status_label
+      FROM transaction t
+      WHERE t.id = ${soId} AND t.type = 'SalesOrd'
+    `);
+    const row = header?.items?.[0];
+    if (!row) return { success: false, fulfillments: [], error: 'Sales order not found in NetSuite' };
+
+    const ships = await suiteqlQuery(`
+      SELECT t.id, t.tranid, t.status
+      FROM transaction t
+      WHERE t.type = 'ItemShip' AND t.createdfrom = ${soId}
+    `);
+
+    return {
+      success: true,
+      status: String(row.status || ''),
+      // BUILTIN.DF returns "Sales Order : Pending Fulfillment" — keep the label.
+      statusLabel: String(row.status_label || '').replace(/^[^:]+:\s*/, ''),
+      fulfillments: (ships?.items || []).map((f: any) => ({
+        id: String(f.id),
+        tranid: f.tranid || null,
+        status: f.status || null,
+      })),
+    };
+  } catch (e: any) {
+    return { success: false, fulfillments: [], error: `Could not read the sales order's fulfillment state: ${e.message}` };
+  }
+}
+
+/**
+ * Fulfill the FULL sales order, shipped.
+ *
+ * POST /record/v1/salesOrder/{id}/!transform/itemFulfillment — the same
+ * transform pattern as PO→Bill and SO→Invoice. An empty item sublist means
+ * "everything the SO has left", which is what completion wants: the order
+ * is done. shipStatus 'C' (Shipped) is the part that matters — a fulfillment
+ * left Picked or Packed has NOT relieved inventory, so the invoice would
+ * come up short exactly as it did before.
+ *
+ * THIS MOVES STOCK AND POSTS COGS. Callers must hold the
+ * netsuite_so_fulfillments claim and must have checked
+ * getSalesOrderFulfillmentState first; this function will not create a
+ * second fulfillment for a sales order that already has one.
+ */
+export async function fulfillSalesOrder(salesOrderId: string | number): Promise<{
+  success: boolean;
+  fulfillmentId?: string;
+  tranid?: string;
+  /** The fulfillment reads back as Shipped — inventory actually moved. */
+  shipped: boolean;
+  error?: string;
+}> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const soId = String(salesOrderId).replace(/[^0-9]/g, '');
+  const url = `${baseUrl}/services/rest/record/v1/salesOrder/${soId}/!transform/itemFulfillment`;
+
+  // The REST record API takes a select field as { id } on some releases and
+  // a bare string on others, and shipStatus is the one field we cannot get
+  // wrong. Try the documented object form, then the string — but never
+  // without re-checking NetSuite in between, in case the "failed" attempt
+  // actually created the record.
+  const attempt = async (shipStatus: unknown): Promise<{ ok: boolean; id?: string; text?: string }> => {
+    const { oauth, token } = createOAuth(config);
+    const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify({ shipStatus }),
+    });
+    if (!response.ok) return { ok: false, text: await response.text() };
+    const location = response.headers.get('Location');
+    let id = location?.match(/\/(\d+)$/)?.[1] || '';
+    try {
+      const result = await response.json();
+      id = id || result.id?.toString() || '';
+    } catch {
+      // 204 No Content — the Location header carried the id.
+    }
+    return { ok: true, id };
+  };
+
+  try {
+    let created = await attempt({ id: 'C' });
+
+    if (!created.ok && isShipStatusRejection(created.text || '')) {
+      // Only retry once NetSuite confirms the first attempt left nothing
+      // behind — a blind retry is how you end up with two fulfillments.
+      const after = await getSalesOrderFulfillmentState(soId);
+      if (after.success && after.fulfillments.length > 0) {
+        const existing = after.fulfillments[0];
+        return {
+          success: true,
+          fulfillmentId: existing.id,
+          tranid: existing.tranid || undefined,
+          shipped: existing.status === 'C',
+        };
+      }
+      created = await attempt('C');
+    }
+
+    if (!created.ok) {
+      const raw = created.text || '';
+      console.error('NetSuite item fulfillment error:', raw);
+      return { success: false, shipped: false, error: `${describeFulfillmentError(raw)} (NetSuite said: ${raw})` };
+    }
+
+    let fulfillmentId = created.id;
+    let tranid: string | undefined;
+    let shipped = false;
+
+    // Read the record back rather than assuming: "created" and "shipped"
+    // are different things, and only the second one relieved inventory.
+    if (fulfillmentId) {
+      try {
+        const check = await suiteqlQuery(`SELECT tranid, status FROM transaction WHERE id = ${fulfillmentId}`);
+        const row = check?.items?.[0];
+        tranid = row?.tranid || undefined;
+        shipped = row?.status === 'C';
+      } catch {
+        // Non-critical — the caller records what it knows and the invoice
+        // step surfaces anything actually missing.
+      }
+    }
+
+    if (fulfillmentId && !shipped) {
+      // Picked/Packed: push it to Shipped in place. Never create another.
+      const patchUrl = `${baseUrl}/services/rest/record/v1/itemFulfillment/${fulfillmentId}`;
+      const { oauth, token } = createOAuth(config);
+      const authHeader = getAuthHeader(oauth, token, { url: patchUrl, method: 'PATCH' });
+      try {
+        const patched = await fetch(patchUrl, {
+          method: 'PATCH',
+          headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shipStatus: { id: 'C' } }),
+        });
+        if (patched.ok) {
+          const check = await suiteqlQuery(`SELECT tranid, status FROM transaction WHERE id = ${fulfillmentId}`);
+          shipped = check?.items?.[0]?.status === 'C';
+        } else {
+          console.error('NetSuite fulfillment ship-status patch failed:', await patched.text());
+        }
+      } catch (e: any) {
+        console.error('NetSuite fulfillment ship-status patch threw:', e?.message);
+      }
+    }
+
+    return { success: true, fulfillmentId, tranid, shipped };
+  } catch (e: any) {
+    return { success: false, shipped: false, error: `Failed to fulfill the sales order: ${e.message}` };
   }
 }
 

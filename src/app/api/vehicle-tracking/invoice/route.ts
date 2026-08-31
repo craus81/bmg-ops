@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { createInvoiceFromSO } from '@/lib/netsuite';
+import { createInvoiceFromSO, fulfillSalesOrder, getSalesOrderFulfillmentState } from '@/lib/netsuite';
+import { decideFulfillment } from '@/lib/so-fulfillment';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -16,6 +17,16 @@ const supabase = createClient(
  * POST /api/vehicle-tracking/invoice — admin-only (field ask, 2026-08-21:
  * "the vehicle completion process should let you turn the sales order or
  * estimate into a NetSuite invoice").
+ *
+ * Fulfills the FULL sales order and then bills it, in one step (field ask,
+ * 2026-08-28: invoicing straight from the SO produced an invoice holding
+ * only labor and freight). This account runs Advanced Shipping, so
+ * NetSuite's SO→invoice transform carries only the lines that need no
+ * fulfillment — every part has to pass through an Item Fulfillment first.
+ * Fulfilling relieves inventory and posts COGS, so it happens at most once
+ * per sales order, ever: NetSuite's own fulfillment records are the source
+ * of truth and the UNIQUE claim in netsuite_so_fulfillments (migration 248)
+ * closes the race between two clicks.
  *
  * Bills the FULL sales order via NetSuite's SO→invoice transform (memo and
  * location inherited from the SO, so the vehicle context the SO carries
@@ -71,6 +82,99 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'That sales order is not linked to this vehicle.' }, { status: 400 });
     }
 
+    // ── Fulfill first (or establish that we must not) ──
+    const state = await getSalesOrderFulfillmentState(salesOrderId);
+    if (!state.success) {
+      return NextResponse.json({ error: state.error || 'Could not read the sales order in NetSuite' }, { status: 502 });
+    }
+
+    const decision = decideFulfillment({
+      soStatus: state.status || '',
+      soStatusLabel: state.statusLabel,
+      existingFulfillments: state.fulfillments.length,
+      shippedFulfillments: state.fulfillments.filter(f => f.status === 'C').length,
+    });
+    if (decision.action === 'block') {
+      return NextResponse.json({ error: decision.error, step: 'fulfillment' }, { status: 400 });
+    }
+
+    let fulfillment: { id: string | null; tranid: string | null; shipped: boolean } | null =
+      state.fulfillments.length > 0
+        ? { id: state.fulfillments[0].id, tranid: state.fulfillments[0].tranid, shipped: state.fulfillments[0].status === 'C' }
+        : null;
+
+    if (decision.action === 'fulfill') {
+      // The claim is what makes this safe under a double-click: UNIQUE on
+      // netsuite_so_id, so the second caller gets 23505 and never reaches
+      // NetSuite. Only a claim that provably created nothing is released.
+      const { error: claimErr } = await supabase
+        .from('netsuite_so_fulfillments')
+        .insert({ netsuite_so_id: String(salesOrderId), claimed_by: auth.user?.id || null });
+
+      if (claimErr) {
+        if (claimErr.code === '23505') {
+          const { data: held } = await supabase
+            .from('netsuite_so_fulfillments')
+            .select('netsuite_fulfillment_id, tranid, shipped')
+            .eq('netsuite_so_id', String(salesOrderId))
+            .maybeSingle();
+          return NextResponse.json({
+            error: held?.netsuite_fulfillment_id
+              ? `This sales order was already fulfilled (item fulfillment ${held.tranid || held.netsuite_fulfillment_id}). Reload the vehicle — it may just need invoicing.`
+              : 'Another fulfillment for this sales order is already running. Give it a moment, then reload.',
+            step: 'fulfillment',
+          }, { status: 409 });
+        }
+        return NextResponse.json({ error: `Could not claim the fulfillment: ${claimErr.message}` }, { status: 500 });
+      }
+
+      const filled = await fulfillSalesOrder(salesOrderId);
+
+      if (!filled.success) {
+        // Release the claim ONLY when NetSuite confirms nothing was created;
+        // an unknown outcome keeps the claim, so the worst case is a stuck
+        // sales order a human resolves — never a second fulfillment.
+        const after = await getSalesOrderFulfillmentState(salesOrderId);
+        if (after.success && after.fulfillments.length === 0) {
+          await supabase.from('netsuite_so_fulfillments').delete().eq('netsuite_so_id', String(salesOrderId));
+        } else {
+          await supabase.from('netsuite_so_fulfillments')
+            .update({ last_error: filled.error || 'unknown', ...(after.fulfillments[0] ? {
+              netsuite_fulfillment_id: after.fulfillments[0].id,
+              tranid: after.fulfillments[0].tranid,
+              shipped: after.fulfillments[0].status === 'C',
+            } : {}) })
+            .eq('netsuite_so_id', String(salesOrderId));
+        }
+        // No invoice on a failed fulfillment: billing anyway is exactly the
+        // labor-and-freight-only invoice this change exists to stop.
+        return NextResponse.json({ error: filled.error || 'NetSuite item fulfillment failed', step: 'fulfillment' }, { status: 502 });
+      }
+
+      await supabase.from('netsuite_so_fulfillments')
+        .update({
+          netsuite_fulfillment_id: filled.fulfillmentId || null,
+          tranid: filled.tranid || null,
+          shipped: filled.shipped,
+          completed_at: new Date().toISOString(),
+          last_error: null,
+        })
+        .eq('netsuite_so_id', String(salesOrderId));
+
+      if (!filled.shipped) {
+        // Created but not Shipped: inventory has NOT moved, so the invoice
+        // would still come up short. Stop here — the claim stays, so a retry
+        // re-uses this fulfillment instead of creating another.
+        return NextResponse.json({
+          error: `Item fulfillment ${filled.tranid || filled.fulfillmentId} was created but NetSuite left it un-shipped, so the parts are not billable yet. Set it to Shipped in NetSuite, then invoice again.`,
+          step: 'fulfillment',
+          fulfillmentId: filled.fulfillmentId,
+        }, { status: 502 });
+      }
+
+      fulfillment = { id: filled.fulfillmentId || null, tranid: filled.tranid || null, shipped: true };
+    }
+
     // Full-SO transform: no line overrides, no memo/location overrides —
     // everything the SO carries (vehicle memo, VIN custom field, location)
     // inherits onto the invoice.
@@ -95,6 +199,10 @@ export async function POST(req: NextRequest) {
       success: true,
       invoiceId: result.invoiceId,
       invoiceNumber: result.invoiceNumber || result.invoiceId,
+      fulfillmentId: fulfillment?.id || null,
+      fulfillmentNumber: fulfillment?.tranid || null,
+      fulfilled: decision.action === 'fulfill',
+      fulfillmentNote: decision.action === 'skip' ? decision.reason : null,
     });
   } catch (err: any) {
     console.error('vehicle invoice error:', err);
