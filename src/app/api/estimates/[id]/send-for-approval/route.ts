@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
-import { generateToken } from '@/lib/magic-link-approval';
+import { generateToken, approvalContentHash } from '@/lib/magic-link-approval';
 import { sendEmailDetailed } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { sendSMS } from '@/lib/sms-provider';
@@ -255,6 +255,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .update({
       approval_token: token,
       approval_token_expires_at: expiresAt,
+      // Fingerprint of what this send actually contains (items + money).
+      // The accept route refuses when the estimate no longer matches it —
+      // an edit landing while the link is live can't become a "signed"
+      // record the customer never saw (migration 242, Round 3 finding).
+      approval_sent_hash: approvalContentHash(estimate, rawLineItems || []),
       sent_for_approval_at: new Date().toISOString(),
       sent_for_approval_by: auth.user.id,
       // 'rejected' also flips back to 'sent': a resent-after-rejection
@@ -364,11 +369,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
   }
 
+  // The live token/URL is deliberately NOT echoed back: any estimates user
+  // could copy it out of the response, open the customer's page, and click
+  // Accept — a forged E-SIGN acceptance the convert gate trusts, which is
+  // exactly the threat stripApprovalSecrets closed on the list API
+  // (Round 3 finding). Delivery always goes through email/SMS (the route
+  // rejects a send with no target), so staff never need the raw link.
   return NextResponse.json({
     status: 'sent',
-    token,
     expiresAt,
-    approvalUrl: `${appUrl}/approve/estimate/${token}`,
     dispatch,
   });
 }

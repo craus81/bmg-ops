@@ -120,7 +120,8 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   }
 
   // Accept path — snapshot the signed document first, then record approval.
-  const snapshotHtml = renderSignedSnapshot(quote, metadata, body.agreementText || AGREEMENT_TEXT);
+  // Server-held for the same reason as the estimate route (Round 3 finding).
+  const snapshotHtml = renderSignedSnapshot(quote, metadata, AGREEMENT_TEXT);
   let signedPath: string | null = null;
   let signedHash: string | null = null;
   try {

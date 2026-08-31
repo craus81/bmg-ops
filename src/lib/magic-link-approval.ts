@@ -119,6 +119,33 @@ export async function uploadSignedDocument(
 }
 
 /**
+ * Deterministic fingerprint of WHAT was sent for approval: the money-and-
+ * items contract — item numbers, quantities, unit prices (line order by
+ * sort_order) plus the header totals. send-for-approval stamps it
+ * (estimates.approval_sent_hash, migration 242); the accept route
+ * recomputes and refuses on mismatch, closing the edit-during-approval
+ * window (Round 3 finding: a save landing while the link was live froze a
+ * "signed" record showing prices the customer never saw).
+ *
+ * Descriptions are deliberately excluded: the approval renderer enriches
+ * lines (catalog photos, vendor links), and a cosmetic description touch
+ * must not strand a legitimate acceptance.
+ */
+export function approvalContentHash(
+  estimate: { subtotal?: unknown; labor_total?: unknown; tax_amount?: unknown; grand_total?: unknown; tax_rate?: unknown },
+  lines: Array<{ item_number?: unknown; quantity?: unknown; unit_price?: unknown; sort_order?: unknown }>,
+): string {
+  const money = (v: unknown) => +(parseFloat(String(v ?? 0)) || 0).toFixed(2);
+  const body = {
+    lines: [...lines]
+      .sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0))
+      .map(l => [String(l.item_number ?? ''), money(l.quantity), money(l.unit_price)]),
+    totals: [estimate.subtotal, estimate.labor_total, estimate.tax_amount, estimate.grand_total, estimate.tax_rate].map(money),
+  };
+  return sha256Hex(JSON.stringify(body));
+}
+
+/**
  * Validate a token has not expired. Returns a reason string on failure.
  */
 export function validateExpiry(expiresAt: string | null): { ok: boolean; reason?: string } {

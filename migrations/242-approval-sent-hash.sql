@@ -1,0 +1,14 @@
+-- Migration 242: send-time content hash for estimate approvals (Round 3
+-- roadmap R3-7, closing the edit-during-approval window).
+--
+-- While an approval link is live, the estimate's lines stayed editable and
+-- both the approval page and the frozen snapshot read CURRENT rows — a
+-- save landing between the customer's page load and their Accept produced
+-- a hash-verified "signed" record showing prices the customer never saw.
+--
+-- send-for-approval now stamps a fingerprint of what was actually sent
+-- (item numbers + quantities + unit prices + the totals; descriptions are
+-- excluded because the approval renderer enriches them). The accept route
+-- recomputes the same fingerprint and refuses when it no longer matches —
+-- the rep re-sends, the customer approves what they can see.
+ALTER TABLE estimates ADD COLUMN IF NOT EXISTS approval_sent_hash TEXT;
