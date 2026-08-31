@@ -14,6 +14,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { partNumberPattern } from './part-number';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 export interface ShiftMember {
   profile_id: string;
@@ -177,11 +178,20 @@ export async function backfillJobCredits(
   if (!job) return { ok: false, created: 0, skipped: 0, error: 'Job not found' };
   const rate = job.pay_per_vehicle != null ? Number(job.pay_per_vehicle) : null;
 
-  const { data: vins } = await service
-    .from('cni_job_vins')
-    .select('id, vin, status')
-    .eq('job_id', cniJobId)
-    .eq('status', 'completed');
+  // Paginated (R3-1 MAJOR sweep): a big fleet job can pass 1000 completed
+  // VINs, and vehicles past the cap silently got no credits. This moves
+  // pay — a failed read must abort, not back-pay a partial list.
+  const { data: vins, error: vinsErr } = await fetchAllRows<{ id: string; vin: string; status: string }>((from, to) =>
+    service
+      .from('cni_job_vins')
+      .select('id, vin, status')
+      .eq('job_id', cniJobId)
+      .eq('status', 'completed')
+      .order('id')
+      .range(from, to));
+  if (vinsErr) {
+    return { ok: false, created: 0, skipped: 0, error: 'Could not read the job\'s vehicles: ' + vinsErr.message };
+  }
   if (!vins || vins.length === 0) {
     return { ok: false, created: 0, skipped: 0, error: 'No completed vehicles on this job to pay out' };
   }

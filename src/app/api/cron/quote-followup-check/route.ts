@@ -4,6 +4,7 @@ import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -47,12 +48,16 @@ export async function GET(req: NextRequest) {
     // Best-effort: the sweep below must run even before migration 212 lands.
     let reminded = 0;
     try {
+      // Oldest first so a backlog over the per-run cap drains fairly
+      // instead of in arbitrary order.
       const { data: due } = await service
         .from('quote_followups')
         .select('id, quote_type, quote_id, note, created_by, remind_at')
         .is('reminder_sent_at', null)
         .not('remind_at', 'is', null)
         .lte('remind_at', today)
+        .order('remind_at')
+        .order('id')
         .limit(200);
       for (const r of due || []) {
         const table = r.quote_type === 'estimate' ? 'estimates' : 'wrap_quotes';
@@ -94,12 +99,17 @@ export async function GET(req: NextRequest) {
     // until the reminder fires.
     const deferred = new Set<string>();
     try {
-      const { data: pending } = await service
-        .from('quote_followups')
-        .select('quote_type, quote_id')
-        .is('reminder_sent_at', null)
-        .gt('remind_at', today)
-        .limit(1000);
+      // Paginated (R3-1 MAJOR sweep): a deferral that falls past the
+      // 1000-row cap silently drops out of this set, and the quote the rep
+      // deliberately parked gets nudged anyway.
+      const { data: pending } = await fetchAllRows<{ quote_type: string; quote_id: string }>((from, to) =>
+        service
+          .from('quote_followups')
+          .select('quote_type, quote_id')
+          .is('reminder_sent_at', null)
+          .gt('remind_at', today)
+          .order('id')
+          .range(from, to));
       for (const p of pending || []) {
         deferred.add(`${p.quote_type === 'estimate' ? 'estimates' : 'wrap_quotes'}:${p.quote_id}`);
       }
@@ -121,13 +131,17 @@ export async function GET(req: NextRequest) {
       return quietDays;
     };
 
+    // Paginated (R3-1 MAJOR sweep): with >500 sent quotes the .limit(500)
+    // reads silently dropped the tail, and those quotes were never nudged.
     const [estRes, wrapRes] = await Promise.all([
-      service.from('estimates')
-        .select('id, estimate_number, customer_name, grand_total, created_by, sent_for_approval_at, updated_at, last_followup_at, followup_nudged_at')
-        .eq('status', 'sent').limit(500),
-      service.from('wrap_quotes')
-        .select('id, quote_number, customer, total, created_by, sent_at, last_followup_at, followup_nudged_at')
-        .eq('status', 'sent').is('archived_at', null).limit(500),
+      fetchAllRows<any>((from, to) =>
+        service.from('estimates')
+          .select('id, estimate_number, customer_name, grand_total, created_by, sent_for_approval_at, updated_at, last_followup_at, followup_nudged_at')
+          .eq('status', 'sent').order('id').range(from, to)),
+      fetchAllRows<any>((from, to) =>
+        service.from('wrap_quotes')
+          .select('id, quote_number, customer, total, created_by, sent_at, last_followup_at, followup_nudged_at')
+          .eq('status', 'sent').is('archived_at', null).order('id').range(from, to)),
     ]);
 
     for (const e of estRes.data || []) {
