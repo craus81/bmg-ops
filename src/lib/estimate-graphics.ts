@@ -11,7 +11,7 @@
  * Server-only: callers pass a service-role Supabase client.
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { r2GetBytes, r2PublicUrl } from './r2';
+import { r2GetBytes, r2PresignGet, r2PublicUrl } from './r2';
 
 export interface EstimateGraphicsSummary {
   quoteNumber: string;
@@ -121,6 +121,12 @@ export async function loadEstimateProofs(
   supabase: SupabaseClient,
   estimateId: string,
   override?: { jobId: string; fileIds: string[] }[],
+  // presign: serve the artwork behind short-lived presigned URLs instead of
+  // permanent public ones (Stage 5 finding: the token gated the PAGE, not
+  // the artwork). The approval PAGES presign; the approval EMAIL keeps
+  // public URLs because mail clients fetch images days after the send,
+  // beyond any presign lifetime.
+  opts?: { presign?: boolean },
 ): Promise<EstimateProofBlock[]> {
   try {
     const { data: jobs, error } = await supabase
@@ -157,7 +163,9 @@ export async function loadEstimateProofs(
         files.push({
           id: f.id,
           name: f.file_name,
-          url: r2PublicUrl('graphics-proofs', f.storage_path),
+          url: opts?.presign
+            ? await r2PresignGet('graphics-proofs', f.storage_path, { disposition: 'inline', expiresIn: 3600 })
+            : r2PublicUrl('graphics-proofs', f.storage_path),
           isPdf: isPdfFile(f.file_name, f.file_type),
           storagePath: f.storage_path,
         });
