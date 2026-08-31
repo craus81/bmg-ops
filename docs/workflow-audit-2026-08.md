@@ -82,7 +82,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
 | **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 19 and 21 remain open** (2 — R2-goes-private, labor capture). Shipped 2026-08-30: the Stage 1 build-out (#701–#704, closing item 18), the two Stage 1 owner decisions (#706 lead tier, #707 deletion→NetSuite), and estimate integrity (#708–#710, items 9–11). Shipped 2026-08-30: the whole **vehicle custody** block (#712–#715, items 12–16). Shipped 2026-08-30 (second wave): **parts ordering & receiving** (#717–#719, item 17 — the audit's largest build: request queue → NetSuite PO → receiving with item receipts) and the **route→permission manifest** (#721, item 20 — all 251 routes declare + prove their guard; the sweep fixed the unauthenticated Google OAuth pair). |
 
-| **Round 3** — re-audit 2026-08-30 (Part 7) | 🔄 roadmap open | Nine-probe re-verification at `1ea2015`, every MAJOR+ finding re-verified by hand. **Round 2 holds** — all 19 ships confirmed at HEAD (5 partial caveats). ~90 new findings distilled into the Part 7 roadmap: 6 CRITICAL truncation bugs that move money/state, 8 E-SIGN forgery/loss holes, 7 non-idempotent NetSuite money paths (zero unique-index backing), 3 custody/CNI blockers — one, CNI company invites, failing 500 in production since #715 — the `forceChannels` no-op, and this week's parts-loop regressions (hotfixed same day, #724). Items 19 and 21 now carry written decision packages (the R2-flip tier checklist, the labor-capture touch-map). Shipped 2026-08-31: **Stage 2 closed** — the estimate correctness set (#726) and E-SIGN hardening (#727, migration 242) retire R3-6, R3-7, and every remaining Stage 2 walkthrough finding; change orders (R3-17) stay as the stage's open enhancement. |
+| **Round 3** — re-audit 2026-08-30 (Part 7) | 🔄 roadmap open | Nine-probe re-verification at `1ea2015`, every MAJOR+ finding re-verified by hand. **Round 2 holds** — all 19 ships confirmed at HEAD (5 partial caveats). ~90 new findings distilled into the Part 7 roadmap: 6 CRITICAL truncation bugs that move money/state, 8 E-SIGN forgery/loss holes, 7 non-idempotent NetSuite money paths (zero unique-index backing), 3 custody/CNI blockers — one, CNI company invites, failing 500 in production since #715 — the `forceChannels` no-op, and this week's parts-loop regressions (hotfixed same day, #724). Items 19 and 21 now carry written decision packages (the R2-flip tier checklist, the labor-capture touch-map). Shipped 2026-08-31: **Stage 2 closed** — the estimate correctness set (#726) and E-SIGN hardening (#727, migration 242) retire R3-6, R3-7, and every remaining Stage 2 walkthrough finding, and #729 ships the R3-17 change-order core (Duplicate + duplicate-as-revision with `supersedes_estimate_id` lineage, migration 243) — Stage 2 closed outright. |
 
 Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap; Part 7 carries Round 3.
 
@@ -186,8 +186,8 @@ status note at the end of this section)_
   its coverage extended to Delete (#726) and add-wrap-quote (#727), and the
   edit-during-approval window closed by the send-time content hash — the
   accept route refuses when items/prices no longer match what was sent
-  (migration 242, #727). Duplicate-as-revision remains the one enhancement,
-  tracked as R3-17.)_
+  (migration 242, #727). Duplicate-as-revision shipped in #729 — the lock's
+  "start a new estimate" now has a one-click escape hatch (R3-17).)_
 - ✅ **MAJOR — The graphics-job prompt misses the two main graphics paths.** The
   "Spawn graphics job" panel only fires off part-backed graphics-catalog lines;
   wrap-quote-fold lines and quick-graphics lines don't trip it — so a combined
@@ -212,9 +212,9 @@ additions against this stage (§7.2.3's eight E-SIGN holes, §7.2.8's estimate
 quick set) shipped in #726 (correctness: labor resolver, qty-0 honesty,
 checked line inserts, delete lock, resend/rejection, graphics gate) and #727
 (E-SIGN: token echo, server-held agreement text, send-time content hash,
-add-wrap-quote lock, oversized-snapshot delivery). The remaining Stage 2 item
-is an enhancement, not a defect: duplicate-as-revision / change orders
-(roadmap R3-17).
+add-wrap-quote lock, oversized-snapshot delivery). The last enhancement —
+duplicate-as-revision / change orders (roadmap R3-17) — shipped in #729
+(2026-08-31): nothing remains open against this stage.
 
 ## Stage 3 — Sending for approval & capturing it
 
@@ -1436,7 +1436,12 @@ it paid; four dead `r2PublicUrl` imports.
     on promote; estimate↔lead link by id, not name.
 17. **R3-17 · Change orders** — duplicate-as-revision with
     `supersedes_estimate_id`; surface `expiration_date`; customer-facing
-    estimate status in the portal.
+    estimate status in the portal. _(✅ Core shipped 2026-08-31, #729 —
+    `POST /api/estimates/[id]/duplicate` (plain copy vs revision decided
+    server-side from the lock state), migration 243, lineage banners both
+    directions, and the non-admin locked-save 409 now offers one-click
+    "Duplicate as Revision" that carries the on-screen edits. Still open,
+    cosmetic: surfacing status/expiration to the customer portal.)_
 18. **R3-18 · Lead lifecycle** — lost/nurture outcomes with reasons, wired
     into reminders and tiles.
 19. **R3-19 · The job-margin report** — parts cost (receipts/bills) +
