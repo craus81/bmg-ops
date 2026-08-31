@@ -166,7 +166,7 @@ they tell you to go back to auto-shipping.
   **relieves inventory and posts COGS**. Never fulfill a sales order twice:
   `/api/vehicle-tracking/invoice` re-reads NetSuite's own `ItemShip` records
   and holds the `UNIQUE(netsuite_so_id)` claim in `netsuite_so_fulfillments`
-  (migration 244) before creating one, and a failed fulfillment never falls
+  (migration 245) before creating one, and a failed fulfillment never falls
   through to invoicing.
 
 - **CNI installer payouts → NetSuite vendor bills:** see
