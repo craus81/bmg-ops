@@ -17,6 +17,7 @@ import { resolvePlatform, matchQualifiersToConfig } from '@/lib/vin-platform';
 import { sameVehicleVin, vinMatchOrFilter } from '@/lib/vin-match';
 import { IN_SHOP_STATUSES } from '@/lib/types';
 import { deepLinks } from '@/lib/deep-links';
+import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
 import NumberInput from '@/components/NumberInput';
@@ -57,23 +58,9 @@ interface LineItem {
   avg_install_cost?: number | null;
 }
 
-// Does this line represent graphics work, for the "spawn or link a graphics
-// job" panel? `catalog === 'graphics'` only covers part-backed catalog lines —
-// the two MAIN graphics paths never satisfied it, so a combined upfit+graphics
-// estimate could sail to a Sales Order with no graphics job and no prompt:
-//   - Add Graphics (wrap-quote fold) lines have no part row, so catalog stays
-//     undefined after reload; wrap_quote_id (which round-trips through save)
-//     and the fold's two fixed NetSuite item names are the durable markers.
-//   - Quick Graphics lines are bare customs; they're stamped
-//     catalog:'graphics' at creation and matched after reload by the exact
-//     machine-generated descriptions addQuickGraphicsLines writes.
-const isGraphicsLine = (l: LineItem): boolean =>
-  l.catalog === 'graphics'
-  || !!l.wrap_quote_id
-  || l.item_number === '3M Vinyl'
-  || l.item_number === 'Graphics Install Labor'
-  || /\d+(\.\d+)? sqft @ \$/.test(l.description || '')
-  || /^Graphics install labor/i.test(l.description || '');
+// Shared with convert-to-so's blocking graphics gate — one predicate, so the
+// panel here and the server-side wall can never disagree about what counts
+// as graphics work.
 
 interface LinkedGraphicsJob {
   id: string;
@@ -182,6 +169,9 @@ interface Estimate {
   vehicle_cab: string | null;
   vehicle_bed: string | null;
   fleet_checkin_id: string | null;
+  // R3-17 lineage: set when this estimate was duplicated off a locked
+  // (accepted/converted) one — the builder shows the chain both directions.
+  supersedes_estimate_id: string | null;
 }
 
 // Allowed qualifier options per platform, from vehicle_platforms.config —
@@ -521,6 +511,7 @@ export default function EstimatesPage() {
   const [pushing, setPushing] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
   const [convertingToSO, setConvertingToSO] = useState(false);
   // Busy while the estimate saves ahead of opening the compose screen.
   const [sendingForApproval, setSendingForApproval] = useState(false);
@@ -1119,7 +1110,13 @@ export default function EstimatesPage() {
   const marginColor = (pct: number) => pct < 0 ? '#ef4444' : pct < marginFloor ? '#fbbf24' : '#22c55e';
 
   // ── Save estimate ──
-  const saveEstimate = async (status: string = 'draft') => {
+  // opts.offerRevision: on the revision lock (non-admin, accepted estimate),
+  // offer "duplicate as revision" and land the edits there. Opt-in because
+  // it switches editingId mid-save: only safe from flows that end at the
+  // save (the Save button, Duplicate's pre-save) — pushToNetSuite/PDF/email/
+  // send-for-approval save first and then act on editingId, so a silent jump
+  // would point them at the wrong estimate.
+  const saveEstimate = async (status: string = 'draft', opts?: { offerRevision?: boolean }) => {
     setSaving(true);
     try {
       const body = {
@@ -1190,28 +1187,68 @@ export default function EstimatesPage() {
         data = await res.json();
       }
 
+      // Same lock, non-admin: no override, but the escape hatch the lock
+      // message points at is one click — duplicate as a revision and land
+      // the on-screen edits on the fresh draft (R3-17).
+      let revisionJumped = false;
+      let revisionNotes: string | null = null;
+      if (res.status === 409 && data.step === 'accepted_locked' && !data.canOverride && opts?.offerRevision && editingId) {
+        const wantsRevision = await dialog.confirm(
+          'This estimate was accepted by the customer, so its contents are locked. Duplicate it as a new revision draft with your changes? The signed original stays untouched.',
+          { confirmLabel: 'Duplicate as Revision' },
+        );
+        if (!wantsRevision) { setSaving(false); return undefined; }
+        const dupRes = await fetch(`/api/estimates/${editingId}/duplicate`, { method: 'POST' });
+        const dup = await dupRes.json().catch(() => ({}));
+        if (!dupRes.ok || !dup.success) {
+          await dialog.alert('Could not create the revision: ' + (dup.error || 'Unknown error'));
+          setSaving(false);
+          return undefined;
+        }
+        // Re-save the builder's current state onto the revision, keeping
+        // the provenance line the server stamped into its internal notes.
+        revisionNotes = [dup.provenance_note, internalNotes].filter(Boolean).join('\n');
+        res = await fetch('/api/estimates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...body, id: dup.id, status: 'draft', internal_notes: revisionNotes }),
+        });
+        data = await res.json();
+        revisionJumped = data.success === true;
+      }
+
       if (data.success) {
+        // Both API paths return the row id; on a revision jump it's the NEW
+        // id, and everything below must follow it, not editingId.
+        const savedId = (data.id || editingId) as string;
         // The just-saved state is the new baseline — retire the local backup
         // ('new' on a first save, which then re-keys under the real id).
         clearEstimateDraft(editingId);
-        if (!editingId && data.id) clearEstimateDraft(data.id);
+        if (savedId !== editingId) clearEstimateDraft(savedId);
         setDraftSession(s => s + 1);
-        if (!editingId) setEditingId(data.id);
+        if (!editingId || revisionJumped) setEditingId(savedId);
+        // On a revision jump the saved notes carry the provenance line —
+        // mirror it into the builder so the next Save doesn't strip it.
+        const savedNotes = revisionJumped && revisionNotes !== null ? revisionNotes : internalNotes;
+        if (revisionJumped && revisionNotes !== null) setInternalNotes(revisionNotes);
+        // The revision starts with no attached graphics jobs — refresh the
+        // panel so it doesn't keep showing the original's links.
+        if (revisionJumped) loadLinkedGraphicsJobs(savedId);
         // Notify teammates newly @mentioned in the internal notes this save.
-        if (internalNotes !== savedInternalNotesRef.current) {
+        if (savedNotes !== savedInternalNotesRef.current) {
           reportMentions({
-            text: internalNotes,
+            text: savedNotes,
             previousText: savedInternalNotesRef.current,
             sourceType: 'estimate_note',
-            sourceId: editingId || data.id,
+            sourceId: savedId,
             contextLabel: `Estimate — ${title || customerName || 'untitled'}`,
-            contextUrl: deepLinks.estimate(editingId || data.id, { flashNotes: true }),
+            contextUrl: deepLinks.estimate(savedId, { flashNotes: true }),
           });
-          savedInternalNotesRef.current = internalNotes;
+          savedInternalNotesRef.current = savedNotes;
         }
         await loadEstimates(true);
         setSaving(false);
-        return (editingId || data.id) as string;
+        return savedId;
       } else {
         await dialog.alert('Save failed: ' + (data.error || 'Unknown error'));
       }
@@ -1648,7 +1685,7 @@ export default function EstimatesPage() {
             ? `SMS sent to ${data.dispatch.sms.target}`
             : `SMS failed: ${data.dispatch.sms.error || 'unknown'}`)
       : null;
-    await dialog.alert(`Approval link sent. Link: ${data.approvalUrl}\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n')}`);
+    await dialog.alert(`Approval link sent.\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n') || 'Delivery is on its way to the customer.'}`);
     loadEstimates(true);
     // The send persisted the proof selection onto the linked jobs
     // (estimate_attach) — refresh so the panel reflects it.
@@ -1690,12 +1727,24 @@ export default function EstimatesPage() {
 
     setConvertingToSO(true);
     try {
-      const res = await fetch('/api/estimates/convert-to-so', {
+      let res = await fetch('/api/estimates/convert-to-so', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ estimateId: editingId, ...(overrideReason ? { overrideReason } : {}) }),
       });
-      const data = await res.json();
+      let data = await res.json();
+      // Graphics gate: the server refuses when graphics lines have no linked
+      // graphics job. "Convert anyway" is a conscious choice, not a default.
+      if (res.status === 409 && data.step === 'graphics_job_missing' && data.canSkip) {
+        const anyway = await dialog.confirm(`${data.error}`, { confirmLabel: 'Convert anyway', destructive: true });
+        if (!anyway) { setConvertingToSO(false); return; }
+        res = await fetch('/api/estimates/convert-to-so', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ estimateId: editingId, skipGraphicsCheck: true, ...(overrideReason ? { overrideReason } : {}) }),
+        });
+        data = await res.json();
+      }
       if (res.ok && data.status === 'created') {
         // NOTE: the API's dropped-lines key is `unmappedLines` — this dialog
         // read `skippedItems` (a key the API never sent), so dropped custom
@@ -2102,6 +2151,49 @@ export default function EstimatesPage() {
     setEditingCustomerDefaults(false);
   };
 
+  // R3-17: copy the open estimate (header + lines) into a fresh draft and
+  // switch the builder to it. The server decides plain-copy vs revision from
+  // the source's lock state; on an editable source we save first so the copy
+  // matches what's on screen, not the last save.
+  const duplicateEstimate = async () => {
+    if (!editingId || duplicating) return;
+    const est = estimates.find(e => e.id === editingId);
+    const locked = !!(est && ((est as any).customer_approved || est.status === 'accepted' || est.netsuite_so_id));
+    if (!locked) {
+      // Preserve status — a bare 'draft' save silently demotes a pushed
+      // estimate (the addGraphics lesson above).
+      const savedId = await saveEstimate(est?.status || 'draft', { offerRevision: true });
+      if (!savedId) return; // save failed or was cancelled — don't copy stale rows
+      // The save itself can jump to a fresh revision (someone accepted the
+      // estimate under us) — that IS the duplicate, don't make a second one.
+      if (savedId !== editingId) return;
+    }
+    setDuplicating(true);
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/duplicate`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        await dialog.alert('Duplicate failed: ' + (data.error || 'Unknown error'));
+        return;
+      }
+      // Open the copy: the single-row fetch (not the list, which may be
+      // mid-refresh) then the normal open path so lines/notes load fresh.
+      const rowRes = await fetch(`/api/estimates?id=${data.id}`);
+      const rowData = await rowRes.json().catch(() => ({}));
+      await loadEstimates(true);
+      const newRow = rowData.estimates?.[0];
+      if (newRow) {
+        await openEstimate(newRow);
+      } else {
+        await dialog.alert(`Created ${data.estimate_number} — open it from the list.`);
+      }
+    } catch {
+      await dialog.alert('Network error — please try again');
+    } finally {
+      setDuplicating(false);
+    }
+  };
+
   const deleteEstimate = async (id: string, hasNsId: boolean = false) => {
     const msg = hasNsId
       ? 'Delete this estimate? This will ALSO delete it from NetSuite. This cannot be undone.'
@@ -2110,12 +2202,29 @@ export default function EstimatesPage() {
 
     setDeleting(true);
     try {
-      const res = await fetch('/api/estimates', {
+      let res = await fetch('/api/estimates', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id }),
       });
-      const data = await res.json();
+      let data = await res.json();
+      // Accepted/converted estimates are delete-locked like the Save path;
+      // an admin can proceed with a recorded reason (audited, and the audit
+      // row preserves the signed snapshot's storage key).
+      if (res.status === 409 && data.step === 'accepted_locked' && data.canOverride) {
+        const reason = await dialog.prompt(
+          'This estimate was accepted (or already has a Sales Order) — deleting it destroys the signed record. Deleting anyway is recorded in the audit log. Why?',
+          '',
+          { placeholder: 'e.g. duplicate of EST-1042, customer re-signed there', confirmLabel: 'Delete anyway' },
+        );
+        if (!reason?.trim()) { setDeleting(false); return; }
+        res = await fetch('/api/estimates', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, overrideReason: reason.trim() }),
+        });
+        data = await res.json();
+      }
       if (!data.success && data.error) {
         await dialog.alert('Delete failed: ' + data.error);
       } else {
@@ -3457,7 +3566,7 @@ export default function EstimatesPage() {
 
         <div style={{ display: 'flex', gap: '6px' }}>
           <button
-            onClick={() => saveEstimate(isPushed ? 'pushed' : 'draft')}
+            onClick={() => saveEstimate(isPushed ? 'pushed' : 'draft', { offerRevision: true })}
             disabled={saving}
             style={{
               flex: 1, padding: '12px', borderRadius: '10px',
@@ -3597,6 +3706,50 @@ export default function EstimatesPage() {
           );
         })()}
 
+        {/* R3-17 lineage — both directions. "Revision of" on the copy links
+            back to the signed original; "Superseded by" on the original
+            warns that newer content lives elsewhere before anyone re-sends
+            or converts the old document. Rows outside the list's 1000-row
+            window degrade to an unlinked label. */}
+        {editingId && (() => {
+          const est = estimates.find(e => e.id === editingId);
+          const sourceId = est?.supersedes_estimate_id || null;
+          const source = sourceId ? estimates.find(e => e.id === sourceId) : null;
+          const replacements = estimates.filter(e => e.supersedes_estimate_id === editingId);
+          if (!sourceId && replacements.length === 0) return null;
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {sourceId && (
+                <button
+                  onClick={() => source && openEstimate(source)}
+                  disabled={!source}
+                  style={{
+                    width: '100%', padding: '8px 12px', borderRadius: '10px', textAlign: 'center',
+                    background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.25)',
+                    color: '#60a5fa', fontWeight: 700, fontSize: '11px',
+                    cursor: source ? 'pointer' : 'default',
+                  }}
+                >
+                  ↩ Revision of {source ? `${source.estimate_number} — open the original` : 'an earlier estimate'}
+                </button>
+              )}
+              {replacements.map(r => (
+                <button
+                  key={r.id}
+                  onClick={() => openEstimate(r)}
+                  style={{
+                    width: '100%', padding: '8px 12px', borderRadius: '10px', textAlign: 'center',
+                    background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)',
+                    color: '#f59e0b', fontWeight: 700, fontSize: '11px', cursor: 'pointer',
+                  }}
+                >
+                  ⚠ Superseded by {r.estimate_number} ({r.status}) — open the revision
+                </button>
+              ))}
+            </div>
+          );
+        })()}
+
         {/* Signed E-SIGN snapshot — the frozen document the customer accepted,
             with an integrity verdict (audit item 11). */}
         {editingId && (estimates.find(e => e.id === editingId) as any)?.customer_approved && (
@@ -3648,6 +3801,32 @@ export default function EstimatesPage() {
             Sales Order: SO #{estimates.find(e => e.id === editingId)?.netsuite_so_number || estimates.find(e => e.id === editingId)?.netsuite_so_id}
           </div>
         )}
+
+        {/* Duplicate (R3-17) — copy header + lines into a fresh draft. On a
+            locked source this is the revision escape hatch; on an editable
+            one it saves first so the copy matches the screen. */}
+        {editingId && (() => {
+          const est = estimates.find(e => e.id === editingId);
+          const locked = !!(est && ((est as any).customer_approved || est.status === 'accepted' || est.netsuite_so_id));
+          return (
+            <button
+              onClick={duplicateEstimate}
+              disabled={duplicating || saving}
+              title={locked
+                ? 'Copies everything into a new draft marked as a revision of this one. This signed original stays untouched.'
+                : 'Saves, then copies this estimate into a new draft (approval and NetSuite state are not copied).'}
+              style={{
+                width: '100%', padding: '10px', borderRadius: '10px',
+                background: duplicating ? 'var(--subtle-bg)' : 'rgba(96,165,250,0.08)',
+                border: '1px solid rgba(96,165,250,0.25)',
+                color: '#60a5fa', fontWeight: 700, fontSize: '12px', cursor: 'pointer',
+                opacity: duplicating || saving ? 0.5 : 1,
+              }}
+            >
+              {duplicating ? 'Duplicating…' : locked ? 'Duplicate as New Revision' : 'Duplicate Estimate'}
+            </button>
+          );
+        })()}
 
         {/* Delete — only for saved estimates */}
         {editingId && isAdmin && (

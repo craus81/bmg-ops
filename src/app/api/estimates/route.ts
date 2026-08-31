@@ -68,7 +68,12 @@ const UpsertEstimateSchema = z.object({
   overrideReason: z.string().trim().max(500).optional(),
 });
 
-const DeleteSchema = z.object({ id: z.string().uuid() });
+const DeleteSchema = z.object({
+  id: z.string().uuid(),
+  /** Admin-only: deletes an accepted/converted estimate, reason audited —
+   *  the same wall the Save path has (Round 3: Delete had no lock at all). */
+  overrideReason: z.string().trim().min(3).max(500).optional(),
+});
 
 // The customer-approval magic-link token lives on the estimate row. It must
 // never reach any client: a staff holder could open the customer's approval
@@ -105,6 +110,9 @@ export async function GET(req: NextRequest) {
     // first, so old estimates fall out of the list).
     const id = req.nextUrl.searchParams.get('id');
     if (id) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+        return NextResponse.json({ error: 'Invalid id' }, { status: 400 });
+      }
       const { data, error } = await supabase.from('estimates').select('*').eq('id', id).maybeSingle();
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
       return NextResponse.json({ estimates: data ? [stripApprovalSecrets(data)] : [] });
@@ -304,15 +312,23 @@ export async function POST(req: NextRequest) {
           netsuite_item_id: l.netsuite_item_id || null,
           item_number: l.item_number || null,
           description: l.description || null,
-          quantity: parseFloat(l.quantity || 1),
+          quantity: parseFloat(l.quantity || 0),
           unit_price: parseFloat(l.unit_price || 0),
-          line_total: parseFloat(l.quantity || 1) * parseFloat(l.unit_price || 0),
+          line_total: parseFloat(l.quantity || 0) * parseFloat(l.unit_price || 0),
           labor_hours: parseFloat(l.labor_hours || 0),
           is_custom: !!l.is_custom,
           notes: l.notes || null,
           wrap_quote_id: l.wrap_quote_id || null,
         }));
-        await supabase.from('estimate_line_items').insert(lineRows);
+        // Checked: the delete above already ran, so a discarded insert error
+        // left an estimate with ZERO lines and a header still showing the
+        // full total (Round 3 finding).
+        const { error: lineErr } = await supabase.from('estimate_line_items').insert(lineRows);
+        if (lineErr) {
+          return NextResponse.json({
+            error: `The estimate header saved but its line items failed to write (${lineErr.message}). The lines are NOT saved — Save again before sending or converting.`,
+          }, { status: 500 });
+        }
       }
 
       return NextResponse.json({ success: true, id });
@@ -381,15 +397,21 @@ export async function POST(req: NextRequest) {
           netsuite_item_id: l.netsuite_item_id || null,
           item_number: l.item_number || null,
           description: l.description || null,
-          quantity: parseFloat(l.quantity || 1),
+          quantity: parseFloat(l.quantity || 0),
           unit_price: parseFloat(l.unit_price || 0),
-          line_total: parseFloat(l.quantity || 1) * parseFloat(l.unit_price || 0),
+          line_total: parseFloat(l.quantity || 0) * parseFloat(l.unit_price || 0),
           labor_hours: parseFloat(l.labor_hours || 0),
           is_custom: !!l.is_custom,
           notes: l.notes || null,
           wrap_quote_id: l.wrap_quote_id || null,
         }));
-        await supabase.from('estimate_line_items').insert(lineRows);
+        // Checked for the same reason as the update path above.
+        const { error: lineErr } = await supabase.from('estimate_line_items').insert(lineRows);
+        if (lineErr) {
+          return NextResponse.json({
+            error: `The estimate was created but its line items failed to write (${lineErr.message}). Open it and Save again before sending or converting.`,
+          }, { status: 500 });
+        }
       }
 
       return NextResponse.json({ success: true, id: data.id, estimate_number: data.estimate_number });
@@ -406,17 +428,53 @@ export async function DELETE(req: NextRequest) {
 
   const parsed = await validateBody(req, DeleteSchema);
   if (parsed.error) return parsed.error;
-  const { id } = parsed.data;
+  const { id, overrideReason } = parsed.data;
 
   try {
     const supabase = getSupabase();
 
-    // Check if this estimate has been pushed to NetSuite
     const { data: estimate } = await supabase
       .from('estimates')
-      .select('netsuite_estimate_id')
+      .select('netsuite_estimate_id, customer_approved, status, netsuite_so_id, estimate_number, grand_total, signed_document_storage_path, signed_document_hash')
       .eq('id', id)
       .single();
+
+    // The Save path's revision lock, on Delete too (Round 3 finding: an
+    // accepted — even CONVERTED — estimate could be deleted outright,
+    // destroying the only row that locates its signed E-SIGN snapshot and
+    // the SO↔project estimate link). Admins may still delete with a
+    // recorded reason; the audit row preserves the snapshot's R2 key and
+    // hash so the evidence stays recoverable after the row is gone.
+    const locked = !!(estimate && (estimate.customer_approved || estimate.status === 'accepted' || estimate.netsuite_so_id));
+    if (locked) {
+      const roles: string[] = auth.profile?.roles?.length > 0 ? auth.profile.roles : [auth.profile?.role];
+      const isAdminActor = roles.includes('admin') || roles.includes('super_admin');
+      const reason = overrideReason?.trim() || '';
+      if (!isAdminActor || !reason) {
+        return NextResponse.json({
+          error: isAdminActor
+            ? 'This estimate was accepted (or already has a Sales Order) — deleting it destroys the signed record. Provide an override reason to delete anyway.'
+            : 'This estimate was accepted (or already has a Sales Order) and cannot be deleted. Ask an admin to override with a recorded reason.',
+          step: 'accepted_locked',
+          canOverride: isAdminActor,
+        }, { status: 409 });
+      }
+      await logAudit(supabase, {
+        actorId: auth.user.id,
+        table: 'estimates',
+        recordId: id,
+        action: 'estimate_delete_after_approval',
+        detail: {
+          reason,
+          estimate_number: estimate!.estimate_number,
+          status: estimate!.status,
+          grand_total: estimate!.grand_total,
+          netsuite_so_id: estimate!.netsuite_so_id,
+          signed_document_storage_path: estimate!.signed_document_storage_path,
+          signed_document_hash: estimate!.signed_document_hash,
+        },
+      });
+    }
 
     // If pushed to NetSuite, delete from NS first
     if (estimate?.netsuite_estimate_id) {

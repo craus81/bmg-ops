@@ -23,7 +23,11 @@ interface SignedDoc {
   storagePath: string;
   hash: string | null;
   verified: boolean;
-  html: string;
+  html?: string | null;
+  /** Presigned R2 URL when the snapshot is too large to ship inline —
+   *  the integrity verdict was still computed server-side on the full
+   *  bytes. */
+  snapshotUrl?: string | null;
 }
 
 // Same keys as the API route's per-type gates.
@@ -61,6 +65,11 @@ export default function SignedDocumentPage() {
 
   const download = () => {
     if (!doc) return;
+    if (!doc.html) {
+      // Oversized snapshot — served by presigned URL; open it directly.
+      if (doc.snapshotUrl) window.open(doc.snapshotUrl, '_blank', 'noopener');
+      return;
+    }
     const blob = new Blob([doc.html], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -99,7 +108,7 @@ export default function SignedDocumentPage() {
           {/* Historical captured markup — sandboxed, no scripts, no navigation. */}
           <iframe
             sandbox=""
-            srcDoc={doc.html}
+            {...(doc.html ? { srcDoc: doc.html } : { src: doc.snapshotUrl || undefined })}
             title={doc.label}
             style={{ width: '100%', height: 'calc(80vh / var(--ts))', border: '1px solid var(--border)', borderRadius: '10px', background: '#fff' }}
           />

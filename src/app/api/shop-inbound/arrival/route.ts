@@ -167,7 +167,15 @@ export async function POST(req: NextRequest) {
           checkin?.vin ? `VIN …${String(checkin.vin).slice(-8)}` : null,
           wasExpected ? 'was on the arrival schedule' : 'walk-in / unscheduled',
         ].filter(Boolean).join(' · ').slice(0, 900),
-        url: checkin ? deepLinks.vehicle(checkin.id) : '/upfit',
+        // No check-in yet (board "Arrived" pressed first — the common path)
+        // → land on the arrivals board flashing this row. '/upfit' was the
+        // wrong board entirely (Round 3 finding): ShopArrivals renders on
+        // /tracking.
+        url: checkin
+          ? deepLinks.vehicle(checkin.id)
+          : inboundId
+            ? deepLinks.shopArrival(inboundId)
+            : '/tracking',
         // Expected arrivals are the ones people are waiting on — those push.
         channels: wasExpected ? ['in_app', 'push'] : ['in_app'],
         forceChannels: true,

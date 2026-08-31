@@ -46,10 +46,17 @@ function getSupabase() {
  * follow-up nudge queue, which only watches status='sent'.
  */
 async function markEstimateWon(supabase: any, estimateId: string) {
+  // Only estimates the CUSTOMER approved flip to accepted. The revision
+  // lock keys on status === 'accepted', so writing it unconditionally
+  // froze never-sent drafts the moment a graphics job was created from
+  // them — the rep couldn't save a quote the customer had never seen
+  // (Round 3 finding). Unapproved estimates keep their status; the real
+  // approval flow sets it when the customer acts.
   await supabase
     .from('estimates')
     .update({ status: 'accepted' })
     .eq('id', estimateId)
+    .eq('customer_approved', true)
     .neq('status', 'accepted');
 }
 

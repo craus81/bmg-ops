@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { estimateContextMemo } from '@/lib/estimate-document';
+import { resolveLaborItemId } from '@/lib/netsuite';
 import { resolveOrPromoteByName } from '@/lib/promote-prospect';
 
 export const dynamic = 'force-dynamic';
@@ -338,6 +339,10 @@ export async function POST(req: NextRequest) {
     let customItemId: string | null = null;
 
     for (const line of lines) {
+      // A qty-0 line totals to $0 on the customer's document — never send
+      // it to NetSuite, where it previously landed as one unit at full
+      // rate (Round 3 finding).
+      if ((parseFloat(line.quantity) || 0) <= 0) continue;
       if (line.netsuite_item_id) {
         nsLineItems.push({
           itemId: line.netsuite_item_id,
@@ -368,25 +373,19 @@ export async function POST(req: NextRequest) {
     // Add labor as a line item if there are labor hours
     const effectiveLaborHours = estimate.labor_hours_override ?? estimate.labor_hours;
     if (effectiveLaborHours > 0 && estimate.labor_rate > 0) {
-      // Look for a "Labor" item in NetSuite
-      try {
-        const { suiteqlQuery } = await import('@/lib/netsuite');
-        const laborLookup = await suiteqlQuery(`
-          SELECT i.id, i.itemid FROM item i
-          WHERE UPPER(i.itemid) LIKE '%LABOR%'
-          AND i.isinactive = 'F'
-          FETCH FIRST 1 ROWS ONLY
-        `);
-        const laborItem = laborLookup?.items?.[0];
-        if (laborItem) {
-          nsLineItems.push({
-            itemId: laborItem.id.toString(),
-            quantity: effectiveLaborHours,
-            rate: estimate.labor_rate,
-            description: `Labor (${effectiveLaborHours} hrs @ $${estimate.labor_rate}/hr)`,
-          });
-        }
-      } catch {
+      // One shared resolver with convert-to-so — the two routes used
+      // different LIKE patterns with no ORDER BY, so the same job's labor
+      // could bill to different NetSuite items (Round 1 finding, closed in
+      // Round 3).
+      const laborItemId = await resolveLaborItemId();
+      if (laborItemId) {
+        nsLineItems.push({
+          itemId: laborItemId,
+          quantity: effectiveLaborHours,
+          rate: estimate.labor_rate,
+          description: `Labor (${effectiveLaborHours} hrs @ $${estimate.labor_rate}/hr)`,
+        });
+      } else {
         console.warn('Could not find Labor item in NetSuite');
       }
     }
@@ -426,7 +425,7 @@ export async function POST(req: NextRequest) {
           status: SALES_STAGES.includes(estimate.status) ? estimate.status : 'pushed',
           updated_at: new Date().toISOString(),
           pushed_at: new Date().toISOString(),
-          pushed_by: userId || null,
+          pushed_by: auth.user.id,
         })
         .eq('id', estimateId);
 
@@ -463,7 +462,7 @@ export async function POST(req: NextRequest) {
         netsuite_estimate_number: result.estimateNumber,
         status: SALES_STAGES.includes(estimate.status) ? estimate.status : 'pushed',
         pushed_at: new Date().toISOString(),
-        pushed_by: userId || null,
+        pushed_by: auth.user.id,
         updated_at: new Date().toISOString(),
       })
       .eq('id', estimateId);
