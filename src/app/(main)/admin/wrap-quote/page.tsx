@@ -522,6 +522,36 @@ export default function WrapQuotePage() {
   // Margin floor (%) shared with the estimate builder (quote_settings singleton).
   const [marginFloor, setMarginFloor] = useState(30);
 
+  // ----- NetSuite labor item (Pricing tab) -----
+  // Which NetSuite item every estimate/SO bills shop labor to. Unset means
+  // the server falls back to a ranked search of the account's LABOR items —
+  // when that search comes up empty, labor silently never reaches NetSuite,
+  // which is exactly the bug this panel exists to make visible.
+  const [laborItem, setLaborItem] = useState<{
+    configured_item_number: string | null;
+    resolved: { itemNumber: string | null; id: string; source: string } | null;
+    reason?: string;
+    error?: string;
+    candidates: { id: string; itemNumber: string }[];
+  } | null>(null);
+  const [laborItemInput, setLaborItemInput] = useState('');
+  const [laborItemBusy, setLaborItemBusy] = useState(false);
+
+  const loadLaborItem = async () => {
+    setLaborItemBusy(true);
+    try {
+      const res = await apiFetch('/api/admin/labor-item');
+      const data = await res.json();
+      if (res.ok) {
+        setLaborItem(data);
+        setLaborItemInput(data.configured_item_number || '');
+      }
+    } catch {
+      // Leave the panel showing "not checked" rather than a wrong answer.
+    }
+    setLaborItemBusy(false);
+  };
+
   // ----- Templates tab state -----
   const [tplForm, setTplForm] = useState({ year: '', make: '', model: '', variant: '', code: '', length: '' });
   const [tplFile, setTplFile] = useState<File | null>(null);
@@ -531,6 +561,9 @@ export default function WrapQuotePage() {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
   useEffect(() => { loadAll(); }, []);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch once, when the tab is first opened
+  useEffect(() => { if (tab === 'pricing' && isAdmin && !laborItem) loadLaborItem(); }, [tab, isAdmin]);
 
   const loadAll = async () => {
     setLoading(true);
@@ -3033,7 +3066,7 @@ export default function WrapQuotePage() {
                 </div>
               ))}
             </>)}
-            {sectionHead('Job Pricing')}
+          {sectionHead('Job Pricing')}
             <div style={{ display: 'flex', gap: '8px', marginBottom: '6px' }}>
               <div>
                 <div style={labelStyle}>Kits (qty)</div>
@@ -3418,6 +3451,64 @@ export default function WrapQuotePage() {
                 </div>
               </>
             )}
+          </div>
+
+          {sectionHead('NetSuite Labor Item')}
+          <div style={{ marginBottom: '16px' }}>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+              {laborItemBusy && !laborItem ? 'Checking NetSuite…' : laborItem?.resolved ? (
+                <>Labor on estimates and sales orders bills to <b style={{ color: 'var(--text-primary)' }}>{laborItem.resolved.itemNumber || `internal id ${laborItem.resolved.id}`}</b>
+                  {laborItem.resolved.source === 'search' && ' (auto-picked — set it below to pin it)'}
+                  {laborItem.resolved.source === 'env' && ' (from NETSUITE_LABOR_ITEM_ID)'}.</>
+              ) : laborItem ? (
+                <b style={{ color: '#ef4444' }}>
+                  ⚠ No labor item found in NetSuite — labor is NOT reaching NetSuite on any estimate or SO.
+                  {laborItem.error ? ` (${laborItem.error})` : ''}
+                </b>
+              ) : 'Not checked yet.'}
+            </div>
+            {isSuperAdmin ? (
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <input
+                  value={laborItemInput}
+                  onChange={e => setLaborItemInput(e.target.value)}
+                  placeholder="Exact NetSuite item name (blank = auto)"
+                  style={{ ...inputStyle, width: '260px' }}
+                />
+                <button
+                  disabled={laborItemBusy}
+                  onClick={async () => {
+                    setLaborItemBusy(true);
+                    try {
+                      const res = await apiFetch('/api/admin/labor-item', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ item_number: laborItemInput.trim() }),
+                      });
+                      const data = await res.json();
+                      if (!res.ok) { await dialog.alert(`Labor item didn't save: ${data?.error || res.status}`); }
+                    } catch (err: any) {
+                      await dialog.alert(`Labor item didn't save: ${err?.message || err}`);
+                    }
+                    setLaborItemBusy(false);
+                    await loadLaborItem();
+                  }}
+                  style={btnStyle('#22c55e', 'rgba(34,197,94,0.1)')}
+                >Save</button>
+                <button disabled={laborItemBusy} onClick={loadLaborItem} style={btnStyle('#60a5fa', 'rgba(96,165,250,0.08)')}>Re-check</button>
+              </div>
+            ) : (
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Only a super admin can change it.</div>
+            )}
+            {(laborItem?.candidates?.length || 0) > 1 && (
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                Other labor items in NetSuite: {laborItem!.candidates.slice(1, 6).map(c => c.itemNumber).join(', ')}
+              </div>
+            )}
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px' }}>
+              Estimate labor hours × the shop rate push as one line on this item. Leave it blank and the server
+              picks the best-matching active LABOR item; naming it here pins the GL account labor posts to.
+            </div>
           </div>
 
           {sectionHead('Job Pricing')}
