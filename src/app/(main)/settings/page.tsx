@@ -9,10 +9,12 @@ import TextSizeToggle from '@/components/TextSizeToggle';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_ORDER, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import type { GraphicsJobStatus, NotificationPreferences } from '@/lib/types';
 import { isPushSupported, getPushPermission, getExistingSubscription, subscribeToPush, unsubscribeFromPush } from '@/lib/push-client';
+import { FALLBACK_SALES_TAX_RATE_PCT } from '@/lib/sales-tax';
+import { apiFetch } from '@/lib/api-client';
 
 export default function SettingsPage() {
   const router = useRouter();
-  const { user, profile, isAdmin } = useAuth();
+  const { user, profile, isAdmin, hasRole } = useAuth();
   const supabase = createClient();
 
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
@@ -34,6 +36,14 @@ export default function SettingsPage() {
   const [sigSaving, setSigSaving] = useState(false);
   const [sigSaved, setSigSaved] = useState(false);
   const [sigError, setSigError] = useState('');
+
+  // Company sales tax rate — the ONE rate every estimate and wrap quote bills
+  // at. Super admins only: it used to be a free-text box on every estimate.
+  const isSuperAdmin = hasRole('super_admin');
+  const [taxPct, setTaxPct] = useState<string>('');
+  const [taxSaving, setTaxSaving] = useState(false);
+  const [taxSaved, setTaxSaved] = useState(false);
+  const [taxError, setTaxError] = useState('');
 
   // Push notification state
   const [pushSupported, setPushSupported] = useState(false);
@@ -57,6 +67,36 @@ export default function SettingsPage() {
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user]);
+
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    apiFetch('/api/admin/sales-tax')
+      .then(r => r.json())
+      .then(d => setTaxPct(String(d?.sales_tax_rate_pct ?? FALLBACK_SALES_TAX_RATE_PCT)))
+      .catch(() => {});
+  }, [isSuperAdmin]);
+
+  const handleSaveTax = async () => {
+    setTaxSaving(true);
+    setTaxError('');
+    try {
+      const res = await apiFetch('/api/admin/sales-tax', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sales_tax_rate_pct: parseFloat(taxPct) }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setTaxError(data?.error || 'Could not save the sales tax rate.'); return; }
+      // Show what actually landed, not what was typed.
+      setTaxPct(String(data.sales_tax_rate_pct));
+      setTaxSaved(true);
+      setTimeout(() => setTaxSaved(false), 2500);
+    } catch (e: any) {
+      setTaxError(e?.message || 'Could not save the sales tax rate.');
+    } finally {
+      setTaxSaving(false);
+    }
+  };
 
   const handleSaveSignature = async () => {
     if (!user) return;
@@ -382,6 +422,49 @@ export default function SettingsPage() {
           {sigSaving ? 'Saving...' : sigSaved ? 'Signature Saved!' : 'Save Signature'}
         </button>
       </div>
+
+      {/* Company — super admins only. The sales tax rate is company-wide and
+          read-only everywhere else; this is the one place it can change. */}
+      {isSuperAdmin && (
+        <>
+          <div style={{ fontSize: '16px', fontWeight: 800, marginBottom: '10px', marginTop: '20px' }}>Company</div>
+          <div style={sectionStyle}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>Sales Tax Rate</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
+              Applied to parts on every new estimate and wrap quote. Everyone else sees it read-only in the
+              builders — this is the only place it can be changed. Estimates already saved keep the rate they
+              were quoted at.
+            </div>
+            <div style={labelStyle}>Rate (%)</div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input
+                type="number"
+                step={0.01}
+                min={0}
+                max={100}
+                value={taxPct}
+                onChange={e => setTaxPct(e.target.value)}
+                style={{ ...inputStyle, width: '120px' }}
+              />
+              <button
+                onClick={handleSaveTax}
+                disabled={taxSaving || taxPct === ''}
+                style={{
+                  padding: '8px 16px', borderRadius: '8px', border: 'none',
+                  background: taxSaved ? '#22c55e' : '#3b82f6', color: '#fff',
+                  fontSize: '12px', fontWeight: 800,
+                  cursor: taxSaving ? 'default' : 'pointer', opacity: taxSaving ? 0.5 : 1,
+                }}
+              >
+                {taxSaving ? 'Saving...' : taxSaved ? 'Saved!' : 'Save Rate'}
+              </button>
+            </div>
+            {taxError && (
+              <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{taxError}</div>
+            )}
+          </div>
+        </>
+      )}
 
       {/* Display — customer-only accounts have no More page, so the text
           size control lives here too (same localStorage preference). */}

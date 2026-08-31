@@ -10,6 +10,7 @@ import { storage } from '@/lib/storage';
 import { apiFetch } from '@/lib/api-client';
 import { formatPhoneInput } from '@/lib/utils';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { FALLBACK_SALES_TAX_RATE_PCT } from '@/lib/sales-tax';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { DropZone } from '@/components/DropZone';
 import { theme } from '@/lib/theme';
@@ -299,7 +300,10 @@ const imageUrl = (path: string | null) => {
 };
 
 export default function WrapQuotePage() {
-  const { user, isAdmin, isSales, isGraphicsProduction, loading: authLoading } = useAuth();
+  const { user, isAdmin, isSales, isGraphicsProduction, hasRole, loading: authLoading } = useAuth();
+  // Only a super admin may change the company sales tax rate (Settings →
+  // Sales Tax is the other place it can be edited).
+  const isSuperAdmin = hasRole('super_admin');
   const dialog = useDialog();
   const supabase = createClient();
   const hasAccess = isAdmin || isSales || isGraphicsProduction;
@@ -538,7 +542,7 @@ export default function WrapQuotePage() {
       supabase.from('wrap_substrates').select('*').order('name'),
       supabase.from('wrap_quote_settings').select('*').eq('id', 1).maybeSingle(),
       supabase.from('wrap_quotes').select('*').order('created_at', { ascending: false }).limit(200),
-      supabase.from('quote_settings').select('margin_floor_pct').eq('id', 1).maybeSingle(),
+      supabase.from('quote_settings').select('margin_floor_pct, sales_tax_rate_pct').eq('id', 1).maybeSingle(),
       // Paginated (R3-1 MAJOR sweep): this map is the "already converted"
       // guard — a quote whose job fell past the 1000-row cap looked
       // unconverted, inviting a duplicate graphics job. Ascending order is
@@ -553,18 +557,26 @@ export default function WrapQuotePage() {
     }
     setJobsByQuote(jobMap);
     if (floorRes.data?.margin_floor_pct != null) setMarginFloor(Number(floorRes.data.margin_floor_pct));
+    // ONE company sales tax rate, shared with the estimate builder and owned
+    // by quote_settings (migration 245). wrap_quote_settings.tax_rate is the
+    // legacy per-builder copy and is no longer read or written.
+    const companyTaxPct = floorRes.data?.sales_tax_rate_pct != null
+      ? Number(floorRes.data.sales_tax_rate_pct)
+      : FALLBACK_SALES_TAX_RATE_PCT;
     setTemplates((tplRes.data || []) as Template[]);
     setSubstrates((subRes.data || []) as Film[]);
     if (setRes.data) {
       setSettings({
         company: setRes.data.company || {},
-        tax_rate: num(setRes.data.tax_rate),
+        tax_rate: companyTaxPct,
         design: { ...EMPTY_LABOR, ...(setRes.data.design || {}) },
         preparation: { ...EMPTY_LABOR, ...(setRes.data.preparation || {}) },
         installation: { ...EMPTY_LABOR, ...(setRes.data.installation || {}) },
         min_job_charge: num(setRes.data.min_job_charge),
         qty_discounts: Array.isArray(setRes.data.qty_discounts) ? setRes.data.qty_discounts : [],
       });
+    } else {
+      setSettings(prev => ({ ...prev, tax_rate: companyTaxPct }));
     }
     setHistory((histRes.data || []) as WrapQuote[]);
     setLoading(false);
@@ -1997,7 +2009,10 @@ export default function WrapQuotePage() {
       const { error } = await supabase.from('wrap_quote_settings').upsert({
         id: 1,
         company: companyOverride ?? settings.company,
-        tax_rate: num(settings.tax_rate),
+        // tax_rate deliberately NOT written: the sales tax rate lives on
+        // quote_settings now (migration 245) and only a super admin changes
+        // it. Writing the legacy column here would recreate the second
+        // source of truth this replaced.
         design: settings.design,
         preparation: settings.preparation,
         installation: settings.installation,
@@ -3365,8 +3380,44 @@ export default function WrapQuotePage() {
 
           {sectionHead('Taxes')}
           <div style={{ marginBottom: '16px' }}>
-            <div style={labelStyle}>Tax Rate (%)</div>
-            <input type="number" value={settings.tax_rate || ''} onChange={e => setSettings(prev => ({ ...prev, tax_rate: num(e.target.value) }))} style={{ ...inputStyle, width: '110px' }} />
+            <div style={labelStyle}>Sales Tax Rate (%)</div>
+            {isSuperAdmin ? (
+              <>
+                <NumberInput
+                  value={settings.tax_rate}
+                  onChange={e => setSettings(prev => ({ ...prev, tax_rate: num(e.target.value) }))}
+                  onBlur={async e => {
+                    const v = num(e.target.value);
+                    try {
+                      const res = await apiFetch('/api/admin/sales-tax', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ sales_tax_rate_pct: v }),
+                      });
+                      const data = await res.json();
+                      if (!res.ok) { await dialog.alert(`Sales tax rate didn't save: ${data?.error || res.status}`); return; }
+                      setSettings(prev => ({ ...prev, tax_rate: Number(data.sales_tax_rate_pct) }));
+                    } catch (err: any) {
+                      await dialog.alert(`Sales tax rate didn't save: ${err?.message || err}`);
+                    }
+                  }}
+                  style={{ ...inputStyle, width: '110px' }}
+                />
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  Saves on blur, separately from the button below. One company rate — it drives the estimate
+                  builder too, and only super admins can change it.
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ ...inputStyle, width: '110px', background: 'var(--subtle-bg)', fontWeight: 700 }}>
+                  {num(settings.tax_rate).toFixed(2)}%
+                </div>
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  Company sales tax rate. Only a super admin can change it, in Settings → Sales Tax.
+                </div>
+              </>
+            )}
           </div>
 
           {sectionHead('Job Pricing')}

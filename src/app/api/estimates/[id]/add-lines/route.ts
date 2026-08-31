@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { computeTotals } from '@/lib/estimate-totals';
+import { FALLBACK_SALES_TAX_RATE } from '@/lib/sales-tax';
 
 export const dynamic = 'force-dynamic';
 
@@ -98,7 +99,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       .eq('estimate_id', params.id);
     const totals = computeTotals(
       allLines || [],
-      parseFloat(String(estimate.tax_rate ?? 0.0795)),
+      // Keep the estimate's own quoted rate; the company setting only fills
+      // in for a row saved before tax_rate existed.
+      parseFloat(String(estimate.tax_rate ?? FALLBACK_SALES_TAX_RATE)),
       !!estimate.tax_exempt,
       parseFloat(String(estimate.labor_rate ?? 120)),
       estimate.labor_hours_override !== null && estimate.labor_hours_override !== undefined

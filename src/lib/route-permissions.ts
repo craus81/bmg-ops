@@ -79,6 +79,10 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/payouts/route.ts': admin(),
   'src/app/api/admin/payroll/route.ts': admin(),
   'src/app/api/admin/resend-invite/route.ts': admin(),
+  // Reading the company sales tax rate is staff-wide (both quote builders
+  // show it); changing it is super-admin only, matching the DB trigger in
+  // migration 245.
+  'src/app/api/admin/sales-tax/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireStaff('] },
   'src/app/api/admin/sync-help-docs/route.ts': admin(),
   'src/app/api/admin/upload-zip/route.ts': admin(),
   'src/app/api/admin/user-settings/route.ts': superAdmin(),
@@ -150,6 +154,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/estimates/[id]/approval-preview/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/duplicate/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/email-pdf/route.ts': feature('estimates'),
+  'src/app/api/estimates/[id]/link-so/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/pdf/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/send-for-approval/route.ts': feature('estimates'),
   'src/app/api/estimates/convert-to-so/route.ts': feature('estimates'),

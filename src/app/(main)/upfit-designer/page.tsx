@@ -28,6 +28,7 @@ import PartCatalogBrowser, { BrowsePart, KitWithMembers } from '@/components/Par
 import CustomerPicker from '@/components/CustomerPicker';
 import { apiFetch } from '@/lib/api-client';
 import { computeTotals } from '@/lib/estimate-totals';
+import { useSalesTaxRate } from '@/lib/use-sales-tax-rate';
 import { CompanyLetterhead, fetchCompanyLetterhead } from '@/lib/company-profile';
 import {
   AutoLayoutEntry, InteriorGeometry, LayoutState, TRADES, UndoableLayout,
@@ -85,8 +86,9 @@ const BLANK_META: DesignMeta = {
 type Step = 'home' | 'vehicle' | 'package' | 'design' | 'review';
 
 // Match the estimate API's own defaults so the review totals equal what the
-// draft estimate will say (src/app/api/estimates/route.ts).
-const DEFAULT_TAX_RATE = 0.0795;
+// draft estimate will say (src/app/api/estimates/route.ts). The tax rate is
+// the company setting (Settings → Sales Tax, super admin only) — read live via
+// useSalesTaxRate so this preview can't quote a stale rate.
 const DEFAULT_LABOR_RATE = 85;
 
 interface SnapshotData { blob: Blob; dataUrl: string; width: number; height: number }
@@ -115,6 +117,8 @@ export default function UpfitDesignerPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, profile, isAdmin, hasFeature, loading: authLoading } = useAuth();
+  // Company sales tax rate — read-only here; only Settings → Sales Tax changes it.
+  const { taxRate } = useSalesTaxRate();
   const dialog = useDialog();
   const supabase = useMemo(() => createClient(), []);
 
@@ -649,7 +653,7 @@ export default function UpfitDesignerPage() {
     const linesNow = aggregateLines(latest.current.present);
     const totals = computeTotals(
       linesNow.map(l => ({ quantity: l.quantity, unit_price: l.unit_price, labor_hours: l.labor_hours })),
-      DEFAULT_TAX_RATE, false, DEFAULT_LABOR_RATE, null,
+      taxRate, false, DEFAULT_LABOR_RATE, null,
     );
     const { exportUpfitDesignPDF } = await import('@/lib/upfit-design-pdf');
     exportUpfitDesignPDF({
@@ -846,7 +850,7 @@ export default function UpfitDesignerPage() {
   if (step === 'review') {
     const totals = computeTotals(
       lines.map(l => ({ quantity: l.quantity, unit_price: l.unit_price, labor_hours: l.labor_hours })),
-      DEFAULT_TAX_RATE, false, DEFAULT_LABOR_RATE, null,
+      taxRate, false, DEFAULT_LABOR_RATE, null,
     );
     return (
       <div style={{ padding: '16px 0 40px' }}>

@@ -242,19 +242,76 @@ export async function POST(req: NextRequest) {
 
     const nsLocation = await findLocation("O'Fallon");
 
-    const result = await createSalesOrder({
-      customerId,
-      // The SO's PO/Reference field carries the CUSTOMER's PO when the
-      // estimate has one — that's what prints on their invoice and what
-      // their AP matches against. Our estimate number stays in the memo.
-      poNumber: estimate.po_number?.trim() || estimate.estimate_number,
-      locationId: nsLocation?.id,
-      memo,
-      vin: estimate.vin,
-      lineItems: soLineItems,
-    });
+    // ── Conversion claim (R3-8 idempotence) ──
+    // The "already converted" pre-check above is read-then-act: two
+    // concurrent conversions could both pass it and each create a REAL
+    // Sales Order (the loser was detected by the first-writer-wins stamp
+    // below, but a human still had to delete the duplicate in NetSuite).
+    // Claim atomically before touching NetSuite — same pattern as
+    // create-po's request claim. A stale claim (crashed request) is taken
+    // over after 5 minutes; a live one turns the second request away here.
+    // claimActive stays false when the claim column isn't visible to
+    // PostgREST (schema-cache lag — the exact failure mode migration 246
+    // documents from the SO1064 incident). Blocking every conversion on a
+    // cache hiccup would be worse than running one request unclaimed: the
+    // detect-and-report guards below still catch a duplicate. Crucially,
+    // the success stamp must then NOT carry the claim column either — a
+    // cache-lagged column in that update would fail the whole write-back
+    // and strand the SO exactly like SO1064.
+    let claimActive = false;
+    const staleClaimCutoff = new Date(Date.now() - 5 * 60_000).toISOString();
+    const { data: claimedRows, error: claimErr } = await supabase
+      .from('estimates')
+      .update({ so_conversion_claimed_at: new Date().toISOString() })
+      .eq('id', estimateId)
+      .is('netsuite_so_id', null)
+      .or(`so_conversion_claimed_at.is.null,so_conversion_claimed_at.lt.${staleClaimCutoff}`)
+      .select('id');
+    if (claimErr) {
+      if ((claimErr as any).code === 'PGRST204') {
+        console.warn('convert-to-so: so_conversion_claimed_at not in the schema cache yet — proceeding without the claim');
+      } else {
+        return NextResponse.json({ error: 'Could not start the conversion: ' + claimErr.message }, { status: 503 });
+      }
+    } else if ((claimedRows || []).length === 0) {
+      return NextResponse.json({
+        error: 'Another conversion for this estimate is already in progress (or just finished). Refresh to see its result before trying again.',
+        step: 'conversion_in_progress',
+      }, { status: 409 });
+    } else {
+      claimActive = true;
+    }
+    const releaseClaim = async () => {
+      if (!claimActive) return;
+      try {
+        await supabase.from('estimates').update({ so_conversion_claimed_at: null }).eq('id', estimateId);
+      } catch { /* best-effort — the claim expires on its own in 5 minutes */ }
+    };
+
+    let result: Awaited<ReturnType<typeof createSalesOrder>>;
+    try {
+      result = await createSalesOrder({
+        customerId,
+        // The SO's PO/Reference field carries the CUSTOMER's PO when the
+        // estimate has one — that's what prints on their invoice and what
+        // their AP matches against. Our estimate number stays in the memo.
+        poNumber: estimate.po_number?.trim() || estimate.estimate_number,
+        locationId: nsLocation?.id,
+        memo,
+        vin: estimate.vin,
+        lineItems: soLineItems,
+      });
+    } catch (err: any) {
+      // No SO was created — release so a retry doesn't wait out the claim.
+      await releaseClaim();
+      return NextResponse.json({
+        error: 'Failed to create Sales Order in NetSuite: ' + (err?.message || err),
+        step: 'create_so',
+      }, { status: 502 });
+    }
 
     if (!result.success) {
+      await releaseClaim();
       return NextResponse.json({
         error: result.error || 'Failed to create Sales Order in NetSuite',
         step: 'create_so',
@@ -274,6 +331,10 @@ export async function POST(req: NextRequest) {
       .update({
         netsuite_so_id: result.salesOrderId,
         netsuite_so_number: result.salesOrderNumber || null,
+        // Conversion is done — retire the claim in the same write. Only
+        // when the claim actually took: including a cache-invisible column
+        // here would fail the entire write-back and strand the SO.
+        ...(claimActive ? { so_conversion_claimed_at: null } : {}),
         // With the acceptance gate above, conversion only happens once the
         // customer approved (or an admin overrode with a recorded reason) —
         // so 'accepted' is now a truthful consequence, and the funnel report
@@ -287,6 +348,9 @@ export async function POST(req: NextRequest) {
     if (writeBackError) {
       // The SO exists in NetSuite but the app couldn't record it. Do NOT let
       // this read as failure-to-create (a retry would duplicate the SO).
+      // The claim is deliberately NOT released: it blocks an immediate
+      // re-click and expires on its own in 5 minutes — matching the
+      // "retry later" advice below.
       return NextResponse.json({
         status: 'created_unlinked',
         salesOrderId: result.salesOrderId,

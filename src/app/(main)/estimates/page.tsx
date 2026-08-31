@@ -20,6 +20,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
+import { FALLBACK_SALES_TAX_RATE, pctToRate, rateToPct } from '@/lib/sales-tax';
 import NumberInput from '@/components/NumberInput';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
 import { estimateHeadlineNumber, estimateAltNumber, estimateNumberMatches } from '@/lib/estimate-number';
@@ -222,7 +223,10 @@ interface Customer {
 
 type ViewMode = 'list' | 'builder';
 
-const DEFAULT_TAX_RATE = 0.0795;
+// Fallback only — the real rate is the company setting (quote_settings,
+// Settings → Sales Tax, super admin only). Used until that load returns, or
+// if it fails.
+const DEFAULT_TAX_RATE = FALLBACK_SALES_TAX_RATE;
 const DEFAULT_LABOR_RATE = 120;
 
 const STATUS_COLORS: Record<string, string> = {
@@ -275,13 +279,22 @@ export default function EstimatesPage() {
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [customerName, setCustomerName] = useState('');
   const [customerNsId, setCustomerNsId] = useState<string | null>(null);
+  // Sales tax is company-wide and NOT editable here — it comes from
+  // quote_settings and only a super admin can change it (Settings → Sales
+  // Tax). `taxRate` still holds a per-estimate value because an already-saved
+  // estimate keeps the rate it was quoted at.
   const [taxRate, setTaxRate] = useState(DEFAULT_TAX_RATE);
+  const [companyTaxRate, setCompanyTaxRate] = useState(DEFAULT_TAX_RATE);
+  // Ref so resetBuilder/applyDraft read the current company rate without
+  // re-creating themselves on every settings load.
+  const companyTaxRateRef = useRef(DEFAULT_TAX_RATE);
   const [taxExempt, setTaxExempt] = useState(false);
   const [laborRate, setLaborRate] = useState(DEFAULT_LABOR_RATE);
   const [laborOverride, setLaborOverride] = useState<number | null>(null);
   const [lines, setLines] = useState<LineItem[]>([]);
   // Margin floor (%) below which a quote gets flagged — admin-set, shared
   // with the wrap-quote builder via the quote_settings singleton.
+  const [linkingSO, setLinkingSO] = useState(false);
   const [marginFloor, setMarginFloor] = useState(30);
   // K5: vehicle identity — prints on the estimate document, pushes to
   // NetSuite's VIN field, and feeds the Shop Board's Arriving row.
@@ -717,8 +730,18 @@ export default function EstimatesPage() {
   }, [custSearch]);
 
   useEffect(() => {
-    supabase.from('quote_settings').select('margin_floor_pct').eq('id', 1).maybeSingle()
-      .then(({ data }: any) => { if (data?.margin_floor_pct != null) setMarginFloor(Number(data.margin_floor_pct)); });
+    supabase.from('quote_settings').select('margin_floor_pct, sales_tax_rate_pct').eq('id', 1).maybeSingle()
+      .then(({ data }: any) => {
+        if (data?.margin_floor_pct != null) setMarginFloor(Number(data.margin_floor_pct));
+        if (data?.sales_tax_rate_pct != null) {
+          const rate = pctToRate(data.sales_tax_rate_pct);
+          setCompanyTaxRate(rate);
+          companyTaxRateRef.current = rate;
+          // Only the estimate being started fresh adopts the current rate;
+          // one already loaded from the database keeps its quoted rate.
+          setTaxRate(prev => (editingId ? prev : rate));
+        }
+      });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
   }, []);
 
@@ -812,7 +835,7 @@ export default function EstimatesPage() {
     setCustomerId(f.customerId ?? null);
     setCustomerName(f.customerName || '');
     setCustomerNsId(f.customerNsId ?? null);
-    setTaxRate(typeof f.taxRate === 'number' ? f.taxRate : DEFAULT_TAX_RATE);
+    setTaxRate(typeof f.taxRate === 'number' ? f.taxRate : companyTaxRateRef.current);
     setTaxExempt(!!f.taxExempt);
     setLaborRate(typeof f.laborRate === 'number' ? f.laborRate : DEFAULT_LABOR_RATE);
     setLaborOverride(typeof f.laborOverride === 'number' ? f.laborOverride : null);
@@ -1097,6 +1120,9 @@ export default function EstimatesPage() {
   const laborTotal = effectiveLaborHours * laborRate;
   const taxableAmount = subtotal; // Tax on parts/materials only, not labor
   const taxAmount = taxExempt ? 0 : taxableAmount * taxRate;
+  // Compare at the precision the rate is displayed and stored at — a float
+  // round-trip through the database is not a "different rate".
+  const atCompanyRate = Math.abs(rateToPct(taxRate) - rateToPct(companyTaxRate)) < 0.005;
   const grandTotal = subtotal + laborTotal + taxAmount;
 
   // ── Margin (internal only — never on the customer-facing quote) ──
@@ -1765,6 +1791,18 @@ export default function EstimatesPage() {
         await loadEstimates(true);
       } else if (data.status === 'already_created') {
         await dialog.alert(data.message);
+      } else if (data.status === 'created_unlinked') {
+        // The SO is REAL in NetSuite, we just couldn't record it. Offer the
+        // repair right here with the number prefilled — telling someone to
+        // "link it by hand" and then giving them no way to do it is how
+        // SO1064 sat orphaned.
+        const fix = await dialog.confirm(
+          `${data.error}\n\nLink SO #${data.salesOrderNumber || data.salesOrderId} to this estimate now?`,
+          { confirmLabel: 'Link it now' },
+        );
+        setConvertingToSO(false);
+        if (fix) await linkExistingSalesOrder(data.salesOrderNumber || '');
+        return;
       } else {
         await dialog.alert('Failed: ' + (data.error || 'Unknown error'));
       }
@@ -1772,6 +1810,37 @@ export default function EstimatesPage() {
       await dialog.alert('Network error — please try again');
     }
     setConvertingToSO(false);
+  };
+
+  // Attach an SO that already exists in NetSuite. Recovery for a conversion
+  // that created the order but couldn't write it back, and the only way to
+  // clear an estimate that is otherwise one click from a duplicate SO.
+  const linkExistingSalesOrder = async (prefill: string = '') => {
+    if (!editingId) return;
+    const entered = await dialog.prompt(
+      'Enter the Sales Order number exactly as NetSuite shows it (e.g. SO1064). It is verified against NetSuite before anything is saved.',
+      prefill,
+      { title: 'Link an existing Sales Order', confirmLabel: 'Link' },
+    );
+    if (entered === null || !entered.trim()) return;
+    setLinkingSO(true);
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/link-so`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ salesOrderNumber: entered.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        await dialog.alert(data.error || 'Could not link that Sales Order.');
+      } else {
+        await dialog.alert(data.message);
+        await loadEstimates(true);
+      }
+    } catch {
+      await dialog.alert('Network error — please try again');
+    }
+    setLinkingSO(false);
   };
 
   // ── Load customer-level operations defaults ──
@@ -1794,7 +1863,7 @@ export default function EstimatesPage() {
     setCustomerId(est.customer_id);
     setCustomerName(est.customer_name || '');
     setCustomerNsId(est.customer_netsuite_id);
-    setTaxRate(est.tax_rate || DEFAULT_TAX_RATE);
+    setTaxRate(est.tax_rate || companyTaxRateRef.current);
     setTaxExempt(est.tax_exempt);
     setLaborRate(est.labor_rate || DEFAULT_LABOR_RATE);
     setLaborOverride(est.labor_hours_override);
@@ -2071,7 +2140,7 @@ export default function EstimatesPage() {
     setCustomerId(null);
     setCustomerName('');
     setCustomerNsId(null);
-    setTaxRate(DEFAULT_TAX_RATE);
+    setTaxRate(companyTaxRateRef.current);
     setTaxExempt(false);
     setLaborRate(DEFAULT_LABOR_RATE);
     setLaborOverride(null);
@@ -3415,13 +3484,19 @@ export default function EstimatesPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
           <div style={{ flex: 1 }}>
             <div style={labelStyle}>Tax Rate</div>
-            <NumberInput
-              style={inputStyle}
-              value={(taxRate * 100).toFixed(2)}
-              onChange={e => setTaxRate((parseFloat(e.target.value) || 0) / 100)}
-  
-              step={0.01}
-            />
+            {/* Read-only by design: the rate is a company setting a super
+                admin owns (Settings → Sales Tax), not a per-quote field. */}
+            <div
+              style={{ ...inputStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', background: 'var(--subtle-bg)', cursor: 'default' }}
+              title={atCompanyRate
+                ? 'Company sales tax rate — changed in Settings → Sales Tax (super admin only)'
+                : `This estimate was quoted at ${rateToPct(taxRate).toFixed(2)}%. The current company rate is ${rateToPct(companyTaxRate).toFixed(2)}%.`}
+            >
+              <span style={{ fontWeight: 700 }}>{rateToPct(taxRate).toFixed(2)}%</span>
+              <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
+                {atCompanyRate ? 'company rate' : 'as quoted'}
+              </span>
+            </div>
           </div>
           <div style={{ paddingTop: '14px' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
@@ -3514,7 +3589,7 @@ export default function EstimatesPage() {
           </div>
           {!taxExempt && (
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-body)', marginBottom: '4px' }}>
-              <span>Sales Tax on Parts ({(taxRate * 100).toFixed(2)}%)</span>
+              <span>Sales Tax on Parts ({rateToPct(taxRate).toFixed(2)}%)</span>
               <span>{fmt(taxAmount)}</span>
             </div>
           )}
@@ -3830,6 +3905,26 @@ export default function EstimatesPage() {
             </button>
           );
         })()}
+
+        {/* Link an SO that already exists in NetSuite. Shown alongside
+            Convert because the case it repairs — an SO created but not
+            recorded — leaves the estimate looking unconverted. */}
+        {editingId && !estimates.find(e => e.id === editingId)?.netsuite_so_id && (
+          <button
+            onClick={() => linkExistingSalesOrder()}
+            disabled={linkingSO || convertingToSO}
+            title="Use this when a Sales Order already exists in NetSuite for this estimate but isn't showing here."
+            style={{
+              width: '100%', padding: '9px', borderRadius: '10px', marginTop: '8px',
+              background: 'transparent', border: '1px solid var(--border)',
+              color: 'var(--text-label)', fontWeight: 700, fontSize: '12px',
+              cursor: linkingSO || convertingToSO ? 'not-allowed' : 'pointer',
+              opacity: linkingSO ? 0.5 : 1,
+            }}
+          >
+            {linkingSO ? 'Linking...' : 'Link an existing Sales Order'}
+          </button>
+        )}
 
         {/* Show SO number if already converted */}
         {editingId && estimates.find(e => e.id === editingId)?.netsuite_so_id && (

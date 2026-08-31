@@ -1,0 +1,11 @@
+-- Migration 245: atomic conversion claim for convert-to-SO (Stage 4 /
+-- roadmap R3-8 — money-path idempotence).
+--
+-- The route's "already converted" pre-check is read-then-act: two
+-- concurrent conversions could both pass it and each create a REAL Sales
+-- Order in NetSuite. The loser was detected and loudly reported (first-
+-- writer-wins stamp), but a human still had to delete the duplicate SO by
+-- hand. The claim column makes the second request turn away BEFORE it
+-- touches NetSuite — same pattern as create-po's request claim. A stale
+-- claim (crashed request) is taken over after 5 minutes.
+ALTER TABLE estimates ADD COLUMN IF NOT EXISTS so_conversion_claimed_at TIMESTAMPTZ;
