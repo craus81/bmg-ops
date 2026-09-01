@@ -9,7 +9,9 @@
  *   - To: editable, multiple addresses (comma/semicolon separated)
  *   - Bcc me: one click copies the send to the signed-in user's login email
  *   - Personal message: free-text block rendered into the email body
- *   - Attachments: pick from the flow's available files, with a size cap
+ *   - Attachments: pick from the flow's available files — plus, where the
+ *     flow allows it, files added straight from the sender's device — with
+ *     a size cap
  *   - Live preview: the exact HTML that will go out, refreshed on edit
  *
  * The modal is presentation-only — the owning screen supplies fetchPreview
@@ -28,6 +30,9 @@ export interface EmailComposeAttachment {
   id: string;
   name: string;
   sizeBytes?: number | null;
+  /** Uploaded here rather than owned by the record — offer a remove button
+   *  (wired to onRemoveAttachment) so a wrong file isn't stuck forever. */
+  removable?: boolean;
 }
 
 export interface EmailComposeFields {
@@ -56,6 +61,18 @@ interface Props {
   /** Files the sender can attach. Omit to hide the attachments section. */
   attachments?: EmailComposeAttachment[];
   initialAttachmentIds?: string[];
+  /**
+   * Add a file from the sender's device. The owner stores it (and adds it
+   * to `attachments`); returning its id checks it on for this send. Omit to
+   * offer only the flow's existing files.
+   */
+  onUploadAttachment?: (file: File) => Promise<{ id?: string; error?: string }>;
+  /** File types the picker offers (input accept attribute). */
+  uploadAccept?: string;
+  /** One-line explanation under the upload button. */
+  uploadHint?: string;
+  /** Delete an attachment marked `removable`. */
+  onRemoveAttachment?: (id: string) => Promise<{ ok: boolean }>;
   /** Total attachment budget; checking a file past it is blocked. */
   maxAttachmentBytes?: number;
   messagePlaceholder?: string;
@@ -126,6 +143,10 @@ export default function EmailComposeModal({
   initialTo,
   attachments,
   initialAttachmentIds,
+  onUploadAttachment,
+  uploadAccept,
+  uploadHint,
+  onRemoveAttachment,
   maxAttachmentBytes = DEFAULT_MAX_ATTACHMENT_BYTES,
   messagePlaceholder,
   sendLabel = 'Send',
@@ -149,6 +170,9 @@ export default function EmailComposeModal({
   const [bccSelf, setBccSelf] = useState(loadBccSelfPref);
   const [message, setMessage] = useState('');
   const [attachmentIds, setAttachmentIds] = useState<string[]>(initialAttachmentIds || []);
+  const [uploadingName, setUploadingName] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [preview, setPreview] = useState<EmailComposePreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -238,6 +262,59 @@ export default function EmailComposeModal({
     setAttachmentIds(next);
     // The email body lists what's attached, so the preview follows the toggle.
     refreshPreview({ ...currentFields(), attachmentIds: next });
+  };
+
+  // Files added from the sender's device. The owner stores the file and
+  // puts it in `attachments`; the returned id is what checks it on for this
+  // send. Uploading is refused rather than silently left unchecked when the
+  // file wouldn't fit the budget — an attachment nobody can send is worse
+  // than a clear "make room first".
+  const handleUploadFiles = async (files: File[]) => {
+    if (!onUploadAttachment) return;
+    let running = selectedBytes;
+    const added: string[] = [];
+    for (const file of files) {
+      if (running + file.size > maxAttachmentBytes) {
+        await dialog.alert(
+          `"${file.name}" (${formatBytes(file.size)}) would push the attachments over ${formatBytes(maxAttachmentBytes)} — most inboxes reject emails that large. Uncheck something first, or send it another way.`,
+        );
+        break;
+      }
+      setUploadingName(file.name);
+      try {
+        const res = await onUploadAttachment(file);
+        if (res.error || !res.id) {
+          await dialog.alert(`Could not attach "${file.name}": ${res.error || 'unknown error'}`);
+          break;
+        }
+        added.push(res.id);
+        running += file.size;
+      } finally {
+        setUploadingName(null);
+      }
+    }
+    if (added.length > 0) {
+      const next = [...attachmentIds, ...added];
+      setAttachmentIds(next);
+      // The email body lists what's attached, so the preview follows.
+      refreshPreview({ ...currentFields(), attachmentIds: next });
+    }
+  };
+
+  const handleRemoveAttachment = async (id: string) => {
+    if (!onRemoveAttachment || removingId) return;
+    setRemovingId(id);
+    try {
+      const res = await onRemoveAttachment(id);
+      if (!res.ok) return;
+      const next = attachmentIds.filter(x => x !== id);
+      setAttachmentIds(next);
+      if (next.length !== attachmentIds.length) {
+        refreshPreview({ ...currentFields(), attachmentIds: next });
+      }
+    } finally {
+      setRemovingId(null);
+    }
   };
 
   const handleSend = async () => {
@@ -341,17 +418,19 @@ export default function EmailComposeModal({
           />
         </div>
 
-        {attachments && (
+        {(attachments || onUploadAttachment) && (
           <div>
             <div style={labelStyle}>
               Attachments — {attachmentIds.length} selected
               {attachmentIds.length > 0 && ` (${formatBytes(selectedBytes)} of ${formatBytes(maxAttachmentBytes)} max)`}
             </div>
-            {attachments.length === 0 ? (
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No files available to attach.</div>
+            {(attachments || []).length === 0 ? (
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                {onUploadAttachment ? 'Nothing attached yet — add a picture or spec sheet below.' : 'No files available to attach.'}
+              </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', maxHeight: '140px', overflowY: 'auto' }}>
-                {attachments.map(a => {
+                {(attachments || []).map(a => {
                   const checked = attachmentIds.includes(a.id);
                   return (
                     <label key={a.id} style={{
@@ -369,9 +448,49 @@ export default function EmailComposeModal({
                       />
                       <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
                       <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>{formatBytes(a.sizeBytes)}</span>
+                      {a.removable && onRemoveAttachment && (
+                        <button
+                          type="button"
+                          // Inside a <label>: without preventDefault the click
+                          // also toggles the checkbox it wraps.
+                          onClick={e => { e.preventDefault(); e.stopPropagation(); handleRemoveAttachment(a.id); }}
+                          disabled={removingId === a.id}
+                          title="Remove this file"
+                          style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer', padding: '0 2px', flexShrink: 0, opacity: removingId === a.id ? 0.4 : 1 }}
+                        >✕</button>
+                      )}
                     </label>
                   );
                 })}
+              </div>
+            )}
+            {onUploadAttachment && (
+              <div style={{ marginTop: '6px' }}>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept={uploadAccept}
+                  style={{ display: 'none' }}
+                  onChange={e => {
+                    const picked = Array.from(e.target.files || []);
+                    // Reset first: picking the same file twice in a row fires
+                    // no change event otherwise.
+                    e.target.value = '';
+                    handleUploadFiles(picked);
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!!uploadingName}
+                  style={{ padding: '6px 10px', borderRadius: '8px', border: '1px dashed var(--border)', background: 'transparent', color: 'var(--text-secondary)', fontWeight: 700, fontSize: '11px', cursor: uploadingName ? 'default' : 'pointer', opacity: uploadingName ? 0.6 : 1 }}
+                >
+                  {uploadingName ? `Uploading ${uploadingName}…` : '＋ Add a picture or file'}
+                </button>
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                  {uploadHint || `Up to ${formatBytes(maxAttachmentBytes)} of attachments per email.`}
+                </div>
               </div>
             )}
           </div>

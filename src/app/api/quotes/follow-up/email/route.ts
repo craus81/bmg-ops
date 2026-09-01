@@ -5,6 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { sendEmailDetailed, buildNotificationEmail } from '@/lib/resend';
 import { getEmailSignature } from '@/lib/email-signature';
 import { deepLinks } from '@/lib/deep-links';
+import { loadEstimateAttachmentRows, fetchEstimateAttachments, type EstimateFileRow } from '@/lib/estimate-attachments';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,6 +15,10 @@ const Schema = z.object({
   emails: z.array(z.string().email()).max(20).optional(),
   bccSelf: z.boolean().optional(),
   message: z.string().max(4000).optional(),
+  // Estimate files (estimate_files) to attach — pictures, spec sheets the
+  // customer asked for since the original send. Estimates only; wrap quotes
+  // carry their own stored files on their own send route.
+  attachmentFileIds: z.array(z.string().uuid()).max(20).optional(),
   preview: z.boolean().optional(),
 });
 
@@ -36,6 +41,9 @@ const service = createClient(
  * When the quote's magic-link approval token is still valid, the email
  * carries the Review & Accept button so the customer can act from the
  * follow-up itself instead of digging for the original email.
+ *
+ * Estimate follow-ups can also carry files off the estimate
+ * (estimate_files) — the same picker the approval and PDF sends use.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireRole(req, ['admin', 'sales']);
@@ -106,13 +114,28 @@ export async function POST(req: NextRequest) {
     ? `${appUrl}/approve/${isEstimate ? 'estimate' : 'quote'}/${quote.approval_token}`
     : undefined;
 
+  // Picked estimate files. Resolved before the preview so it can name
+  // them, and validated against THIS estimate.
+  const attachmentFileIds = parsed.data.attachmentFileIds || [];
+  if (attachmentFileIds.length > 0 && !isEstimate) {
+    return NextResponse.json({ error: 'Attachments are only supported on estimate follow-ups.' }, { status: 400 });
+  }
+  const picked = isEstimate
+    ? await loadEstimateAttachmentRows(service, id, attachmentFileIds)
+    : { ok: true as const, rows: [] as EstimateFileRow[] };
+  if (!picked.ok) return NextResponse.json({ error: picked.error }, { status: picked.status });
+
   const signature = await getEmailSignature(service, auth.user?.id);
   const html = buildNotificationEmail(
     `Following up — ${label}`,
     bodyText,
     ctaUrl,
     ctaUrl ? 'Review & Accept' : undefined,
-    { note: message?.trim() || undefined, signature },
+    {
+      note: message?.trim() || undefined,
+      attachmentNames: picked.rows.map(r => r.file_name),
+      signature,
+    },
   );
 
   if (preview) {
@@ -123,13 +146,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'No email on file for this quote. Add a recipient first.' }, { status: 400 });
   }
 
+  // Pull the bytes before anything is sent or logged — a storage failure
+  // fails the send with the file named, never a half-sent follow-up.
+  const extras = await fetchEstimateAttachments(picked.rows);
+  if (!extras.ok) return NextResponse.json({ error: extras.error }, { status: extras.status });
+
   const senderEmail = auth.user?.email || undefined;
   const { ok } = await sendEmailDetailed(
     emailList,
     subject,
     html,
     undefined,
-    undefined,
+    extras.attachments.length > 0 ? extras.attachments : undefined,
     senderEmail,
     bccSelf && senderEmail ? [senderEmail] : undefined,
     {

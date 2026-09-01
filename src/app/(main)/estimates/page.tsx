@@ -10,7 +10,7 @@ import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
 import PartCatalogBrowser, { type BrowsePart, type KitWithMembers } from '@/components/PartCatalogBrowser';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
-import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
+import EmailComposeModal, { type EmailComposeAttachment, type EmailComposeFields } from '@/components/EmailComposeModal';
 import { flashNote } from '@/lib/focus-note';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import { resolvePlatform, matchQualifiersToConfig } from '@/lib/vin-platform';
@@ -548,6 +548,12 @@ export default function EstimatesPage() {
   const [approvalProofFiles, setApprovalProofFiles] = useState<Record<string, JobProofFile[]>>({});
   const [approvalProofSelections, setApprovalProofSelections] = useState<Record<string, string[]>>({});
   // Email-the-PDF compose modal (FleetSuite enhanced-estimate copy).
+  // Files kept on the estimate for its customer emails (estimate_files):
+  // pictures, spec sheets. Uploaded once, offered by all three estimate
+  // email flows. Nothing is pre-checked — a file that rode on the first
+  // send shouldn't silently ride on the next one.
+  const [estimateFiles, setEstimateFiles] = useState<EmailComposeAttachment[]>([]);
+
   const [pdfEmailModal, setPdfEmailModal] = useState(false);
   // Follow-up actions on sent estimates (list rows): compose modal target
   // and the log-a-note dialog — same machinery as /admin/quote-followups.
@@ -1476,12 +1482,73 @@ export default function EstimatesPage() {
     });
   };
 
+  // ── Files attached to the estimate's customer emails ──
+  const fileToAttachment = (f: any): EmailComposeAttachment => ({
+    id: f.id, name: f.file_name, sizeBytes: f.size_bytes, removable: true,
+  });
+
+  const loadEstimateFiles = async (estimateId: string) => {
+    try {
+      const res = await fetch(`/api/estimates/${estimateId}/files`);
+      const data = await res.json();
+      setEstimateFiles(res.ok && data.success ? (data.files || []).map(fileToAttachment) : []);
+    } catch {
+      setEstimateFiles([]);
+    }
+  };
+
+  // Browser → R2 via presigned PUT (the file never passes through the API
+  // route, which caps at ~4.5MB on Vercel), then a record call that saves
+  // the metadata row. The returned id is what checks the file on for the
+  // send in progress.
+  const uploadEstimateFile = async (estimateId: string, file: File): Promise<{ id?: string; error?: string }> => {
+    const contentType = file.type || 'application/octet-stream';
+    const post = (payload: any) => fetch(`/api/estimates/${estimateId}/files`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    }).then(r => r.json());
+    try {
+      const presign = await post({ action: 'presign', fileName: file.name, contentType, size: file.size });
+      if (!presign.success) return { error: presign.error || 'Could not start the upload' };
+      const put = await fetch(presign.uploadUrl, { method: 'PUT', headers: { 'Content-Type': contentType }, body: file });
+      if (!put.ok) return { error: `Upload failed (HTTP ${put.status})` };
+      const rec = await post({ action: 'record', path: presign.path, fileName: file.name, contentType, size: file.size });
+      if (!rec.success || !rec.file) return { error: rec.error || 'Failed to save the file record' };
+      setEstimateFiles(prev => [fileToAttachment(rec.file), ...prev]);
+      return { id: rec.file.id };
+    } catch {
+      return { error: 'Network error — please try again.' };
+    }
+  };
+
+  const removeEstimateFile = async (estimateId: string, fileId: string): Promise<{ ok: boolean }> => {
+    const file = estimateFiles.find(f => f.id === fileId);
+    const confirmed = await dialog.confirm(
+      `Remove ${file?.name || 'this file'} from the estimate? It won't be available on future emails either.`,
+      { destructive: true, confirmLabel: 'Remove' },
+    );
+    if (!confirmed) return { ok: false };
+    try {
+      const res = await fetch(`/api/estimates/${estimateId}/files?fileId=${fileId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        await dialog.alert('Could not remove the file: ' + (data.error || 'unknown error'));
+        return { ok: false };
+      }
+      setEstimateFiles(prev => prev.filter(f => f.id !== fileId));
+      return { ok: true };
+    } catch {
+      await dialog.alert('Network error — please try again.');
+      return { ok: false };
+    }
+  };
+
   // ── Email the enhanced-estimate PDF (standard compose screen) ──
   const openPdfEmailModal = async () => {
     if (!editingId) return;
     // Persist current edits so the attached PDF matches what's on screen.
     const currentStatus = estimates.find(e => e.id === editingId)?.status || 'draft';
     await saveEstimate(currentStatus);
+    await loadEstimateFiles(editingId);
     setPdfEmailModal(true);
   };
 
@@ -1495,6 +1562,7 @@ export default function EstimatesPage() {
           preview: true,
           emails: fields.emails,
           message: fields.message || undefined,
+          attachmentFileIds: fields.attachmentIds,
         }),
       });
       const data = await res.json();
@@ -1515,6 +1583,7 @@ export default function EstimatesPage() {
           emails: fields.emails,
           bccSelf: fields.bccSelf,
           message: fields.message || undefined,
+          attachmentFileIds: fields.attachmentIds,
         }),
       });
       const data = await res.json();
@@ -1578,6 +1647,7 @@ export default function EstimatesPage() {
         body: JSON.stringify({
           type: 'estimate', id: followupEmailFor.id, preview: true,
           emails: fields.emails, message: fields.message || undefined,
+          attachmentFileIds: fields.attachmentIds,
         }),
       });
       const data = await res.json();
@@ -1597,6 +1667,7 @@ export default function EstimatesPage() {
         body: JSON.stringify({
           type: 'estimate', id: followupEmailFor.id,
           emails: fields.emails, bccSelf: fields.bccSelf, message: fields.message || undefined,
+          attachmentFileIds: fields.attachmentIds,
         }),
       });
       const data = await res.json();
@@ -1638,6 +1709,7 @@ export default function EstimatesPage() {
           emails: fields.emails,
           message: fields.message || undefined,
           proofSelections: approvalProofSelectionPayload(),
+          attachmentFileIds: fields.attachmentIds,
         }),
       });
       const data = await res.json();
@@ -1688,6 +1760,7 @@ export default function EstimatesPage() {
     setApprovalProofFiles(files);
     setApprovalProofSelections(selections);
 
+    await loadEstimateFiles(editingId);
     setSendingForApproval(false);
     setApprovalPdfName(null);
     setApprovalModal(true);
@@ -1705,6 +1778,7 @@ export default function EstimatesPage() {
           bccSelf: fields.bccSelf,
           message: fields.message || undefined,
           proofSelections: approvalProofSelectionPayload(),
+          attachmentFileIds: fields.attachmentIds,
         }),
       });
       data = await res.json();
@@ -2441,7 +2515,7 @@ export default function EstimatesPage() {
                               }}
                             >☎ Log</button>
                             <button
-                              onClick={(e) => { e.stopPropagation(); setFollowupEmailFor(est); }}
+                              onClick={(e) => { e.stopPropagation(); setEstimateFiles([]); loadEstimateFiles(est.id); setFollowupEmailFor(est); }}
                               title="Send a follow-up email (includes the Review & Accept link while it's valid)"
                               style={{
                                 padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
@@ -4070,6 +4144,10 @@ export default function EstimatesPage() {
               )}
             </div>
           ) : undefined}
+          attachments={estimateFiles}
+          onUploadAttachment={f => uploadEstimateFile(editingId!, f)}
+          onRemoveAttachment={id => removeEstimateFile(editingId!, id)}
+          uploadHint="Pictures, spec sheets, anything the customer needs with the estimate. Files stay on the estimate for later emails."
           fetchPreview={fetchApprovalPreview}
           onSend={confirmSendApproval}
           onClose={() => setApprovalModal(false)}
@@ -4083,6 +4161,10 @@ export default function EstimatesPage() {
           title={`Follow Up — Estimate #${estimateHeadlineNumber(followupEmailFor)}`}
           sendLabel="Send Follow-Up"
           messagePlaceholder="Personal note — shown at the top of the follow-up email…"
+          attachments={estimateFiles}
+          onUploadAttachment={f => uploadEstimateFile(followupEmailFor.id, f)}
+          onRemoveAttachment={id => removeEstimateFile(followupEmailFor.id, id)}
+          uploadHint="Pictures, spec sheets, anything the customer needs with the estimate. Files stay on the estimate for later emails."
           fetchPreview={fetchFollowupEmailPreview}
           onSend={confirmSendFollowupEmail}
           onClose={() => setFollowupEmailFor(null)}
@@ -4161,6 +4243,10 @@ export default function EstimatesPage() {
           title="Email Estimate PDF"
           sendLabel="Send PDF"
           messagePlaceholder="Optional note to the customer — shown in the email above the attached PDF…"
+          attachments={estimateFiles}
+          onUploadAttachment={f => uploadEstimateFile(editingId!, f)}
+          onRemoveAttachment={id => removeEstimateFile(editingId!, id)}
+          uploadHint="Pictures, spec sheets, anything the customer needs with the estimate. Files stay on the estimate for later emails."
           fetchPreview={fetchPdfEmailPreview}
           onSend={confirmSendPdfEmail}
           onClose={() => setPdfEmailModal(false)}
