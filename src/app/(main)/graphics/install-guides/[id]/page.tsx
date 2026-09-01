@@ -96,8 +96,11 @@ const saveErrorMessage = (error: { message?: string; code?: string } | null | un
 };
 
 export default function InstallGuideEditorPage() {
-  const { isAdmin, isSales, isGraphicsProduction, loading: authLoading } = useAuth();
-  const hasAccess = isAdmin || isSales || isGraphicsProduction;
+  const { isAdmin, isSales, isGraphicsProduction, hasRole, loading: authLoading } = useAuth();
+  // super_admin included explicitly: isAdmin tests only the literal 'admin'
+  // role, which locked a pure super_admin out of the guides (Stage 6
+  // finding — migration 248 fixes the matching RLS).
+  const hasAccess = isAdmin || isSales || isGraphicsProduction || hasRole('super_admin');
   const params = useParams<{ id: string }>();
   const guideId = params?.id;
   const router = useRouter();
@@ -165,6 +168,24 @@ export default function InstallGuideEditorPage() {
     fetchCompanyLetterhead().then(setLetterhead);
   }, []);
 
+  // Link pickers (Stage 6: the guide was an orphan — nothing tied it to the
+  // graphics job or the CNI job it describes). Recent 100 of each; a linked
+  // record older than the window renders as a synthetic option so the
+  // select never silently clears it.
+  const [linkOptions, setLinkOptions] = useState<{ cni: { id: string; label: string }[]; gfx: { id: string; label: string }[] } | null>(null);
+  useEffect(() => {
+    if (!hasAccess || linkOptions) return;
+    (async () => {
+      const [cniRes, gfxRes] = await Promise.all([
+        supabase.from('cni_jobs').select('id, job_number, title').order('created_at', { ascending: false }).limit(100),
+        supabase.from('graphics_jobs').select('id, job_number, title').order('created_at', { ascending: false }).limit(100),
+      ]);
+      const toOpt = (j: any) => ({ id: j.id as string, label: [j.job_number, j.title].filter(Boolean).join(' — ') || String(j.id).slice(0, 8) });
+      setLinkOptions({ cni: (cniRes.data || []).map(toOpt), gfx: (gfxRes.data || []).map(toOpt) });
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
+  }, [hasAccess, linkOptions]);
+
   // ---- Autosave (debounced) ----
   useEffect(() => {
     if (!guide || !dirtyRef.current) return;
@@ -182,6 +203,9 @@ export default function InstallGuideEditorPage() {
           fraction_denominator: guide.fraction_denominator,
           pages: guide.pages,
           sections: guide.sections,
+          graphics_job_id: guide.graphics_job_id || null,
+          cni_job_id: guide.cni_job_id || null,
+          fleet_checkin_id: guide.fleet_checkin_id || null,
           updated_at: new Date().toISOString(),
         })
         .eq('id', guide.id);
@@ -202,6 +226,51 @@ export default function InstallGuideEditorPage() {
     dirtyRef.current = true;
     setGuide(prev => (prev ? fn(prev) : prev));
   }, []);
+
+  // ── Scale-change recalibration (Stage 6 finding) ──────────────────────
+  // Editing the template scale after PDF import used to silently skew every
+  // exported dimension: pages kept px_per_in computed from the OLD scale
+  // while the export footer printed the new one. On commit (blur), pages
+  // whose calibration came from the scale are recomputed; manual
+  // calibrations (traced length or DPI — scale-independent) are never
+  // touched. Legacy pages without a px_source are recognized by matching
+  // the old scale's import constant.
+  const lastScaleRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (guide && lastScaleRef.current === null) lastScaleRef.current = guide.scale;
+  }, [guide]);
+  const commitScaleChange = async () => {
+    if (!guide) return;
+    const oldScale = lastScaleRef.current;
+    lastScaleRef.current = guide.scale;
+    if (oldScale === null || oldScale === guide.scale) return;
+    const oldFactor = parseGuideScale(oldScale);
+    const newFactor = parseGuideScale(guide.scale);
+    if (!Number.isFinite(oldFactor) || !Number.isFinite(newFactor) || oldFactor <= 0 || newFactor <= 0) return;
+    const oldConst = (72 * PDF_RENDER_SCALE) / oldFactor;
+    const newConst = (72 * PDF_RENDER_SCALE) / newFactor;
+    let recalibrated = 0;
+    let kept = 0;
+    const pages = guide.pages.map(pg => {
+      if (pg.px_per_in == null) return pg;
+      const scaleDerived = pg.px_source === 'scale'
+        || (pg.px_source == null && Math.abs(pg.px_per_in - oldConst) < 0.01);
+      if (!scaleDerived) { kept++; return pg; }
+      recalibrated++;
+      return { ...pg, px_per_in: newConst, px_source: 'scale' as const };
+    });
+    if (recalibrated > 0) {
+      pushUndo();
+      mutate(g => ({ ...g, pages }));
+    }
+    if (recalibrated > 0 || kept > 0) {
+      await dialog.alert(
+        `Template scale is now ${guide.scale}. ${recalibrated} imported page${recalibrated !== 1 ? 's' : ''} recalibrated to match`
+        + `${kept > 0 ? `; ${kept} manually calibrated page${kept !== 1 ? 's keep' : ' keeps'} its own calibration` : ''}.`,
+        { title: 'Scale changed' },
+      );
+    }
+  };
 
   // Flush a pending debounced save when the editor unmounts (Back button,
   // tab list click) so the last edit isn't silently dropped, and warn on a
@@ -230,6 +299,9 @@ export default function InstallGuideEditorPage() {
             fraction_denominator: g.fraction_denominator,
             pages: g.pages,
             sections: g.sections,
+            graphics_job_id: g.graphics_job_id || null,
+            cni_job_id: g.cni_job_id || null,
+            fleet_checkin_id: g.fleet_checkin_id || null,
             updated_at: new Date().toISOString(),
           })
           .eq('id', g.id)
@@ -449,7 +521,7 @@ export default function InstallGuideEditorPage() {
         const inches = parseFloat(answer || '');
         if (!answer || !Number.isFinite(inches) || inches <= 0) return;
         pushUndo();
-        updatePage(activePage.id, pg => ({ ...pg, px_per_in: lenPx / inches }));
+        updatePage(activePage.id, pg => ({ ...pg, px_per_in: lenPx / inches, px_source: 'manual' }));
         setTool('select');
         return;
       }
@@ -561,6 +633,7 @@ export default function InstallGuideEditorPage() {
           image_w: canvas.width,
           image_h: canvas.height,
           px_per_in: pxPerIn,
+          px_source: 'scale',
           dims: [],
           source_pdf_path: sourcePath,
           source_page: sourcePath ? idx : null,
@@ -645,7 +718,7 @@ export default function InstallGuideEditorPage() {
     const dpi = parseFloat(answer || '');
     if (!answer || !Number.isFinite(dpi) || dpi <= 0) return;
     pushUndo();
-    updatePage(activePage.id, pg => ({ ...pg, px_per_in: pxPerRealInchFromDpi(dpi, parseGuideScale(guide.scale)) }));
+    updatePage(activePage.id, pg => ({ ...pg, px_per_in: pxPerRealInchFromDpi(dpi, parseGuideScale(guide.scale)), px_source: 'manual' }));
   };
 
   // ---- Export ----
@@ -788,8 +861,12 @@ export default function InstallGuideEditorPage() {
       if (updErr) throw new Error(updErr.message);
       setSendOpen(false);
       attachFileRef.current = null;
+      // Attaching IS the linkage moment: stamp the first-class link so the
+      // job page lists this guide and the CNI completion photo gate arms
+      // (Stage 6 — the guide used to be an orphan the system couldn't see).
+      mutate(g => ({ ...g, cni_job_id: job.id }));
       await dialog.alert(
-        `"${file.name}" is attached to ${job.job_number} — the installer sees it under the job's files.`,
+        `"${file.name}" is attached to ${job.job_number} — the installer sees it under the job's files, and completing this job's vehicles now requires install photos.`,
         { title: 'Attached' },
       );
     } catch (err: any) {
@@ -998,11 +1075,41 @@ export default function InstallGuideEditorPage() {
             />
           </div>
           <div>
+            <div style={labelStyle}>Graphics job</div>
+            <select
+              style={inputStyle}
+              value={guide.graphics_job_id || ''}
+              onChange={e => mutate(g => ({ ...g, graphics_job_id: e.target.value || null }))}
+            >
+              <option value="">Not linked</option>
+              {guide.graphics_job_id && !(linkOptions?.gfx || []).some(o => o.id === guide.graphics_job_id) && (
+                <option value={guide.graphics_job_id}>Linked job (older than list)</option>
+              )}
+              {(linkOptions?.gfx || []).map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={labelStyle}>CNI job</div>
+            <select
+              style={inputStyle}
+              value={guide.cni_job_id || ''}
+              onChange={e => mutate(g => ({ ...g, cni_job_id: e.target.value || null }))}
+              title="Linking a CNI job arms the completion photo gate: installers must submit install photos before marking this job's vehicles complete. Attaching the guide PDF to a job links it automatically."
+            >
+              <option value="">Not linked</option>
+              {guide.cni_job_id && !(linkOptions?.cni || []).some(o => o.id === guide.cni_job_id) && (
+                <option value={guide.cni_job_id}>Linked job (older than list)</option>
+              )}
+              {(linkOptions?.cni || []).map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
+          </div>
+          <div>
             <div style={labelStyle}>Template scale</div>
             <input
               style={inputStyle}
               value={guide.scale}
               onChange={e => mutate(g => ({ ...g, scale: e.target.value }))}
+              onBlur={commitScaleChange}
             />
           </div>
           <div>

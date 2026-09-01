@@ -60,11 +60,32 @@ export async function POST(req: NextRequest) {
   // Load the VIN and confirm it belongs to this job.
   const { data: vin } = await supabase
     .from('cni_job_vins')
-    .select('id, job_id, vin, vehicle_year, vehicle_make, vehicle_model, scan_log_id')
+    .select('id, job_id, vin, vehicle_year, vehicle_make, vehicle_model, scan_log_id, photos_submitted')
     .eq('id', vinId)
     .single();
   if (!vin || vin.job_id !== jobId) {
     return NextResponse.json({ error: 'VIN not found for this job' }, { status: 404 });
+  }
+
+  // ── Install-guide photo gate (Stage 6) ──────────────────────────────
+  // A job carrying a dimensioned install guide promises, in the guide's
+  // own words, "photos of each side" — and the system enforced none of
+  // it: an installer could mark every vehicle complete without a single
+  // photo. When a guide is linked to this job, completion requires the
+  // vehicle's install photos to be submitted first (the existing
+  // submit-photos flow). Admins completing on an installer's behalf pass.
+  if (!isAdmin && !(vin as any).photos_submitted) {
+    const { data: guideRows } = await supabase
+      .from('install_guides')
+      .select('id')
+      .eq('cni_job_id', jobId)
+      .limit(1);
+    if ((guideRows || []).length > 0) {
+      return NextResponse.json({
+        error: 'This job has a dimensioned install guide, which requires photos of the completed install. Submit this vehicle\'s photos first, then mark it complete.',
+        step: 'photos_required',
+      }, { status: 409 });
+    }
   }
 
   // The part is whatever the crew picked for the open shift (CNI field-shift
