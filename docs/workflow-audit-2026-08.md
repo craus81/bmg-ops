@@ -82,7 +82,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
 | **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 19 and 21 remain open** (2 — R2-goes-private, labor capture). Shipped 2026-08-30: the Stage 1 build-out (#701–#704, closing item 18), the two Stage 1 owner decisions (#706 lead tier, #707 deletion→NetSuite), and estimate integrity (#708–#710, items 9–11). Shipped 2026-08-30: the whole **vehicle custody** block (#712–#715, items 12–16). Shipped 2026-08-30 (second wave): **parts ordering & receiving** (#717–#719, item 17 — the audit's largest build: request queue → NetSuite PO → receiving with item receipts) and the **route→permission manifest** (#721, item 20 — all 251 routes declare + prove their guard; the sweep fixed the unauthenticated Google OAuth pair). |
 
-| **Round 3** — re-audit 2026-08-30 (Part 7) | 🔄 roadmap open | Nine-probe re-verification at `1ea2015`, every MAJOR+ finding re-verified by hand. **Round 2 holds** — all 19 ships confirmed at HEAD (5 partial caveats). ~90 new findings distilled into the Part 7 roadmap: 6 CRITICAL truncation bugs that move money/state, 8 E-SIGN forgery/loss holes, 7 non-idempotent NetSuite money paths (zero unique-index backing), 3 custody/CNI blockers — one, CNI company invites, failing 500 in production since #715 — the `forceChannels` no-op, and this week's parts-loop regressions (hotfixed same day, #724). Items 19 and 21 now carry written decision packages (the R2-flip tier checklist, the labor-capture touch-map). Shipped 2026-08-31: **Stage 2 closed** — the estimate correctness set (#726) and E-SIGN hardening (#727, migration 242) retire R3-6, R3-7, and every remaining Stage 2 walkthrough finding, and #729 ships the R3-17 change-order core (Duplicate + duplicate-as-revision with `supersedes_estimate_id` lineage, migration 243) — Stage 2 closed outright. **R3-1 closed in full** (#732 the six CRITICALs with fail-closed reads, #733 the MAJOR sweep) — every §7.2.2 truncation finding fixed. **Stage 3 closed** (#735 wrap-quote reconciliation + honest win counting + visible provenance, #736 customer reminders w/ migration 244) — all six capture-side findings shipped. **Stage 4 closed** (#740 atomic conversion claim + vendor-PO sync honesty, #741 schema-cache hardening after the live SO1064 stranding that #738/#739 repaired in parallel with migration 246 + a manual SO link) — the earlier findings were verified already fixed at HEAD (N2 phase 1 auto-project, item 9 staff walls, item 10 estimate closing, 17A–C ordering) and the dead-list re-verdicted. **Stage 5 closed** (#746 + migration 247: graphics_jobs UPDATE wall, presigned proof artwork, pre-invoice packing list; fan-out/transition-rules/proof-gate verified already shipped) — roll-nesting for production stays as the stage's one open enhancement. |
+| **Round 3** — re-audit 2026-08-30 (Part 7) | 🔄 roadmap open | Nine-probe re-verification at `1ea2015`, every MAJOR+ finding re-verified by hand. **Round 2 holds** — all 19 ships confirmed at HEAD (5 partial caveats). ~90 new findings distilled into the Part 7 roadmap: 6 CRITICAL truncation bugs that move money/state, 8 E-SIGN forgery/loss holes, 7 non-idempotent NetSuite money paths (zero unique-index backing), 3 custody/CNI blockers — one, CNI company invites, failing 500 in production since #715 — the `forceChannels` no-op, and this week's parts-loop regressions (hotfixed same day, #724). Items 19 and 21 now carry written decision packages (the R2-flip tier checklist, the labor-capture touch-map). Shipped 2026-08-31: **Stage 2 closed** — the estimate correctness set (#726) and E-SIGN hardening (#727, migration 242) retire R3-6, R3-7, and every remaining Stage 2 walkthrough finding, and #729 ships the R3-17 change-order core (Duplicate + duplicate-as-revision with `supersedes_estimate_id` lineage, migration 243) — Stage 2 closed outright. **R3-1 closed in full** (#732 the six CRITICALs with fail-closed reads, #733 the MAJOR sweep) — every §7.2.2 truncation finding fixed. **Stage 3 closed** (#735 wrap-quote reconciliation + honest win counting + visible provenance, #736 customer reminders w/ migration 244) — all six capture-side findings shipped. **Stage 4 closed** (#740 atomic conversion claim + vendor-PO sync honesty, #741 schema-cache hardening after the live SO1064 stranding that #738/#739 repaired in parallel with migration 246 + a manual SO link) — the earlier findings were verified already fixed at HEAD (N2 phase 1 auto-project, item 9 staff walls, item 10 estimate closing, 17A–C ordering) and the dead-list re-verdicted. **Stage 5 closed** (#746 + migration 247: graphics_jobs UPDATE wall, presigned proof artwork, pre-invoice packing list; fan-out/transition-rules/proof-gate verified already shipped) — roll-nesting for production stays as the stage's one open enhancement. **Stage 6 closed** (#751 + migration 248: guide links w/ auto-stamp on attach, the CNI completion photo gate, scale-change recalibration with px_source provenance, the verification modal's 📐 guide link, super_admin walls; the inverted checklist was already fixed) — a full CNI checklist stays as its open enhancement, and the app-wide requireAdmin-excludes-super_admin question is flagged for an owner call. |
 
 Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap; Part 7 carries Round 3.
 
@@ -415,25 +415,54 @@ and email/attach-to-CNI-job delivery.
 
 **But the guide is an orphan, and its audience isn't gated:**
 
-- **CRITICAL — The guide has no link to the job, vehicle, or CNI job.** Customer
+- ✅ **CRITICAL — The guide has no link to the job, vehicle, or CNI job.** Customer
   and vehicle are free text; nothing references the guide from `graphics_jobs`,
   `fleet_checkins`, or `cni_jobs`. Finding "the guide for this Transit" means
   eyeballing a flat list.
-- **CRITICAL — CNI installers — the guide's actual audience — have no checklist
+  _(Fixed: #751 + migration 248 — first-class `graphics_job_id` /
+  `cni_job_id` / `fleet_checkin_id` links, editor link selects, and the
+  existing attach-PDF-to-CNI-job flow stamps the link automatically:
+  attaching IS the linkage moment.)_
+- ✅ **CRITICAL — CNI installers — the guide's actual audience — have no checklist
   and no photo gate at completion.** The guide's own text promises "photos of
   each side" and "deviations may be redone at the installer's expense," but the
   system enforces none of it on CNI jobs (checklists instantiate only onto
   in-shop check-ins).
-- **MAJOR — Checklist category selection is inverted** (detailed under Stage 8):
+  _(Photo gate fixed: #751 — with a guide linked to the job, `complete-vin`
+  refuses until the vehicle's install photos are submitted (the existing
+  submit-photos flow); admins completing on an installer's behalf pass.
+  Remaining enhancement: a full CNI task **checklist** — build-scale, same
+  posture as roll-nesting for Stage 5.)_
+- ✅ **MAJOR — Checklist category selection is inverted** (detailed under Stage 8):
   upfit-only vehicles get the *mixed* template and are blocked on a required
   graphics task that has no meaning for them.
-- **MAJOR — Stale calibration:** changing a guide's template scale after PDF
+  _(Verified already fixed: the shared `install-checklist.ts` lookup replaced
+  the inverted order-by with exact-category-first + mixed fallback for both
+  routes.)_
+- ✅ **MAJOR — Stale calibration:** changing a guide's template scale after PDF
   import silently skews every exported dimension, and the export footer prints
   the new scale next to numbers computed from the old one.
-- **MAJOR — The in-shop tech verifying "Graphics applied per proof" never sees
+  _(Fixed: #751 — committing a scale change recalibrates scale-derived pages
+  to the new scale and reports the count; manual calibrations (traced length
+  / DPI — scale-independent) are never touched, with legacy pages recognized
+  by the old scale's import constant. Pages carry `px_source` provenance
+  going forward.)_
+- ✅ **MAJOR — The in-shop tech verifying "Graphics applied per proof" never sees
   the dimensioned guide** — the completion modal shows the raw proof only.
-- **MAJOR — Install guides bypass the feature system** (raw role flags), and a
+  _(Fixed: #751 — the tracking modal links the dimensioned guide (📐) beside
+  the raw proof, resolved via the vehicle's graphics job or check-in link.)_
+- ✅ **MAJOR — Install guides bypass the feature system** (raw role flags), and a
   pure `super_admin` account is locked out of them in both UI and RLS.
+  _(Fixed: #751 + migration 248 — the RLS role array and both pages' gates
+  add super_admin. Flagged for an owner decision, not changed here:
+  `requireAdmin`/`isAdmin` test only the literal `admin` role APP-WIDE, so a
+  pure super_admin is refused by every requireAdmin route — the newer
+  DB policies (233/234/248) already treat super_admin ⊇ admin.)_
+
+**Stage 6 status (2026-08-31): CLOSED** — links, the completion photo gate,
+recalibration, verification-modal access, and the super_admin walls all
+shipped in #751/migration 248; the inverted checklist was already fixed.
+One enhancement remains open by design: a full CNI install checklist.
 
 ## Stage 7 — Vehicle arrives: check-in with photos
 
