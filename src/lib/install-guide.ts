@@ -32,6 +32,15 @@ export interface GuidePage {
   image_h: number;
   /** Pixels per real vehicle inch; null until the page is calibrated. */
   px_per_in: number | null;
+  /**
+   * How px_per_in was derived: 'scale' = computed from the guide's template
+   * scale at PDF import (must be recomputed when the scale is corrected);
+   * 'manual' = calibrated against a known real-world length or DPI
+   * (scale-independent — never auto-recomputed). Absent on pages made
+   * before this existed; the scale-change handler falls back to comparing
+   * against the old scale's import constant.
+   */
+  px_source?: 'scale' | 'manual' | null;
   dims: DimAnnotation[];
   /**
    * Where this page came from when it was imported from a proof PDF: the
@@ -56,6 +65,12 @@ export interface InstallGuide {
   title: string;
   customer_name: string | null;
   vehicle_desc: string | null;
+  /** First-class links (migration 248) — the guide was an orphan before:
+   *  customer/vehicle were free text and nothing could find "the guide for
+   *  this Transit" from the job, the CNI job, or the check-in. */
+  graphics_job_id?: string | null;
+  cni_job_id?: string | null;
+  fleet_checkin_id?: string | null;
   scale: string;
   units: DimUnits;
   fraction_denominator: number;

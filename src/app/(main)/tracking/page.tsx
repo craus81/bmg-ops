@@ -140,6 +140,10 @@ export default function TrackingPage() {
 
   // Matched graphics job (looked up via fleet_checkins.matched_graphics_job_id)
   const [graphicsJobs, setGraphicsJobs] = useState<Record<string, GraphicsJob | null>>({});
+  // Dimensioned install guides tied to the vehicle's graphics job or
+  // check-in (Stage 6): verification against the raw proof alone loses the
+  // placement numbers.
+  const [installGuidesByVehicle, setInstallGuidesByVehicle] = useState<Record<string, { id: string; title: string }[]>>({});
   // Bridge: check-in id → the CNI job created from it (null = none exists).
   const [cniJobsBySource, setCniJobsBySource] = useState<Record<string, { id: string; job_number: string | null; title: string; status: string } | null>>({});
 
@@ -590,6 +594,23 @@ export default function TrackingPage() {
         .maybeSingle();
       setGraphicsJobs(prev => ({ ...prev, [vehicle.id]: (data as GraphicsJob | null) || null }));
     }
+    // Dimensioned install guide(s) for this vehicle — linked via the
+    // graphics job or directly to the check-in (migration 248). Errors
+    // (e.g. pre-migration columns) degrade to "no guides".
+    try {
+      const guideOr = gjId
+        ? `graphics_job_id.eq.${gjId},fleet_checkin_id.eq.${vehicle.id}`
+        : `fleet_checkin_id.eq.${vehicle.id}`;
+      const { data: guides } = await supabase
+        .from('install_guides')
+        .select('id, title')
+        .or(guideOr)
+        .limit(3);
+      setInstallGuidesByVehicle(prev => ({ ...prev, [vehicle.id]: (guides || []) as { id: string; title: string }[] }));
+    } catch {
+      setInstallGuidesByVehicle(prev => ({ ...prev, [vehicle.id]: [] }));
+    }
+
     // Bridge: the outsourced CNI job created from this check-in, if any
     // (cni_admin holders only — the modal panel is gated the same way).
     if (hasFeature('cni_admin')) {
@@ -2605,6 +2626,26 @@ export default function TrackingPage() {
                         </div>
                       );
                     })()}
+
+                    {/* Dimensioned install guide (Stage 6): the tech
+                        verifying "Graphics applied per proof" used to see
+                        the raw proof only — the guide carries the actual
+                        placement dimensions. */}
+                    {(installGuidesByVehicle[vehicle.id] || []).length > 0 && (
+                      <div style={{ marginBottom: '10px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                        {(installGuidesByVehicle[vehicle.id] || []).map(g => (
+                          <a
+                            key={g.id}
+                            href={`/graphics/install-guides/${g.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '7px 10px', borderRadius: '8px', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', fontSize: '12px', fontWeight: 700, textDecoration: 'none' }}
+                          >
+                            📐 {g.title || 'Dimensioned install guide'}
+                          </a>
+                        ))}
+                      </div>
+                    )}
 
                     {/* Proof File (Dropbox) */}
                     <div style={{ marginBottom: '12px' }}>
