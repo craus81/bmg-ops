@@ -260,6 +260,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/pos/sync-invoices/route.ts': admin(),
   'src/app/api/pos/verify-invoices/route.ts': admin(),
   'src/app/api/prospects/check-duplicate/route.ts': staff(),
+  'src/app/api/prospects/contacts/primary/route.ts': staff(),
   'src/app/api/prospects/contacts/route.ts': staff(),
   'src/app/api/prospects/email/route.ts': staff(),
   'src/app/api/prospects/files/route.ts': staff(),

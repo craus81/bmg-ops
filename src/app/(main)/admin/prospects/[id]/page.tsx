@@ -44,6 +44,7 @@ import { fetchCompanyLetterhead, type CompanyLetterhead } from '@/lib/company-pr
 import { AGE_META } from '@/components/FinancialsDrilldown';
 import type { OpenArInvoice, AgingBucketKey, StatementInvoice, StatementScope } from '@/lib/financials-data';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { samePerson } from '@/lib/primary-contact';
 import NumberInput from '@/components/NumberInput';
 
 interface Prospect {
@@ -377,11 +378,16 @@ export default function CustomerRecordPage() {
   const [cForm, setCForm] = useState(emptyContactForm);
   const [cSyncNs, setCSyncNs] = useState(true);
   const [cSaving, setCSaving] = useState(false);
+  // "Primary contact" is deliberately NOT part of cForm: it isn't a
+  // prospect_contacts column, it's a promotion on external_contacts that
+  // runs after the save.
+  const [cPrimary, setCPrimary] = useState(false);
 
   const openContactForm = (c?: Contact) => {
     setCEditId(c?.id || null);
     setCForm(c ? { name: c.name, title: c.title || '', email: c.email || '', phone: c.phone || '', is_decision_maker: c.is_decision_maker } : emptyContactForm);
     setCSyncNs(true);
+    setCPrimary(!!c && isPrimaryContact(c));
     setCFormOpen(true);
   };
 
@@ -415,6 +421,10 @@ export default function CustomerRecordPage() {
   const saveContact = async () => {
     if (!prospect || !cForm.name.trim() || cSaving) return;
     setCSaving(true);
+    // Captured before the save: an edit that changes the email/phone would
+    // otherwise stop matching the external contact this person already is.
+    const editing = cEditId ? contacts.find(c => c.id === cEditId) : null;
+    const boundExtId = editing && isPrimaryContact(editing) ? primaryExtContact?.id || null : null;
     try {
       const res = await fetch('/api/prospects/contacts', {
         method: 'POST',
@@ -434,6 +444,13 @@ export default function CustomerRecordPage() {
       setCEditId(null);
       setCForm(emptyContactForm);
       if (wasCreate) logAuto('note', `Added contact: ${saved.name}${saved.is_decision_maker ? ' (decision maker)' : ''}`);
+      // Ticked → promote (passing the row this person already is, so an
+      // edited email still syncs onto it rather than forking a second one).
+      // Unticked on the current primary → stand them down.
+      if (customer) {
+        if (cPrimary) await makeContactPrimary(saved, boundExtId);
+        else if (boundExtId) await clearPrimaryContact(boundExtId);
+      }
       if (body.netsuite?.error) {
         await dialog.alert(`Contact saved, but the NetSuite update failed:\n\n${body.netsuite.error}`);
       }
@@ -662,13 +679,7 @@ export default function CustomerRecordPage() {
 
     // Primary contact (external_contacts drives estimate approvals, pickup
     // notices, and SMS matching — surfacing it here is K2).
-    (async () => {
-      const { data } = await supabase.from('external_contacts')
-        .select('id, name, title, email, phone, is_primary')
-        .eq('customer_id', cust.id)
-        .order('is_primary', { ascending: false }).order('name');
-      setExtContacts((data || []) as ExtContact[]);
-    })();
+    reloadExtContacts(cust.id);
 
     // Industry/partner tags + the controlled vocabulary.
     (async () => {
@@ -747,6 +758,8 @@ export default function CustomerRecordPage() {
     setParentSaving(false);
   };
 
+  // Promote an EXTERNAL contact (one with no CRM twin — typically created by
+  // an inbound text) straight from the notifications box.
   const setPrimaryContact = async (contactId: string) => {
     if (!customer || !contactId) return;
     try {
@@ -763,6 +776,55 @@ export default function CustomerRecordPage() {
     } catch (err: any) {
       await dialog.alert(`Could not set the primary contact: ${err?.message || 'unknown error'}`);
     }
+  };
+
+  // Promote a CRM contact — the star on each Contacts row. The flag lives on
+  // external_contacts (what every notification path reads), so the server
+  // matches this person onto the customer's existing external contact or
+  // creates one; see src/lib/primary-contact.ts.
+  const [primaryBusy, setPrimaryBusy] = useState<string | null>(null);
+  const makeContactPrimary = async (c: Contact, externalContactId?: string | null) => {
+    setPrimaryBusy(c.id);
+    try {
+      const res = await fetch('/api/prospects/contacts/primary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactId: c.id, ...(externalContactId ? { externalContactId } : {}) }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body?.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      if (customer) await reloadExtContacts(customer.id);
+    } catch (err: any) {
+      await dialog.alert(`Could not set the primary contact: ${err?.message || 'unknown error'}`);
+    }
+    setPrimaryBusy(null);
+  };
+
+  // Stand the current primary down — the customer then falls back to the
+  // account's own email/phone (customer-notify recreates a contact from it).
+  const clearPrimaryContact = async (externalContactId: string) => {
+    try {
+      const res = await fetch(`/api/external-contacts/${externalContactId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_primary: false }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        throw new Error(b?.error || `HTTP ${res.status}`);
+      }
+      if (customer) await reloadExtContacts(customer.id);
+    } catch (err: any) {
+      await dialog.alert(`Could not clear the primary contact: ${err?.message || 'unknown error'}`);
+    }
+  };
+
+  const reloadExtContacts = async (customerId: string) => {
+    const { data } = await supabase.from('external_contacts')
+      .select('id, name, title, email, phone, is_primary')
+      .eq('customer_id', customerId)
+      .order('is_primary', { ascending: false }).order('name');
+    setExtContacts((data || []) as ExtContact[]);
   };
 
   const addCustTag = async (tagId: string) => {
@@ -1645,6 +1707,16 @@ export default function CustomerRecordPage() {
   const allDocsSelected = zippableShown.length > 0 && selectedShown === zippableShown.length;
   const openBalance = stInvoices ? stInvoices.reduce((s, i) => s + i.unpaid, 0) : null;
 
+  // Which CRM contact currently wears the star: the primary lives on
+  // external_contacts, so a CRM row is primary when it IS that person
+  // (samePerson — the same matcher the promote endpoint uses).
+  const primaryExtContact = extContacts.find(c => c.is_primary) || null;
+  const isPrimaryContact = (c: Contact) => !!primaryExtContact && samePerson(primaryExtContact, c);
+  // External contacts with no CRM twin — typically auto-created from an
+  // inbound text. The star can't reach them, so the notifications box keeps
+  // its own picker for exactly these.
+  const extContactsWithoutCrmRow = extContacts.filter(e => !contacts.some(c => samePerson(e, c)));
+
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '60px 0' }}>
@@ -2041,27 +2113,27 @@ export default function CustomerRecordPage() {
             {customer && (
               <div style={{ margin: '8px 0 2px', padding: '8px 10px', borderRadius: '8px', background: 'var(--subtle-bg)', fontSize: '12px' }}>
                 <div style={{ fontSize: '9.5px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginBottom: '3px' }}>Primary contact — notifications</div>
-                {extContacts.length === 0 ? (
-                  <span style={{ color: 'var(--text-muted)' }}>None on file — one is created automatically from the customer’s email/phone on the first send.</span>
-                ) : (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                    {(() => {
-                      const p = extContacts.find(c => c.is_primary);
-                      return p ? (
-                        <span style={{ fontWeight: 700, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>
-                          ★ {p.name}{p.phone ? ` · ${p.phone}` : ''}{p.email ? ` · ${p.email}` : ''}
-                        </span>
-                      ) : <span style={{ color: 'var(--text-muted)' }}>No primary set.</span>;
-                    })()}
-                    {(extContacts.length > 1 || !extContacts.some(c => c.is_primary)) && (
-                      <select value="" onChange={e => setPrimaryContact(e.target.value)}
-                        style={{ ...cInput, width: 'auto', padding: '3px 6px', fontSize: '10.5px' }}>
-                        <option value="">change…</option>
-                        {extContacts.filter(c => !c.is_primary).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                      </select>
-                    )}
-                  </div>
-                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  {primaryExtContact ? (
+                    <span style={{ fontWeight: 700, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>
+                      ★ {primaryExtContact.name}{primaryExtContact.phone ? ` · ${primaryExtContact.phone}` : ''}{primaryExtContact.email ? ` · ${primaryExtContact.email}` : ''}
+                    </span>
+                  ) : (
+                    <span style={{ color: 'var(--text-muted)' }}>
+                      No primary set — star a contact below{contacts.length === 0 ? ' (add one first)' : ''}.
+                    </span>
+                  )}
+                  {/* Only external contacts the star can't reach (no CRM row —
+                      usually created by an inbound text) need this picker. */}
+                  {extContactsWithoutCrmRow.filter(c => !c.is_primary).length > 0 && (
+                    <select value="" onChange={e => setPrimaryContact(e.target.value)}
+                      title="Contacts we've texted or emailed that aren't in the CRM list below"
+                      style={{ ...cInput, width: 'auto', padding: '3px 6px', fontSize: '10.5px' }}>
+                      <option value="">from messages…</option>
+                      {extContactsWithoutCrmRow.filter(c => !c.is_primary).map(c => <option key={c.id} value={c.id}>{c.name || c.phone || c.email}</option>)}
+                    </select>
+                  )}
+                </div>
                 <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '3px' }}>Estimate approvals, pickup notices, and SMS threads go to this contact.</div>
               </div>
             )}
@@ -2074,6 +2146,14 @@ export default function CustomerRecordPage() {
                 <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', gridColumn: '1 / -1' }}>
                   <input type="checkbox" checked={cForm.is_decision_maker} onChange={e => setCForm({ ...cForm, is_decision_maker: e.target.checked })} />
                   Key decision maker
+                </label>
+                <label
+                  title={customer
+                    ? 'Estimate approvals, pickup notices and SMS threads go to the primary contact. Only one contact can hold it.'
+                    : 'Promote this record to a NetSuite customer first — the primary contact is stored against the customer.'}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: customer ? 'var(--text-secondary)' : 'var(--text-muted)', gridColumn: '1 / -1' }}>
+                  <input type="checkbox" disabled={!customer} checked={cPrimary} onChange={e => setCPrimary(e.target.checked)} />
+                  Primary contact — notifications go here
                 </label>
                 {prospect?.netsuite_id && (
                   <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', gridColumn: '1 / -1' }}>
@@ -2106,9 +2186,20 @@ export default function CustomerRecordPage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
                   <span style={{ flex: 1, minWidth: 0 }}>
                     {c.name}
+                    {isPrimaryContact(c) && <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', background: 'rgba(251,191,36,0.12)', color: '#f59e0b', marginLeft: '6px' }}>★ PRIMARY</span>}
                     {c.is_decision_maker && <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', background: 'rgba(251,191,36,0.12)', color: '#f59e0b', marginLeft: '6px' }}>DM</span>}
                     {c.title && <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', marginLeft: '6px' }}>{c.title}</span>}
                   </span>
+                  {prospect && !isPrimaryContact(c) && (
+                    <button
+                      onClick={() => { if (!primaryBusy) makeContactPrimary(c); }}
+                      disabled={!!primaryBusy}
+                      title={customer
+                        ? `Make ${c.name} the primary contact — estimate approvals, pickup notices and SMS threads go to this person`
+                        : 'Promote this record to a NetSuite customer first — the primary contact is stored against the customer'}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '12px', padding: '2px 4px', flexShrink: 0, opacity: primaryBusy === c.id ? 0.5 : 1 }}
+                    >☆</button>
+                  )}
                   {prospect && (
                     <button onClick={() => openContactForm(c)} title={`Edit ${c.name}${c.netsuite_contact_id ? ' (linked to NetSuite)' : ''}`}
                       style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '12px', padding: '2px 4px', flexShrink: 0 }}>✎</button>
