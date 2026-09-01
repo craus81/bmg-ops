@@ -13,6 +13,11 @@
  *
  * ?req=<id> (deepLinks.purchaseRequests) scroll-flashes one row — the
  * landing for the "parts requested" notification.
+ *
+ * The Demand tab (?tab=demand) answers the other question: not "what did
+ * someone ask for" but "what does ALL the open work need" — every part
+ * across every open sales order and every approved-but-unconverted
+ * estimate, inventory deliberately not netted out (PartsDemandTab).
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -20,6 +25,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import NetsuiteVendorSearch from '@/components/NetsuiteVendorSearch';
+import PartsDemandTab from '@/components/PartsDemandTab';
 import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
 
@@ -51,6 +57,9 @@ export default function PurchasingQueuePage() {
   const searchParams = useSearchParams();
   const dialog = useDialog();
 
+  const [tab, setTab] = useState<'requests' | 'demand'>(
+    searchParams.get('tab') === 'demand' ? 'demand' : 'requests',
+  );
   const [requests, setRequests] = useState<RequestRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -197,6 +206,41 @@ export default function PurchasingQueuePage() {
           <span style={{ fontSize: '12px', fontWeight: 700, color: '#f59e0b' }}>{requests.length} pending</span>
         )}
       </div>
+      <div style={{ display: 'flex', gap: '6px', margin: '12px 0 14px', borderBottom: `1px solid ${theme.border}` }}>
+        {([
+          ['requests', 'Request queue'],
+          ['demand', 'Open-job demand'],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            style={{
+              padding: '7px 14px', background: 'none', border: 'none', cursor: 'pointer',
+              fontSize: '12px', fontWeight: 800,
+              color: tab === key ? 'var(--text-primary)' : theme.textMuted,
+              borderBottom: `2px solid ${tab === key ? '#60a5fa' : 'transparent'}`,
+              marginBottom: '-1px',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'demand' && (
+        <>
+          <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '14px' }}>
+            Every part all the open work needs, rolled up by part number — open sales orders
+            plus approved estimates that haven’t become sales orders yet.
+            <b style={{ color: 'var(--text-body)' }}> Stock on the shelf is not subtracted</b>:
+            this is what the jobs require. Parts already on a vendor PO show in their own column
+            rather than being netted out.
+          </div>
+          <PartsDemandTab onQueued={load} />
+        </>
+      )}
+
+      {tab === 'requests' && (<>
       <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '18px' }}>
         Parts requested from short readiness cards land here, grouped by vendor.
         {isAdmin
@@ -354,6 +398,7 @@ export default function PurchasingQueuePage() {
           </div>
         );
       })}
+      </>)}
     </div>
   );
 }
