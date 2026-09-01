@@ -25,6 +25,7 @@ Invoice email from vendor ──► PDF captured ──► one-click NetSuite bi
 |---|---|
 | **Upfit** (tab) | One project per job. Key dates, linked SO, Parts Readiness card, notes. |
 | **More → Inventory** | Every part at a glance: on hand · allocated · free · on order. |
+| **Admin → Purchasing → Open-job demand** | Everything all the open work needs, rolled up by part. Ignores stock on purpose — see below. |
 | **More → Parts Mail** | **Incoming Parts** up top — what's on order and when it lands (from vendor email ETAs), checked against on-hand stock and what's reserved to jobs, with shortfalls flagged. Below it: the email scan's review queue and captured invoices. |
 | **In-Shop** (tab) | Arrival schedule + calendar up top, Check-In, and every vehicle in the shop. |
 | **More → System Health** | Confirms the background syncs are alive. |
@@ -146,6 +147,44 @@ One row per part that has stock, reservations, or an open PO:
 
 Use the search box and the **Allocated** / **On Order** filters.
 
+## Open-job demand (Admin → Purchasing → "Open-job demand" tab)
+
+The readiness card answers "can I build THIS job." This tab answers the
+other question: **what does everything we've sold add up to?** One row per
+part, biggest number first, expandable to the jobs driving it.
+
+Two sources feed it, and it dedupes between them:
+
+- **Open NetSuite sales orders**, from the 2-hourly mirror — every SO that
+  isn't Cancelled, Billed, or Closed. A line already fully billed is
+  finished work and drops out.
+- **Customer-approved estimates that haven't become a sales order yet.**
+  Sold work NetSuite can't see. Once an estimate converts, its SO carries
+  the demand instead — it is never counted twice.
+
+**It does not subtract stock, and that's the point.** The Needed column is
+what the jobs require, full stop. Two other columns sit beside it for
+context, never netted out of the headline:
+
+| Column | Meaning |
+|---|---|
+| **Needed** | Total across every open job. No stock, no PO, no reservation removed from it. |
+| **On order** | Remaining quantity on open vendor POs (hover for PO numbers and ETAs). |
+| **In queue** | Already sitting in the purchase-request queue on the other tab. |
+
+**+ Queue** adds a part to that request queue, prefilled with what's left
+after on-order and queued quantities — edit it to whatever you actually
+want to buy. The request isn't tied to one project (the demand spans
+jobs), so the note records which jobs the number came from.
+
+Labor and service lines are excluded — conversion pushes labor as a real
+item line, and the tab says how many it dropped so the count is never a
+mystery. A part that isn't in the mirrored catalog still shows, flagged,
+because dropping real demand silently is the worse error; it just has no
+vendor or NetSuite item id to enrich it.
+
+**⬇ CSV** exports whatever the filters currently show.
+
 ## Who does what
 
 | Person | Habit |
@@ -169,6 +208,9 @@ Use the search box and the **Allocated** / **On Order** filters.
 - **Reserving is first-come.** "Available" on the card means available
   *right now* — if scheduling matters, reserve at the moment the job is
   confirmed, not the day before drop-off.
+- **Open-job demand is only as fresh as the SO sync** (2 hours), and it
+  reads mirrored sales orders rather than querying NetSuite live. The tab
+  prints the sync timestamp — if it looks stale, check System Health.
 - **The email scan reads only the watched mailboxes** (edit the list on
   Parts Mail) and only acts on what it can match confidently — anything
   fuzzy waits in the review queue rather than guessing.
