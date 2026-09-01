@@ -56,6 +56,13 @@ export const deepLinks = {
   part: (partId: string) => `/parts?part=${partId}`,
   /** Wrap-quote list — opens that quote (page reads ?id=). */
   wrapQuote: (quoteId: string) => `/admin/wrap-quote?id=${quoteId}`,
+  /** The FleetSuite copy of an estimate as PDF bytes (server-rendered — the
+   *  same file the customer is emailed). Feed it to `pdfViewer`, never link
+   *  a tab straight at it. */
+  estimatePdf: (estimateId: string) => `/api/estimates/${estimateId}/pdf`,
+  /** The FleetSuite copy of a wrap quote as PDF bytes (server-rendered from
+   *  the shared quote-document model). Feed it to `pdfViewer`. */
+  wrapQuotePdf: (quoteId: string) => `/api/wrap-quote/${quoteId}/pdf`,
   /** Install guide editor — the dimensioned placement guide record page. */
   installGuide: (guideId: string) => `/graphics/install-guides/${guideId}`,
   /** Combined quotes list — optionally scroll-flashes one quote's row

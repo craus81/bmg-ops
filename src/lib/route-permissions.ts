@@ -326,6 +326,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/vendor-invoices/sync-paid/route.ts': role(),
   'src/app/api/vendor-invoices/workflow/route.ts': role(),
   'src/app/api/webhooks/resend/route.ts': webhook('Resend delivery events; svix HMAC verified', 'verifySvixSignature'),
+  'src/app/api/wrap-quote/[id]/pdf/route.ts': staff(),
   'src/app/api/wrap-quote/create-customer/route.ts': staff(),
   'src/app/api/wrap-quote/netsuite/route.ts': staff(),
   'src/app/api/wrap-quote/send/route.ts': staff(),
