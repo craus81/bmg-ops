@@ -3,10 +3,11 @@
 /**
  * The Customer Record — one customer on its own page, and the primary
  * surface for working a customer: identity, NetSuite spend metrics,
- * contacts, deals, reminders, activity, files, and NetSuite documents with
- * PDFs. Everything is editable here — field edits, tags, deals, reminders,
- * voice notes, delete — so nothing requires a round-trip to the CRM list
- * (which is just the index/pipeline view).
+ * contacts, deals, reminders, activity, files, and ONE Transactions ledger
+ * (NetSuite documents + FleetSuite quotes/estimates + payments and credits,
+ * with both PDFs on every row). Everything is editable here — field edits,
+ * tags, deals, reminders, voice notes, delete — so nothing requires a
+ * round-trip to the CRM list (which is just the index/pipeline view).
  *
  * Prospects and customers are unified, with a lead tier (owner decision
  * 2026-08-30): a record with no netsuite_id IS a lead — creating it no
@@ -152,15 +153,89 @@ const docDaysPastDue = (dueIso: string | null): number => {
 
 const STATUS_RANK: Record<CustDocument['statusNorm'], number> = { pastdue: 0, open: 1, paid: 2, other: 3 };
 
-// Column getters for the sortable documents table (ISO dates compare correctly
-// as strings; nulls sort last via useTableSort).
-const DOC_SORT_COLS = {
-  type: (d: CustDocument) => d.typeLabel,
-  number: (d: CustDocument) => d.number,
-  date: (d: CustDocument) => d.date,
-  due: (d: CustDocument) => d.dueDate,
-  status: (d: CustDocument) => STATUS_RANK[d.statusNorm],
-  amount: (d: CustDocument) => d.total,
+/**
+ * One line of the customer's Transactions ledger — the merge of everything
+ * that used to live in three separate boxes (NetSuite documents, quotes &
+ * estimates, payments & credits).
+ *
+ * A quote built in FleetSuite and pushed to NetSuite is ONE transaction, so
+ * it renders as one row: the NetSuite document carries the money and the
+ * status, and `origin` carries the FleetSuite record it came from. That's
+ * what lets the number open the exact estimate/quote/job that produced it
+ * (never the list page it lives on), and what lets a row offer BOTH PDFs —
+ * NetSuite's document of record and the FleetSuite copy.
+ */
+type TxnKind = 'invoice' | 'salesOrder' | 'estimate' | 'quote' | 'payment' | 'credit';
+
+interface TxnOrigin {
+  /** Which FleetSuite tool built it — decides the label and the PDF route. */
+  kind: 'estimate' | 'wrapQuote' | 'graphicsJob';
+  id: string;
+  number: string;
+  /** Deep link to that exact record. */
+  url: string;
+  /** Server-rendered FleetSuite PDF, when the record has one (a graphics
+   *  job doesn't — its invoice document only ever existed in NetSuite). */
+  pdfUrl: string | null;
+}
+
+interface Txn {
+  key: string;
+  kind: TxnKind;
+  typeLabel: string;
+  number: string;
+  date: string | null; // ISO
+  dueDate: string | null; // ISO
+  status: string;
+  statusNorm: CustDocument['statusNorm'];
+  daysPastDue: number;
+  total: number;
+  /** NetSuite internal id, when NetSuite holds this transaction. */
+  nsId: string | null;
+  /** Set only for the three types NetSuite will render a PDF for. */
+  nsPdfType: CustDocument['type'] | null;
+  origin: TxnOrigin | null;
+}
+
+const TXN_FILTERS = [
+  ['all', 'All'],
+  ['invoice', 'Invoices'],
+  ['salesOrder', 'Sales Orders'],
+  ['quote', 'Quotes & Estimates'],
+  ['payment', 'Payments & Credits'],
+] as const;
+type TxnFilter = typeof TXN_FILTERS[number][0];
+
+const TXN_FILTER_KINDS: Record<Exclude<TxnFilter, 'all'>, TxnKind[]> = {
+  invoice: ['invoice'],
+  salesOrder: ['salesOrder'],
+  quote: ['estimate', 'quote'],
+  payment: ['payment', 'credit'],
+};
+
+const TXN_BADGE: Record<TxnKind, { bg: string; color: string }> = {
+  invoice: { bg: 'var(--subtle-bg)', color: 'var(--text-muted)' },
+  salesOrder: { bg: 'var(--subtle-bg)', color: 'var(--text-muted)' },
+  estimate: { bg: 'var(--subtle-bg)', color: 'var(--text-muted)' },
+  quote: { bg: 'rgba(96,165,250,0.12)', color: '#60a5fa' },
+  payment: { bg: 'var(--success-bg)', color: 'var(--success)' },
+  credit: { bg: 'rgba(167,139,250,0.12)', color: '#a78bfa' },
+};
+
+const ORIGIN_LABEL: Record<TxnOrigin['kind'], string> = {
+  estimate: 'estimate', wrapQuote: 'wrap quote', graphicsJob: 'graphics job',
+};
+
+// Column getters for the sortable transactions table (ISO dates compare
+// correctly as strings; nulls sort last via useTableSort).
+const TXN_SORT_COLS = {
+  type: (t: Txn) => t.typeLabel,
+  number: (t: Txn) => t.number,
+  date: (t: Txn) => t.date,
+  due: (t: Txn) => t.dueDate,
+  status: (t: Txn) => STATUS_RANK[t.statusNorm],
+  amount: (t: Txn) => t.total,
+  source: (t: Txn) => (t.origin ? 0 : 1),
 };
 
 const OPP_STAGES: Record<string, string> = { lead: 'Lead', quoted: 'Quoted', negotiating: 'Negotiating', won: 'Won', lost: 'Lost' };
@@ -249,7 +324,7 @@ export default function CustomerRecordPage() {
   const [docsHasMore, setDocsHasMore] = useState(false);
   const [docsLoading, setDocsLoading] = useState(false);
   const [docsError, setDocsError] = useState<string | null>(null);
-  const [docFilter, setDocFilter] = useState<'all' | 'invoice' | 'salesOrder' | 'estimate'>('all');
+  const [docFilter, setDocFilter] = useState<TxnFilter>('all');
   const [docStatus, setDocStatus] = useState<'all' | 'open' | 'pastdue' | 'paid'>('all');
   const [docSearch, setDocSearch] = useState('');
   const [pdfBusy, setPdfBusy] = useState<string | null>(null);
@@ -283,11 +358,16 @@ export default function CustomerRecordPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [emailingSt, setEmailingSt] = useState(false);
 
-  // FleetSuite-side quotes & estimates for this customer.
-  interface WrapQuoteRow { id: string; quote_number: string; vehicle_description: string | null; project_type: string | null; total: number | null; status: string; sent_at: string | null; created_at: string }
-  interface EstimateRow { id: string; estimate_number: string; title: string | null; status: string; grand_total: number | null; created_at: string }
+  // FleetSuite-side transactions for this customer. The NetSuite ids are
+  // what tie a FleetSuite record to the NetSuite document it became, so the
+  // Transactions list can show ONE row per transaction instead of the same
+  // quote twice (see txns).
+  interface WrapQuoteRow { id: string; quote_number: string; vehicle_description: string | null; project_type: string | null; total: number | null; status: string; sent_at: string | null; created_at: string; netsuite_estimate_id: string | null }
+  interface EstimateRow { id: string; estimate_number: string; title: string | null; status: string; grand_total: number | null; created_at: string; netsuite_estimate_id: string | null; netsuite_so_id: string | null }
+  interface GraphicsJobRow { id: string; job_number: string | null; title: string | null; netsuite_invoice_id: string | null }
   const [wrapQuotes, setWrapQuotes] = useState<WrapQuoteRow[] | null>(null);
   const [estimatesList, setEstimatesList] = useState<EstimateRow[] | null>(null);
+  const [graphicsJobs, setGraphicsJobs] = useState<GraphicsJobRow[] | null>(null);
 
   // Contact add/edit — saved through /api/prospects/contacts, which also
   // pushes the change to NetSuite when the record is linked.
@@ -1104,14 +1184,21 @@ export default function CustomerRecordPage() {
     } catch { /* header facts are optional — the page stands without them */ }
   };
 
+  // Every status counts here, not just draft/sent: Transactions is a ledger
+  // of what this customer was quoted, so an accepted or rejected quote is
+  // exactly as much a transaction as an open one.
+  const WRAP_QUOTE_COLS = 'id, quote_number, vehicle_description, project_type, total, status, sent_at, created_at, netsuite_estimate_id';
+  const ESTIMATE_COLS = 'id, estimate_number, title, status, grand_total, created_at, netsuite_estimate_id, netsuite_so_id';
+  const TXN_PAGE_SIZE = 50;
+
   const loadQuotesAndEstimates = async (companyName: string | null, nsId: string | null) => {
     if (companyName) {
       const { data } = await supabase.from('wrap_quotes')
-        .select('id, quote_number, vehicle_description, project_type, total, status, sent_at, created_at')
-        .is('archived_at', null).in('status', ['draft', 'sent'])
+        .select(WRAP_QUOTE_COLS)
+        .is('archived_at', null)
         .ilike('customer->>name', companyName)
-        .order('created_at', { ascending: false }).limit(10);
-      setWrapQuotes((data || []) as WrapQuoteRow[]);
+        .order('created_at', { ascending: false }).limit(TXN_PAGE_SIZE);
+      setWrapQuotes((data || []) as unknown as WrapQuoteRow[]);
     } else {
       setWrapQuotes([]);
     }
@@ -1121,19 +1208,32 @@ export default function CustomerRecordPage() {
     const found = new Map<string, EstimateRow>();
     if (nsId) {
       const { data } = await supabase.from('estimates')
-        .select('id, estimate_number, title, status, grand_total, created_at')
+        .select(ESTIMATE_COLS)
         .eq('customer_netsuite_id', nsId)
-        .order('created_at', { ascending: false }).limit(6);
-      for (const e of (data || []) as EstimateRow[]) found.set(e.id, e);
+        .order('created_at', { ascending: false }).limit(TXN_PAGE_SIZE);
+      for (const e of (data || []) as unknown as EstimateRow[]) found.set(e.id, e);
     }
     if (companyName) {
       const { data } = await supabase.from('estimates')
-        .select('id, estimate_number, title, status, grand_total, created_at')
+        .select(ESTIMATE_COLS)
         .ilike('customer_name', companyName)
-        .order('created_at', { ascending: false }).limit(6);
-      for (const e of (data || []) as EstimateRow[]) found.set(e.id, e);
+        .order('created_at', { ascending: false }).limit(TXN_PAGE_SIZE);
+      for (const e of (data || []) as unknown as EstimateRow[]) found.set(e.id, e);
     }
-    setEstimatesList([...found.values()].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 6));
+    setEstimatesList([...found.values()].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, TXN_PAGE_SIZE));
+
+    // Graphics jobs that produced a NetSuite invoice — the FleetSuite record
+    // behind an invoice row, so its number opens the job instead of dead-ending.
+    if (nsId) {
+      const { data } = await supabase.from('graphics_jobs')
+        .select('id, job_number, title, netsuite_invoice_id')
+        .eq('customer_netsuite_id', nsId)
+        .not('netsuite_invoice_id', 'is', null)
+        .order('created_at', { ascending: false }).limit(TXN_PAGE_SIZE);
+      setGraphicsJobs((data || []) as GraphicsJobRow[]);
+    } else {
+      setGraphicsJobs([]);
+    }
   };
 
   const loadPayments = async (nsId: string) => {
@@ -1205,30 +1305,31 @@ export default function CustomerRecordPage() {
     setDocsLoading(false);
   };
 
-  const viewPdf = async (doc: CustDocument) => {
-    setPdfBusy(doc.id);
-    const res = await openNetSuitePdf(doc.type, doc.id);
+  // NetSuite's own PDF for a transaction (the document of record).
+  const viewPdf = async (t: Txn) => {
+    if (!t.nsId || !t.nsPdfType) return;
+    setPdfBusy(t.key);
+    const res = await openNetSuitePdf(t.nsPdfType, t.nsId);
     setPdfBusy(null);
     if (!res.ok) await dialog.alert(res.error || 'Could not open the PDF');
   };
 
-  // Composite key — a doc's raw NetSuite `id` isn't guaranteed unique across
-  // types (invoice/SO/estimate share NetSuite's transaction id space in
-  // some accounts), so selection is keyed by type+id like the table rows.
-  const docKey = (d: CustDocument) => `${d.type}-${d.id}`;
-  const toggleDocSelected = (d: CustDocument) => {
+  // Only NetSuite documents have a PDF to zip — quotes that never left
+  // FleetSuite, and payments/credits, are skipped by the bulk download.
+  const zippableTxns = (list: Txn[]) => list.filter(t => t.nsId && t.nsPdfType);
+  const toggleDocSelected = (t: Txn) => {
     setSelectedDocKeys(prev => {
       const next = new Set(prev);
-      const k = docKey(d);
-      if (next.has(k)) next.delete(k); else next.add(k);
+      if (next.has(t.key)) next.delete(t.key); else next.add(t.key);
       return next;
     });
   };
   const toggleAllDocsSelected = () => {
+    const zippable = zippableTxns(sortedTxns);
     setSelectedDocKeys(prev =>
-      sortedDocs.length > 0 && sortedDocs.every(d => prev.has(docKey(d)))
+      zippable.length > 0 && zippable.every(t => prev.has(t.key))
         ? new Set()
-        : new Set(sortedDocs.map(docKey))
+        : new Set(zippable.map(t => t.key))
     );
   };
   // Fetch each selected document's PDF individually (capped concurrency) and
@@ -1236,7 +1337,7 @@ export default function CustomerRecordPage() {
   // downloadZip(), which exists specifically because one server request
   // fetching+zipping every PDF hit Vercel's 60s limit around ~50 documents.
   const downloadSelectedPdfs = async () => {
-    const items = (docs || []).filter(d => selectedDocKeys.has(docKey(d)));
+    const items = zippableTxns(txns).filter(t => selectedDocKeys.has(t.key));
     if (items.length === 0) return;
     setBulkDownloading(true);
     setBulkError(null);
@@ -1250,10 +1351,10 @@ export default function CustomerRecordPage() {
           const doc = queue.shift();
           if (!doc) return;
           try {
-            const res = await fetch(`/api/netsuite/pdf?type=${doc.type}&id=${encodeURIComponent(doc.id)}`);
+            const res = await fetch(`/api/netsuite/pdf?type=${doc.nsPdfType}&id=${encodeURIComponent(doc.nsId!)}`);
             const data = await res.json();
             if (!data.success || !data.pdfBase64) throw new Error(data.error || 'PDF fetch failed');
-            const prefix = doc.type === 'invoice' ? 'INV' : doc.type === 'salesOrder' ? 'SO' : 'EST';
+            const prefix = doc.nsPdfType === 'invoice' ? 'INV' : doc.nsPdfType === 'salesOrder' ? 'SO' : 'EST';
             zip.file(`${prefix}-${doc.number}.pdf`, Uint8Array.from(atob(data.pdfBase64), ch => ch.charCodeAt(0)));
           } catch {
             failed.push(doc.number);
@@ -1423,22 +1524,125 @@ export default function CustomerRecordPage() {
     setStWorking(false);
   };
 
-  // Documents: filter chips + search narrow the loaded set; headers sort it.
-  const filteredDocs = useMemo(() => {
-    let list = docs || [];
-    if (docFilter !== 'all') list = list.filter(d => d.type === docFilter);
+  // ── The Transactions ledger ────────────────────────────────────────────
+  // FleetSuite records keyed by the NetSuite document they became, so the
+  // NetSuite row can claim its origin (and the FleetSuite row can then drop
+  // out instead of duplicating it).
+  const originByNsDoc = useMemo(() => {
+    const m = new Map<string, TxnOrigin>();
+    for (const e of estimatesList || []) {
+      const origin: TxnOrigin = {
+        kind: 'estimate', id: e.id, number: e.estimate_number,
+        url: deepLinks.estimate(e.id), pdfUrl: deepLinks.estimatePdf(e.id),
+      };
+      if (e.netsuite_estimate_id) m.set(`estimate-${e.netsuite_estimate_id}`, origin);
+      if (e.netsuite_so_id) m.set(`salesOrder-${e.netsuite_so_id}`, origin);
+    }
+    for (const q of wrapQuotes || []) {
+      if (!q.netsuite_estimate_id) continue;
+      m.set(`estimate-${q.netsuite_estimate_id}`, {
+        kind: 'wrapQuote', id: q.id, number: q.quote_number,
+        url: deepLinks.wrapQuote(q.id), pdfUrl: deepLinks.wrapQuotePdf(q.id),
+      });
+    }
+    for (const g of graphicsJobs || []) {
+      if (!g.netsuite_invoice_id) continue;
+      m.set(`invoice-${g.netsuite_invoice_id}`, {
+        kind: 'graphicsJob', id: g.id, number: g.job_number || g.title || 'Graphics job',
+        url: deepLinks.graphicsJob(g.id), pdfUrl: null,
+      });
+    }
+    return m;
+  }, [estimatesList, wrapQuotes, graphicsJobs]);
+
+  const txns = useMemo<Txn[]>(() => {
+    const rows: Txn[] = [];
+    // NetSuite documents — the money and the status of record.
+    const claimed = new Set<string>();
+    for (const d of docs || []) {
+      const originKey = `${d.type}-${d.id}`;
+      const origin = originByNsDoc.get(originKey) || null;
+      if (origin) claimed.add(`${origin.kind}-${origin.id}`);
+      rows.push({
+        key: `ns-${originKey}`,
+        kind: d.type, typeLabel: d.typeLabel, number: d.number,
+        date: d.date, dueDate: d.dueDate, status: d.status, statusNorm: d.statusNorm,
+        daysPastDue: d.daysPastDue, total: d.total,
+        nsId: d.id, nsPdfType: d.type, origin,
+      });
+    }
+    // FleetSuite quotes that no loaded NetSuite document accounts for —
+    // never pushed, or pushed into history this page hasn't paged in yet.
+    for (const e of estimatesList || []) {
+      if (claimed.has(`estimate-${e.id}`)) continue;
+      rows.push({
+        key: `fs-estimate-${e.id}`,
+        kind: 'estimate', typeLabel: 'Estimate', number: e.estimate_number,
+        date: e.created_at.slice(0, 10), dueDate: null,
+        status: e.status.charAt(0).toUpperCase() + e.status.slice(1),
+        statusNorm: 'other', daysPastDue: 0, total: e.grand_total || 0,
+        nsId: null, nsPdfType: null,
+        origin: {
+          kind: 'estimate', id: e.id, number: e.estimate_number,
+          url: deepLinks.estimate(e.id), pdfUrl: deepLinks.estimatePdf(e.id),
+        },
+      });
+    }
+    for (const q of wrapQuotes || []) {
+      if (claimed.has(`wrapQuote-${q.id}`)) continue;
+      rows.push({
+        key: `fs-wrap-${q.id}`,
+        kind: 'quote', typeLabel: 'Wrap Quote', number: q.quote_number,
+        date: q.created_at.slice(0, 10), dueDate: null,
+        status: q.status.charAt(0).toUpperCase() + q.status.slice(1),
+        statusNorm: 'other', daysPastDue: 0, total: q.total || 0,
+        nsId: null, nsPdfType: null,
+        origin: {
+          kind: 'wrapQuote', id: q.id, number: q.quote_number,
+          url: deepLinks.wrapQuote(q.id), pdfUrl: deepLinks.wrapQuotePdf(q.id),
+        },
+      });
+    }
+    // Payments received + credit memos. NetSuite's PDF RESTlet only renders
+    // invoices/SOs/estimates, so these carry no PDF button.
+    for (const p of payments || []) {
+      rows.push({
+        key: `pay-${p.type}-${p.id}`,
+        kind: p.type, typeLabel: p.type === 'credit' ? 'Credit' : 'Payment',
+        number: p.tranid, date: p.date, dueDate: null,
+        status: p.memo || '', statusNorm: 'other', daysPastDue: 0, total: p.amount,
+        nsId: p.id, nsPdfType: null, origin: null,
+      });
+    }
+    return rows;
+  }, [docs, payments, estimatesList, wrapQuotes, originByNsDoc]);
+
+  // Transactions: filter chips + search narrow the loaded set; headers sort it.
+  const filteredTxns = useMemo(() => {
+    let list = txns;
+    if (docFilter !== 'all') {
+      const kinds = TXN_FILTER_KINDS[docFilter];
+      list = list.filter(t => kinds.includes(t.kind));
+    }
     // "Open" is the superset, not a sibling of "Past due": a past-due invoice
     // is still open (NetSuite keeps it status 'A'), so the Open chip shows the
     // whole unpaid set and the Past due chip narrows it to the late ones. The
     // row badge still distinguishes them.
-    if (docStatus === 'open') list = list.filter(d => d.statusNorm === 'open' || d.statusNorm === 'pastdue');
-    else if (docStatus !== 'all') list = list.filter(d => d.statusNorm === docStatus);
+    if (docStatus === 'open') list = list.filter(t => t.statusNorm === 'open' || t.statusNorm === 'pastdue');
+    else if (docStatus !== 'all') list = list.filter(t => t.statusNorm === docStatus);
     const q = docSearch.trim().toLowerCase();
-    if (q) list = list.filter(d => d.number.toLowerCase().includes(q) || d.status.toLowerCase().includes(q));
+    if (q) {
+      list = list.filter(t =>
+        t.number.toLowerCase().includes(q)
+        || t.status.toLowerCase().includes(q)
+        || (t.origin?.number || '').toLowerCase().includes(q));
+    }
     return list;
-  }, [docs, docFilter, docStatus, docSearch]);
-  const { sorted: sortedDocs, sort: docSort, toggle: toggleDocSort } = useTableSort(filteredDocs, DOC_SORT_COLS, { key: 'date', dir: 'desc' });
-  const allDocsSelected = sortedDocs.length > 0 && sortedDocs.every(d => selectedDocKeys.has(docKey(d)));
+  }, [txns, docFilter, docStatus, docSearch]);
+  const { sorted: sortedTxns, sort: docSort, toggle: toggleDocSort } = useTableSort(filteredTxns, TXN_SORT_COLS, { key: 'date', dir: 'desc' });
+  const zippableShown = zippableTxns(sortedTxns);
+  const selectedShown = zippableShown.filter(t => selectedDocKeys.has(t.key)).length;
+  const allDocsSelected = zippableShown.length > 0 && selectedShown === zippableShown.length;
   const openBalance = stInvoices ? stInvoices.reduce((s, i) => s + i.unpaid, 0) : null;
 
   if (loading) {
@@ -2010,76 +2214,6 @@ export default function CustomerRecordPage() {
             ))}
           </div>
 
-          {((wrapQuotes?.length || 0) > 0 || (estimatesList?.length || 0) > 0) && (
-            <div style={card}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                <div style={{ ...eyebrow, marginBottom: 0 }}>Quotes &amp; estimates</div>
-                <span style={{ display: 'flex', gap: '10px' }}>
-                  {(wrapQuotes?.length || 0) > 0 && <button onClick={() => router.push('/admin/wrap-quote')} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10.5px', fontWeight: 700, color: '#60a5fa', padding: 0 }}>Wrap quotes ›</button>}
-                  {(estimatesList?.length || 0) > 0 && <button onClick={() => router.push('/estimates')} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10.5px', fontWeight: 700, color: '#60a5fa', padding: 0 }}>Estimates ›</button>}
-                </span>
-              </div>
-              {/* Rows deep-link to the record — a quote you can see but not
-                  open is a dead end (field report). */}
-              {(wrapQuotes || []).map(q => (
-                <button
-                  key={q.id}
-                  onClick={() => router.push(deepLinks.wrapQuote(q.id))}
-                  title={`Open quote ${q.quote_number} in the wrap-quote builder`}
-                  style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px', marginTop: '4px', width: '100%', background: 'transparent', border: 'none', borderRadius: 0, cursor: 'pointer', textAlign: 'left' }}
-                >
-                  <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', flexShrink: 0, width: '48px', textAlign: 'center', background: 'rgba(96,165,250,0.12)', color: '#60a5fa' }}>QUOTE</span>
-                  <span style={{ fontWeight: 700, color: 'var(--text-primary)', flexShrink: 0 }}>{q.quote_number}</span>
-                  <span style={{ flex: 1, minWidth: 0, color: 'var(--text-muted)', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.vehicle_description || q.project_type || ''}</span>
-                  <span style={{ fontSize: '10px', fontWeight: 700, color: q.status === 'sent' ? '#60a5fa' : 'var(--text-muted)', flexShrink: 0 }}>{q.status === 'sent' ? 'Sent' : 'Draft'}</span>
-                  <span style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', flexShrink: 0, color: 'var(--text-primary)' }}>{q.total ? usd2(q.total) : '—'}</span>
-                </button>
-              ))}
-              {(estimatesList || []).map(e => (
-                <button
-                  key={e.id}
-                  onClick={() => router.push(deepLinks.estimate(e.id))}
-                  title={`Open estimate ${e.estimate_number} in the builder`}
-                  style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px', marginTop: '4px', width: '100%', background: 'transparent', border: 'none', borderRadius: 0, cursor: 'pointer', textAlign: 'left' }}
-                >
-                  <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', flexShrink: 0, width: '48px', textAlign: 'center', background: 'var(--subtle-bg)', color: 'var(--text-muted)' }}>EST</span>
-                  <span style={{ fontWeight: 700, color: 'var(--text-primary)', flexShrink: 0 }}>{e.estimate_number}</span>
-                  <span style={{ flex: 1, minWidth: 0, color: 'var(--text-muted)', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.title || ''}</span>
-                  <span style={{ fontSize: '10px', fontWeight: 700, flexShrink: 0, color: e.status === 'accepted' ? 'var(--success)' : e.status === 'rejected' ? 'var(--error)' : e.status === 'sent' ? '#60a5fa' : e.status === 'pushed' ? '#a78bfa' : 'var(--text-muted)' }}>
-                    {e.status.charAt(0).toUpperCase() + e.status.slice(1)}
-                  </span>
-                  <span style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', flexShrink: 0, color: 'var(--text-primary)' }}>{e.grand_total ? usd2(e.grand_total) : '—'}</span>
-                </button>
-              ))}
-            </div>
-          )}
-
-          {(prospect?.netsuite_id || customer) && (
-            <div style={card}>
-              <div style={eyebrow}>Payments &amp; credits</div>
-              {paymentsNote && (
-                <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                  {/restlet/i.test(paymentsNote)
-                    ? <><span style={{ color: 'var(--warning)', fontWeight: 700 }}>Needs the updated NetSuite RESTlet.</span> {paymentsNote}</>
-                    : paymentsNote}
-                </div>
-              )}
-              {!payments && !paymentsNote && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Loading payment history…</div>}
-              {payments && payments.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No payments or credits on file.</div>}
-              {(payments || []).map(p => (
-                <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px' }}>
-                  <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', flexShrink: 0, width: '58px', textAlign: 'center', background: p.type === 'credit' ? 'rgba(167,139,250,0.12)' : 'var(--success-bg)', color: p.type === 'credit' ? '#a78bfa' : 'var(--success)' }}>
-                    {p.type === 'credit' ? 'CREDIT' : 'PAYMENT'}
-                  </span>
-                  <span style={{ fontWeight: 700, color: 'var(--text-primary)', flexShrink: 0 }}>{p.tranid}</span>
-                  <span style={{ color: 'var(--text-muted)', flexShrink: 0, whiteSpace: 'nowrap' }}>{fmtDate(p.date)}</span>
-                  <span style={{ flex: 1, minWidth: 0, color: 'var(--text-muted)', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.memo || ''}</span>
-                  <span style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{usd2(p.amount)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
           {(prospect || reminders.length > 0) && (
             <div style={card}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: reminders.length > 0 || remFormOpen ? '6px' : 0 }}>
@@ -2207,24 +2341,28 @@ export default function CustomerRecordPage() {
         </div>
       </div>
 
-      {/* NetSuite documents */}
-      {(prospect?.netsuite_id || customer) && (
+      {/* Transactions — ONE ledger for this customer: NetSuite documents,
+          FleetSuite quotes & estimates, and payments & credits. A quote
+          built here and pushed to NetSuite is a single row (the NetSuite
+          document, tagged with the FleetSuite record it came from), whose
+          number opens that exact record and which offers both PDFs. */}
+      {(prospect?.netsuite_id || customer || txns.length > 0) && (
         <div style={card}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '6px' }}>
-            <div style={{ ...eyebrow, marginBottom: 0 }}>NetSuite documents {docs ? `· ${docs.length}${docsHasMore ? '+' : ''}` : ''}</div>
+            <div style={{ ...eyebrow, marginBottom: 0 }}>Transactions {txns.length > 0 ? `· ${txns.length}${docsHasMore ? '+' : ''}` : ''}</div>
             {openBalance !== null && stInvoices && stInvoices.length > 0 && (
               <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
                 · open balance <strong style={{ color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{usd2(openBalance)}</strong> ({stInvoices.length} invoice{stInvoices.length === 1 ? '' : 's'})
               </span>
             )}
             <span style={{ flex: 1 }} />
-            {(['all', 'invoice', 'salesOrder', 'estimate'] as const).map(f => (
+            {TXN_FILTERS.map(([f, label]) => (
               <button key={f} onClick={() => setDocFilter(f)} style={{
                 padding: '4px 10px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
                 background: docFilter === f ? 'var(--tab-active-bg)' : 'transparent',
                 border: `1px solid ${docFilter === f ? 'var(--tab-active-border)' : 'var(--border)'}`,
                 color: docFilter === f ? 'var(--text-primary)' : 'var(--text-muted)',
-              }}>{f === 'all' ? 'All' : f === 'invoice' ? 'Invoices' : f === 'salesOrder' ? 'Sales Orders' : 'Estimates'}</button>
+              }}>{label}</button>
             ))}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
@@ -2244,30 +2382,40 @@ export default function CustomerRecordPage() {
             />
           </div>
           {docsError && <div style={{ fontSize: '12px', color: 'var(--error)', padding: '8px 0' }}>{docsError}</div>}
-          {!docs && !docsError && <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading documents…</div>}
-          {docs && sortedDocs.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>No documents match.</div>}
-          {sortedDocs.length > 0 && (
+          {paymentsNote && (
+            <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: 1.5, padding: '2px 0 6px' }}>
+              {/restlet/i.test(paymentsNote)
+                ? <><span style={{ color: 'var(--warning)', fontWeight: 700 }}>Payments &amp; credits need the updated NetSuite RESTlet.</span> {paymentsNote}</>
+                : `Payments & credits unavailable — ${paymentsNote}`}
+            </div>
+          )}
+          {!docs && !docsError && (prospect?.netsuite_id || customer) && <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading transactions…</div>}
+          {(docs || txns.length > 0) && sortedTxns.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>No transactions match.</div>}
+          {sortedTxns.length > 0 && (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '8px' }}>
-                <button onClick={toggleAllDocsSelected} style={{ ...btnSm, padding: '4px 10px' }}>
-                  {allDocsSelected ? 'Deselect all' : 'Select all'} ({selectedDocKeys.size}/{sortedDocs.length})
-                </button>
-                {selectedDocKeys.size > 0 && (
-                  <button onClick={downloadSelectedPdfs} disabled={bulkDownloading} style={{ ...btnSm, padding: '4px 10px', background: 'var(--success)', color: '#fff', border: 'none', opacity: bulkDownloading ? 0.6 : 1 }}>
-                    {bulkDownloading ? (bulkProgress || 'Preparing…') : `Download ${selectedDocKeys.size} PDF${selectedDocKeys.size === 1 ? '' : 's'} as ZIP`}
+              {zippableShown.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                  <button onClick={toggleAllDocsSelected} title="Select every NetSuite document shown — quotes that never left FleetSuite and payments have no NetSuite PDF to zip" style={{ ...btnSm, padding: '4px 10px' }}>
+                    {allDocsSelected ? 'Deselect all' : 'Select all'} ({selectedShown}/{zippableShown.length})
                   </button>
-                )}
-                {bulkError && <span style={{ fontSize: '11px', color: 'var(--error)' }}>{bulkError}</span>}
-              </div>
+                  {selectedDocKeys.size > 0 && (
+                    <button onClick={downloadSelectedPdfs} disabled={bulkDownloading} style={{ ...btnSm, padding: '4px 10px', background: 'var(--success)', color: '#fff', border: 'none', opacity: bulkDownloading ? 0.6 : 1 }}>
+                      {bulkDownloading ? (bulkProgress || 'Preparing…') : `Download ${selectedDocKeys.size} PDF${selectedDocKeys.size === 1 ? '' : 's'} as ZIP`}
+                    </button>
+                  )}
+                  {bulkError && <span style={{ fontSize: '11px', color: 'var(--error)' }}>{bulkError}</span>}
+                </div>
+              )}
               <div className="responsive-table">
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr>
                       <th style={docTh}>
-                        <input type="checkbox" checked={allDocsSelected} onChange={toggleAllDocsSelected} style={{ cursor: 'pointer' }} />
+                        <input type="checkbox" checked={allDocsSelected} onChange={toggleAllDocsSelected} disabled={zippableShown.length === 0} style={{ cursor: zippableShown.length === 0 ? 'default' : 'pointer' }} />
                       </th>
                       <SortableTh label="Type" sortKey="type" sort={docSort} onToggle={toggleDocSort} style={docTh} />
                       <SortableTh label="Number" sortKey="number" sort={docSort} onToggle={toggleDocSort} style={docTh} />
+                      <SortableTh label="Source" sortKey="source" sort={docSort} onToggle={toggleDocSort} style={docTh} />
                       <SortableTh label="Date" sortKey="date" sort={docSort} onToggle={toggleDocSort} defaultDir="desc" style={docTh} />
                       <SortableTh label="Due" sortKey="due" sort={docSort} onToggle={toggleDocSort} style={docTh} />
                       <SortableTh label="Status" sortKey="status" sort={docSort} onToggle={toggleDocSort} style={docTh} />
@@ -2276,33 +2424,69 @@ export default function CustomerRecordPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedDocs.map(doc => (
-                      <tr key={`${doc.type}-${doc.id}`}>
+                    {sortedTxns.map(t => (
+                      <tr key={t.key}>
                         <td style={docTd}>
-                          <input type="checkbox" checked={selectedDocKeys.has(docKey(doc))} onChange={() => toggleDocSelected(doc)} style={{ cursor: 'pointer' }} />
+                          {t.nsId && t.nsPdfType
+                            ? <input type="checkbox" checked={selectedDocKeys.has(t.key)} onChange={() => toggleDocSelected(t)} style={{ cursor: 'pointer' }} />
+                            : null}
                         </td>
                         <td style={docTd}>
-                          <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', display: 'inline-block', minWidth: '76px', textAlign: 'center', background: 'var(--subtle-bg)', color: 'var(--text-muted)' }}>{doc.typeLabel}</span>
+                          <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', display: 'inline-block', minWidth: '76px', textAlign: 'center', background: TXN_BADGE[t.kind].bg, color: TXN_BADGE[t.kind].color }}>{t.typeLabel}</span>
                         </td>
-                        <td style={{ ...docTd, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{doc.number}</td>
-                        <td style={{ ...docTd, whiteSpace: 'nowrap' }}>{fmtDate(doc.date)}</td>
-                        <td style={{ ...docTd, whiteSpace: 'nowrap' }}>{fmtDate(doc.dueDate)}</td>
-                        <td style={docTd}>
-                          {doc.statusNorm === 'pastdue' ? (
-                            <span style={{ fontSize: '10.5px', fontWeight: 800, color: 'var(--error)', whiteSpace: 'nowrap' }}>{doc.daysPastDue}d past due</span>
-                          ) : doc.statusNorm === 'open' ? (
-                            <span style={{ fontSize: '10.5px', fontWeight: 800, color: '#60a5fa' }}>Open</span>
-                          ) : doc.statusNorm === 'paid' ? (
-                            <span style={{ fontSize: '10.5px', fontWeight: 800, color: 'var(--success)' }}>Paid</span>
+                        <td style={{ ...docTd, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{t.number}</td>
+                        <td style={{ ...docTd, whiteSpace: 'nowrap' }}>
+                          {/* Built in FleetSuite? The link opens THAT record —
+                              the estimate, wrap quote or graphics job — not the
+                              list page it lives on. */}
+                          {t.origin ? (
+                            <button
+                              onClick={() => router.push(t.origin!.url)}
+                              title={`Open ${ORIGIN_LABEL[t.origin.kind]} ${t.origin.number} in FleetSuite`}
+                              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '11.5px', fontWeight: 700, color: '#60a5fa' }}
+                            >
+                              {t.origin.number} ›
+                            </button>
                           ) : (
-                            <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{doc.status || '—'}</span>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>NetSuite</span>
                           )}
                         </td>
-                        <td style={{ ...docTd, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{usd2(doc.total)}</td>
-                        <td style={{ ...docTd, textAlign: 'right' }}>
-                          <button onClick={() => viewPdf(doc)} disabled={pdfBusy === doc.id} style={{ ...btnSm, padding: '4px 10px', opacity: pdfBusy === doc.id ? 0.6 : 1 }}>
-                            {pdfBusy === doc.id ? '…' : 'PDF'}
-                          </button>
+                        <td style={{ ...docTd, whiteSpace: 'nowrap' }}>{fmtDate(t.date)}</td>
+                        <td style={{ ...docTd, whiteSpace: 'nowrap' }}>{fmtDate(t.dueDate)}</td>
+                        <td style={docTd}>
+                          {t.statusNorm === 'pastdue' ? (
+                            <span style={{ fontSize: '10.5px', fontWeight: 800, color: 'var(--error)', whiteSpace: 'nowrap' }}>{t.daysPastDue}d past due</span>
+                          ) : t.statusNorm === 'open' ? (
+                            <span style={{ fontSize: '10.5px', fontWeight: 800, color: '#60a5fa' }}>Open</span>
+                          ) : t.statusNorm === 'paid' ? (
+                            <span style={{ fontSize: '10.5px', fontWeight: 800, color: 'var(--success)' }}>Paid</span>
+                          ) : (
+                            <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>{t.status || '—'}</span>
+                          )}
+                        </td>
+                        <td style={{ ...docTd, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{usd2(t.total)}</td>
+                        <td style={{ ...docTd, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          <span style={{ display: 'inline-flex', gap: '6px', justifyContent: 'flex-end' }}>
+                            {t.nsId && t.nsPdfType && (
+                              <button onClick={() => viewPdf(t)} disabled={pdfBusy === t.key} title="Open NetSuite's PDF — the document of record" style={{ ...btnSm, padding: '4px 10px', opacity: pdfBusy === t.key ? 0.6 : 1 }}>
+                                {pdfBusy === t.key ? '…' : 'NetSuite PDF'}
+                              </button>
+                            )}
+                            {t.origin?.pdfUrl && (
+                              <a
+                                href={deepLinks.pdfViewer(t.origin.pdfUrl, {
+                                  name: `${t.origin.number}.pdf`,
+                                  back: deepLinks.prospect(String(params?.id || '')),
+                                  backLabel: 'Back to customer',
+                                })}
+                                target="_blank" rel="noopener noreferrer"
+                                title={`Open the FleetSuite ${ORIGIN_LABEL[t.origin.kind]} PDF`}
+                                style={{ ...btnSm, padding: '4px 10px' }}
+                              >
+                                FleetSuite PDF
+                              </a>
+                            )}
+                          </span>
                         </td>
                       </tr>
                     ))}
