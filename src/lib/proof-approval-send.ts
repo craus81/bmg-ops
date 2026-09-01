@@ -18,17 +18,15 @@ import { sendEmail, buildNotificationEmail } from './resend';
 import { getEmailSignature } from './email-signature';
 import { deepLinks } from './deep-links';
 import { sendSMS } from './sms-provider';
-import { r2Get } from './r2';
+import { fetchEmailAttachments, MAX_ATTACHMENT_BYTES } from './email-attachments';
 
 type Service = SupabaseClient<any, any, any>;
 
 const FILE_BUCKET_PREFIX = 'graphics-proofs';
 
-// Total attachment budget per email. Resend caps messages at 40MB, but
-// plenty of corporate inboxes bounce well before that — 20MB is the safe
-// ceiling, enforced against declared sizes up front and actual bytes after
-// fetching (upload rows can carry a null file_size).
-export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+// The attachment budget is shared with every other compose flow
+// (src/lib/email-attachments.ts) — re-exported here for existing callers.
+export { MAX_ATTACHMENT_BYTES };
 
 export interface SendProofOptions {
   /** Staff user who triggered a manual send; null for the cron. */
@@ -67,14 +65,6 @@ export interface SendProofResult {
   approvalUrl?: string;
   dispatch?: Record<string, any>;
   preview?: { to: string | null; subject: string; html: string };
-}
-
-async function streamToBuffer(stream: any): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(chunk instanceof Buffer ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
 }
 
 export async function sendProofApproval(
@@ -197,28 +187,11 @@ export async function sendProofApproval(
 
   // Pull attachment bytes before minting anything — a failed fetch must not
   // rotate the token or stamp the job as sent.
-  const emailAttachments: { filename: string; content: Buffer; contentType?: string }[] = [];
+  let emailAttachments: { filename: string; content: Buffer; contentType?: string }[] = [];
   if (emailList.length > 0 && attachmentRows.length > 0) {
-    let fetchedTotal = 0;
-    for (const row of attachmentRows) {
-      const result = await r2Get(FILE_BUCKET_PREFIX, row.storage_path);
-      if (!result.success || !result.body) {
-        return { ok: false, status: 502, error: `Could not fetch attachment "${row.file_name}" from storage: ${result.error || 'unknown error'}` };
-      }
-      const content = await streamToBuffer(result.body);
-      fetchedTotal += content.byteLength;
-      if (fetchedTotal > MAX_ATTACHMENT_BYTES) {
-        return {
-          ok: false, status: 400,
-          error: `Attachments exceed the ${Math.round(MAX_ATTACHMENT_BYTES / (1024 * 1024))}MB limit ("${row.file_name}" pushed it over). Deselect some files.`,
-        };
-      }
-      emailAttachments.push({
-        filename: row.file_name,
-        content,
-        contentType: row.file_type || result.contentType || undefined,
-      });
-    }
+    const fetched = await fetchEmailAttachments(FILE_BUCKET_PREFIX, attachmentRows);
+    if (!fetched.ok) return { ok: false, status: fetched.status, error: fetched.error };
+    emailAttachments = fetched.attachments;
   }
 
   const { token, expiresAt } = generateToken(expiryDays);

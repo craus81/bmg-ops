@@ -11,6 +11,8 @@ import { getEmailSignature } from '@/lib/email-signature';
 import { enrichLinesWithPartAssets } from '@/lib/estimate-line-parts';
 import { loadEstimateGraphics, loadEstimateProofs, type EstimateProofBlock } from '@/lib/estimate-graphics';
 import { r2PublicUrl } from '@/lib/r2';
+import { loadEstimateAttachmentRows, fetchEstimateAttachments } from '@/lib/estimate-attachments';
+import { MAX_ATTACHMENT_BYTES } from '@/lib/email-attachments';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -49,6 +51,9 @@ const SendForApprovalSchema = z.object({
     jobId: z.string().uuid(),
     fileIds: z.array(z.string().uuid()).max(10),
   })).max(10).optional(),
+  // Files the rep picked off the estimate (estimate_files) — pictures,
+  // spec sheets. Attached to the email alongside the estimate document.
+  attachmentFileIds: z.array(z.string().uuid()).max(20).optional(),
 });
 
 /**
@@ -217,6 +222,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
   }
 
+  // Files the rep picked off the estimate. Resolved before the preview so
+  // the document lists exactly what the customer will receive, and
+  // validated against THIS estimate.
+  const picked = await loadEstimateAttachmentRows(supabase, estimate.id, body.attachmentFileIds);
+  if (!picked.ok) return NextResponse.json({ error: picked.error }, { status: picked.status });
+  const pickedNames = picked.rows.map(r => r.file_name);
+
   // Preview: show exactly what would go out (message, line items, totals,
   // Approve button) without minting a token, sending, or touching status.
   // The CTA points at a placeholder — the real link is minted on send.
@@ -245,8 +257,50 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       signature,
       graphics: approvalGraphics,
       proofs: proofBlocks,
+      attachmentNames: pickedNames,
     });
     return NextResponse.json({ preview: true, to: emailList.join(', ') || null, subject, html, attachments });
+  }
+
+  // Attachments are assembled BEFORE the token is minted or the estimate is
+  // stamped sent (docs/customer-email-standard.md): a storage failure must
+  // fail the whole send, not leave a rotated link on a record that already
+  // claims it went out.
+  //
+  // The merged estimate PDF rides first and takes its share of the budget;
+  // the rep's picked files get what's left. The PDF stays best-effort — a
+  // render hiccup never blocks the approval email — but a picked file that
+  // can't be fetched is a hard error, because the sender chose it and would
+  // otherwise never learn it didn't go.
+  const approvalAttachments: { filename: string; content: Buffer; contentType: string }[] = [];
+  if (emailList.length > 0) {
+    // When linked wrap quotes contribute assets (estimate_attach — coverage
+    // diagram, proofs, vinyl details) or linked graphics jobs contribute
+    // proof files, attach the merged estimate PDF so the customer approves
+    // ONE document carrying all of it.
+    try {
+      const { count: attachCount } = await supabase
+        .from('wrap_quotes')
+        .select('id', { count: 'exact', head: true })
+        .eq('estimate_id', estimate.id)
+        .not('estimate_attach', 'is', null);
+      if ((attachCount || 0) > 0 || proofBlocks.length > 0) {
+        const { generateEstimatePdf } = await import('@/lib/estimate-pdf-server');
+        const pdf = await generateEstimatePdf(supabase, estimate.id);
+        if (pdf.ok) {
+          approvalAttachments.push({ filename: pdf.filename, content: pdf.buffer, contentType: 'application/pdf' });
+        }
+      }
+    } catch (err: any) {
+      console.warn('[send-for-approval] estimate PDF attach skipped:', err?.message || err);
+    }
+
+    const usedBytes = approvalAttachments.reduce((sum, a) => sum + a.content.byteLength, 0);
+    const extras = await fetchEstimateAttachments(picked.rows, Math.max(0, MAX_ATTACHMENT_BYTES - usedBytes));
+    if (!extras.ok) return NextResponse.json({ error: extras.error }, { status: extras.status });
+    for (const a of extras.attachments) {
+      approvalAttachments.push({ filename: a.filename, content: a.content, contentType: a.contentType || 'application/octet-stream' });
+    }
   }
 
   // Mint a fresh token — rotating on resend invalidates prior links.
@@ -307,35 +361,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       signature,
       graphics: approvalGraphics,
       proofs: proofBlocks,
+      attachmentNames: pickedNames,
     });
     const bcc = body.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
 
-    // When linked wrap quotes contribute assets (estimate_attach — coverage
-    // diagram, proofs, vinyl details) or linked graphics jobs contribute
-    // proof files, attach the merged estimate PDF so the customer approves
-    // ONE document carrying all of it. Best-effort: a PDF hiccup never
-    // blocks the approval email itself.
-    let approvalAttachments: { filename: string; content: Buffer; contentType: string }[] | undefined;
-    try {
-      const { count: attachCount } = await supabase
-        .from('wrap_quotes')
-        .select('id', { count: 'exact', head: true })
-        .eq('estimate_id', estimate.id)
-        .not('estimate_attach', 'is', null);
-      if ((attachCount || 0) > 0 || proofBlocks.length > 0) {
-        const { generateEstimatePdf } = await import('@/lib/estimate-pdf-server');
-        const pdf = await generateEstimatePdf(supabase, estimate.id);
-        if (pdf.ok) {
-          approvalAttachments = [{ filename: pdf.filename, content: pdf.buffer, contentType: 'application/pdf' }];
-        }
-      }
-    } catch (err: any) {
-      console.warn('[send-for-approval] estimate PDF attach skipped:', err?.message || err);
-    }
-
     try {
       const { ok, id: resendId } = await sendEmailDetailed(
-        emailList, subject, html, undefined, approvalAttachments, auth.user?.email || undefined, bcc,
+        emailList, subject, html, undefined,
+        approvalAttachments.length > 0 ? approvalAttachments : undefined,
+        auth.user?.email || undefined, bcc,
         { kind: 'estimate_approval', sentBy: auth.user?.id, contextUrl: deepLinks.estimate(estimate.id), customerId: estimate.customer_id, netsuiteCustomerId: estimate.customer_netsuite_id },
       );
       dispatch.email = { target: emailList.join(', '), ok, bcc: bcc ? bcc.join(', ') : undefined };

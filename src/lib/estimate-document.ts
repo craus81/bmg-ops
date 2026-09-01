@@ -116,6 +116,10 @@ export interface EstimateDocumentOptions {
    *  customer approves design + price on ONE document. Frozen snapshots
    *  must pass inlineProofImages output — the R2 objects are mutable. */
   proofs?: QuoteDocProofBlock[] | null;
+  /** Files riding along on the email (estimate_files picked on the compose
+   *  screen). Listed as their own section so the customer knows what came
+   *  with the estimate — the document itself can't show them. */
+  attachmentNames?: string[] | null;
 }
 
 /**
@@ -178,6 +182,12 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
   }
   if (est.delivery_preferences) sections.push({ title: 'Delivery', bodyHtml: escHtml(est.delivery_preferences) });
   if (est.notes) sections.push({ title: 'Notes', bodyHtml: escHtml(est.notes) });
+  if (opts.attachmentNames && opts.attachmentNames.length > 0) {
+    sections.push({
+      title: 'Attached',
+      bodyHtml: opts.attachmentNames.map(n => escHtml(n)).join(' &middot; '),
+    });
+  }
 
   return renderQuoteDocument(
     {
