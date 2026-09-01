@@ -1,0 +1,23 @@
+# PVO download priority — one vehicle per line, most important first.
+# Lines starting with # are ignored.
+# A template matches a line when EVERY word on the line appears in its description.
+# Anything that matches nothing queues up after everything that does.
+#
+# Edit this file freely; the next nightly run picks up the new order.
+
+Ford Transit Connect
+Ford Transit
+Mercedes Sprinter
+Mercedes Metris
+ProMaster
+Chevrolet Express
+GMC Savana
+Nissan NV
+Ford F-150
+Ford F-250
+Ford F-350
+Chevrolet Silverado
+GMC Sierra
+Toyota Tacoma
+Toyota Tundra
+Isuzu NPR
