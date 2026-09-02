@@ -112,6 +112,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cni/import-scans/route.ts': admin(),
   'src/app/api/cni/installers/route.ts': admin(),
   'src/app/api/cni/invite-company/route.ts': feature('cni_admin'),
+  'src/app/api/cni/invites-seen/route.ts': authScoped('external installer flow; the update is scoped in-route to invites addressed to the caller (their installer id or company) and stamps seen_at only', 'getCniCompanyId('),
   'src/app/api/cni/invite/route.ts': admin(),
   'src/app/api/cni/job-billing/route.ts': feature('cni_admin'),
   'src/app/api/cni/job-message/route.ts': authScoped('external installer / coordinator flow; requireStaff would wrongly reject the installer side, so membership is checked in-route against the CNI job'),

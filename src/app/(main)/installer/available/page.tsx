@@ -152,13 +152,15 @@ export default function AvailableJobsPage() {
 
     setJobs([...mergedInvites, ...openJobs]);
 
-    // Mark unseen invites as seen
+    // Mark unseen invites as seen — through the route: invites are
+    // read-only from the browser (migration 253), and the route scopes the
+    // stamp to invites addressed to this installer or their company.
     const unseenInvites = (invites || []).filter((i: any) => !i.seen_at);
     if (unseenInvites.length > 0) {
-      await supabase
-        .from('cni_job_invites')
-        .update({ seen_at: new Date().toISOString() })
-        .in('id', unseenInvites.map((i: any) => i.id));
+      fetch('/api/cni/invites-seen', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inviteIds: unseenInvites.map((i: any) => i.id) }),
+      }).catch(() => { /* badge clears on the next successful load */ });
     }
 
     setLoading(false);

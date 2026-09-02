@@ -468,17 +468,29 @@ export default function CniJobDetailPage() {
       .eq('job_id', jobId);
     setInvitedIds((inviteData || []).map((i: any) => i.company_id).filter(Boolean));
 
-    // Load photo stats
+    // Load photo stats over the EFFECTIVE set: the newest photo per
+    // (vin, type). R3-2: counting every row ever uploaded meant one denied
+    // photo failed the closure checklist forever — even after an approved
+    // reshoot replaced it — permanently blocking the payout. A superseded
+    // photo no longer counts; the reviewer page and the route's
+    // photos_approved recompute use the same rule.
     const { data: photoData } = await supabase
       .from('cni_job_photos')
-      .select('review_status')
-      .eq('job_id', jobId);
+      .select('vin_id, photo_type, review_status, uploaded_at')
+      .eq('job_id', jobId)
+      .order('uploaded_at', { ascending: false });
     if (photoData) {
+      const newestByKey = new Map<string, string>();
+      for (const p of photoData as any[]) {
+        const key = `${p.vin_id || 'general'}::${p.photo_type || 'other'}`;
+        if (!newestByKey.has(key)) newestByKey.set(key, p.review_status);
+      }
+      const effective = [...newestByKey.values()];
       setPhotoStats({
-        total: photoData.length,
-        pending: photoData.filter((p: any) => p.review_status === 'pending').length,
-        approved: photoData.filter((p: any) => p.review_status === 'approved').length,
-        denied: photoData.filter((p: any) => p.review_status === 'denied').length,
+        total: effective.length,
+        pending: effective.filter(s => s === 'pending').length,
+        approved: effective.filter(s => s === 'approved').length,
+        denied: effective.filter(s => s === 'denied').length,
       });
     }
 

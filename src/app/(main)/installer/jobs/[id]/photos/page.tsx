@@ -5,6 +5,15 @@ import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { DropZone } from '@/components/DropZone';
+import { storageDownloadUrl } from '@/lib/storage';
+
+// storage_path carries either the full R2 key ('photos/cni-photos/…') or a
+// bucket-relative path (legacy fallback rows) — same splitting as the admin
+// review page.
+const photoUrl = (storagePath: string) => {
+  const rel = storagePath.startsWith('photos/') ? storagePath.slice('photos/'.length) : storagePath;
+  return storageDownloadUrl('photos', rel, rel.split('/').pop() || 'photo.jpg');
+};
 
 const REQUIRED_TYPES = ['front', 'back', 'driver_side', 'passenger_side', 'vin_plate'];
 const ALL_TYPES = [...REQUIRED_TYPES, 'detail', 'other'];
@@ -296,10 +305,20 @@ export default function InstallerPhotoUploadPage() {
             {currentVinPhotos.map(p => (
               <div key={p.id} style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                padding: '10px 12px', borderRadius: '8px',
+                padding: '10px 12px', borderRadius: '8px', gap: '10px',
                 background: 'var(--input-bg)', border: '1px solid var(--border)',
               }}>
-                <div>
+                {/* Thumbnail (R3-2: the installer side rendered no images at
+                    all — a denied "reshoot this" verdict pointed at a photo
+                    they couldn't see). Same key-splitting as the review page. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={photoUrl(p.storage_path)}
+                  alt={TYPE_LABELS[p.photo_type] || p.photo_type}
+                  style={{ width: '56px', height: '56px', objectFit: 'cover', borderRadius: '6px', border: '1px solid var(--border)', flexShrink: 0 }}
+                  onError={e => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }}
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
                     {TYPE_LABELS[p.photo_type] || p.photo_type}
                   </div>
