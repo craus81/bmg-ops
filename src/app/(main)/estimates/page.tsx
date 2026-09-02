@@ -539,6 +539,8 @@ export default function EstimatesPage() {
   const [deleting, setDeleting] = useState(false);
   const [duplicating, setDuplicating] = useState(false);
   const [convertingToSO, setConvertingToSO] = useState(false);
+  // Busy while opening the customer thread to reply to a change request.
+  const [openingRejectionThread, setOpeningRejectionThread] = useState(false);
   // Busy while the estimate saves ahead of opening the compose screen.
   const [sendingForApproval, setSendingForApproval] = useState(false);
   // Approval email goes through the standard compose screen (E4 +
@@ -3978,6 +3980,41 @@ export default function EstimatesPage() {
                 <div style={{ marginTop: '3px', fontWeight: 500, color: 'var(--text-body)' }}>
                   “{est.customer_rejection_reason || 'No reason given'}”
                 </div>
+                {/* Answer the change request without drafting a whole new
+                    estimate: opens the customer thread (seeded with their
+                    message) in the comms inbox — admin/sales, the inbox's
+                    own audience, so nobody bounces off its gate. */}
+                {(isAdmin || isSales) && (
+                  <button
+                    onClick={async () => {
+                      if (openingRejectionThread) return;
+                      setOpeningRejectionThread(true);
+                      try {
+                        const res = await fetch(`/api/estimates/${est.id}/rejection-thread`, { method: 'POST' });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok || !data.threadId) {
+                          await dialog.alert(data.error || `Could not open the thread (${res.status})`);
+                        } else {
+                          router.push(deepLinks.inboxThread(data.threadId));
+                        }
+                      } catch (err: any) {
+                        await dialog.alert(err?.message || 'Network error opening the thread');
+                      } finally {
+                        setOpeningRejectionThread(false);
+                      }
+                    }}
+                    disabled={openingRejectionThread}
+                    style={{
+                      width: '100%', marginTop: '8px', padding: '9px 12px', borderRadius: '8px',
+                      background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)',
+                      color: '#60a5fa', fontWeight: 700, fontSize: '12px',
+                      cursor: openingRejectionThread ? 'default' : 'pointer',
+                      opacity: openingRejectionThread ? 0.6 : 1,
+                    }}
+                  >
+                    {openingRejectionThread ? 'Opening conversation…' : '💬 Reply to customer — ask for clarification'}
+                  </button>
+                )}
               </div>
             );
           }

@@ -628,7 +628,7 @@ export default function TrackingPage() {
     setMessagingVehicleId(vehicle.id);
     const result = await openOrCreateVehicleThread(supabase, vehicle, user?.id);
     if ('threadId' in result) {
-      router.push(`/admin/inbox?thread=${result.threadId}`);
+      router.push(deepLinks.inboxThread(result.threadId));
     } else {
       await dialog.alert('Failed to open thread: ' + result.error);
     }

@@ -10,6 +10,7 @@ import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
 import CompletionModal from '@/components/CompletionModal';
 import { PartLabel } from '@/components/PartLabel';
 import { openOrCreateVehicleThread } from '@/lib/customer-thread';
+import { deepLinks } from '@/lib/deep-links';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 
 interface VehicleData {
@@ -261,7 +262,7 @@ export default function VehiclePickListPage() {
     setMessagingCustomer(true);
     const result = await openOrCreateVehicleThread(supabase, vehicle, user?.id);
     if ('threadId' in result) {
-      router.push(`/admin/inbox?thread=${result.threadId}`);
+      router.push(deepLinks.inboxThread(result.threadId));
     } else {
       await dialog.alert('Failed to open thread: ' + result.error);
     }

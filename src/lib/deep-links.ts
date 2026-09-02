@@ -82,6 +82,8 @@ export const deepLinks = {
   installerInvoice: (invoiceId: string) => `/installer/invoices?invoice=${invoiceId}`,
   /** Messages — opens the conversation thread. */
   conversation: (conversationId: string) => `/messages?conversation=${conversationId}`,
+  /** Customer-comms inbox — opens one customer thread (admin/sales only). */
+  inboxThread: (threadId: string) => `/admin/inbox?thread=${threadId}`,
   /** Schedule — opens a calendar event card (optionally flashing one note). */
   scheduleCard: (eventId: string, noteId?: string | null) =>
     `/admin/schedule?card=${eventId}${noteId ? `&note=${noteId}` : ''}`,
