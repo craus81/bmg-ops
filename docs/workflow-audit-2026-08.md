@@ -100,8 +100,8 @@ lead straight to the estimate builder.
 
 **What breaks at the edges:** _(All four findings below were built and
 merged 2026-08-30 — #701 reminders, #702 credit application, #703 duplicate
-guard, #704 phone intake; the two design leftovers followed the same day as
-#706 lead tier and #707 deletion propagation. Annotations inline.)_
+guard, #704 phone intake; the two design leftovers followed the same day
+as #706 lead tier and #707 deletion propagation. Annotations inline.)_
 
 - ✅ **CRITICAL — The credit application is a black hole.** The public
   `/credit-application` form writes rows into `credit_applications` (EINs, bank
@@ -526,8 +526,8 @@ is unprotected and unlinked.
 
 **Stage 7 status (2026-09-01): CLOSED** — the custody gate is server-enforced
 (#756 + migration 249), arrival↔check-in links match VIN → SO → unique
-customer in both directions, the VIN→SO prefill exists, and the
-#712/#713/#714 ships held under re-verification. Adjacent items deliberately
+customer in both directions, the VIN→SO prefill exists, and the ships
+from #712/#713/#714 held under re-verification. Adjacent items deliberately
 left for Stage 8 / R3-10's remainder: per-visit deep links, `profileRoles`
 in update-status, the scans role gate, and auto-archiving shipped visits.
 
