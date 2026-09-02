@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireAuth, isInternalStaffRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -28,15 +28,15 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  // Same self-enforced gate as /api/scans/log: approved accounts that are
-  // not customer-only. Whoever may log a scan may photograph it.
+  // Same self-enforced gate as /api/scans/log: internal staff or the CNI
+  // installer role. Whoever may log a scan may photograph it.
   const { data: profile } = await supabase
     .from('profiles').select('role, roles, status').eq('id', auth.user.id).single();
   if (!profile || profile.status !== 'approved') {
     return NextResponse.json({ error: 'Account not approved' }, { status: 403 });
   }
   const roles: string[] = profile.roles?.length ? profile.roles : (profile.role ? [profile.role] : []);
-  if (roles.includes('customer') && roles.length === 1) {
+  if (!isInternalStaffRole(profile) && !roles.includes('installer')) {
     return NextResponse.json({ error: 'Not allowed' }, { status: 403 });
   }
 

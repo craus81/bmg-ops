@@ -45,6 +45,10 @@
       "schedule": "15 14 * * *"
     },
     {
+      "path": "/api/cron/auto-archive-shipped",
+      "schedule": "45 14 * * *"
+    },
+    {
       "path": "/api/cron/weekly-customer-digest",
       "schedule": "0 14 * * 1"
     }

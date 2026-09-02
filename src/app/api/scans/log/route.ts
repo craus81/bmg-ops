@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireAuth, isInternalStaffRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { logScan, resolveScannerCompany } from '@/lib/scan-log';
 import { matchScansToOpenPos } from '@/lib/scan-match';
@@ -53,7 +53,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
   const roles: string[] = profile.roles?.length ? profile.roles : (profile.role ? [profile.role] : []);
-  if (roles.includes('customer') && roles.length === 1) {
+  // Allowlist, not "anyone who isn't customer-only" (Round 3, §7.2.6): the
+  // old check let a bare executive — or a ['customer','executive'] account —
+  // log scans and mint pay credits. Scanning is internal staff or the
+  // external CNI installer role, exactly the roles the field flow serves.
+  if (!isInternalStaffRole(profile) && !roles.includes('installer')) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 

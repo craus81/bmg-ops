@@ -51,7 +51,7 @@ export async function POST(request: Request) {
         .select('id, status, vin, customer_name, vehicle_year, vehicle_make, vehicle_model, assigned_to, matched_graphics_job_id, graphics_install_status, qc_completed_at')
         .eq('id', vehicleId)
         .single(),
-      serviceSupabase.from('profiles').select('id, full_name, role').eq('id', user.id).single(),
+      serviceSupabase.from('profiles').select('id, full_name, role, roles').eq('id', user.id).single(),
     ]);
 
     if (vehicleResult.error || !vehicleResult.data) {
@@ -61,7 +61,13 @@ export async function POST(request: Request) {
     const vehicle = vehicleResult.data;
     const currentStatus = vehicle.status as string;
     const userName = profileResult.data?.full_name || user.email || 'Unknown';
-    const isAdmin = profileResult.data?.role === 'admin';
+    // roles[] with a scalar fallback (Round 3, §7.2.6): the force-override
+    // used to read the scalar `role` only, so an admin whose grant lives in
+    // roles[] couldn't override — the same profileRoles idiom api-auth uses.
+    const userRoles: string[] = profileResult.data?.roles?.length
+      ? profileResult.data.roles
+      : (profileResult.data?.role ? [profileResult.data.role] : []);
+    const isAdmin = userRoles.includes('admin');
 
     // No-op: same status
     if (currentStatus === newStatus) {
@@ -251,7 +257,7 @@ async function notifyCompletion(vehicle: any, actorName: string, actorEmail: str
       type: 'vehicle_complete',
       title: `Install complete: ${vehicleLabel}`,
       body: `${actorName} marked ${vehicleLabel} (${customerName}) complete. VIN ${vehicle.vin}.`,
-      url: deepLinks.pickList(vehicle.vin),
+      url: deepLinks.pickList(vehicle.vin, vehicle.id),
     });
   }
 
