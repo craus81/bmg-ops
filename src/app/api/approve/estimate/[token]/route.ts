@@ -391,14 +391,17 @@ async function notifySalesRep(estimate: any, verdict: 'accepted' | 'rejected', r
   const targetIds = new Set<string>();
   if (estimate.created_by) targetIds.add(estimate.created_by);
   if (estimate.sent_for_approval_by) targetIds.add(estimate.sent_for_approval_by);
-  // Also pull account owner from customers if present
+  // Also pull account owner from customers if present (email rides along —
+  // it's a Reply-To candidate on the rejection alert below).
+  let customerEmail: string | null = null;
   if (estimate.customer_id) {
     const { data: cust } = await supabase
       .from('customers')
-      .select('account_owner_id')
+      .select('account_owner_id, email')
       .eq('id', estimate.customer_id)
       .maybeSingle();
     if (cust?.account_owner_id) targetIds.add(cust.account_owner_id);
+    customerEmail = cust?.email || null;
   }
   // Fall back to admins if nobody else
   if (targetIds.size === 0) {
@@ -418,11 +421,28 @@ async function notifySalesRep(estimate: any, verdict: 'accepted' | 'rejected', r
     ? `${estimate.customer_name || 'Customer'} approved the estimate. Review before pushing to NetSuite.`
     : `${estimate.customer_name || 'Customer'} requested changes: ${reason || '(no reason provided)'}`;
 
+  // A change request needs an answer, not just an acknowledgment — make the
+  // rejection alert itself the reply path. Reply-To goes to the mailbox the
+  // approval was sent to (falling back to the customer record), so the rep
+  // can answer the customer straight from their own inbox; the in-app route
+  // is the estimate's "Reply to customer" thread. estimate_rejected is in
+  // notify's always-all-channels set, so this email reliably goes out.
+  const replyTo: string[] =
+    Array.isArray(estimate.approval_email_to) && estimate.approval_email_to.length > 0
+      ? estimate.approval_email_to
+      : (customerEmail ? [customerEmail] : []);
+
   await notifyMany(Array.from(targetIds), {
     type: verdict === 'accepted' ? 'estimate_accepted' : 'estimate_rejected',
     title,
     body,
     url: deepLinks.estimate(estimate.id),
+    ...(verdict === 'rejected' && replyTo.length > 0
+      ? {
+          emailReplyTo: replyTo,
+          emailCtaNote: `Replying to this email goes directly to ${estimate.customer_name || 'the customer'} (${replyTo.join(', ')}) — or open the estimate above and use "Reply to customer" to keep the conversation in FleetSuite.`,
+        }
+      : {}),
   });
 }
 

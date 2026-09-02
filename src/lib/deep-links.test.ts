@@ -10,6 +10,10 @@ describe('deepLinks.pickList / vehicleLinkFor', () => {
       .toBe('/vehicles/1FTBW3XM5PKA00001/pick-list?visit=ci-123');
   });
 
+  it('inboxThread opens the customer thread in the comms inbox', () => {
+    expect(deepLinks.inboxThread('t-1')).toBe('/admin/inbox?thread=t-1');
+  });
+
   it('vehicleLinkFor carries the visit into the pick-list fallback', () => {
     // External installer: no in_shop/fleet_checkin feature → pick-list, pinned.
     expect(vehicleLinkFor(['installer'], 'ci-123', '1FTBW3XM5PKA00001'))

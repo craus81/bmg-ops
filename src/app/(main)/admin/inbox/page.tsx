@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { estimateHeadlineNumber } from '@/lib/estimate-number';
+import { deepLinks } from '@/lib/deep-links';
 
 type ThreadFilter = 'all' | 'unread' | 'mine' | 'unassigned' | 'archived';
 
@@ -308,7 +309,14 @@ export default function AdminInboxPage() {
                     )}
                     {detail.thread.context_entity_type === 'purchase_order' && `PO ${detail.entity.po_number}`}
                     {detail.thread.context_entity_type === 'graphics_job' && `Job ${detail.entity.job_number} · ${detail.entity.title || ''}`}
-                    {detail.thread.context_entity_type === 'estimate' && `Estimate ${estimateHeadlineNumber(detail.entity)} · ${detail.entity.title || ''}`}
+                    {detail.thread.context_entity_type === 'estimate' && (
+                      <a
+                        href={deepLinks.estimate(detail.entity.id)}
+                        style={{ color: 'var(--accent, #2563eb)', textDecoration: 'none' }}
+                      >
+                        Estimate {estimateHeadlineNumber(detail.entity)} · {detail.entity.title || ''}
+                      </a>
+                    )}
                   </div>
                 )}
               </div>

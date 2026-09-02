@@ -35,6 +35,14 @@ export interface NotifyPayload {
   url?: string;
   /** Optional: skip preference check and force these channels */
   forceChannels?: boolean;
+  /** Optional Reply-To for the email channel — set when a mail-client reply
+   *  should go somewhere real (e.g. straight back to the customer whose
+   *  message the notification relays) instead of bouncing off the no-mailbox
+   *  from address. */
+  emailReplyTo?: string | string[];
+  /** Optional footnote under the email CTA (e.g. "replying to this email
+   *  goes to the customer"). Email channel only. */
+  emailCtaNote?: string;
   /** For message notifications: the message context */
   messageContext?: {
     senderName: string;
@@ -153,10 +161,13 @@ async function getPreferredChannels(userId: string, type: string): Promise<Notif
   }
 
   // For all other notification types (graphics, PO, etc.)
-  // Actionable operational events (assignments, install readiness) always
-  // fan out to in-app + email + push regardless of per-user preferences —
-  // silencing these by accident creates operational blindspots.
-  const ALWAYS_ALL_CHANNELS = new Set(['assignment', 'graphics_ready_for_install']);
+  // Actionable operational events (assignments, install readiness, a
+  // customer's decision on money) always fan out to in-app + email + push
+  // regardless of per-user preferences — silencing these by accident
+  // creates operational blindspots. estimate_rejected in particular must
+  // reach the rep's inbox: the email is the reply path back to the
+  // customer's change request.
+  const ALWAYS_ALL_CHANNELS = new Set(['assignment', 'graphics_ready_for_install', 'estimate_rejected']);
 
   if (!prefs) {
     // Default: in-app + push + email for high-signal events, in-app + push for others
@@ -374,11 +385,12 @@ async function sendViaEmail(payload: NotifyPayload): Promise<boolean> {
       payload.title,
       payload.body,
       ctaUrl,
-      payload.messageContext ? 'Open Chat' : 'Open in App'
+      payload.messageContext ? 'Open Chat' : 'Open in App',
+      payload.emailCtaNote ? { ctaNote: payload.emailCtaNote } : undefined,
     );
 
     return await sendEmail(
-      profile.email, subject, html, undefined, undefined, undefined, undefined,
+      profile.email, subject, html, undefined, undefined, payload.emailReplyTo, undefined,
       // The notification's own deep link doubles as the email-log context.
       { kind: 'staff_notification', contextUrl: payload.url || null },
     );
