@@ -650,7 +650,7 @@ export default function UpfitProjectsPage() {
         sourceType: 'upfit_note',
         sourceId: selected.id,
         contextLabel: `${selected.project_name}${selected.customer_name ? ` — ${selected.customer_name}` : ''}`,
-        contextUrl: `/upfit?id=${selected.id}${note?.id ? `&note=${note.id}` : ''}`,
+        contextUrl: deepLinks.upfitProject(selected.id, { noteId: note?.id }),
       });
       setNewNote('');
       loadNotes(selected.id);

@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { notifyMany } from '@/lib/notify';
-import { mentionSourceUrl, deepLinks } from '@/lib/deep-links';
+import { mentionSourceUrl, deepLinks, cniJobLinkFor } from '@/lib/deep-links';
 import { resolveFeatures } from '@/lib/features';
 
 export const dynamic = 'force-dynamic';
@@ -106,9 +106,16 @@ export async function POST(req: NextRequest) {
     vehicleVin = checkin?.vin || null;
   }
   const urlFor = (userId: string): string | null => {
-    if (!deepUrl) return null;
     const p = staff.find(s => s.id === userId);
     const roles: string[] = p?.roles?.length ? p.roles : (p?.role ? [p.role] : []);
+    // CNI job chat serves two portals from different URLs, and the surface
+    // sends the SENDER's pathname — an admin's mention bounced every
+    // installer off the admin gate and vice versa (Round 3, §7.2.7).
+    // Resolve per recipient instead of trusting the sender's path.
+    if (sourceType === 'cni_job_message' && sourceId) {
+      return cniJobLinkFor(roles, sourceId);
+    }
+    if (!deepUrl) return null;
     const f = resolveFeatures(roles, []);
     if (deepUrl.startsWith('/tracking') && !f.has('in_shop') && !f.has('fleet_checkin')) {
       return vehicleVin ? deepLinks.pickList(vehicleVin, sourceId) : '/home';

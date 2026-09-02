@@ -690,7 +690,7 @@ export default function PoRecordPage() {
         sourceType: 'po_note',
         sourceId: po.id,
         contextLabel: `PO #${po.po_number}`,
-        contextUrl: `/admin/pos/${po.id}`,
+        contextUrl: deepLinks.po(po.id),
         userIds: mentions,
       });
     }

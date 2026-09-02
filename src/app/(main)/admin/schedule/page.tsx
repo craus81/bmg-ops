@@ -344,7 +344,7 @@ export default function SchedulePage() {
         sourceType: 'calendar_event_note',
         sourceId: cardEvent.id,
         contextLabel: `Schedule — ${cardEvent.title}`,
-        contextUrl: `/admin/schedule?card=${cardEvent.id}${inserted?.id ? `&note=${inserted.id}` : ''}`,
+        contextUrl: deepLinks.scheduleCard(cardEvent.id, inserted?.id),
       });
       setCardNoteDraft('');
       const { data: notes } = await supabase.from('calendar_event_notes').select('*').eq('event_id', cardEvent.id).order('created_at', { ascending: true });

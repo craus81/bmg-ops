@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { deepLinks } from '@/lib/deep-links';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
@@ -179,7 +180,7 @@ export default function CniInstallerDetailPage() {
         sourceType: 'cni_internal_note',
         sourceId: userId,
         contextLabel: `Installer — ${userProfile?.full_name || 'CNI installer'}`,
-        contextUrl: `/admin/cni/installers/${userId}${inserted?.id ? `?note=${inserted.id}` : ''}`,
+        contextUrl: deepLinks.cniInstaller(userId, inserted?.id),
       });
     }
     setNewNote('');
