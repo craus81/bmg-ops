@@ -82,7 +82,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
 | **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 19 and 21 remain open** (2 — R2-goes-private, labor capture). Shipped 2026-08-30: the Stage 1 build-out (#701–#704, closing item 18), the two Stage 1 owner decisions (#706 lead tier, #707 deletion→NetSuite), and estimate integrity (#708–#710, items 9–11). Shipped 2026-08-30: the whole **vehicle custody** block (#712–#715, items 12–16). Shipped 2026-08-30 (second wave): **parts ordering & receiving** (#717–#719, item 17 — the audit's largest build: request queue → NetSuite PO → receiving with item receipts) and the **route→permission manifest** (#721, item 20 — all 251 routes declare + prove their guard; the sweep fixed the unauthenticated Google OAuth pair). |
 
-| **Round 3** — re-audit 2026-08-30 (Part 7) | 🔄 roadmap open | Nine-probe re-verification at `1ea2015`, every MAJOR+ finding re-verified by hand. **Round 2 holds** — all 19 ships confirmed at HEAD (5 partial caveats). ~90 new findings distilled into the Part 7 roadmap: 6 CRITICAL truncation bugs that move money/state, 8 E-SIGN forgery/loss holes, 7 non-idempotent NetSuite money paths (zero unique-index backing), 3 custody/CNI blockers — one, CNI company invites, failing 500 in production since #715 — the `forceChannels` no-op, and this week's parts-loop regressions (hotfixed same day, #724). Items 19 and 21 now carry written decision packages (the R2-flip tier checklist, the labor-capture touch-map). Shipped 2026-08-31: **Stage 2 closed** — the estimate correctness set (#726) and E-SIGN hardening (#727, migration 242) retire R3-6, R3-7, and every remaining Stage 2 walkthrough finding, and #729 ships the R3-17 change-order core (Duplicate + duplicate-as-revision with `supersedes_estimate_id` lineage, migration 243) — Stage 2 closed outright. **R3-1 closed in full** (#732 the six CRITICALs with fail-closed reads, #733 the MAJOR sweep) — every §7.2.2 truncation finding fixed. **Stage 3 closed** (#735 wrap-quote reconciliation + honest win counting + visible provenance, #736 customer reminders w/ migration 244) — all six capture-side findings shipped. **Stage 4 closed** (#740 atomic conversion claim + vendor-PO sync honesty, #741 schema-cache hardening after the live SO1064 stranding that #738/#739 repaired in parallel with migration 246 + a manual SO link) — the earlier findings were verified already fixed at HEAD (N2 phase 1 auto-project, item 9 staff walls, item 10 estimate closing, 17A–C ordering) and the dead-list re-verdicted. **Stage 5 closed** (#746 + migration 247: graphics_jobs UPDATE wall, presigned proof artwork, pre-invoice packing list; fan-out/transition-rules/proof-gate verified already shipped) — roll-nesting for production stays as the stage's one open enhancement. **Stage 6 closed** (#751 + migration 248: guide links w/ auto-stamp on attach, the CNI completion photo gate, scale-change recalibration with px_source provenance, the verification modal's 📐 guide link, super_admin walls; the inverted checklist was already fixed) — a full CNI checklist stays as its open enhancement, and the app-wide requireAdmin-excludes-super_admin question is flagged for an owner call. **Stage 7 closed** 2026-09-01 (#756 + migration 249: `POST /api/checkins` is the one writer with photos verified in storage before the row exists and the table's INSERT policies dropped — Round 3 caveat 12; arrival back-link + dedupe walk VIN → SO → unique customer and upfit rows carry SO identifiers — caveat 14; and the VIN→SO prefill the docs promised finally exists) — #712/#713/#714 held; R3-10's remainder (per-visit links, profileRoles, scans gate, auto-archive) stays with Stage 8. |
+| **Round 3** — re-audit 2026-08-30 (Part 7) | 🔄 roadmap open | Nine-probe re-verification at `1ea2015`, every MAJOR+ finding re-verified by hand. **Round 2 holds** — all 19 ships confirmed at HEAD (5 partial caveats). ~90 new findings distilled into the Part 7 roadmap: 6 CRITICAL truncation bugs that move money/state, 8 E-SIGN forgery/loss holes, 7 non-idempotent NetSuite money paths (zero unique-index backing), 3 custody/CNI blockers — one, CNI company invites, failing 500 in production since #715 — the `forceChannels` no-op, and this week's parts-loop regressions (hotfixed same day, #724). Items 19 and 21 now carry written decision packages (the R2-flip tier checklist, the labor-capture touch-map). Shipped 2026-08-31: **Stage 2 closed** — the estimate correctness set (#726) and E-SIGN hardening (#727, migration 242) retire R3-6, R3-7, and every remaining Stage 2 walkthrough finding, and #729 ships the R3-17 change-order core (Duplicate + duplicate-as-revision with `supersedes_estimate_id` lineage, migration 243) — Stage 2 closed outright. **R3-1 closed in full** (#732 the six CRITICALs with fail-closed reads, #733 the MAJOR sweep) — every §7.2.2 truncation finding fixed. **Stage 3 closed** (#735 wrap-quote reconciliation + honest win counting + visible provenance, #736 customer reminders w/ migration 244) — all six capture-side findings shipped. **Stage 4 closed** (#740 atomic conversion claim + vendor-PO sync honesty, #741 schema-cache hardening after the live SO1064 stranding that #738/#739 repaired in parallel with migration 246 + a manual SO link) — the earlier findings were verified already fixed at HEAD (N2 phase 1 auto-project, item 9 staff walls, item 10 estimate closing, 17A–C ordering) and the dead-list re-verdicted. **Stage 5 closed** (#746 + migration 247: graphics_jobs UPDATE wall, presigned proof artwork, pre-invoice packing list; fan-out/transition-rules/proof-gate verified already shipped) — roll-nesting for production stays as the stage's one open enhancement. **Stage 6 closed** (#751 + migration 248: guide links w/ auto-stamp on attach, the CNI completion photo gate, scale-change recalibration with px_source provenance, the verification modal's 📐 guide link, super_admin walls; the inverted checklist was already fixed) — a full CNI checklist stays as its open enhancement, and the app-wide requireAdmin-excludes-super_admin question is flagged for an owner call. **Stage 7 closed** 2026-09-01 (#756 + migration 249: `POST /api/checkins` is the one writer with photos verified in storage before the row exists and the table's INSERT policies dropped — Round 3 caveat 12; arrival back-link + dedupe walk VIN → SO → unique customer and upfit rows carry SO identifiers — caveat 14; and the VIN→SO prefill the docs promised finally exists) — #712/#713/#714 held; R3-10's remainder (per-visit links, profileRoles, scans gate, auto-archive) stays with Stage 8. **Stage 8 closed** 2026-09-02 (#759 + migration 250: the completion gate moves to the DB — a 233-style trigger denies signed-in clients writing status/lane/QC, closing the route-only bypass; roles[]-aware admin override; scans allowlist; per-visit `?visit=` pick-list links; daily auto-archive of week-old shipped visits; Message Customer admin-only, ending the installer dead-end) — R3-10 shipped in full across the two custody closes; #650/#632/#634/#635/#638/#663 re-verified at HEAD; R3-21 labor capture stays the stage's open decision-package build. |
 
 Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap; Part 7 carries Round 3.
 
@@ -538,30 +538,66 @@ in update-status, the scans role gate, and auto-archiving shipped visits.
 a stuck-vehicle cron) are genuinely strong. But the role model is **inverted for
 this stage:**
 
-- **CRITICAL — The two roles built to install can't run the install.**
+- ✅ **CRITICAL — The two roles built to install can't run the install.**
   `field_tech` has no In-Shop access at all; both `field_tech` and `shop_tech`
   are bounced off the pick-list install runner and the assignment picker — while
   the external CNI `installer` role passes every gate.
-- **CRITICAL — The status APIs are `requireAuth`-only.** Any approved account
+  _(Fixed: #650 (Round 1 item 19) — techs run the pick-list by role, external
+  installers gain no internal surface; re-verified at HEAD 2026-09-02.)_
+- ✅ **CRITICAL — The status APIs are `requireAuth`-only.** Any approved account
   (customer included) can flip any vehicle's status and trigger "your vehicle is
   ready"/"shipped" customer emails, or mark graphics lanes complete.
-- **CRITICAL — RLS counts external CNI installers as internal staff** with full
+  _(Fixed: the #632 sweep moved them to `requireStaff`, pinned by the #721
+  manifest; #759 + migration 250 go further — see the gate bullet below.)_
+- ✅ **CRITICAL — RLS counts external CNI installers as internal staff** with full
   CRUD on `fleet_checkins`, `estimates`, `customers`, `purchase_orders` from the
   browser client.
-- **MAJOR — `received → complete` bypasses the entire completion gate** — no
+  _(Fixed: #634/migration 224 — `is_internal_staff()` is a real staff
+  allowlist; installer and customer are out. Held under Round 3.)_
+- ✅ **MAJOR — `received → complete` bypasses the entire completion gate** — no
   photos, no checklist, no QC stamp, no notifications.
+  _(Fixed in layers: #635 made every transition into `complete` run the full
+  ceremony, instantiating the checklist on demand; Round 3 found the gate was
+  route-level only — a direct browser status write skipped it — closed
+  2026-09-02, #759 + migration 250: a BEFORE UPDATE trigger (233's shape)
+  denies signed-in clients changing `status`, the graphics lane, or the QC
+  stamps; the routes (service role) are the only writers. The same PR makes
+  the admin force-override read `roles[]`, so an admin granted via the array
+  can actually override.)_
 - **MAJOR — No job-level labor capture.** Nothing links time entries or shifts to
   a vehicle, so actual install hours vs. the estimate are unknowable — on a job
   the whole app exists to invoice.
-- **MAJOR — Assignment is split-brained:** the picker writes `job_assignments`,
+  _(Open by design — R3-21, the stage's build-tier item. The decision package
+  is written (the `work_shifts` touch-map: `fleet_checkin_id` + `'shop'`
+  context, rate resolution, pick-list start/stop); it awaits the owner's go,
+  same posture roll-nesting holds for Stage 5.)_
+- ✅ **MAJOR — Assignment is split-brained:** the picker writes `job_assignments`,
   but the board card, the stuck-alert cron, and notify-ready all read
   `fleet_checkins.assigned_to`, which nothing writes.
-- **MAJOR — Checklist template selection inverted** (pure-upfit vehicles get the
+  _(Fixed: #638 — jobs/assign mirrors the first assignee onto `assigned_to`
+  (and re-mirrors on unassign); re-verified at HEAD 2026-09-02.)_
+- ✅ **MAJOR — Checklist template selection inverted** (pure-upfit vehicles get the
   mixed template with a required graphics task); **"Message Customer"
   dead-ends** for shop_tech/installer (thread created, then bounced to /home);
   **marking a vehicle stuck notifies nobody for 48h**.
-- **Bug:** the migration-092 trigger never writes graphics history on the success
+  _(Three verdicts: the inversion fixed in #635 (shared exact-category-first
+  lookup, re-verdicted with Stage 6); the dead-end was STILL live for
+  installers — the button created a thread in /admin/inbox, whose gate then
+  bounced them — closed by #759: the button is admin-only, and CNI installers
+  coordinate through their job chat, which notifies coordinators; the 48h
+  stuck floor stands as designed — the daily sweep exists and works.)_
+- ✅ **Bug:** the migration-092 trigger never writes graphics history on the success
   path and writes a bogus row for cancelled jobs.
+  _(Fixed: #663, migration 229 — captures the prior status before the update.)_
+
+**Stage 8 status (2026-09-02): CLOSED** — the completion gate is enforced at
+the DB (#759 + migration 250), the role gates match their intent (scans
+allowlist, roles[]-aware override, admin-only Message Customer), per-visit
+deep links pin pick-list notifications to the exact visit, and the In-Shop
+board finally empties itself (daily auto-archive of 7-day-old shipped
+visits) — with #650/#632/#634/#635/#638/#663 all re-verified at HEAD. One
+build remains open by design: R3-21 job-level labor capture, whose written
+decision package awaits the owner's call.
 
 ## Stage 9 — Completion, invoice, and getting paid
 
@@ -1483,18 +1519,28 @@ exists nowhere else. Verified consequences:
   `completed_pending_review`, payout blocked.
 - `photos_approved` is written only by a browser-side bulk loop; the
   route-level per-photo path never sets it.
-- `update-status`'s admin force-override reads the scalar `role` only —
+- ✅ `update-status`'s admin force-override reads the scalar `role` only —
   an admin whose grant lives in `roles[]` can't override; and the
   completion gate is route-level only (a direct browser status write
   bypasses photos/tasks/QC entirely).
-- The scans in-route gate rejects only customer-ONLY accounts —
+  _(Both closed 2026-09-02, #759 + migration 250 with Stage 8's close: the
+  override reads roles[], and a DB trigger denies signed-in clients writing
+  status / the graphics lane / QC stamps at all.)_
+- ✅ The scans in-route gate rejects only customer-ONLY accounts —
   `['customer','executive']` or a bare `executive` passes and can log
   scans and mint pay credits (`scans/log/route.ts:56`).
-- Post-#712, VIN-keyed surfaces (pick-list, `/api/vehicles/[vin]/photos`,
+  _(Closed 2026-09-02, #759: scans/log and scans/photos gate on an
+  internal-staff-or-installer allowlist.)_
+- ✅ Post-#712, VIN-keyed surfaces (pick-list, `/api/vehicles/[vin]/photos`,
   `pickList` deep links) resolve to the *newest* visit — links about the
   old visit open the new one; no per-visit link exists.
-- The In-Shop board never empties (nothing auto-archives; archive is
+  _(Closed 2026-09-02, #759: `pickList(vin, checkinId)` pins the visit via
+  `?visit=`, the page banners when a newer check-in exists, and
+  update-status / mentions / `vehicleLinkFor` all pass the id.)_
+- ✅ The In-Shop board never empties (nothing auto-archives; archive is
   admin-only), so returning vehicles now double-list.
+  _(Closed 2026-09-02, #759: a daily cron archives vehicles 7+ days past
+  their shipped transition, history-timestamped.)_
 
 ### 7.2.7 Notifications & deep links
 
@@ -1570,12 +1616,15 @@ it paid; four dead `r2PublicUrl` imports.
    `POST /api/prospects`; drop `.passthrough()` and make `netsuite_id`
    admin-only + audited; decide the deletion policy for files/mirror
    (checked deletes, honest confirm); escape `*`; rate-limit fail-closed.
-10. **R3-10 · Custody hardening** —
-    ~~a server-side check-in route that enforces photos~~
-    _(✅ shipped 2026-09-01 with Stage 7's close, #756 + migration 249)_;
-    per-visit deep links (pick-list by check-in id);
-    `profileRoles` in update-status; tighten the scans role gate;
-    auto-archive shipped visits off the board.
+10. **R3-10 · Custody hardening** — ✅ **shipped in full** across the two
+    custody stage closes:
+    a server-side check-in route that enforces photos
+    _(2026-09-01, #756 + migration 249)_;
+    per-visit deep links (pick-list by check-in id),
+    `profileRoles` in update-status, the scans role gate tightened to a
+    staff-or-installer allowlist, and auto-archive of shipped visits off
+    the board _(2026-09-02, #759 + migration 250 — which also puts the
+    completion gate itself at the DB)_.
 
 ### Later — the workflow builds
 
