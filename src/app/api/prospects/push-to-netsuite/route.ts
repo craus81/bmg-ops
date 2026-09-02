@@ -24,9 +24,11 @@ const Schema = z.object({
 
 /**
  * POST /api/prospects/push-to-netsuite
- * Promote a FleetSuite lead to a NetSuite customer (the record page's
- * "Promote to NetSuite Customer" button). Since the lead tier, this is an
- * explicit act — creating a CRM record no longer calls this route.
+ * Promote a FleetSuite lead to a NetSuite customer. Two callers: the CRM
+ * create form, when "Create the customer in NetSuite now" is ticked (the
+ * default since 2026-09-02), and the record page's "Promote to NetSuite
+ * Customer" button — for leads created with that box unticked, or whose
+ * create-time push failed.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireStaff(req);

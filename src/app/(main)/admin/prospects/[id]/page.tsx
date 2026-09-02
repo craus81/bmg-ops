@@ -10,10 +10,13 @@
  * round-trip to the CRM list (which is just the index/pipeline view).
  *
  * Prospects and customers are unified, with a lead tier (owner decision
- * 2026-08-30): a record with no netsuite_id IS a lead — creating it no
- * longer creates a NetSuite customer. Promotion happens here (the
- * "Promote to NetSuite Customer" button) or automatically the first time
- * an estimate for the lead is pushed to NetSuite / converted to an SO.
+ * 2026-08-30): a record with no netsuite_id IS a lead. Creating a record
+ * normally creates the NetSuite customer too (2026-09-02 — the create
+ * form's ticked-by-default box), so a lead here is one that was created
+ * with that box unticked, or whose NetSuite create failed. Promotion
+ * happens here (the "Promote to NetSuite Customer" button) or
+ * automatically the first time an estimate for the lead is pushed to
+ * NetSuite / converted to an SO.
  *
  * Routes:
  *   /admin/prospects/<uuid>       — CRM prospect id
@@ -574,8 +577,12 @@ export default function CustomerRecordPage() {
     }
   };
 
-  // Retry path for records whose NetSuite create failed at creation time —
-  // customers are normally pushed to NetSuite the moment they're created.
+  // Promote a lead. Customers are normally created in NetSuite the moment
+  // they're entered (the CRM create form's "Create the customer in NetSuite
+  // now", ticked by default), so a record reaches this button in one of two
+  // ways: someone unticked that box, or NetSuite refused at create time.
+  // Either way the CRM row already exists — this only fills in the missing
+  // NetSuite half.
   const [converting, setConverting] = useState(false);
   const addToNetSuite = async () => {
     if (!prospect || converting) return;
