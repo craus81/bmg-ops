@@ -15,6 +15,7 @@
  */
 
 import { Fragment, useState, useEffect, useCallback } from 'react';
+import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 
@@ -56,6 +57,43 @@ interface DemandMeta {
   units: number;
   skippedNonStock: number;
   soSyncedAt: string | null;
+  /** Health of the NetSuite sales-order mirror the SO half reads from.
+   *  Optional only for the deploy window where an older API answers. */
+  soSync?: {
+    mirrorRows: number;
+    status: 'ok' | 'partial' | 'stale' | 'error' | 'never';
+    lastRunAt: string | null;
+    problem: string | null;
+  };
+}
+
+/**
+ * Why the sales-order half of the list might be short — said out loud, so
+ * "0 open sales orders" is never a silent zero. The mirror's first sync
+ * silently never finished and this page reported a confident 0 for weeks.
+ */
+function soMirrorNotice(meta: DemandMeta): { warn: boolean; text: string } | null {
+  const s = meta.soSync;
+  if (!s) return null;
+  switch (s.status) {
+    case 'never':
+      return { warn: true, text: 'Sales orders have never been pulled from NetSuite, so this list only reflects approved estimates.' };
+    case 'error':
+      return { warn: true, text: `The last sales-order sync failed (${s.problem || 'unknown error'}), so open jobs may be missing.` };
+    case 'stale':
+      return { warn: true, text: `The sales-order sync is overdue (${s.problem || 'no recent run'}), so jobs entered since may be missing.` };
+    case 'partial':
+      return { warn: false, text: `NetSuite sales orders are still backfilling (${s.problem || 'in progress'}). Open orders sync first, so this list is usable now.` };
+    default:
+      break;
+  }
+  if (s.mirrorRows === 0) {
+    return { warn: true, text: 'The sync ran but NetSuite returned no sales orders at all — the integration role most likely can\'t see Sales Orders (NetSuite permission "Sales Order → View").' };
+  }
+  if (meta.salesOrders === 0) {
+    return { warn: false, text: `${s.mirrorRows} sales order${s.mirrorRows !== 1 ? 's' : ''} on file, none open right now — every one is billed, closed or cancelled in NetSuite.` };
+  }
+  return null;
 }
 
 const qty = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
@@ -66,8 +104,10 @@ const csvCell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 
 export default function PartsDemandTab({ onQueued }: { onQueued?: () => void }) {
   const dialog = useDialog();
+  const { isAdmin } = useAuth();
 
   const [rows, setRows] = useState<DemandRow[]>([]);
+  const [syncing, setSyncing] = useState(false);
   const [meta, setMeta] = useState<DemandMeta | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -96,6 +136,36 @@ export default function PartsDemandTab({ onQueued }: { onQueued?: () => void }) 
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  /** Admin: pull sales orders from NetSuite right now (full resync, newest
+   *  first) and say what came back in the terms that tell a NetSuite
+   *  permission problem from a FleetSuite save problem. */
+  const syncSalesOrders = async () => {
+    setSyncing(true);
+    try {
+      const res = await fetch('/api/purchasing/sync-sales-orders', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) {
+        await dialog.alert(`Sales order sync failed: ${data.error || `HTTP ${res.status}`}`);
+        return;
+      }
+      const modified = data.modified ?? 0;   // SOs NetSuite returned
+      const totalSos = data.totalSos ?? 0;   // SOs now on file in FleetSuite
+      let msg: string;
+      if (totalSos > 0) {
+        msg = `NetSuite returned ${modified} sales order(s) · ${data.synced ?? 0} saved · ${data.lines ?? 0} line(s). ${totalSos} on file now, ${data.openSos ?? 0} open.`
+          + (data.partial ? '\n\nNewest orders came first; older history keeps backfilling on the 2-hour sync.' : '');
+      } else if (modified === 0) {
+        msg = 'NetSuite returned 0 sales orders across all history.\n\nOther NetSuite data syncs fine, so the integration role most likely can\'t see Sales Orders. Fix in NetSuite: grant that role "Sales Order → View". This is a NetSuite permission, not a FleetSuite bug.';
+      } else {
+        msg = `NetSuite returned ${modified} sales order(s) but none saved to FleetSuite${data.headerErrors ? ` (${data.headerErrors} header error(s))` : ''} — that's a FleetSuite-side problem. Screenshot this and report it.`;
+      }
+      await dialog.alert(msg);
+      await load();
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const addToQueue = async (row: DemandRow) => {
     const suggested = Math.max(0, row.needed - row.on_order - row.requested);
@@ -165,6 +235,8 @@ export default function PartsDemandTab({ onQueued }: { onQueued?: () => void }) 
     URL.revokeObjectURL(url);
   };
 
+  const soNotice = meta ? soMirrorNotice(meta) : null;
+
   if (loading) return <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Building the demand list…</div>;
 
   if (error) {
@@ -193,8 +265,30 @@ export default function PartsDemandTab({ onQueued }: { onQueued?: () => void }) 
           {meta.skippedNonStock > 0 && (
             <span style={{ color: theme.textMuted }}> · {meta.skippedNonStock} labor/service line{meta.skippedNonStock !== 1 ? 's' : ''} excluded</span>
           )}
-          {meta.soSyncedAt && (
+          {meta.soSyncedAt ? (
             <span style={{ color: theme.textMuted }}> · sales orders synced {new Date(meta.soSyncedAt).toLocaleString()}</span>
+          ) : meta.soSync?.lastRunAt ? (
+            <span style={{ color: theme.textMuted }}> · sales-order sync last ran {new Date(meta.soSync.lastRunAt).toLocaleString()}</span>
+          ) : null}
+        </div>
+      )}
+
+      {soNotice && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap',
+          padding: '10px 12px', marginBottom: '12px', borderRadius: '10px', fontSize: '12px', color: 'var(--text-body)',
+          border: `1px solid ${soNotice.warn ? 'rgba(245,158,11,0.35)' : theme.border}`,
+          background: soNotice.warn ? 'rgba(245,158,11,0.07)' : 'var(--subtle-bg)',
+        }}>
+          <span style={{ flex: '1 1 260px' }}>{soNotice.warn ? '⚠ ' : ''}{soNotice.text}</span>
+          {isAdmin ? (
+            <button onClick={syncSalesOrders} disabled={syncing}
+              title="Pull sales orders from NetSuite now — newest first, so open jobs land immediately"
+              style={{ padding: '6px 12px', borderRadius: '8px', border: '1px solid rgba(96,165,250,0.3)', background: 'rgba(96,165,250,0.1)', color: '#60a5fa', fontSize: '11px', fontWeight: 800, cursor: syncing ? 'wait' : 'pointer', opacity: syncing ? 0.7 : 1 }}>
+              {syncing ? 'Syncing from NetSuite…' : 'Sync sales orders now'}
+            </button>
+          ) : (
+            <span style={{ color: theme.textMuted, fontSize: '11px' }}>An admin can run the sync from this tab.</span>
           )}
         </div>
       )}
@@ -222,9 +316,11 @@ export default function PartsDemandTab({ onQueued }: { onQueued?: () => void }) 
 
       {filtered.length === 0 ? (
         <div style={{ padding: '28px', textAlign: 'center', border: `1px dashed ${theme.border}`, borderRadius: '14px', color: theme.textMuted, fontSize: '13px' }}>
-          {rows.length === 0
-            ? 'No open jobs need parts right now.'
-            : 'Nothing matches those filters.'}
+          {rows.length > 0
+            ? 'Nothing matches those filters.'
+            : meta?.soSync && meta.soSync.status !== 'ok'
+              ? 'Nothing to show until sales orders come over from NetSuite.'
+              : 'No open jobs need parts right now.'}
         </div>
       ) : (
         <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '14px', overflow: 'hidden' }}>

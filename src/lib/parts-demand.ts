@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { normalizeItemNumber, isOpenPoStatus } from './vendor-po-sync';
 import { fetchAllRows } from './fetch-all';
+import { evaluateHealthRow, HEALTH_MONITORS, type SyncStateRow } from './system-health';
 
 /**
  * Total parts demand across every open job — "what do we need to buy to
@@ -109,6 +110,21 @@ export interface DemandRow {
   sources: DemandSourceRef[];
 }
 
+/**
+ * Health of the sales-order mirror this list reads, so "0 open sales orders"
+ * can say WHY. The number is only as true as the sync feeding it, and the
+ * sync's first version silently never finished (see sales-order-sync.ts) —
+ * the page showed a confident zero for weeks.
+ */
+export interface SoMirrorHealth {
+  /** Every SO row in the mirror, open or not. 0 after a healthy run means
+   *  NetSuite returned nothing — a permission problem, not a sync bug. */
+  mirrorRows: number;
+  status: 'ok' | 'partial' | 'stale' | 'error' | 'never';
+  lastRunAt: string | null;
+  problem: string | null;
+}
+
 export interface PartsDemandResult {
   rows: DemandRow[];
   meta: {
@@ -122,7 +138,28 @@ export interface PartsDemandResult {
     skippedNonStock: number;
     /** Newest last_synced_at across the open SOs — how fresh this is. */
     soSyncedAt: string | null;
+    soSync: SoMirrorHealth;
   };
+}
+
+const SO_SYNC_TYPE = 'netsuite_sales_orders';
+
+/** The mirror's health from its sync_state row, with the same verdict the
+ *  System Health board gives plus the backfill-in-progress case. */
+export function describeSoMirrorHealth(row: SyncStateRow | null | undefined, mirrorRows: number, now = Date.now()): SoMirrorHealth {
+  const monitor = HEALTH_MONITORS.find(m => m.syncType === SO_SYNC_TYPE)
+    || { syncType: SO_SYNC_TYPE, label: 'NetSuite sales order sync', intervalMinutes: 120 };
+  const check = evaluateHealthRow(monitor, row, now);
+  if (check.status === 'ok' && row?.last_result?.partial === true) {
+    const processed = Number(row.last_result?.resume?.processed) || 0;
+    return {
+      mirrorRows,
+      status: 'partial',
+      lastRunAt: check.lastRunAt,
+      problem: `backfill in progress — ${processed} sales order${processed !== 1 ? 's' : ''} pulled so far, newest first; the rest land over the next 2-hour runs`,
+    };
+  }
+  return { mirrorRows, status: check.status, lastRunAt: check.lastRunAt, problem: check.problem };
 }
 
 interface Working {
@@ -174,6 +211,13 @@ export async function computePartsDemand(service: SupabaseClient<any, any, any>)
     .range(from, to)), 'sales orders');
   const openSos = allSos.filter(so => isOpenSalesOrderStatus(so.status, so.status_label));
   const soById = new Map(openSos.map(so => [so.id, so]));
+  // Not through must(): the list is still whole without its health note.
+  const { data: syncState } = await service
+    .from('sync_state')
+    .select('sync_type, last_synced_at, last_result, updated_at')
+    .eq('sync_type', SO_SYNC_TYPE)
+    .maybeSingle();
+  const soSync = describeSoMirrorHealth(syncState as SyncStateRow | null, allSos.length);
   const soSyncedAt = openSos.reduce<string | null>(
     (latest, so) => (!latest || (so.last_synced_at && so.last_synced_at > latest) ? so.last_synced_at || latest : latest),
     null,
@@ -372,6 +416,7 @@ export async function computePartsDemand(service: SupabaseClient<any, any, any>)
       units: rows.reduce((sum, r) => sum + r.needed, 0),
       skippedNonStock,
       soSyncedAt,
+      soSync,
     },
   };
 }

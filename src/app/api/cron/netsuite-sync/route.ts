@@ -40,6 +40,7 @@ export async function GET(req: NextRequest) {
   }
 
   const supabase = createServiceClient();
+  const startedAt = Date.now();
 
   const results: Record<string, any> = {};
 
@@ -383,8 +384,15 @@ export async function GET(req: NextRequest) {
   // Customer sales orders — including ones entered directly in NetSuite —
   // mirrored into netsuite_sales_orders and matched back to their estimate
   // (createdfrom → Reference-No estimate number → memo, in that order).
+  // Budgeted: this route is capped at maxDuration and five NetSuite phases
+  // run before this one, so the sync gets what's left up to ~40s, stops
+  // itself with a saved cursor, and the next run continues. Without the
+  // budget the initial backfill got killed every run, recorded nothing, and
+  // restarted from scratch — the mirror stayed empty for weeks.
   try {
-    results.salesOrders = await syncSalesOrders(supabase);
+    results.salesOrders = await syncSalesOrders(supabase, {
+      deadline: Math.min(startedAt + 90_000, Date.now() + 40_000),
+    });
   } catch (err: any) {
     console.error('[cron] Sales order sync error:', err.message);
     results.salesOrders = { error: err.message };
