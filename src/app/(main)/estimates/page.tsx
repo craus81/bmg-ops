@@ -20,6 +20,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
+import { roundCentsHalfEven } from '@/lib/estimate-totals';
 import { FALLBACK_SALES_TAX_RATE, pctToRate, rateToPct } from '@/lib/sales-tax';
 import NumberInput from '@/components/NumberInput';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
@@ -1200,13 +1201,17 @@ export default function EstimatesPage() {
   // non-taxable — Freight is the live case. Mirrors computeTotals on the
   // server, which is what actually gets stored: only an explicit false
   // excludes, so an unmatched or un-synced item is still taxed.
-  const taxableAmount = lines.reduce(
-    (s, l) => (nonTaxableItems.has(String(l.item_number || '').trim().toUpperCase())
-      ? s
-      : s + l.quantity * l.unit_price),
-    0,
-  );
-  const taxAmount = taxExempt ? 0 : taxableAmount * taxRate;
+  const isLineTaxable = (l: LineItem) =>
+    !nonTaxableItems.has(String(l.item_number || '').trim().toUpperCase());
+  const taxableAmount = lines.reduce((s, l) => (isLineTaxable(l) ? s + l.quantity * l.unit_price : s), 0);
+  // Per line, each rounded to cents, ties to the even cent — the same math
+  // computeTotals runs server-side, which is the same math NetSuite books.
+  // Taxing `taxableAmount` in one go drifts a cent or two off the invoice.
+  const taxAmount = taxExempt
+    ? 0
+    : lines.reduce((s, l) => (isLineTaxable(l)
+      ? s + roundCentsHalfEven(l.quantity * l.unit_price * taxRate)
+      : s), 0);
   // Compare at the precision the rate is displayed and stored at — a float
   // round-trip through the database is not a "different rate".
   const atCompanyRate = Math.abs(rateToPct(taxRate) - rateToPct(companyTaxRate)) < 0.005;
