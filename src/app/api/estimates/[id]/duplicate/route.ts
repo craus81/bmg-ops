@@ -29,8 +29,9 @@ const DROP_FIELDS = new Set([
 
 // Lifecycle column FAMILIES, stripped by prefix so additions to a family
 // (e.g. approval_sent_hash joining approval_token) stay stripped without a
-// list edit here. customer_id / customer_name / customer_netsuite_id do NOT
-// match — only the approval/rejection state prefixes do.
+// list edit here. customer_id / prospect_id / customer_name /
+// customer_netsuite_id do NOT match — only the approval/rejection state
+// prefixes do — so a copy stays pointed at the same customer or CRM lead.
 const DROP_PREFIXES = /^(netsuite_|approval_|customer_approved|customer_reject|signed_document_|sent_for_approval|pushed_|last_followup|followup_)/;
 
 /**

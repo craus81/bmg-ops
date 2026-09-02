@@ -135,21 +135,53 @@ export async function promoteProspect(
 }
 
 /**
- * Resolve an estimate's customer name to a NetSuite customer id, promoting
- * the matching lead if that's what the name refers to.
+ * Resolve an estimate to a NetSuite customer id, promoting the lead it was
+ * quoted for when that's what it refers to.
  *
- * Order matters: (1) an existing NetSuite customer with exactly this name —
- * never create a double; (2) exactly one non-vendor lead with this name —
- * promote it; (3) null, and the caller keeps its "pick a customer" error.
- * Ambiguity (two same-named leads) also returns null: silently promoting
- * one of them would guess at money-bearing linkage.
+ * `prospectId` (estimates.prospect_id, migration 251) is the reliable path:
+ * the builder recorded exactly which lead this estimate is for, so there is
+ * nothing to guess. The name path below is the fallback for estimates
+ * written before that column existed — and it's why the column exists, since
+ * matching on name gives up whenever the name was edited on the estimate or
+ * two leads share one.
+ *
+ * Order matters: (1) the linked lead, if it still needs promoting;
+ * (2) an existing NetSuite customer with exactly this name — never create a
+ * double; (3) exactly one non-vendor lead with this name — promote it;
+ * (4) null, and the caller keeps its "pick a customer" error. Ambiguity (two
+ * same-named leads) also returns null: silently promoting one of them would
+ * guess at money-bearing linkage.
  */
 export async function resolveOrPromoteByName(
   supabase: SupabaseClient,
   customerName: string,
   userId?: string | null,
+  prospectId?: string | null,
 ): Promise<{ netsuiteId: string; promoted: boolean } | null> {
   const name = (customerName || '').trim();
+
+  // The estimate names its own lead — no name matching needed. A lead that
+  // was promoted since (netsuite_id already set) resolves straight to it.
+  if (prospectId) {
+    const { data: linked } = await supabase
+      .from('prospects')
+      .select('id, company_name, contact_name, title, email, phone, address, city, state, zip, website, record_type, netsuite_id')
+      .eq('id', prospectId)
+      .maybeSingle();
+    if (linked?.netsuite_id) {
+      return { netsuiteId: String(linked.netsuite_id), promoted: false };
+    }
+    if (linked && linked.record_type !== 'vendor') {
+      const promoted = await promoteProspect(supabase, linked as ProspectRow, { userId });
+      if (promoted.success && promoted.netsuiteId) {
+        return { netsuiteId: promoted.netsuiteId, promoted: true };
+      }
+      // A failed promote falls through to the name paths rather than
+      // stopping: an existing NetSuite customer with this name is still a
+      // legitimate answer, and the caller's error is the same either way.
+    }
+  }
+
   if (!name) return null;
 
   try {

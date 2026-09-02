@@ -128,6 +128,8 @@ interface Estimate {
   id: string;
   estimate_number: string;
   customer_id: string | null;
+  /** The CRM lead this was quoted for, when there's no customers row yet. */
+  prospect_id: string | null;
   customer_name: string | null;
   customer_netsuite_id: string | null;
   title: string | null;
@@ -279,6 +281,11 @@ export default function EstimatesPage() {
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [customerName, setCustomerName] = useState('');
   const [customerNsId, setCustomerNsId] = useState<string | null>(null);
+  // The CRM lead this estimate is for, when the customer isn't a NetSuite
+  // customer yet (migration 251). customerId and prospectId are the two
+  // halves of "who is this for" — exactly one is set once a customer is
+  // picked, and the approval/send paths accept either.
+  const [prospectId, setProspectId] = useState<string | null>(null);
   // Sales tax is company-wide and NOT editable here — it comes from
   // quote_settings and only a super admin can change it (Settings → Sales
   // Tax). `taxRate` still holds a per-estimate value because an already-saved
@@ -641,9 +648,10 @@ export default function EstimatesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
-  // ?new=1[&customer=<customers.id>] (deepLinks.newEstimate) opens the
-  // builder on a fresh estimate, pre-selecting the customer when one is
-  // given — the straight path from entering a new client to quoting them.
+  // ?new=1[&customer=<customers.id> | &prospect=<prospects.id>]
+  // (deepLinks.newEstimate) opens the builder on a fresh estimate with that
+  // customer — or CRM lead — pre-selected: the straight path from entering a
+  // new client to quoting them.
   // One-shot: ?id= (an existing-estimate deep link) always wins over ?new=.
   const handledNewParam = useRef(false);
   useEffect(() => {
@@ -651,10 +659,11 @@ export default function EstimatesPage() {
     if (searchParams.get('new') !== '1' || searchParams.get('id')) return;
     handledNewParam.current = true;
     (async () => {
-      // A restored autosave backup carries its own customer — only prefill
-      // from the deep link when the builder really starts blank.
-      if (await openNewEstimate()) return;
+      // Resolve who the link names BEFORE touching the builder, so the
+      // restore prompt below can name them.
       const custId = searchParams.get('customer');
+      const leadParam = searchParams.get('prospect');
+      let pick: { customerId: string | null; prospectId: string | null; name: string; nsId: string | null } | null = null;
       if (custId) {
         const { data } = await supabase
           .from('customers')
@@ -664,25 +673,49 @@ export default function EstimatesPage() {
         // No match (bad/stale id) degrades to a blank builder — the customer
         // search is right there.
         if (data) {
-          setCustomerId(data.id);
-          setCustomerName(data.company_name || data.entity_id || '');
-          setCustomerNsId(data.netsuite_id);
+          pick = {
+            customerId: data.id, prospectId: null,
+            name: data.company_name || data.entity_id || '',
+            nsId: data.netsuite_id,
+          };
         }
-        return;
+      } else if (leadParam) {
+        // ?prospect= — a CRM lead (no NetSuite record yet). Recording WHICH
+        // lead is what lets the estimate be sent for approval and lets the
+        // push promote it by id instead of guessing on the name.
+        const { data: lead } = await supabase
+          .from('prospects')
+          .select('id, company_name, netsuite_id')
+          .eq('id', leadParam)
+          .maybeSingle();
+        if (lead?.company_name) {
+          pick = {
+            customerId: null, prospectId: lead.id,
+            name: lead.company_name, nsId: lead.netsuite_id || null,
+          };
+        }
       }
-      // ?prospect= — a CRM lead (no NetSuite record yet). The estimate rides
-      // on the name alone; pushing it to NetSuite promotes the lead then.
-      const prospectId = searchParams.get('prospect');
-      if (!prospectId) return;
-      const { data: lead } = await supabase
-        .from('prospects')
-        .select('id, company_name, netsuite_id')
-        .eq('id', prospectId)
-        .maybeSingle();
-      if (lead?.company_name) {
-        setCustomerName(lead.company_name);
-        setCustomerNsId(lead.netsuite_id || null);
+
+      // A restored autosave backup carries its OWN customer, so restoring
+      // silently dropped the one the rep arrived with — they'd just created
+      // a customer, hit Start Estimate, and land on somebody else's draft
+      // with no hint why. Restoring still wins by default; it just says so
+      // and offers the swap.
+      if (await openNewEstimate()) {
+        if (!pick) return;
+        const startFresh = await dialog.confirm(
+          `You restored backed-up work, and ${pick.name} — the customer you came in with — isn't on it.\n\n`
+          + `Start a blank estimate for ${pick.name} instead?`,
+          { title: 'Which one do you want?', confirmLabel: `Start fresh for ${pick.name}`, cancelLabel: 'Keep the restored work' },
+        );
+        if (!startFresh) return;
+        resetBuilder();
       }
+      if (!pick) return;
+      setCustomerId(pick.customerId);
+      setProspectId(pick.prospectId);
+      setCustomerName(pick.name);
+      setCustomerNsId(pick.nsId);
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: apply once after load
   }, [loading, searchParams]);
@@ -766,7 +799,7 @@ export default function EstimatesPage() {
   // openEstimate/openNewEstimate offer the snapshot back, and a successful
   // save retires it. See src/lib/estimate-draft.ts.
   const draftFields = {
-    editingId, title, notes, customerId, customerName, customerNsId,
+    editingId, title, notes, customerId, prospectId, customerName, customerNsId,
     taxRate, taxExempt, laborRate, laborOverride, lines,
     vin, unitNumber, vehiclePlatformId, vehicleOther, vehicleOtherMode,
     vehicleYear, vehicleWheelbase, vehicleRoof, vehicleCab, vehicleBed,
@@ -841,6 +874,7 @@ export default function EstimatesPage() {
     setCustomerId(f.customerId ?? null);
     setCustomerName(f.customerName || '');
     setCustomerNsId(f.customerNsId ?? null);
+    setProspectId(f.prospectId ?? null);
     setTaxRate(typeof f.taxRate === 'number' ? f.taxRate : companyTaxRateRef.current);
     setTaxExempt(!!f.taxExempt);
     setLaborRate(typeof f.laborRate === 'number' ? f.laborRate : DEFAULT_LABOR_RATE);
@@ -1160,6 +1194,7 @@ export default function EstimatesPage() {
       const body = {
         id: editingId || undefined,
         customer_id: customerId,
+        prospect_id: prospectId,
         customer_name: customerName,
         customer_netsuite_id: customerNsId,
         title, notes, status,
@@ -1952,6 +1987,7 @@ export default function EstimatesPage() {
     setCustomerId(est.customer_id);
     setCustomerName(est.customer_name || '');
     setCustomerNsId(est.customer_netsuite_id);
+    setProspectId(est.prospect_id ?? null);
     setTaxRate(est.tax_rate || companyTaxRateRef.current);
     setTaxExempt(est.tax_exempt);
     setLaborRate(est.labor_rate || DEFAULT_LABOR_RATE);
@@ -2229,6 +2265,7 @@ export default function EstimatesPage() {
     setCustomerId(null);
     setCustomerName('');
     setCustomerNsId(null);
+    setProspectId(null);
     setTaxRate(companyTaxRateRef.current);
     setTaxExempt(false);
     setLaborRate(DEFAULT_LABOR_RATE);
@@ -2616,7 +2653,7 @@ export default function EstimatesPage() {
             </div>
             {(
               <button
-                onClick={() => { setCustomerId(null); setCustomerName(''); setCustomerNsId(null); setCustSearch(''); }}
+                onClick={() => { setCustomerId(null); setProspectId(null); setCustomerName(''); setCustomerNsId(null); setCustSearch(''); }}
                 style={{ padding: '6px 10px', borderRadius: '6px', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
               >
                 Change
@@ -2646,6 +2683,7 @@ export default function EstimatesPage() {
                       // A lead has no customers-mirror row: the estimate
                       // carries the name only until push promotes it.
                       setCustomerId(c.isLead ? null : c.id);
+                      setProspectId(c.isLead ? c.id : null);
                       setCustomerName(c.company_name);
                       setCustomerNsId(c.isLead ? null : c.netsuite_id);
                       setCustSearch('');
@@ -3811,7 +3849,11 @@ export default function EstimatesPage() {
         )}
 
         {/* Send for Customer Approval (magic link) */}
-        {editingId && customerId && lines.length > 0 && !(estimates.find(e => e.id === editingId) as any)?.customer_approved && (
+        {/* Either half counts: a lead's estimate is as sendable as a
+            NetSuite customer's. Gating on customerId alone silently hid
+            this button for every estimate started from "Create + Start
+            Estimate". */}
+        {editingId && (customerId || prospectId) && lines.length > 0 && !(estimates.find(e => e.id === editingId) as any)?.customer_approved && (
           <button
             onClick={openApprovalModal}
             disabled={sendingForApproval}

@@ -27,6 +27,10 @@ const LineItemSchema = z.object({
 const UpsertEstimateSchema = z.object({
   id: z.string().uuid().optional(),
   customer_id: z.string().uuid().optional().nullable(),
+  // The CRM lead this was quoted for, when the customer isn't a NetSuite
+  // customer yet (migration 251). customer_id and prospect_id are the two
+  // halves of "who is this for" — a lead estimate carries the second.
+  prospect_id: z.string().uuid().optional().nullable(),
   customer_name: z.string().max(200).optional().nullable(),
   customer_netsuite_id: z.string().max(40).optional().nullable(),
   title: z.string().max(300).optional().nullable(),
@@ -147,7 +151,7 @@ export async function POST(req: NextRequest) {
   if (parsed.error) return parsed.error;
   const {
     id, // if present, update existing
-    customer_id, customer_name, customer_netsuite_id,
+    customer_id, prospect_id, customer_name, customer_netsuite_id,
     title, notes, status,
     tax_exempt,
     labor_rate, labor_hours_override,
@@ -278,6 +282,7 @@ export async function POST(req: NextRequest) {
         .from('estimates')
         .update({
           customer_id: customer_id || null,
+          prospect_id: prospect_id || null,
           customer_name: customer_name || null,
           customer_netsuite_id: customer_netsuite_id || null,
           title: title || null,
@@ -360,6 +365,7 @@ export async function POST(req: NextRequest) {
         .insert({
           estimate_number,
           customer_id: customer_id || null,
+          prospect_id: prospect_id || null,
           customer_name: customer_name || null,
           customer_netsuite_id: customer_netsuite_id || null,
           title: title || null,
