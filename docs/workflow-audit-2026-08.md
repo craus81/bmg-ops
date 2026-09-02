@@ -82,7 +82,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
 | **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 19 and 21 remain open** (2 — R2-goes-private, labor capture). Shipped 2026-08-30: the Stage 1 build-out (#701–#704, closing item 18), the two Stage 1 owner decisions (#706 lead tier, #707 deletion→NetSuite), and estimate integrity (#708–#710, items 9–11). Shipped 2026-08-30: the whole **vehicle custody** block (#712–#715, items 12–16). Shipped 2026-08-30 (second wave): **parts ordering & receiving** (#717–#719, item 17 — the audit's largest build: request queue → NetSuite PO → receiving with item receipts) and the **route→permission manifest** (#721, item 20 — all 251 routes declare + prove their guard; the sweep fixed the unauthenticated Google OAuth pair). |
 
-| **Round 3** — re-audit 2026-08-30 (Part 7) | 🔄 roadmap open | Nine-probe re-verification at `1ea2015`, every MAJOR+ finding re-verified by hand. **Round 2 holds** — all 19 ships confirmed at HEAD (5 partial caveats). ~90 new findings distilled into the Part 7 roadmap: 6 CRITICAL truncation bugs that move money/state, 8 E-SIGN forgery/loss holes, 7 non-idempotent NetSuite money paths (zero unique-index backing), 3 custody/CNI blockers — one, CNI company invites, failing 500 in production since #715 — the `forceChannels` no-op, and this week's parts-loop regressions (hotfixed same day, #724). Items 19 and 21 now carry written decision packages (the R2-flip tier checklist, the labor-capture touch-map). Shipped 2026-08-31: **Stage 2 closed** — the estimate correctness set (#726) and E-SIGN hardening (#727, migration 242) retire R3-6, R3-7, and every remaining Stage 2 walkthrough finding, and #729 ships the R3-17 change-order core (Duplicate + duplicate-as-revision with `supersedes_estimate_id` lineage, migration 243) — Stage 2 closed outright. **R3-1 closed in full** (#732 the six CRITICALs with fail-closed reads, #733 the MAJOR sweep) — every §7.2.2 truncation finding fixed. **Stage 3 closed** (#735 wrap-quote reconciliation + honest win counting + visible provenance, #736 customer reminders w/ migration 244) — all six capture-side findings shipped. **Stage 4 closed** (#740 atomic conversion claim + vendor-PO sync honesty, #741 schema-cache hardening after the live SO1064 stranding that #738/#739 repaired in parallel with migration 246 + a manual SO link) — the earlier findings were verified already fixed at HEAD (N2 phase 1 auto-project, item 9 staff walls, item 10 estimate closing, 17A–C ordering) and the dead-list re-verdicted. **Stage 5 closed** (#746 + migration 247: graphics_jobs UPDATE wall, presigned proof artwork, pre-invoice packing list; fan-out/transition-rules/proof-gate verified already shipped) — roll-nesting for production stays as the stage's one open enhancement. **Stage 6 closed** (#751 + migration 248: guide links w/ auto-stamp on attach, the CNI completion photo gate, scale-change recalibration with px_source provenance, the verification modal's 📐 guide link, super_admin walls; the inverted checklist was already fixed) — a full CNI checklist stays as its open enhancement, and the app-wide requireAdmin-excludes-super_admin question is flagged for an owner call. **Stage 7 closed** 2026-09-01 (#756 + migration 249: `POST /api/checkins` is the one writer with photos verified in storage before the row exists and the table's INSERT policies dropped — Round 3 caveat 12; arrival back-link + dedupe walk VIN → SO → unique customer and upfit rows carry SO identifiers — caveat 14; and the VIN→SO prefill the docs promised finally exists) — #712/#713/#714 held; R3-10's remainder (per-visit links, profileRoles, scans gate, auto-archive) stays with Stage 8. **Stage 8 closed** 2026-09-02 (#759 + migration 250: the completion gate moves to the DB — a 233-style trigger denies signed-in clients writing status/lane/QC, closing the route-only bypass; roles[]-aware admin override; scans allowlist; per-visit `?visit=` pick-list links; daily auto-archive of week-old shipped visits; Message Customer admin-only, ending the installer dead-end) — R3-10 shipped in full across the two custody closes; #650/#632/#634/#635/#638/#663 re-verified at HEAD; R3-21 labor capture stays the stage's open decision-package build. **Stage 9 closed** 2026-09-02 (#761 + migration 251: the invoice money paths get the claim/checked-stamp/never-falsy discipline — create-invoice refuses re-billing without an explicit tranche flag, graphics + parts-mail claims, the `created-id-unknown` sentinel keeps every already-created guard armed; invoice-vehicles always stamps billed scans; ar-payment-sync matches internal ids and backfills tranids; billing asks fall back to all admins and fire on picked_up/installed too; finance admitted to /invoices, ending the bounce-alert dead-end; dead scanPhotos deleted) — R3-8's invoice half shipped; the estimates/push, create-customer and promote-prospect paths ride with R3-9/R3-16, unique netsuite_*_id indexes stay open (blind index builds could brick deploys on existing dupes); R3-14's build half (per-SO invoices, a send step, a never-invoiced tile) is the stage's open build. |
+| **Round 3** — re-audit 2026-08-30 (Part 7) | 🔄 roadmap open | Nine-probe re-verification at `1ea2015`, every MAJOR+ finding re-verified by hand. **Round 2 holds** — all 19 ships confirmed at HEAD (5 partial caveats). ~90 new findings distilled into the Part 7 roadmap: 6 CRITICAL truncation bugs that move money/state, 8 E-SIGN forgery/loss holes, 7 non-idempotent NetSuite money paths (zero unique-index backing), 3 custody/CNI blockers — one, CNI company invites, failing 500 in production since #715 — the `forceChannels` no-op, and this week's parts-loop regressions (hotfixed same day, #724). Items 19 and 21 now carry written decision packages (the R2-flip tier checklist, the labor-capture touch-map). Shipped 2026-08-31: **Stage 2 closed** — the estimate correctness set (#726) and E-SIGN hardening (#727, migration 242) retire R3-6, R3-7, and every remaining Stage 2 walkthrough finding, and #729 ships the R3-17 change-order core (Duplicate + duplicate-as-revision with `supersedes_estimate_id` lineage, migration 243) — Stage 2 closed outright. **R3-1 closed in full** (#732 the six CRITICALs with fail-closed reads, #733 the MAJOR sweep) — every §7.2.2 truncation finding fixed. **Stage 3 closed** (#735 wrap-quote reconciliation + honest win counting + visible provenance, #736 customer reminders w/ migration 244) — all six capture-side findings shipped. **Stage 4 closed** (#740 atomic conversion claim + vendor-PO sync honesty, #741 schema-cache hardening after the live SO1064 stranding that #738/#739 repaired in parallel with migration 246 + a manual SO link) — the earlier findings were verified already fixed at HEAD (N2 phase 1 auto-project, item 9 staff walls, item 10 estimate closing, 17A–C ordering) and the dead-list re-verdicted. **Stage 5 closed** (#746 + migration 247: graphics_jobs UPDATE wall, presigned proof artwork, pre-invoice packing list; fan-out/transition-rules/proof-gate verified already shipped) — roll-nesting for production stays as the stage's one open enhancement. **Stage 6 closed** (#751 + migration 248: guide links w/ auto-stamp on attach, the CNI completion photo gate, scale-change recalibration with px_source provenance, the verification modal's 📐 guide link, super_admin walls; the inverted checklist was already fixed) — a full CNI checklist stays as its open enhancement, and the app-wide requireAdmin-excludes-super_admin question is flagged for an owner call. **Stage 7 closed** 2026-09-01 (#756 + migration 249: `POST /api/checkins` is the one writer with photos verified in storage before the row exists and the table's INSERT policies dropped — Round 3 caveat 12; arrival back-link + dedupe walk VIN → SO → unique customer and upfit rows carry SO identifiers — caveat 14; and the VIN→SO prefill the docs promised finally exists) — #712/#713/#714 held; R3-10's remainder (per-visit links, profileRoles, scans gate, auto-archive) stays with Stage 8. **Stage 8 closed** 2026-09-02 (#759 + migration 250: the completion gate moves to the DB — a 233-style trigger denies signed-in clients writing status/lane/QC, closing the route-only bypass; roles[]-aware admin override; scans allowlist; per-visit `?visit=` pick-list links; daily auto-archive of week-old shipped visits; Message Customer admin-only, ending the installer dead-end) — R3-10 shipped in full across the two custody closes; #650/#632/#634/#635/#638/#663 re-verified at HEAD; R3-21 labor capture stays the stage's open decision-package build. **Stage 9 closed** 2026-09-02 (#761 + migration 251: the invoice money paths get the claim/checked-stamp/never-falsy discipline — create-invoice refuses re-billing without an explicit tranche flag, graphics + parts-mail claims, the `created-id-unknown` sentinel keeps every already-created guard armed; invoice-vehicles always stamps billed scans; ar-payment-sync matches internal ids and backfills tranids; billing asks fall back to all admins and fire on picked_up/installed too; finance admitted to /invoices, ending the bounce-alert dead-end; dead scanPhotos deleted) — R3-8's invoice half shipped; the estimates/push, create-customer and promote-prospect paths ride with R3-9/R3-16, unique netsuite_*_id indexes stay open (blind index builds could brick deploys on existing dupes); R3-14's build half (per-SO invoices, a send step, a never-invoiced tile) is the stage's open build. **Stage 10 closed** 2026-09-02 (#763 + migration 252: the shop sees the approved 3D layout — the project's Linked Records resolves the design through the shared estimate id, snapshot for every role + designer link for configurator holders; a confirmed Cancel action finally reaches 228's release-on-cancel; unplaced parts get an undoable remove in the Review card; and `upfit_designs`' USING(true) read — the stage's own CRITICAL class, recreated on a post-224 table — is staff-only) — API walls/auto-project/allocation trigger held at HEAD; per-SKU meshes, trade packages and the magic-link viewer stay Part 4's build tier. |
 
 Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap; Part 7 carries Round 3.
 
@@ -675,18 +675,47 @@ parts-readiness and stock reservations.
 
 **What's broken is the connective tissue and the locks:**
 
-- **CRITICAL — The upfit-projects API + RLS are open to any account.**
+- ✅ **CRITICAL — The upfit-projects API + RLS are open to any account.**
   `requireAuth` + `USING(true)` RLS means customer/installer (and even the
   anon key) can read, rewrite, and **DELETE** all projects.
-- **CRITICAL — Estimate→SO conversion never creates the project** (the manual
+  _(Fixed: item 9 moved all five routes to `requireStaff` (manifest-pinned by
+  #721) and migration 224 rebuilt the projects tables staff-only; re-verified
+  at HEAD 2026-09-02. Same-class hardening with the close: `upfit_designs` —
+  created AFTER that fix with the same `USING(true)` read — is staff-read as
+  of #763 + migration 252.)_
+- ✅ **CRITICAL — Estimate→SO conversion never creates the project** (the manual
   chasm from Stage 4).
-- **MAJOR — The 3D design dead-ends at the estimate.** There's no design link on
+  _(Fixed: N2 phase 1 — convert-to-so find-or-creates the project keyed on
+  estimate_id, migration 225's unique index guarding the race; held under
+  Round 3 and hardened by Stage 4's conversion claim.)_
+- ✅ **MAJOR — The 3D design dead-ends at the estimate.** There's no design link on
   the project, so the shop builds without ever seeing the approved layout.
-- **MAJOR — The ship-complete DB trigger strands part allocations in
+  _(Fixed: #763 — no new schema needed: the designer's hand-off already
+  stamps `upfit_designs.estimate_id` and the auto-created project carries
+  the same estimate id, so the project's Linked Records resolves the design
+  through that chain — layout snapshot shown to every role that can see the
+  project (the shop's build reference), open-in-designer link for
+  `upfit_configurator` holders so the link never bounces its audience.)_
+- ✅ **MAJOR — The ship-complete DB trigger strands part allocations in
   `reserved`** — permanently shrinking free stock for every other job's readiness
   math.
-- **MAJOR — No UI can cancel a project** (cancellation is the only path that
+  _(Fixed: #662, migration 228 — status-change trigger consumes on complete,
+  releases on cancel, with the stranded-rows backfill; re-verified.)_
+- ✅ **MAJOR — No UI can cancel a project** (cancellation is the only path that
   releases reservations), and unplaced (no-dimension) parts can never be removed.
+  _(Fixed: #763 — the pipeline row deliberately hid the cancelled chip and
+  nothing else offered it, so 228's release-on-cancel was unreachable from
+  the UI: a confirmed Cancel action on the project modal closes that, and
+  any pipeline click revives a cancelled project. The designer's Review card
+  now carries an undoable ✕ on unplaced rows — they priced onto the quote
+  but the 3D delete only reached placed items.)_
+
+**Stage 10 status (2026-09-02): CLOSED** — the design→shop link, the cancel
+affordance, unplaced-part removal, and the designs-table RLS hardening
+shipped in #763 + migration 252; the API walls, auto-created project, and
+allocation trigger all held at HEAD. Open by design (Part 4's build tier):
+per-SKU 3D meshes, seeded trade packages, and the customer magic-link
+viewer.
 
 ## The CNI (contract-installer) subsystem
 
@@ -853,13 +882,15 @@ A full recommended role→feature table is in the per-slice `roleaudit` detail.
 The owner asked specifically about features that would help if finished. The
 biggest ones. _(Status re-checked 2026-08-29 at `4cc8507`; ✅/❌ added then.)_
 
-- ❌ **The 3D Upfit Designer → shop bridge.** The designer is already a complete v1
+- ⚠️ **The 3D Upfit Designer → shop bridge.** The designer is already a complete v1
   that produces a priced, to-scale 3D BOM and hands it to an estimate. Of the two
   things missing when this was written, (1) auto-create the upfit project on SO
-  conversion **has since shipped** in `convert-to-so`; (2) the `design_id` link
-  that would let the **shop build from the approved 3D layout** instead of
-  re-planning from tasks and file attachments **has not** — `design_id` appears
-  nowhere in the repo. Per-SKU 3D meshes (the seam is
+  conversion **has since shipped** in `convert-to-so`; (2) the shop-sees-the-
+  layout link **shipped 2026-09-02 with Stage 10's close (#763)** — no
+  `design_id` column needed: the project's Linked Records resolves the design
+  through the shared estimate id and shows the layout snapshot to the whole
+  shop, with an open-in-designer link for configurator holders. Still the
+  build tier: per-SKU 3D meshes (the seam is
   already built: `resolveItemMesh`) and seeded trade packages would turn it into
   a real closing tool. A magic-link 3D viewer (the scene already has a read-only
   mode) would let customers see their van.
