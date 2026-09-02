@@ -131,14 +131,30 @@ export async function POST(req: NextRequest) {
       }, { status: 500 });
     }
 
-    // Step 4: Save the NetSuite SO reference back to the PO
-    await supabase
+    // Step 4: Save the NetSuite SO reference back to the PO. The SO EXISTS
+    // from here on — never stamp falsy (Round 3 §7.2.4: an id NetSuite
+    // didn't return stamped '' and defeated the already-pushed guard above,
+    // so the next click created a second real SO), and never let a failed
+    // stamp pass silently.
+    const soStampId = result.salesOrderId || 'created-id-unknown';
+    const { error: soStampErr } = await supabase
       .from('purchase_orders')
       .update({
-        netsuite_so_id: result.salesOrderId,
+        netsuite_so_id: soStampId,
         netsuite_so_number: result.salesOrderNumber || null,
       })
       .eq('id', poId);
+    if (soStampErr || !result.salesOrderId) {
+      console.error('create-sales-order: stamp issue after NetSuite create:', soStampErr?.message || 'no id returned');
+      return NextResponse.json({
+        status: 'created',
+        salesOrderId: result.salesOrderId || null,
+        salesOrderNumber: result.salesOrderNumber || null,
+        warning: soStampErr
+          ? `The sales order was created but the PO reference stamp failed (${soStampErr.message}) — record it on the PO by hand.`
+          : 'The sales order was created but NetSuite did not return its id — find it in NetSuite and fix the PO reference by hand.',
+      });
+    }
 
     return NextResponse.json({
       status: 'created',

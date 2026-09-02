@@ -87,16 +87,22 @@ interface InvoiceVehiclesResult {
 export default function InvoicingHubPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, profile, isAdmin, isSales, hasFeature } = useAuth();
+  const { user, profile, isAdmin, isSales, hasRole, hasFeature } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
 
   useEffect(() => {
     // Wait for the profile — role flags are false until it loads, and
     // redirecting on unresolved roles would bounce email deep links home.
+    // Finance is admitted (audit Stage 9): the invoice-email bounce alert
+    // deep-links FINANCE to this page's Sent tab ("Resend it from the
+    // Invoices page") — bouncing them to /home made that alert a dead
+    // click. Their nav deliberately doesn't surface the tile (#651: they
+    // don't author invoices); the gate just stops rejecting the audience
+    // the alerts target.
     if (!user || !profile) return;
-    if (!isAdmin && !isSales) router.push('/home');
-  }, [user, profile, isAdmin, isSales, router]);
+    if (!isAdmin && !isSales && !hasRole('finance')) router.push('/home');
+  }, [user, profile, isAdmin, isSales, hasRole, router]);
 
   const [tab, setTab] = useState<HubTab>('graphics');
   const [loading, setLoading] = useState(true);

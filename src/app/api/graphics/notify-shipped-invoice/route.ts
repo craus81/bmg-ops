@@ -22,6 +22,10 @@ const Schema = z.object({
   notifyCustomer: z.boolean().optional(),
   // Staff-edited recipient for this one send.
   customerEmail: z.string().email().optional().nullable(),
+  // Which terminal transition fired this (copy only). The audit's Stage 9
+  // finding: the billing ask fired only on 'shipped', so picked-up and
+  // direct-installed jobs never prompted anyone to bill them.
+  trigger: z.enum(['shipped', 'picked_up', 'installed']).optional(),
 });
 
 /**
@@ -44,7 +48,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
-  const { jobId, preview, notifyCustomer, customerEmail } = parsed.data;
+  const { jobId, preview, notifyCustomer, customerEmail, trigger } = parsed.data;
 
   const { data: job } = await supabase
     .from('graphics_jobs')
@@ -104,11 +108,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ skipped: 'already_invoiced' });
   }
 
+  const verb = trigger === 'picked_up' ? 'was picked up'
+    : trigger === 'installed' ? 'was installed'
+    : 'has shipped';
+  const titleVerb = trigger === 'picked_up' ? 'picked up'
+    : trigger === 'installed' ? 'installed'
+    : 'shipped';
   const billingUserIds = await getBillingUserIds(supabase);
   await notifyMany(billingUserIds, {
     type: 'graphics_invoice_prompt',
-    title: 'Graphics shipped — create invoice?',
-    body: `${jobLabel}${job.customer ? ` for ${job.customer}` : ''} has shipped. Create invoice in FleetSuite?`,
+    title: `Graphics ${titleVerb} — create invoice?`,
+    body: `${jobLabel}${job.customer ? ` for ${job.customer}` : ''} ${verb}. Create invoice in FleetSuite?`,
     url: deepLinks.createInvoiceForJob(job.id),
   });
 

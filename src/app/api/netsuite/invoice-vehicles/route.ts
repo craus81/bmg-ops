@@ -304,14 +304,20 @@ export async function POST(req: NextRequest) {
           // Fold the full invoice bookkeeping into the endpoint so every caller
           // gets identical accounting in one server-side step, instead of a
           // separate client-side call that could fail after NetSuite already
-          // billed (docs/cni-redesign.md §3.3). Only when an invoice number came
-          // back — otherwise leave the scans visible for manual handling, as the
-          // page did before.
-          if (invoiceResult.invoiceNumber) {
+          // billed (docs/cni-redesign.md §3.3). The invoice EXISTS from here on,
+          // so the scans are ALWAYS stamped (Round 3 §7.2.4: gating this on a
+          // truthy invoiceNumber left successfully billed scans looking
+          // un-invoiced and re-billable when only the tranid lookup failed).
+          // Fall back to the internal id — the AR payment sync resolves those
+          // to tranids — and to a visible sentinel in the never-seen case of
+          // no id at all.
+          const stampNumber = invoiceResult.invoiceNumber
+            || (invoiceResult.invoiceId ? String(invoiceResult.invoiceId) : 'created-id-unknown');
+          {
             await supabase
               .from('scan_logs')
               .update({
-                invoice_number: invoiceResult.invoiceNumber,
+                invoice_number: stampNumber,
                 date_invoiced: nowIso.slice(0, 10),
                 archived_at: nowIso,
               })

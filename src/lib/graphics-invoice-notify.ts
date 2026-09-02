@@ -19,17 +19,25 @@ import { deepLinks } from '@/lib/deep-links';
  * notifications in Settings (notification_preferences.notify_invoicing).
  * Admin detection mirrors api-auth's profileRoles(): the multi-role `roles`
  * array wins when present, else the single `role` column.
+ *
+ * notify_invoicing DEFAULTS FALSE (migration 144) — the audit's Stage 9
+ * finding was that with zero opt-ins this list dispatched to nobody and the
+ * billing ask silently vanished. When no admin has opted in, fall back to
+ * ALL admins: an explicit opt-in set narrows the audience, but money asks
+ * must always reach someone.
  */
 export async function getBillingUserIds(supabase: SupabaseClient): Promise<string[]> {
   const [{ data: profiles }, { data: prefs }] = await Promise.all([
-    supabase.from('profiles').select('id, role, roles').eq('status', 'approved'),
+    supabase.from('profiles').select('id, role, roles, deactivated').eq('status', 'approved'),
     supabase.from('notification_preferences').select('user_id').eq('notify_invoicing', true),
   ]);
   const optedIn = new Set((prefs || []).map((p) => p.user_id));
-  return (profiles || [])
+  const adminIds = (profiles || [])
+    .filter((p: any) => !p.deactivated)
     .filter((p) => (Array.isArray(p.roles) && p.roles.length > 0 ? p.roles : [p.role]).includes('admin'))
-    .map((p) => p.id)
-    .filter((id) => optedIn.has(id));
+    .map((p) => p.id);
+  const opted = adminIds.filter((id) => optedIn.has(id));
+  return opted.length > 0 ? opted : adminIds;
 }
 
 export async function notifyInvoiceCreated(

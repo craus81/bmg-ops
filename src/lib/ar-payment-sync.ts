@@ -58,27 +58,56 @@ async function unpaidInvoiceNumbers(
 /**
  * Ask NetSuite which of these invoice numbers are Paid In Full.
  * Batched IN queries keep the SuiteQL statement bounded.
+ *
+ * Stored numbers are matched two ways (Round 3 §7.2.8): as tranids — the
+ * normal case — and, for digit-only values, as internal ids too. The
+ * invoice routes stamp the internal id when NetSuite's tranid lookup
+ * fails, and those rows could never be marked paid while this matched
+ * tranid alone. An id-match also reports the real tranid so the caller
+ * can backfill the stored number.
  */
-async function fetchPaidInvoiceNumbers(numbers: string[]): Promise<Set<string>> {
+async function fetchPaidInvoiceNumbers(numbers: string[]): Promise<{
+  paid: Set<string>;
+  /** stored internal id (digit-only) → real tranid, for paid id-matches */
+  tranidByStoredId: Map<string, string>;
+}> {
   const paid = new Set<string>();
+  const tranidByStoredId = new Map<string, string>();
   const BATCH = 150;
   for (let i = 0; i < numbers.length; i += BATCH) {
     const batch = numbers.slice(i, i + BATCH);
     const inList = batch.map((n) => `'${safeStringLiteral(n, 60)}'`).join(', ');
+    const idCandidates = batch.filter((n) => /^\d{1,15}$/.test(n));
+    const idList = idCandidates.join(', ');
     const query = `
-      SELECT t.tranid, t.status
+      SELECT t.id, t.tranid, t.status
       FROM transaction t
-      WHERE t.type = 'CustInvc' AND t.tranid IN (${inList})
+      WHERE t.type = 'CustInvc'
+        AND (t.tranid IN (${inList})${idList ? ` OR t.id IN (${idList})` : ''})
     `;
-    const res = await suiteqlQuery(query, BATCH + 50, 0);
+    const res = await suiteqlQuery(query, (BATCH * 2) + 50, 0);
+    // Resolve each stored value with the TRANID interpretation winning: a
+    // digit-only tranid must never be flipped on the strength of some other
+    // invoice that happens to carry that number as its internal id.
+    const byTranid = new Map<string, any>();
+    const byId = new Map<string, any>();
     for (const row of res?.items || []) {
-      if (isPaidStatus(row.status)) {
+      const tranid = String(row.tranid ?? '').trim();
+      const internalId = String(row.id ?? '').trim();
+      if (tranid && !byTranid.has(tranid)) byTranid.set(tranid, row);
+      if (internalId && !byId.has(internalId)) byId.set(internalId, row);
+    }
+    for (const n of batch) {
+      const row = byTranid.get(n) ?? byId.get(n);
+      if (!row || !isPaidStatus(row.status)) continue;
+      paid.add(n);
+      if (!byTranid.has(n)) {
         const tranid = String(row.tranid ?? '').trim();
-        if (tranid) paid.add(tranid);
+        if (tranid) tranidByStoredId.set(n, tranid);
       }
     }
   }
-  return paid;
+  return { paid, tranidByStoredId };
 }
 
 export async function syncArInvoicePayments(supabase: any): Promise<ArPaymentSyncResult> {
@@ -97,7 +126,7 @@ export async function syncArInvoicePayments(supabase: any): Promise<ArPaymentSyn
   };
   if (allNumbers.length === 0) return result;
 
-  const paidNumbers = await fetchPaidInvoiceNumbers(allNumbers);
+  const { paid: paidNumbers, tranidByStoredId } = await fetchPaidInvoiceNumbers(allNumbers);
   result.paidInvoices = paidNumbers.size;
   if (paidNumbers.size === 0) return result;
 
@@ -123,6 +152,18 @@ export async function syncArInvoicePayments(supabase: any): Promise<ArPaymentSyn
     ]);
     result.fleetCheckinsUpdated += (fleetRes.data || []).length;
     result.scanLogsUpdated += (scanRes.data || []).length;
+  }
+
+  // Rows that matched by INTERNAL id were stamped by an invoice route whose
+  // tranid lookup failed — now that NetSuite told us the real tranid,
+  // backfill it so the row displays (and future-matches) like every other.
+  // Exact-equality filter: hand-typed numbers are never touched.
+  for (const [storedId, tranid] of tranidByStoredId) {
+    if (!tranid || tranid === storedId) continue;
+    await Promise.all([
+      supabase.from('fleet_checkins').update({ invoice_number: tranid }).eq('invoice_number', storedId),
+      supabase.from('scan_logs').update({ invoice_number: tranid }).eq('invoice_number', storedId),
+    ]);
   }
 
   return result;

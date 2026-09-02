@@ -67,6 +67,9 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Hoisted so the outer catch can release a claim taken below (a leaked
+  // claim also self-heals via the 15-minute stale takeover).
+  let releaseInvoiceClaim: (() => Promise<void>) | null = null;
   try {
     const supabase = getSupabase();
 
@@ -237,6 +240,43 @@ export async function POST(req: NextRequest) {
       locationName: job.ship_to,
     });
 
+    // Atomic claim (migration 251): the truthy netsuite_invoice_id guard
+    // above is check-then-act — two concurrent clicks could both pass it
+    // before either stamped (Round 3 §7.2.4). The claim turns the second
+    // one away BEFORE a duplicate NetSuite invoice exists. Degrades
+    // gracefully while the schema cache lags (#741).
+    let invClaimActive = false;
+    {
+      const staleCutoff = new Date(Date.now() - 15 * 60_000).toISOString();
+      const { data: claimRows, error: claimErr } = await supabase
+        .from('graphics_jobs')
+        .update({ invoice_claimed_at: new Date().toISOString() })
+        .eq('id', jobId)
+        .or(`invoice_claimed_at.is.null,invoice_claimed_at.lt.${staleCutoff}`)
+        .select('id');
+      if (claimErr) {
+        if ((claimErr as any).code === 'PGRST204' || /invoice_claimed_at/i.test(claimErr.message || '')) {
+          console.warn('graphics create-invoice: claim column not in schema cache yet — proceeding unclaimed');
+        } else {
+          return NextResponse.json({ error: 'Could not reserve this job for invoicing — try again' }, { status: 503 });
+        }
+      } else if (!claimRows || claimRows.length === 0) {
+        return NextResponse.json({
+          error: 'An invoice for this job is already being created — wait a moment and refresh before retrying.',
+          status: 'invoice_in_progress',
+        }, { status: 409 });
+      } else {
+        invClaimActive = true;
+        releaseInvoiceClaim = async () => {
+          if (!invClaimActive) return;
+          invClaimActive = false;
+          try {
+            await supabase.from('graphics_jobs').update({ invoice_claimed_at: null }).eq('id', jobId);
+          } catch { /* stale takeover covers a lost release */ }
+        };
+      }
+    }
+
     const result = await createDirectInvoice({
       customerId: customerNsId,
       memo,
@@ -247,31 +287,48 @@ export async function POST(req: NextRequest) {
     });
 
     if (!result.success) {
+      if (releaseInvoiceClaim) await releaseInvoiceClaim();
       return NextResponse.json({ error: result.error }, { status: 500 });
     }
 
     const invoiceAmount = lineItems.reduce((sum, li) => sum + (li.quantity * li.rate), 0);
 
-    await supabase
+    // The invoice EXISTS from here on — never report failure, never stamp
+    // falsy (R3-8): a success whose id NetSuite didn't return stamps a
+    // visible sentinel so the already-invoiced guard still holds.
+    const stampId = result.invoiceId || 'created-id-unknown';
+    const stampWarnings: string[] = [];
+    if (!result.invoiceId) {
+      stampWarnings.push('NetSuite did not return the invoice id — find the new invoice in NetSuite and correct the job reference by hand');
+    }
+
+    const { error: stampErr } = await supabase
       .from('graphics_jobs')
       .update({
-        netsuite_invoice_id: result.invoiceId,
-        netsuite_invoice_number: result.invoiceNumber,
+        netsuite_invoice_id: stampId,
+        netsuite_invoice_number: result.invoiceNumber || null,
         invoiced_at: new Date().toISOString(),
         invoiced_by: userId || auth.user.id,
         updated_by: userId || auth.user.id,
         invoice_amount: invoiceAmount,
         customer_netsuite_id: customerNsId,
         updated_at: new Date().toISOString(),
+        ...(invClaimActive ? { invoice_claimed_at: null } : {}),
       })
       .eq('id', jobId);
+    if (stampErr) {
+      // The claim stays held so a retry can't double-bill while the stamp
+      // is missing; the stale takeover reopens it after 15 minutes.
+      console.error('graphics create-invoice: job stamp failed after NetSuite create:', stampErr.message);
+      stampWarnings.push(`the job's invoice stamp failed (${stampErr.message}) — record invoice ${result.invoiceNumber || stampId} on the job by hand before retrying anything`);
+    }
 
     await supabase.from('graphics_status_history').insert({
       job_id: jobId,
       from_status: job.status,
       to_status: job.status,
       changed_by: userId || auth.user.id,
-      note: `Invoice created: ${result.invoiceNumber || result.invoiceId}${job.po_number ? ` (PO #${job.po_number})` : ''}`,
+      note: `Invoice created: ${result.invoiceNumber || stampId}${job.po_number ? ` (PO #${job.po_number})` : ''}`,
     });
 
     // Resolve the "create invoice?" prompts and tell the other billing
@@ -280,7 +337,7 @@ export async function POST(req: NextRequest) {
       jobId,
       jobLabel: job.title || `Job #${job.job_number}` || `Job ${jobId.slice(0, 8)}`,
       customer: job.customer,
-      invoiceNumber: result.invoiceNumber || result.invoiceId,
+      invoiceNumber: result.invoiceNumber || stampId,
       actorId: userId || auth.user.id,
     });
 
@@ -329,9 +386,11 @@ export async function POST(req: NextRequest) {
       lineItemCount: lineItems.length,
       skippedParts: skippedParts.length > 0 ? skippedParts : undefined,
       savedPrices: savedPrices > 0 ? savedPrices : undefined,
+      warning: stampWarnings.length > 0 ? stampWarnings.join('; ') : undefined,
     });
   } catch (err: any) {
     console.error('Graphics create-invoice error:', err);
+    if (releaseInvoiceClaim) await releaseInvoiceClaim();
     return NextResponse.json({ error: err.message || 'Failed to create invoice' }, { status: 500 });
   }
 }

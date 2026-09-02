@@ -117,8 +117,6 @@ export const deepLinks = {
   /** Ready-for-install list — highlights the vehicles for one graphics job. */
   readyForInstall: (graphicsJobId?: string | null) =>
     `/installer/ready-for-install${graphicsJobId ? `?job=${graphicsJobId}` : ''}`,
-  /** Tech-facing photo page for one scanned vehicle (photo review verdicts). */
-  scanPhotos: (scannedVehicleId: string) => `/photos?id=${scannedVehicleId}`,
   /** POs page with the pending-import review queue opened on one entry. */
   poPendingReview: (messageId: string) => `/admin/pos?review=${encodeURIComponent(messageId)}`,
   /** Customer portal dashboard — the only in-app destination an external
