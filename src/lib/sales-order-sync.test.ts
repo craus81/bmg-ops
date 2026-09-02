@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@/lib/netsuite', () => ({
   suiteqlQuery: vi.fn(),
   suiteqlQueryAll: vi.fn(),
+  isSuiteqlError: (err: unknown) => err instanceof Error && typeof (err as any).status === 'number',
 }));
 vi.mock('@/lib/system-health', () => ({
   recordHeartbeat: vi.fn(async () => ({ ok: true })),
@@ -15,6 +16,7 @@ import { suiteqlQuery, suiteqlQueryAll } from '@/lib/netsuite';
 import { recordHeartbeat } from '@/lib/system-health';
 import {
   classifySoMatch, syncSalesOrders, buildSoHeaderQuery, parseSoSyncResume, SO_PAGE_SIZE,
+  compactSuiteqlError, diagnoseSoQueries,
 } from './sales-order-sync';
 
 const suiteql = vi.mocked(suiteqlQuery);
@@ -79,12 +81,30 @@ const many = (n: number) => Array.from({ length: n }, (_, i) => so(i + 1));
 
 /** Answers header pages (newest first, honouring `t.id < N` and the limit)
  *  and line queries the way NetSuite would. */
-function installNetSuite(sos: NsSo[], opts?: { rejectExtras?: boolean; failOnCall?: number }) {
+/** What NetSuite actually sends back on an internal failure. */
+const NS_500 = 'NetSuite SuiteQL error (500): {"type":"https://www.rfc-editor.org/rfc/rfc9110.html#section-15.6.1","title":"Internal Server Error","status":500,"o:errorDetails":[{"detail":"An unexpected error occurred. Error ID: mtkekqnm1b0jlj800jp4o","o:errorCode":"UNEXPECTED_ERROR"}]}';
+const nsError = (message: string, status: number) => Object.assign(new Error(message), { status });
+
+interface NsOpts {
+  rejectExtras?: boolean;
+  /** Fail the Nth header/probe query (1-based) with a NetSuite 500. */
+  failOnCall?: number;
+  /** Fail every header/probe query matching this predicate with a NetSuite 500. */
+  failWhen?: (q: string) => boolean;
+  /** Fail the Nth line query (1-based) with a NetSuite 500. */
+  failLinesOnCall?: number;
+}
+
+function installNetSuite(sos: NsSo[], opts?: NsOpts) {
   let call = 0;
+  let lineCall = 0;
   suiteql.mockImplementation(async (q: string, limit?: number) => {
     call++;
-    if (opts?.rejectExtras && q.includes('BUILTIN.DF')) throw new Error('Invalid search query: BUILTIN.DF');
-    if (opts?.failOnCall === call) throw new Error('NetSuite SuiteQL error (500): boom');
+    if (opts?.rejectExtras && q.includes('BUILTIN.DF')) throw nsError('NetSuite SuiteQL error (400): Invalid search query: BUILTIN.DF', 400);
+    if (opts?.failOnCall === call) throw nsError(NS_500, 500);
+    if (opts?.failWhen?.(q)) throw nsError(NS_500, 500);
+    if (/SELECT COUNT\(t\.id\) AS n/.test(q)) return { items: [{ n: String(sos.length) }] };
+    if (/FROM transactionline tl/.test(q)) return { items: await suiteqlAll(q) };
     const m = q.match(/t\.id < (\d+)/);
     const before = m ? Number(m[1]) : Infinity;
     const items = sos
@@ -100,6 +120,8 @@ function installNetSuite(sos: NsSo[], opts?: { rejectExtras?: boolean; failOnCal
     return { items };
   });
   suiteqlAll.mockImplementation(async (q: string) => {
+    lineCall++;
+    if (opts?.failLinesOnCall === lineCall) throw nsError(NS_500, 500);
     const m = q.match(/IN \(([^)]+)\)/);
     const ids = new Set((m ? m[1] : '').split(',').map(x => x.trim()));
     const rows: any[] = [];
@@ -303,12 +325,60 @@ describe('syncSalesOrders', () => {
 
     const result = await syncSalesOrders(service, { deadline: far() });
 
-    expect(result.error).toMatch(/boom/);
+    // Stage, compact NetSuite detail (with the Error ID support asks for),
+    // and the probe verdict — one transient failure, every probe passing.
+    expect(result.error).toMatch(/^sales-order headers, page 2 \(ids below 251\): NetSuite SuiteQL error \(500\): UNEXPECTED_ERROR — An unexpected error occurred\. Error ID: mtkekqnm1b0jlj800jp4o — every probe passed/);
+    expect(result.error).not.toContain('rfc-editor');
     expect(result.partial).toBe(false);
     expect(result.synced).toBe(200);
-    const [, , payload, opts] = heartbeat.mock.calls[0];
-    expect(opts).toEqual({ touchLastSyncedAt: false });
-    expect(payload).toMatchObject({ error: expect.stringMatching(/boom/), resume: { beforeId: '251', processed: 200 } });
+    // The cursor lands before the diagnosis makes more NetSuite calls, then
+    // the verdict is appended in a second write.
+    expect(heartbeat).toHaveBeenCalledTimes(2);
+    const [, , first, firstOpts] = heartbeat.mock.calls[0];
+    expect(firstOpts).toEqual({ touchLastSyncedAt: false });
+    expect(first).toMatchObject({ error: expect.stringMatching(/^sales-order headers, page 2/), resume: { beforeId: '251', processed: 200 } });
+    expect((first as any).error).not.toContain('every probe passed');
+    const [, , second] = heartbeat.mock.calls[1];
+    expect(second).toMatchObject({ error: result.error, resume: { beforeId: '251', processed: 200 } });
+  });
+
+  it('names the clause NetSuite rejects when the failure is deterministic', async () => {
+    // Every ordered query fails, so the ladder passes count → filter →
+    // columns → join and stops at the ordering step.
+    installNetSuite(many(5), { failWhen: q => q.includes('ORDER BY') });
+    const { service, writes } = fakeService({ syncState: null });
+
+    const result = await syncSalesOrders(service, { deadline: far() });
+
+    expect(writes.headers).toHaveLength(0);
+    expect(result.error).toMatch(/^sales-order headers, page 1: NetSuite SuiteQL error \(500\): UNEXPECTED_ERROR/);
+    expect(result.error).toContain('NetSuite rejects the newest-first ordering (ORDER BY t.id DESC)');
+    const [, , payload] = heartbeat.mock.calls[heartbeat.mock.calls.length - 1];
+    expect(payload).not.toHaveProperty('resume');
+    expect((payload as any).error).toBe(result.error);
+  });
+
+  it('a line-query failure is labelled as such, and the headers of that page are not counted as synced', async () => {
+    installNetSuite(many(3), { failLinesOnCall: 1 });
+    const { service, writes } = fakeService({ syncState: null });
+
+    const result = await syncSalesOrders(service, { deadline: far() });
+
+    expect(result.error).toMatch(/^sales-order lines, page 1 \(orders 1–3\): NetSuite SuiteQL error \(500\)/);
+    expect(result.synced).toBe(0);
+    expect(writes.headers).toHaveLength(0);
+  });
+
+  it('an auth failure is reported without the probe ladder', async () => {
+    suiteql.mockImplementation(async () => { throw nsError('NetSuite SuiteQL error (401): Invalid login attempt', 401); });
+    const { service } = fakeService({ syncState: null });
+
+    const result = await syncSalesOrders(service, { deadline: far() });
+
+    expect(result.error).toBe('sales-order headers, page 1: NetSuite SuiteQL error (401): Invalid login attempt');
+    expect(heartbeat).toHaveBeenCalledTimes(1);
+    // Only the two header attempts (extras, then plain) — no probes.
+    expect(suiteql).toHaveBeenCalledTimes(2);
   });
 
   it('retries without the optional columns when SuiteQL rejects them, and stays without them for the run', async () => {
@@ -396,5 +466,50 @@ describe('syncSalesOrders', () => {
     expect(writes.lines.map(l => l.so_id)).toEqual(['row-3', 'row-1']);
     const [, , payload] = heartbeat.mock.calls[0];
     expect((payload as any).headerErrorSamples[0]).toMatch(/SO2: bad row/);
+  });
+});
+
+describe('compactSuiteqlError', () => {
+  it('keeps status, error code and detail from a NetSuite JSON body', () => {
+    expect(compactSuiteqlError(new Error(NS_500)))
+      .toBe('NetSuite SuiteQL error (500): UNEXPECTED_ERROR — An unexpected error occurred. Error ID: mtkekqnm1b0jlj800jp4o');
+  });
+  it('passes a non-JSON body through', () => {
+    expect(compactSuiteqlError(new Error('NetSuite SuiteQL error (400): Invalid search query'))).toBe('NetSuite SuiteQL error (400): Invalid search query');
+    expect(compactSuiteqlError(new Error('ECONNRESET'))).toBe('ECONNRESET');
+  });
+});
+
+describe('diagnoseSoQueries', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('walks the ladder and reports all-clear when everything passes', async () => {
+    installNetSuite(many(3));
+    const { probes, verdict } = await diagnoseSoQueries('2025-01-01T00:00:00Z');
+    expect(probes.map(p => [p.step, p.ok])).toEqual([
+      ['sales orders visible to the integration role', true],
+      ['lastmodifieddate filter', true],
+      ['header columns', true],
+      ['customer join', true],
+      ['ORDER BY t.id DESC', true],
+      ['status label + VIN columns', true],
+      ['line query', true],
+    ]);
+    expect(verdict).toMatch(/transient/);
+  });
+
+  it('calls out a role that sees no sales orders at all', async () => {
+    installNetSuite([]);
+    const { verdict } = await diagnoseSoQueries('2025-01-01T00:00:00Z');
+    expect(verdict).toContain('Sales Order → View');
+  });
+
+  it('stops at the first required failure, and a failing optional step does not stop it', async () => {
+    installNetSuite(many(3), { rejectExtras: true, failWhen: q => q.includes('FROM transactionline') });
+    const { probes, verdict } = await diagnoseSoQueries('2025-01-01T00:00:00Z');
+    const extras = probes.find(p => p.step === 'status label + VIN columns');
+    expect(extras).toMatchObject({ ok: false, optional: true });
+    expect(probes[probes.length - 1]).toMatchObject({ step: 'line query', ok: false });
+    expect(verdict).toMatch(/rejects the line query/);
   });
 });
