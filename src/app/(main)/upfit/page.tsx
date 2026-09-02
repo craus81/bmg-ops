@@ -9,6 +9,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { DropZone } from '@/components/DropZone';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { theme } from '@/lib/theme';
+import { deepLinks } from '@/lib/deep-links';
 import { flashNote } from '@/lib/focus-note';
 import { fetchAllRows } from '@/lib/fetch-all';
 import RecordChanges from '@/components/RecordChanges';
@@ -136,7 +137,7 @@ const STATUSES = [
 ];
 
 export default function UpfitProjectsPage() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, hasFeature } = useAuth();
   useRequireFeature('upfit_projects');
   const supabase = createClient();
   const dialog = useDialog();
@@ -306,6 +307,34 @@ export default function UpfitProjectsPage() {
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams, projects]);
+
+  // 3D design behind this project (audit Stage 10: "the shop builds without
+  // ever seeing the approved layout" — the design was reachable only from
+  // the estimate side). Resolved through the estimate the design quoted:
+  // upfit_designs.estimate_id ↔ upfit_projects.estimate_id, no new schema.
+  const [designLink, setDesignLink] = useState<{ id: string; name: string; snapshotUrl: string | null } | null>(null);
+  useEffect(() => {
+    setDesignLink(null);
+    const estId = selected?.estimate_id;
+    if (!estId) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('upfit_designs')
+        .select('id, name, snapshot_path')
+        .eq('estimate_id', estId)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (cancelled || !data) return;
+      const snapshotUrl = data.snapshot_path
+        ? storage.from('photos').getPublicUrl(data.snapshot_path).data?.publicUrl || null
+        : null;
+      setDesignLink({ id: data.id, name: data.name || '3D design', snapshotUrl });
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
+  }, [selected?.estimate_id]);
 
   const loadNotes = async (projectId: string) => {
     setLoadingNotes(true);
@@ -750,6 +779,27 @@ export default function UpfitProjectsPage() {
           })}
         </div>
 
+        {/* Cancel (audit Stage 10: "No UI can cancel a project" — the
+            pipeline row deliberately hides the cancelled chip, and nothing
+            else offered it, so reservations could only ever release via
+            completion. The migration-228 trigger releases them on
+            cancellation; clicking any pipeline stage revives a cancelled
+            project.) */}
+        {selected.status !== 'cancelled' && selected.status !== 'completed' && (
+          <div style={{ marginTop: '-8px', marginBottom: '16px', textAlign: 'right' }}>
+            <button
+              onClick={async () => {
+                if (!(await dialog.confirm(
+                  `Cancel "${selected.project_name}"? Its reserved parts release back to free stock; the project stays in history and can be revived from any pipeline stage.`,
+                  { destructive: true, confirmLabel: 'Cancel project' },
+                ))) return;
+                updateStatus(selected.id, 'cancelled');
+              }}
+              style={{ background: 'none', border: 'none', color: theme.textMuted, fontSize: '11px', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline', padding: '2px 4px' }}
+            >✕ Cancel project</button>
+          </div>
+        )}
+
         {/* Linked records */}
         <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px', padding: '12px', marginBottom: '16px' }}>
           <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textSecondary, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Linked Records</div>
@@ -770,6 +820,29 @@ export default function UpfitProjectsPage() {
               <span style={{ color: theme.textMuted }}>Schedule: </span>
               <span style={{ color: theme.textPrimary, fontWeight: 600 }}>{selected.scheduled_date ? fmt(selected.scheduled_date) : '—'}</span>
             </div>
+            {designLink && (
+              <div style={{ gridColumn: '1 / -1' }}>
+                <span style={{ color: theme.textMuted }}>3D Design: </span>
+                <span style={{ color: theme.textPrimary, fontWeight: 600 }}>{designLink.name}</span>
+                {(isAdmin || hasFeature('upfit_configurator')) && (
+                  <a
+                    href={deepLinks.upfitDesign(designLink.id)}
+                    style={{ marginLeft: '8px', color: 'var(--accent, #2563eb)', fontWeight: 700, fontSize: '11px' }}
+                  >Open in designer →</a>
+                )}
+                {designLink.snapshotUrl && (
+                  // The approved layout itself — visible to every role that
+                  // can see the project, including techs who can't open the
+                  // designer. This is the shop's build reference.
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={designLink.snapshotUrl}
+                    alt={`3D layout — ${designLink.name}`}
+                    style={{ display: 'block', marginTop: '6px', maxWidth: '100%', maxHeight: '180px', borderRadius: '8px', border: `1px solid ${theme.border}` }}
+                  />
+                )}
+              </div>
+            )}
             {selected.estimated_total && (
               <div>
                 <span style={{ color: theme.textMuted }}>Est. Total: </span>
