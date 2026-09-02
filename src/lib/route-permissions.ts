@@ -100,6 +100,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/calendar/sync-event/route.ts': staff(),
   'src/app/api/calendar/sync-graphics/route.ts': staff(),
   'src/app/api/calendar/sync-upfit/route.ts': staff(),
+  'src/app/api/checkins/route.ts': staff(),
   'src/app/api/cni/add-completed-vin/route.ts': admin(),
   'src/app/api/cni/assign-company/route.ts': feature('cni_admin'),
   'src/app/api/cni/bid/route.ts': authScoped('external installer / coordinator flow; requireStaff would wrongly reject the installer side, so membership is checked in-route against the CNI job'),

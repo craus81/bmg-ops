@@ -45,7 +45,7 @@ function StepIndicator({ current }: { current: number }) {
 // In-Shop page (and anywhere else). onCheckedIn fires after a successful
 // save so the host page can refresh its vehicle list.
 export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => void }) {
-  const { user, profile } = useAuth();
+  const { user } = useAuth();
   const router = useRouter();
   const { open: openPopout } = usePopout();
   const supabase = createClient();
@@ -117,9 +117,10 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
 
   // Check-in photos — REQUIRED, at least one (audit item 12): the check-in
   // is the moment custody transfers, and it went unphotographed for years.
-  // Staged as Files during the wizard and uploaded right after the insert,
-  // since vehicle_photos rows are keyed by the check-in id which doesn't
-  // exist until then.
+  // Staged as Files during the wizard, uploaded BEFORE the save under a
+  // client-generated check-in id — POST /api/checkins verifies they exist
+  // in storage before the row is created (Stage 7: the gate is
+  // server-enforced, not a browser courtesy).
   const [checkinPhotos, setCheckinPhotos] = useState<{ file: File; preview: string }[]>([]);
   // Pre-existing damage — its own staging bucket so the photos land as
   // photo_type 'damage' (a CHECK value that never had a writer) and the
@@ -181,6 +182,18 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   // Prefilled on "Check in another for same customer" or "Clone" — keeps the
   // shared job config while resetting only the VIN.
   const [keepingContext, setKeepingContext] = useState(false);
+
+  // VIN→SO auto-match (audit Stage 7): the estimate chain already knows
+  // which sales order belongs to this VIN — surface it on the SO step
+  // instead of making the tech re-type the customer for every van in a
+  // multi-van drop-off. autoSelected flips once the matched SO is found in
+  // the search results and pre-selected.
+  const [vinSoMatch, setVinSoMatch] = useState<{
+    soNumber: string | null;
+    soId: string | null;
+    customer: string | null;
+    autoSelected: boolean;
+  } | null>(null);
 
   useEffect(() => {
     if (mode === 'text' && inputRef.current) inputRef.current.focus();
@@ -271,11 +284,65 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
       const vehicle = await decodeVIN(v);
       setVehicleData({ vin: v, vehicle });
       setStep(1);
-      // Pre-fill customer search if we find a matching sales order by VIN
+      // Pre-fill the SO step when the estimate chain already knows this
+      // VIN. Skipped when SO context is being kept (Clone / same-customer
+      // flows bring their own orders) or a search is already set up.
+      setVinSoMatch(null);
+      if (selectedOrders.length === 0 && !customerSearch.trim() && !keepingContext) {
+        applyVinSoPrefill(v).catch(() => {});
+      }
     } catch {
       setVinError('Failed to decode VIN.');
     }
     setVinLoading(false);
+  };
+
+  // ─── VIN → SO auto-match ───────────────────────────────────
+  // The audit's Stage 7 walkthrough: "No VIN→SO auto-match despite the VIN
+  // being on the SO and estimate — the docs promise a pre-fill that doesn't
+  // exist." The estimate carries both the VIN (K5) and the SO it converted
+  // to, so a converted estimate for this VIN names the sales order
+  // outright: prefill the customer, run the search, and pre-select the SO
+  // when it appears in the results. Best-effort — any failure just leaves
+  // the manual search exactly as it was.
+  const applyVinSoPrefill = async (v: string) => {
+    const { data: ests } = await supabase
+      .from('estimates')
+      .select('id, customer_name, netsuite_so_id, netsuite_so_number, status, updated_at')
+      .eq('vin', v)
+      .not('netsuite_so_id', 'is', null)
+      .not('status', 'in', '("cancelled","rejected","lost")')
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    const est = ests?.[0];
+    if (!est?.netsuite_so_id) return;
+    setVinSoMatch({
+      soNumber: est.netsuite_so_number || null,
+      soId: String(est.netsuite_so_id),
+      customer: est.customer_name || null,
+      autoSelected: false,
+    });
+    if (!est.customer_name) return;
+    setCustomerSearch(est.customer_name);
+    setSoLoading(true);
+    setSoError('');
+    setSalesOrders([]);
+    setSoHasMore(false);
+    try {
+      const data = await fetchSalesOrdersPage(0, soTypeFilter, est.customer_name);
+      if (data.found && data.data) {
+        setSalesOrders(data.data);
+        setSoHasMore(!!data.hasMore);
+        const hit = (data.data as NetsuiteSalesOrder[]).find(o =>
+          String(o.id) === String(est.netsuite_so_id) ||
+          (est.netsuite_so_number && String(o.sales_order_number) === String(est.netsuite_so_number)));
+        if (hit) {
+          setSelectedOrders(prev => (prev.some(o => o.id === hit.id) ? prev : [...prev, hit]));
+          setVinSoMatch(m => (m ? { ...m, autoSelected: true } : m));
+        }
+      }
+    } catch { /* prefill is best-effort — the manual search still works */ }
+    setSoLoading(false);
   };
 
   const handleVinSubmit = async () => {
@@ -329,9 +396,12 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   };
 
   // ─── Step 2: Sales Order Search ────────────────────────────
-  const fetchSalesOrdersPage = async (offset: number, typeFilter: typeof soTypeFilter) => {
+  // customerOverride lets the VIN prefill search immediately with the
+  // estimate's customer — the setCustomerSearch write above it hasn't
+  // rendered yet, so reading state here would race a stale value.
+  const fetchSalesOrdersPage = async (offset: number, typeFilter: typeof soTypeFilter, customerOverride?: string) => {
     const params = new URLSearchParams({
-      customer: customerSearch.trim(),
+      customer: (customerOverride ?? customerSearch).trim(),
       limit: String(SO_PAGE),
       offset: String(offset),
     });
@@ -656,9 +726,46 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
       if (custMatch?.length === 1) checkinCustomerId = custMatch[0].id;
     }
 
-    const { data, error } = await supabase
-      .from('fleet_checkins')
-      .insert({
+    // ── Photos first, record second (audit Stage 7) ──
+    // The row's id is generated client-side so the staged photos can land
+    // in storage under it BEFORE the record exists; POST /api/checkins then
+    // verifies them server-side and creates the row — the ≥1-photo custody
+    // gate is enforced where a browser console can't skip it (the direct
+    // fleet_checkins INSERT path is closed by migration 249). This also
+    // improves the old flaky-connection story: photo failures now happen
+    // while the form is still open for a retry, instead of silently
+    // stranding an already-saved check-in with fewer photos.
+    const checkinId = crypto.randomUUID();
+    const allStaged = [
+      ...checkinPhotos.map(p => ({ ...p, kind: 'before' as const })),
+      ...damagePhotos.map(p => ({ ...p, kind: 'damage' as const })),
+    ];
+    const uploadedPaths: { path: string; kind: 'before' | 'damage' }[] = [];
+    let uploadsFailed = 0;
+    for (let i = 0; i < allStaged.length; i++) {
+      const { file, kind } = allStaged[i];
+      const rawExt = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const ext = /^[a-z0-9]{1,8}$/.test(rawExt) ? rawExt : 'jpg';
+      const path = `${checkinId}/checkin-${kind === 'damage' ? 'damage-' : ''}${Date.now()}-${i}.${ext}`;
+      const { error: upErr } = await storage.from('photos').upload(path, file, { contentType: file.type });
+      if (upErr) {
+        console.error('[fleet check-in] photo upload failed:', upErr);
+        uploadsFailed++;
+      } else {
+        uploadedPaths.push({ path, kind });
+      }
+    }
+    if (!uploadedPaths.some(p => p.kind === 'before')) {
+      setSaveError('The check-in photos could not be uploaded — nothing was saved. Check your connection and press Save again (your photos are still staged).');
+      setSaving(false);
+      return;
+    }
+
+    const res = await fetch('/api/checkins', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: checkinId,
         vin: vehicleData.vin,
         vehicle_year: vehicleData.vehicle.year || null,
         vehicle_make: vehicleData.vehicle.make || null,
@@ -679,13 +786,10 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
         // back to dbxSelected for Dropbox-sourced proofs (existing flow).
         proof_url: uploadedProofUrl || null,
         proof_filename: uploadedProofUrl ? (selectedProof?.file_name || null) : (dbxSelected?.name || null),
-        notes: [
-          damageNote.trim() ? `DAMAGE ON ARRIVAL: ${damageNote.trim()}` : null,
-          notes.trim() || null,
-        ].filter(Boolean).join('\n\n') || null,
-        status: 'received',
-        checked_in_by: user.id,
-        company_id: profile?.company_id || null,
+        // The server composes the stored notes from these two so the
+        // damage context can't be dropped.
+        notes: notes.trim() || null,
+        damage_note: damageNote.trim() || null,
         scheduled_upfit_date: scheduledUpfitDate || null,
         promised_back_date: promisedBackDate || null,
         install_instructions: contextSnapshot.install_instructions,
@@ -695,15 +799,49 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
         source_estimate_id: contextSnapshot.source_estimate_id,
         needs_graphics: !!graphicsSignal,
         graphics_signal: graphicsSignal,
-      })
-      .select()
-      .single();
-
-    if (error) {
-      console.error('[fleet check-in] insert failed:', error);
-      setSaveError(`Failed to save check-in: ${error.message || 'Unknown error'}${error.code ? ` (${error.code})` : ''}`);
+        photoPaths: uploadedPaths,
+      }),
+    });
+    const saveBody = await res.json().catch(() => ({}));
+    if (!res.ok || !saveBody.checkin) {
+      console.error('[fleet check-in] save failed:', saveBody);
+      setSaveError(saveBody.error || `Failed to save check-in (${res.status})`);
       setSaving(false);
       return;
+    }
+    const data: FleetCheckin = saveBody.checkin;
+
+    // Photo bookkeeping for the saved screen: uploads that failed stayed
+    // out of the record; the ones that made it are already verified rows.
+    const photoRowFailures = Number(saveBody.photoRowFailures) || 0;
+    setPhotosUploaded(uploadedPaths.length - photoRowFailures);
+    setPhotoWarning(uploadsFailed + photoRowFailures > 0
+      ? `${uploadsFailed + photoRowFailures} of ${allStaged.length} photo${allStaged.length !== 1 ? 's' : ''} didn't make it into the record — add them again from the pick list.`
+      : null);
+    allStaged.forEach(p => URL.revokeObjectURL(p.preview));
+    setCheckinPhotos([]);
+    setDamagePhotos([]);
+
+    // Persist every selected SO into the join table so multi-SO check-ins
+    // round-trip correctly. The first one is already mirrored into the
+    // legacy columns above; we still insert it here so the join table is
+    // the single source of truth for the tracking page list. Runs BEFORE
+    // the arrival call so the arrival brain matches on every linked SO
+    // number, not just the primary.
+    if (data?.id && selectedOrders.length > 0) {
+      const rows = selectedOrders.map(o => ({
+        checkin_id: data.id,
+        netsuite_sales_order_id: o.id,
+        sales_order_number: o.sales_order_number,
+        customer_name: o.customer_name,
+        sales_order_memo: o.memo || null,
+        sales_order_total: o.total || null,
+        added_by: user.id,
+      }));
+      const { error: linkErr } = await supabase
+        .from('fleet_checkin_sales_orders')
+        .insert(rows);
+      if (linkErr) console.error('Failed to link additional sales orders:', linkErr);
     }
 
     // Arrival brain (audit items 14+15): links the fulfilled Shop Board row
@@ -726,65 +864,6 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
         contextLabel: `Check-in — ${vehicleDesc}${selectedOrder?.customer_name ? ` (${selectedOrder.customer_name})` : ''}`,
         contextUrl: `/tracking?vehicle=${data.id}`,
       });
-    }
-
-    // Upload the staged photos — condition shots as 'before', damage shots
-    // as 'damage' (audit item 12: that CHECK value finally has a writer).
-    // Staging is required pre-save; the upload itself stays best-effort so
-    // a flaky connection can't strand a finished check-in — failures
-    // surface as a warning and photos can be re-added from the pick list.
-    const allStaged = [
-      ...checkinPhotos.map(p => ({ ...p, kind: 'before' as const })),
-      ...damagePhotos.map(p => ({ ...p, kind: 'damage' as const })),
-    ];
-    if (data?.id && allStaged.length > 0) {
-      let failed = 0;
-      for (let i = 0; i < allStaged.length; i++) {
-        const { file, kind } = allStaged[i];
-        try {
-          const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
-          const path = `${data.id}/checkin-${kind === 'damage' ? 'damage-' : ''}${Date.now()}-${i}.${ext}`;
-          const { error: upErr } = await storage.from('photos').upload(path, file, { contentType: file.type });
-          if (upErr) throw upErr;
-          const { error: dbErr } = await supabase.from('vehicle_photos').insert({
-            vehicle_id: data.id,
-            storage_path: path,
-            photo_type: kind,
-            taken_by: user.id,
-          });
-          if (dbErr) throw dbErr;
-        } catch (err) {
-          console.error('[fleet check-in] photo upload failed:', err);
-          failed++;
-        }
-      }
-      setPhotosUploaded(allStaged.length - failed);
-      setPhotoWarning(failed > 0
-        ? `${failed} of ${allStaged.length} photo${allStaged.length !== 1 ? 's' : ''} failed to upload — add them again from the pick list.`
-        : null);
-      allStaged.forEach(p => URL.revokeObjectURL(p.preview));
-      setCheckinPhotos([]);
-      setDamagePhotos([]);
-    }
-
-    // Persist every selected SO into the join table so multi-SO check-ins
-    // round-trip correctly. The first one is already mirrored into the
-    // legacy columns above; we still insert it here so the join table is
-    // the single source of truth for the tracking page list.
-    if (data?.id && selectedOrders.length > 0) {
-      const rows = selectedOrders.map(o => ({
-        checkin_id: data.id,
-        netsuite_sales_order_id: o.id,
-        sales_order_number: o.sales_order_number,
-        customer_name: o.customer_name,
-        sales_order_memo: o.memo || null,
-        sales_order_total: o.total || null,
-        added_by: user.id,
-      }));
-      const { error: linkErr } = await supabase
-        .from('fleet_checkin_sales_orders')
-        .insert(rows);
-      if (linkErr) console.error('Failed to link additional sales orders:', linkErr);
     }
 
     // Auto-match graphics job by customer name. The linkage lives on
@@ -876,6 +955,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
     setPhotoWarning(null);
     setKeepingContext(false);
     setPartialVinMatches([]);
+    setVinSoMatch(null);
     setMode('text');
   };
 
@@ -904,6 +984,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
     setPhotosUploaded(0);
     setPhotoWarning(null);
     setKeepingContext(true);
+    setVinSoMatch(null);
     setMode('text');
   };
 
@@ -987,6 +1068,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
 
     setKeepingContext(true);
     setShowRecent(false);
+    setVinSoMatch(null);
     setMode('text');
   };
 
@@ -1423,6 +1505,21 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
         {returningNote && (
           <div style={{ marginBottom: '10px', padding: '10px 12px', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.25)', borderRadius: '10px', color: '#60a5fa', fontSize: '12px', fontWeight: 600 }}>
             ↩ {returningNote}
+          </div>
+        )}
+
+        {vinSoMatch && (
+          <div style={{
+            marginBottom: '10px', padding: '10px 12px', borderRadius: '10px', fontSize: '12px', fontWeight: 600,
+            background: vinSoMatch.autoSelected ? 'rgba(52,211,153,0.08)' : 'rgba(251,191,36,0.08)',
+            border: `1px solid ${vinSoMatch.autoSelected ? 'rgba(52,211,153,0.3)' : 'rgba(251,191,36,0.3)'}`,
+            color: vinSoMatch.autoSelected ? '#34d399' : '#fbbf24',
+          }}>
+            🔗 This VIN&apos;s estimate converted to {vinSoMatch.soNumber ? `SO #${vinSoMatch.soNumber}` : 'a sales order'}
+            {vinSoMatch.customer ? ` for ${vinSoMatch.customer}` : ''}
+            {vinSoMatch.autoSelected
+              ? ' — selected below ✓'
+              : ' — results below; pick it (Load more if it isn’t shown, e.g. already billed).'}
           </div>
         )}
 
