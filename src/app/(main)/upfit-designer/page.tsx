@@ -335,6 +335,21 @@ export default function UpfitDesignerPage() {
     setDirty(true);
   }, []);
 
+  /** Drop a no-dimension part off the unplaced list (audit Stage 10: these
+   *  rows priced onto the quote but could never be removed — the 3D delete
+   *  only reaches placed items). Undoable like every other layout edit. */
+  const removeUnplaced = useCallback((itemNumber: string) => {
+    setUndoState(s => {
+      const cur = s.present;
+      const nextLayout: LayoutState = {
+        ...cur,
+        unplaced: cur.unplaced.filter(u => u.item_number !== itemNumber),
+      };
+      return undoableApply(s, { type: 'set_layout', layout: nextLayout }, latest.current.interiorGeom);
+    });
+    setDirty(true);
+  }, []);
+
   const entryFromPart = (p: BrowsePart, qty: number): AutoLayoutEntry => ({
     part_id: p.id,
     netsuite_item_id: p.netsuite_id,
@@ -895,16 +910,23 @@ export default function UpfitDesignerPage() {
                 Parts ({lines.reduce((s, l) => s + l.quantity, 0)})
               </div>
               {lines.map(l => (
-                <div key={`${l.item_number}-${l.placed}`} style={{ display: 'flex', gap: '8px', fontSize: '12px', padding: '3px 0', color: 'var(--text-primary)' }}>
+                <div key={`${l.item_number}-${l.placed}`} style={{ display: 'flex', gap: '8px', fontSize: '12px', padding: '3px 0', color: 'var(--text-primary)', alignItems: 'center' }}>
                   <span style={{ fontWeight: 800, minWidth: '26px' }}>{l.quantity}×</span>
                   <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {l.description}{!l.placed && <span style={{ color: 'var(--warning, #eab308)' }}> *</span>}
                   </span>
                   <span style={{ fontWeight: 700 }}>{money(l.quantity * l.unit_price)}</span>
+                  {!l.placed && (
+                    <button
+                      onClick={() => removeUnplaced(l.item_number)}
+                      title="Remove this unplaced part from the design"
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '12px', padding: '0 2px', lineHeight: 1 }}
+                    >✕</button>
+                  )}
                 </div>
               ))}
               {lines.some(l => !l.placed) && (
-                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>* priced but not shown in 3D (no dimensions on file)</div>
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>* priced but not shown in 3D (no dimensions on file) — ✕ removes it</div>
               )}
               <div style={{ borderTop: '1px solid var(--border)', marginTop: '8px', paddingTop: '8px', fontSize: '12px', color: 'var(--text-primary)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}><span>Parts subtotal</span><span>{money(totals.subtotal)}</span></div>
