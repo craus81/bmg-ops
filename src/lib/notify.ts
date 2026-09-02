@@ -29,11 +29,15 @@ export interface NotifyPayload {
   title: string;
   /** Longer body text */
   body: string;
-  /** Which channels to send on. If omitted, checks user preferences. */
+  /** The channels this event supports — a CEILING, not a bypass: the send
+   *  goes out on these intersected with the user's preferences. Omitted =
+   *  preferences alone decide. */
   channels?: NotifyChannel[];
   /** Optional deep link URL (used in email CTA) */
   url?: string;
-  /** Optional: skip preference check and force these channels */
+  /** Send on exactly `channels`, skipping the preference check. Reserved
+   *  for un-silenceable alarms and external audiences with no preference
+   *  rows — don't reach for this just to make sure a ping lands. */
   forceChannels?: boolean;
   /** Optional Reply-To for the email channel — set when a mail-client reply
    *  should go somewhere real (e.g. straight back to the customer whose
@@ -58,6 +62,28 @@ export interface NotifyResult {
   push: boolean;
 }
 
+/** What the event supports ∩ what the user wants, in caller order. */
+export function intersectChannels(
+  requested: NotifyChannel[],
+  preferred: NotifyChannel[],
+): NotifyChannel[] {
+  return requested.filter((c) => preferred.includes(c));
+}
+
+/**
+ * Notification types that always fan out to in-app + email + push no matter
+ * the per-user preferences — actionable operational events (assignments,
+ * install readiness, a customer's decision on money) where an accidental
+ * opt-out creates an operational blindspot. estimate_rejected in particular
+ * must reach the rep's inbox: the email is the reply path back to the
+ * customer's change request.
+ */
+export const ALWAYS_ALL_CHANNELS: ReadonlySet<string> = new Set([
+  'assignment',
+  'graphics_ready_for_install',
+  'estimate_rejected',
+]);
+
 /**
  * Unified notification dispatcher.
  * Sends notifications across in-app, SMS, and email based on user preferences
@@ -68,9 +94,23 @@ export async function notify(payload: NotifyPayload): Promise<NotifyResult> {
 
   let channels = payload.channels;
 
-  // If no explicit channels, determine from user preferences
-  if (!channels || (!payload.forceChannels && !channels)) {
+  // Channel resolution (R3-4 — the original condition here reduced to
+  // `!channels`, which made ANY explicit channel list a silent preference
+  // bypass and forceChannels a no-op):
+  //   - no channels        → the user's preferences decide.
+  //   - channels           → the event's ceiling, intersected with the
+  //                          user's preferences — a caller says what the
+  //                          event supports, the user says what they want.
+  //   - forceChannels:true → send on exactly `channels`, preferences
+  //                          skipped. Reserved for un-silenceable alarms
+  //                          (money-out attention, delivery failures,
+  //                          system health) and external audiences that
+  //                          have no preference rows (CNI installers).
+  if (!channels) {
     channels = await getPreferredChannels(payload.userId, payload.type);
+  } else if (!payload.forceChannels) {
+    const preferred = await getPreferredChannels(payload.userId, payload.type);
+    channels = intersectChannels(channels, preferred);
   }
 
   // Execute all channels in parallel
@@ -160,15 +200,9 @@ async function getPreferredChannels(userId: string, type: string): Promise<Notif
     return channels;
   }
 
-  // For all other notification types (graphics, PO, etc.)
-  // Actionable operational events (assignments, install readiness, a
-  // customer's decision on money) always fan out to in-app + email + push
-  // regardless of per-user preferences — silencing these by accident
-  // creates operational blindspots. estimate_rejected in particular must
-  // reach the rep's inbox: the email is the reply path back to the
-  // customer's change request.
-  const ALWAYS_ALL_CHANNELS = new Set(['assignment', 'graphics_ready_for_install', 'estimate_rejected']);
-
+  // For all other notification types (graphics, PO, etc.); the
+  // ALWAYS_ALL_CHANNELS types (module scope, exported) skip the per-user
+  // preference gate entirely.
   if (!prefs) {
     // Default: in-app + push + email for high-signal events, in-app + push for others
     const defaults: NotifyChannel[] = ALWAYS_ALL_CHANNELS.has(type) ? ['in_app', 'push', 'email'] : ['in_app', 'push'];

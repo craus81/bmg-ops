@@ -58,7 +58,6 @@ export async function GET(req: NextRequest) {
           // opens flashed on its row.
           url: fresh.length === 1 ? deepLinks.atRiskCustomer(fresh[0].id) : '/admin/reports/at-risk',
           channels: ['in_app', 'push'],
-          forceChannels: true,
         });
         notified += adminIds.length;
       }
@@ -70,7 +69,6 @@ export async function GET(req: NextRequest) {
             body: `${fmtK(c.last_year_spend)} last year, ${fmtK(c.ytd_spend)} this year${c.days_quiet != null ? ` — no orders in ${c.days_quiet} days` : ''}. Worth a call.`,
             url: deepLinks.atRiskCustomer(c.id),
             channels: ['in_app', 'push'],
-            forceChannels: true,
           });
           notified += 1;
         }

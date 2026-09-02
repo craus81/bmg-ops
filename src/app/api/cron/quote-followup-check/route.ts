@@ -84,7 +84,6 @@ export async function GET(req: NextRequest) {
               body: r.note ? r.note.slice(0, 900) : `You asked to be reminded today to follow up on ${number}.`,
               url: deepLinks.quoteFollowUps(r.quote_type as 'estimate' | 'wrap', r.quote_id),
               channels: ['in_app', 'push'],
-              forceChannels: true,
             });
             reminded++;
           }
@@ -192,7 +191,6 @@ export async function GET(req: NextRequest) {
             ? deepLinks.quoteFollowUps(only.table === 'estimates' ? 'estimate' : 'wrap', only.id)
             : deepLinks.quoteFollowUps(),
           channels: ['in_app', 'push'],
-          forceChannels: true,
         });
         notified++;
       }
@@ -245,7 +243,6 @@ export async function GET(req: NextRequest) {
             body: `${e.customer_name || 'The customer'} hasn't answered ${e.estimate_number} in ${Math.floor(sentDays)} days (${e.approval_reminder_count || 0} automatic reminder${(e.approval_reminder_count || 0) !== 1 ? 's' : ''} sent). Worth a call.`,
             url: deepLinks.quoteFollowUps('estimate', e.id),
             channels: ['in_app', 'push'],
-            forceChannels: true,
           });
         }
         await service.from('estimates')

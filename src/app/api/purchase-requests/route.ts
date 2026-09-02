@@ -221,7 +221,6 @@ export async function POST(req: NextRequest) {
           body: `${lines}${body.neededBy ? ` · needed by ${body.neededBy}` : ''}`.slice(0, 900),
           url: deepLinks.purchaseRequests(created.length === 1 ? created[0] : undefined),
           channels: ['in_app', 'push'],
-          forceChannels: true,
         });
       }
     } catch (err) {

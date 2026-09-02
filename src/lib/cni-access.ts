@@ -9,6 +9,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { resolveFeatures } from '@/lib/features';
 
 export function rolesOf(profile: { role?: string | null; roles?: string[] | null } | null): string[] {
   if (!profile) return [];
@@ -47,22 +48,52 @@ export async function canActOnCniJob(
 }
 
 /**
- * The BMG-side people who coordinate CNI work — approved admins (scalar role or
- * roles[] entry). The recipient set for installer-lifecycle notifications
- * (schedule declined, job complete, photos ready). Optionally drops the actor
- * so nobody is pinged about their own action. Mirrors the my-docs/my-invoices
- * staff-notify convention.
+ * The BMG-side people who coordinate CNI work — approved profiles holding the
+ * `cni_admin` feature, resolved exactly the way the CNI admin pages gate
+ * (role defaults + per-user overrides via resolveFeatures). That covers
+ * admins and super_admins by default, admits non-admin staff granted the
+ * console, and drops admins who had it revoked — previously this was "every
+ * admin", so people who couldn't even open the review pages were pinged for
+ * every CNI lifecycle event (R3-4). Falls back to all approved admins if
+ * nobody holds the feature, so a coordination alert can never dead-end.
+ * Optionally drops the actor so nobody is pinged about their own action.
  */
 export async function getCniStaffIds(
   service: SupabaseClient,
   excludeUserId?: string | null,
 ): Promise<string[]> {
-  const { data } = await service
+  const [{ data: profiles }, { data: overrides }] = await Promise.all([
+    service
+      .from('profiles')
+      .select('id, role, roles')
+      .eq('status', 'approved'),
+    service
+      .from('user_feature_overrides')
+      .select('user_id, granted')
+      .eq('feature', 'cni_admin'),
+  ]);
+
+  const overrideByUser = new Map<string, boolean>();
+  for (const o of overrides || []) overrideByUser.set(o.user_id, o.granted);
+
+  const holders = (profiles || [])
+    .filter((p: any) => {
+      const roles = rolesOf(p).map((r) => (r === 'production' ? 'graphics_production' : r));
+      const ov = overrideByUser.has(p.id)
+        ? [{ feature: 'cni_admin', granted: overrideByUser.get(p.id)! }]
+        : [];
+      return resolveFeatures(roles, ov).has('cni_admin');
+    })
+    .map((p: any) => p.id as string)
+    .filter((id: string) => id && id !== excludeUserId);
+  if (holders.length > 0) return holders;
+
+  const { data: admins } = await service
     .from('profiles')
     .select('id')
     .or('role.eq.admin,roles.cs.{admin}')
     .eq('status', 'approved');
-  return (data || [])
+  return (admins || [])
     .map((p: any) => p.id as string)
     .filter((id: string) => id && id !== excludeUserId);
 }

@@ -264,7 +264,6 @@ export async function POST(req: NextRequest) {
         body: summary.slice(0, 900),
         url: deepLinks.receiving(po.id),
         channels: ['in_app', 'push'],
-        forceChannels: true,
       });
     }
   } catch (err) {

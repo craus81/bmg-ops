@@ -152,6 +152,7 @@ export async function POST(req: NextRequest) {
           // installerJob(job.id) landed one page short of them.
           url: deepLinks.installerJobPhotos(job.id),
           channels: ['in_app', 'push'],
+          // External installer audience — no preference rows; addressed-to-you lifecycle event.
           forceChannels: true,
         });
       }

@@ -72,7 +72,6 @@ async function notifyFinanceOfSubmission(
     body: `${companyName} ${resubmitted ? 'resubmitted' : 'submitted'} invoice${num} for $${amount.toFixed(2)} (${vinCount} VIN${vinCount !== 1 ? 's' : ''}) — awaiting approval.`,
     url: deepLinks.apInvoice(invoiceId),
     channels: ['in_app', 'push'],
-    forceChannels: true,
   });
 }
 

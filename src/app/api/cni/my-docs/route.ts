@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { getCniStaffIds } from '@/lib/cni-access';
+import { deepLinks } from '@/lib/deep-links';
 import { notifyMany } from '@/lib/notify';
 
 export const dynamic = 'force-dynamic';
@@ -74,12 +76,10 @@ export async function POST(req: NextRequest) {
   if (nowComplete && !wasComplete) {
     // Fire-and-forget style but awaited so serverless doesn't kill it.
     try {
-      const [{ data: profile }, { data: admins }] = await Promise.all([
+      const [{ data: profile }, staffIds] = await Promise.all([
         service.from('profiles').select('full_name, company_id').eq('id', userId).single(),
-        service.from('profiles')
-          .select('id, role, roles')
-          .or('role.eq.admin,roles.cs.{admin}')
-          .eq('status', 'approved'),
+        // The CNI coordinators (cni_admin feature), not every admin.
+        getCniStaffIds(service),
       ]);
       let companyName: string | null = null;
       if (profile?.company_id) {
@@ -89,15 +89,13 @@ export async function POST(req: NextRequest) {
       }
       const name = profile?.full_name || 'An installer';
       const who = companyName && companyName !== name ? `${name} (${companyName})` : name;
-      const adminIds = (admins || []).map(a => a.id);
-      if (adminIds.length > 0) {
-        await notifyMany(adminIds, {
+      if (staffIds.length > 0) {
+        await notifyMany(staffIds, {
           type: 'cni_docs_complete',
           title: `Compliance docs complete: ${name}`,
           body: `${who} has uploaded all compliance documents — W-9, insurance certificate, and direct deposit form are on file.`,
-          url: `/admin/cni/installers/${userId}`,
+          url: deepLinks.cniInstaller(userId),
           channels: ['in_app', 'push', 'email'],
-          forceChannels: true,
         });
       }
     } catch (err) {

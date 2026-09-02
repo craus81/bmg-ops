@@ -98,6 +98,7 @@ export async function GET(req: NextRequest) {
           body: lines.slice(0, 900),
           url: deepLinks.systemHealth(),
           channels: ['in_app', 'push'],
+          // System-failure alarm to an opted admin audience — never silenceable.
           forceChannels: true,
         });
         notified = adminIds.length;

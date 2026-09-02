@@ -123,7 +123,6 @@ export async function syncVendorBillPayments(service: Service): Promise<{
           body: `Payment of $${amount.toFixed(2)} has been sent (bill paid in NetSuite).`,
           url: await apSubmitterUrl(service, inv.submitted_by, inv.id),
           channels: ['in_app', 'push'],
-          forceChannels: true,
         });
       }
       const finance = (await financeUserIds(service)).filter(id => id !== inv.submitted_by);
@@ -134,7 +133,6 @@ export async function syncVendorBillPayments(service: Service): Promise<{
           body: `NetSuite shows bill ${inv.netsuite_bill_id} paid in full ($${amount.toFixed(2)}) — the invoice moved to Paid.`,
           url: deepLinks.apInvoice(inv.id),
           channels: ['in_app', 'push'],
-          forceChannels: true,
         });
       }
     }

@@ -144,7 +144,6 @@ export async function POST(req: NextRequest) {
     title: `${actorName} mentioned you${contextLabel ? ` — ${contextLabel}` : ''}`,
     body: excerpt,
     channels: ['in_app', 'push'] as ('in_app' | 'push')[],
-    forceChannels: true,
   };
   const byUrl = new Map<string, string[]>();
   for (const id of mentionedIds) {
