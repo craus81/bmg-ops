@@ -62,45 +62,80 @@ function getAuthHeader(oauth: OAuth, token: { key: string; secret: string }, req
   return params.Authorization;
 }
 
+export interface SuiteqlOptions {
+  /** Extra attempts after a 429, a 5xx, or a network failure — NetSuite
+   *  throws the occasional UNEXPECTED_ERROR that succeeds on re-send.
+   *  Default 0: callers opt in (a background sync can afford the wait; an
+   *  interactive lookup usually shouldn't). 4xx never retries. */
+  retries?: number;
+  /** Base backoff between attempts; doubles each time. */
+  retryDelayMs?: number;
+}
+
+/** A failed SuiteQL request. `status` is the HTTP status NetSuite returned. */
+export interface SuiteqlError extends Error {
+  status: number;
+}
+
+export function isSuiteqlError(err: unknown): err is SuiteqlError {
+  return err instanceof Error && typeof (err as any).status === 'number';
+}
+
+const isRetryableStatus = (status: number) => status === 429 || status >= 500;
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
 /**
  * Execute a SuiteQL query against NetSuite
  */
-export async function suiteqlQuery(query: string, limit: number = 1000, offset: number = 0): Promise<any> {
+export async function suiteqlQuery(query: string, limit: number = 1000, offset: number = 0, opts?: SuiteqlOptions): Promise<any> {
   const config = getConfig();
   const baseUrl = getBaseUrl(config.accountId);
   const url = `${baseUrl}/services/rest/query/v1/suiteql?limit=${limit}&offset=${offset}`;
   const { oauth, token } = createOAuth(config);
+  const retries = Math.max(0, opts?.retries ?? 0);
+  const baseDelay = opts?.retryDelayMs ?? 1500;
 
-  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+  for (let attempt = 0; ; attempt++) {
+    // Signed per attempt: the OAuth nonce/timestamp must be fresh.
+    const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': authHeader,
-      'Content-Type': 'application/json',
-      'Prefer': 'transient',
-    },
-    body: JSON.stringify({ q: query }),
-  });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': authHeader,
+          'Content-Type': 'application/json',
+          'Prefer': 'transient',
+        },
+        body: JSON.stringify({ q: query }),
+      });
+    } catch (err) {
+      if (attempt < retries) { await sleep(baseDelay * 2 ** attempt); continue; }
+      throw err;
+    }
 
-  if (!response.ok) {
+    if (response.ok) return response.json();
+
     const text = await response.text();
-    throw new Error(`NetSuite SuiteQL error (${response.status}): ${text}`);
+    if (isRetryableStatus(response.status) && attempt < retries) {
+      await sleep(baseDelay * 2 ** attempt);
+      continue;
+    }
+    throw Object.assign(new Error(`NetSuite SuiteQL error (${response.status}): ${text}`), { status: response.status });
   }
-
-  return response.json();
 }
 
 /**
  * Execute a paginated SuiteQL query — fetches all rows across multiple pages
  */
-export async function suiteqlQueryAll(query: string, pageSize: number = 1000): Promise<any[]> {
+export async function suiteqlQueryAll(query: string, pageSize: number = 1000, opts?: SuiteqlOptions): Promise<any[]> {
   let allItems: any[] = [];
   let offset = 0;
   let hasMore = true;
 
   while (hasMore) {
-    const result = await suiteqlQuery(query, pageSize, offset);
+    const result = await suiteqlQuery(query, pageSize, offset, opts);
     const items = result?.items || [];
     allItems = allItems.concat(items);
 

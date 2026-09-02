@@ -80,6 +80,76 @@ describe('suiteqlQuery', () => {
       'NetSuite SuiteQL error (400): Invalid search query'
     );
   });
+
+  it('carries the HTTP status on the thrown error', async () => {
+    fetchMock.mockResolvedValue(new Response('nope', { status: 503 }));
+
+    await expect(suiteqlQuery('SELECT 1')).rejects.toMatchObject({ status: 503 });
+  });
+
+  // NetSuite throws the odd UNEXPECTED_ERROR that succeeds on re-send. The
+  // sales-order sync opts in; everything else keeps today's fail-fast.
+  describe('retries', () => {
+    const fail500 = () => new Response('{"o:errorDetails":[{"o:errorCode":"UNEXPECTED_ERROR"}]}', { status: 500 });
+
+    it('does not retry by default', async () => {
+      fetchMock.mockResolvedValue(fail500());
+
+      await expect(suiteqlQuery('SELECT 1')).rejects.toThrow('SuiteQL error (500)');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-sends after a 5xx and returns the eventual success', async () => {
+      fetchMock
+        .mockResolvedValueOnce(fail500())
+        .mockResolvedValueOnce(fail500())
+        .mockResolvedValueOnce(jsonResponse({ items: [{ id: '1' }] }));
+
+      const result = await suiteqlQuery('SELECT 1', 10, 0, { retries: 2, retryDelayMs: 0 });
+
+      expect(result.items).toEqual([{ id: '1' }]);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      // Each attempt is signed afresh — the OAuth nonce must not repeat.
+      const nonces = fetchMock.mock.calls.map(c => c[1].headers['Authorization'].match(/oauth_nonce="([^"]+)"/)![1]);
+      expect(new Set(nonces).size).toBe(3);
+    });
+
+    it('re-sends after a network failure', async () => {
+      fetchMock
+        .mockRejectedValueOnce(new Error('ECONNRESET'))
+        .mockResolvedValueOnce(jsonResponse({ items: [] }));
+
+      await expect(suiteqlQuery('SELECT 1', 10, 0, { retries: 1, retryDelayMs: 0 })).resolves.toEqual({ items: [] });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('never retries a 4xx — a bad query does not get better', async () => {
+      fetchMock.mockResolvedValue(new Response('Invalid search query', { status: 400 }));
+
+      await expect(suiteqlQuery('SELECT bogus', 10, 0, { retries: 2, retryDelayMs: 0 })).rejects.toMatchObject({ status: 400 });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('gives up after the budget with the last status', async () => {
+      // A fresh Response per attempt — a body can only be read once.
+      fetchMock.mockImplementation(async () => fail500());
+
+      await expect(suiteqlQuery('SELECT 1', 10, 0, { retries: 2, retryDelayMs: 0 })).rejects.toMatchObject({ status: 500 });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('suiteqlQueryAll passes the retry budget to every page', async () => {
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse({ items: [{ id: 1 }, { id: 2 }] }))
+        .mockResolvedValueOnce(fail500())
+        .mockResolvedValueOnce(jsonResponse({ items: [{ id: 3 }] }));
+
+      const rows = await suiteqlQueryAll('SELECT id FROM item', 2, { retries: 1, retryDelayMs: 0 });
+
+      expect(rows).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }]);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+  });
 });
 
 describe('suiteqlQueryAll', () => {

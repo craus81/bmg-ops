@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { suiteqlQuery, suiteqlQueryAll } from '@/lib/netsuite';
+import { suiteqlQuery, suiteqlQueryAll, isSuiteqlError } from '@/lib/netsuite';
 import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 import { normalizeItemNumber } from '@/lib/vendor-po-sync';
 
@@ -112,6 +112,9 @@ const FULL_RESYNC_SINCE = '2024-01-01T00:00:00Z';
 const FIRST_RUN_SINCE = '2025-01-01T00:00:00Z';
 /** Budget when the caller passes no deadline. */
 const DEFAULT_BUDGET_MS = 45_000;
+/** NetSuite throws the odd UNEXPECTED_ERROR that succeeds on re-send; a
+ *  background sync can afford two more tries before calling it a failure. */
+const SUITEQL_OPTS = { retries: 2 };
 
 /**
  * The cursor a partial run leaves in sync_state.last_result.resume. A run
@@ -180,6 +183,104 @@ function buildSoLinesQuery(soIds: string[]): string {
         AND tl.taxline = 'F'
         AND tl.item IS NOT NULL
     `;
+}
+
+/**
+ * NetSuite's error body is a JSON blob nobody wants on a status line; keep
+ * the status, the error code and the detail (which carries the Error ID
+ * NetSuite support asks for).
+ */
+export function compactSuiteqlError(err: unknown): string {
+  const message = String((err as any)?.message || err);
+  const m = message.match(/^(NetSuite SuiteQL error \(\d+\)): ([\s\S]*)$/);
+  if (!m) return message.slice(0, 300);
+  try {
+    const body = JSON.parse(m[2]);
+    const detail = body?.['o:errorDetails']?.[0];
+    const code = detail?.['o:errorCode'] || body?.title;
+    const text = detail?.detail || body?.detail || '';
+    if (code || text) return `${m[1]}: ${[code, text].filter(Boolean).join(' — ')}`.slice(0, 300);
+  } catch { /* not JSON — fall through to the raw text */ }
+  return message.slice(0, 300);
+}
+
+export interface SoQueryProbe {
+  step: string;
+  ok: boolean;
+  /** A failing optional step doesn't stop the sync (it runs without those columns). */
+  optional?: boolean;
+  error?: string;
+  rows?: number;
+}
+
+/**
+ * When a sync query fails, find WHICH clause NetSuite objects to: re-run the
+ * header query from its simplest shape up, one clause at a time, then the
+ * line query, and stop at the first required step that fails. Cheap (each
+ * probe is a count or a 5-row select) and it turns "UNEXPECTED_ERROR" into
+ * a named clause — or into "every probe passes", which means the failure
+ * was transient and the next run's retry will get through.
+ */
+export async function diagnoseSoQueries(sinceIso: string): Promise<{ probes: SoQueryProbe[]; verdict: string }> {
+  const probes: SoQueryProbe[] = [];
+  const sinceMdy = toSuiteqlDate(sinceIso);
+  const run = async (step: string, query: string, opts?: { optional?: boolean; limit?: number }): Promise<any[] | null> => {
+    try {
+      const result = await suiteqlQuery(query, opts?.limit ?? 5, 0);
+      const items = result?.items || [];
+      probes.push({ step, ok: true, optional: opts?.optional, rows: items.length });
+      return items;
+    } catch (err) {
+      probes.push({ step, ok: false, optional: opts?.optional, error: compactSuiteqlError(err) });
+      return null;
+    }
+  };
+  const failed = () => probes[probes.length - 1];
+
+  const visible = await run('sales orders visible to the integration role',
+    `SELECT COUNT(t.id) AS n FROM transaction t WHERE t.type = 'SalesOrd'`);
+  if (!visible) return { probes, verdict: `NetSuite rejects even a count of sales orders: ${failed().error}` };
+  if (!(Number(visible[0]?.n) > 0)) {
+    return { probes, verdict: 'NetSuite returns no sales orders at all for the integration role — grant it "Sales Order → View" in NetSuite' };
+  }
+
+  if (!await run('lastmodifieddate filter',
+    `SELECT COUNT(t.id) AS n FROM transaction t WHERE t.type = 'SalesOrd' AND t.lastmodifieddate >= TO_DATE('${sinceMdy}', 'MM/DD/YYYY')`)) {
+    return { probes, verdict: `NetSuite rejects the lastmodifieddate filter: ${failed().error}` };
+  }
+
+  const base = `
+      SELECT t.id, t.tranid, t.trandate, t.status, t.memo, t.otherrefnum, t.createdfrom,
+             t.foreigntotal AS total, t.entity AS customer_id
+      FROM transaction t
+      WHERE t.type = 'SalesOrd'
+        AND t.lastmodifieddate >= TO_DATE('${sinceMdy}', 'MM/DD/YYYY')`;
+  if (!await run('header columns', base)) {
+    return { probes, verdict: `NetSuite rejects one of the header columns: ${failed().error}` };
+  }
+
+  if (!await run('customer join', `
+      SELECT t.id, t.entity AS customer_id, c.companyname AS customer_name
+      FROM transaction t
+      LEFT JOIN customer c ON t.entity = c.id
+      WHERE t.type = 'SalesOrd'
+        AND t.lastmodifieddate >= TO_DATE('${sinceMdy}', 'MM/DD/YYYY')`)) {
+    return { probes, verdict: `NetSuite rejects the customer join: ${failed().error}` };
+  }
+
+  const ordered = await run('ORDER BY t.id DESC', buildSoHeaderQuery(sinceIso, null, false));
+  if (!ordered) return { probes, verdict: `NetSuite rejects the newest-first ordering (ORDER BY t.id DESC): ${failed().error}` };
+
+  await run('status label + VIN columns', buildSoHeaderQuery(sinceIso, null, true), { optional: true });
+
+  const ids = ordered.map(r => String(r.id)).filter(id => /^\d+$/.test(id));
+  if (ids.length > 0) {
+    if (!await run('line query', buildSoLinesQuery(ids), { limit: 50 })) {
+      return { probes, verdict: `NetSuite rejects the line query: ${failed().error}` };
+    }
+  }
+
+  return { probes, verdict: 'every probe passed on re-check — the failure looks transient; the next run retries from where this one stopped' };
 }
 
 export interface SalesOrderSyncOptions {
@@ -293,6 +394,7 @@ export async function syncSalesOrders(
   let extras: 'untested' | 'on' | 'off' = 'untested';
   let drained = false;
   let error: string | undefined;
+  let lastError: unknown;
 
   const fetchHeaderPage = async (): Promise<any[]> => {
     // BUILTIN.DF(status) and the VIN custom field are nice-to-have — if the
@@ -301,19 +403,26 @@ export async function syncSalesOrders(
     // must surface (with the cursor kept), not be retried as a column issue.
     if (extras === 'untested') {
       try {
-        const result = await suiteqlQuery(buildSoHeaderQuery(win.since, win.beforeId, true), SO_PAGE_SIZE, 0);
+        const result = await suiteqlQuery(buildSoHeaderQuery(win.since, win.beforeId, true), SO_PAGE_SIZE, 0, SUITEQL_OPTS);
         extras = 'on';
         return result?.items || [];
       } catch {
         extras = 'off';
       }
     }
-    const result = await suiteqlQuery(buildSoHeaderQuery(win.since, win.beforeId, extras === 'on'), SO_PAGE_SIZE, 0);
+    const result = await suiteqlQuery(buildSoHeaderQuery(win.since, win.beforeId, extras === 'on'), SO_PAGE_SIZE, 0, SUITEQL_OPTS);
     return result?.items || [];
   };
 
+  // Which query was in flight when something threw — the error is useless
+  // on a status line without it.
+  let stage = 'opening the window';
+  let page = 0;
+
   try {
     for (;;) {
+      page++;
+      stage = `sales-order headers, page ${page}${win.beforeId ? ` (ids below ${win.beforeId})` : ''}`;
       const sos = await fetchHeaderPage();
       modified += sos.length;
       if (sos.length === 0) { drained = true; break; }
@@ -322,13 +431,16 @@ export async function syncSalesOrders(
       const linesBySo = new Map<string, any[]>();
       const soIds = sos.map(s => String(s.id));
       for (let i = 0; i < soIds.length; i += LINE_CHUNK) {
-        const rows = await suiteqlQueryAll(buildSoLinesQuery(soIds.slice(i, i + LINE_CHUNK)));
+        stage = `sales-order lines, page ${page} (orders ${i + 1}–${Math.min(i + LINE_CHUNK, soIds.length)})`;
+        const rows = await suiteqlQueryAll(buildSoLinesQuery(soIds.slice(i, i + LINE_CHUNK)), 1000, SUITEQL_OPTS);
         for (const row of rows) {
           const key = String(row.so_id);
           if (!linesBySo.has(key)) linesBySo.set(key, []);
           linesBySo.get(key)!.push(row);
         }
       }
+
+      stage = `writing page ${page} to the mirror`;
 
       // Estimate links per the precedence in classifySoMatch, resolved for
       // the whole page at once.
@@ -458,9 +570,13 @@ export async function syncSalesOrders(
       if (Date.now() >= deadline) break;
     }
   } catch (err: any) {
-    error = String(err?.message || err);
+    lastError = err;
+    error = `${stage}: ${compactSuiteqlError(err)}`;
     console.error('[sales-order-sync]', error);
   }
+  // Only a NetSuite rejection is worth probing; a Supabase write failure
+  // or an auth failure would just get a misleading "all probes pass".
+  const probeNetSuite = !drained && isSuiteqlError(lastError) && lastError.status !== 401 && lastError.status !== 403;
 
   const partial = !drained && !error;
   const counts = {
@@ -475,15 +591,29 @@ export async function syncSalesOrders(
     ? { windowStartedAt: win.windowStartedAt, since: win.since, beforeId: win.beforeId, processed: win.processed }
     : null;
 
+  const writeFailure = () => recordHeartbeat(
+    service, SO_SYNC_TYPE,
+    { ...counts, ...(error ? { error } : { partial: true }), ...(resume ? { resume } : {}) },
+    { touchLastSyncedAt: false },
+  );
+
   let syncStateWrite: HeartbeatResult;
   if (drained) {
     syncStateWrite = await recordHeartbeat(service, SO_SYNC_TYPE, counts, { lastSyncedAt: win.windowStartedAt });
   } else {
-    syncStateWrite = await recordHeartbeat(
-      service, SO_SYNC_TYPE,
-      { ...counts, ...(error ? { error } : { partial: true }), ...(resume ? { resume } : {}) },
-      { touchLastSyncedAt: false },
-    );
+    // The cursor lands FIRST — the diagnosis below makes more NetSuite
+    // calls, and if the platform cuts the run off during them, progress
+    // must already be saved.
+    syncStateWrite = await writeFailure();
+    if (probeNetSuite) {
+      try {
+        const { verdict } = await diagnoseSoQueries(win.since);
+        error = `${error} — ${verdict}`;
+        syncStateWrite = await writeFailure();
+      } catch (diagErr: any) {
+        console.error('[sales-order-sync] diagnosis failed:', diagErr?.message || diagErr);
+      }
+    }
   }
 
   return {
