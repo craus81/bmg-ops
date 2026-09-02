@@ -16,7 +16,7 @@ import { suiteqlQuery, suiteqlQueryAll } from '@/lib/netsuite';
 import { recordHeartbeat } from '@/lib/system-health';
 import {
   classifySoMatch, syncSalesOrders, buildSoHeaderQuery, parseSoSyncResume, SO_PAGE_SIZE,
-  compactSuiteqlError, diagnoseSoQueries,
+  compactSuiteqlError, diagnoseSoQueries, ALL_OPTIONAL_HEADER_COLUMNS, HEADER_COLUMN_LADDER,
 } from './sales-order-sync';
 
 const suiteql = vi.mocked(suiteqlQuery);
@@ -113,8 +113,10 @@ function installNetSuite(sos: NsSo[], opts?: NsOpts) {
       .slice(0, limit ?? 1000)
       .map(s => ({
         id: String(s.id), tranid: s.tranid, trandate: '9/1/2026', status: s.status || 'B',
+        // Optional columns come back only when the query asked for them.
         status_label: q.includes('BUILTIN.DF') ? 'Pending Fulfillment' : undefined,
-        memo: s.memo || null, otherrefnum: s.otherrefnum || null, createdfrom: s.createdfrom || null,
+        createdfrom: q.includes('t.createdfrom') ? (s.createdfrom || null) : undefined,
+        memo: s.memo || null, otherrefnum: s.otherrefnum || null,
         total: '100', customer_id: '7', customer_name: 'Acme Fleet',
       }));
     return { items };
@@ -212,26 +214,43 @@ function fakeService(state: MirrorState) {
 const far = () => Date.now() + 60_000;
 
 describe('buildSoHeaderQuery', () => {
+  const ALL = ALL_OPTIONAL_HEADER_COLUMNS;
+
   it('pages newest first and continues strictly below the cursor', () => {
-    expect(buildSoHeaderQuery('2025-01-01T00:00:00Z', null, true)).toContain('ORDER BY t.id DESC');
-    expect(buildSoHeaderQuery('2025-01-01T00:00:00Z', null, true)).not.toMatch(/t\.id </);
-    expect(buildSoHeaderQuery('2025-01-01T00:00:00Z', '251', true)).toContain('AND t.id < 251');
+    expect(buildSoHeaderQuery('2025-01-01T00:00:00Z', null, ALL)).toContain('ORDER BY t.id DESC');
+    expect(buildSoHeaderQuery('2025-01-01T00:00:00Z', null, ALL)).not.toMatch(/t\.id </);
+    expect(buildSoHeaderQuery('2025-01-01T00:00:00Z', '251', ALL)).toContain('AND t.id < 251');
   });
 
   it('refuses a non-numeric cursor rather than splicing it into SQL', () => {
-    expect(buildSoHeaderQuery('2025-01-01T00:00:00Z', '1 OR 1=1', true)).not.toMatch(/t\.id </);
+    expect(buildSoHeaderQuery('2025-01-01T00:00:00Z', '1 OR 1=1', ALL)).not.toMatch(/t\.id </);
   });
 
   it('formats the window date the way SuiteQL wants, in UTC', () => {
-    expect(buildSoHeaderQuery('2025-01-01T00:00:00Z', null, true)).toContain("TO_DATE('1/1/2025', 'MM/DD/YYYY')");
-    expect(buildSoHeaderQuery('2026-08-31T23:30:00Z', null, true)).toContain("TO_DATE('8/31/2026'");
+    expect(buildSoHeaderQuery('2025-01-01T00:00:00Z', null, ALL)).toContain("TO_DATE('1/1/2025', 'MM/DD/YYYY')");
+    expect(buildSoHeaderQuery('2026-08-31T23:30:00Z', null, ALL)).toContain("TO_DATE('8/31/2026'");
   });
 
-  it('drops the optional columns on request', () => {
-    const q = buildSoHeaderQuery('2025-01-01T00:00:00Z', null, false);
-    expect(q).not.toContain('BUILTIN.DF');
-    expect(q).not.toContain('custbody_vin_number_');
-    expect(q).toContain('t.status,');
+  it('adds exactly the optional columns asked for', () => {
+    const bare = buildSoHeaderQuery('2025-01-01T00:00:00Z', null, []);
+    expect(bare).not.toContain('BUILTIN.DF');
+    expect(bare).not.toContain('custbody_vin_number_');
+    expect(bare).not.toContain('t.createdfrom');
+    expect(bare).toContain('t.status,');
+    expect(bare).toContain('t.otherrefnum');
+
+    const cf = buildSoHeaderQuery('2025-01-01T00:00:00Z', null, ['createdfrom']);
+    expect(cf).toContain(', t.createdfrom');
+    expect(cf).not.toContain('BUILTIN.DF');
+
+    const all = buildSoHeaderQuery('2025-01-01T00:00:00Z', null, ALL);
+    expect(all).toContain('BUILTIN.DF(t.status) AS status_label');
+    expect(all).toContain('t.custbody_vin_number_ AS vin');
+    expect(all).toContain(', t.createdfrom');
+  });
+
+  it('the ladder ends with the bare core query', () => {
+    expect(HEADER_COLUMN_LADDER[HEADER_COLUMN_LADDER.length - 1]).toEqual([]);
   });
 });
 
@@ -327,7 +346,7 @@ describe('syncSalesOrders', () => {
 
     // Stage, compact NetSuite detail (with the Error ID support asks for),
     // and the probe verdict — one transient failure, every probe passing.
-    expect(result.error).toMatch(/^sales-order headers, page 2 \(ids below 251\): NetSuite SuiteQL error \(500\): UNEXPECTED_ERROR — An unexpected error occurred\. Error ID: mtkekqnm1b0jlj800jp4o — every probe passed/);
+    expect(result.error).toMatch(/^sales-order headers, page 2 \(ids below 251\): NetSuite SuiteQL error \(500\): UNEXPECTED_ERROR — An unexpected error occurred\. Error ID: mtkekqnm1b0jlj800jp4o — every required probe passed/);
     expect(result.error).not.toContain('rfc-editor');
     expect(result.partial).toBe(false);
     expect(result.synced).toBe(200);
@@ -337,7 +356,7 @@ describe('syncSalesOrders', () => {
     const [, , first, firstOpts] = heartbeat.mock.calls[0];
     expect(firstOpts).toEqual({ touchLastSyncedAt: false });
     expect(first).toMatchObject({ error: expect.stringMatching(/^sales-order headers, page 2/), resume: { beforeId: '251', processed: 200 } });
-    expect((first as any).error).not.toContain('every probe passed');
+    expect((first as any).error).not.toContain('every required probe passed');
     const [, , second] = heartbeat.mock.calls[1];
     expect(second).toMatchObject({ error: result.error, resume: { beforeId: '251', processed: 200 } });
   });
@@ -377,11 +396,11 @@ describe('syncSalesOrders', () => {
 
     expect(result.error).toBe('sales-order headers, page 1: NetSuite SuiteQL error (401): Invalid login attempt');
     expect(heartbeat).toHaveBeenCalledTimes(1);
-    // Only the two header attempts (extras, then plain) — no probes.
-    expect(suiteql).toHaveBeenCalledTimes(2);
+    // Only the header attempts (one per ladder rung) — no probes.
+    expect(suiteql).toHaveBeenCalledTimes(HEADER_COLUMN_LADDER.length);
   });
 
-  it('retries without the optional columns when SuiteQL rejects them, and stays without them for the run', async () => {
+  it('runs without the status-label/VIN columns when SuiteQL rejects them, and stays without them for the run', async () => {
     installNetSuite(many(250), { rejectExtras: true });
     const { service, writes } = fakeService({ syncState: null });
 
@@ -389,11 +408,39 @@ describe('syncSalesOrders', () => {
 
     expect(result.error).toBeUndefined();
     const queries = suiteql.mock.calls.map(c => c[0] as string);
+    // Rung 1 (all) and rung 2 (status_label + vin) rejected; rung 3
+    // (createdfrom alone) serves page 1 and every page after it.
+    expect(queries).toHaveLength(4);
     expect(queries[0]).toContain('BUILTIN.DF');
-    expect(queries.slice(1).every(q => !q.includes('BUILTIN.DF'))).toBe(true);
-    expect(queries).toHaveLength(3); // rejected, page 1, page 2
+    expect(queries[1]).toContain('BUILTIN.DF');
+    expect(queries.slice(2).every(q => !q.includes('BUILTIN.DF') && q.includes('t.createdfrom'))).toBe(true);
     expect(writes.headers).toHaveLength(250);
     expect(writes.headers[0].status_label).toBeNull();
+    expect(result.droppedColumns).toEqual(['status_label', 'vin']);
+    const [, , payload] = heartbeat.mock.calls[0];
+    expect(payload).toMatchObject({ droppedColumns: ['status_label', 'vin'] });
+  });
+
+  it('runs without createdfrom when NetSuite rejects it on the header — the case that kept this mirror empty — and still links estimates by Reference No', async () => {
+    installNetSuite([so(1, { otherrefnum: 'EST-2608-041', createdfrom: '777' }), so(2)], {
+      failWhen: q => q.includes('t.createdfrom'),
+    });
+    const { service, writes } = fakeService({
+      syncState: null,
+      estimates: [{ id: 'e41', estimate_number: 'EST-2608-041', netsuite_so_id: null }],
+    });
+
+    const result = await syncSalesOrders(service, { deadline: far() });
+
+    expect(result.error).toBeUndefined();
+    expect(result.droppedColumns).toEqual(['createdfrom']);
+    // Rung 1 rejected, rung 2 (status_label + vin) accepted.
+    expect(suiteql).toHaveBeenCalledTimes(2);
+    expect(writes.headers).toHaveLength(2);
+    const byId = new Map(writes.headers.map(h => [h.netsuite_id, h]));
+    expect(byId.get('1')).toMatchObject({ createdfrom_netsuite_id: null, status_label: 'Pending Fulfillment', estimate_id: 'e41', match_source: 'otherrefnum' });
+    expect(result.matched).toBe(1);
+    expect(result.backfilled).toBe(1);
   });
 
   it('writes lines against the mirror row, item numbers normalized, billed quantity carried', async () => {
@@ -489,12 +536,34 @@ describe('diagnoseSoQueries', () => {
     expect(probes.map(p => [p.step, p.ok])).toEqual([
       ['sales orders visible to the integration role', true],
       ['lastmodifieddate filter', true],
-      ['header columns', true],
+      ['core header columns', true],
+      ['header column t.memo', true],
+      ['header column t.otherrefnum', true],
+      ['header column t.foreigntotal', true],
       ['customer join', true],
       ['ORDER BY t.id DESC', true],
-      ['status label + VIN columns', true],
+      ['optional column status_label (BUILTIN.DF(t.status) AS status_label)', true],
+      ['optional column vin (t.custbody_vin_number_ AS vin)', true],
+      ['optional column createdfrom (t.createdfrom)', true],
       ['line query', true],
     ]);
+    expect(verdict).toMatch(/transient/);
+    expect(verdict).not.toContain('runs without');
+  });
+
+  it('names the header column NetSuite rejects', async () => {
+    installNetSuite(many(3), { failWhen: q => q.includes('t.otherrefnum') });
+    const { probes, verdict } = await diagnoseSoQueries('2025-01-01T00:00:00Z');
+    expect(probes[probes.length - 1]).toMatchObject({ step: 'header column t.otherrefnum', ok: false });
+    expect(verdict).toMatch(/rejects selecting t\.otherrefnum on the sales-order header/);
+  });
+
+  it('an optional column failing alone is named but does not fail the verdict', async () => {
+    installNetSuite(many(3), { failWhen: q => q.includes('t.createdfrom') });
+    const { probes, verdict } = await diagnoseSoQueries('2025-01-01T00:00:00Z');
+    expect(probes.find(p => p.step.startsWith('optional column createdfrom'))).toMatchObject({ ok: false, optional: true });
+    expect(probes[probes.length - 1]).toMatchObject({ step: 'line query', ok: true });
+    expect(verdict).toContain('runs without optional column createdfrom');
     expect(verdict).toMatch(/transient/);
   });
 
@@ -507,7 +576,7 @@ describe('diagnoseSoQueries', () => {
   it('stops at the first required failure, and a failing optional step does not stop it', async () => {
     installNetSuite(many(3), { rejectExtras: true, failWhen: q => q.includes('FROM transactionline') });
     const { probes, verdict } = await diagnoseSoQueries('2025-01-01T00:00:00Z');
-    const extras = probes.find(p => p.step === 'status label + VIN columns');
+    const extras = probes.find(p => p.step.startsWith('optional column status_label'));
     expect(extras).toMatchObject({ ok: false, optional: true });
     expect(probes[probes.length - 1]).toMatchObject({ step: 'line query', ok: false });
     expect(verdict).toMatch(/rejects the line query/);

@@ -154,7 +154,10 @@ export default function PartsDemandTab({ onQueued }: { onQueued?: () => void }) 
       let msg: string;
       if (totalSos > 0) {
         msg = `NetSuite returned ${modified} sales order(s) · ${data.synced ?? 0} saved · ${data.lines ?? 0} line(s). ${totalSos} on file now, ${data.openSos ?? 0} open.`
-          + (data.partial ? '\n\nNewest orders came first; older history keeps backfilling on the 2-hour sync.' : '');
+          + (data.partial ? '\n\nNewest orders came first; older history keeps backfilling on the 2-hour sync.' : '')
+          + (Array.isArray(data.droppedColumns) && data.droppedColumns.length > 0
+            ? `\n\nNetSuite refuses these optional header columns for this role, so the sync runs without them: ${data.droppedColumns.join(', ')}.`
+            : '');
       } else if (modified === 0) {
         msg = 'NetSuite returned 0 sales orders across all history.\n\nOther NetSuite data syncs fine, so the integration role most likely can\'t see Sales Orders. Fix in NetSuite: grant that role "Sales Order → View". This is a NetSuite permission, not a FleetSuite bug.';
       } else {

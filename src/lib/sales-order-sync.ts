@@ -90,6 +90,9 @@ export interface SalesOrderSyncResult {
   partial: boolean;
   /** Headers processed in the current window so far, this run included. */
   windowProcessed: number;
+  /** Optional header columns NetSuite rejected on this run's first page,
+   *  so the run went without them (see OPTIONAL_HEADER_COLUMNS). */
+  droppedColumns: OptionalHeaderColumn[];
   error?: string;
   /** Outcome of the sync_state heartbeat write — not persisted, only reported. */
   syncStateWrite?: HeartbeatResult;
@@ -149,21 +152,48 @@ function toSuiteqlDate(iso: string): string {
 }
 
 /**
- * One page of SO headers, newest first. `beforeId` continues a window from
- * where the previous page (or run) stopped. `withExtras` adds BUILTIN.DF(status)
- * and the VIN custom field, which the integration role's SuiteQL may reject —
- * the caller retries without them.
+ * Header columns this account's SuiteQL may refuse. Each is nice-to-have:
+ *
+ *   status_label — BUILTIN.DF(status); the raw code is what the open/closed
+ *                  gate keys on anyway.
+ *   vin          — a custom body field that may not exist.
+ *   createdfrom  — header-level Created From. Filters fine in a WHERE (the
+ *                  SO-invoices route does that) but SELECTing it on the
+ *                  sales-order header answered 500 UNEXPECTED_ERROR on this
+ *                  account (2026-09-02, the probe ladder's "header columns"
+ *                  step), which kept the mirror empty. Without it the
+ *                  estimate link falls back to Reference No / memo — the
+ *                  signals FleetSuite's own convert-to-so writes — and only
+ *                  NetSuite-side Estimate→SO transforms lose their link.
  */
-export function buildSoHeaderQuery(sinceIso: string, beforeId: string | null, withExtras: boolean): string {
-  const extras = withExtras
-    ? ', BUILTIN.DF(t.status) AS status_label, t.custbody_vin_number_ AS vin'
-    : '';
+export const OPTIONAL_HEADER_COLUMNS = {
+  status_label: 'BUILTIN.DF(t.status) AS status_label',
+  vin: 't.custbody_vin_number_ AS vin',
+  createdfrom: 't.createdfrom',
+} as const;
+export type OptionalHeaderColumn = keyof typeof OPTIONAL_HEADER_COLUMNS;
+export const ALL_OPTIONAL_HEADER_COLUMNS: readonly OptionalHeaderColumn[] = ['status_label', 'vin', 'createdfrom'];
+/** Column sets a run tries on its first page, richest first; the first
+ *  one NetSuite accepts is used for the rest of the run. */
+export const HEADER_COLUMN_LADDER: readonly (readonly OptionalHeaderColumn[])[] = [
+  ['status_label', 'vin', 'createdfrom'],
+  ['status_label', 'vin'],
+  ['createdfrom'],
+  [],
+];
+
+/**
+ * One page of SO headers, newest first. `beforeId` continues a window from
+ * where the previous page (or run) stopped. `columns` adds the optional
+ * header columns the account has been found to accept.
+ */
+export function buildSoHeaderQuery(sinceIso: string, beforeId: string | null, columns: readonly OptionalHeaderColumn[]): string {
+  const extras = columns.map(c => `, ${OPTIONAL_HEADER_COLUMNS[c]}`).join('');
   // Never trust a stored string into SQL, even one we wrote ourselves.
   const before = beforeId && /^\d+$/.test(beforeId) ? `\n        AND t.id < ${beforeId}` : '';
   return `
-      SELECT t.id, t.tranid, t.trandate, t.status${extras},
-             t.memo, t.otherrefnum, t.createdfrom,
-             t.foreigntotal AS total, t.entity AS customer_id, c.companyname AS customer_name
+      SELECT t.id, t.tranid, t.trandate, t.status, t.memo, t.otherrefnum,
+             t.foreigntotal AS total, t.entity AS customer_id, c.companyname AS customer_name${extras}
       FROM transaction t
       LEFT JOIN customer c ON t.entity = c.id
       WHERE t.type = 'SalesOrd'
@@ -249,14 +279,19 @@ export async function diagnoseSoQueries(sinceIso: string): Promise<{ probes: SoQ
     return { probes, verdict: `NetSuite rejects the lastmodifieddate filter: ${failed().error}` };
   }
 
-  const base = `
-      SELECT t.id, t.tranid, t.trandate, t.status, t.memo, t.otherrefnum, t.createdfrom,
-             t.foreigntotal AS total, t.entity AS customer_id
+  const from = `
       FROM transaction t
       WHERE t.type = 'SalesOrd'
         AND t.lastmodifieddate >= TO_DATE('${sinceMdy}', 'MM/DD/YYYY')`;
-  if (!await run('header columns', base)) {
-    return { probes, verdict: `NetSuite rejects one of the header columns: ${failed().error}` };
+
+  if (!await run('core header columns', `SELECT t.id, t.tranid, t.trandate, t.status, t.entity AS customer_id${from}`)) {
+    return { probes, verdict: `NetSuite rejects the core header columns (id, tranid, trandate, status, entity): ${failed().error}` };
+  }
+  // One column at a time, so the verdict names the column, not the query.
+  for (const col of ['t.memo', 't.otherrefnum', 't.foreigntotal']) {
+    if (!await run(`header column ${col}`, `SELECT t.id, ${col}${from}`)) {
+      return { probes, verdict: `NetSuite rejects selecting ${col} on the sales-order header: ${failed().error}` };
+    }
   }
 
   if (!await run('customer join', `
@@ -268,10 +303,16 @@ export async function diagnoseSoQueries(sinceIso: string): Promise<{ probes: SoQ
     return { probes, verdict: `NetSuite rejects the customer join: ${failed().error}` };
   }
 
-  const ordered = await run('ORDER BY t.id DESC', buildSoHeaderQuery(sinceIso, null, false));
+  const ordered = await run('ORDER BY t.id DESC', buildSoHeaderQuery(sinceIso, null, []));
   if (!ordered) return { probes, verdict: `NetSuite rejects the newest-first ordering (ORDER BY t.id DESC): ${failed().error}` };
 
-  await run('status label + VIN columns', buildSoHeaderQuery(sinceIso, null, true), { optional: true });
+  // The optional columns, individually: a rejection here never stops the
+  // sync (it runs without them), but the verdict should say so.
+  const unavailable: OptionalHeaderColumn[] = [];
+  for (const col of ALL_OPTIONAL_HEADER_COLUMNS) {
+    const expr = OPTIONAL_HEADER_COLUMNS[col];
+    if (!await run(`optional column ${col} (${expr})`, `SELECT t.id, ${expr}${from}`, { optional: true })) unavailable.push(col);
+  }
 
   const ids = ordered.map(r => String(r.id)).filter(id => /^\d+$/.test(id));
   if (ids.length > 0) {
@@ -280,7 +321,10 @@ export async function diagnoseSoQueries(sinceIso: string): Promise<{ probes: SoQ
     }
   }
 
-  return { probes, verdict: 'every probe passed on re-check — the failure looks transient; the next run retries from where this one stopped' };
+  const without = unavailable.length > 0
+    ? ` (the sync runs without optional column${unavailable.length > 1 ? 's' : ''} ${unavailable.join(', ')})`
+    : '';
+  return { probes, verdict: `every required probe passed on re-check${without} — the failure looks transient; the next run retries from where this one stopped` };
 }
 
 export interface SalesOrderSyncOptions {
@@ -391,26 +435,35 @@ export async function syncSalesOrders(
   const headerErrorSamples: string[] = [];
   let lineErrors = 0;
   const lineErrorSamples: string[] = [];
-  let extras: 'untested' | 'on' | 'off' = 'untested';
+  /** Optional header columns this account accepts — settled on the first
+   *  page (inside fetchHeaderPage, hence the cast: TS would otherwise
+   *  narrow this to its initial null at the read below). */
+  let columns = null as readonly OptionalHeaderColumn[] | null;
   let drained = false;
   let error: string | undefined;
   let lastError: unknown;
 
   const fetchHeaderPage = async (): Promise<any[]> => {
-    // BUILTIN.DF(status) and the VIN custom field are nice-to-have — if the
-    // integration role's SuiteQL rejects them on the FIRST page, run without
-    // them. Settled once: a failure on a later page is a real failure and
-    // must surface (with the cursor kept), not be retried as a column issue.
-    if (extras === 'untested') {
-      try {
-        const result = await suiteqlQuery(buildSoHeaderQuery(win.since, win.beforeId, true), SO_PAGE_SIZE, 0, SUITEQL_OPTS);
-        extras = 'on';
-        return result?.items || [];
-      } catch {
-        extras = 'off';
+    // Settle the optional columns on the FIRST page, richest set first. A
+    // rejected column is deterministic, so the ladder's rungs carry no retry
+    // budget; only the bare core query (the last rung) does, since a failure
+    // there is either transient or real. Settled once: a later page's
+    // failure is a real failure and must surface with the cursor kept, not
+    // get retried as a column issue.
+    if (columns === null) {
+      for (let i = 0; i < HEADER_COLUMN_LADDER.length; i++) {
+        const set = HEADER_COLUMN_LADDER[i];
+        const lastRung = i === HEADER_COLUMN_LADDER.length - 1;
+        try {
+          const result = await suiteqlQuery(buildSoHeaderQuery(win.since, win.beforeId, set), SO_PAGE_SIZE, 0, lastRung ? SUITEQL_OPTS : undefined);
+          columns = set;
+          return result?.items || [];
+        } catch (err) {
+          if (lastRung) throw err;
+        }
       }
     }
-    const result = await suiteqlQuery(buildSoHeaderQuery(win.since, win.beforeId, extras === 'on'), SO_PAGE_SIZE, 0, SUITEQL_OPTS);
+    const result = await suiteqlQuery(buildSoHeaderQuery(win.since, win.beforeId, columns || []), SO_PAGE_SIZE, 0, SUITEQL_OPTS);
     return result?.items || [];
   };
 
@@ -579,10 +632,15 @@ export async function syncSalesOrders(
   const probeNetSuite = !drained && isSuiteqlError(lastError) && lastError.status !== 401 && lastError.status !== 403;
 
   const partial = !drained && !error;
+  const settled = columns;
+  const droppedColumns: OptionalHeaderColumn[] = settled ? ALL_OPTIONAL_HEADER_COLUMNS.filter(c => !settled.includes(c)) : [];
   const counts = {
     modified, synced, lines: lineCount, matched, backfilled,
     ...(headerErrors > 0 ? { headerErrors, headerErrorSamples } : {}),
     ...(lineErrors > 0 ? { lineErrors, lineErrorSamples } : {}),
+    // Surfaces in System Health: which nice-to-have columns this account
+    // refuses, so a missing status label or estimate link isn't a mystery.
+    ...(droppedColumns.length > 0 ? { droppedColumns } : {}),
   };
   // Anything short of a drained window keeps its cursor (when a page landed)
   // so the next run continues rather than starting over — that restart loop
@@ -618,7 +676,7 @@ export async function syncSalesOrders(
 
   return {
     modified, synced, lines: lineCount, matched, backfilled, headerErrors,
-    partial, windowProcessed: win.processed,
+    partial, windowProcessed: win.processed, droppedColumns,
     ...(error ? { error } : {}),
     syncStateWrite,
   };
