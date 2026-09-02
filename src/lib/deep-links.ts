@@ -26,8 +26,12 @@ export const deepLinks = {
   /** In-Shop board — opens the vehicle's detail modal (optionally flashing one note). */
   vehicle: (checkinId: string, noteId?: string | null) =>
     `/tracking?vehicle=${checkinId}${noteId ? `&note=${noteId}` : ''}`,
-  /** Vehicle job card / pick list by VIN. */
-  pickList: (vin: string) => `/vehicles/${vin}/pick-list`,
+  /** Vehicle job card / pick list by VIN. Pass the check-in id whenever one
+   *  is in scope: VIN-only links resolve to the VIN's NEWEST visit, so after
+   *  a returning vehicle re-checks in (#712), a link about the old visit
+   *  would open the new one (Round 3, §7.2.6 — per-visit deep links). */
+  pickList: (vin: string, checkinId?: string | null) =>
+    `/vehicles/${vin}/pick-list${checkinId ? `?visit=${checkinId}` : ''}`,
   /** Upfit board — opens the project detail (optionally flashing a note or task). */
   upfitProject: (projectId: string, opts?: { noteId?: string | null; taskId?: string | null }) =>
     `/upfit?id=${projectId}${opts?.noteId ? `&note=${opts.noteId}` : ''}${opts?.taskId ? `&task=${opts.taskId}` : ''}`,
@@ -181,7 +185,7 @@ export function vehicleLinkFor(
 ): string {
   const features = resolveFeatures(roles?.length ? roles : [], []);
   if (features.has('in_shop') || features.has('fleet_checkin')) return deepLinks.vehicle(checkinId);
-  return vin ? deepLinks.pickList(vin) : deepLinks.vehicle(checkinId);
+  return vin ? deepLinks.pickList(vin, checkinId) : deepLinks.vehicle(checkinId);
 }
 
 /**

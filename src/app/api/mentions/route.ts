@@ -111,7 +111,7 @@ export async function POST(req: NextRequest) {
     const roles: string[] = p?.roles?.length ? p.roles : (p?.role ? [p.role] : []);
     const f = resolveFeatures(roles, []);
     if (deepUrl.startsWith('/tracking') && !f.has('in_shop') && !f.has('fleet_checkin')) {
-      return vehicleVin ? deepLinks.pickList(vehicleVin) : '/home';
+      return vehicleVin ? deepLinks.pickList(vehicleVin, sourceId) : '/home';
     }
     if (deepUrl.startsWith('/admin/schedule') && !f.has('schedule')) return '/home';
     if ((deepUrl === '/upfit' || deepUrl.startsWith('/upfit?')) && !f.has('upfit_projects')) return '/home';

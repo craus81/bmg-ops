@@ -1,5 +1,24 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { deepLinks, allowedPdfSrc } from './deep-links';
+import { deepLinks, allowedPdfSrc, vehicleLinkFor } from './deep-links';
+
+// Per-visit deep links (Stage 8 close): a VIN-only pick-list URL resolves to
+// the VIN's NEWEST visit, so links about an older visit must pin it.
+describe('deepLinks.pickList / vehicleLinkFor', () => {
+  it('pins the visit when a check-in id is provided', () => {
+    expect(deepLinks.pickList('1FTBW3XM5PKA00001')).toBe('/vehicles/1FTBW3XM5PKA00001/pick-list');
+    expect(deepLinks.pickList('1FTBW3XM5PKA00001', 'ci-123'))
+      .toBe('/vehicles/1FTBW3XM5PKA00001/pick-list?visit=ci-123');
+  });
+
+  it('vehicleLinkFor carries the visit into the pick-list fallback', () => {
+    // External installer: no in_shop/fleet_checkin feature → pick-list, pinned.
+    expect(vehicleLinkFor(['installer'], 'ci-123', '1FTBW3XM5PKA00001'))
+      .toBe('/vehicles/1FTBW3XM5PKA00001/pick-list?visit=ci-123');
+    // Staff with the board feature keep the board link.
+    expect(vehicleLinkFor(['admin'], 'ci-123', '1FTBW3XM5PKA00001'))
+      .toBe('/tracking?vehicle=ci-123');
+  });
+});
 
 // The PDF viewer wraps an attachment in app chrome so a "open in new tab"
 // click isn't a dead end. Two things must hold: the link carries a real way

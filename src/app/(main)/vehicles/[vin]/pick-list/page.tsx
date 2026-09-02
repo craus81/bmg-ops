@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -83,6 +83,12 @@ export default function VehiclePickListPage() {
   const router = useRouter();
   const params = useParams<{ vin: string }>();
   const vin = (params?.vin || '').toUpperCase();
+  // Per-visit deep links (Round 3, §7.2.6): a VIN resolves to its NEWEST
+  // visit, so after a returning vehicle re-checks in, links about the old
+  // visit would open the new one. ?visit=<checkin id> pins the page to the
+  // exact record the notification was about.
+  const searchParams = useSearchParams();
+  const visitId = searchParams?.get('visit') || null;
   const { user, profile, isInstaller, isShopTech, isFieldTech, isAdmin } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
@@ -103,6 +109,7 @@ export default function VehiclePickListPage() {
   const [photoRefreshKey, setPhotoRefreshKey] = useState(0);
   const [messagingCustomer, setMessagingCustomer] = useState(false);
   const [completionModalOpen, setCompletionModalOpen] = useState(false);
+  const [visitNote, setVisitNote] = useState<string | null>(null);
 
   const beforeFileRef = useRef<HTMLInputElement>(null);
   const completionFileRef = useRef<HTMLInputElement>(null);
@@ -110,20 +117,51 @@ export default function VehiclePickListPage() {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setVisitNote(null);
 
-    const { data: v, error: vErr } = await supabase
-      .from('fleet_checkins')
-      .select('*')
-      .eq('vin', vin)
-      .is('archived_at', null)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    // ?visit= pins the page to a specific check-in (per-visit deep links).
+    // The VIN in the URL must match — a mismatched or missing visit falls
+    // back to the VIN's current record, with a note so the reader knows.
+    let v: any = null;
+    if (visitId) {
+      const { data: pinned } = await supabase
+        .from('fleet_checkins')
+        .select('*')
+        .eq('id', visitId)
+        .maybeSingle();
+      if (pinned && String(pinned.vin || '').toUpperCase() === vin) {
+        v = pinned;
+        const { data: newest } = await supabase
+          .from('fleet_checkins')
+          .select('id')
+          .eq('vin', vin)
+          .is('archived_at', null)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (!newest || newest.id !== pinned.id) {
+          setVisitNote('This link points to a specific earlier visit for this VIN — a newer check-in exists. You are viewing the visit the notification was about.');
+        }
+      } else {
+        setVisitNote('The linked visit no longer exists — showing this VIN’s current record instead.');
+      }
+    }
 
-    if (vErr || !v) {
-      setError(vErr?.message || 'Vehicle not found');
-      setLoading(false);
-      return;
+    if (!v) {
+      const { data: byVin, error: vErr } = await supabase
+        .from('fleet_checkins')
+        .select('*')
+        .eq('vin', vin)
+        .is('archived_at', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (vErr || !byVin) {
+        setError(vErr?.message || 'Vehicle not found');
+        setLoading(false);
+        return;
+      }
+      v = byVin;
     }
     setVehicle(v as VehicleData);
 
@@ -160,7 +198,7 @@ export default function VehiclePickListPage() {
     setPhotos((photoRes.data || []) as Photo[]);
 
     setLoading(false);
-  }, [vin, supabase]);
+  }, [vin, visitId, supabase]);
 
   useEffect(() => {
     if (!user) return;
@@ -342,6 +380,16 @@ export default function VehiclePickListPage() {
 
   return (
     <div>
+      {visitNote && (
+        <div style={{
+          marginBottom: '12px', padding: '10px 12px', borderRadius: '10px',
+          background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.25)',
+          color: '#60a5fa', fontSize: '12px', fontWeight: 600,
+        }}>
+          ↩ {visitNote}
+        </div>
+      )}
+
       {/* Sticky header */}
       <div style={{
         position: 'sticky',
@@ -430,7 +478,11 @@ export default function VehiclePickListPage() {
         >{actionLoading ? 'Starting...' : 'Start Install'}</button>
       )}
 
-      {(isAdmin || isInstaller) && (
+      {/* Admin only (Round 3 dead-end): the thread this opens lives in
+          /admin/inbox, which admits admin/sales — an installer clicking it
+          created a thread and then bounced off the inbox gate to /home.
+          External CNI installers coordinate through their CNI job chat. */}
+      {isAdmin && (
         <button
           onClick={openMessageCustomer}
           disabled={messagingCustomer}
