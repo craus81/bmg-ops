@@ -8,6 +8,7 @@ import { getEmailSignature } from '@/lib/email-signature';
 import { estimatePdfFilename } from '@/lib/estimate-pdf';
 import { deepLinks } from '@/lib/deep-links';
 import { loadEstimateAttachmentRows, fetchEstimateAttachments } from '@/lib/estimate-attachments';
+import { resolveEstimateEmail } from '@/lib/estimate-recipients';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/email-attachments';
 
 export const dynamic = 'force-dynamic';
@@ -51,34 +52,20 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const { data: estimate, error: estErr } = await supabase
     .from('estimates')
-    .select('id, estimate_number, title, customer_id, customer_name, customer_netsuite_id, grand_total')
+    .select('id, estimate_number, title, customer_id, prospect_id, customer_name, customer_netsuite_id, grand_total')
     .eq('id', params.id)
     .single();
   if (estErr || !estimate) {
     return NextResponse.json({ error: 'Estimate not found' }, { status: 404 });
   }
 
-  // Default recipient: primary external contact, then the synced customer
-  // email — the same fallback order as send-for-approval.
+  // Default recipient: the estimate's customer OR its CRM lead — one
+  // resolver shared with send-for-approval and the follow-up
+  // (src/lib/estimate-recipients.ts).
   const composeEmails = (body.emails || []).map(e => e.trim()).filter(Boolean);
-  let defaultEmail: string | null = null;
-  if (composeEmails.length === 0 && estimate.customer_id) {
-    const { data: primary } = await supabase
-      .from('external_contacts')
-      .select('email')
-      .eq('customer_id', estimate.customer_id)
-      .eq('is_primary', true)
-      .maybeSingle();
-    defaultEmail = primary?.email || null;
-    if (!defaultEmail) {
-      const { data: customer } = await supabase
-        .from('customers')
-        .select('email')
-        .eq('id', estimate.customer_id)
-        .maybeSingle();
-      defaultEmail = customer?.email || null;
-    }
-  }
+  const defaultEmail = composeEmails.length === 0
+    ? await resolveEstimateEmail(supabase, estimate)
+    : null;
   const emailList = composeEmails.length > 0 ? composeEmails : (defaultEmail ? [defaultEmail] : []);
 
   const { data: settings } = await supabase

@@ -301,10 +301,13 @@ export async function POST(req: NextRequest) {
 
     if (!estimate.customer_netsuite_id) {
       // Lead tier: an estimate built for a CRM lead carries a name and no
-      // NetSuite id. Pushing to NetSuite is the promotion moment — resolve
-      // the name to an existing NetSuite customer, or promote the matching
-      // lead. Stamp the estimate so later pushes/converts skip this.
-      const resolved = await resolveOrPromoteByName(supabase, estimate.customer_name || '', userId || null);
+      // NetSuite id. Pushing to NetSuite is the promotion moment — promote
+      // the lead the estimate is linked to (prospect_id), falling back to
+      // matching the name. Stamp the estimate so later pushes/converts
+      // skip this.
+      const resolved = await resolveOrPromoteByName(
+        supabase, estimate.customer_name || '', userId || null, estimate.prospect_id || null,
+      );
       if (!resolved) {
         return NextResponse.json({
           error: 'No NetSuite customer linked to this estimate, and no CRM lead matches the customer name. Promote the record from its CRM page, or pick a NetSuite customer.',

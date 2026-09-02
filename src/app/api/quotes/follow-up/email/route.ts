@@ -6,6 +6,7 @@ import { sendEmailDetailed, buildNotificationEmail } from '@/lib/resend';
 import { getEmailSignature } from '@/lib/email-signature';
 import { deepLinks } from '@/lib/deep-links';
 import { loadEstimateAttachmentRows, fetchEstimateAttachments, type EstimateFileRow } from '@/lib/estimate-attachments';
+import { resolveEstimateEmail } from '@/lib/estimate-recipients';
 
 export const dynamic = 'force-dynamic';
 
@@ -58,7 +59,7 @@ export async function POST(req: NextRequest) {
   const { data: quoteRow } = await service
     .from(table)
     .select(isEstimate
-      ? 'id, estimate_number, title, status, customer_id, customer_name, grand_total, approval_email_to, approval_token, approval_token_expires_at'
+      ? 'id, estimate_number, title, status, customer_id, prospect_id, customer_name, grand_total, approval_email_to, approval_token, approval_token_expires_at'
       : 'id, quote_number, vehicle_description, status, customer_id, customer, total, sent_to, approval_token, approval_token_expires_at')
     .eq('id', id)
     .maybeSingle();
@@ -73,19 +74,11 @@ export async function POST(req: NextRequest) {
   let defaults: string[] = [];
   if (isEstimate) {
     defaults = (quote.approval_email_to || []).filter(Boolean);
-    if (defaults.length === 0 && quote.customer_id) {
-      const { data: primary } = await service
-        .from('external_contacts')
-        .select('email')
-        .eq('customer_id', quote.customer_id)
-        .eq('is_primary', true)
-        .maybeSingle();
-      if (primary?.email) defaults = [primary.email];
-      if (defaults.length === 0) {
-        const { data: customer } = await service
-          .from('customers').select('email').eq('id', quote.customer_id).maybeSingle();
-        if (customer?.email) defaults = [customer.email];
-      }
+    if (defaults.length === 0) {
+      // Customer OR CRM lead — the same resolver the approval and PDF
+      // sends use (src/lib/estimate-recipients.ts).
+      const resolved = await resolveEstimateEmail(service, quote);
+      if (resolved) defaults = [resolved];
     }
   } else {
     if (quote.sent_to) defaults = [quote.sent_to];

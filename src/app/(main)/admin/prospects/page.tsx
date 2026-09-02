@@ -319,15 +319,19 @@ export default function ProspectsPage() {
   };
 
   // Create a customer, then land on its record page — the record is where
-  // everything else (contacts, deals, activity) gets added. Creation is one
-  // step: the record is pushed to NetSuite as a customer immediately (no
-  // separate prospect stage / convert step). If the NetSuite create fails,
-  // the local record still exists and the record page offers a retry.
-  // Vendor records skip the NetSuite push entirely — they're FleetSuite-only.
+  // everything else (contacts, deals, activity) gets added.
+  //
+  // Since the lead tier (owner decision 2026-08-30) creation does NOT touch
+  // NetSuite: the new record is a LEAD (prospects row, netsuite_id null),
+  // promoted later from its record page or automatically by the first push
+  // of one of its estimates. Vendor records are FleetSuite-only always.
+  //
   // `startEstimate` (Valarie's new-client-to-quote flow) lands in the
-  // estimate builder with the new customer pre-selected instead — falling
-  // back to the record page when the NetSuite create failed (an estimate
-  // can't link a customer that doesn't exist yet).
+  // estimate builder with the new record pre-selected instead — as a lead
+  // (?prospect=), which the builder records on the estimate as prospect_id
+  // (migration 251). That link is what makes the estimate sendable for
+  // approval and lets the push promote this exact lead rather than matching
+  // on its name.
   const createCustomer = async (startEstimate = false) => {
     if (!form.company_name.trim() || saving) return;
     setSaving(true);

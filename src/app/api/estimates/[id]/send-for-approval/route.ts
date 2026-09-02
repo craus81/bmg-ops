@@ -12,6 +12,7 @@ import { enrichLinesWithPartAssets } from '@/lib/estimate-line-parts';
 import { loadEstimateGraphics, loadEstimateProofs, type EstimateProofBlock } from '@/lib/estimate-graphics';
 import { r2PublicUrl } from '@/lib/r2';
 import { loadEstimateAttachmentRows, fetchEstimateAttachments } from '@/lib/estimate-attachments';
+import { resolveEstimateEmail, resolveEstimatePhone } from '@/lib/estimate-recipients';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/email-attachments';
 import { validateBody, z } from '@/lib/validate';
 
@@ -96,32 +97,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   let phone: string | null = body.phone || null;
   const composeEmails = (body.emails || []).map(e => e.trim()).filter(Boolean);
 
-  if (!email || !phone) {
-    let customerId: string | null = estimate.customer_id || null;
-    if (customerId) {
-      const { data: primary } = await supabase
-        .from('external_contacts')
-        .select('name, email, phone')
-        .eq('customer_id', customerId)
-        .eq('is_primary', true)
-        .maybeSingle();
-      if (primary) {
-        email = email || primary.email || null;
-        phone = phone || primary.phone || null;
-      }
-      if ((!email || !phone)) {
-        const { data: customer } = await supabase
-          .from('customers')
-          .select('email, phone')
-          .eq('id', customerId)
-          .maybeSingle();
-        if (customer) {
-          email = email || customer.email || null;
-          phone = phone || customer.phone || null;
-        }
-      }
-    }
-  }
+  // The estimate's customer OR its CRM lead (migration 251) — an estimate
+  // quoted for a brand-new customer has no customers row yet, and resolving
+  // through customer_id alone left it with nobody to send to.
+  if (!email) email = await resolveEstimateEmail(supabase, estimate);
+  if (!phone) phone = await resolveEstimatePhone(supabase, estimate);
 
   const emailList: string[] = composeEmails.length > 0 ? composeEmails : (email ? [email] : []);
 

@@ -136,10 +136,13 @@ export async function POST(req: NextRequest) {
     // Verify we have a customer NetSuite ID
     let customerId = estimate.customer_netsuite_id;
     if (!customerId && estimate.customer_name) {
-      // Same resolver as the estimate push: an existing NetSuite customer
-      // with this exact name, else promote the matching CRM lead (lead
-      // tier). Stamp the estimate so the linkage survives for invoicing.
-      const resolved = await resolveOrPromoteByName(supabase, estimate.customer_name, null);
+      // Same resolver as the estimate push: the lead this estimate is
+      // linked to (prospect_id), else an existing NetSuite customer with
+      // this exact name, else the lead whose name matches. Stamp the
+      // estimate so the linkage survives for invoicing.
+      const resolved = await resolveOrPromoteByName(
+        supabase, estimate.customer_name, null, estimate.prospect_id || null,
+      );
       if (resolved) {
         customerId = resolved.netsuiteId;
         await supabase.from('estimates')
