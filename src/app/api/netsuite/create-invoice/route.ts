@@ -14,6 +14,11 @@ const Schema = z.object({
   // quantities" flow moved to /api/pos/invoice-open, which invoices NetSuite
   // directly; this SO-transform path is the batch-from-sales-order route.)
   quantities: z.record(z.string().min(1).max(120), z.number().int().min(1).max(100000)).optional(),
+  // A PO whose SO already has a FleetSuite-created invoice is refused unless
+  // the caller explicitly says this is another tranche — the silent
+  // alternative was re-billing the same installed units on every POST
+  // (Round 3 §7.2.4).
+  allowAdditional: z.boolean().optional(),
 });
 
 /**
@@ -29,7 +34,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
-  const { salesOrderIds, quantities } = parsed.data;
+  const { salesOrderIds, quantities, allowAdditional } = parsed.data;
   if (quantities && salesOrderIds.length !== 1) {
     return NextResponse.json({ error: 'Explicit quantities require exactly one sales order' }, { status: 400 });
   }
@@ -49,6 +54,7 @@ export async function POST(req: NextRequest) {
       invoiceId?: string;
       invoiceNumber?: string;
       error?: string;
+      warning?: string;
     }[] = [];
 
     // For each sales order, look up the PO to get installed quantities
@@ -86,6 +92,80 @@ export async function POST(req: NextRequest) {
         });
         continue;
       }
+
+      // Idempotence (Round 3 §7.2.4): this endpoint re-billed the same
+      // installed units on every POST — nothing consumed or checked
+      // anything. A PO that already has a FleetSuite invoice needs an
+      // explicit allowAdditional to bill another tranche.
+      const { data: priorInvoices } = await supabase
+        .from('po_invoices')
+        .select('netsuite_invoice_number, netsuite_invoice_id')
+        .eq('purchase_order_id', po.id)
+        .limit(5);
+      const priorList = [
+        ...new Set([
+          ...(priorInvoices || []).map((r: any) => r.netsuite_invoice_number || r.netsuite_invoice_id),
+          ...(po.netsuite_invoice_id ? [po.netsuite_invoice_number || po.netsuite_invoice_id] : []),
+        ].filter(Boolean)),
+      ];
+      if (priorList.length > 0 && !allowAdditional) {
+        results.push({
+          poId: po.id,
+          poNumber: po.po_number,
+          soId,
+          soNumber: po.netsuite_so_number || '',
+          status: 'skipped',
+          error: `Already invoiced (${priorList.join(', ')}). Re-run with "bill another tranche" if this is deliberately a second invoice.`,
+        });
+        continue;
+      }
+
+      // Atomic claim (the create-po/convert-to-so shape, migration 251):
+      // a concurrent double-POST turns away here, BEFORE a duplicate
+      // invoice exists. Degrades gracefully while the schema cache lags
+      // (#741): a missing-column error proceeds unclaimed rather than
+      // failing the request.
+      const staleCutoff = new Date(Date.now() - 15 * 60_000).toISOString();
+      let claimActive = false;
+      const { data: claimRows, error: claimErr } = await supabase
+        .from('purchase_orders')
+        .update({ invoice_claimed_at: new Date().toISOString() })
+        .eq('id', po.id)
+        .or(`invoice_claimed_at.is.null,invoice_claimed_at.lt.${staleCutoff}`)
+        .select('id');
+      if (claimErr) {
+        if ((claimErr as any).code === 'PGRST204' || /invoice_claimed_at/i.test(claimErr.message || '')) {
+          console.warn('create-invoice: claim column not in schema cache yet — proceeding unclaimed');
+        } else {
+          results.push({
+            poId: po.id,
+            poNumber: po.po_number,
+            soId,
+            soNumber: po.netsuite_so_number || '',
+            status: 'error',
+            error: 'Could not reserve this PO for invoicing — try again',
+          });
+          continue;
+        }
+      } else if (!claimRows || claimRows.length === 0) {
+        results.push({
+          poId: po.id,
+          poNumber: po.po_number,
+          soId,
+          soNumber: po.netsuite_so_number || '',
+          status: 'skipped',
+          error: 'An invoice for this PO is already being created — wait a moment and check NetSuite before retrying',
+        });
+        continue;
+      } else {
+        claimActive = true;
+      }
+      const releaseClaim = async () => {
+        if (!claimActive) return;
+        try {
+          await supabase.from('purchase_orders').update({ invoice_claimed_at: null }).eq('id', po.id);
+        } catch { /* stale-claim takeover covers a lost release */ }
+      };
 
       // Get the SO line details from NetSuite to map our PO lines to SO lines
       try {
@@ -156,6 +236,7 @@ export async function POST(req: NextRequest) {
               status: 'error',
               error: detail,
             });
+            await releaseClaim();
             continue;
           }
         } else {
@@ -197,6 +278,7 @@ export async function POST(req: NextRequest) {
             status: 'skipped',
             error: 'Could not match installed lines to SO lines',
           });
+          await releaseClaim();
           continue;
         }
 
@@ -218,26 +300,48 @@ export async function POST(req: NextRequest) {
         });
 
         if (invoiceResult.success) {
-          // Store invoice reference on the PO (legacy single-invoice field)
-          await supabase
+          // The invoice EXISTS in NetSuite from here on — never report
+          // failure, never stamp falsy (R3-8's written policy). A rare
+          // success without an id (Location header unparseable + 204 body)
+          // stamps a visible sentinel so the already-invoiced guard still
+          // holds instead of silently re-arming a duplicate.
+          const stampId = invoiceResult.invoiceId || 'created-id-unknown';
+          const warnings: string[] = [];
+          if (!invoiceResult.invoiceId) {
+            warnings.push('NetSuite did not return the invoice id — find the new invoice in NetSuite and fix the PO reference by hand');
+          }
+
+          const { error: stampErr } = await supabase
             .from('purchase_orders')
             .update({
-              netsuite_invoice_id: invoiceResult.invoiceId,
-              netsuite_invoice_number: invoiceResult.invoiceNumber,
+              netsuite_invoice_id: stampId,
+              netsuite_invoice_number: invoiceResult.invoiceNumber || null,
+              ...(claimActive ? { invoice_claimed_at: null } : {}),
             })
             .eq('id', po.id);
+          if (stampErr) {
+            console.error('create-invoice: PO stamp failed after NetSuite create:', stampErr.message);
+            warnings.push(`the PO reference stamp failed (${stampErr.message}) — record invoice ${invoiceResult.invoiceNumber || stampId} on PO #${po.po_number} by hand`);
+          }
 
-          // Also insert into po_invoices for multi-invoice tracking
+          // Also insert into po_invoices for multi-invoice tracking (needs a
+          // real id — the sentinel case is covered by the legacy field).
           const installedLineCount = Object.keys(installedQuantities).length;
           const installedTotalQty = Object.values(installedQuantities).reduce((a, b) => a + b, 0);
-          await supabase.from('po_invoices').insert({
-            purchase_order_id: po.id,
-            netsuite_invoice_id: invoiceResult.invoiceId,
-            netsuite_invoice_number: invoiceResult.invoiceNumber,
-            line_count: installedLineCount,
-            total_qty: installedTotalQty,
-            memo: `PO #${po.po_number} — ${installedTotalQty} unit${installedTotalQty !== 1 ? 's' : ''} across ${installedLineCount} line${installedLineCount !== 1 ? 's' : ''}`,
-          });
+          if (invoiceResult.invoiceId) {
+            const { error: piErr } = await supabase.from('po_invoices').insert({
+              purchase_order_id: po.id,
+              netsuite_invoice_id: invoiceResult.invoiceId,
+              netsuite_invoice_number: invoiceResult.invoiceNumber,
+              line_count: installedLineCount,
+              total_qty: installedTotalQty,
+              memo: `PO #${po.po_number} — ${installedTotalQty} unit${installedTotalQty !== 1 ? 's' : ''} across ${installedLineCount} line${installedLineCount !== 1 ? 's' : ''}`,
+            });
+            if (piErr) {
+              console.error('create-invoice: po_invoices insert failed:', piErr.message);
+              warnings.push('the multi-invoice tracking row failed to write — the billing sweep will pick the invoice up by Reference No.');
+            }
+          }
 
           results.push({
             poId: po.id,
@@ -247,6 +351,7 @@ export async function POST(req: NextRequest) {
             status: 'success',
             invoiceId: invoiceResult.invoiceId,
             invoiceNumber: invoiceResult.invoiceNumber,
+            ...(warnings.length > 0 ? { warning: warnings.join('; ') } : {}),
           });
         } else {
           results.push({
@@ -257,6 +362,7 @@ export async function POST(req: NextRequest) {
             status: 'error',
             error: invoiceResult.error,
           });
+          await releaseClaim();
         }
       } catch (e: any) {
         results.push({
@@ -267,6 +373,7 @@ export async function POST(req: NextRequest) {
           status: 'error',
           error: e.message || 'Unknown error',
         });
+        await releaseClaim();
       }
     }
 

@@ -79,12 +79,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: result.error || 'NetSuite invoice create failed' }, { status: 502 });
     }
 
-    // Stamp the check-in's invoice fields (migration 070) — best-effort;
-    // the invoice exists in NetSuite either way.
+    // Stamp the check-in's invoice fields (migration 070). The invoice
+    // exists in NetSuite either way, so the stamp must always be truthy —
+    // a null here would re-arm the 409 guard above and invite a duplicate.
+    // An internal-id fallback is fine: the AR payment sync resolves
+    // internal ids to tranids (Round 3 §7.2.8 — it used to match tranid
+    // only, so these rows could never be marked paid).
+    const stampNumber = result.invoiceNumber
+      || (result.invoiceId ? String(result.invoiceId) : 'created-id-unknown');
     const { error: stampErr } = await supabase
       .from('fleet_checkins')
       .update({
-        invoice_number: result.invoiceNumber || result.invoiceId || null,
+        invoice_number: stampNumber,
         date_invoiced: new Date().toISOString().slice(0, 10),
         updated_at: new Date().toISOString(),
       })

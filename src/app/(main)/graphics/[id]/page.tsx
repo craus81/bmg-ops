@@ -410,7 +410,7 @@ export default function GraphicsJobRecordPage() {
     } catch { /* fall through — still fire the billing prompt */ }
     apiFetch('/api/graphics/notify-shipped-invoice', {
       method: 'POST',
-      body: JSON.stringify({ jobId: j.id, notifyCustomer, customerEmail }),
+      body: JSON.stringify({ jobId: j.id, notifyCustomer, customerEmail, trigger: 'shipped' }),
     }).catch(() => {});
   };
 
@@ -502,6 +502,15 @@ export default function GraphicsJobRecordPage() {
       promptPickupNotify(job);
     } else if (newStatus === 'shipped') {
       promptShippedNotify(job);
+    } else if (newStatus === 'picked_up' || newStatus === 'installed') {
+      // Billing ask on the OTHER terminal exits (audit Stage 9): a job that
+      // leaves as a pickup or a direct install is just as billable as a
+      // shipped one, but only 'shipped' ever prompted anyone. Billing-only —
+      // no customer email; the route skips already-invoiced jobs itself.
+      apiFetch('/api/graphics/notify-shipped-invoice', {
+        method: 'POST',
+        body: JSON.stringify({ jobId: job.id, trigger: newStatus }),
+      }).catch(() => {});
     }
 
     apiFetch('/api/graphics/notify-assignees', {
