@@ -47,6 +47,7 @@ export async function POST(req: NextRequest) {
       synced: result.synced,
       lines: result.lines,
       headerErrors: result.headerErrors,
+      droppedColumns: result.droppedColumns,
       partial: result.partial,
       windowProcessed: result.windowProcessed,
       totalSos,
