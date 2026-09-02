@@ -96,6 +96,57 @@ function stripApprovalSecrets<T extends Record<string, any>>(row: T | null): T |
   return clone;
 }
 
+/**
+ * Attach `taxable` to each line from netsuite_parts.is_taxable.
+ *
+ * Only an explicit false makes a line non-taxable; a part we can't match,
+ * or one NetSuite never reported taxability for, stays taxable — the
+ * pre-252 behavior — so this can never quietly reduce tax on an estimate.
+ */
+async function resolveLineTaxability(supabase: any, lines: any[]): Promise<any[]> {
+  const partIds = [...new Set(lines.map(l => l.part_id).filter(Boolean))];
+  const itemNumbers = [...new Set(
+    lines.map(l => String(l.item_number || '').trim().toUpperCase()).filter(Boolean),
+  )];
+  if (partIds.length === 0 && itemNumbers.length === 0) return lines;
+
+  const byId = new Map<string, boolean | null>();
+  const byNumber = new Map<string, boolean | null>();
+  try {
+    if (partIds.length > 0) {
+      const { data } = await supabase
+        .from('netsuite_parts')
+        .select('id, item_number, is_taxable')
+        .in('id', partIds);
+      for (const p of data || []) byId.set(p.id, p.is_taxable ?? null);
+    }
+    if (itemNumbers.length > 0) {
+      // Chunked: a long line list would otherwise overflow the request URL.
+      for (let i = 0; i < itemNumbers.length; i += 200) {
+        const { data } = await supabase
+          .from('netsuite_parts')
+          .select('item_number, is_taxable')
+          .in('item_number', itemNumbers.slice(i, i + 200));
+        for (const p of data || []) {
+          byNumber.set(String(p.item_number || '').trim().toUpperCase(), p.is_taxable ?? null);
+        }
+      }
+    }
+  } catch (err: any) {
+    // A catalog hiccup must not reprice the estimate: fall through with
+    // everything taxable rather than dropping tax off the quote.
+    console.warn('[estimates] taxability lookup failed, taxing all lines:', err?.message || err);
+    return lines;
+  }
+
+  return lines.map(l => {
+    const resolved = l.part_id && byId.has(l.part_id)
+      ? byId.get(l.part_id)
+      : byNumber.get(String(l.item_number || '').trim().toUpperCase());
+    return resolved === false ? { ...l, taxable: false } : l;
+  });
+}
+
 function getSupabase() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -191,7 +242,13 @@ export async function POST(req: NextRequest) {
       ? parseFloat(String(labor_hours_override))
       : null;
 
-    const totals = computeTotals(lines, effectiveTaxRate, !!tax_exempt, effectiveLaborRate, override);
+    // Per-item taxability from the catalog (migration 252). Resolved
+    // server-side so the stored total is authoritative — the builder does
+    // the same lookup for the live figure, and this is what settles it.
+    // Matched on part_id first (exact), then the normalized item number for
+    // lines typed or imported without one. No match = unknown = taxable.
+    const taxableByLine = await resolveLineTaxability(supabase, lines);
+    const totals = computeTotals(taxableByLine, effectiveTaxRate, !!tax_exempt, effectiveLaborRate, override);
 
     if (id) {
       // ── Revision lock ─────────────────────────────────────────────────

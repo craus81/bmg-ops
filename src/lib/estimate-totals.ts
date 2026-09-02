@@ -4,6 +4,13 @@
  *
  * Behavior notes (intentional, matches production):
  *  - Tax applies to parts/materials only, never labor.
+ *  - A line whose item NetSuite marks non-taxable (`taxable === false`,
+ *    resolved by the caller from netsuite_parts.is_taxable, migration 252)
+ *    is excluded from the tax base too. Freight is the case that surfaced
+ *    it: FleetSuite taxed it, NetSuite did not, so the signed quote came
+ *    out above the invoice. ONLY an explicit false excludes — undefined or
+ *    null (unknown, custom lines, un-synced items) stays taxable, so the
+ *    figure can never silently drop below what it is today.
  *  - Per-line labor is labor_hours × quantity, matching the builder UI —
  *    a line's labor_hours is per unit, so two brackets take twice the labor.
  *    (Changed Aug 2026 with sign-off: the server used to ignore quantity,
@@ -17,7 +24,14 @@ export function computeTotals(lines: any[], taxRate: number, taxExempt: boolean,
   const autoLaborHours = lines.reduce((sum: number, l: any) => sum + (parseFloat(l.labor_hours || 0) * parseFloat(l.quantity || 0)), 0);
   const effectiveLaborHours = laborHoursOverride !== null && laborHoursOverride !== undefined ? laborHoursOverride : autoLaborHours;
   const laborTotal = effectiveLaborHours * laborRate;
-  const taxableAmount = subtotal; // Tax on parts/materials only, not labor
+  // Parts/materials only (never labor), minus anything NetSuite says is
+  // non-taxable.
+  const taxableAmount = lines.reduce(
+    (sum: number, l: any) => (l.taxable === false
+      ? sum
+      : sum + (parseFloat(l.quantity || 0) * parseFloat(l.unit_price || 0))),
+    0,
+  );
   const taxAmount = taxExempt ? 0 : taxableAmount * taxRate;
   const grandTotal = subtotal + laborTotal + taxAmount;
 

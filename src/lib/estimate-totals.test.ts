@@ -111,3 +111,53 @@ describe('computeTotals', () => {
     expect(result.grand_total).toBe(440);
   });
 });
+
+// Per-item taxability (migration 252). The live case: NetSuite treats
+// Freight as non-taxable, FleetSuite taxed it, and the customer signed a
+// total $11.94 above what NetSuite billed.
+describe('computeTotals — non-taxable lines', () => {
+  const parts = [
+    { quantity: 1, unit_price: 3896.48, labor_hours: 0 },
+    { quantity: 1, unit_price: 150, labor_hours: 0, taxable: false }, // Freight
+  ];
+
+  it('excludes a non-taxable line from the tax base but not the subtotal', () => {
+    const r = computeTotals(parts, 0.0795, false, 115, 4.5);
+    expect(r.subtotal).toBe(4046.48);
+    // 3896.48 × 7.95% — the freight is not in the base.
+    expect(r.tax_amount).toBe(309.77);
+    expect(r.labor_total).toBe(517.5);
+    expect(r.grand_total).toBe(4873.75);
+  });
+
+  it('taxes the same lines in full when nothing is flagged', () => {
+    const r = computeTotals(parts.map(({ taxable, ...l }) => l), 0.0795, false, 115, 4.5);
+    // 4046.48 × 7.95% — the pre-252 figure, still what unknown items get,
+    // and exactly the $321.70 the builder showed on EST-2608-024.
+    expect(r.tax_amount).toBe(321.7);
+  });
+
+  it('only an explicit false excludes — unknown stays taxable', () => {
+    const unknown = [
+      { quantity: 1, unit_price: 100, labor_hours: 0 },
+      { quantity: 1, unit_price: 100, labor_hours: 0, taxable: null },
+      { quantity: 1, unit_price: 100, labor_hours: 0, taxable: undefined },
+      { quantity: 1, unit_price: 100, labor_hours: 0, taxable: true },
+    ];
+    expect(computeTotals(unknown, 0.1, false, 0, 0).tax_amount).toBe(40);
+  });
+
+  it('tax-exempt still wins over everything', () => {
+    expect(computeTotals(parts, 0.0795, true, 115, 4.5).tax_amount).toBe(0);
+  });
+
+  it('an all-non-taxable estimate has no tax but keeps its subtotal', () => {
+    const r = computeTotals(
+      [{ quantity: 2, unit_price: 75, labor_hours: 0, taxable: false }],
+      0.0795, false, 115, 0,
+    );
+    expect(r.subtotal).toBe(150);
+    expect(r.tax_amount).toBe(0);
+    expect(r.grand_total).toBe(150);
+  });
+});
