@@ -70,6 +70,7 @@ export async function POST(req: NextRequest) {
         body: `Your company was invited to bid on "${job.title}". Open it to respond with interest or a pass.`,
         url: deepLinks.installerAvailableJob(jobId),
         channels: ['in_app', 'push'],
+        // External installer audience — no preference rows; addressed-to-you lifecycle event.
         forceChannels: true,
       });
       notified = installerIds.length;

@@ -76,19 +76,34 @@ export async function POST(req: NextRequest) {
     .from('cni_job_vins').update({ photos_submitted: true }).eq('id', vinId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Tell the coordinators there are photos to review.
+  // Tell the coordinators there are photos to review — but only when this
+  // submission lands on an empty review queue (R3-4). A crew works a job's
+  // VINs one at a time, and pinging every coordinator per VIN made a 30-VIN
+  // job 30 pushes + 30 emails each; while other VINs on the job already sit
+  // submitted-but-unapproved, the reviewers have been told and the job page
+  // shows the live count. `.not(is true)` so never-reviewed NULLs count as
+  // outstanding too.
   try {
-    const staff = await getCniStaffIds(supabase, auth.user.id);
-    if (staff.length > 0) {
-      const who = profile?.full_name || 'An installer';
-      await notifyMany(staff, {
-        type: 'cni_photos_ready',
-        title: `Photos ready: ${job.job_number}`,
-        body: `${who} submitted completion photos for VIN …${(vin.vin || '').slice(-6)} on "${job.title}". Review and approve.`,
-        url: deepLinks.cniJob(jobId),
-        channels: ['in_app', 'push', 'email'],
-        forceChannels: true,
-      });
+    const { data: outstanding } = await supabase
+      .from('cni_job_vins')
+      .select('id')
+      .eq('job_id', jobId)
+      .eq('photos_submitted', true)
+      .not('photos_approved', 'is', true)
+      .neq('id', vinId)
+      .limit(1);
+    if ((outstanding || []).length === 0) {
+      const staff = await getCniStaffIds(supabase, auth.user.id);
+      if (staff.length > 0) {
+        const who = profile?.full_name || 'An installer';
+        await notifyMany(staff, {
+          type: 'cni_photos_ready',
+          title: `Photos ready: ${job.job_number}`,
+          body: `${who} submitted completion photos for VIN …${(vin.vin || '').slice(-6)} on "${job.title}". Review and approve.`,
+          url: deepLinks.cniJob(jobId),
+          channels: ['in_app', 'push', 'email'],
+        });
+      }
     }
   } catch (err) {
     console.error('cni_photos_ready notify failed:', err);

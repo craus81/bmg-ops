@@ -99,7 +99,6 @@ export async function GET(req: NextRequest) {
             body: `${job.customer || 'The customer'} hasn't answered the proof for ${label} in ${Math.floor(sentDays)} days (${job.approval_reminder_count || 0} automatic reminder${(job.approval_reminder_count || 0) !== 1 ? 's' : ''} sent). Production is blocked — worth a call.`,
             url: deepLinks.graphicsJob(job.id),
             channels: ['in_app', 'push'],
-            forceChannels: true,
           });
         }
         await service.from('graphics_jobs')

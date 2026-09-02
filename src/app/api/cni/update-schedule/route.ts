@@ -89,7 +89,6 @@ export async function POST(req: NextRequest) {
         body: `${who} declined the proposed time for "${job.title}".${note ? ` Reason: ${note}` : ''} Propose a new time.`,
         url: deepLinks.cniJob(jobId),
         channels: ['in_app', 'push', 'email'],
-        forceChannels: true,
       });
     }
   } catch (err) {

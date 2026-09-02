@@ -142,6 +142,7 @@ export async function POST(req: NextRequest) {
             // lists the rest when one event covers several).
             url: deepLinks.invoicesSent(first.invoice_number),
             channels: ['in_app', 'push'],
+            // Delivery-failure alarm — the sender must learn their email died.
             forceChannels: true,
           });
         }
@@ -199,6 +200,7 @@ export async function POST(req: NextRequest) {
           body: `The approval email to ${(est.approval_email_to || []).join(', ') || 'the customer'}${est.customer_name ? ` (${est.customer_name})` : ''} ${status === 'complained' ? 'was marked as spam' : status}. ${detail ? `Reason: ${detail}. ` : ''}Fix the address and resend it from the estimate.`,
           url: deepLinks.estimate(est.id),
           channels: ['in_app', 'push'],
+          // Delivery-failure alarm — the sender must learn their email died.
           forceChannels: true,
         });
       }
@@ -261,6 +263,7 @@ export async function POST(req: NextRequest) {
           body: `Your email to ${(row.recipients || []).join(', ') || 'the recipient'}${row.subject ? ` (“${row.subject}”)` : ''} ${status === 'complained' ? 'was marked as spam' : status}. ${detail ? `Reason: ${detail}. ` : ''}They did not receive it — fix the address and resend.`,
           url: row.context_url || deepLinks.emailDelivery(row.id),
           channels: ['in_app', 'push'],
+          // Delivery-failure alarm — the sender must learn their email died.
           forceChannels: true,
         });
       }

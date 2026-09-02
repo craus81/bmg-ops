@@ -87,7 +87,6 @@ export async function GET(req: NextRequest) {
               : `You asked to be reminded today about ${company}.`,
             url: deepLinks.prospect(r.prospect_id),
             channels: ['in_app', 'push'],
-            forceChannels: true,
           });
           notified++;
         } else {

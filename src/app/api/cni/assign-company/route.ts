@@ -66,6 +66,7 @@ export async function POST(req: NextRequest) {
           body: `Your company was assigned "${job.title}". Open the job to schedule and start the work.`,
           url: deepLinks.installerJob(jobId),
           channels: ['in_app', 'push', 'email'],
+          // External installer audience — no preference rows; addressed-to-you lifecycle event.
           forceChannels: true,
         });
       }

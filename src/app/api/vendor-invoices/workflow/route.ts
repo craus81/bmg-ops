@@ -88,7 +88,6 @@ export async function POST(req: NextRequest) {
           body: `${invoice.vendor_name} invoice${invoice.invoice_number ? ` #${invoice.invoice_number}` : ''} for $${amount.toFixed(2)} is awaiting approval.`,
           url: deepLinks.apInvoice(invoice.id),
           channels: ['in_app', 'push'],
-          forceChannels: true,
         });
       }
       await logAudit(service, { actorId, table: 'vendor_invoices', recordId: invoice.id, action: 'submit', detail: { vendor: invoice.vendor_name, amount } });
@@ -105,7 +104,6 @@ export async function POST(req: NextRequest) {
           body: `Payment of $${amount.toFixed(2)} was approved.`,
           url: await submitterUrl(invoice.submitted_by, invoice.id),
           channels: ['in_app', 'push'],
-          forceChannels: true,
         });
       }
       // The rest of the finance team hears it's ready to bill — the
@@ -120,7 +118,6 @@ export async function POST(req: NextRequest) {
           body: `$${amount.toFixed(2)} to ${invoice.vendor_name} was approved — create the NetSuite bill from the AP queue.`,
           url: deepLinks.apInvoice(invoice.id),
           channels: ['in_app', 'push'],
-          forceChannels: true,
         });
       }
       await logAudit(service, { actorId, table: 'vendor_invoices', recordId: invoice.id, action: 'approve', detail: { vendor: invoice.vendor_name, amount } });
@@ -139,7 +136,6 @@ export async function POST(req: NextRequest) {
           body: body.reason,
           url: await submitterUrl(invoice.submitted_by, invoice.id),
           channels: ['in_app', 'push'],
-          forceChannels: true,
         });
       }
       await logAudit(service, { actorId, table: 'vendor_invoices', recordId: invoice.id, action: 'reject', detail: { vendor: invoice.vendor_name, amount, reason: body.reason } });
@@ -210,7 +206,6 @@ export async function POST(req: NextRequest) {
         body: `Payment of $${amount.toFixed(2)} has been sent.`,
         url: await submitterUrl(invoice.submitted_by, invoice.id),
         channels: ['in_app', 'push'],
-        forceChannels: true,
       });
     }
     // The rest of the finance team sees the queue shrink (same note the
@@ -223,7 +218,6 @@ export async function POST(req: NextRequest) {
         body: `$${amount.toFixed(2)} to ${invoice.vendor_name} was marked paid.`,
         url: deepLinks.apInvoice(invoice.id),
         channels: ['in_app', 'push'],
-        forceChannels: true,
       });
     }
     await logAudit(service, { actorId, table: 'vendor_invoices', recordId: invoice.id, action: 'mark_paid', detail: { vendor: invoice.vendor_name, amount, netsuite_bill_id: invoice.netsuite_bill_id } });

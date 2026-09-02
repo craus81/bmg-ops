@@ -79,7 +79,6 @@ export async function POST(req: NextRequest) {
         body: `${who} marked "${job.title}" complete. Review the work and photos, then approve and close.`,
         url: deepLinks.cniJob(jobId),
         channels: ['in_app', 'push', 'email'],
-        forceChannels: true,
       });
     }
   } catch (err) {

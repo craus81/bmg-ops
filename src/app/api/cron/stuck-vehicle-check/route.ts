@@ -97,7 +97,6 @@ export async function GET(req: NextRequest) {
         title: `🚩 ${label} stuck ${Math.floor(stuckHours / 24)}d — ${reason}`,
         body: `${v.customer_name ? `${v.customer_name}'s ` : ''}${label} (VIN …${String(v.vin || '').slice(-8)}) has been ${reason} for ${Math.floor(stuckHours)} hours. Reach out to the customer before they call.`,
         channels: ['in_app', 'push'] as ('in_app' | 'push')[],
-        forceChannels: true,
       };
       // Per-recipient URL: the board for admins, whatever the assignee can
       // open for the assignee (an installer's board link would bounce).

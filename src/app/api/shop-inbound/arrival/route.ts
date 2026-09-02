@@ -191,7 +191,6 @@ export async function POST(req: NextRequest) {
             : '/tracking',
         // Expected arrivals are the ones people are waiting on — those push.
         channels: wasExpected ? ['in_app', 'push'] : ['in_app'],
-        forceChannels: true,
       });
     }
 

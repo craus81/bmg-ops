@@ -283,7 +283,6 @@ export async function POST(req: NextRequest) {
         body: summary.slice(0, 900),
         url,
         channels: ['in_app', 'push'] as ('in_app' | 'push')[],
-        forceChannels: true,
       });
       const digestIds: string[] = [];
       for (const [uid, theirs] of [...byRequester.entries()]) {

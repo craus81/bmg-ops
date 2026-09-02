@@ -119,7 +119,6 @@ export async function POST(req: NextRequest) {
           : `${who} passed on "${job.title}".${body.declineReason ? ` Reason: ${body.declineReason}` : ''}`,
         url: deepLinks.cniJob(job.id),
         channels: ['in_app', 'push'],
-        forceChannels: true,
       });
     }
   } catch (err) {
