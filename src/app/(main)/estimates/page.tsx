@@ -909,13 +909,39 @@ export default function EstimatesPage() {
     if (f.customerId) loadCustomerDefaults(f.customerId);
   };
 
+  /**
+   * Is this estimate's content frozen, so a save would be refused?
+   *
+   * Mirrors the SAVE gate in /api/estimates exactly — customer_approved OR
+   * status 'accepted'. Deliberately NOT netsuite_so_id, which locks
+   * DELETION only: a converted-but-unaccepted estimate still saves, and
+   * treating it as frozen here would silently keep on-screen edits out of
+   * its PDF.
+   */
+  const isContentFrozen = (est?: Estimate | null): boolean =>
+    !!(est && (est.customer_approved || est.status === 'accepted'));
+
   // Offer the device-local backup for this estimate (null = the unsaved
   // builder). True = restored. Declining discards the backup.
   const maybeOfferDraft = async (id: string | null, est?: Estimate): Promise<boolean> => {
     const draft = readEstimateDraft(id);
     if (!draft) return false;
+
+    // NEVER onto a customer-accepted estimate. Its contents are frozen, so
+    // restoring can only mislead — or, if someone then saves with an admin
+    // override, overwrite the document the customer actually signed with a
+    // backup up to 14 days old. That is how an accepted estimate came back
+    // as a pre-approval version. The backup is deliberately NOT discarded:
+    // it may be wanted on a revision, and it expires on its own.
+    if (isContentFrozen(est)) return false;
+
     const savedAt = new Date(draft.savedAt);
-    const staleNote = est?.updated_at && new Date(est.updated_at) > savedAt
+    // Older than what's saved: the safe answer is almost always "keep what's
+    // saved", so the restore is styled as the destructive choice and the
+    // labels say which version each button keeps. The old wording made
+    // "Restore" the plain primary action on a backup that undoes newer work.
+    const stale = !!(est?.updated_at && new Date(est.updated_at) > savedAt);
+    const staleNote = stale
       ? '\n\nNote: this estimate has been saved more recently (possibly on another device) than this backup — restoring brings back the older unsaved edits.'
       : '';
     const lineCount = Array.isArray(draft.fields?.lines) ? draft.fields.lines.length : 0;
@@ -923,7 +949,9 @@ export default function EstimatesPage() {
     const ok = await dialog.confirm(
       `Unsaved work${label ? ` (“${label}”)` : ''} from ${savedAt.toLocaleString()} was backed up on this device — ` +
       `${lineCount} line item${lineCount === 1 ? '' : 's'}. Restore it?${staleNote}`,
-      { title: 'Restore unsaved estimate?', confirmLabel: 'Restore', cancelLabel: 'Discard backup' },
+      stale
+        ? { title: 'Restore older unsaved edits?', confirmLabel: 'Restore the older version', cancelLabel: 'Keep what’s saved', destructive: true }
+        : { title: 'Restore unsaved estimate?', confirmLabel: 'Restore', cancelLabel: 'Discard backup' },
     );
     if (!ok) { clearEstimateDraft(id); return false; }
     applyDraft(id, draft);
@@ -1506,16 +1534,24 @@ export default function EstimatesPage() {
   };
 
   /**
-   * Is this estimate's content frozen, so a save would be refused?
+   * On a locked estimate, warn when the screen is holding changes the
+   * document won't have. Returns false to abandon the open.
    *
-   * Mirrors the SAVE gate in /api/estimates exactly — customer_approved OR
-   * status 'accepted'. Deliberately NOT netsuite_so_id, which locks
-   * DELETION only: a converted-but-unaccepted estimate still saves, and
-   * treating it as frozen here would silently keep on-screen edits out of
-   * its PDF.
+   * This is the trap that made an accepted estimate look like it printed a
+   * "stale" copy: the builder showed edits made after the customer's
+   * rejection, the estimate row still held the version that was resent and
+   * accepted, and the PDF — correctly — rendered the row. The document was
+   * right; the screen was the unsaved copy.
    */
-  const isContentFrozen = (est?: Estimate | null): boolean =>
-    !!(est && (est.customer_approved || est.status === 'accepted'));
+  const confirmFrozenPdf = async (): Promise<boolean> => {
+    if (draftSerialized === draftBaselineRef.current) return true;
+    return dialog.confirm(
+      'The customer accepted this estimate, so it is locked and the changes on screen are NOT saved — '
+      + 'the PDF shows the accepted document, not what you are looking at.\n\n'
+      + 'Open the accepted document anyway? To quote the changes instead, use "Duplicate as New Revision".',
+      { confirmLabel: 'Open accepted document', cancelLabel: 'Go back' },
+    );
+  };
 
   // ── FleetSuite enhanced-estimate PDF: view / print in a new tab ──
   // The endpoint renders the same customer-facing copy as the approval email
@@ -1533,7 +1569,13 @@ export default function EstimatesPage() {
     if (!editingId) return;
     const w = window.open('', '_blank');
     const est = estimates.find(e => e.id === editingId);
-    if (!isContentFrozen(est)) {
+    if (isContentFrozen(est)) {
+      // Locked, so nothing to save — but the builder can still be holding
+      // changes that are NOT in the document. Removing the save took away
+      // the only (accidental) signal that they differ: the lock prompt. Say
+      // it plainly instead, and point at the revision that CAN carry them.
+      if (!(await confirmFrozenPdf())) { w?.close(); return; }
+    } else {
       const saved = await saveEstimate(est?.status || 'draft');
       // Refused or cancelled: handing over a PDF that silently differs from
       // the screen is worse than handing over nothing.
@@ -1612,7 +1654,11 @@ export default function EstimatesPage() {
     // contents can't have moved, and saving would demand an override reason
     // just to email the customer their own signed copy.
     const est = estimates.find(e => e.id === editingId);
-    if (!isContentFrozen(est)) {
+    if (isContentFrozen(est)) {
+      // Emailing the customer the accepted document while the screen shows
+      // something else is the version of this trap that reaches them.
+      if (!(await confirmFrozenPdf())) return;
+    } else {
       const saved = await saveEstimate(est?.status || 'draft');
       // Don't open a compose screen that would attach a stale PDF.
       if (!saved) return;
