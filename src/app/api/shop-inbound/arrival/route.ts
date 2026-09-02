@@ -4,7 +4,7 @@ import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
-import { linkInboundToCheckin } from '@/lib/shop-inbound';
+import { linkInboundToCheckin, findActiveCheckinForInbound } from '@/lib/shop-inbound';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -70,30 +70,46 @@ export async function POST(req: NextRequest) {
         id: c.id, vin: c.vin, customer_name: c.customer_name, soNumbers,
       });
       // Someone may have hit "Arrived" on the Shop Board hours before the
-      // formal check-in — that already notified. A recent arrived row for
-      // this VIN means this is the same physical arrival: link-only, no
-      // second ping.
-      if (!linkedInbound && c.vin) {
+      // formal check-in — that already notified. A recent arrived row that
+      // matches this check-in means it's the same physical arrival:
+      // link-only, no second ping. Round 3 caveat 14: matching on VIN alone
+      // let graphics/upfit/manual board rows (which carry no VIN) slip past
+      // this and double-notify — match the same VIN → SO number → customer
+      // ladder the forward link uses.
+      if (!linkedInbound) {
         const dayAgo = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-        const { data: recent } = await supabase
+        const { data: recentRows } = await supabase
           .from('shop_inbound')
-          .select('id')
+          .select('id, vin, netsuite_so_number, customer_name, fleet_checkin_id')
           .eq('status', 'arrived')
-          .eq('vin', String(c.vin).trim().toUpperCase())
           .gte('updated_at', dayAgo)
-          .limit(1);
-        if (recent && recent.length > 0) {
+          .limit(200);
+        const recent = recentRows || [];
+        const vinU = c.vin ? String(c.vin).trim().toUpperCase() : '';
+        const custL = (c.customer_name || '').trim().toLowerCase();
+        // Only rows linked to nothing, or already to THIS check-in (an
+        // idempotent retry), count as "the same arrival".
+        const linkable = recent.filter(r => !r.fleet_checkin_id || r.fleet_checkin_id === c.id);
+        let same =
+          (vinU && linkable.find(r => (r.vin || '').trim().toUpperCase() === vinU)) ||
+          (soNumbers.length > 0 && linkable.find(r => r.netsuite_so_number && soNumbers.includes(String(r.netsuite_so_number).trim()))) ||
+          null;
+        if (!same && custL) {
+          const byCust = linkable.filter(r => (r.customer_name || '').trim().toLowerCase() === custL);
+          if (byCust.length === 1) same = byCust[0];
+        }
+        if (same) {
           await supabase.from('shop_inbound')
             .update({ fleet_checkin_id: c.id, updated_at: new Date().toISOString() })
-            .eq('id', recent[0].id)
+            .eq('id', same.id)
             .is('fleet_checkin_id', null);
-          return NextResponse.json({ success: true, alreadyArrived: true, linkedInboundId: recent[0].id });
+          return NextResponse.json({ success: true, alreadyArrived: true, linkedInboundId: same.id });
         }
       }
     } else if (inboundId) {
       const { data: row } = await supabase
         .from('shop_inbound')
-        .select('id, status, vin, customer_name, vehicle_desc, expected_date, fleet_checkin_id')
+        .select('id, status, vin, netsuite_so_number, customer_name, vehicle_desc, expected_date, fleet_checkin_id')
         .eq('id', inboundId)
         .maybeSingle();
       if (!row) return NextResponse.json({ error: 'Arrival row not found' }, { status: 404 });
@@ -104,20 +120,17 @@ export async function POST(req: NextRequest) {
       }
       inboundDesc = row.vehicle_desc;
 
-      // Back-link an active check-in for this VIN when one exists (the
-      // vehicle was checked in before anyone touched the Shop Board).
+      // Back-link an active check-in when one exists (the vehicle was
+      // checked in before anyone touched the Shop Board). VIN → SO number
+      // → unique customer, so graphics/upfit/manual rows — which carry no
+      // VIN — can link too (Round 3 caveat 14).
       let checkinLink: string | null = row.fleet_checkin_id;
-      if (!checkinLink && row.vin) {
-        const { data: c } = await supabase
-          .from('fleet_checkins')
-          .select('id')
-          .eq('vin', String(row.vin).trim().toUpperCase())
-          .is('archived_at', null)
-          .neq('status', 'shipped')
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        checkinLink = c?.id || null;
+      if (!checkinLink) {
+        checkinLink = await findActiveCheckinForInbound(supabase, {
+          vin: row.vin,
+          netsuite_so_number: row.netsuite_so_number,
+          customer_name: row.customer_name,
+        });
       }
       await supabase
         .from('shop_inbound')

@@ -33,8 +33,9 @@ interface InboundFields {
   install_location: string | null;
   expected_date: string | null;
   need_back_date: string | null;
-  // sales_order rows only — omitted (and so never written) by the other
-  // sources, since JSON.stringify drops undefined keys before the upsert.
+  // Written by sources that know them (sales_order rows; upfit rows carry
+  // the SO pair since the Stage 7 close) — omitted (and so never written)
+  // elsewhere, since JSON.stringify drops undefined keys before the upsert.
   netsuite_so_id?: string | null;
   netsuite_so_number?: string | null;
   vin?: string | null;
@@ -153,7 +154,7 @@ export async function syncShopInboundForUpfitProject(
 ): Promise<void> {
   const { data: project } = await service
     .from('upfit_projects')
-    .select('id, project_name, customer_name, status, customer_dropoff_date, need_back_date')
+    .select('id, project_name, customer_name, status, customer_dropoff_date, need_back_date, netsuite_so_id, netsuite_so_number')
     .eq('id', projectId)
     .maybeSingle();
   if (!project) return;
@@ -162,6 +163,10 @@ export async function syncShopInboundForUpfitProject(
     !!project.customer_dropoff_date &&
     !['completed', 'cancelled'].includes(project.status);
 
+  // Round 3 caveat 14: only sales_order rows carried SO identifiers, so
+  // upfit arrivals could never match a check-in by SO. Projects have both
+  // columns (migration 075) — pass them through so arrival matching works
+  // on this source too.
   await upsertInbound(service, 'upfit_project', project.id, qualifies, {
     vehicle_desc: project.project_name || null,
     customer_name: project.customer_name || null,
@@ -169,6 +174,8 @@ export async function syncShopInboundForUpfitProject(
     install_location: SHOP_INSTALL_LOCATION,
     expected_date: project.customer_dropoff_date,
     need_back_date: project.need_back_date,
+    netsuite_so_id: project.netsuite_so_id || null,
+    netsuite_so_number: project.netsuite_so_number || null,
   });
 }
 
@@ -217,4 +224,84 @@ export async function linkInboundToCheckin(
     })
     .eq('id', match.id);
   return { id: match.id, vehicle_desc: match.vehicle_desc, expected_date: match.expected_date };
+}
+
+/**
+ * The other direction of item 14: find the active check-in a Shop Board row
+ * belongs to when someone presses "Arrived" (or when the arrival brain
+ * dedupes a check-in against a row already marked arrived).
+ *
+ * Round 3 caveat 14: this matched VIN only, and only sales_order rows carry
+ * a VIN — so graphics/upfit/manual arrivals could never back-link, and a
+ * board-arrival + check-in on the same day double-notified. Match order
+ * mirrors linkInboundToCheckin, strongest first: exact VIN, then the row's
+ * SO number against the check-in's legacy column or the multi-SO join
+ * table, then customer name — the last only when it matches EXACTLY ONE
+ * active check-in.
+ */
+export async function findActiveCheckinForInbound(
+  service: SupabaseClient,
+  inbound: { vin?: string | null; netsuite_so_number?: string | null; customer_name?: string | null },
+): Promise<string | null> {
+  const vin = (inbound.vin || '').trim().toUpperCase();
+  if (vin) {
+    const { data: byVin } = await service
+      .from('fleet_checkins')
+      .select('id')
+      .eq('vin', vin)
+      .is('archived_at', null)
+      .neq('status', 'shipped')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (byVin?.id) return byVin.id;
+  }
+
+  const soNumber = (inbound.netsuite_so_number || '').trim();
+  if (soNumber) {
+    const { data: legacy } = await service
+      .from('fleet_checkins')
+      .select('id')
+      .eq('sales_order_number', soNumber)
+      .is('archived_at', null)
+      .neq('status', 'shipped')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (legacy?.id) return legacy.id;
+
+    const { data: joins } = await service
+      .from('fleet_checkin_sales_orders')
+      .select('checkin_id')
+      .eq('sales_order_number', soNumber)
+      .order('added_at', { ascending: false })
+      .limit(5);
+    for (const j of joins || []) {
+      const { data: c } = await service
+        .from('fleet_checkins')
+        .select('id')
+        .eq('id', j.checkin_id)
+        .is('archived_at', null)
+        .neq('status', 'shipped')
+        .maybeSingle();
+      if (c?.id) return c.id;
+    }
+  }
+
+  const custName = (inbound.customer_name || '').trim();
+  if (custName) {
+    // Escape LIKE wildcards so the name is matched literally
+    // (case-insensitive) — same treatment as the check-in save path.
+    const escaped = custName.replace(/[\\%_]/g, '\\$&');
+    const { data: byCust } = await service
+      .from('fleet_checkins')
+      .select('id')
+      .ilike('customer_name', escaped)
+      .is('archived_at', null)
+      .neq('status', 'shipped')
+      .limit(2);
+    if (byCust && byCust.length === 1) return byCust[0].id;
+  }
+
+  return null;
 }

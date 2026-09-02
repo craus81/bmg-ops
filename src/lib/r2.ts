@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand, GetBucketCorsCommand, PutBucketCorsCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, GetBucketCorsCommand, PutBucketCorsCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 // ── R2 Configuration ──
@@ -149,6 +149,23 @@ export async function r2Delete(
   } catch (err: any) {
     console.error('R2 delete error:', err);
     return { success: false, error: err.message };
+  }
+}
+
+// ── Does an object exist? (HEAD — no body transfer) ──
+// Server-side proof that a client-claimed upload actually landed, e.g. the
+// check-in route verifying custody photos exist before the record does.
+export async function r2Head(prefix: string, path: string): Promise<boolean> {
+  try {
+    const config = getR2Config();
+    const client = getR2Client();
+    await client.send(new HeadObjectCommand({
+      Bucket: config.bucket,
+      Key: `${prefix}/${path}`,
+    }));
+    return true;
+  } catch {
+    return false;
   }
 }
 
