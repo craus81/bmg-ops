@@ -177,6 +177,8 @@ interface Estimate {
   supersedes_estimate_id: string | null;
   // Approval provenance + rejection record (Stage 3: these lived only in
   // the DB and one push notification — the builder now shows them).
+  /** The customer accepted this document — its contents are locked. */
+  customer_approved: boolean | null;
   customer_approved_at: string | null;
   customer_approved_via: string | null;
   customer_rejected_at: string | null;
@@ -1503,20 +1505,43 @@ export default function EstimatesPage() {
     setViewingPdf(false);
   };
 
+  /**
+   * Is this estimate's content frozen, so a save would be refused?
+   *
+   * Mirrors the SAVE gate in /api/estimates exactly — customer_approved OR
+   * status 'accepted'. Deliberately NOT netsuite_so_id, which locks
+   * DELETION only: a converted-but-unaccepted estimate still saves, and
+   * treating it as frozen here would silently keep on-screen edits out of
+   * its PDF.
+   */
+  const isContentFrozen = (est?: Estimate | null): boolean =>
+    !!(est && (est.customer_approved || est.status === 'accepted'));
+
   // ── FleetSuite enhanced-estimate PDF: view / print in a new tab ──
   // The endpoint renders the same customer-facing copy as the approval email
   // (photos + product links) as a real PDF. The tab must open inside the
   // click gesture (popup blockers), so open it blank, save so the PDF
   // matches the screen, then point it at the endpoint.
-  const openFleetsuitePdf = (print = false) => {
+  //
+  // The save is SKIPPED on a frozen estimate. Reading a document is not
+  // editing it, and saving one the server has locked turned View PDF and
+  // Print into the accepted-lock override prompt — "why are you changing
+  // it?" — for anyone trying to print a signed estimate. Frozen contents
+  // can't have drifted from the screen anyway, so there is nothing to
+  // persist.
+  const openFleetsuitePdf = async (print = false) => {
     if (!editingId) return;
     const w = window.open('', '_blank');
-    const currentStatus = estimates.find(e => e.id === editingId)?.status || 'draft';
-    saveEstimate(currentStatus).then(() => {
-      const url = `/api/estimates/${editingId}/pdf${print ? '?print=1' : ''}`;
-      if (w) w.location.href = url;
-      else window.open(url, '_blank');
-    });
+    const est = estimates.find(e => e.id === editingId);
+    if (!isContentFrozen(est)) {
+      const saved = await saveEstimate(est?.status || 'draft');
+      // Refused or cancelled: handing over a PDF that silently differs from
+      // the screen is worse than handing over nothing.
+      if (!saved) { w?.close(); return; }
+    }
+    const url = `/api/estimates/${editingId}/pdf${print ? '?print=1' : ''}`;
+    if (w) w.location.href = url;
+    else window.open(url, '_blank');
   };
 
   // ── Files attached to the estimate's customer emails ──
@@ -1582,9 +1607,16 @@ export default function EstimatesPage() {
   // ── Email the enhanced-estimate PDF (standard compose screen) ──
   const openPdfEmailModal = async () => {
     if (!editingId) return;
-    // Persist current edits so the attached PDF matches what's on screen.
-    const currentStatus = estimates.find(e => e.id === editingId)?.status || 'draft';
-    await saveEstimate(currentStatus);
+    // Persist current edits so the attached PDF matches what's on screen —
+    // skipped on a frozen estimate for the same reason as View/Print: its
+    // contents can't have moved, and saving would demand an override reason
+    // just to email the customer their own signed copy.
+    const est = estimates.find(e => e.id === editingId);
+    if (!isContentFrozen(est)) {
+      const saved = await saveEstimate(est?.status || 'draft');
+      // Don't open a compose screen that would attach a stale PDF.
+      if (!saved) return;
+    }
     await loadEstimateFiles(editingId);
     setPdfEmailModal(true);
   };
