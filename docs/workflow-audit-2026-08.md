@@ -82,7 +82,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
 | **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 19 and 21 remain open** (2 — R2-goes-private, labor capture). Shipped 2026-08-30: the Stage 1 build-out (#701–#704, closing item 18), the two Stage 1 owner decisions (#706 lead tier, #707 deletion→NetSuite), and estimate integrity (#708–#710, items 9–11). Shipped 2026-08-30: the whole **vehicle custody** block (#712–#715, items 12–16). Shipped 2026-08-30 (second wave): **parts ordering & receiving** (#717–#719, item 17 — the audit's largest build: request queue → NetSuite PO → receiving with item receipts) and the **route→permission manifest** (#721, item 20 — all 251 routes declare + prove their guard; the sweep fixed the unauthenticated Google OAuth pair). |
 
-| **Round 3** — re-audit 2026-08-30 (Part 7) | 🔄 roadmap open | Nine-probe re-verification at `1ea2015`, every MAJOR+ finding re-verified by hand. **Round 2 holds** — all 19 ships confirmed at HEAD (5 partial caveats). ~90 new findings distilled into the Part 7 roadmap: 6 CRITICAL truncation bugs that move money/state, 8 E-SIGN forgery/loss holes, 7 non-idempotent NetSuite money paths (zero unique-index backing), 3 custody/CNI blockers — one, CNI company invites, failing 500 in production since #715 — the `forceChannels` no-op, and this week's parts-loop regressions (hotfixed same day, #724). Items 19 and 21 now carry written decision packages (the R2-flip tier checklist, the labor-capture touch-map). Shipped 2026-08-31: **Stage 2 closed** — the estimate correctness set (#726) and E-SIGN hardening (#727, migration 242) retire R3-6, R3-7, and every remaining Stage 2 walkthrough finding, and #729 ships the R3-17 change-order core (Duplicate + duplicate-as-revision with `supersedes_estimate_id` lineage, migration 243) — Stage 2 closed outright. **R3-1 closed in full** (#732 the six CRITICALs with fail-closed reads, #733 the MAJOR sweep) — every §7.2.2 truncation finding fixed. **Stage 3 closed** (#735 wrap-quote reconciliation + honest win counting + visible provenance, #736 customer reminders w/ migration 244) — all six capture-side findings shipped. **Stage 4 closed** (#740 atomic conversion claim + vendor-PO sync honesty, #741 schema-cache hardening after the live SO1064 stranding that #738/#739 repaired in parallel with migration 246 + a manual SO link) — the earlier findings were verified already fixed at HEAD (N2 phase 1 auto-project, item 9 staff walls, item 10 estimate closing, 17A–C ordering) and the dead-list re-verdicted. **Stage 5 closed** (#746 + migration 247: graphics_jobs UPDATE wall, presigned proof artwork, pre-invoice packing list; fan-out/transition-rules/proof-gate verified already shipped) — roll-nesting for production stays as the stage's one open enhancement. **Stage 6 closed** (#751 + migration 248: guide links w/ auto-stamp on attach, the CNI completion photo gate, scale-change recalibration with px_source provenance, the verification modal's 📐 guide link, super_admin walls; the inverted checklist was already fixed) — a full CNI checklist stays as its open enhancement, and the app-wide requireAdmin-excludes-super_admin question is flagged for an owner call. |
+| **Round 3** — re-audit 2026-08-30 (Part 7) | 🔄 roadmap open | Nine-probe re-verification at `1ea2015`, every MAJOR+ finding re-verified by hand. **Round 2 holds** — all 19 ships confirmed at HEAD (5 partial caveats). ~90 new findings distilled into the Part 7 roadmap: 6 CRITICAL truncation bugs that move money/state, 8 E-SIGN forgery/loss holes, 7 non-idempotent NetSuite money paths (zero unique-index backing), 3 custody/CNI blockers — one, CNI company invites, failing 500 in production since #715 — the `forceChannels` no-op, and this week's parts-loop regressions (hotfixed same day, #724). Items 19 and 21 now carry written decision packages (the R2-flip tier checklist, the labor-capture touch-map). Shipped 2026-08-31: **Stage 2 closed** — the estimate correctness set (#726) and E-SIGN hardening (#727, migration 242) retire R3-6, R3-7, and every remaining Stage 2 walkthrough finding, and #729 ships the R3-17 change-order core (Duplicate + duplicate-as-revision with `supersedes_estimate_id` lineage, migration 243) — Stage 2 closed outright. **R3-1 closed in full** (#732 the six CRITICALs with fail-closed reads, #733 the MAJOR sweep) — every §7.2.2 truncation finding fixed. **Stage 3 closed** (#735 wrap-quote reconciliation + honest win counting + visible provenance, #736 customer reminders w/ migration 244) — all six capture-side findings shipped. **Stage 4 closed** (#740 atomic conversion claim + vendor-PO sync honesty, #741 schema-cache hardening after the live SO1064 stranding that #738/#739 repaired in parallel with migration 246 + a manual SO link) — the earlier findings were verified already fixed at HEAD (N2 phase 1 auto-project, item 9 staff walls, item 10 estimate closing, 17A–C ordering) and the dead-list re-verdicted. **Stage 5 closed** (#746 + migration 247: graphics_jobs UPDATE wall, presigned proof artwork, pre-invoice packing list; fan-out/transition-rules/proof-gate verified already shipped) — roll-nesting for production stays as the stage's one open enhancement. **Stage 6 closed** (#751 + migration 248: guide links w/ auto-stamp on attach, the CNI completion photo gate, scale-change recalibration with px_source provenance, the verification modal's 📐 guide link, super_admin walls; the inverted checklist was already fixed) — a full CNI checklist stays as its open enhancement, and the app-wide requireAdmin-excludes-super_admin question is flagged for an owner call. **Stage 7 closed** 2026-09-01 (#756 + migration 249: `POST /api/checkins` is the one writer with photos verified in storage before the row exists and the table's INSERT policies dropped — Round 3 caveat 12; arrival back-link + dedupe walk VIN → SO → unique customer and upfit rows carry SO identifiers — caveat 14; and the VIN→SO prefill the docs promised finally exists) — #712/#713/#714 held; R3-10's remainder (per-visit links, profileRoles, scans gate, auto-archive) stays with Stage 8. |
 
 Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap; Part 7 carries Round 3.
 
@@ -472,28 +472,64 @@ offline fallback, multi-SO linking, cloning, and a good "graphics needed"
 hand-off. But the physical arrival — the moment custody and liability transfer —
 is unprotected and unlinked.
 
-- **CRITICAL — "Photograph BEFORE we take possession" is policy, not software.**
+- ✅ **CRITICAL — "Photograph BEFORE we take possession" is policy, not software.**
   Photos are explicitly optional: no required angles, no minimum count, no
   odometer, **no damage capture** (`photo_type='damage'` has no writer anywhere,
   so the timeline's "Issues" section is dead code). For a liability dispute, the
   system happily produces check-ins with zero photographic evidence.
-- **CRITICAL — Arrival and check-in are two unlinked systems.** "Mark Arrived"
+  _(Fixed in two layers: #713 made ≥1 condition photo + a damage-note rule the
+  wizard's law and gave `photo_type='damage'` its first writer; Round 3's
+  caveat 12 — the gate was browser-only, "no check-in API route and no DB
+  constraint" — closed 2026-09-01, #756 + migration 249: photos upload BEFORE
+  the save under a client-generated id, `POST /api/checkins` verifies the
+  objects exist in storage (HEAD, paths pinned to the id) and is now the only
+  writer — the table's INSERT policies are dropped, so a browser console
+  can't create a photo-less check-in either.)_
+- ✅ **CRITICAL — Arrival and check-in are two unlinked systems.** "Mark Arrived"
   on the arrival board writes `shop_inbound.status='arrived'` and *nothing else*
   — no check-in, `fleet_checkin_id` written by no code — while check-in never
   closes the expected row. Two buttons for one physical event; vehicles show
   "overdue — expected but not arrived" while sitting in the shop.
-- **CRITICAL — A returning vehicle can never be checked in again.** The
+  _(Fixed: #714's arrival brain links both directions; Round 3's caveat 14 —
+  back-link and dedupe matched VIN only, which no graphics/upfit/manual row
+  carries — closed by #756: both walk the same VIN → SO number → unique-
+  customer ladder as the forward link, upfit rows now carry their project's
+  SO id/number, and the wizard writes its multi-SO join rows before calling
+  the brain so secondary SOs match too.)_
+- ✅ **CRITICAL — A returning vehicle can never be checked in again.** The
   duplicate-VIN guard matches archived/shipped rows with no re-check-in path.
   Fleet vans come back; the only workaround destroys the prior job's history.
-- **MAJOR — No notification when a vehicle arrives** — not to the customer
+  _(Fixed 2026-08-30, #712 — active-custody-only guard, returning-vehicle
+  banner; held under Round 3. #756 re-enforces the same rule server-side in
+  the new check-in route, where a second tab can't race it.)_
+- ✅ **MAJOR — No notification when a vehicle arrives** — not to the customer
   ("we've got your van"), not to sales, not to the assigned installer.
-- **MAJOR — RLS hole:** the never-dropped 001-era permissive policies let *any*
+  _(Fixed 2026-08-30, #714 — every arrival notifies admins in-app; push is
+  reserved for EXPECTED vehicles; same-day board-arrival + check-in dedupe
+  to one ping — a dedupe #756 extends beyond VIN.)_
+- ✅ **MAJOR — RLS hole:** the never-dropped 001-era permissive policies let *any*
   authenticated account (customer role included) read the whole shop board and
   update any check-in; `/api/vehicles/[vin]/photos` is `requireAuth`, so any
   login can enumerate any vehicle's photos and captions.
-- **MAJOR — No VIN→SO auto-match** despite the VIN being on the SO and estimate
+  _(Fixed in halves long since: #634 dropped the 001-era policies and rebuilt
+  `fleet_checkins`/`vehicle_status_history` staff-only (migration 224), and
+  the photos route is `requireStaff`, pinned by the #721 manifest. Migration
+  249 tightens further: INSERT now has no browser path at all.)_
+- ✅ **MAJOR — No VIN→SO auto-match** despite the VIN being on the SO and estimate
   — the docs promise a pre-fill that doesn't exist, forcing double entry on every
   multi-van drop-off.
+  _(Fixed: #756 — the wizard's literal `// Pre-fill customer search if we
+  find a matching sales order by VIN` comment finally has code behind it:
+  decoding a VIN whose estimate converted to an SO prefills the customer,
+  runs the search, pre-selects the matched SO, and banners the result;
+  Clone / same-customer flows keep their own context.)_
+
+**Stage 7 status (2026-09-01): CLOSED** — the custody gate is server-enforced
+(#756 + migration 249), arrival↔check-in links match VIN → SO → unique
+customer in both directions, the VIN→SO prefill exists, and the
+#712/#713/#714 ships held under re-verification. Adjacent items deliberately
+left for Stage 8 / R3-10's remainder: per-visit deep links, `profileRoles`
+in update-status, the scans role gate, and auto-archiving shipped visits.
 
 ## Stage 8 — Performing the upfit + graphics install
 
@@ -1255,8 +1291,8 @@ recording:
 |---|---|---|
 | 3 (dupe guard) | ⚠️ partial | The guard is real in every API create path — but the main CRM create never calls one: `admin/prospects/page.tsx:381` inserts from the browser, and its pre-flight check is swallowed by `catch {}` (`:352`). See 7.2.5. |
 | 6 (deletion→NS) | ⚠️ partial | CRM records covered; but the `customers`-mirror delete is unchecked and FK-blocked by `wrap_quotes`/`fleet_checkins` (no `ON DELETE` clause), and when it *does* succeed it cascades away `customer_files` (W-9s, tax certs) without the confirm ever mentioning them. See 7.2.5. |
-| 12 (photos) | ⚠️ partial | The ≥1-photo and damage-note gates are browser-only. There is no check-in API route and no DB constraint — a photo-less `fleet_checkins` row inserts fine under staff RLS (`migrations/224:95`). |
-| 14 (arrival link) | ⚠️ partial | Back-link and dedupe match on VIN only, and only `sales_order` inbound rows carry a VIN (`shop-inbound.ts:146`) — graphics/upfit/manual arrivals can never link, and double-notify past the dedupe. |
+| 12 (photos) | ⚠️ partial | ~~The ≥1-photo and damage-note gates are browser-only. There is no check-in API route and no DB constraint — a photo-less `fleet_checkins` row inserts fine under staff RLS (`migrations/224:95`).~~ **Closed 2026-09-01 (#756 + migration 249, Stage 7's close):** `POST /api/checkins` is the one writer (photos verified in storage before the row exists) and the table's INSERT policies are dropped. |
+| 14 (arrival link) | ⚠️ partial | ~~Back-link and dedupe match on VIN only, and only `sales_order` inbound rows carry a VIN (`shop-inbound.ts:146`) — graphics/upfit/manual arrivals can never link, and double-notify past the dedupe.~~ **Closed 2026-09-01 (#756):** back-link and dedupe walk VIN → SO number → unique customer, and upfit rows carry their SO identifiers. |
 | 20 (manifest) | ⚠️ note | Markers are file-wide, not per HTTP method (no live gap today — all 251 files scanned method-by-method), and two `authScoped` whys oversell: `cni/bid` checks *visibility*, not membership (`bid/route.ts:65-79`), and the storage ACL is prefix-level — any approved login can write/delete under another customer's prefix (`storage-guard.ts:51`). |
 
 ## 7.2 New findings
@@ -1534,8 +1570,10 @@ it paid; four dead `r2PublicUrl` imports.
    `POST /api/prospects`; drop `.passthrough()` and make `netsuite_id`
    admin-only + audited; decide the deletion policy for files/mirror
    (checked deletes, honest confirm); escape `*`; rate-limit fail-closed.
-10. **R3-10 · Custody hardening** — a server-side check-in route that
-    enforces photos; per-visit deep links (pick-list by check-in id);
+10. **R3-10 · Custody hardening** —
+    ~~a server-side check-in route that enforces photos~~
+    _(✅ shipped 2026-09-01 with Stage 7's close, #756 + migration 249)_;
+    per-visit deep links (pick-list by check-in id);
     `profileRoles` in update-status; tighten the scans role gate;
     auto-archive shipped visits off the board.
 
