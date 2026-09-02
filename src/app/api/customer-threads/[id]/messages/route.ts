@@ -106,12 +106,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
     try {
       const { sendEmailDetailed, buildNotificationEmail } = await import('@/lib/resend');
+      const { deepLinks } = await import('@/lib/deep-links');
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+      // CTA lands on the customer portal — the only in-app page an external
+      // customer login can open. The bare app origin just showed whoever
+      // clicked a login screen with no destination (Round 3, §7.2.7); the
+      // real reply path stays the email itself (Reply-To = sender).
       const html = buildNotificationEmail(
         'Message from BMG Fleet',
         messageBody,
-        appUrl,
-        'Open'
+        `${appUrl}${deepLinks.customerPortal()}`,
+        'Open',
+        { ctaNote: 'You can reply directly to this email.' },
       );
       // The Resend id rides on the message row (external_provider_sid) so
       // the delivery webhook can flip this thread message to

@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { createClient } from '@/lib/supabase-browser';
+import { deepLinks } from '@/lib/deep-links';
 import { downloadCsv } from '@/lib/csv';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
@@ -141,7 +142,7 @@ export default function AtRiskReportPage() {
         sourceType: 'customer_note',
         sourceId: row.id,
         contextLabel: `At-risk account — ${row.company_name}`,
-        contextUrl: `/admin/reports/at-risk?id=${row.id}`,
+        contextUrl: deepLinks.atRiskCustomer(row.id),
       });
     }
     setRows(prev => prev.map(r => r.id === row.id ? { ...r, internal_notes: value } : r));

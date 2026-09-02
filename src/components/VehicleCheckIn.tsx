@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePopout } from '@/components/Popout';
+import { deepLinks } from '@/lib/deep-links';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { DropZone } from '@/components/DropZone';
@@ -862,7 +863,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
         sourceType: 'checkin_note',
         sourceId: data.id,
         contextLabel: `Check-in — ${vehicleDesc}${selectedOrder?.customer_name ? ` (${selectedOrder.customer_name})` : ''}`,
-        contextUrl: `/tracking?vehicle=${data.id}`,
+        contextUrl: deepLinks.vehicle(data.id),
       });
     }
 

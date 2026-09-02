@@ -34,7 +34,7 @@ interface ReadyVehicle {
 export default function ReadyForInstallPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, isInstaller, isAdmin, isGraphicsProduction } = useAuth();
+  const { user, isInstaller, isAdmin, isGraphicsProduction, isShopTech, isFieldTech } = useAuth();
   const supabase = createClient();
 
   const [vehicles, setVehicles] = useState<ReadyVehicle[]>([]);
@@ -63,15 +63,17 @@ export default function ReadyForInstallPage() {
 
   useEffect(() => {
     if (!user) return;
-    // Graphics roles receive the "Graphics ready" notification too (creator/
-    // assignee) — let them see the install-readiness list instead of
-    // bouncing their click to /home.
-    if (!isInstaller && !isAdmin && !isGraphicsProduction) {
+    // Everyone the "Graphics ready" notification targets can open its
+    // destination: graphics roles (creator/assignee), and the shop/field
+    // techs assigned to the matched vehicles — the notify-ready audience
+    // included them while this gate bounced their click to /home
+    // (Round 3, §7.2.7).
+    if (!isInstaller && !isAdmin && !isGraphicsProduction && !isShopTech && !isFieldTech) {
       router.push('/home');
       return;
     }
     load();
-  }, [user, isInstaller, isAdmin, isGraphicsProduction, router, load]);
+  }, [user, isInstaller, isAdmin, isGraphicsProduction, isShopTech, isFieldTech, router, load]);
 
   // One-shot per job id: once a job has been highlighted (or widening was
   // tried once), the user's own filter toggles and later data refreshes must

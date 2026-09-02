@@ -733,7 +733,7 @@ export default function TrackingPage() {
         sourceType: 'vehicle_note',
         sourceId: vehicleId,
         contextLabel: v ? `${vehicleTitle(v)} — ${v.customer_name || 'vehicle'}` : 'In-Shop vehicle',
-        contextUrl: `/tracking?vehicle=${vehicleId}${inserted?.id ? `&note=${inserted.id}` : ''}`,
+        contextUrl: deepLinks.vehicle(vehicleId, inserted?.id),
       });
     } catch (err) {
       console.error('Note save error:', err);

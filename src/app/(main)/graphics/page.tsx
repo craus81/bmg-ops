@@ -19,6 +19,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { deepLinks } from '@/lib/deep-links';
 import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -590,7 +591,7 @@ export default function GraphicsPage() {
           sourceType: 'graphics_note',
           sourceId: data.id,
           contextLabel: createForm.title || jobNumber,
-          contextUrl: `/graphics/${data.id}`,
+          contextUrl: deepLinks.graphicsJob(data.id),
         });
       }
 

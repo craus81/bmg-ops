@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { deepLinks, allowedPdfSrc, vehicleLinkFor } from './deep-links';
+import { deepLinks, allowedPdfSrc, vehicleLinkFor, cniJobLinkFor } from './deep-links';
 
 // Per-visit deep links (Stage 8 close): a VIN-only pick-list URL resolves to
 // the VIN's NEWEST visit, so links about an older visit must pin it.
@@ -21,6 +21,15 @@ describe('deepLinks.pickList / vehicleLinkFor', () => {
     // Staff with the board feature keep the board link.
     expect(vehicleLinkFor(['admin'], 'ci-123', '1FTBW3XM5PKA00001'))
       .toBe('/tracking?vehicle=ci-123');
+  });
+
+  // R3-5: the CNI job chat serves two portals from different URLs — each
+  // recipient's link must land in THEIR portal, never the sender's.
+  it('cniJobLinkFor routes each recipient to their own portal', () => {
+    expect(cniJobLinkFor(['admin'], 'job-1')).toBe('/admin/cni/jobs/job-1');
+    expect(cniJobLinkFor(['super_admin'], 'job-1')).toBe('/admin/cni/jobs/job-1');
+    expect(cniJobLinkFor(['installer'], 'job-1')).toBe('/installer/jobs/job-1');
+    expect(cniJobLinkFor([], 'job-1')).toBe('/installer/jobs/job-1');
   });
 });
 

@@ -189,6 +189,24 @@ export function vehicleLinkFor(
 }
 
 /**
+ * The CNI job link a given recipient can actually open. The admin record
+ * page (`cniJob`) sits behind the cni_admin feature; the job's installers
+ * live in the installer portal (`installerJob`). The job chat serves BOTH
+ * portals from different URLs, so a producer notifying a mixed audience
+ * about a CNI job (chat mentions above all) must build each recipient's
+ * URL through this — storing the sender's own pathname bounces every
+ * cross-portal recipient (Round 3, §7.2.7).
+ */
+export function cniJobLinkFor(
+  roles: string[] | null | undefined,
+  jobId: string,
+): string {
+  const features = resolveFeatures(roles?.length ? roles : [], []);
+  if (features.has('cni_admin')) return deepLinks.cniJob(jobId);
+  return deepLinks.installerJob(jobId);
+}
+
+/**
  * Vet a `pdfViewer` src before the viewer renders it in an iframe.
  *
  * Only same-origin paths/URLs and our public file host are allowed: the
@@ -262,9 +280,10 @@ export function mentionSourceUrl(
       return deepLinks.atRiskCustomer(sourceId);
     case 'cni_internal_note':
       return deepLinks.cniInstaller(sourceId);
-    // cni_job_message always arrives with a contextUrl (the chat page's own
-    // pathname, which differs between the admin and installer portals), so
-    // this admin-side fallback only catches rows saved with none at all.
+    // cni_job_message mentions are resolved per recipient by the mentions
+    // route (cniJobLinkFor — the chat serves two portals from different
+    // URLs); this admin-side fallback covers legacy inbox rows and rows
+    // saved with no recipient resolution.
     case 'cni_job_message':
       return deepLinks.cniJob(sourceId);
     default:
