@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
-import { r2PublicUrl } from '@/lib/r2';
+import { storageDownloadUrl } from '@/lib/storage';
 
 const TYPE_LABELS: Record<string, string> = {
   front: 'Front',
@@ -98,22 +98,18 @@ export default function PhotoReviewPage() {
     setUpdating(false);
   };
 
+  // Through the route (R3-2): the old browser loop wrote verdicts directly
+  // and then flagged the VIN approved even when denied photos remained; the
+  // route approves the pending set and recomputes the flag honestly.
   const approveAllForVin = async (vinId: string) => {
     if (!user) return;
     setUpdating(true);
-
-    const vinPhotos = photos.filter(p => p.vin_id === vinId && p.review_status === 'pending');
-    for (const photo of vinPhotos) {
-      await supabase.from('cni_job_photos').update({
-        review_status: 'approved',
-        reviewed_by: user.id,
-        reviewed_at: new Date().toISOString(),
-      }).eq('id', photo.id);
-    }
-
-    // Mark VIN photos as approved
-    await supabase.from('cni_job_vins').update({ photos_approved: true }).eq('id', vinId);
-
+    try {
+      await fetch('/api/cni/review-photo', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vinId, bulk: true }),
+      });
+    } catch { /* loadData below shows the true state either way */ }
     await loadData();
     setUpdating(false);
   };
@@ -132,9 +128,14 @@ export default function PhotoReviewPage() {
     background: 'var(--card)', border: '1px solid var(--border)',
   };
 
-  const getPublicUrl = (path: string) => {
-    // Construct URL from R2 public domain
-    return `/api/storage/view?bucket=photos&path=${encodeURIComponent(path)}`;
+  // R3-2: this used to point at /api/storage/view — a route that never
+  // existed — so reviewers QC'd grey boxes. storage_path rows carry either
+  // the full R2 key ('photos/cni-photos/…', from the upload response) or
+  // the bucket-relative path (legacy fallback rows); split accordingly and
+  // serve through the credentialed download route.
+  const photoUrl = (storagePath: string) => {
+    const rel = storagePath.startsWith('photos/') ? storagePath.slice('photos/'.length) : storagePath;
+    return storageDownloadUrl('photos', rel, rel.split('/').pop() || 'photo.jpg');
   };
 
   return (
@@ -270,10 +271,23 @@ export default function PhotoReviewPage() {
                 overflow: 'hidden',
               }}>
                 <img
-                  src={getPublicUrl(photo.storage_path)}
+                  src={photoUrl(photo.storage_path)}
                   alt={TYPE_LABELS[photo.photo_type]}
                   style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-                  onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                  onError={e => {
+                    // Show WHAT failed instead of a silent grey box — a
+                    // reviewer must never approve/deny what they can't see.
+                    const el = e.target as HTMLImageElement;
+                    el.style.display = 'none';
+                    const parent = el.parentElement;
+                    if (parent && !parent.querySelector('[data-imgfail]')) {
+                      const msg = document.createElement('div');
+                      msg.setAttribute('data-imgfail', '1');
+                      msg.textContent = 'Photo failed to load — do not review blind. Open it directly: ' + photo.storage_path;
+                      msg.style.cssText = 'font-size:11px;color:var(--error);padding:10px;text-align:center;word-break:break-all;';
+                      parent.appendChild(msg);
+                    }
+                  }}
                 />
               </div>
 
@@ -284,54 +298,58 @@ export default function PhotoReviewPage() {
                 </div>
               )}
 
-              {/* Review actions */}
-              {photo.review_status === 'pending' && (
-                <>
-                  <input
-                    type="text"
-                    placeholder="Review notes (optional)..."
-                    value={reviewNotes[photo.id] || ''}
-                    onChange={e => setReviewNotes({ ...reviewNotes, [photo.id]: e.target.value })}
-                    style={{
-                      width: '100%', padding: '8px 12px', borderRadius: '8px', marginBottom: '8px',
-                      border: '1px solid var(--border)', background: 'var(--input-bg)',
-                      color: 'var(--text-body)', fontSize: '12px',
-                    }}
-                  />
-                  <div style={{ display: 'flex', gap: '6px' }}>
-                    <button
-                      onClick={() => reviewPhoto(photo.id, 'approved')}
-                      disabled={updating}
-                      style={{
-                        flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                        background: 'var(--success)', color: '#fff', border: 'none',
-                      }}
-                    >
-                      ✓ Approve
-                    </button>
-                    <button
-                      onClick={() => reviewPhoto(photo.id, 'conditionally_approved')}
-                      disabled={updating}
-                      style={{
-                        flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                        background: 'var(--warning)', color: '#fff', border: 'none',
-                      }}
-                    >
-                      ⚠ Conditional
-                    </button>
-                    <button
-                      onClick={() => reviewPhoto(photo.id, 'denied')}
-                      disabled={updating}
-                      style={{
-                        flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                        background: 'var(--error)', color: '#fff', border: 'none',
-                      }}
-                    >
-                      ✕ Deny
-                    </button>
-                  </div>
-                </>
-              )}
+              {/* Review actions — on EVERY photo, not just pending (R3-2:
+                  verdicts rendered only on 'pending', so a denied photo
+                  could never be un-denied and permanently bricked the job's
+                  closure and payout). The current verdict's button is
+                  disabled; picking another changes it, and the route
+                  recomputes the VIN's photos_approved flag. */}
+              <input
+                type="text"
+                placeholder={photo.review_status === 'pending' ? 'Review notes (optional)...' : 'Notes for the changed verdict (optional)...'}
+                value={reviewNotes[photo.id] || ''}
+                onChange={e => setReviewNotes({ ...reviewNotes, [photo.id]: e.target.value })}
+                style={{
+                  width: '100%', padding: '8px 12px', borderRadius: '8px', marginBottom: '8px',
+                  border: '1px solid var(--border)', background: 'var(--input-bg)',
+                  color: 'var(--text-body)', fontSize: '12px',
+                }}
+              />
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button
+                  onClick={() => reviewPhoto(photo.id, 'approved')}
+                  disabled={updating || photo.review_status === 'approved'}
+                  style={{
+                    flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                    background: 'var(--success)', color: '#fff', border: 'none',
+                    opacity: photo.review_status === 'approved' ? 0.45 : 1,
+                  }}
+                >
+                  ✓ Approve
+                </button>
+                <button
+                  onClick={() => reviewPhoto(photo.id, 'conditionally_approved')}
+                  disabled={updating || photo.review_status === 'conditionally_approved'}
+                  style={{
+                    flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                    background: 'var(--warning)', color: '#fff', border: 'none',
+                    opacity: photo.review_status === 'conditionally_approved' ? 0.45 : 1,
+                  }}
+                >
+                  ⚠ Conditional
+                </button>
+                <button
+                  onClick={() => reviewPhoto(photo.id, 'denied')}
+                  disabled={updating || photo.review_status === 'denied'}
+                  style={{
+                    flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                    background: 'var(--error)', color: '#fff', border: 'none',
+                    opacity: photo.review_status === 'denied' ? 0.45 : 1,
+                  }}
+                >
+                  ✕ Deny
+                </button>
+              </div>
             </div>
           ))}
         </div>

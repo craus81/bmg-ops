@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
   // legacy assigned installer, or an admin (company model — no lead).
   const { data: job } = await supabase
     .from('cni_jobs')
-    .select('id, assigned_installer_id, assigned_company_id, pay_per_vehicle, part_number, part_description, billable_customer, address, title, status, device_capture')
+    .select('id, assigned_installer_id, assigned_company_id, pay_per_vehicle, part_number, part_description, billable_customer, address, title, status, device_capture, source_checkin_id')
     .eq('id', jobId)
     .single();
   if (!job) return NextResponse.json({ error: 'Job not found' }, { status: 404 });
@@ -180,6 +180,37 @@ export async function POST(req: NextRequest) {
   // admin), NOT auto-advanced when the VIN list empties. In the scan-as-you-go
   // model the first scanned vehicle leaves zero pending VINs, which would
   // otherwise mark the whole job done after one car. See docs/cni-redesign.md §2.5.
+
+  // R3-15 (the one-way bridge): a CNI job outsourced from a check-in
+  // (migration 232's source_checkin_id) completing THIS vehicle completes
+  // its graphics install — flip the source check-in's lane so the In-Shop
+  // board stops waiting on work an installer already did, instead of a
+  // human re-typing the outcome. Service-role write (migration 250's
+  // trigger exempts it); the 092 trigger then propagates 'installed' onto
+  // the matched graphics job. Best-effort: the VIN completion stands.
+  if ((job as any).source_checkin_id) {
+    try {
+      const { data: checkin } = await supabase
+        .from('fleet_checkins')
+        .select('id, vin, graphics_install_status')
+        .eq('id', (job as any).source_checkin_id)
+        .maybeSingle();
+      if (
+        checkin &&
+        String(checkin.vin || '').trim().toUpperCase() === String(vin.vin || '').trim().toUpperCase() &&
+        checkin.graphics_install_status !== 'complete' &&
+        checkin.graphics_install_status !== 'n/a'
+      ) {
+        await supabase.from('fleet_checkins').update({
+          graphics_install_status: 'complete',
+          graphics_install_completed_at: new Date().toISOString(),
+          graphics_install_completed_by: auth.user.id,
+        }).eq('id', checkin.id);
+      }
+    } catch (err) {
+      console.error('complete-vin: source check-in lane writeback failed:', err);
+    }
+  }
 
   // A credits failure doesn't undo the completion — the vehicle IS done; the
   // missing credits surface in the admin shift editor and can be rebuilt.
