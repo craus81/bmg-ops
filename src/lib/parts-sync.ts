@@ -167,8 +167,13 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
   const since = new Date(syncState?.last_synced_at || '2020-01-01T00:00:00Z');
   const sinceStr = `${since.getMonth() + 1}/${since.getDate()}/${since.getFullYear()}`;
 
-  const nsItems = await suiteqlQueryAll(`
-    SELECT
+  // istaxable is the field the quote's tax base needs (migration 252 —
+  // Freight is non-taxable in NetSuite and FleetSuite was taxing it). Not
+  // every account/role exposes it on every item type, so it is requested in
+  // its own attempt: if SuiteQL rejects the column the sync still runs and
+  // taxability stays NULL, which computeTotals reads as taxable — exactly
+  // today's behavior, never a silent under-charge.
+  const ITEM_COLUMNS = `
       i.id,
       i.itemid AS item_number,
       i.displayname AS display_name,
@@ -179,12 +184,22 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
       i.custitem1 AS labor_hours,
       BUILTIN.DF(i.class) AS class_name,
       BUILTIN.DF(i.department) AS department_name,
-      BUILTIN.DF(i.vendor) AS vendor_name
+      BUILTIN.DF(i.vendor) AS vendor_name`;
+  const itemQuery = (extra: string) => `
+    SELECT${extra}${ITEM_COLUMNS}
     FROM item i
     WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly', 'OthCharge')
       AND i.lastmodifieddate >= TO_DATE('${sinceStr}', 'MM/DD/YYYY')
     ORDER BY i.id
-  `);
+  `;
+  let taxabilityAvailable = true;
+  let nsItems: any[];
+  try {
+    nsItems = await suiteqlQueryAll(itemQuery('\n      i.istaxable,'));
+  } catch {
+    taxabilityAvailable = false;
+    nsItems = await suiteqlQueryAll(itemQuery(''));
+  }
 
   const active = nsItems.filter((it: any) => it.isinactive !== 'T');
   const inactive = nsItems.filter((it: any) => it.isinactive === 'T');
@@ -307,6 +322,12 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
         ns_class: className || null,
         ns_department: item.department_name || null,
         vendor: item.vendor_name || localVendors[nsId] || null,
+        // Only ever written from NetSuite's own answer. Anything else —
+        // the column missing, an item that didn't report it — stays NULL,
+        // and NULL means taxable downstream.
+        ...(taxabilityAvailable
+          ? { is_taxable: item.istaxable === 'T' ? true : item.istaxable === 'F' ? false : null }
+          : {}),
         is_active: true,
         last_synced_at: now,
         updated_at: now,
