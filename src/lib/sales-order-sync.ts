@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { suiteqlQueryAll } from '@/lib/netsuite';
+import { suiteqlQuery, suiteqlQueryAll } from '@/lib/netsuite';
 import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 import { normalizeItemNumber } from '@/lib/vendor-po-sync';
 
@@ -7,8 +7,29 @@ import { normalizeItemNumber } from '@/lib/vendor-po-sync';
  * Incremental sync of customer sales orders from NetSuite into
  * netsuite_sales_orders / netsuite_sales_order_lines, with each SO matched
  * back to its FleetSuite estimate (roadmap N3). Runs inside the 2-hour
- * netsuite-sync cron; a near-copy of vendor-po-sync so the pattern stays
- * uniform.
+ * netsuite-sync cron and behind the Purchasing page's manual "Sync sales
+ * orders" button.
+ *
+ * Run shape — a WINDOW of SOs (lastmodifieddate >= since) drained NEWEST
+ * FIRST in pages of SO_PAGE_SIZE, each page written in bulk, with a time
+ * budget and a saved cursor:
+ *
+ *   - The first version pulled every SO modified since 2025 in one shot,
+ *     one estimate lookup + upsert + delete + insert per SO, inside a cron
+ *     capped at 120s that runs five other NetSuite phases first, and wrote
+ *     its heartbeat only at the very end. The initial pull could never
+ *     finish inside the budget, a killed run recorded nothing, so every
+ *     2-hour run repeated the same doomed pull — the mirror stayed empty
+ *     (or held only the oldest, long-billed orders) and the open-job demand
+ *     page reported "0 open sales orders" while the shop had plenty.
+ *   - Now a run stops itself before the deadline, records how far it got
+ *     (sync_state.last_result.resume = the window + the id it stopped at)
+ *     and the next run continues from there. Newest first means the open
+ *     orders — the ones anything reading the mirror cares about — land in
+ *     the first page of the first run; history backfills behind them.
+ *   - last_synced_at advances only when a window fully drains, to the time
+ *     the window was OPENED (not finished), so nothing modified during a
+ *     long drain is skipped by the next window.
  *
  * Matching runs in strict precedence and records its source:
  *   1. createdfrom  — NetSuite's own Estimate→SO link (only populated when
@@ -54,159 +75,421 @@ export function classifySoMatch(keys: SoMatchKeys): SoMatch {
 }
 
 export interface SalesOrderSyncResult {
+  /** Headers NetSuite returned this run. 0 across a full resync means the
+   *  integration role can't see Sales Orders — a NetSuite permission. */
   modified: number;
   synced: number;
   lines: number;
   matched: number;
   backfilled: number;
+  /** Header upserts that failed (with samples in the heartbeat) — a stale
+   *  mirror is a visible System Health condition, not a silent one. */
+  headerErrors: number;
+  /** True when the run stopped on its time budget with more to do; the
+   *  saved cursor makes the next run (cron or manual) continue. */
+  partial: boolean;
+  /** Headers processed in the current window so far, this run included. */
+  windowProcessed: number;
   error?: string;
   /** Outcome of the sync_state heartbeat write — not persisted, only reported. */
   syncStateWrite?: HeartbeatResult;
 }
 
-export async function syncSalesOrders(
-  service: SupabaseClient,
-  opts?: { fullResync?: boolean },
-): Promise<SalesOrderSyncResult> {
-  let lastSynced = '2024-01-01T00:00:00Z';
-  if (!opts?.fullResync) {
-    const { data: syncState } = await service
-      .from('sync_state')
-      .select('last_synced_at')
-      .eq('sync_type', 'netsuite_sales_orders')
-      .maybeSingle();
-    lastSynced = syncState?.last_synced_at || '2025-01-01T00:00:00Z';
-  }
-  const since = new Date(lastSynced);
-  // Overlap one day so edits right around a sync are never missed.
-  since.setDate(since.getDate() - 1);
-  const sinceStr = `${since.getMonth() + 1}/${since.getDate()}/${since.getFullYear()}`;
+export const SO_SYNC_TYPE = 'netsuite_sales_orders';
 
-  // BUILTIN.DF(status) and the VIN custom field are nice-to-have — retry
-  // without them if the integration role's SuiteQL rejects either.
-  let sos: any[];
-  try {
-    sos = await suiteqlQueryAll(`
-      SELECT t.id, t.tranid, t.trandate, t.status, BUILTIN.DF(t.status) AS status_label,
-             t.memo, t.otherrefnum, t.createdfrom, t.custbody_vin_number_ AS vin,
+/** Headers per SuiteQL page — also the unit of work between deadline checks. */
+export const SO_PAGE_SIZE = 200;
+/** SO ids per line query — a page's lines come back in a couple of calls. */
+const LINE_CHUNK = 100;
+/** Line rows per insert. */
+const LINE_INSERT_CHUNK = 500;
+/** Ids per `.in()` / `.or()` filter — those ride in the request URL, and a
+ *  page's worth of UUIDs in one filter overflows it. */
+const FILTER_CHUNK = 100;
+/** How far back a manual full resync reaches. */
+const FULL_RESYNC_SINCE = '2024-01-01T00:00:00Z';
+/** Where the very first incremental run starts when no cursor exists. */
+const FIRST_RUN_SINCE = '2025-01-01T00:00:00Z';
+/** Budget when the caller passes no deadline. */
+const DEFAULT_BUDGET_MS = 45_000;
+
+/**
+ * The cursor a partial run leaves in sync_state.last_result.resume. A run
+ * that finds one continues that window below `beforeId` instead of opening
+ * a new window.
+ */
+export interface SoSyncResume {
+  /** Wall clock when the window was opened — becomes last_synced_at once it drains. */
+  windowStartedAt: string;
+  /** Lower bound on lastmodifieddate for the window (ISO). */
+  since: string;
+  /** Continue with NetSuite internal ids strictly below this one. */
+  beforeId: string;
+  /** Headers processed in the window so far. */
+  processed: number;
+}
+
+export function parseSoSyncResume(lastResult: unknown): SoSyncResume | null {
+  const r = (lastResult as any)?.resume;
+  if (!r || typeof r !== 'object') return null;
+  const { windowStartedAt, since, beforeId, processed } = r;
+  if (typeof windowStartedAt !== 'string' || typeof since !== 'string') return null;
+  if (typeof beforeId !== 'string' || !/^\d+$/.test(beforeId)) return null;
+  if (Number.isNaN(Date.parse(windowStartedAt)) || Number.isNaN(Date.parse(since))) return null;
+  return { windowStartedAt, since, beforeId, processed: Number(processed) || 0 };
+}
+
+/** SuiteQL wants MM/DD/YYYY; the window is date-granular by design. */
+function toSuiteqlDate(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}/${d.getUTCFullYear()}`;
+}
+
+/**
+ * One page of SO headers, newest first. `beforeId` continues a window from
+ * where the previous page (or run) stopped. `withExtras` adds BUILTIN.DF(status)
+ * and the VIN custom field, which the integration role's SuiteQL may reject —
+ * the caller retries without them.
+ */
+export function buildSoHeaderQuery(sinceIso: string, beforeId: string | null, withExtras: boolean): string {
+  const extras = withExtras
+    ? ', BUILTIN.DF(t.status) AS status_label, t.custbody_vin_number_ AS vin'
+    : '';
+  // Never trust a stored string into SQL, even one we wrote ourselves.
+  const before = beforeId && /^\d+$/.test(beforeId) ? `\n        AND t.id < ${beforeId}` : '';
+  return `
+      SELECT t.id, t.tranid, t.trandate, t.status${extras},
+             t.memo, t.otherrefnum, t.createdfrom,
              t.foreigntotal AS total, t.entity AS customer_id, c.companyname AS customer_name
       FROM transaction t
       LEFT JOIN customer c ON t.entity = c.id
       WHERE t.type = 'SalesOrd'
-        AND t.lastmodifieddate >= TO_DATE('${sinceStr}', 'MM/DD/YYYY')
-    `);
-  } catch {
-    sos = await suiteqlQueryAll(`
-      SELECT t.id, t.tranid, t.trandate, t.status, t.memo, t.otherrefnum, t.createdfrom,
-             t.foreigntotal AS total, t.entity AS customer_id, c.companyname AS customer_name
-      FROM transaction t
-      LEFT JOIN customer c ON t.entity = c.id
-      WHERE t.type = 'SalesOrd'
-        AND t.lastmodifieddate >= TO_DATE('${sinceStr}', 'MM/DD/YYYY')
-    `);
-  }
+        AND t.lastmodifieddate >= TO_DATE('${toSuiteqlDate(sinceIso)}', 'MM/DD/YYYY')${before}
+      ORDER BY t.id DESC
+    `;
+}
 
-  // Line detail for the modified SOs, chunked to keep SuiteQL happy.
-  const linesBySo = new Map<string, any[]>();
-  const soIds = sos.map(s => String(s.id));
-  for (let i = 0; i < soIds.length; i += 50) {
-    const chunk = soIds.slice(i, i + 50);
-    const rows = await suiteqlQueryAll(`
+function buildSoLinesQuery(soIds: string[]): string {
+  return `
       SELECT tl.transaction AS so_id, tl.id AS line_id, tl.item, i.itemid AS item_number,
              tl.memo AS description, tl.quantity, tl.quantitybilled, tl.rate, tl.netamount
       FROM transactionline tl
       LEFT JOIN item i ON tl.item = i.id
-      WHERE tl.transaction IN (${chunk.join(', ')})
+      WHERE tl.transaction IN (${soIds.join(', ')})
         AND tl.mainline = 'F'
         AND tl.taxline = 'F'
         AND tl.item IS NOT NULL
-    `);
-    for (const row of rows) {
-      const key = String(row.so_id);
-      if (!linesBySo.has(key)) linesBySo.set(key, []);
-      linesBySo.get(key)!.push(row);
+    `;
+}
+
+export interface SalesOrderSyncOptions {
+  /** Open a fresh window reaching back to FULL_RESYNC_SINCE, ignoring the
+   *  incremental cursor — the manual button, for an empty/stuck mirror. */
+  fullResync?: boolean;
+  /** Absolute epoch ms; the run stops starting new pages once past it.
+   *  Defaults to now + DEFAULT_BUDGET_MS. */
+  deadline?: number;
+}
+
+interface Window {
+  windowStartedAt: string;
+  since: string;
+  beforeId: string | null;
+  processed: number;
+}
+
+async function openWindow(service: SupabaseClient, opts?: SalesOrderSyncOptions): Promise<Window> {
+  const now = new Date().toISOString();
+  if (opts?.fullResync) {
+    return { windowStartedAt: now, since: FULL_RESYNC_SINCE, beforeId: null, processed: 0 };
+  }
+  const { data: state } = await service
+    .from('sync_state')
+    .select('last_synced_at, last_result')
+    .eq('sync_type', SO_SYNC_TYPE)
+    .maybeSingle();
+  const resume = parseSoSyncResume(state?.last_result);
+  if (resume) return { ...resume };
+  // Overlap one day so edits right around a sync are never missed.
+  const since = new Date(state?.last_synced_at || FIRST_RUN_SINCE);
+  since.setUTCDate(since.getUTCDate() - 1);
+  return { windowStartedAt: now, since: since.toISOString(), beforeId: null, processed: 0 };
+}
+
+type EstimateRef = { id: string; netsuite_so_id: string | null };
+
+/**
+ * Resolve every SO on the page to its estimate in two reads instead of one
+ * per SO. A key that matches more than one estimate resolves to nothing —
+ * the per-row `.maybeSingle()` this replaces behaved the same way, and
+ * guessing between duplicates is how an SO gets pinned to the wrong job.
+ */
+async function resolveEstimates(
+  service: SupabaseClient,
+  matches: Map<string, SoMatch>,
+): Promise<Map<string, EstimateRef>> {
+  const byNsEstimateId = new Set<string>();
+  const byNumber = new Set<string>();
+  for (const m of matches.values()) {
+    if (!m) continue;
+    if (m.source === 'createdfrom') byNsEstimateId.add(m.nsEstimateId);
+    else byNumber.add(m.estimateNumber);
+  }
+
+  const idHits = new Map<string, EstimateRef[]>();
+  const nsIds = [...byNsEstimateId];
+  for (let i = 0; i < nsIds.length; i += FILTER_CHUNK) {
+    const { data } = await service
+      .from('estimates')
+      .select('id, netsuite_so_id, netsuite_estimate_id')
+      .in('netsuite_estimate_id', nsIds.slice(i, i + FILTER_CHUNK));
+    for (const e of data || []) {
+      const key = String(e.netsuite_estimate_id);
+      if (!idHits.has(key)) idHits.set(key, []);
+      idHits.get(key)!.push({ id: e.id, netsuite_so_id: e.netsuite_so_id });
+    }
+  }
+  const numberHits = new Map<string, EstimateRef[]>();
+  const numbers = [...byNumber];
+  for (let i = 0; i < numbers.length; i += FILTER_CHUNK) {
+    // Case-insensitive like the ilike it replaces; EST_NUMBER_RE keeps the
+    // values to [A-Z0-9-], so they're safe inside the filter string.
+    const { data } = await service
+      .from('estimates')
+      .select('id, netsuite_so_id, estimate_number')
+      .or(numbers.slice(i, i + FILTER_CHUNK).map(n => `estimate_number.ilike.${n}`).join(','));
+    for (const e of data || []) {
+      const key = String(e.estimate_number || '').toUpperCase();
+      if (!numberHits.has(key)) numberHits.set(key, []);
+      numberHits.get(key)!.push({ id: e.id, netsuite_so_id: e.netsuite_so_id });
     }
   }
 
+  const resolved = new Map<string, EstimateRef>();
+  for (const [soId, m] of matches) {
+    if (!m) continue;
+    const hits = m.source === 'createdfrom' ? idHits.get(m.nsEstimateId) : numberHits.get(m.estimateNumber);
+    if (hits && hits.length === 1) resolved.set(soId, hits[0]);
+  }
+  return resolved;
+}
+
+export async function syncSalesOrders(
+  service: SupabaseClient,
+  opts?: SalesOrderSyncOptions,
+): Promise<SalesOrderSyncResult> {
+  const deadline = opts?.deadline ?? Date.now() + DEFAULT_BUDGET_MS;
+  const win = await openWindow(service, opts);
+
+  let modified = 0;
   let synced = 0;
   let lineCount = 0;
   let matched = 0;
   let backfilled = 0;
+  let headerErrors = 0;
+  const headerErrorSamples: string[] = [];
+  let lineErrors = 0;
+  const lineErrorSamples: string[] = [];
+  let extras: 'untested' | 'on' | 'off' = 'untested';
+  let drained = false;
+  let error: string | undefined;
 
-  for (const so of sos) {
-    const nsId = String(so.id);
-
-    // Resolve the estimate link per the precedence above.
-    const match = classifySoMatch({ createdfrom: so.createdfrom, otherrefnum: so.otherrefnum, memo: so.memo });
-    let estimateId: string | null = null;
-    let estimate: { id: string; netsuite_so_id: string | null } | null = null;
-    if (match) {
-      const q = service.from('estimates').select('id, netsuite_so_id');
-      const { data: est } = match.source === 'createdfrom'
-        ? await q.eq('netsuite_estimate_id', match.nsEstimateId).maybeSingle()
-        : await q.ilike('estimate_number', match.estimateNumber).maybeSingle();
-      if (est) {
-        estimate = est;
-        estimateId = est.id;
-        matched++;
+  const fetchHeaderPage = async (): Promise<any[]> => {
+    // BUILTIN.DF(status) and the VIN custom field are nice-to-have — if the
+    // integration role's SuiteQL rejects them on the FIRST page, run without
+    // them. Settled once: a failure on a later page is a real failure and
+    // must surface (with the cursor kept), not be retried as a column issue.
+    if (extras === 'untested') {
+      try {
+        const result = await suiteqlQuery(buildSoHeaderQuery(win.since, win.beforeId, true), SO_PAGE_SIZE, 0);
+        extras = 'on';
+        return result?.items || [];
+      } catch {
+        extras = 'off';
       }
     }
+    const result = await suiteqlQuery(buildSoHeaderQuery(win.since, win.beforeId, extras === 'on'), SO_PAGE_SIZE, 0);
+    return result?.items || [];
+  };
 
-    const { data: header, error } = await service
-      .from('netsuite_sales_orders')
-      .upsert({
-        netsuite_id: nsId,
-        tranid: so.tranid || null,
-        customer_netsuite_id: so.customer_id ? String(so.customer_id) : null,
-        customer_name: so.customer_name || null,
-        trandate: so.trandate || null,
-        status: so.status || null,
-        status_label: so.status_label || null,
-        memo: so.memo || null,
-        otherrefnum: so.otherrefnum || null,
-        createdfrom_netsuite_id: so.createdfrom ? String(so.createdfrom) : null,
-        vin: so.vin || null,
-        total: so.total != null ? Math.abs(parseFloat(so.total)) || null : null,
-        estimate_id: estimateId,
-        match_source: estimateId && match ? match.source : null,
-        last_synced_at: new Date().toISOString(),
-      }, { onConflict: 'netsuite_id' })
-      .select('id')
-      .single();
-    if (error || !header) continue;
+  try {
+    for (;;) {
+      const sos = await fetchHeaderPage();
+      modified += sos.length;
+      if (sos.length === 0) { drained = true; break; }
 
-    // Backfill the estimate's SO link — strong matches only, never
-    // overwriting a link that already exists.
-    if (estimate && match && match.source !== 'memo' && !estimate.netsuite_so_id) {
-      const { error: backfillErr } = await service
-        .from('estimates')
-        .update({ netsuite_so_id: nsId, netsuite_so_number: so.tranid || null })
-        .eq('id', estimate.id)
-        .is('netsuite_so_id', null);
-      if (!backfillErr) backfilled++;
+      // Line detail for the page, chunked to keep SuiteQL happy.
+      const linesBySo = new Map<string, any[]>();
+      const soIds = sos.map(s => String(s.id));
+      for (let i = 0; i < soIds.length; i += LINE_CHUNK) {
+        const rows = await suiteqlQueryAll(buildSoLinesQuery(soIds.slice(i, i + LINE_CHUNK)));
+        for (const row of rows) {
+          const key = String(row.so_id);
+          if (!linesBySo.has(key)) linesBySo.set(key, []);
+          linesBySo.get(key)!.push(row);
+        }
+      }
+
+      // Estimate links per the precedence in classifySoMatch, resolved for
+      // the whole page at once.
+      const matches = new Map<string, SoMatch>();
+      for (const so of sos) {
+        matches.set(String(so.id), classifySoMatch({ createdfrom: so.createdfrom, otherrefnum: so.otherrefnum, memo: so.memo }));
+      }
+      const estimates = await resolveEstimates(service, matches);
+
+      const syncedAt = new Date().toISOString();
+      const headerRows = sos.map(so => {
+        const nsId = String(so.id);
+        const match = matches.get(nsId) || null;
+        const estimate = estimates.get(nsId) || null;
+        if (estimate) matched++;
+        return {
+          netsuite_id: nsId,
+          tranid: so.tranid || null,
+          customer_netsuite_id: so.customer_id ? String(so.customer_id) : null,
+          customer_name: so.customer_name || null,
+          trandate: so.trandate || null,
+          status: so.status || null,
+          status_label: so.status_label || null,
+          memo: so.memo || null,
+          otherrefnum: so.otherrefnum || null,
+          createdfrom_netsuite_id: so.createdfrom ? String(so.createdfrom) : null,
+          vin: so.vin || null,
+          total: so.total != null ? Math.abs(parseFloat(so.total)) || null : null,
+          estimate_id: estimate?.id || null,
+          match_source: estimate && match ? match.source : null,
+          last_synced_at: syncedAt,
+        };
+      });
+
+      // Headers in one upsert; if the statement fails as a whole, fall back
+      // to one row at a time so a single bad SO can't sink the page, and
+      // count what still fails (Stage 4: no bare `continue`).
+      const idByNsId = new Map<string, string>();
+      const { data: upserted, error: bulkErr } = await service
+        .from('netsuite_sales_orders')
+        .upsert(headerRows, { onConflict: 'netsuite_id' })
+        .select('id, netsuite_id');
+      if (!bulkErr && upserted) {
+        for (const h of upserted) idByNsId.set(String(h.netsuite_id), h.id);
+      } else {
+        for (const row of headerRows) {
+          const { data: h, error: rowErr } = await service
+            .from('netsuite_sales_orders')
+            .upsert(row, { onConflict: 'netsuite_id' })
+            .select('id, netsuite_id')
+            .single();
+          if (rowErr || !h) {
+            headerErrors++;
+            if (headerErrorSamples.length < 5) {
+              headerErrorSamples.push(`${row.tranid || row.netsuite_id}: ${rowErr?.message || bulkErr?.message || 'no header row returned'}`);
+            }
+            continue;
+          }
+          idByNsId.set(String(h.netsuite_id), h.id);
+        }
+      }
+
+      // Backfill the estimate's SO link — strong matches only, never
+      // overwriting a link that already exists. Rare (FleetSuite-pushed
+      // SOs only), so per row is fine.
+      for (const so of sos) {
+        const nsId = String(so.id);
+        const match = matches.get(nsId);
+        const estimate = estimates.get(nsId);
+        if (!idByNsId.has(nsId) || !estimate || !match || match.source === 'memo' || estimate.netsuite_so_id) continue;
+        const { error: backfillErr } = await service
+          .from('estimates')
+          .update({ netsuite_so_id: nsId, netsuite_so_number: so.tranid || null })
+          .eq('id', estimate.id)
+          .is('netsuite_so_id', null);
+        if (!backfillErr) backfilled++;
+      }
+
+      // Replace lines wholesale for every header that landed — quantities/
+      // billing move and lines get deleted in NetSuite; delete+insert keeps
+      // us exact. One delete and a few inserts per page instead of two
+      // round trips per SO.
+      const landedIds = [...idByNsId.values()];
+      const lineRows: any[] = [];
+      for (const [nsId, soRowId] of idByNsId) {
+        for (const l of linesBySo.get(nsId) || []) {
+          lineRows.push({
+            so_id: soRowId,
+            line_id: String(l.line_id),
+            item_netsuite_id: l.item ? String(l.item) : null,
+            item_number: normalizeItemNumber(l.item_number),
+            description: l.description || null,
+            quantity: Math.abs(parseFloat(l.quantity || '0')) || 0,
+            quantity_billed: Math.abs(parseFloat(l.quantitybilled || '0')) || 0,
+            rate: l.rate != null ? Math.abs(parseFloat(l.rate)) || null : null,
+            amount: l.netamount != null ? Math.abs(parseFloat(l.netamount)) || null : null,
+          });
+        }
+      }
+      for (let i = 0; i < landedIds.length; i += FILTER_CHUNK) {
+        const { error: delErr } = await service
+          .from('netsuite_sales_order_lines')
+          .delete()
+          .in('so_id', landedIds.slice(i, i + FILTER_CHUNK));
+        if (delErr) throw new Error(`Could not clear sales order lines: ${delErr.message}`);
+      }
+      for (let i = 0; i < lineRows.length; i += LINE_INSERT_CHUNK) {
+        const chunk = lineRows.slice(i, i + LINE_INSERT_CHUNK);
+        const { error: insErr } = await service.from('netsuite_sales_order_lines').insert(chunk);
+        if (insErr) {
+          // A header without its lines is a job the demand page can't see.
+          // Count it into the heartbeat rather than losing it silently.
+          lineErrors += chunk.length;
+          if (lineErrorSamples.length < 5) lineErrorSamples.push(insErr.message);
+          continue;
+        }
+        lineCount += chunk.length;
+      }
+      synced += idByNsId.size;
+
+      // Cursor: everything at or above the smallest id on this page is done.
+      const minId = soIds.reduce((min, id) => (Number(id) < Number(min) ? id : min), soIds[0]);
+      win.beforeId = minId;
+      win.processed += sos.length;
+
+      if (sos.length < SO_PAGE_SIZE) { drained = true; break; }
+      if (Date.now() >= deadline) break;
     }
-
-    // Replace lines wholesale — quantities/billing move and lines get
-    // deleted in NetSuite; delete+insert keeps us exact.
-    const lines = (linesBySo.get(nsId) || []).map(l => ({
-      so_id: header.id,
-      line_id: String(l.line_id),
-      item_netsuite_id: l.item ? String(l.item) : null,
-      item_number: normalizeItemNumber(l.item_number),
-      description: l.description || null,
-      quantity: Math.abs(parseFloat(l.quantity || '0')) || 0,
-      quantity_billed: Math.abs(parseFloat(l.quantitybilled || '0')) || 0,
-      rate: l.rate != null ? Math.abs(parseFloat(l.rate)) || null : null,
-      amount: l.netamount != null ? Math.abs(parseFloat(l.netamount)) || null : null,
-    }));
-    await service.from('netsuite_sales_order_lines').delete().eq('so_id', header.id);
-    if (lines.length > 0) {
-      await service.from('netsuite_sales_order_lines').insert(lines);
-      lineCount += lines.length;
-    }
-    synced++;
+  } catch (err: any) {
+    error = String(err?.message || err);
+    console.error('[sales-order-sync]', error);
   }
 
-  const result = { modified: sos.length, synced, lines: lineCount, matched, backfilled };
-  return { ...result, syncStateWrite: await recordHeartbeat(service, 'netsuite_sales_orders', result) };
+  const partial = !drained && !error;
+  const counts = {
+    modified, synced, lines: lineCount, matched, backfilled,
+    ...(headerErrors > 0 ? { headerErrors, headerErrorSamples } : {}),
+    ...(lineErrors > 0 ? { lineErrors, lineErrorSamples } : {}),
+  };
+  // Anything short of a drained window keeps its cursor (when a page landed)
+  // so the next run continues rather than starting over — that restart loop
+  // is exactly what kept the mirror empty.
+  const resume: SoSyncResume | null = !drained && win.beforeId
+    ? { windowStartedAt: win.windowStartedAt, since: win.since, beforeId: win.beforeId, processed: win.processed }
+    : null;
+
+  let syncStateWrite: HeartbeatResult;
+  if (drained) {
+    syncStateWrite = await recordHeartbeat(service, SO_SYNC_TYPE, counts, { lastSyncedAt: win.windowStartedAt });
+  } else {
+    syncStateWrite = await recordHeartbeat(
+      service, SO_SYNC_TYPE,
+      { ...counts, ...(error ? { error } : { partial: true }), ...(resume ? { resume } : {}) },
+      { touchLastSyncedAt: false },
+    );
+  }
+
+  return {
+    modified, synced, lines: lineCount, matched, backfilled, headerErrors,
+    partial, windowProcessed: win.processed,
+    ...(error ? { error } : {}),
+    syncStateWrite,
+  };
 }
