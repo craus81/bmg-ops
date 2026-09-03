@@ -1208,7 +1208,10 @@ export default function CustomerRecordPage() {
         }),
       });
       const data = await res.json();
-      if (res.ok && data.preview) return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      if (res.ok && data.preview) {
+        setStPdfName((Array.isArray(data.attachments) && data.attachments[0]) || null);
+        return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      }
       return { error: data.error || 'Unknown error' };
     } catch {
       return { error: 'Network error — please try again.' };
@@ -1234,7 +1237,7 @@ export default function CustomerRecordPage() {
       });
       const body = await res.json();
       if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
-      await dialog.alert(`Statement sent to ${body.sent.join(', ')} with ${body.attached} invoice PDF${body.attached === 1 ? '' : 's'} attached.${body.failedAttachments?.length ? `\n\nPDFs unavailable for: ${body.failedAttachments.join(', ')}` : ''}`);
+      await dialog.alert(`Statement sent to ${body.sent.join(', ')} with the statement PDF${body.statementPdf ? ` (${body.statementPdf})` : ''} and ${body.attached} invoice PDF${body.attached === 1 ? '' : 's'} attached.${body.failedAttachments?.length ? `\n\nPDFs unavailable for: ${body.failedAttachments.join(', ')}` : ''}`);
       setStModalOpen(false);
       setEmailingSt(false);
       return { ok: true };
@@ -1551,6 +1554,8 @@ export default function CustomerRecordPage() {
   const [stWorking, setStWorking] = useState(false);
   // Standard compose screen for the statement email
   const [stEmailOpen, setStEmailOpen] = useState(false);
+  // The statement send auto-attaches the statement PDF; the preview names it.
+  const [stPdfName, setStPdfName] = useState<string | null>(null);
 
   const fetchStatementData = async (): Promise<StatementInvoice[]> => {
     const nsId = prospect?.netsuite_id || customer?.netsuite_id;
@@ -2722,6 +2727,11 @@ export default function CustomerRecordPage() {
           title={`Email Statement — ${prospect?.company_name || customer?.company_name || ''}`}
           sendLabel="Send Statement"
           messagePlaceholder="Optional note — shown above the statement table…"
+          intro={stPdfName ? (
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              📎 <b style={{ color: 'var(--text-secondary)' }}>{stPdfName}</b> is attached automatically — a PDF copy of the statement the customer can save or forward, ahead of the open invoices&apos; PDFs.
+            </div>
+          ) : undefined}
           initialTo={(prospect?.billing_emails?.length ? prospect.billing_emails.join(', ') : '') || prospect?.email || customer?.email || ''}
           fetchPreview={fetchStatementPreview}
           onSend={sendStatementEmail}
