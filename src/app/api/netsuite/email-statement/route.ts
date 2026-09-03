@@ -243,10 +243,12 @@ export async function POST(req: NextRequest) {
     // Standard compose behavior: replies reach the sender (the from address
     // has no mailbox), and bcc-me copies the send to their inbox.
     const bcc = body?.bccSelf === true && auth.user?.email ? [auth.user.email] : undefined;
+    // Cc BMG teammates (compose screen row) — validated like To.
+    const cc: string[] = (Array.isArray(body?.cc) ? body.cc : []).map((r: any) => String(r).trim()).filter((r: string) => EMAIL_RE.test(r)).slice(0, 10);
     const result = await sendEmailDetailed(
       recipients, subject, html, undefined, attachments, auth.user?.email || undefined, bcc,
       // ns-<id> routes to the customer record even when no CRM row exists.
-      { kind: 'statement', sentBy: auth.user?.id, contextUrl: deepLinks.prospect(`ns-${customerId}`), netsuiteCustomerId: String(customerId) },
+      { kind: 'statement', cc, sentBy: auth.user?.id, contextUrl: deepLinks.prospect(`ns-${customerId}`), netsuiteCustomerId: String(customerId) },
     );
     if (!result.ok) {
       return NextResponse.json({ error: 'Email send failed' }, { status: 502 });

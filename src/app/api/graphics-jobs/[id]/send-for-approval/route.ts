@@ -19,6 +19,7 @@ const Schema = z.object({
   // Standard compose fields (docs/customer-email-standard.md)
   emails: z.array(z.string().email().max(254)).max(20).optional(),
   bccSelf: z.boolean().optional().default(false),
+  cc: z.array(z.string().email().max(254)).max(10).optional(),
   message: z.string().trim().max(5000).optional(),
   attachmentFileIds: z.array(z.string().uuid()).max(20).optional(),
   // Render the exact email (to/subject/html) without minting or sending.
@@ -48,6 +49,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     email: body.email || null,
     emails: body.emails || null,
     bcc: body.bccSelf && auth.user.email ? [auth.user.email] : null,
+    cc: body.cc || null,
     message: body.message || null,
     attachmentFileIds: body.attachmentFileIds || null,
     preview: body.preview,

@@ -11,9 +11,13 @@ export async function GET(request: NextRequest) {
   if (auth.error) return auth.error;
 
   const { searchParams } = new URL(request.url);
-  const customer = searchParams.get('customer');
+  const customer = searchParams.get('customer') || '';
+  // ?vin= finds the transaction carrying that VIN (last-8 tail match) —
+  // the check-in's "scan the VIN, find the sales order" path — with or
+  // without a customer name.
+  const vin = (searchParams.get('vin') || '').trim();
 
-  if (!customer) {
+  if (!customer.trim() && vin.length < 5) {
     return NextResponse.json(
       { found: false, error: 'Missing customer parameter' },
       { status: 400 }
@@ -35,6 +39,7 @@ export async function GET(request: NextRequest) {
       limit: Number.isFinite(limit) ? limit : undefined,
       offset: Number.isFinite(offset) ? offset : undefined,
       types,
+      ...(vin ? { vin } : {}),
     });
     return NextResponse.json(result);
   } catch (e: any) {

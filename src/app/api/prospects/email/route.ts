@@ -32,6 +32,7 @@ const Schema = z.object({
   recipientLabel: z.string().trim().max(200).optional().nullable(),
   emails: z.array(z.string().email().max(254)).max(20).default([]),
   bccSelf: z.boolean().optional().default(false),
+  cc: z.array(z.string().email().max(254)).max(10).optional(),
   subject: z.string().trim().max(200).optional().default(''),
   message: z.string().trim().max(10_000).optional().default(''),
   preview: z.boolean().optional().default(false),
@@ -128,6 +129,7 @@ export async function POST(req: NextRequest) {
       p.emails, subject, html, undefined, undefined, auth.user?.email || undefined, bcc,
       {
         kind: p.includeCreditAppLink ? 'credit_app_invite' : 'customer_email',
+        cc: p.cc,
         sentBy: auth.user?.id,
         contextUrl,
         customerId: p.customerId,

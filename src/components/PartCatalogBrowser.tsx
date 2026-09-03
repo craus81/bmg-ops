@@ -852,7 +852,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '10px' }}>
                 <RecordFact label="Sales Price" value={money(detail.sales_price)} strong />
-                <RecordFact label="Labor" value={(detail.labor_hours || 0) > 0 ? `${detail.labor_hours}h` : '—'} />
+                <RecordFact label="Labor" value={detail.labor_hours == null ? '— not set' : `${detail.labor_hours}h`} />
                 <RecordFact label="Qty Available" value={detail.quantity_available != null ? String(detail.quantity_available) : '—'} />
                 <RecordFact label="Dimensions (W×D×H)" value={dimsLabel(detail) || '—'} />
                 {detail.weight_lb != null && <RecordFact label="Weight" value={`${Number(detail.weight_lb)} lb`} />}

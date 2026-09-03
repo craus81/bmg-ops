@@ -17,6 +17,7 @@ export const maxDuration = 60;
 const Schema = z.object({
   emails: z.array(z.string().email()).max(20).optional(),
   bccSelf: z.boolean().optional(),
+  cc: z.array(z.string().email().max(254)).max(10).optional(),
   message: z.string().max(4000).optional(),
   // Files the rep picked off the estimate (estimate_files) to ride along
   // with the PDF — pictures, spec sheets.
@@ -137,6 +138,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     body.bccSelf && senderEmail ? [senderEmail] : undefined,
     {
       kind: 'estimate_pdf',
+      cc: body.cc,
       sentBy: auth.user?.id,
       contextUrl: deepLinks.estimate(estimate.id),
       customerId: estimate.customer_id,

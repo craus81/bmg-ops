@@ -1229,7 +1229,7 @@ export default function CustomerRecordPage() {
           customerId: nsId,
           recipients: fields.emails,
           customBody: fields.message || undefined,
-          bccSelf: fields.bccSelf,
+          bccSelf: fields.bccSelf, cc: fields.cc,
           scope: stScope,
           from: stFrom || undefined,
           to: stTo || undefined,
@@ -1516,7 +1516,7 @@ export default function CustomerRecordPage() {
         customerId: customer?.id || null,
         netsuiteCustomerId: prospect?.netsuite_id || customer?.netsuite_id || null,
         emails: fields.emails,
-        bccSelf: fields.bccSelf,
+        bccSelf: fields.bccSelf, cc: fields.cc,
         subject: composeSubject,
         message: fields.message,
         includeCreditAppLink: composeCreditApp,
@@ -2735,6 +2735,7 @@ export default function CustomerRecordPage() {
       {stEmailOpen && (
         <EmailComposeModal
           title={`Email Statement — ${prospect?.company_name || customer?.company_name || ''}`}
+          contacts={[...extContacts, ...contacts].filter(c => !!c.email).map(c => ({ name: c.name, email: c.email as string, title: c.title }))}
           sendLabel="Send Statement"
           messagePlaceholder="Optional note — shown above the statement table…"
           intro={stPdfName ? (
@@ -2753,6 +2754,7 @@ export default function CustomerRecordPage() {
           button and contact addresses (formerly mailto: links). */}
       {composeOpen && (
         <EmailComposeModal
+          contacts={[...extContacts, ...contacts].filter(c => !!c.email).map(c => ({ name: c.name, email: c.email as string, title: c.title }))}
           title={composeCreditApp
             ? `Send credit application — ${prospect?.company_name || customer?.company_name || ''}`
             : `Email — ${prospect?.company_name || customer?.company_name || ''}`}

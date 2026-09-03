@@ -13,6 +13,8 @@ on every send, not just estimates.
 | Control | Behavior |
 | --- | --- |
 | **To** | Editable, multiple addresses (comma/semicolon separated). Prefilled from the record's contact (primary external contact → customer profile), but always changeable at send time. Invalid entries are surfaced, never silently dropped. |
+| **Company contacts** | An "Add a company contact…" dropdown under To listing the customer's contacts (`external_contacts`, or the record page's own list); picking one appends it to To. Callers pass `contacts` (when the screen has them) or `customerId` (customers.id — the modal loads them). Hidden when neither is given. |
+| **Cc BMG teammates** | A "Cc a teammate…" picker of approved staff (name + email, same directory rule as @mentions) rendered as removable chips; the send carries them as real Cc (`cc: string[]` on `EmailComposeFields`, `cc` on `EmailMeta` → Resend cc). On for every flow; `hideCc` turns it off. |
 | **Bcc me** | One click copies the real send to the signed-in user's login email (`useAuth().user.email`). Off by default. |
 | **Personal message** | Free-text block rendered at the top of the email body, newlines preserved. |
 | **Attachments** | Where the flow has files (job files, PDFs), a picker with per-file sizes and a total-size cap (20MB — `MAX_ATTACHMENT_BYTES` in `src/lib/email-attachments.ts`, one definition for every flow). Flows that let the sender add a file from their device pass `onUploadAttachment` (and `onRemoveAttachment` for files marked `removable`) — the owner stores the file and returns its id, which checks it on for that send. Oversize or missing files are hard errors, never silent drops. |
@@ -30,10 +32,12 @@ on every send, not just estimates.
   `intro` slot; bump `previewKey` when they change. Callers supply
   `fetchPreview` and `onSend` against their API route.
 - **API route contract:** accept `emails: string[]`, `bccSelf: boolean`,
+  `cc: string[]` (BMG teammates, validated like To, max 10),
   `message: string`, `attachmentFileIds`/`attachmentPaths`, and
   `preview: boolean`. Preview returns `{ preview: true, to, subject,
   html }` with **zero side effects**. Real sends pass
-  `bcc: [auth.user.email]` when `bccSelf`, and `auth.user.email` as
+  `bcc: [auth.user.email]` when `bccSelf`, `cc` on the `EmailMeta`
+  (the send layer hands it to Resend as cc), and `auth.user.email` as
   Reply-To.
 - **Send layer:** `sendEmail` / `sendEmailDetailed` (`src/lib/resend.ts`)
   take `to: string | string[]`, attachments, `replyTo`, and `bcc`.

@@ -318,7 +318,13 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
         sales_price: pricingMap[nsId] || 0,
         purchase_price: parseFloat(item.purchase_price || '0') || 0,
         ...(qty ? { quantity_on_hand: qty.onHand, quantity_available: qty.available } : {}),
-        labor_hours: parseFloat(item.labor_hours || '0'),
+        // Labor hours only when NetSuite actually carries a value (custitem1).
+        // A blank used to become 0 on every run — clobbering labor entered
+        // in FleetSuite and making "not set" look like "no labor"
+        // (migration 258: NULL = not set, 0 = no labor charged).
+        ...(item.labor_hours != null && String(item.labor_hours).trim() !== ''
+          ? { labor_hours: parseFloat(item.labor_hours) || 0 }
+          : {}),
         ns_class: className || null,
         ns_department: item.department_name || null,
         vendor: item.vendor_name || localVendors[nsId] || null,

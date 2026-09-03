@@ -392,7 +392,9 @@ export async function POST(req: NextRequest) {
           quantity: parseFloat(l.quantity || 0),
           unit_price: parseFloat(l.unit_price || 0),
           line_total: parseFloat(l.quantity || 0) * parseFloat(l.unit_price || 0),
-          labor_hours: parseFloat(l.labor_hours || 0),
+          // NULL stays NULL ("labor not set on the part", migration 258);
+          // 0 is a real value.
+          labor_hours: l.labor_hours == null || l.labor_hours === '' ? null : (parseFloat(l.labor_hours) || 0),
           is_custom: !!l.is_custom,
           notes: l.notes || null,
           wrap_quote_id: l.wrap_quote_id || null,
@@ -504,7 +506,9 @@ export async function POST(req: NextRequest) {
           quantity: parseFloat(l.quantity || 0),
           unit_price: parseFloat(l.unit_price || 0),
           line_total: parseFloat(l.quantity || 0) * parseFloat(l.unit_price || 0),
-          labor_hours: parseFloat(l.labor_hours || 0),
+          // NULL stays NULL ("labor not set on the part", migration 258);
+          // 0 is a real value.
+          labor_hours: l.labor_hours == null || l.labor_hours === '' ? null : (parseFloat(l.labor_hours) || 0),
           is_custom: !!l.is_custom,
           notes: l.notes || null,
           wrap_quote_id: l.wrap_quote_id || null,

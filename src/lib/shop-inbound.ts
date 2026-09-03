@@ -220,6 +220,9 @@ export async function linkInboundToCheckin(
     .update({
       status: 'arrived',
       fleet_checkin_id: checkin.id,
+      // A row matched by SO number or customer name had no VIN of its own —
+      // the check-in just supplied it, so keep it (never overwrite one).
+      ...(vin && !(match.vin || '').trim() ? { vin } : {}),
       updated_at: new Date().toISOString(),
     })
     .eq('id', match.id);
