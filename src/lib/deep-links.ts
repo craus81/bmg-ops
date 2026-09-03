@@ -96,6 +96,11 @@ export const deepLinks = {
     `/admin/cni/installers/${userId}${noteId ? `?note=${noteId}` : ''}`,
   /** Dedicated prospect / customer record page. */
   prospect: (prospectId: string) => `/admin/prospects/${prospectId}`,
+  /** The same record page, addressed by the customer's NetSuite internal id
+   *  (the page resolves `ns-<id>` to the prospect row + synced customer, so
+   *  records with no CRM row still land). Use when a record only carries
+   *  the NetSuite id — estimates, POs, sales orders. */
+  customerByNetsuiteId: (netsuiteId: string | number) => `/admin/prospects/ns-${netsuiteId}`,
   /** Purchasing queue — pending purchase requests grouped by vendor;
    *  ?req= scroll-flashes one request's row. */
   purchaseRequests: (requestId?: string | null) =>

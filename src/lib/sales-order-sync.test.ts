@@ -491,7 +491,9 @@ describe('syncSalesOrders', () => {
     expect(result.matched).toBe(3);
     expect(result.backfilled).toBe(1);
     expect(writes.estimateUpdates).toEqual([
-      { set: { netsuite_so_id: '1', netsuite_so_number: 'SO1' }, eq: ['id', 'e41'], is: ['netsuite_so_id', null] },
+      // A linked SO means the deal is won — the backfill marks the estimate
+      // accepted, exactly like convert-to-so and link-so do.
+      { set: { netsuite_so_id: '1', netsuite_so_number: 'SO1', status: 'accepted' }, eq: ['id', 'e41'], is: ['netsuite_so_id', null] },
     ]);
     expect(queries.estimateOr).toHaveLength(1);
     expect(queries.estimateIn).toHaveLength(1);

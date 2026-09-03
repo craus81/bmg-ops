@@ -559,6 +559,12 @@ export async function syncSalesOrders(
       // Backfill the estimate's SO link — strong matches only, never
       // overwriting a link that already exists. Rare (FleetSuite-pushed
       // SOs only), so per row is fine.
+      //
+      // The link also marks the estimate 'accepted', exactly as convert-to-so
+      // and link-so do: a sales order exists for it, so the deal is won. Without
+      // this, an SO created inside NetSuite from a pushed estimate linked back
+      // fine but the estimate sat in "sent" on the quotes page forever — the
+      // rep had to mark it won by hand, or never did.
       for (const so of sos) {
         const nsId = String(so.id);
         const match = matches.get(nsId);
@@ -566,7 +572,7 @@ export async function syncSalesOrders(
         if (!idByNsId.has(nsId) || !estimate || !match || match.source === 'memo' || estimate.netsuite_so_id) continue;
         const { error: backfillErr } = await service
           .from('estimates')
-          .update({ netsuite_so_id: nsId, netsuite_so_number: so.tranid || null })
+          .update({ netsuite_so_id: nsId, netsuite_so_number: so.tranid || null, status: 'accepted' })
           .eq('id', estimate.id)
           .is('netsuite_so_id', null);
         if (!backfillErr) backfilled++;
