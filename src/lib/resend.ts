@@ -1,6 +1,7 @@
 import { Resend } from 'resend';
 import { createClient } from '@supabase/supabase-js';
 import { renderSignatureHtml, type EmailSignature } from './email-signature';
+import { resolveCustomerLinkage } from './customer-linkage';
 
 const apiKey = process.env.RESEND_API_KEY;
 const fromEmail = process.env.RESEND_FROM_EMAIL || 'notifications@bmgfleet.com';
@@ -63,27 +64,14 @@ async function logEmailSend(
 
     // Resolve the customer behind the send from whichever id the flow
     // passed — customers.id and prospects.id bridge via netsuite_id (the
-    // record page's own join). Best-effort: a failed lookup logs without.
-    let customerId = meta?.customerId || null;
-    let prospectId = meta?.prospectId || null;
-    const nsId = meta?.netsuiteCustomerId != null ? String(meta.netsuiteCustomerId) : null;
-    try {
-      if (!customerId && nsId) {
-        const { data } = await service.from('customers').select('id').eq('netsuite_id', nsId).maybeSingle();
-        customerId = data?.id || null;
-      }
-      if (!prospectId && nsId) {
-        const { data } = await service.from('prospects').select('id').eq('netsuite_id', nsId).maybeSingle();
-        prospectId = data?.id || null;
-      }
-      if (!prospectId && customerId) {
-        const { data: cust } = await service.from('customers').select('netsuite_id').eq('id', customerId).maybeSingle();
-        if (cust?.netsuite_id) {
-          const { data } = await service.from('prospects').select('id').eq('netsuite_id', cust.netsuite_id).maybeSingle();
-          prospectId = data?.id || null;
-        }
-      }
-    } catch { /* log without the linkage */ }
+    // record page's own join). One resolver for every account-history
+    // producer (src/lib/customer-linkage.ts). Best-effort: a failed
+    // lookup logs without.
+    const { customerId, prospectId } = await resolveCustomerLinkage(service, {
+      customerId: meta?.customerId,
+      prospectId: meta?.prospectId,
+      netsuiteCustomerId: meta?.netsuiteCustomerId,
+    });
 
     const { data: logRow, error } = await service.from('email_log').insert({
       source_id: ok ? sourceId : null,
