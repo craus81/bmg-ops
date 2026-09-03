@@ -1323,6 +1323,13 @@ export default function EstimatesPage() {
 
       let data = await res.json();
 
+      // The server is the source of truth for the lock: whatever the list's
+      // copy of the row said, it is frozen now. Fold that in so View/Print,
+      // Email PDF, and the draft-restore guard treat it as accepted from
+      // here on instead of re-tripping the lock.
+      if (res.status === 409 && data.step === 'accepted_locked' && editingId) {
+        setEstimates(prev => prev.map(e => e.id === editingId && !isContentFrozen(e) ? { ...e, status: 'accepted' } : e));
+      }
       // Revision lock: the customer signed this document, so its contents are
       // frozen. An admin can still save with a recorded reason — ask for it
       // and retry once. Anyone else gets the plain refusal below.
@@ -1602,6 +1609,28 @@ export default function EstimatesPage() {
     );
   };
 
+  // The frozen check above reads the list's copy of the row, which can be
+  // stale: a customer accepting online (or a conversion to a sales order)
+  // while the builder is open leaves the local row unlocked, so View/Print
+  // and Email PDF still tried to save and ran straight into the server's
+  // lock prompt. Ask the server for the current lock state first and fold
+  // it into the list, so the decision below matches what the save gate
+  // would say. Falls back to the local row if the fetch fails.
+  const freshEstimateRow = async (id: string): Promise<Estimate | undefined> => {
+    try {
+      const res = await fetch(`/api/estimates?id=${id}`);
+      const data = await res.json();
+      const row = res.ok ? data.estimates?.[0] : null;
+      if (row) {
+        const patch = { customer_approved: row.customer_approved, status: row.status, netsuite_so_id: row.netsuite_so_id, updated_at: row.updated_at };
+        setEstimates(prev => prev.map(e => e.id === id ? { ...e, ...patch } : e));
+        const local = estimates.find(e => e.id === id);
+        return local ? { ...local, ...patch } : row;
+      }
+    } catch { /* offline or transient — the local row decides */ }
+    return estimates.find(e => e.id === id);
+  };
+
   // ── FleetSuite enhanced-estimate PDF: view / print in a new tab ──
   // The endpoint renders the same customer-facing copy as the approval email
   // (photos + product links) as a real PDF. The tab must open inside the
@@ -1617,7 +1646,7 @@ export default function EstimatesPage() {
   const openFleetsuitePdf = async (print = false) => {
     if (!editingId) return;
     const w = window.open('', '_blank');
-    const est = estimates.find(e => e.id === editingId);
+    const est = await freshEstimateRow(editingId);
     if (isContentFrozen(est)) {
       // Locked, so nothing to save — but the builder can still be holding
       // changes that are NOT in the document. Removing the save took away
@@ -1702,7 +1731,7 @@ export default function EstimatesPage() {
     // skipped on a frozen estimate for the same reason as View/Print: its
     // contents can't have moved, and saving would demand an override reason
     // just to email the customer their own signed copy.
-    const est = estimates.find(e => e.id === editingId);
+    const est = await freshEstimateRow(editingId);
     if (isContentFrozen(est)) {
       // Emailing the customer the accepted document while the screen shows
       // something else is the version of this trap that reaches them.
