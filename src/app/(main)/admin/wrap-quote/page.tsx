@@ -371,6 +371,8 @@ export default function WrapQuotePage() {
   const [sendInclude, setSendInclude] = useState<{ pricing: boolean; lineItems: boolean; diagram: boolean; netsuitePdf: boolean }>({
     pricing: true, lineItems: true, diagram: true, netsuitePdf: false,
   });
+  // The follow-up send auto-attaches the quote PDF; the preview names it.
+  const [followupPdfName, setFollowupPdfName] = useState<string | null>(null);
   // Email-the-quote compose (the standard EmailComposeModal): opens on a
   // saved quote id; the modal owns recipients/bcc/message/attachment picks
   // and pulls its live preview from the send route's dry run.
@@ -1905,7 +1907,10 @@ export default function WrapQuotePage() {
         }),
       });
       const data = await res.json();
-      if (res.ok && data.preview) return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      if (res.ok && data.preview) {
+        setFollowupPdfName((Array.isArray(data.attachments) && data.attachments[0]) || null);
+        return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      }
       return { error: data.error || 'Unknown error' };
     } catch {
       return { error: 'Network error — please try again.' };
@@ -3599,7 +3604,11 @@ export default function WrapQuotePage() {
           messagePlaceholder="Optional note to the customer — added above the quote…"
           intro={sendInclude.netsuitePdf ? (
             <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              The NetSuite quote PDF is attached automatically in this mode.
+              📎 The NetSuite quote PDF is attached automatically in this mode.
+            </div>
+          ) : sendInclude.pricing ? (
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              📎 A PDF copy of this quote is attached automatically, so the customer can save or forward it.
             </div>
           ) : undefined}
           attachments={attachments.map(a => ({ id: a.path, name: a.name, sizeBytes: a.size }))}
@@ -3616,6 +3625,11 @@ export default function WrapQuotePage() {
         <EmailComposeModal
           title={`Follow Up — Quote ${followupEmailFor.quote_number}`}
           sendLabel="Send Follow-Up"
+          intro={followupPdfName ? (
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              📎 <b style={{ color: 'var(--text-secondary)' }}>{followupPdfName}</b> is attached automatically — a PDF copy of the quote the customer can save or forward.
+            </div>
+          ) : undefined}
           messagePlaceholder="Personal note — shown at the top of the follow-up email…"
           fetchPreview={fetchFollowupEmailPreview}
           onSend={confirmSendFollowupEmail}
