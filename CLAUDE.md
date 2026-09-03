@@ -155,7 +155,8 @@ they tell you to go back to auto-shipping.
   send auto-attaches a PDF of that record (estimate approval + Email PDF +
   follow-up → `generateEstimatePdf`; wrap quote send + follow-up →
   `generateWrapQuotePdf`, or NetSuite's own PDF when that box is checked;
-  invoices/statements → NetSuite PDFs) so the receiver can download or
+  invoices → NetSuite PDFs; statement → `generateStatementPdf` plus the
+  open invoices' NetSuite PDFs) so the receiver can download or
   forward the transaction without the original email. The PDF rides first
   in the attachment budget, is named in the email body, the preview names
   it (`attachments`) so the compose screen can say so, and a render
