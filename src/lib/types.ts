@@ -70,6 +70,12 @@ export interface PurchaseOrder {
   requested_delivery_date: string | null;
   notes: string | null;
   ship_to: { name?: string; address?: string; city?: string; state?: string; zip?: string } | null;
+  /** Buyer Information off the PO PDF (migration 256). */
+  buyer_name?: string | null;
+  buyer_email?: string | null;
+  /** Automatic receipt confirmation (src/lib/po-confirmation.ts). */
+  confirmation_sent_at?: string | null;
+  confirmation_sent_to?: string[] | null;
   created_by: string;
   created_at: string;
   line_items?: POLineItem[];

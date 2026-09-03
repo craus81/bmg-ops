@@ -1045,6 +1045,29 @@ export default function PoRecordPage() {
             <div style={labelStyle}>Requested delivery</div>
             <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{fmtDate(po.requested_delivery_date)}</div>
           </div>
+          {/* Buyer Information off the PO PDF (migration 256) — who sent it,
+              and whether the automatic receipt confirmation reached them. */}
+          <div>
+            <div style={labelStyle}>Buyer</div>
+            <div style={{ fontSize: '13px', fontWeight: 700, color: po.buyer_name || po.buyer_email ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+              {po.buyer_name || po.buyer_email || 'Not on the PO'}
+            </div>
+            {po.buyer_name && po.buyer_email && (
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{po.buyer_email}</div>
+            )}
+          </div>
+          <div>
+            <div style={labelStyle}>Confirmation</div>
+            <div
+              title={po.confirmation_sent_at ? `Sent ${new Date(po.confirmation_sent_at).toLocaleString()} to ${(po.confirmation_sent_to || []).join(', ')}` : 'The receipt confirmation goes out automatically when the PO’s lines are imported — to the buyer on the PDF, or the customer’s billing email.'}
+              style={{ fontSize: '13px', fontWeight: 700, color: po.confirmation_sent_at ? '#34d399' : 'var(--text-muted)' }}
+            >
+              {po.confirmation_sent_at ? `Sent ${fmtDate(po.confirmation_sent_at)}` : 'Not sent'}
+            </div>
+            {po.confirmation_sent_at && (po.confirmation_sent_to || []).length > 0 && (
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{(po.confirmation_sent_to || []).join(', ')}</div>
+            )}
+          </div>
           <div>
             <div style={labelStyle}>PO total</div>
             <div style={{ fontSize: '13px', fontWeight: 800, color: '#60a5fa', fontVariantNumeric: 'tabular-nums' }}>{fmt(totalValue)}</div>
