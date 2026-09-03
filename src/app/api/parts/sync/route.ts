@@ -209,7 +209,11 @@ export async function POST(req: NextRequest) {
           purchase_price: costInfo.purchasePrice,
           quantity_on_hand: costInfo.quantityOnHand,
           quantity_available: costInfo.quantityAvailable,
-          labor_hours: parseFloat(item.labor_hours || '0'),
+          // Only when NetSuite carries a value — blank must not become 0
+          // (migration 258: NULL = not set, 0 = no labor charged).
+          ...(item.labor_hours != null && String(item.labor_hours).trim() !== ''
+            ? { labor_hours: parseFloat(item.labor_hours) || 0 }
+            : {}),
           ns_class: className || null,
           ns_category: null,
           ns_department: item.department_name || null,
