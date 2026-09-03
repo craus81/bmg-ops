@@ -3037,6 +3037,7 @@ export default function TrackingPage() {
                       </div>
                       <VehiclePhotoTimeline
                         vin={vehicle.vin}
+                        visit={vehicle.id}
                         variant="internal"
                         refreshKey={vehiclePhotos[vehicle.id]?.length || 0}
                       />

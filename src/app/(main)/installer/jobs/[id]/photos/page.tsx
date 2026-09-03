@@ -242,7 +242,11 @@ export default function InstallerPhotoUploadPage() {
       </div>
 
       {/* Upload Controls */}
-      {(job.status === 'in_progress' || job.status === 'scheduled_confirmed') && (
+      {/* Photos stay live until the job is DONE (approved_closed), not just
+          submitted: QC can deny a photo after submission and the alert
+          tells the installer to "retake and resubmit from the job page" —
+          which used to land here with no upload control. */}
+      {(job.status === 'in_progress' || job.status === 'scheduled_confirmed' || job.status === 'completed_pending_review') && (
         <DropZone onFiles={uploadPhotos} accept="image/*" disabled={uploading} style={sectionStyle}>
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '10px' }}>UPLOAD PHOTO</div>
 
