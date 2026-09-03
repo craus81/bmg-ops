@@ -24,6 +24,7 @@ const Schema = z.object({
   id: z.string().uuid(),
   emails: z.array(z.string().email()).max(20).optional(),
   bccSelf: z.boolean().optional(),
+  cc: z.array(z.string().email().max(254)).max(10).optional(),
   message: z.string().max(4000).optional(),
   // Estimate files (estimate_files) to attach — pictures, spec sheets the
   // customer asked for since the original send. Estimates only; wrap quotes
@@ -191,6 +192,7 @@ export async function POST(req: NextRequest) {
     bccSelf && senderEmail ? [senderEmail] : undefined,
     {
       kind: 'quote_followup',
+      cc: parsed.data.cc,
       sentBy: auth.user?.id,
       contextUrl: isEstimate ? deepLinks.estimate(id) : deepLinks.wrapQuote(id),
       customerId: quote.customer_id || null,

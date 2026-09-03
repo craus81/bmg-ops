@@ -44,6 +44,7 @@ const SendSchema = z.object({
   // bcc-the-sender.
   emails: z.array(z.string().email().max(254)).max(20).optional(),
   bccSelf: z.boolean().optional().default(false),
+  cc: z.array(z.string().email().max(254)).max(10).optional(),
   // Subset of the quote's stored attachments to send, by path. Omitted =
   // send them all (the pre-selection behavior).
   attachmentPaths: z.array(z.string().min(1).max(500)).max(50).optional(),
@@ -274,7 +275,7 @@ export async function POST(req: NextRequest) {
   const bcc = parsed.data.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
   const ok = await sendEmail(
     to, subject, html, undefined, attachments, auth.user?.email || undefined, bcc,
-    { kind: 'wrap_quote', sentBy: auth.user?.id, contextUrl: deepLinks.wrapQuote(quote.id), customerId: quote.customer_id || null },
+    { kind: 'wrap_quote', cc: parsed.data.cc, sentBy: auth.user?.id, contextUrl: deepLinks.wrapQuote(quote.id), customerId: quote.customer_id || null },
   );
   if (!ok) {
     return NextResponse.json({ error: 'Email send failed (is Resend configured?)' }, { status: 502 });

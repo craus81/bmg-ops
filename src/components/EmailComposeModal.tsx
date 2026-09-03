@@ -25,6 +25,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
+import { createClient } from '@/lib/supabase-browser';
+
+// BMG staff directory for the Cc row — one load per app session (same
+// rule as MentionTextArea: approved profiles, minus customer-only accounts).
+let staffCache: { id: string; name: string; email: string }[] | null = null;
 
 export interface EmailComposeAttachment {
   id: string;
@@ -40,8 +45,18 @@ export interface EmailComposeFields {
   emails: string[];
   /** Bcc the signed-in sender's login email on the real send. */
   bccSelf: boolean;
+  /** BMG teammates cc'd on the send (the "Cc a teammate" row). */
+  cc: string[];
   message: string;
   attachmentIds: string[];
+}
+
+/** A contact at the customer the sender can add to To with one click. */
+export interface EmailComposeContact {
+  name: string;
+  email: string;
+  title?: string | null;
+  isPrimary?: boolean;
 }
 
 export interface EmailComposePreview {
@@ -91,6 +106,16 @@ interface Props {
   /** Send the email. Return ok:true to close the modal; the caller owns success/failure dialogs. */
   onSend: (fields: EmailComposeFields) => Promise<{ ok: boolean }>;
   onClose: () => void;
+  /**
+   * The customer's company contacts, offered in an "Add contact" dropdown
+   * under To. Pass `contacts` when the screen already has them (customer
+   * record page), or `customerId` (customers.id) and the modal loads
+   * external_contacts itself. Omit both to hide the dropdown.
+   */
+  contacts?: EmailComposeContact[];
+  customerId?: string | null;
+  /** Hide the "Cc a BMG teammate" row (on by default). */
+  hideCc?: boolean;
 }
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -138,6 +163,9 @@ const inputStyle: React.CSSProperties = {
 };
 
 export default function EmailComposeModal({
+  contacts,
+  customerId,
+  hideCc,
   title,
   intro,
   initialTo,
@@ -168,7 +196,57 @@ export default function EmailComposeModal({
   const setToInput = (value: string) => { toInputRef.current = value; setToInputState(value); };
   const toTouched = useRef(!!initialTo);
   const [bccSelf, setBccSelf] = useState(loadBccSelfPref);
+  const [cc, setCc] = useState<string[]>([]);
+  const [staff, setStaff] = useState<{ id: string; name: string; email: string }[]>(staffCache || []);
+  const [loadedContacts, setLoadedContacts] = useState<EmailComposeContact[]>([]);
   const [message, setMessage] = useState('');
+
+  // Company contacts: the caller's list wins; otherwise load the customer's
+  // external_contacts once per open (cheap, and it's the same list the
+  // record page shows).
+  useEffect(() => {
+    if (contacts || !customerId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/external-contacts?customerId=${encodeURIComponent(customerId)}`);
+        const data = await res.json().catch(() => ({}));
+        if (!cancelled && res.ok && Array.isArray(data.contacts)) {
+          setLoadedContacts(data.contacts
+            .filter((c: any) => c?.email)
+            .map((c: any) => ({ name: c.name || c.email, email: String(c.email), title: c.title || null, isPrimary: !!c.is_primary })));
+        }
+      } catch { /* dropdown just stays empty */ }
+    })();
+    return () => { cancelled = true; };
+  }, [contacts, customerId]);
+
+  // Staff directory for the Cc row — profiles are readable by every
+  // signed-in user; cached for the session like MentionTextArea does.
+  useEffect(() => {
+    if (hideCc || staffCache) return;
+    (async () => {
+      try {
+        const supabase = createClient();
+        const { data } = await supabase
+          .from('profiles')
+          .select('id, full_name, email, role, roles')
+          .eq('status', 'approved')
+          .order('full_name');
+        const options = (data || [])
+          .filter((p: any) => {
+            const roles: string[] = p.roles?.length ? p.roles : [p.role];
+            return !(roles.includes('customer') && roles.length === 1) && p.full_name && p.email;
+          })
+          .map((p: any) => ({ id: p.id, name: p.full_name as string, email: String(p.email).toLowerCase() }));
+        staffCache = options;
+        setStaff(options);
+      } catch { /* row stays empty */ }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per app session
+  }, []);
+
+  const contactOptions: EmailComposeContact[] = contacts || loadedContacts;
   const [attachmentIds, setAttachmentIds] = useState<string[]>(initialAttachmentIds || []);
   const [uploadingName, setUploadingName] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
@@ -184,6 +262,7 @@ export default function EmailComposeModal({
   const currentFields = (): EmailComposeFields => ({
     emails: parseEmailList(toInputRef.current),
     bccSelf,
+    cc,
     message: message.trim(),
     attachmentIds,
   });
@@ -198,7 +277,7 @@ export default function EmailComposeModal({
   const previewSig = useRef<string | null>(null);
   const previewInFlight = useRef<Promise<void> | null>(null);
   const fieldsSig = (f: EmailComposeFields) =>
-    JSON.stringify([f.emails, f.bccSelf, f.message, f.attachmentIds]);
+    JSON.stringify([f.emails, f.bccSelf, f.cc, f.message, f.attachmentIds]);
 
   const refreshPreview = (fields?: EmailComposeFields): Promise<void> => {
     if (!fetchPreview) return Promise.resolve();
@@ -386,7 +465,73 @@ export default function EmailComposeModal({
               {emptyToNote || 'No recipients yet — add at least one email address.'}
             </div>
           )}
+          {/* Company contacts: one click adds a contact to To — no more
+              re-typing the AP inbox or looking the buyer up on the record. */}
+          {contactOptions.length > 0 && (
+            <select
+              value=""
+              onChange={e => {
+                const email = e.target.value.trim().toLowerCase();
+                if (!email) return;
+                if (!emails.includes(email)) {
+                  const next = toInputRef.current.trim() ? `${toInputRef.current.trim().replace(/[,;\s]+$/, '')}, ${email}` : email;
+                  setToInput(next);
+                  toTouched.current = true;
+                  refreshPreview({ ...currentFields(), emails: parseEmailList(next) });
+                }
+              }}
+              title="Add one of the customer's contacts to the To line"
+              style={{ ...inputStyle, marginTop: '6px', width: 'auto', maxWidth: '100%', color: 'var(--text-secondary)', fontSize: '11px' }}
+            >
+              <option value="">+ Add a company contact…</option>
+              {contactOptions.filter(c => !emails.includes(c.email.toLowerCase())).map(c => (
+                <option key={c.email} value={c.email}>
+                  {c.name}{c.title ? ` — ${c.title}` : ''}{c.isPrimary ? ' (primary)' : ''} · {c.email}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
+
+        {/* Cc BMG teammates — the account owner, the installer lead, whoever
+            should see the customer got this. Chips, not free text: these are
+            our own people, so pick them by name. */}
+        {!hideCc && staff.length > 0 && (
+          <div>
+            <div style={labelStyle}>Cc BMG teammates</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
+              {cc.map(email => {
+                const person = staff.find(s => s.email === email);
+                return (
+                  <span key={email} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '3px 8px', borderRadius: '999px', background: 'rgba(96,165,250,0.12)', border: '1px solid rgba(96,165,250,0.3)', color: 'var(--text-body)', fontSize: '11px', fontWeight: 700 }}>
+                    {person?.name || email}
+                    <button
+                      onClick={() => { const next = cc.filter(e => e !== email); setCc(next); refreshPreview({ ...currentFields(), cc: next }); }}
+                      title="Remove"
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0, fontSize: '12px', lineHeight: 1 }}
+                    >✕</button>
+                  </span>
+                );
+              })}
+              <select
+                value=""
+                onChange={e => {
+                  const email = e.target.value;
+                  if (!email || cc.includes(email)) return;
+                  const next = [...cc, email];
+                  setCc(next);
+                  refreshPreview({ ...currentFields(), cc: next });
+                }}
+                style={{ ...inputStyle, width: 'auto', maxWidth: '100%', color: 'var(--text-secondary)', fontSize: '11px' }}
+              >
+                <option value="">+ Cc a teammate…</option>
+                {staff.filter(s => !cc.includes(s.email) && s.email !== (user?.email || '').toLowerCase()).map(s => (
+                  <option key={s.id} value={s.email}>{s.name} · {s.email}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
 
         {user?.email && (
           <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer', width: 'fit-content' }}>

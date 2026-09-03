@@ -36,6 +36,7 @@ const SendForApprovalSchema = z.object({
   // multi-recipient To and bcc-the-sender.
   emails: z.array(z.string().email().max(254)).max(20).optional(),
   bccSelf: z.boolean().optional().default(false),
+  cc: z.array(z.string().email().max(254)).max(10).optional(),
   phone: z.string().trim().max(40).optional().nullable(),
   expiryDays: z.number().int().positive().max(365).optional(),
   // Personal note rendered at the top of the estimate email (plain text,
@@ -343,7 +344,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         emailList, subject, html, undefined,
         approvalAttachments.length > 0 ? approvalAttachments : undefined,
         auth.user?.email || undefined, bcc,
-        { kind: 'estimate_approval', sentBy: auth.user?.id, contextUrl: deepLinks.estimate(estimate.id), customerId: estimate.customer_id, netsuiteCustomerId: estimate.customer_netsuite_id },
+        { kind: 'estimate_approval', cc: body.cc, sentBy: auth.user?.id, contextUrl: deepLinks.estimate(estimate.id), customerId: estimate.customer_id, netsuiteCustomerId: estimate.customer_netsuite_id },
       );
       dispatch.email = { target: emailList.join(', '), ok, bcc: bcc ? bcc.join(', ') : undefined };
       // Delivery tracking (same scheme as invoice emails): store the Resend

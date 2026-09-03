@@ -1575,7 +1575,7 @@ export default function WrapQuotePage() {
           include: sendInclude,
           message: fields.message || undefined,
           emails: fields.emails,
-          bccSelf: fields.bccSelf,
+          bccSelf: fields.bccSelf, cc: fields.cc,
           attachmentPaths: fields.attachmentIds,
         }),
       });
@@ -1925,7 +1925,7 @@ export default function WrapQuotePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           type: 'wrap', id: followupEmailFor.id,
-          emails: fields.emails, bccSelf: fields.bccSelf, message: fields.message || undefined,
+          emails: fields.emails, bccSelf: fields.bccSelf, cc: fields.cc, message: fields.message || undefined,
         }),
       });
       const data = await res.json();
@@ -3600,6 +3600,7 @@ export default function WrapQuotePage() {
       {emailModal && emailQuoteId && (
         <EmailComposeModal
           title="Review Email Before Sending"
+          customerId={customerId}
           sendLabel={!sendInclude.pricing && !sendInclude.netsuitePdf ? 'Send Coverage' : 'Send Quote'}
           messagePlaceholder="Optional note to the customer — added above the quote…"
           intro={sendInclude.netsuitePdf ? (
@@ -3624,6 +3625,7 @@ export default function WrapQuotePage() {
       {followupEmailFor && (
         <EmailComposeModal
           title={`Follow Up — Quote ${followupEmailFor.quote_number}`}
+          customerId={followupEmailFor.customer_id}
           sendLabel="Send Follow-Up"
           intro={followupPdfName ? (
             <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
