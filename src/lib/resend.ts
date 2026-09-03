@@ -40,6 +40,11 @@ export interface EmailMeta {
   customerId?: string | null;
   prospectId?: string | null;
   netsuiteCustomerId?: string | number | null;
+  /** Cc recipients — the compose screen's "Cc a BMG teammate" row. A
+   *  delivery option rather than metadata, carried here so the send
+   *  signature (already eight positional args) didn't grow a ninth; the
+   *  send layer passes it to Resend as cc. */
+  cc?: string[] | null;
 }
 
 /**
@@ -185,6 +190,7 @@ export async function sendEmailDetailed(
       : defaultReplyTo || undefined;
   const effectiveBcc =
     bcc && (typeof bcc === 'string' ? bcc.trim() : bcc.length > 0) ? bcc : undefined;
+  const effectiveCc = (meta?.cc || []).map(e => String(e).trim()).filter(Boolean);
 
   let result: { ok: boolean; id: string | null };
   try {
@@ -200,6 +206,7 @@ export async function sendEmailDetailed(
           text: textBody || htmlBody.replace(/<[^>]*>/g, ''),
           ...(effectiveReplyTo ? { replyTo: effectiveReplyTo } : {}),
           ...(effectiveBcc ? { bcc: effectiveBcc } : {}),
+          ...(effectiveCc.length > 0 ? { cc: effectiveCc } : {}),
           ...(attachments && attachments.length > 0 ? { attachments } : {}),
         });
         lastSendAt = Date.now();

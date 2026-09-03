@@ -40,6 +40,8 @@ export interface SendProofOptions {
   emails?: string[] | null;
   /** Bcc addresses for the customer email (e.g. the sender's own inbox). */
   bcc?: string[] | null;
+  /** Cc addresses — the compose screen's BMG-teammate row. */
+  cc?: string[] | null;
   /** Personal note rendered at the top of the email. */
   message?: string | null;
   phone?: string | null;
@@ -244,9 +246,9 @@ export async function sendProofApproval(
         emailAttachments.length > 0 ? emailAttachments : undefined,
         opts.actorEmail || undefined,
         bcc.length > 0 ? bcc : undefined,
-        { kind: 'proof_approval', sentBy: opts.actorId || null, contextUrl: deepLinks.graphicsJob(jobId), customerId: historyCustomerId },
+        { kind: 'proof_approval', cc: opts.cc || null, sentBy: opts.actorId || null, contextUrl: deepLinks.graphicsJob(jobId), customerId: historyCustomerId },
       );
-      dispatch.email = { target: emailList.join(', '), ok, attachments: emailAttachments.length, bcc: bcc.length > 0 ? bcc.join(', ') : undefined };
+      dispatch.email = { target: emailList.join(', '), ok, attachments: emailAttachments.length, bcc: bcc.length > 0 ? bcc.join(', ') : undefined, cc: (opts.cc || []).length > 0 ? (opts.cc || []).join(', ') : undefined };
     } catch (err: any) {
       dispatch.email = { target: emailList.join(', '), ok: false, error: err?.message };
     }

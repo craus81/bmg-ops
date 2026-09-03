@@ -907,7 +907,7 @@ export default function InstallGuideEditorPage() {
         body: JSON.stringify({
           guideId: guide.id,
           emails: fields.emails,
-          bccSelf: fields.bccSelf,
+          bccSelf: fields.bccSelf, cc: fields.cc,
           message: fields.message || undefined,
           attachments: [{ path: emailAttachment.path, name: emailAttachment.name }],
           preview,

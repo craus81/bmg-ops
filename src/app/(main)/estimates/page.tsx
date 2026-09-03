@@ -1785,7 +1785,7 @@ export default function EstimatesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           emails: fields.emails,
-          bccSelf: fields.bccSelf,
+          bccSelf: fields.bccSelf, cc: fields.cc,
           message: fields.message || undefined,
           attachmentFileIds: fields.attachmentIds,
         }),
@@ -1873,7 +1873,7 @@ export default function EstimatesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           type: 'estimate', id: followupEmailFor.id,
-          emails: fields.emails, bccSelf: fields.bccSelf, message: fields.message || undefined,
+          emails: fields.emails, bccSelf: fields.bccSelf, cc: fields.cc, message: fields.message || undefined,
           attachmentFileIds: fields.attachmentIds,
         }),
       });
@@ -1982,7 +1982,7 @@ export default function EstimatesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           emails: fields.emails,
-          bccSelf: fields.bccSelf,
+          bccSelf: fields.bccSelf, cc: fields.cc,
           message: fields.message || undefined,
           proofSelections: approvalProofSelectionPayload(),
           attachmentFileIds: fields.attachmentIds,
@@ -4362,6 +4362,7 @@ export default function EstimatesPage() {
       {approvalModal && (
         <EmailComposeModal
           title="Review Approval Email Before Sending"
+          customerId={customerId}
           sendLabel="Send for Approval"
           messagePlaceholder="Optional note to the customer — added above the estimate…"
           allowSendWithoutTo
@@ -4445,6 +4446,7 @@ export default function EstimatesPage() {
       {followupEmailFor && (
         <EmailComposeModal
           title={`Follow Up — Estimate #${estimateHeadlineNumber(followupEmailFor)}`}
+          customerId={followupEmailFor.customer_id || customerId}
           sendLabel="Send Follow-Up"
           intro={followupPdfName ? (
             <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
@@ -4532,6 +4534,7 @@ export default function EstimatesPage() {
       {pdfEmailModal && (
         <EmailComposeModal
           title="Email Estimate PDF"
+          customerId={customerId}
           sendLabel="Send PDF"
           messagePlaceholder="Optional note to the customer — shown in the email above the attached PDF…"
           attachments={estimateFiles}
