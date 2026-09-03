@@ -2811,6 +2811,19 @@ export default function EstimatesPage() {
             }}>
               {customerName}
               {customerNsId && <span style={{ color: 'var(--text-label)', fontWeight: 400, marginLeft: '6px' }}>NS #{customerNsId}</span>}
+              {/* Deep link to the customer record — the estimate knew the
+                  customer but gave no way to get there (history, contacts,
+                  open invoices) without searching for them again. */}
+              {(customerNsId || prospectId) && (
+                <a
+                  href={customerNsId ? deepLinks.customerByNetsuiteId(customerNsId) : deepLinks.prospect(prospectId!)}
+                  onClick={e => e.stopPropagation()}
+                  title="Open the customer record"
+                  style={{ marginLeft: '10px', color: '#60a5fa', fontWeight: 700, fontSize: '11px', textDecoration: 'none' }}
+                >
+                  Open record →
+                </a>
+              )}
             </div>
             {(
               <button
