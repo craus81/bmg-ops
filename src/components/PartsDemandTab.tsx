@@ -48,6 +48,9 @@ interface DemandRow {
   requested: number;
   pos: DemandPoRef[];
   sources: DemandSourceRef[];
+  /** Dismissed by staff and its needed quantity hasn't grown since (server
+   *  clears a dismissal the moment new demand outgrows it). */
+  dismissed: { at: string; by: string | null; reason: string | null; neededAtDismiss: number } | null;
 }
 
 interface DemandMeta {
@@ -56,6 +59,8 @@ interface DemandMeta {
   parts: number;
   units: number;
   skippedNonStock: number;
+  /** Rows hidden by a live dismissal. Optional for the deploy window. */
+  dismissed?: number;
   soSyncedAt: string | null;
   /** Health of the NetSuite sales-order mirror the SO half reads from.
    *  Optional only for the deploy window where an older API answers. */
@@ -115,6 +120,8 @@ export default function PartsDemandTab({ onQueued }: { onQueued?: () => void }) 
   const [queueing, setQueueing] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [hideCovered, setHideCovered] = useState(false);
+  const [showDismissed, setShowDismissed] = useState(false);
+  const [dismissing, setDismissing] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -210,7 +217,50 @@ export default function PartsDemandTab({ onQueued }: { onQueued?: () => void }) 
     setQueueing(null);
   };
 
+  /** "Not buying this one" — hides the part until its needed quantity
+   *  grows past today's (new demand un-hides it server-side). */
+  const dismissRow = async (row: DemandRow) => {
+    const reason = await dialog.prompt(
+      `Dismiss ${row.item_number} from the demand list?\n\nIt stays hidden while the needed quantity is ${qty(row.needed)} or less — if a new job pushes it higher, it comes back on its own. You can also bring it back any time with "Show dismissed".`,
+      '',
+      { title: 'Dismiss part', placeholder: 'Why? (optional — e.g. covered from stock, customer supplies)', confirmLabel: 'Dismiss' },
+    );
+    if (reason === null || reason === undefined) return;
+    setDismissing(row.item_number);
+    try {
+      const res = await fetch('/api/purchasing/demand/dismiss', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemNumber: row.item_number, needed: row.needed, reason: reason.trim() || undefined }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      await load();
+    } catch (e: any) {
+      await dialog.alert(`Could not dismiss: ${e?.message || 'unknown error'}`);
+    }
+    setDismissing(null);
+  };
+
+  const restoreRow = async (row: DemandRow) => {
+    setDismissing(row.item_number);
+    try {
+      const res = await fetch('/api/purchasing/demand/dismiss', {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemNumber: row.item_number }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      await load();
+    } catch (e: any) {
+      await dialog.alert(`Could not restore: ${e?.message || 'unknown error'}`);
+    }
+    setDismissing(null);
+  };
+
+  const dismissedCount = rows.filter(r => r.dismissed).length;
+
   const filtered = rows.filter(r => {
+    if (r.dismissed && !showDismissed) return false;
     if (hideCovered && r.on_order + r.requested >= r.needed) return false;
     if (!search.trim()) return true;
     const q = search.trim().toLowerCase();
@@ -311,10 +361,26 @@ export default function PartsDemandTab({ onQueued }: { onQueued?: () => void }) 
           style={{ padding: '6px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.textSecondary, fontSize: '11px', fontWeight: 700, cursor: filtered.length ? 'pointer' : 'not-allowed', opacity: filtered.length ? 1 : 0.5 }}>
           ⬇ CSV
         </button>
+        {dismissedCount > 0 && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: theme.textSecondary, cursor: 'pointer' }}>
+            <input type="checkbox" checked={showDismissed} onChange={e => setShowDismissed(e.target.checked)} style={{ accentColor: '#3b82f6' }} />
+            Show dismissed ({dismissedCount})
+          </label>
+        )}
         <button onClick={load}
           style={{ padding: '6px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.textSecondary, fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
           Refresh
         </button>
+        {/* Always available, not just when the mirror looks unhealthy: a
+            sales order entered in NetSuite five minutes ago shouldn't wait
+            for the 2-hour sync to show up here. */}
+        {isAdmin && (
+          <button onClick={syncSalesOrders} disabled={syncing}
+            title="Pull sales orders from NetSuite now — newest first, so a job entered minutes ago lands immediately"
+            style={{ padding: '6px 12px', borderRadius: '8px', border: '1px solid rgba(96,165,250,0.3)', background: 'rgba(96,165,250,0.1)', color: '#60a5fa', fontSize: '11px', fontWeight: 800, cursor: syncing ? 'wait' : 'pointer', opacity: syncing ? 0.7 : 1 }}>
+            {syncing ? 'Syncing…' : '⟳ Sync from NetSuite'}
+          </button>
+        )}
       </div>
 
       {filtered.length === 0 ? (
@@ -353,6 +419,12 @@ export default function PartsDemandTab({ onQueued }: { onQueued?: () => void }) 
                             <div title="No catalog row matched — no vendor or NetSuite item id could be resolved"
                               style={{ fontSize: '10px', color: '#f59e0b', fontWeight: 700 }}>⚠ not in the parts catalog</div>
                           )}
+                          {r.dismissed && (
+                            <div title={`Dismissed ${new Date(r.dismissed.at).toLocaleString()}${r.dismissed.reason ? ` — ${r.dismissed.reason}` : ''}. Comes back on its own if the needed quantity grows past ${qty(r.dismissed.neededAtDismiss)}.`}
+                              style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 700 }}>
+                              dismissed{r.dismissed.reason ? ` — ${r.dismissed.reason}` : ''}
+                            </div>
+                          )}
                         </td>
                         <td style={{ padding: '9px 10px', color: r.vendor ? 'var(--text-body)' : theme.textMuted }}>
                           {r.vendor || '—'}
@@ -381,6 +453,19 @@ export default function PartsDemandTab({ onQueued }: { onQueued?: () => void }) 
                             style={{ padding: '4px 10px', borderRadius: '6px', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)', color: '#60a5fa', fontSize: '10px', fontWeight: 800, cursor: 'pointer' }}>
                             {queueing === r.item_number ? 'Adding…' : '+ Queue'}
                           </button>
+                          {r.dismissed ? (
+                            <button onClick={() => restoreRow(r)} disabled={dismissing === r.item_number}
+                              title="Bring this part back onto the list"
+                              style={{ marginLeft: '6px', padding: '4px 10px', borderRadius: '6px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', fontSize: '10px', fontWeight: 800, cursor: 'pointer' }}>
+                              {dismissing === r.item_number ? '…' : 'Restore'}
+                            </button>
+                          ) : (
+                            <button onClick={() => dismissRow(r)} disabled={dismissing === r.item_number}
+                              title="Not buying this — hide it until new demand appears"
+                              style={{ marginLeft: '6px', padding: '4px 10px', borderRadius: '6px', background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textMuted, fontSize: '10px', fontWeight: 800, cursor: 'pointer' }}>
+                              {dismissing === r.item_number ? '…' : 'Dismiss'}
+                            </button>
+                          )}
                         </td>
                       </tr>
                       {open && (
