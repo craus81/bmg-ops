@@ -560,6 +560,8 @@ export default function EstimatesPage() {
   // wrap quotes with estimate_attach) — from the preview response; null =
   // no attachment.
   const [approvalPdfName, setApprovalPdfName] = useState<string | null>(null);
+  // The follow-up send auto-attaches the estimate PDF; the preview names it.
+  const [followupPdfName, setFollowupPdfName] = useState<string | null>(null);
   // Proof picker for the approval compose (linked graphics jobs): each
   // job's files, and which are checked to ride on the send. Approving the
   // estimate will also approve the jobs whose proofs are included.
@@ -1813,7 +1815,10 @@ export default function EstimatesPage() {
         }),
       });
       const data = await res.json();
-      if (res.ok && data.preview) return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      if (res.ok && data.preview) {
+        setFollowupPdfName((Array.isArray(data.attachments) && data.attachments[0]) || null);
+        return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      }
       return { error: data.error || 'Unknown error' };
     } catch {
       return { error: 'Network error — please try again.' };
@@ -4352,7 +4357,7 @@ export default function EstimatesPage() {
               )}
               {approvalPdfName && (
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                  📎 <b style={{ color: 'var(--text-secondary)' }}>{approvalPdfName}</b> is attached automatically — the merged estimate PDF with the linked coverage pictures, proofs, and vinyl details.
+                  📎 <b style={{ color: 'var(--text-secondary)' }}>{approvalPdfName}</b> is attached automatically — a PDF copy of this estimate the customer can save or forward, with any linked coverage pictures, proofs, and vinyl details merged in.
                 </div>
               )}
             </div>
@@ -4373,6 +4378,11 @@ export default function EstimatesPage() {
         <EmailComposeModal
           title={`Follow Up — Estimate #${estimateHeadlineNumber(followupEmailFor)}`}
           sendLabel="Send Follow-Up"
+          intro={followupPdfName ? (
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              📎 <b style={{ color: 'var(--text-secondary)' }}>{followupPdfName}</b> is attached automatically — a PDF copy of the estimate the customer can save or forward.
+            </div>
+          ) : undefined}
           messagePlaceholder="Personal note — shown at the top of the follow-up email…"
           attachments={estimateFiles}
           onUploadAttachment={f => uploadEstimateFile(followupEmailFor.id, f)}

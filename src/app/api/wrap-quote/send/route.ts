@@ -10,6 +10,7 @@ import { generateToken, validateExpiry } from '@/lib/magic-link-approval';
 import { getEmailSignature } from '@/lib/email-signature';
 import { renderQuoteDocument } from '@/lib/quote-document';
 import { wrapQuoteDocModel, wrapDocTitle } from '@/lib/wrap-quote-document';
+import { generateWrapQuotePdf, wrapQuotePdfFilename } from '@/lib/wrap-quote-pdf-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -189,12 +190,23 @@ export async function POST(req: NextRequest) {
     },
   );
 
+  // Every quote email carries a PDF copy of the quote (CLAUDE.md domain
+  // note), so the customer can save or forward it without the original
+  // email. With the NetSuite PDF checked, NetSuite's document is that copy
+  // (its totals and tax are the record); otherwise the FleetSuite wrap-quote
+  // PDF — the same bytes GET /api/wrap-quote/[id]/pdf hands out — rides
+  // first, itemized exactly as the email body is. A coverage-only send has
+  // no pricing to copy, so it carries no quote PDF.
+  const attachFleetSuitePdf = flags.pricing && !flags.netsuitePdf;
+
   // Preview: return what would go out without touching R2/NetSuite or
   // marking anything sent.
   if (parsed.data.preview) {
     const names = selectedMeta.map((a: any) => a.name || a.path.split('/').pop() || 'attachment');
     if (flags.netsuitePdf) {
       names.unshift(`Quote_${quote.netsuite_estimate_number || quote.netsuite_estimate_id}.pdf`);
+    } else if (attachFleetSuitePdf) {
+      names.unshift(wrapQuotePdfFilename(quote));
     }
     return NextResponse.json({
       preview: true,
@@ -241,6 +253,20 @@ export async function POST(req: NextRequest) {
       content: Buffer.from(pdf.pdfBase64, 'base64'),
       contentType: 'application/pdf',
     });
+  } else if (attachFleetSuitePdf) {
+    // The FleetSuite PDF copy — a render failure fails the send rather than
+    // emailing a body that promises an attachment.
+    let pdf: Awaited<ReturnType<typeof generateWrapQuotePdf>>;
+    try {
+      pdf = await generateWrapQuotePdf(supabase, quote.id, { quote, lineItems: flags.lineItems });
+    } catch (err: any) {
+      console.error('[wrap-quote/send] quote PDF failed:', err?.message || err);
+      pdf = { ok: false, status: 500, error: err?.message || 'PDF render failed' };
+    }
+    if (!pdf.ok) {
+      return NextResponse.json({ error: `Could not generate the quote PDF (${pdf.error}). Nothing was sent — try again.` }, { status: 502 });
+    }
+    attachments.unshift({ filename: pdf.filename, content: pdf.buffer, contentType: 'application/pdf' });
   }
 
   // Replies route to the staff member who sent the quote — the from

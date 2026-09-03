@@ -7,8 +7,17 @@ import { getEmailSignature } from '@/lib/email-signature';
 import { deepLinks } from '@/lib/deep-links';
 import { loadEstimateAttachmentRows, fetchEstimateAttachments, type EstimateFileRow } from '@/lib/estimate-attachments';
 import { resolveEstimateEmail } from '@/lib/estimate-recipients';
+import { MAX_ATTACHMENT_BYTES, type EmailAttachment } from '@/lib/email-attachments';
+import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
+import { estimatePdfFilename } from '@/lib/estimate-pdf';
+import { generateWrapQuotePdf, wrapQuotePdfFilename } from '@/lib/wrap-quote-pdf-server';
 
 export const dynamic = 'force-dynamic';
+// The send generates the quote PDF (catalog photo fetches, and R2 + pdf-lib
+// when an estimate's linked wrap assets merge on) — same budget as the
+// other generateEstimatePdf routes; the platform default is too tight for
+// a cold start with several assets.
+export const maxDuration = 60;
 
 const Schema = z.object({
   type: z.enum(['estimate', 'wrap']),
@@ -43,8 +52,12 @@ const service = createClient(
  * carries the Review & Accept button so the customer can act from the
  * follow-up itself instead of digging for the original email.
  *
- * Estimate follow-ups can also carry files off the estimate
- * (estimate_files) — the same picker the approval and PDF sends use.
+ * Every follow-up carries a PDF copy of the quote (CLAUDE.md domain note):
+ * the estimate PDF or the FleetSuite wrap-quote PDF — the same bytes the
+ * view/print endpoints hand out — so the customer can save or forward the
+ * transaction without hunting for the original email. Estimate follow-ups
+ * can also carry files off the estimate (estimate_files) — the same picker
+ * the approval and PDF sends use.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireRole(req, ['admin', 'sales']);
@@ -96,6 +109,7 @@ export async function POST(req: NextRequest) {
   const bodyText = `Just checking in on ${label}${detail ? ` — ${detail}` : ''}`
     + `${customerName ? ` for ${customerName}` : ''}`
     + `${total > 0 ? `, total $${total.toFixed(2)}` : ''}.`
+    + ' A PDF copy is attached for your records.'
     + ' If anything needs adjusting, or you have questions, just reply to this email — it comes straight back to us.';
 
   // Live Review & Accept link, when the magic-link token hasn't expired.
@@ -118,6 +132,10 @@ export async function POST(req: NextRequest) {
     : { ok: true as const, rows: [] as EstimateFileRow[] };
   if (!picked.ok) return NextResponse.json({ error: picked.error }, { status: picked.status });
 
+  // The PDF copy rides first; named in the body (and predicted for the
+  // preview) by the same filename helper the real send uses.
+  const pdfFilename = isEstimate ? estimatePdfFilename(quote) : wrapQuotePdfFilename(quote);
+
   const signature = await getEmailSignature(service, auth.user?.id);
   const html = buildNotificationEmail(
     `Following up — ${label}`,
@@ -126,23 +144,41 @@ export async function POST(req: NextRequest) {
     ctaUrl ? 'Review & Accept' : undefined,
     {
       note: message?.trim() || undefined,
-      attachmentNames: picked.rows.map(r => r.file_name),
+      attachmentNames: [pdfFilename, ...picked.rows.map(r => r.file_name)],
       signature,
     },
   );
 
   if (preview) {
-    return NextResponse.json({ preview: true, to: emailList.join(', ') || null, subject, html });
+    return NextResponse.json({ preview: true, to: emailList.join(', ') || null, subject, html, attachments: [pdfFilename] });
   }
 
   if (emailList.length === 0) {
     return NextResponse.json({ error: 'No email on file for this quote. Add a recipient first.' }, { status: 400 });
   }
 
-  // Pull the bytes before anything is sent or logged — a storage failure
-  // fails the send with the file named, never a half-sent follow-up.
-  const extras = await fetchEstimateAttachments(picked.rows);
+  // Generate the PDF and pull the picked bytes before anything is sent or
+  // logged — a render or storage failure fails the send with the file
+  // named, never a half-sent follow-up. The PDF takes its share of the
+  // budget first; the picked files get what's left.
+  let pdf: Awaited<ReturnType<typeof generateEstimatePdf>> | Awaited<ReturnType<typeof generateWrapQuotePdf>>;
+  try {
+    pdf = isEstimate
+      ? await generateEstimatePdf(service, id)
+      : await generateWrapQuotePdf(service, id);
+  } catch (err: any) {
+    console.error('[quote-followup] PDF failed:', err?.message || err);
+    pdf = { ok: false, status: 500, error: err?.message || 'PDF render failed' };
+  }
+  if (!pdf.ok) {
+    return NextResponse.json({ error: `Could not generate the quote PDF (${pdf.error}). Nothing was sent — try again.` }, { status: pdf.status === 404 ? 404 : 502 });
+  }
+  const attachments: EmailAttachment[] = [
+    { filename: pdf.filename, content: pdf.buffer, contentType: 'application/pdf' },
+  ];
+  const extras = await fetchEstimateAttachments(picked.rows, Math.max(0, MAX_ATTACHMENT_BYTES - pdf.buffer.byteLength));
   if (!extras.ok) return NextResponse.json({ error: extras.error }, { status: extras.status });
+  attachments.push(...extras.attachments);
 
   const senderEmail = auth.user?.email || undefined;
   const { ok } = await sendEmailDetailed(
@@ -150,7 +186,7 @@ export async function POST(req: NextRequest) {
     subject,
     html,
     undefined,
-    extras.attachments.length > 0 ? extras.attachments : undefined,
+    attachments,
     senderEmail,
     bccSelf && senderEmail ? [senderEmail] : undefined,
     {
