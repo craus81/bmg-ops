@@ -232,7 +232,10 @@ type ViewMode = 'list' | 'builder';
 // Settings → Sales Tax, super admin only). Used until that load returns, or
 // if it fails.
 const DEFAULT_TAX_RATE = FALLBACK_SALES_TAX_RATE;
-const DEFAULT_LABOR_RATE = 120;
+// Standard shop labor rate for a new estimate (owner decision, 2026-09-03:
+// $115). Editable per estimate; saved estimates keep whatever rate they
+// were quoted at.
+const DEFAULT_LABOR_RATE = 115;
 
 const STATUS_COLORS: Record<string, string> = {
   draft: '#60a5fa',
