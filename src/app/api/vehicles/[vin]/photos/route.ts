@@ -46,15 +46,44 @@ export async function GET(req: NextRequest, { params }: { params: { vin: string 
     return NextResponse.json({ error: 'vin required' }, { status: 400 });
   }
 
-  // Most recent active checkin for this VIN
-  const { data: checkin } = await supabase
-    .from('fleet_checkins')
-    .select('id, matched_graphics_job_id')
-    .eq('vin', vin)
-    .is('archived_at', null)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  // Which visit: ?visit=<fleet_checkins.id> pins one (the tracking page's
+  // per-visit deep links); otherwise the newest ACTIVE check-in, and when
+  // none is active, the newest archived one. The timeline used to return
+  // nothing at all once the auto-archive stamped archived_at seven days
+  // after ship — the arrival/damage photos the check-in can't even be
+  // created without vanished before the job was invoiced and paid.
+  // Photos stay with the vehicle until someone deletes them.
+  const visit = (req.nextUrl.searchParams.get('visit') || '').trim();
+  let checkin: { id: string; matched_graphics_job_id: string | null } | null = null;
+  if (visit) {
+    const { data } = await supabase
+      .from('fleet_checkins')
+      .select('id, matched_graphics_job_id')
+      .eq('id', visit)
+      .eq('vin', vin)
+      .maybeSingle();
+    checkin = data || null;
+  } else {
+    const { data: active } = await supabase
+      .from('fleet_checkins')
+      .select('id, matched_graphics_job_id')
+      .eq('vin', vin)
+      .is('archived_at', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    checkin = active || null;
+    if (!checkin) {
+      const { data: archived } = await supabase
+        .from('fleet_checkins')
+        .select('id, matched_graphics_job_id')
+        .eq('vin', vin)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      checkin = archived || null;
+    }
+  }
 
   if (!checkin) {
     return NextResponse.json({ items: [], count: 0 });
