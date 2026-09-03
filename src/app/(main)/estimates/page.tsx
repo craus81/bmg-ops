@@ -33,7 +33,8 @@ interface Part {
   display_name: string;
   description: string;
   sales_price: number;
-  labor_hours: number;
+  /** NULL = labor not set on the part yet; 0 = no labor (migration 258). */
+  labor_hours: number | null;
   catalog: string;
   purchase_price: number | null;
   avg_install_cost: number | null;
@@ -47,7 +48,9 @@ interface LineItem {
   description: string;
   quantity: number;
   unit_price: number;
-  labor_hours: number;
+  /** NULL = the part had no labor set when added (flagged on the line);
+   *  0 = no labor. Summed as 0 either way. */
+  labor_hours: number | null;
   is_custom: boolean;
   notes?: string;
   // Which wrap quote produced this line (Add Graphics flow) — preserved
@@ -1066,7 +1069,9 @@ export default function EstimatesPage() {
       description: part.display_name || part.description || part.item_number,
       quantity: 1,
       unit_price: part.sales_price || 0,
-      labor_hours: part.labor_hours || 0,
+      // Carry "not set" onto the line so the builder can flag it instead of
+      // quietly quoting zero labor (migration 258).
+      labor_hours: part.labor_hours ?? null,
       is_custom: false,
       catalog: part.catalog,
       purchase_price: part.purchase_price,
@@ -1092,7 +1097,7 @@ export default function EstimatesPage() {
       description: m.part.display_name || m.part.marketing_description || m.part.description || m.part.item_number,
       quantity: m.quantity,
       unit_price: m.part.sales_price || 0,
-      labor_hours: m.part.labor_hours || 0,
+      labor_hours: m.part.labor_hours ?? null,
       is_custom: false,
       catalog: m.part.catalog || undefined,
       purchase_price: m.part.purchase_price,
@@ -1199,7 +1204,10 @@ export default function EstimatesPage() {
 
   // ── Computed totals ──
   const subtotal = lines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
-  const autoLaborHours = lines.reduce((s, l) => s + (l.labor_hours * l.quantity), 0);
+  const autoLaborHours = lines.reduce((s, l) => s + ((l.labor_hours ?? 0) * l.quantity), 0);
+  // Lines built from parts whose labor was never set (NULL, migration 258):
+  // they sum as zero, which is exactly the silent under-quote to flag.
+  const laborUnsetCount = lines.filter(l => !l.is_custom && l.labor_hours == null).length;
   const effectiveLaborHours = laborOverride !== null ? laborOverride : autoLaborHours;
   const laborTotal = effectiveLaborHours * laborRate;
   // Parts/materials only (never labor), minus anything NetSuite marks
@@ -2217,7 +2225,7 @@ export default function EstimatesPage() {
       description: l.description || '',
       quantity: l.quantity || 1,
       unit_price: l.unit_price || 0,
-      labor_hours: l.labor_hours || 0,
+      labor_hours: l.labor_hours ?? null,
       is_custom: l.is_custom || false,
       notes: l.notes || '',
       wrap_quote_id: l.wrap_quote_id || null,
@@ -3299,7 +3307,8 @@ export default function EstimatesPage() {
                       </div>
                       <div style={{ display: 'flex', gap: '10px', flexShrink: 0 }}>
                         <span style={{ color: '#22c55e', fontWeight: 700 }}>{fmt(p.sales_price)}</span>
-                        {p.labor_hours > 0 && <span style={{ color: '#fbbf24', fontSize: '10px' }}>{p.labor_hours}h labor</span>}
+                        {(p.labor_hours ?? 0) > 0 && <span style={{ color: '#fbbf24', fontSize: '10px' }}>{p.labor_hours}h labor</span>}
+                        {p.labor_hours == null && <span title="Labor not set on this part — set it on the Parts page" style={{ color: '#f59e0b', fontSize: '10px' }}>labor not set</span>}
                         <span style={{ color: 'var(--text-label)', fontSize: '10px', textTransform: 'uppercase' }}>{p.catalog}</span>
                       </div>
                     </div>
@@ -3487,9 +3496,17 @@ export default function EstimatesPage() {
                     })()}
                   </div>
 
-                  <div className="est-c-labor" style={{ fontSize: '10px', color: line.labor_hours > 0 ? '#fbbf24' : 'var(--text-label)', textAlign: 'center' }}>
+                  <div
+                    className="est-c-labor"
+                    title={!line.is_custom && line.labor_hours == null
+                      ? 'This part has no labor hours set in the catalog, so it adds nothing to Auto Labor Hours. Set it on the Parts page (0 = no labor).'
+                      : line.labor_hours === 0 ? 'No labor for this part' : undefined}
+                    style={{ fontSize: '10px', color: !line.is_custom && line.labor_hours == null ? '#f59e0b' : (line.labor_hours ?? 0) > 0 ? '#fbbf24' : 'var(--text-label)', textAlign: 'center' }}
+                  >
                     <div className="est-cell-label">Labor</div>
-                    {line.labor_hours > 0 ? `${(line.labor_hours * line.quantity).toFixed(1)}h` : '—'}
+                    {!line.is_custom && line.labor_hours == null
+                      ? '⚠ not set'
+                      : (line.labor_hours ?? 0) > 0 ? `${((line.labor_hours ?? 0) * line.quantity).toFixed(1)}h` : '—'}
                   </div>
 
                   {(
@@ -3767,6 +3784,12 @@ export default function EstimatesPage() {
               {autoLaborHours.toFixed(1)}h
               <span style={{ color: 'var(--text-label)', fontWeight: 400, fontSize: '10px', marginLeft: '4px' }}>(from parts)</span>
             </div>
+            {laborUnsetCount > 0 && (
+              <div title="These parts have no labor hours in the catalog and add nothing here — the quote may be under-labored. Set hours on the Parts page (0 = no labor), or use Override."
+                style={{ marginTop: '4px', fontSize: '10px', fontWeight: 700, color: '#f59e0b' }}>
+                ⚠ {laborUnsetCount} part{laborUnsetCount !== 1 ? 's' : ''} with labor not set
+              </div>
+            )}
           </div>
           <div>
             <div style={labelStyle}>Labor Override</div>
@@ -4537,7 +4560,7 @@ export default function EstimatesPage() {
           display_name: p.display_name || p.item_number,
           description: p.marketing_description || p.description || '',
           sales_price: p.sales_price || 0,
-          labor_hours: p.labor_hours || 0,
+          labor_hours: p.labor_hours ?? null,
           catalog: p.catalog,
           purchase_price: p.purchase_price,
           avg_install_cost: p.avg_install_cost,

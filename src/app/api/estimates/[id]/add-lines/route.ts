@@ -21,7 +21,7 @@ const LineItemSchema = z.object({
   description: z.string().max(2000).optional().nullable(),
   quantity: z.union([z.number(), z.string()]).optional(),
   unit_price: z.union([z.number(), z.string()]).optional(),
-  labor_hours: z.union([z.number(), z.string()]).optional(),
+  labor_hours: z.union([z.number(), z.string()]).optional().nullable(),
   is_custom: z.boolean().optional(),
   notes: z.string().max(2000).optional().nullable(),
 });
@@ -85,7 +85,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         quantity,
         unit_price: unitPrice,
         line_total: Math.round(quantity * unitPrice * 100) / 100,
-        labor_hours: parseFloat(String(l.labor_hours ?? 0)) || 0,
+        // NULL = labor not set on the part (migration 258); 0 is a real value.
+        labor_hours: l.labor_hours == null || l.labor_hours === '' ? null : (parseFloat(String(l.labor_hours)) || 0),
         is_custom: !!l.is_custom,
         notes: l.notes || null,
       };

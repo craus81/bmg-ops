@@ -27,7 +27,8 @@ interface Part {
   purchase_price: number;
   quantity_on_hand: number;
   quantity_available: number;
-  labor_hours: number;
+  /** NULL = not set yet (dash); 0 = deliberately no labor (migration 258). */
+  labor_hours: number | null;
   ns_class: string | null;
   ns_department: string | null;
   vendor: string | null;
@@ -405,8 +406,11 @@ export default function PartsPage() {
   };
 
   const updateLaborHours = async (partId: string) => {
-    const hours = parseFloat(laborValue);
-    if (isNaN(hours) || hours < 0) return;
+    // Blank clears to NULL ("not set yet"); "0" is a real value ("no labor
+    // charged") — migration 258 keeps the two apart.
+    const raw = laborValue.trim();
+    const hours = raw === '' ? null : parseFloat(raw);
+    if (hours !== null && (isNaN(hours) || hours < 0)) return;
 
     await supabase
       .from('netsuite_parts')
@@ -1110,8 +1114,10 @@ export default function PartsPage() {
                   <div style={{ textAlign: 'right', fontSize: '12px', fontWeight: 600, color: part.quantity_on_hand > 0 ? 'var(--text-primary)' : 'var(--error)' }}>
                     {formatQty(part.quantity_on_hand)}
                   </div>
-                  <div style={{ textAlign: 'right', fontSize: '12px', fontWeight: 600, color: part.labor_hours > 0 ? '#c084fc' : 'var(--text-muted)' }}>
-                    {part.labor_hours > 0 ? `${part.labor_hours}h` : '—'}
+                  <div
+                    title={part.labor_hours == null ? 'Labor not set yet' : part.labor_hours === 0 ? 'No labor charged for this part' : undefined}
+                    style={{ textAlign: 'right', fontSize: '12px', fontWeight: 600, color: part.labor_hours == null ? 'var(--text-muted)' : '#c084fc' }}>
+                    {part.labor_hours == null ? '—' : `${part.labor_hours}h`}
                   </div>
                 </div>
 
@@ -1194,10 +1200,11 @@ export default function PartsPage() {
                           </div>
                         ) : (
                           <div
-                            onClick={() => { if (isAdmin) { setEditingLabor(part.id); setLaborValue(part.labor_hours.toString()); } }}
-                            style={{ fontSize: '14px', fontWeight: 700, color: '#c084fc', cursor: isAdmin ? 'pointer' : 'default' }}
+                            onClick={() => { if (isAdmin) { setEditingLabor(part.id); setLaborValue(part.labor_hours == null ? '' : String(part.labor_hours)); } }}
+                            title={part.labor_hours == null ? 'Labor not set yet — enter hours, or 0 for no labor' : part.labor_hours === 0 ? 'No labor charged for this part' : undefined}
+                            style={{ fontSize: '14px', fontWeight: 700, color: part.labor_hours == null ? 'var(--text-muted)' : '#c084fc', cursor: isAdmin ? 'pointer' : 'default' }}
                           >
-                            {part.labor_hours > 0 ? `${part.labor_hours}h` : '—'}
+                            {part.labor_hours == null ? '— not set' : `${part.labor_hours}h`}
                             {isAdmin && <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '4px' }}>Edit</span>}
                           </div>
                         )}

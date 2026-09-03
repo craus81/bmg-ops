@@ -117,7 +117,8 @@ export async function POST(req: NextRequest) {
           description: part.display_name || part.description || part.item_number,
           quantity: job.quantity || 1,
           unit_price: part.sales_price || 0,
-          labor_hours: part.labor_hours || 0,
+          // NULL = labor not set on the part (migration 258); the builder flags it.
+          labor_hours: part.labor_hours ?? null,
           is_custom: false,
         });
       } else {

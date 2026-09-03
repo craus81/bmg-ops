@@ -102,7 +102,8 @@ export default function AddToEstimateModal({ part, kit, onClose }: {
         description: part.display_name || part.description || part.item_number,
         quantity: qty,
         unit_price: part.sales_price || 0,
-        labor_hours: part.labor_hours || 0,
+        // NULL = labor not set on the part (the builder flags it) — migration 258.
+        labor_hours: part.labor_hours ?? null,
         is_custom: false,
       }];
     }
@@ -115,7 +116,7 @@ export default function AddToEstimateModal({ part, kit, onClose }: {
         description: m.part.display_name || m.part.marketing_description || m.part.description || m.part.item_number,
         quantity: m.quantity,
         unit_price: m.part.sales_price || 0,
-        labor_hours: m.part.labor_hours || 0,
+        labor_hours: m.part.labor_hours ?? null,
         is_custom: false,
       })),
       // Package-level assembly overhead as its own visible zero-price line,
