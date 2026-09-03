@@ -8,6 +8,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { DropZone } from '@/components/DropZone';
 import { createClient } from '@/lib/supabase-browser';
+import { vinMatchOrFilter, sameVehicleVin } from '@/lib/vin-match';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import VinScanner from '@/components/VinScanner';
 import { theme } from '@/lib/theme';
@@ -194,6 +195,11 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
     soId: string | null;
     customer: string | null;
     autoSelected: boolean;
+    /** Where the VIN was already known: a converted/open estimate, the
+     *  NetSuite sales-order mirror, the Arriving board, or NetSuite itself. */
+    source: 'estimate' | 'sales_order' | 'expected' | 'netsuite';
+    /** Set when the VIN sits on an estimate that has no sales order yet. */
+    estimateNumber?: string | null;
   } | null>(null);
 
   useEffect(() => {
@@ -307,38 +313,103 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   // when it appears in the results. Best-effort — any failure just leaves
   // the manual search exactly as it was.
   const applyVinSoPrefill = async (v: string) => {
-    const { data: ests } = await supabase
-      .from('estimates')
-      .select('id, customer_name, netsuite_so_id, netsuite_so_number, status, updated_at')
-      .eq('vin', v)
-      .not('netsuite_so_id', 'is', null)
-      .not('status', 'in', '("cancelled","rejected","lost")')
-      .order('updated_at', { ascending: false })
-      .limit(1);
-    const est = ests?.[0];
-    if (!est?.netsuite_so_id) return;
-    setVinSoMatch({
-      soNumber: est.netsuite_so_number || null,
-      soId: String(est.netsuite_so_id),
-      customer: est.customer_name || null,
-      autoSelected: false,
-    });
-    if (!est.customer_name) return;
-    setCustomerSearch(est.customer_name);
+    // Everywhere the VIN may already be known, cheapest and most certain
+    // first. Tail matching (src/lib/vin-match.ts) so an estimate entered
+    // with the last 8 still finds this full VIN.
+    const orFilter = vinMatchOrFilter(v);
+    type Hit = {
+      source: 'estimate' | 'sales_order' | 'expected' | 'netsuite';
+      soId: string | null; soNumber: string | null; customer: string | null; estimateNumber?: string | null;
+    };
+    let hit: Hit | null = null;
+
+    // 1. An estimate for this VIN — converted (names the SO outright) or
+    //    still open (names the customer; the SO comes from the search).
+    if (orFilter) {
+      const { data: ests } = await supabase
+        .from('estimates')
+        .select('id, estimate_number, customer_name, netsuite_so_id, netsuite_so_number, status, updated_at, vin')
+        .or(orFilter)
+        .not('status', 'in', '("cancelled","rejected","lost")')
+        .order('updated_at', { ascending: false })
+        .limit(5);
+      const est = (ests || []).find((e: any) => sameVehicleVin(e.vin || '', v));
+      if (est) {
+        hit = {
+          source: 'estimate',
+          soId: est.netsuite_so_id ? String(est.netsuite_so_id) : null,
+          soNumber: est.netsuite_so_number || null,
+          customer: est.customer_name || null,
+          estimateNumber: est.estimate_number || null,
+        };
+      }
+    }
+    // 2. The NetSuite sales-order mirror — the only place that knows SOs
+    //    entered directly in NetSuite (no FleetSuite estimate behind them).
+    if (!hit?.soId && orFilter) {
+      const { data: sos } = await supabase
+        .from('netsuite_sales_orders')
+        .select('netsuite_id, tranid, customer_name, vin, trandate')
+        .or(orFilter)
+        .order('trandate', { ascending: false })
+        .limit(5);
+      const so = (sos || []).find((s: any) => sameVehicleVin(s.vin || '', v));
+      if (so) hit = { source: 'sales_order', soId: String(so.netsuite_id), soNumber: so.tranid || null, customer: so.customer_name || hit?.customer || null };
+    }
+    // 3. The Arriving board's expected row for this VIN.
+    if (!hit?.soId && orFilter) {
+      const { data: rows } = await supabase
+        .from('shop_inbound')
+        .select('netsuite_so_id, netsuite_so_number, customer_name, vin')
+        .eq('status', 'expected')
+        .or(orFilter)
+        .limit(5);
+      const row = (rows || []).find((r: any) => sameVehicleVin(r.vin || '', v));
+      if (row?.netsuite_so_id || row?.customer_name) {
+        hit = { source: 'expected', soId: row.netsuite_so_id ? String(row.netsuite_so_id) : null, soNumber: row.netsuite_so_number || null, customer: row.customer_name || hit?.customer || null };
+      }
+    }
+
+    // 4. Nothing local knows it: ask NetSuite by VIN directly (the SO
+    //    carries custbody_vin_number_). A hit here also prefills the
+    //    customer from the SO itself.
+    if (!hit) {
+      setSoLoading(true);
+      setSoError('');
+      try {
+        const data = await fetchSalesOrdersPage(0, soTypeFilter, '', v);
+        const first = data?.found && Array.isArray(data.data) ? (data.data as NetsuiteSalesOrder[])[0] : null;
+        if (first) {
+          setSalesOrders(data.data);
+          setSoHasMore(!!data.hasMore);
+          setCustomerSearch(first.customer_name || '');
+          setSelectedOrders(prev => (prev.some(o => o.id === first.id) ? prev : [...prev, first]));
+          setVinSoMatch({ source: 'netsuite', soId: String(first.id), soNumber: first.sales_order_number || null, customer: first.customer_name || null, autoSelected: true });
+        }
+      } catch { /* best-effort */ }
+      setSoLoading(false);
+      return;
+    }
+
+    setVinSoMatch({ ...hit, autoSelected: false });
+    if (!hit.customer) return;
+    setCustomerSearch(hit.customer);
     setSoLoading(true);
     setSoError('');
     setSalesOrders([]);
     setSoHasMore(false);
     try {
-      const data = await fetchSalesOrdersPage(0, soTypeFilter, est.customer_name);
+      const data = await fetchSalesOrdersPage(0, soTypeFilter, hit.customer);
       if (data.found && data.data) {
         setSalesOrders(data.data);
         setSoHasMore(!!data.hasMore);
-        const hit = (data.data as NetsuiteSalesOrder[]).find(o =>
-          String(o.id) === String(est.netsuite_so_id) ||
-          (est.netsuite_so_number && String(o.sales_order_number) === String(est.netsuite_so_number)));
-        if (hit) {
-          setSelectedOrders(prev => (prev.some(o => o.id === hit.id) ? prev : [...prev, hit]));
+        const match = hit.soId || hit.soNumber
+          ? (data.data as NetsuiteSalesOrder[]).find(o =>
+              (hit!.soId && String(o.id) === hit!.soId) ||
+              (hit!.soNumber && String(o.sales_order_number) === String(hit!.soNumber)))
+          : null;
+        if (match) {
+          setSelectedOrders(prev => (prev.some(o => o.id === match.id) ? prev : [...prev, match]));
           setVinSoMatch(m => (m ? { ...m, autoSelected: true } : m));
         }
       }
@@ -400,12 +471,15 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   // customerOverride lets the VIN prefill search immediately with the
   // estimate's customer — the setCustomerSearch write above it hasn't
   // rendered yet, so reading state here would race a stale value.
-  const fetchSalesOrdersPage = async (offset: number, typeFilter: typeof soTypeFilter, customerOverride?: string) => {
+  const fetchSalesOrdersPage = async (offset: number, typeFilter: typeof soTypeFilter, customerOverride?: string, vinFilter?: string) => {
     const params = new URLSearchParams({
       customer: (customerOverride ?? customerSearch).trim(),
       limit: String(SO_PAGE),
       offset: String(offset),
     });
+    // VIN search: the SO carries custbody_vin_number_, so a scanned VIN can
+    // find its order with no customer typed (server does a tail match).
+    if (vinFilter && vinFilter.trim()) params.set('vin', vinFilter.trim());
     if (typeFilter !== 'all') params.set('types', typeFilter);
     const res = await fetch(`/api/netsuite/sales-orders?${params.toString()}`);
     return res.json();
@@ -1516,11 +1590,16 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
             border: `1px solid ${vinSoMatch.autoSelected ? 'rgba(52,211,153,0.3)' : 'rgba(251,191,36,0.3)'}`,
             color: vinSoMatch.autoSelected ? '#34d399' : '#fbbf24',
           }}>
-            🔗 This VIN&apos;s estimate converted to {vinSoMatch.soNumber ? `SO #${vinSoMatch.soNumber}` : 'a sales order'}
+            🔗 {vinSoMatch.soId || vinSoMatch.soNumber
+              ? `This VIN is on ${vinSoMatch.soNumber ? `SO #${vinSoMatch.soNumber}` : 'a sales order'}`
+                + (vinSoMatch.source === 'estimate' ? ' (from its estimate)' : vinSoMatch.source === 'expected' ? ' (expected on the Arriving board)' : vinSoMatch.source === 'netsuite' ? ' (found in NetSuite by VIN)' : '')
+              : `This VIN is on ${vinSoMatch.estimateNumber ? `estimate ${vinSoMatch.estimateNumber}` : 'an estimate'} that has no sales order yet`}
             {vinSoMatch.customer ? ` for ${vinSoMatch.customer}` : ''}
             {vinSoMatch.autoSelected
               ? ' — selected below ✓'
-              : ' — results below; pick it (Load more if it isn’t shown, e.g. already billed).'}
+              : vinSoMatch.soId || vinSoMatch.soNumber
+                ? ' — results below; pick it (Load more if it isn’t shown, e.g. already billed).'
+                : ' — the customer is filled in; pick the sales order below once it exists, or continue without one.'}
           </div>
         )}
 

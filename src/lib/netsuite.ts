@@ -237,6 +237,12 @@ export interface SalesOrderSearchOptions {
   limit?: number;
   /** Rows to skip (for "load 20 more"). */
   offset?: number;
+  /** Match on the transaction's VIN (custbody_vin_number_) instead of —
+   *  or as well as — the customer name. Last-8 tail match, so a full VIN
+   *  finds an SO entered with just the tail and vice versa. With a VIN the
+   *  customer name may be empty: this is the check-in's "scan the VIN,
+   *  find the sales order" path. */
+  vin?: string;
   /** Restrict to these record types; omit for all three. */
   types?: SalesOrderSearchType[];
 }
@@ -252,7 +258,8 @@ export async function getOpenSalesOrdersByCustomer(
   error?: string;
 }> {
   const searchTerm = customerName.trim().replace(/'/g, "''");
-  if (!searchTerm) {
+  const vinTail = (opts.vin || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(-8);
+  if (!searchTerm && vinTail.length < 5) {
     return { found: false, count: 0, data: null, hasMore: false, error: 'Customer name cannot be empty' };
   }
 
@@ -290,8 +297,14 @@ export async function getOpenSalesOrdersByCustomer(
       ${typeConditions}
     )
     AND (
-      UPPER(c.companyname) LIKE UPPER('%${searchTerm}%')
-      OR UPPER(c.entityid) LIKE UPPER('%${searchTerm}%')
+      ${[
+        searchTerm
+          ? `(UPPER(c.companyname) LIKE UPPER('%${searchTerm}%') OR UPPER(c.entityid) LIKE UPPER('%${searchTerm}%'))`
+          : null,
+        vinTail.length >= 5
+          ? `UPPER(t.custbody_vin_number_) LIKE '%${vinTail}'`
+          : null,
+      ].filter(Boolean).join('\n      OR ')}
     )
     ORDER BY c.companyname, t.trandate DESC, t.id DESC
     OFFSET ${offset} ROWS FETCH NEXT ${limit + 1} ROWS ONLY
@@ -2358,6 +2371,58 @@ export async function updateInvoiceLocation(
       return { success: false, error: `NetSuite ${response.status}: ${detail}` };
     }
 
+    return { success: true };
+  } catch (e: any) {
+    const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';
+    return { success: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Stamp a VIN on an existing NetSuite sales order (custbody_vin_number_).
+ *
+ * The SO carries the VIN only when it was created from an estimate that
+ * already had one; an SO entered in NetSuite, or converted before the VIN
+ * was known, has none — and until now nothing could set it from FleetSuite.
+ * The check-in is the moment the VIN becomes certain, so the check-in
+ * route calls this (best-effort, tightly bounded so a slow NetSuite never
+ * stalls the check-in). Modeled on updateInvoiceLocation.
+ */
+export async function updateSalesOrderVin(
+  salesOrderId: string | number,
+  vin: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<{ success: boolean; error?: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/salesOrder/${salesOrderId}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'PATCH' });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 10000);
+  try {
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify({ custbody_vin_number_: vin }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
     return { success: true };
   } catch (e: any) {
     const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';

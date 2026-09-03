@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { r2Head } from '@/lib/r2';
+import { updateSalesOrderVin } from '@/lib/netsuite';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -217,7 +218,57 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({ success: true, checkin, photoRowFailures });
+    // ── VIN → the records that were missing it ─────────────────────────
+    // The check-in is the moment the VIN becomes certain. Push it OUT to
+    // the linked estimate (vin + the check-in back-link the estimate's
+    // "Link Checked-In Vehicle" button would otherwise set by hand), the
+    // sales-order mirror, and the NetSuite sales order itself
+    // (custbody_vin_number_) when none of them had one. Never overwrites
+    // a VIN already on a record; best-effort and bounded — the check-in
+    // is saved either way.
+    const vinSync: Record<string, string> = {};
+    try {
+      const soId = body.netsuite_sales_order_id ? String(body.netsuite_sales_order_id) : null;
+      let estimateId: string | null = body.source_estimate_id || null;
+      if (!estimateId && soId) {
+        const { data: est } = await supabase
+          .from('estimates').select('id').eq('netsuite_so_id', soId)
+          .order('updated_at', { ascending: false }).limit(1).maybeSingle();
+        estimateId = est?.id || null;
+      }
+      if (estimateId) {
+        const { data: est } = await supabase
+          .from('estimates').select('id, vin, fleet_checkin_id').eq('id', estimateId).maybeSingle();
+        if (est) {
+          const patch: Record<string, any> = {};
+          if (!(est.vin || '').trim()) patch.vin = vin;
+          if (!est.fleet_checkin_id) patch.fleet_checkin_id = checkin.id;
+          if (Object.keys(patch).length > 0) {
+            const { error } = await supabase.from('estimates').update(patch).eq('id', est.id);
+            vinSync.estimate = error ? `failed: ${error.message}` : Object.keys(patch).join('+');
+          }
+        }
+      }
+      if (soId) {
+        const { data: so } = await supabase
+          .from('netsuite_sales_orders').select('id, vin').eq('netsuite_id', soId).maybeSingle();
+        // The mirror says whether NetSuite already has the VIN; when it
+        // doesn't (or the SO isn't mirrored yet), stamp NetSuite and the
+        // mirror together. Tightly bounded so a slow NetSuite can't stall
+        // the check-in.
+        if (!so || !(so.vin || '').trim()) {
+          const ns = await updateSalesOrderVin(soId, vin, { timeoutMs: 8000 });
+          vinSync.netsuite = ns.success ? 'set' : `failed: ${ns.error}`;
+          if (ns.success && so) {
+            await supabase.from('netsuite_sales_orders').update({ vin }).eq('id', so.id);
+          }
+        }
+      }
+    } catch (err: any) {
+      console.warn('[checkins] VIN write-back skipped:', err?.message || err);
+    }
+
+    return NextResponse.json({ success: true, checkin, photoRowFailures, vinSync });
   } catch (e: any) {
     console.error('check-in create failed:', e);
     return NextResponse.json({ error: e.message || 'Check-in failed' }, { status: 500 });
