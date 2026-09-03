@@ -11,6 +11,7 @@ import { isProofLikeName } from '@/lib/pdf-classify';
 import { recomputePoFulfillment } from '@/lib/scan-match';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { notifyPoImported, countGraphicsLines } from '@/lib/po-import-notify';
+import { sendPoConfirmation } from '@/lib/po-confirmation';
 import { applyInstallPartRule } from '@/lib/po-install-parts';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 
@@ -312,6 +313,19 @@ async function callAnthropicWithRetry(body: any, apiKey: string, maxRetries = 3)
   throw new Error('Max retries exceeded for Anthropic API');
 }
 
+// Buyer Information from the PDF (migration 256). Tolerant of the model
+// returning a nested object or a bare string, and of a stray label.
+const buyerName = (x: any): string | null => {
+  const v = x?.buyer_name ?? x?.buyer?.name ?? null;
+  const s = v == null ? '' : String(v).replace(/^name:\s*/i, '').trim();
+  return s ? s.slice(0, 200) : null;
+};
+const buyerEmail = (x: any): string | null => {
+  const v = x?.buyer_email ?? x?.buyer?.email ?? null;
+  const s = v == null ? '' : String(v).replace(/^email:\s*/i, '').trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s.slice(0, 254) : null;
+};
+
 const PO_EXTRACTION_PROMPT = `You are extracting purchase order data from a PDF document. This is typically a Masterack or similar fleet equipment purchase order sent to BMG Fleet Installation.
 
 CRITICAL: You MUST extract every single line item from the table. Each line item row has: a line number (like 1.000, 2.000), a part number, a description, quantity, unit of measure (EA/PC), and a unit price. Some POs have many line items across multiple pages — extract ALL of them.
@@ -321,6 +335,7 @@ LOOK FOR THESE SPECIFIC ELEMENTS:
 - ORDERED DATE: Format like MM/DD/YY or MM/DD/YYYY
 - REQUESTED DELIVERY DATE: A header-level date the buyer needs the order delivered by. On Masterack POs it is labeled exactly "REQUESTED DELIVERY DATE". If that header field is not present, use the earliest delivery date across the line items.
 - SHIP TO / DELIVER TO: The address block showing the DESTINATION where items should be delivered. IMPORTANT: POs have multiple address blocks — there is usually a "Supplier" or "Vendor" address (this is BMG Fleet Installation's address — IGNORE IT) and a "Ship To" or "Deliver To" address (this is the actual destination — USE THIS ONE). Never use BMG Fleet Installation's own address as the ship_to. The ship_to should be the customer's facility or job site, like a Masterack plant, dealership, or fleet location.
+- BUYER INFORMATION: A block labeled "Buyer Information" with the buyer's Name and Email (and sometimes Phone). This is the person at the customer who sent the PO — we email them a receipt confirmation. Put the name in buyer_name and the email address in buyer_email; null if the block is absent.
 - LINE ITEMS TABLE: Each row starts with a line number (1.000, 2.000, etc.) followed by columns of data
 
 COLUMN IDENTIFICATION — THIS IS CRITICAL:
@@ -362,6 +377,8 @@ Return ONLY valid JSON, no markdown, no backticks, no other text:
   "customer": "Masterack",
   "ordered_date": "03/18/2026",
   "requested_delivery_date": "03/25/2026",
+  "buyer_name": "Aleecia Brock",
+  "buyer_email": "abrock@masterack.com",
   "ship_to": {
     "name": "Masterack - Kansas City",
     "address": "1234 Industrial Blvd",
@@ -562,6 +579,8 @@ export async function POST(req: NextRequest) {
         await supabase.from('purchase_orders').update({
           customer,
           customer_netsuite_id: customerNetsuiteId || existingPO.customer_netsuite_id || null,
+          buyer_name: buyerName(extracted) || existingPO.buyer_name || null,
+          buyer_email: buyerEmail(extracted) || existingPO.buyer_email || null,
           ordered_date: normalizeDate(extracted.ordered_date) || existingPO.ordered_date || null,
           requested_delivery_date: requestedDelivery,
           notes: extracted.notes ? String(extracted.notes) : existingPO.notes,
@@ -625,8 +644,11 @@ export async function POST(req: NextRequest) {
           updated: true,
           actorId,
         });
+        // Receipt confirmation to the buyer — once per PO, so a re-import
+        // only sends if the first one never went out (migration 256).
+        const confirmation = lineInserts.length > 0 ? await sendPoConfirmation(supabase, existingPO.id) : null;
 
-        return NextResponse.json({ status: 'updated', poNumber, poId: existingPO.id, customer, lineCount: lineInserts.length, unmatchedParts, extracted, proofsAttached });
+        return NextResponse.json({ status: 'updated', poNumber, poId: existingPO.id, customer, lineCount: lineInserts.length, unmatchedParts, extracted, proofsAttached, confirmation });
       }
 
       // Create new PO from reviewed data
@@ -643,6 +665,8 @@ export async function POST(req: NextRequest) {
           earliestLineDeliveryDate(extractedLines),
         notes: extracted.notes ? String(extracted.notes) : null,
         ship_to: extracted.ship_to || null,
+        buyer_name: buyerName(extracted),
+        buyer_email: buyerEmail(extracted),
       };
       if (adminUser?.id) insertPayload.created_by = adminUser.id;
 
@@ -699,8 +723,11 @@ export async function POST(req: NextRequest) {
         graphicsCount: countGraphicsLines(lineInserts),
         actorId,
       });
+      // Automatic receipt confirmation to the buyer named on the PO
+      // (Buyer Information block), PO PDF attached — migration 256.
+      const confirmation = lineInserts.length > 0 ? await sendPoConfirmation(supabase, newPO.id) : null;
 
-      return NextResponse.json({ status: 'imported', poNumber, poId: newPO.id, customer, lineCount: lineInserts.length, unmatchedParts, extracted, proofsAttached });
+      return NextResponse.json({ status: 'imported', poNumber, poId: newPO.id, customer, lineCount: lineInserts.length, unmatchedParts, extracted, proofsAttached, confirmation });
     }
 
     if (pdfs.length === 0) {
@@ -1072,6 +1099,8 @@ export async function POST(req: NextRequest) {
       const { error: updateErr } = await supabase.from('purchase_orders').update({
         customer,
         customer_netsuite_id: customerNetsuiteId || existingPO.customer_netsuite_id || null,
+        buyer_name: buyerName(extracted) || existingPO.buyer_name || null,
+        buyer_email: buyerEmail(extracted) || existingPO.buyer_email || null,
         ordered_date: normalizeDate(extracted.ordered_date) || existingPO.ordered_date || null,
         requested_delivery_date: requestedDelivery,
         notes: extracted.notes ? String(extracted.notes) : existingPO.notes,
@@ -1153,8 +1182,10 @@ export async function POST(req: NextRequest) {
         updated: true,
         actorId,
       });
+      const confirmation = lineInserts.length > 0 ? await sendPoConfirmation(supabase, existingPO.id) : null;
 
       return NextResponse.json({
+        confirmation,
         status: 'updated',
         poNumber,
         poId: existingPO.id,
@@ -1189,6 +1220,8 @@ export async function POST(req: NextRequest) {
           earliestLineDeliveryDate(extractedLines),
         notes: extracted.notes ? String(extracted.notes) : null,
         ship_to: extracted.ship_to || null,
+        buyer_name: buyerName(extracted),
+        buyer_email: buyerEmail(extracted),
       };
       if (adminUser?.id) {
         insertPayload.created_by = adminUser.id;
@@ -1276,8 +1309,10 @@ export async function POST(req: NextRequest) {
         graphicsCount: countGraphicsLines(lineInserts),
         actorId,
       });
+      const confirmation = lineInserts.length > 0 ? await sendPoConfirmation(supabase, newPO.id) : null;
 
       return NextResponse.json({
+        confirmation,
         status: 'imported',
         poNumber,
         poId: newPO.id,
