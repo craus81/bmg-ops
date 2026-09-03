@@ -119,7 +119,7 @@ const BILLING_WORKFLOWS: Record<string, string> = {
 
 interface Contact { id: string; name: string; title: string | null; email: string | null; phone: string | null; is_decision_maker: boolean; netsuite_contact_id: string | null }
 interface Opportunity { id: string; title: string; type: string; stage: string; value: number | null; expected_close_date: string | null; created_at: string }
-interface Activity { id: string; type: string; summary: string; created_by: string | null; created_at: string; creator_name?: string | null; email_log_id?: string | null }
+interface Activity { id: string; type: string; summary: string; created_by: string | null; created_at: string; creator_name?: string | null; email_log_id?: string | null; url?: string | null }
 interface Reminder { id: string; title: string; description: string | null; due_at: string }
 interface Tag { id: string; tag: string }
 interface CustDocument {
@@ -962,7 +962,7 @@ export default function CustomerRecordPage() {
     setActsLoadingMore(true);
     const from = activities.length;
     const { data } = await supabase.from('prospect_activities')
-      .select('id, type, summary, created_by, created_at, email_log_id')
+      .select('id, type, summary, created_by, created_at, email_log_id, url')
       .eq('prospect_id', prospect.id)
       .order('created_at', { ascending: false }).order('id')
       .range(from, from + ACTS_PAGE_SIZE - 1);
@@ -982,7 +982,7 @@ export default function CustomerRecordPage() {
   // server-side (it parses the transcript into both).
   const refreshFeed = async (pid: string) => {
     const [aRes, rRes] = await Promise.all([
-      supabase.from('prospect_activities').select('id, type, summary, created_by, created_at, email_log_id').eq('prospect_id', pid).order('created_at', { ascending: false }).order('id').limit(20),
+      supabase.from('prospect_activities').select('id, type, summary, created_by, created_at, email_log_id, url').eq('prospect_id', pid).order('created_at', { ascending: false }).order('id').limit(20),
       supabase.from('prospect_reminders').select('id, title, description, due_at').eq('prospect_id', pid).is('completed_at', null).order('due_at'),
     ]);
     const acts = (aRes.data || []) as Activity[];
@@ -1111,7 +1111,7 @@ export default function CustomerRecordPage() {
       const [cRes, oRes, aRes, tRes, rRes] = await Promise.all([
         supabase.from('prospect_contacts').select('id, name, title, email, phone, is_decision_maker, netsuite_contact_id').eq('prospect_id', p.id).order('is_decision_maker', { ascending: false }),
         supabase.from('prospect_opportunities').select('id, title, type, stage, value, expected_close_date, created_at').eq('prospect_id', p.id).order('created_at', { ascending: false }),
-        supabase.from('prospect_activities').select('id, type, summary, created_by, created_at, email_log_id').eq('prospect_id', p.id).order('created_at', { ascending: false }).order('id').limit(20),
+        supabase.from('prospect_activities').select('id, type, summary, created_by, created_at, email_log_id, url').eq('prospect_id', p.id).order('created_at', { ascending: false }).order('id').limit(20),
         supabase.from('prospect_tags').select('id, tag').eq('prospect_id', p.id),
         supabase.from('prospect_reminders').select('id, title, description, due_at').eq('prospect_id', p.id).is('completed_at', null).order('due_at'),
       ]);
@@ -2427,6 +2427,16 @@ export default function CustomerRecordPage() {
                       title="View the email that was sent"
                       style={{ marginLeft: '6px', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '11px', fontWeight: 700, color: '#60a5fa' }}>
                       View email
+                    </button>
+                  )}
+                  {/* Activities about a record (quote accepted / rejected,
+                      migration 257) carry its deep link — open it, don't
+                      make the reader hunt for the quote. */}
+                  {a.url && (
+                    <button onClick={() => router.push(a.url!)}
+                      title="Open the record this is about"
+                      style={{ marginLeft: '6px', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '11px', fontWeight: 700, color: '#60a5fa' }}>
+                      Open ›
                     </button>
                   )}
                 </span>
