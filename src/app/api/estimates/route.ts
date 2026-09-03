@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { soContentHash } from '@/lib/so-sync';
 import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { logAudit } from '@/lib/audit';
@@ -407,7 +408,33 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      return NextResponse.json({ success: true, id });
+      // ── Sales order still in sync? (migration 259) ──
+      // An estimate that already has a NetSuite sales order is compared
+      // against the contract last pushed; a mismatch flags the row so the
+      // builder can offer "push changes" — never pushed silently.
+      let soOutOfDate = false;
+      let salesOrderNumber: string | null = null;
+      try {
+        const { data: after } = await supabase
+          .from('estimates')
+          .select('netsuite_so_id, netsuite_so_number, so_pushed_hash, labor_hours, labor_hours_override, labor_rate, po_number, estimate_number, vin')
+          .eq('id', id)
+          .maybeSingle();
+        if (after?.netsuite_so_id) {
+          salesOrderNumber = after.netsuite_so_number || null;
+          const nowHash = soContentHash(after, lines.map((l: any, idx: number) => ({
+            item_number: l.item_number || null, quantity: l.quantity, unit_price: l.unit_price, sort_order: idx,
+          })));
+          // A null pushed hash (converted before migration 259) is unknown,
+          // not "in sync" — offer the push with the softer wording client-side.
+          soOutOfDate = after.so_pushed_hash ? nowHash !== after.so_pushed_hash : true;
+          await supabase.from('estimates').update({ so_out_of_date: soOutOfDate }).eq('id', id);
+        }
+      } catch (err: any) {
+        console.warn('[estimates] SO sync check skipped:', err?.message || err);
+      }
+
+      return NextResponse.json({ success: true, id, soOutOfDate, salesOrderNumber });
     } else {
       // ── CREATE new estimate ──
       // The number has a UNIQUE constraint and a 4-char random suffix — two
