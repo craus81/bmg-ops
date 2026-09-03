@@ -646,6 +646,9 @@ export interface NotificationPreferences {
   sms_messages: boolean;
   sms_messages_mode: 'always' | 'unread_only';
   email_messages: boolean;
+  /** Opt-out (migration 254, default true): email on every @mention. Optional
+   *  because rows written before the column existed read it as undefined. */
+  email_mentions?: boolean;
 }
 
 // ═══════════ MESSAGING ═══════════

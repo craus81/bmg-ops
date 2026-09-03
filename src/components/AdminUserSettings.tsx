@@ -31,6 +31,8 @@ interface Prefs {
   notify_sms: boolean;
   sms_messages: boolean;
   email_messages: boolean;
+  /** Opt-out (default true): email on every @mention. */
+  email_mentions: boolean;
   sms_messages_mode: 'always' | 'unread_only';
   phone_number: string | null;
   custom_statuses: string[] | null;
@@ -40,7 +42,7 @@ const DEFAULT_PREFS: Prefs = {
   notify_new_job: true, notify_status_change: true, notify_ready: true,
   notify_ready_for_install: false, notify_invoicing: false, notify_shipped: true,
   notify_new_po: false, notify_in_app: true, notify_email: false, notify_sms: false,
-  sms_messages: false, email_messages: false, sms_messages_mode: 'always',
+  sms_messages: false, email_messages: false, email_mentions: true, sms_messages_mode: 'always',
   phone_number: null, custom_statuses: null,
 };
 
@@ -62,6 +64,7 @@ const DELIVERY_TOGGLES: [keyof Prefs, string][] = [
 const MESSAGE_TOGGLES: [keyof Prefs, string][] = [
   ['sms_messages', 'Text me about direct messages'],
   ['email_messages', 'Email me about direct messages'],
+  ['email_mentions', 'Email me when I\'m @mentioned (on by default)'],
 ];
 
 export default function AdminUserSettings({ userId, userName }: { userId: string; userName: string }) {
@@ -124,6 +127,7 @@ export default function AdminUserSettings({ userId, userName }: { userId: string
             notify_sms: prefs.notify_sms,
             sms_messages: prefs.sms_messages,
             email_messages: prefs.email_messages,
+            email_mentions: prefs.email_mentions ?? true,
             sms_messages_mode: prefs.sms_messages_mode,
             phone_number: prefs.phone_number,
             custom_statuses: prefs.custom_statuses,
