@@ -303,6 +303,7 @@ export default function SettingsPage() {
         sms_messages: false,
         sms_messages_mode: 'always' as const,
         email_messages: false,
+        email_mentions: true,
       });
     }
     setLoading(false);
@@ -330,6 +331,7 @@ export default function SettingsPage() {
       sms_messages: prefs.sms_messages,
       sms_messages_mode: prefs.sms_messages_mode,
       email_messages: prefs.email_messages,
+      email_mentions: prefs.email_mentions ?? true,
       updated_at: new Date().toISOString(),
     };
 
@@ -856,6 +858,16 @@ export default function SettingsPage() {
             <div>
               <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>Email Notifications</div>
               <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>Get an email when someone sends you a chat message.</div>
+            </div>
+          </label>
+
+          {/* Email for @mentions — ON by default (opt-out): being pulled into
+              a job by name has to reach people who aren't in the app. */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+            <input type="checkbox" checked={prefs.email_mentions ?? true} onChange={e => setPrefs({ ...prefs, email_mentions: e.target.checked })} />
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>Email me when I&apos;m mentioned</div>
+              <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>Any @mention in a note — jobs, estimates, POs, vehicles — also sends an email. On for everyone unless you turn it off.</div>
             </div>
           </label>
 

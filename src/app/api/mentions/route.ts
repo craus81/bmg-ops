@@ -150,15 +150,36 @@ export async function POST(req: NextRequest) {
     type: 'mention',
     title: `${actorName} mentioned you${contextLabel ? ` — ${contextLabel}` : ''}`,
     body: excerpt,
-    channels: ['in_app', 'push'] as ('in_app' | 'push')[],
   };
-  const byUrl = new Map<string, string[]>();
+
+  // A mention always emails the person unless THEY turned it off
+  // (notification_preferences.email_mentions, migration 254 — opt-out,
+  // default true; no preferences row means email). In-app + push always
+  // fire. The channels used to be hard-coded to in-app + push, so someone
+  // not in the app never learned they'd been pulled into a job.
+  const emailOff = new Set<string>();
+  const { data: prefRows } = await service
+    .from('notification_preferences')
+    .select('user_id, email_mentions')
+    .in('user_id', [...mentionedIds]);
+  for (const p of prefRows || []) {
+    if (p.email_mentions === false) emailOff.add(String(p.user_id));
+  }
+  const withEmail: ('in_app' | 'push' | 'email')[] = ['in_app', 'push', 'email'];
+  const withoutEmail: ('in_app' | 'push')[] = ['in_app', 'push'];
+
+  // Group by destination URL and by email opt-out, so each notifyMany call
+  // carries one url and one channel set.
+  const groups = new Map<string, string[]>();
   for (const id of mentionedIds) {
     const url = recipientUrls.get(id) || '/home';
-    byUrl.set(url, [...(byUrl.get(url) || []), id]);
+    const key = `${emailOff.has(id) ? '0' : '1'}|${url}`;
+    groups.set(key, [...(groups.get(key) || []), id]);
   }
-  for (const [url, ids] of byUrl) {
-    await notifyMany(ids, { ...payload, url });
+  for (const [key, ids] of groups) {
+    const email = key.startsWith('1|');
+    const url = key.slice(2);
+    await notifyMany(ids, { ...payload, url, channels: email ? withEmail : withoutEmail });
   }
 
   return NextResponse.json({ mentioned: mentionedIds.size });
