@@ -150,6 +150,9 @@ interface Estimate {
   grand_total: number;
   netsuite_estimate_id: string | null;
   netsuite_estimate_number: string | null;
+  /** Migration 259: the SO no longer matches the estimate (set on save). */
+  so_out_of_date?: boolean | null;
+  so_pushed_hash?: string | null;
   netsuite_so_id: string | null;
   netsuite_so_number: string | null;
   // Delivery state of the LATEST approval email (Resend webhook — same
@@ -1420,6 +1423,11 @@ export default function EstimatesPage() {
         }
         await loadEstimates(true);
         setSaving(false);
+        // The estimate already has a sales order and this save changed
+        // what the SO carries (migration 259): ask, never push silently.
+        if (data.soOutOfDate && savedId) {
+          await offerSalesOrderPush(savedId, data.salesOrderNumber || null);
+        }
         return savedId;
       } else {
         await dialog.alert('Save failed: ' + (data.error || 'Unknown error'));
@@ -1429,6 +1437,48 @@ export default function EstimatesPage() {
     }
     setSaving(false);
     return null;
+  };
+
+  // ── Push estimate changes to its NetSuite sales order (migration 259) ──
+  // Never automatic: a save that changes what the SO carries asks first;
+  // the amber SO banner offers it again while the estimate is out of date.
+  const [pushingSo, setPushingSo] = useState(false);
+
+  const pushSalesOrderChanges = async (estimateId: string, soNumber: string | null) => {
+    if (pushingSo) return;
+    const reason = await dialog.prompt(
+      `Replace the lines on ${soNumber ? `SO #${soNumber}` : 'the sales order'} in NetSuite with this estimate's current lines, labor, reference number and VIN? NetSuite refuses changes to lines already billed or fulfilled. Why is the sales order changing?`,
+      '',
+      { title: 'Push changes to sales order', placeholder: 'e.g. customer added two units by phone', confirmLabel: 'Push to NetSuite' },
+    );
+    if (!reason?.trim()) return;
+    setPushingSo(true);
+    try {
+      const res = await fetch(`/api/estimates/${estimateId}/push-so`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        await dialog.alert(`Sales order not updated: ${data.error || `HTTP ${res.status}`}`);
+        return;
+      }
+      await loadEstimates(true);
+      await dialog.alert(`${data.salesOrderNumber ? `SO #${data.salesOrderNumber}` : 'The sales order'} now carries ${data.lines} line${data.lines !== 1 ? 's' : ''} from this estimate${data.laborItemNumber ? ` (labor on ${data.laborItemNumber})` : ''}.`);
+    } catch {
+      await dialog.alert('Network error — the sales order was not changed. Try again.');
+    } finally {
+      setPushingSo(false);
+    }
+  };
+
+  const offerSalesOrderPush = async (estimateId: string, soNumber: string | null) => {
+    const go = await dialog.confirm(
+      `This estimate has ${soNumber ? `Sales Order SO #${soNumber}` : 'a sales order'} in NetSuite, and it no longer matches what you just saved. Push these changes to the sales order now? (You can also do it later from the SO banner.)`,
+      { confirmLabel: 'Push to Sales Order', cancelLabel: 'Not now' },
+    );
+    if (!go) return;
+    await pushSalesOrderChanges(estimateId, soNumber);
   };
 
   // ── Quick graphics entry (no estimator) ──
@@ -4301,16 +4351,34 @@ export default function EstimatesPage() {
           </button>
         )}
 
-        {/* Show SO number if already converted */}
-        {editingId && estimates.find(e => e.id === editingId)?.netsuite_so_id && (
-          <div style={{
-            width: '100%', padding: '10px 12px', borderRadius: '10px',
-            background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)',
-            fontSize: '12px', fontWeight: 700, color: '#22c55e', textAlign: 'center',
-          }}>
-            Sales Order: SO #{estimates.find(e => e.id === editingId)?.netsuite_so_number || estimates.find(e => e.id === editingId)?.netsuite_so_id}
-          </div>
-        )}
+        {/* Show SO number if already converted — amber with a Push button
+            while the estimate no longer matches the sales order (migration
+            259), so a declined or failed push isn't lost. */}
+        {editingId && estimates.find(e => e.id === editingId)?.netsuite_so_id && (() => {
+          const est = estimates.find(e => e.id === editingId)!;
+          const stale = !!est.so_out_of_date;
+          return (
+            <div style={{
+              width: '100%', padding: '10px 12px', borderRadius: '10px',
+              background: stale ? 'rgba(245,158,11,0.08)' : 'rgba(34,197,94,0.08)',
+              border: `1px solid ${stale ? 'rgba(245,158,11,0.35)' : 'rgba(34,197,94,0.2)'}`,
+              fontSize: '12px', fontWeight: 700, color: stale ? '#f59e0b' : '#22c55e', textAlign: 'center',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', flexWrap: 'wrap',
+            }}>
+              <span>Sales Order: SO #{est.netsuite_so_number || est.netsuite_so_id}{stale ? ' — out of date with this estimate' : ''}</span>
+              {stale && (
+                <button
+                  onClick={() => pushSalesOrderChanges(est.id, est.netsuite_so_number || null)}
+                  disabled={pushingSo}
+                  title="Replace the sales order's lines in NetSuite with this estimate's current lines (admin, with a recorded reason)"
+                  style={{ padding: '5px 10px', borderRadius: '7px', border: '1px solid rgba(245,158,11,0.5)', background: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontSize: '11px', fontWeight: 800, cursor: pushingSo ? 'wait' : 'pointer' }}
+                >
+                  {pushingSo ? 'Pushing…' : 'Push changes to SO'}
+                </button>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Duplicate (R3-17) — copy header + lines into a fresh draft. On a
             locked source this is the revision escape hatch; on an editable

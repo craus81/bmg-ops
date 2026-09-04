@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createSalesOrder, findLocation, suiteqlQuery, closeNetSuiteEstimate } from '@/lib/netsuite';
-import { resolveLaborItem } from '@/lib/labor-item';
+import { createSalesOrder, findLocation, closeNetSuiteEstimate } from '@/lib/netsuite';
+import { buildSoLineItems, soContentHash } from '@/lib/so-sync';
 import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
@@ -22,25 +22,6 @@ const ConvertSchema = z.object({
    *  409s — the gate is a blocking check, not a silent pass. */
   skipGraphicsCheck: z.boolean().optional().default(false),
 });
-
-/**
- * Resolve the NetSuite item id for the FS-CUSTOM placeholder used to land
- * custom estimate line items on the SO. Admins create the item once in NS
- * (Item Number = FS-CUSTOM, any NonInventory or Service item type) and any
- * estimate line without a netsuite_item_id is pushed as FS-CUSTOM with the
- * line's own description carrying the detail.
- */
-async function findCustomItemId(): Promise<string | null> {
-  try {
-    const res = await suiteqlQuery(
-      "SELECT i.id FROM item i WHERE UPPER(i.itemid) = 'FS-CUSTOM' FETCH FIRST 1 ROWS ONLY"
-    );
-    const id = res?.items?.[0]?.id;
-    return id ? id.toString() : null;
-  } catch {
-    return null;
-  }
-}
 
 export async function POST(req: NextRequest) {
   const auth = await requireFeature(req, 'estimates');
@@ -161,77 +142,14 @@ export async function POST(req: NextRequest) {
     const lineItems = (estimate.estimate_line_items || [])
       .sort((a: any, b: any) => (a.sort_order || 0) - (b.sort_order || 0));
 
-    const soLineItems: { itemId: string; quantity: number; rate: number; description?: string }[] = [];
-    const customLineDescriptions: string[] = [];
-    const unmappedLineDescriptions: string[] = [];
-
-    let customItemId: string | null = null;
-
-    for (const li of lineItems) {
-      // qty-0 "included" lines total to $0 on the signed document — skip
-      // them rather than coercing to 1 unit at full rate (Round 3 finding).
-      if ((parseFloat(li.quantity) || 0) <= 0) continue;
-      if (li.netsuite_item_id) {
-        const lineDesc = [li.description, li.notes].filter(Boolean).join(' — ')
-          || li.item_number
-          || undefined;
-        soLineItems.push({
-          itemId: li.netsuite_item_id,
-          quantity: parseFloat(li.quantity),
-          rate: parseFloat(li.unit_price) || 0,
-          description: lineDesc,
-        });
-        continue;
-      }
-
-      // Custom line — route through the FS-CUSTOM placeholder item. Admin
-      // must create the item in NS (Item Number = FS-CUSTOM) before the
-      // first custom push.
-      if (customItemId === null) customItemId = await findCustomItemId();
-      if (!customItemId) {
-        unmappedLineDescriptions.push(li.item_number || li.description || 'Custom item');
-        continue;
-      }
-
-      const label = li.item_number
-        ? `${li.item_number}${li.description ? ' — ' + li.description : ''}`
-        : (li.description || 'Custom item');
-      const fullDesc = li.notes ? `${label} (${li.notes})` : label;
-      soLineItems.push({
-        itemId: customItemId,
-        quantity: parseFloat(li.quantity),
-        rate: parseFloat(li.unit_price) || 0,
-        description: fullDesc,
-      });
-      customLineDescriptions.push(label);
-    }
-
-    // Add labor as a line item if there are labor hours. When no LABOR item
-    // exists in NetSuite the SO silently shipped short by the labor amount —
-    // now the response carries laborSkipped so the user is told.
-    const laborHours = parseFloat(estimate.labor_hours_override ?? estimate.labor_hours) || 0;
-    const laborRate = parseFloat(estimate.labor_rate) || 85;
-    let laborSkipped = false;
-    let laborItemNumber: string | null = null;
-    if (laborHours > 0) {
-      try {
-        // Same resolver as estimates/push — the two routes used different
-        // LIKE patterns, so the pushed estimate and its SO could bill labor
-        // to different NetSuite items (Round 1 finding, closed in Round 3).
-        const { item: laborItem } = await resolveLaborItem(supabase);
-        if (laborItem) {
-          laborItemNumber = laborItem.itemNumber;
-          soLineItems.push({
-            itemId: laborItem.id,
-            quantity: laborHours,
-            rate: laborRate,
-            description: `Labor - ${laborHours} hrs @ $${laborRate}/hr`,
-          });
-        } else {
-          laborSkipped = true;
-        }
-      } catch { laborSkipped = true; }
-    }
+    // ONE line builder shared with push-so (src/lib/so-sync.ts) — creating
+    // the SO and later updating it map lines, custom lines and labor the
+    // same way. A missing labor item is reported (laborSkipped), never a
+    // silent no-op.
+    const {
+      soLineItems, customLineDescriptions, unmappedLineDescriptions,
+      laborSkipped, laborItemNumber, laborHours, laborRate,
+    } = await buildSoLineItems(supabase, estimate, lineItems);
 
     if (soLineItems.length === 0) {
       return NextResponse.json({
@@ -346,6 +264,11 @@ export async function POST(req: NextRequest) {
         // so 'accepted' is now a truthful consequence, and the funnel report
         // keeps its won signal for phone/email-approved deals.
         status: 'accepted',
+        // The SO contract as just pushed (migration 259) — the save route
+        // compares against it to flag "sales order out of date".
+        so_pushed_hash: soContentHash(estimate, lineItems),
+        so_synced_at: new Date().toISOString(),
+        so_out_of_date: false,
       })
       .eq('id', estimateId)
       .is('netsuite_so_id', null)

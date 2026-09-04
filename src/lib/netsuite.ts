@@ -2433,6 +2433,74 @@ export async function updateSalesOrderVin(
 }
 
 /**
+ * Replace an existing sales order's lines (and reference/VIN/memo) with the
+ * estimate's current ones — the "push changes to the sales order" path
+ * (migration 259). `?replace=item` makes NetSuite replace the whole item
+ * sublist rather than append (same trick as the estimate re-push). Lines
+ * with a rate keep the "Custom" price level pin exactly as createSalesOrder
+ * sets it, so NetSuite doesn't re-source the money from the customer's
+ * price level. Never called automatically — a person confirms first.
+ */
+export async function updateSalesOrderLines(
+  salesOrderId: string | number,
+  payload: {
+    lineItems: { itemId: string | number; quantity: number; rate: number; description?: string }[];
+    poNumber?: string | null;
+    memo?: string | null;
+    vin?: string | null;
+  },
+): Promise<{ success: boolean; error?: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/salesOrder/${salesOrderId}?replace=item`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'PATCH' });
+
+  const items = payload.lineItems.map((li) => ({
+    item: { id: li.itemId },
+    quantity: li.quantity,
+    ...(li.rate > 0 ? { price: { id: '-1' }, rate: li.rate } : {}),
+    ...(li.description ? { description: li.description } : {}),
+  }));
+  const body: any = { item: { items } };
+  if (payload.poNumber?.trim()) body.otherRefNum = payload.poNumber.trim();
+  if (payload.memo) body.memo = payload.memo;
+  if (payload.vin !== undefined) body.custbody_vin_number_ = payload.vin || null;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      // NetSuite's own message: a billed/fulfilled line it refuses to
+      // change, a closed period, a missing permission — say which.
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+    return { success: true };
+  } catch (e: any) {
+    const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';
+    return { success: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Recent customer payments + credit memos via the financials RESTlet — the
  * SuiteQL integration role cannot see CustPymt at all (see the RESTlet
  * header), so the RESTlet's own role answers instead. Requires the updated
