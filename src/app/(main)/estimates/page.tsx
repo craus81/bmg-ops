@@ -1430,7 +1430,12 @@ export default function EstimatesPage() {
         }
         return savedId;
       } else {
-        await dialog.alert('Save failed: ' + (data.error || 'Unknown error'));
+        // A schema rejection (400) names the offending field in `details`
+        // — show it, or the message is an unactionable "Invalid request".
+        const details = Array.isArray(data.details)
+          ? data.details.map((d: { path?: string; message?: string }) => [d.path, d.message].filter(Boolean).join(': ')).filter(Boolean).join('; ')
+          : '';
+        await dialog.alert('Save failed: ' + (data.error || 'Unknown error') + (details ? ` (${details})` : ''));
       }
     } catch (err) {
       await dialog.alert('Network error — please try again');
