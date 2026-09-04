@@ -17,7 +17,10 @@ const LineItemSchema = z.object({
   description: z.string().max(2000).optional().nullable(),
   quantity: z.union([z.number(), z.string()]).optional(),
   unit_price: z.union([z.number(), z.string()]).optional(),
-  labor_hours: z.union([z.number(), z.string()]).optional(),
+  // NULL = the part had no labor set when the line was added (migration
+  // 258) — the builder sends it through as null, so it must be accepted
+  // here or every estimate with an unpriced part fails to save.
+  labor_hours: z.union([z.number(), z.string()]).optional().nullable(),
   is_custom: z.boolean().optional(),
   notes: z.string().max(2000).optional().nullable(),
   // Which wrap quote produced the line (Add Graphics flow) — must survive
