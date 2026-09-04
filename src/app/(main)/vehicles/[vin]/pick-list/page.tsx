@@ -8,6 +8,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { DropZone } from '@/components/DropZone';
 import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
 import CompletionModal from '@/components/CompletionModal';
+import PhotoSession from '@/components/PhotoSession';
 import { PartLabel } from '@/components/PartLabel';
 import { openOrCreateVehicleThread } from '@/lib/customer-thread';
 import { deepLinks } from '@/lib/deep-links';
@@ -114,6 +115,8 @@ export default function VehiclePickListPage() {
 
   const beforeFileRef = useRef<HTMLInputElement>(null);
   const completionFileRef = useRef<HTMLInputElement>(null);
+  // In-app camera session (PhotoSession): tap once, shoot many, Done.
+  const [photoSession, setPhotoSession] = useState<'before' | 'completion' | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -569,20 +572,30 @@ export default function VehiclePickListPage() {
                 fontSize: '12px', marginBottom: '6px',
               }}
             />
-            <button
-              onClick={() => beforeFileRef.current?.click()}
-              disabled={uploadingPhotoType === 'before'}
-              style={{
-                width: '100%', padding: '8px 12px', borderRadius: '8px',
-                border: '1px dashed var(--border)', background: 'transparent',
-                fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-              }}
-            >{uploadingPhotoType === 'before' ? 'Uploading...' : '+ Take / upload'}</button>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                onClick={() => setPhotoSession('before')}
+                disabled={uploadingPhotoType === 'before'}
+                style={{
+                  flex: 1, padding: '8px 12px', borderRadius: '8px',
+                  border: '1px solid rgba(59,130,246,0.35)', background: 'rgba(59,130,246,0.08)', color: '#3b82f6',
+                  fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                }}
+              >{uploadingPhotoType === 'before' ? 'Uploading...' : '📷 Take photos'}</button>
+              <button
+                onClick={() => beforeFileRef.current?.click()}
+                disabled={uploadingPhotoType === 'before'}
+                style={{
+                  padding: '8px 12px', borderRadius: '8px',
+                  border: '1px dashed var(--border)', background: 'transparent',
+                  fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                }}
+              >Upload</button>
+            </div>
             <input
               ref={beforeFileRef}
               type="file"
               accept="image/*"
-              capture="environment"
               multiple
               onChange={onPhotoPick('before')}
               style={{ display: 'none' }}
@@ -616,21 +629,32 @@ export default function VehiclePickListPage() {
                   fontSize: '12px', marginBottom: '6px',
                 }}
               />
-              <button
-                onClick={() => completionFileRef.current?.click()}
-                disabled={uploadingPhotoType === 'completion' || !canComplete}
-                style={{
-                  width: '100%', padding: '8px 12px', borderRadius: '8px',
-                  border: '1px dashed var(--border)', background: 'transparent',
-                  fontSize: '12px', fontWeight: 700, cursor: canComplete ? 'pointer' : 'not-allowed',
-                  opacity: canComplete ? 1 : 0.5,
-                }}
-              >{uploadingPhotoType === 'completion' ? 'Uploading...' : '+ Take / upload'}</button>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button
+                  onClick={() => setPhotoSession('completion')}
+                  disabled={uploadingPhotoType === 'completion' || !canComplete}
+                  style={{
+                    flex: 1, padding: '8px 12px', borderRadius: '8px',
+                    border: '1px solid rgba(34,197,94,0.35)', background: 'rgba(34,197,94,0.08)', color: '#16a34a',
+                    fontSize: '12px', fontWeight: 700, cursor: canComplete ? 'pointer' : 'not-allowed',
+                    opacity: canComplete ? 1 : 0.5,
+                  }}
+                >{uploadingPhotoType === 'completion' ? 'Uploading...' : '📷 Take photos'}</button>
+                <button
+                  onClick={() => completionFileRef.current?.click()}
+                  disabled={uploadingPhotoType === 'completion' || !canComplete}
+                  style={{
+                    padding: '8px 12px', borderRadius: '8px',
+                    border: '1px dashed var(--border)', background: 'transparent',
+                    fontSize: '12px', fontWeight: 700, cursor: canComplete ? 'pointer' : 'not-allowed',
+                    opacity: canComplete ? 1 : 0.5,
+                  }}
+                >Upload</button>
+              </div>
               <input
                 ref={completionFileRef}
                 type="file"
                 accept="image/*"
-                capture="environment"
                 multiple
                 onChange={onPhotoPick('completion')}
                 style={{ display: 'none' }}
@@ -644,6 +668,20 @@ export default function VehiclePickListPage() {
       <div style={{ marginBottom: '16px' }}>
         <VehiclePhotoTimeline vin={vin} refreshKey={photoRefreshKey} variant="internal" />
       </div>
+
+      <PhotoSession
+        open={photoSession !== null}
+        title={photoSession === 'before' ? 'Check-in photos' : 'Completion photos'}
+        subtitle={vehicle ? `${[vehicle.vehicle_year, vehicle.vehicle_make, vehicle.vehicle_model].filter(Boolean).join(' ') || vin} — tap Done when finished` : undefined}
+        onShot={(file, i) => {
+          if (!photoSession) return;
+          // The caption applies to the first shot of the session, like a multi-select.
+          const caption = photoSession === 'before' ? beforeCaption : completionCaption;
+          return uploadPhoto(photoSession, file, i === 0 ? caption : undefined);
+        }}
+        onDone={() => { if (photoSession === 'before') setBeforeCaption(''); else setCompletionCaption(''); }}
+        onClose={() => setPhotoSession(null)}
+      />
 
       {/* Mark Complete UX lives in CompletionModal. The compact summary above
           is the entry point; the modal renders the full checklist + photo

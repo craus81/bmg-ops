@@ -11,6 +11,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { vinMatchOrFilter, sameVehicleVin } from '@/lib/vin-match';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import VinScanner from '@/components/VinScanner';
+import PhotoSession from '@/components/PhotoSession';
 import { theme } from '@/lib/theme';
 import { storage } from '@/lib/storage';
 import { firstGraphicsMatch } from '@/lib/graphics-detection';
@@ -131,8 +132,8 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   const [damageNote, setDamageNote] = useState('');
   const [photosUploaded, setPhotosUploaded] = useState(0);
   const [photoWarning, setPhotoWarning] = useState<string | null>(null);
-  const photoCameraRef = useRef<HTMLInputElement>(null);
-  const damageCameraRef = useRef<HTMLInputElement>(null);
+  // In-app camera session (PhotoSession): tap once, shoot many, Done.
+  const [photoSession, setPhotoSession] = useState<'checkin' | 'damage' | null>(null);
 
   const stagePhotos = (files: FileList | File[] | null): { file: File; preview: string }[] => {
     if (!files) return [];
@@ -2192,24 +2193,22 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
           >
             Drop photos here, or tap to pick from your device
           </DropZone>
-          <input
-            ref={photoCameraRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            multiple
-            hidden
-            onChange={(e) => { addCheckinPhotos(e.target.files); e.target.value = ''; }}
+          <PhotoSession
+            open={photoSession !== null}
+            title={photoSession === 'damage' ? 'Damage on arrival' : 'Check-in photos'}
+            subtitle={photoSession === 'damage' ? 'Photograph anything pre-existing — tap Done when finished' : 'Walk around the vehicle — tap Done when finished'}
+            onDone={(files) => { if (photoSession === 'damage') addDamagePhotos(files); else addCheckinPhotos(files); }}
+            onClose={() => setPhotoSession(null)}
           />
           <button
             type="button"
-            onClick={() => photoCameraRef.current?.click()}
+            onClick={() => setPhotoSession('checkin')}
             style={{
               marginTop: '8px', width: '100%', padding: '10px', borderRadius: '10px',
               border: `1px solid ${theme.border}`, background: 'transparent',
               color: theme.textPrimary, fontSize: '12px', fontWeight: 700, cursor: 'pointer',
             }}
-          >📷 Take Photo</button>
+          >📷 Take Photos</button>
         </div>
 
         {/* Damage on arrival — pre-existing damage gets photographed as
@@ -2259,19 +2258,10 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
               }}
             />
           )}
-          <input
-            ref={damageCameraRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            multiple
-            hidden
-            onChange={(e) => { addDamagePhotos(e.target.files); e.target.value = ''; }}
-          />
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
               type="button"
-              onClick={() => damageCameraRef.current?.click()}
+              onClick={() => setPhotoSession('damage')}
               style={{
                 flex: 1, padding: '10px', borderRadius: '10px',
                 border: '1px solid rgba(251,191,36,0.35)', background: 'transparent',

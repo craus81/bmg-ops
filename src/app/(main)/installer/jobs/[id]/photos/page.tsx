@@ -5,6 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { DropZone } from '@/components/DropZone';
+import PhotoSession from '@/components/PhotoSession';
 import { storageDownloadUrl } from '@/lib/storage';
 
 // storage_path carries either the full R2 key ('photos/cni-photos/…') or a
@@ -44,6 +45,8 @@ export default function InstallerPhotoUploadPage() {
   const { user } = useAuth();
   const supabase = createClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // In-app camera session (PhotoSession): tap once, shoot many, Done.
+  const [photoSession, setPhotoSession] = useState(false);
 
   const [job, setJob] = useState<any>(null);
   const [vins, setVins] = useState<any[]>([]);
@@ -282,7 +285,7 @@ export default function InstallerPhotoUploadPage() {
 
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => setPhotoSession(true)}
               disabled={uploading}
               style={{
                 flex: 1, padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: 700,
@@ -293,9 +296,26 @@ export default function InstallerPhotoUploadPage() {
                 ? uploadProgress
                   ? `Uploading ${uploadProgress.done}/${uploadProgress.total}...`
                   : 'Uploading...'
-                : 'Take / Choose Photos'}
+                : '📷 Take Photos'}
+            </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              style={{
+                padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: 700,
+                background: 'transparent', color: 'var(--text-primary)', border: '1px dashed var(--border)',
+              }}
+            >
+              Choose
             </button>
           </div>
+          <PhotoSession
+            open={photoSession}
+            title={`${TYPE_LABELS[selectedType] || selectedType} photos`}
+            subtitle="Tap Done when finished — each shot uploads as you go"
+            onShot={(file) => uploadPhotos([file])}
+            onClose={() => setPhotoSession(false)}
+          />
         </DropZone>
       )}
 
