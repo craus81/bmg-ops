@@ -69,7 +69,7 @@ export function getRequestUserAgent(req: NextRequest | Request): string {
  * the caller should respond 429. Records the attempt on each call so the
  * window rolls naturally.
  */
-export async function checkRateLimit(ip: string, action: string): Promise<boolean> {
+export async function checkRateLimit(ip: string, action: string, maxAttempts: number = RATE_LIMIT_MAX_ATTEMPTS): Promise<boolean> {
   if (!ip || ip === 'unknown') return true; // can't rate-limit without IP
   const supabase = getServiceClient();
   const cutoff = new Date(Date.now() - RATE_LIMIT_WINDOW_MS).toISOString();
@@ -82,7 +82,7 @@ export async function checkRateLimit(ip: string, action: string): Promise<boolea
     .gt('attempted_at', cutoff);
 
   const attempts = count || 0;
-  if (attempts >= RATE_LIMIT_MAX_ATTEMPTS) return false;
+  if (attempts >= maxAttempts) return false;
 
   await supabase.from('approval_rate_limits').insert({
     ip_address: ip,

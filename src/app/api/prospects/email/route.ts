@@ -6,6 +6,7 @@ import { sendEmailDetailed } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { r2PublicUrl } from '@/lib/r2';
 import { getEmailSignature, renderSignatureHtml, type EmailSignature } from '@/lib/email-signature';
+import { ensurePortalLink, portalLinkUrl } from '@/lib/po-portal-link';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,6 +44,13 @@ const Schema = z.object({
    * application" action; the send is logged as kind credit_app_invite.
    */
   includeCreditAppLink: z.boolean().optional().default(false),
+  /**
+   * Appends the "View your purchase order status" CTA linking to the
+   * customer's PO-status portal (migration 260), minting the customer's
+   * portal link if none exists yet. Needs customerId or netsuiteCustomerId.
+   * Logged as kind po_portal_link.
+   */
+  includePortalLink: z.boolean().optional().default(false),
 });
 
 const esc = (s: string) => s
@@ -55,6 +63,15 @@ function creditAppCtaHtml(): string {
       <div style="margin:20px 0;text-align:center;">
         <a href="${esc(link)}" style="display:inline-block;background:#1a2b36;color:#ffffff;text-decoration:none;font-size:14px;font-weight:700;padding:12px 28px;border-radius:8px;">Complete your credit application</a>
         <div style="font-size:11px;color:#9ca3af;margin-top:8px;">Or copy this link: ${esc(link)}</div>
+      </div>`;
+}
+
+function portalCtaHtml(link: string): string {
+  return `
+      <div style="margin:20px 0;text-align:center;">
+        <a href="${esc(link)}" style="display:inline-block;background:#1a2b36;color:#ffffff;text-decoration:none;font-size:14px;font-weight:700;padding:12px 28px;border-radius:8px;">View your purchase order status</a>
+        <div style="font-size:11px;color:#9ca3af;margin-top:8px;">Or copy this link: ${esc(link)}</div>
+        <div style="font-size:11px;color:#9ca3af;margin-top:4px;">This link is private to your company — please don't forward it outside your team.</div>
       </div>`;
 }
 
@@ -98,14 +115,35 @@ export async function POST(req: NextRequest) {
     // Sender's signature — in the preview too, so what they see is what goes.
     const signature = await getEmailSignature(supabase, auth.user?.id);
 
+    // The portal CTA: resolve the customer, mint the link if needed. Only on
+    // a real send or a preview — never client-supplied.
+    let portalCta = '';
+    if (p.includePortalLink) {
+      let q = supabase.from('customers').select('id, netsuite_id, portal_token, portal_token_created_at');
+      q = p.customerId ? q.eq('id', p.customerId) : q.eq('netsuite_id', p.netsuiteCustomerId || '');
+      const { data: cust } = await q.maybeSingle();
+      if (!cust || !cust.netsuite_id) {
+        return NextResponse.json({ error: 'This customer has no NetSuite id yet, so there is no purchase-order portal to link.' }, { status: 400 });
+      }
+      // A preview mints nothing (standard rule) — when no link exists yet the
+      // preview shows a placeholder; the real send issues the token.
+      const link = p.preview && !cust.portal_token
+        ? { token: 'link-issued-when-sent' }
+        : await ensurePortalLink(supabase, cust);
+      portalCta = portalCtaHtml(portalLinkUrl(link.token));
+    }
+
     const subject = p.subject
-      || (p.includeCreditAppLink ? `Credit application — ${company?.name || 'BMG Fleet'}` : `Message from ${company?.name || 'BMG Fleet'}`);
+      || (p.includeCreditAppLink ? `Credit application — ${company?.name || 'BMG Fleet'}`
+        : p.includePortalLink ? `Your purchase order status — ${company?.name || 'BMG Fleet'}`
+        : `Message from ${company?.name || 'BMG Fleet'}`);
     const defaultInviteMsg = 'To set up net payment terms with us, please complete our credit application using the button below. It takes about ten minutes, and our team reviews applications within 2-3 business days.';
+    const defaultPortalMsg = 'You can now check the status of every purchase order you send us — what we have received, what is in production, what has shipped, and which vehicles are done — at any time using the button below. No login needed; bookmark the link and share it with your team.';
     const html = buildEmailHtml(
       company, logoUrl,
-      p.message || (p.includeCreditAppLink ? defaultInviteMsg : ''),
+      p.message || (p.includeCreditAppLink ? defaultInviteMsg : p.includePortalLink ? defaultPortalMsg : ''),
       signature,
-      p.includeCreditAppLink ? creditAppCtaHtml() : '',
+      (p.includeCreditAppLink ? creditAppCtaHtml() : '') + portalCta,
     );
 
     if (p.preview) {
@@ -117,7 +155,7 @@ export async function POST(req: NextRequest) {
     }
     // A credit-app invite's substance is the CTA button; the personal
     // message is optional there (the preview shows the default line).
-    if (!p.message.trim() && !p.includeCreditAppLink) {
+    if (!p.message.trim() && !p.includeCreditAppLink && !p.includePortalLink) {
       return NextResponse.json({ error: 'Write a message before sending.' }, { status: 400 });
     }
 
@@ -128,7 +166,7 @@ export async function POST(req: NextRequest) {
     const { ok } = await sendEmailDetailed(
       p.emails, subject, html, undefined, undefined, auth.user?.email || undefined, bcc,
       {
-        kind: p.includeCreditAppLink ? 'credit_app_invite' : 'customer_email',
+        kind: p.includeCreditAppLink ? 'credit_app_invite' : p.includePortalLink ? 'po_portal_link' : 'customer_email',
         cc: p.cc,
         sentBy: auth.user?.id,
         contextUrl,
