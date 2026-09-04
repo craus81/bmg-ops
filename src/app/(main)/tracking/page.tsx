@@ -21,6 +21,7 @@ import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS, 
 import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
 import CompletionModal from '@/components/CompletionModal';
+import PhotoSession from '@/components/PhotoSession';
 import { useDialog } from '@/components/DialogProvider';
 import { DropZone } from '@/components/DropZone';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
@@ -165,7 +166,8 @@ export default function TrackingPage() {
   const [notesSaving, setNotesSaving] = useState<string | null>(null);
   const [completionModalVehicleId, setCompletionModalVehicleId] = useState<string | null>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
+  // In-app camera session (PhotoSession) — which vehicle is being photographed.
+  const [photoSessionVehicle, setPhotoSessionVehicle] = useState<string | null>(null);
 
   // Notes state
   interface VehicleNote {
@@ -2836,7 +2838,7 @@ export default function TrackingPage() {
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setPhotoType('completion');
-                                cameraInputRef.current?.click();
+                                setPhotoSessionVehicle(vehicle.id);
                               }}
                               style={{
                                 flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
@@ -2886,7 +2888,7 @@ export default function TrackingPage() {
                         {showCompletionPrompt !== vehicle.id && (
                           <div style={{ display: 'flex', gap: '6px' }}>
                             <button
-                              onClick={(e) => { e.stopPropagation(); cameraInputRef.current?.click(); }}
+                              onClick={(e) => { e.stopPropagation(); setPhotoSessionVehicle(vehicle.id); }}
                               disabled={photoUploading}
                               style={{
                                 padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
@@ -2934,22 +2936,6 @@ export default function TrackingPage() {
                       </div>
 
                       {/* Hidden file inputs */}
-                      <input
-                        ref={cameraInputRef}
-                        type="file"
-                        accept="image/*"
-                        capture="environment"
-                        multiple
-                        style={{ display: 'none' }}
-                        onChange={async (e) => {
-                          const hadFiles = !!(e.target.files && e.target.files.length);
-                          await handlePhotoFiles(vehicle.id, e.target.files);
-                          e.target.value = '';
-                          // Mobile camera capture is single-shot; re-open it so
-                          // the installer keeps shooting until they cancel.
-                          if (hadFiles) cameraInputRef.current?.click();
-                        }}
-                      />
                       <input
                         ref={photoInputRef}
                         type="file"
@@ -3324,6 +3310,14 @@ export default function TrackingPage() {
           )}
         </div>
       )}
+
+      <PhotoSession
+        open={photoSessionVehicle !== null}
+        title={`${photoType === 'before' ? 'Check-in' : photoType === 'during' ? 'In-progress' : 'Completion'} photos`}
+        subtitle={(() => { const v = vehicles.find(x => x.id === photoSessionVehicle); return v ? `${vehicleTitle(v)} — tap Done when finished` : undefined; })()}
+        onShot={(file) => { if (photoSessionVehicle) return handlePhotoFiles(photoSessionVehicle, [file]); }}
+        onClose={() => setPhotoSessionVehicle(null)}
+      />
 
       {completionModalVehicleId && (() => {
         const v = vehicles.find(x => x.id === completionModalVehicleId);

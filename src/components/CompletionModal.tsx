@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import ProofThumbnail from '@/components/ProofThumbnail';
 import { DropZone } from '@/components/DropZone';
+import PhotoSession from '@/components/PhotoSession';
 import { estimateHeadlineNumber } from '@/lib/estimate-number';
 
 interface Task {
@@ -104,6 +105,8 @@ export default function CompletionModal({
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const fileRef = useRef<HTMLInputElement>(null);
+  // In-app camera session (PhotoSession): tap once, shoot many, Done.
+  const [photoSession, setPhotoSession] = useState(false);
 
   // ── Admin invoicing (turn the vehicle's SO or estimate into a NetSuite
   // invoice, right from the completion process) ──
@@ -303,13 +306,7 @@ export default function CompletionModal({
   };
 
   const onPhotoPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const uploadedAny = await uploadPhotos(Array.from(e.target.files || []));
-    // Auto re-open the camera after a successful shot so the installer
-    // keeps capturing without re-tapping. Cancelling the camera UI returns
-    // no files and never fires onChange, which breaks the loop naturally.
-    if (uploadedAny) {
-      fileRef.current?.click();
-    }
+    await uploadPhotos(Array.from(e.target.files || []));
   };
 
   const submit = async (force = false) => {
@@ -412,17 +409,36 @@ export default function CompletionModal({
               onChange={e => setCaption(e.target.value)}
               style={{ width: '100%', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', marginBottom: '6px' }}
             />
-            <button
-              onClick={() => fileRef.current?.click()}
-              disabled={uploading}
-              style={{
-                width: '100%', padding: '8px 12px', borderRadius: '8px',
-                border: '1px dashed var(--border)', background: 'var(--card)',
-                color: 'var(--text-primary)',
-                fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-              }}
-            >{uploading ? 'Uploading…' : '+ Take / upload completion photo'}</button>
-            <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple onChange={onPhotoPick} style={{ display: 'none' }} />
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                onClick={() => setPhotoSession(true)}
+                disabled={uploading}
+                style={{
+                  flex: 1, padding: '8px 12px', borderRadius: '8px',
+                  border: '1px solid rgba(34,197,94,0.35)', background: 'rgba(34,197,94,0.08)',
+                  color: '#16a34a',
+                  fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                }}
+              >{uploading ? 'Uploading…' : '📷 Take completion photos'}</button>
+              <button
+                onClick={() => fileRef.current?.click()}
+                disabled={uploading}
+                style={{
+                  padding: '8px 12px', borderRadius: '8px',
+                  border: '1px dashed var(--border)', background: 'var(--card)',
+                  color: 'var(--text-primary)',
+                  fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                }}
+              >Upload</button>
+            </div>
+            <input ref={fileRef} type="file" accept="image/*" multiple onChange={onPhotoPick} style={{ display: 'none' }} />
+            <PhotoSession
+              open={photoSession}
+              title="Completion photos"
+              subtitle="Tap Done when finished — each shot uploads as you go"
+              onShot={(file) => uploadPhotos([file]).then(() => undefined)}
+              onClose={() => setPhotoSession(false)}
+            />
           </div>
           </DropZone>
 
