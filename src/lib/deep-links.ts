@@ -130,6 +130,9 @@ export const deepLinks = {
    *  customer login can open; use for customer email CTAs when no public
    *  page (carrier tracking, approval magic link) fits. */
   customerPortal: () => '/customer/dashboard',
+  /** Customer PO-status portal — the shared link on a customer record
+   *  (customers.portal_token, migration 260). Public page, no login. */
+  customerPoPortal: (token: string) => `/portal/${encodeURIComponent(token)}`,
   /** The installer's own earnings/payout history — the destination for CNI
    *  payout-status notifications (there is no per-payout page). */
   earnings: () => '/earnings',

@@ -103,6 +103,10 @@ interface CustomerRow {
   billing_portal: string | null;
   billing_notes: string | null;
   internal_notes: string | null;
+  /** Customer PO-status portal link (migration 260). */
+  portal_token?: string | null;
+  portal_token_created_at?: string | null;
+  portal_last_viewed_at?: string | null;
 }
 
 interface ParentRef { id: string; netsuite_id: string | null; company_name: string | null; source: 'manual' | 'netsuite' }
@@ -1097,7 +1101,7 @@ export default function CustomerRecordPage() {
     let cust: CustomerRow | null = null;
     if (nsId) {
       const { data } = await supabase.from('customers')
-        .select('id, netsuite_id, netsuite_url, company_name, entity_id, email, phone, address, total_spend, avg_order_value, ytd_spend, ytd_orders, last_year_spend, total_orders, last_order_date, netsuite_parent_id, parent_customer_id, parent_source, account_owner_id, billing_workflow, billing_portal, billing_notes, internal_notes')
+        .select('id, netsuite_id, netsuite_url, company_name, entity_id, email, phone, address, total_spend, avg_order_value, ytd_spend, ytd_orders, last_year_spend, total_orders, last_order_date, netsuite_parent_id, parent_customer_id, parent_source, account_owner_id, billing_workflow, billing_portal, billing_notes, internal_notes, portal_token, portal_token_created_at, portal_last_viewed_at')
         .eq('netsuite_id', nsId).maybeSingle();
       cust = data as CustomerRow | null;
     }
@@ -1490,9 +1494,40 @@ export default function CustomerRecordPage() {
   // log the send as credit_app_invite (audit Stage 1 — staff previously
   // had no way to send the form's URL from inside the app).
   const [composeCreditApp, setComposeCreditApp] = useState(false);
-  const openCompose = (to: string, creditApp = false) => {
-    setComposeTo(to); setComposeSubject(''); setComposeCreditApp(creditApp);
+  // PO-status portal link (migration 260) rides the same flow: the server
+  // mints the customer's shared link if needed and appends the CTA.
+  const [composePortalLink, setComposePortalLink] = useState(false);
+  const openCompose = (to: string, creditApp = false, portalLink = false) => {
+    setComposeTo(to); setComposeSubject(''); setComposeCreditApp(creditApp); setComposePortalLink(portalLink);
     setComposeSubjectKey(k => k + 1); setComposeOpen(true);
+  };
+
+  // ── PO-status portal link: create / copy / regenerate / revoke ──
+  const [portalBusy, setPortalBusy] = useState(false);
+  const [pageOrigin, setPageOrigin] = useState('');
+  useEffect(() => { setPageOrigin(window.location.origin); }, []);
+  const portalUrl = customer?.portal_token ? `${pageOrigin}${deepLinks.customerPoPortal(customer.portal_token)}` : null;
+  const copyText = async (text: string) => {
+    try { await navigator.clipboard.writeText(text); await dialog.alert('Link copied.'); }
+    catch { await dialog.alert(text); }
+  };
+  const portalAction = async (action: 'create' | 'regenerate' | 'revoke') => {
+    if (!customer) return;
+    if (action === 'revoke' && !(await dialog.confirm('Revoke the portal link? Anyone holding it will see "no longer active".', { destructive: true, confirmLabel: 'Revoke' }))) return;
+    if (action === 'regenerate' && !(await dialog.confirm('Issue a new link? The current link stops working immediately.', { confirmLabel: 'New link' }))) return;
+    setPortalBusy(true);
+    try {
+      const res = await fetch('/api/customers/portal-link', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerId: customer.id, action }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { await dialog.alert(data.error || 'Could not update the portal link.'); return; }
+      setCustomer(prev => (prev ? { ...prev, portal_token: data.token, portal_token_created_at: data.createdAt || null } : prev));
+      if (data.url) await copyText(data.url);
+    } finally {
+      setPortalBusy(false);
+    }
   };
 
   // ?compose=1&to=… — the Contacts directory's email addresses land here
@@ -1520,6 +1555,7 @@ export default function CustomerRecordPage() {
         subject: composeSubject,
         message: fields.message,
         includeCreditAppLink: composeCreditApp,
+        includePortalLink: composePortalLink,
         preview,
       }),
     });
@@ -1534,6 +1570,12 @@ export default function CustomerRecordPage() {
     if (!res.ok || !data.success) { await dialog.alert(data.error || 'Email send failed'); return { ok: false }; }
     await dialog.alert(`Email sent to ${(data.to || []).join(', ')}${data.bcc?.length ? ` (bcc ${data.bcc.join(', ')})` : ''}.`);
     if (prospect) refreshFeed(prospect.id);
+    // A portal-link send mints the link server-side when none existed;
+    // reflect it on the card without a reload.
+    if (composePortalLink && customer && !customer.portal_token) {
+      const { data: fresh } = await supabase.from('customers').select('portal_token, portal_token_created_at').eq('id', customer.id).maybeSingle();
+      if (fresh) setCustomer(prev => (prev ? { ...prev, ...fresh } : prev));
+    }
     return { ok: true };
   };
 
@@ -2074,6 +2116,44 @@ export default function CustomerRecordPage() {
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* PO-status portal (migration 260) — the shared, no-login link
+              where this customer sees where each PO they sent us stands. */}
+          {customer && !isVendor && (
+            <div style={card}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <div style={{ ...eyebrow, marginBottom: 0 }}>PO status link</div>
+                {customer.portal_last_viewed_at && (
+                  <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>Last opened {new Date(customer.portal_last_viewed_at).toLocaleDateString()}</span>
+                )}
+              </div>
+              <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.45 }}>
+                A private page (no login) where {customer.company_name || 'this customer'} can see every purchase order they sent us and where each one stands — received, in production, shipped, installed.
+              </div>
+              {portalUrl ? (
+                <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <input readOnly value={portalUrl} onFocus={e => e.currentTarget.select()} style={{ ...cInput, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '10.5px' }} />
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    <button onClick={() => copyText(portalUrl)} disabled={portalBusy} style={btnSm}>Copy link</button>
+                    <button onClick={() => openCompose(email || '', false, true)} disabled={portalBusy}
+                      title="Email the link through the standard compose screen — the message carries a View-your-purchase-order-status button" style={btnSm}>Send link…</button>
+                    <a href={portalUrl} target="_blank" rel="noopener noreferrer" style={btnSm}>Preview ↗</a>
+                    <button onClick={() => portalAction('regenerate')} disabled={portalBusy} title="Issue a new link; the current one stops working" style={btnSm}>New link</button>
+                    <button onClick={() => portalAction('revoke')} disabled={portalBusy} style={{ ...btnSm, color: 'var(--error, #ef4444)' }}>Revoke</button>
+                  </div>
+                  {customer.portal_token_created_at && (
+                    <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>Issued {new Date(customer.portal_token_created_at).toLocaleDateString()}</div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ marginTop: '8px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  <button onClick={() => portalAction('create')} disabled={portalBusy} style={btnSm}>{portalBusy ? 'Working…' : 'Create link'}</button>
+                  <button onClick={() => openCompose(email || '', false, true)} disabled={portalBusy}
+                    title="Creates the link and emails it through the standard compose screen" style={btnSm}>Send link…</button>
+                </div>
+              )}
             </div>
           )}
 
@@ -2757,12 +2837,16 @@ export default function CustomerRecordPage() {
           contacts={[...extContacts, ...contacts].filter(c => !!c.email).map(c => ({ name: c.name, email: c.email as string, title: c.title }))}
           title={composeCreditApp
             ? `Send credit application — ${prospect?.company_name || customer?.company_name || ''}`
-            : `Email — ${prospect?.company_name || customer?.company_name || ''}`}
-          sendLabel={composeCreditApp ? 'Send Credit Application' : 'Send Email'}
+            : composePortalLink
+              ? `Send PO status link — ${prospect?.company_name || customer?.company_name || ''}`
+              : `Email — ${prospect?.company_name || customer?.company_name || ''}`}
+          sendLabel={composeCreditApp ? 'Send Credit Application' : composePortalLink ? 'Send Portal Link' : 'Send Email'}
           initialTo={composeTo}
           messagePlaceholder={composeCreditApp
             ? 'Optional note — the email carries the credit-application button either way…'
-            : 'Write your message…'}
+            : composePortalLink
+              ? 'Optional note — the email carries the "View your purchase order status" button either way…'
+              : 'Write your message…'}
           intro={
             <div>
               <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '3px' }}>Subject</div>
