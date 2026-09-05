@@ -9,6 +9,7 @@ import ProofThumbnail from '@/components/ProofThumbnail';
 import { DropZone } from '@/components/DropZone';
 import PhotoSession from '@/components/PhotoSession';
 import { estimateHeadlineNumber } from '@/lib/estimate-number';
+import { openNetSuitePdf, openNetSuiteInvoicePdfByNumber } from '@/lib/netsuite-pdf-client';
 
 interface Task {
   id: string;
@@ -111,6 +112,10 @@ export default function CompletionModal({
   // ── Admin invoicing (turn the vehicle's SO or estimate into a NetSuite
   // invoice, right from the completion process) ──
   const [invNumber, setInvNumber] = useState<string | null>(invoiceNumber || null);
+  // Internal id of the invoice created in THIS session (opens the PDF
+  // directly); a pre-stamped number is resolved by number instead.
+  const [invId, setInvId] = useState<string | null>(null);
+  const [invPdfBusy, setInvPdfBusy] = useState(false);
   const [invWorking, setInvWorking] = useState<string | null>(null); // SO id in flight
   const [invError, setInvError] = useState<string | null>(null);
   const [linkedEstimates, setLinkedEstimates] = useState<LinkedEstimateLite[]>([]);
@@ -154,6 +159,7 @@ export default function CompletionModal({
         return;
       }
       setInvNumber(data.invoiceNumber || data.invoiceId || null);
+      setInvId(data.invoiceId ? String(data.invoiceId) : null);
       onInvoiced?.();
     } catch (e: any) {
       setInvError(e?.message || 'Network error creating the invoice');
@@ -606,7 +612,24 @@ export default function CompletionModal({
                 NetSuite Invoice <span style={{ fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>· admin</span>
               </div>
               {invNumber ? (
-                <div style={{ fontSize: '12px', fontWeight: 700, color: '#22c55e' }}>✓ Invoice #{invNumber} created for this vehicle.</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#22c55e' }}>✓ Invoice #{invNumber} created for this vehicle.</div>
+                  <button
+                    type="button"
+                    disabled={invPdfBusy}
+                    title="Open this invoice's NetSuite PDF in a new tab to print or save"
+                    onClick={async () => {
+                      setInvPdfBusy(true);
+                      setInvError(null);
+                      const r = invId ? await openNetSuitePdf('invoice', invId) : await openNetSuiteInvoicePdfByNumber(invNumber);
+                      if (!r.ok) setInvError(`Could not open the invoice PDF: ${r.error}`);
+                      setInvPdfBusy(false);
+                    }}
+                    style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text-primary)', opacity: invPdfBusy ? 0.6 : 1 }}
+                  >
+                    {invPdfBusy ? 'Opening…' : '🖨 Print / PDF'}
+                  </button>
+                </div>
               ) : invoiceSos.length > 0 ? (
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                   {invoiceSos.map(so => (

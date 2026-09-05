@@ -5,8 +5,11 @@ import { safeStringLiteral, SqlSafeError } from '@/lib/sql-safe';
 
 /**
  * GET /api/netsuite/lookup-transaction?tranid=SO123&type=salesOrder
- * Looks up a sales order or estimate by its tranid (the human-readable number).
- * type: 'salesOrder' | 'estimate' | 'any' (default 'any' searches both)
+ * Looks up a sales order, estimate, or invoice by its tranid (the
+ * human-readable number).
+ * type: 'salesOrder' | 'estimate' | 'invoice' | 'any' (default 'any' searches
+ * sales orders and estimates — the upfit-project link flow; 'invoice' is
+ * explicit, used to open a stamped invoice number's PDF).
  * Returns id, tranid, type, customer, total — enough to link to an upfit project.
  */
 export async function GET(req: NextRequest) {
@@ -23,6 +26,7 @@ export async function GET(req: NextRequest) {
   const typeFilter =
     type === 'salesorder' ? `t.type = 'SalesOrd'` :
     type === 'estimate' ? `t.type = 'Estimate'` :
+    type === 'invoice' ? `t.type = 'CustInvc'` :
     `t.type IN ('SalesOrd', 'Estimate')`;
 
   let safeTranid: string;
@@ -60,12 +64,12 @@ export async function GET(req: NextRequest) {
     if (items.length === 0) {
       return NextResponse.json({
         found: false,
-        error: `No sales order or estimate found with number "${tranid}"`,
+        error: `No ${type === 'invoice' ? 'invoice' : 'sales order or estimate'} found with number "${tranid}"`,
       }, { status: 404 });
     }
 
     const row = items[0];
-    const matchType = row.type === 'Estimate' ? 'estimate' : 'salesOrder';
+    const matchType = row.type === 'Estimate' ? 'estimate' : row.type === 'CustInvc' ? 'invoice' : 'salesOrder';
 
     return NextResponse.json({
       found: true,
@@ -73,7 +77,7 @@ export async function GET(req: NextRequest) {
         id: row.id,
         tranid: row.tranid,
         type: matchType,
-        typeLabel: matchType === 'estimate' ? 'Estimate' : 'Sales Order',
+        typeLabel: matchType === 'estimate' ? 'Estimate' : matchType === 'invoice' ? 'Invoice' : 'Sales Order',
         customer_id: row.customer_id,
         customer_name: row.customer_name,
         customer_entityid: row.customer_entityid,
