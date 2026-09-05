@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { deepLinks } from '@/lib/deep-links';
+import { apiErrorMessage } from '@/lib/api-error-message';
 import type { BrowsePart, KitWithMembers } from '@/components/PartCatalogBrowser';
 import { estimateHeadlineNumber, estimateNumberMatches } from '@/lib/estimate-number';
 
@@ -145,7 +146,7 @@ export default function AddToEstimateModal({ part, kit, onClose }: {
         body: JSON.stringify({ line_items: buildLines() }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.success) throw new Error(data.error || 'Add failed');
+      if (!res.ok || !data.success) throw new Error(apiErrorMessage(data, 'Add failed'));
       setDone({ id: est.id, number: estimateHeadlineNumber(est) || data.estimate_number, added: data.added || 0 });
     } catch (err: any) {
       setError(err?.message || 'Network error — please try again');
@@ -171,7 +172,7 @@ export default function AddToEstimateModal({ part, kit, onClose }: {
         }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.success) throw new Error(data.error || 'Create failed');
+      if (!res.ok || !data.success) throw new Error(apiErrorMessage(data, 'Create failed'));
       // A brand-new draft has no customer yet — jump straight into the
       // builder to finish it.
       router.push(deepLinks.estimate(data.id));
@@ -223,6 +224,14 @@ export default function AddToEstimateModal({ part, kit, onClose }: {
           )}
           <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{money(subjectPrice)}</div>
         </div>
+
+        {/* A failed create/add must be unmissable — an 11px line under the
+            list read as "nothing happened" when the API refused the request. */}
+        {error && (
+          <div role="alert" style={{ margin: '12px 16px 0', padding: '10px 12px', borderRadius: '10px', border: '1px solid #f87171', background: 'rgba(248,113,113,0.12)', color: '#f87171', fontSize: '12px', fontWeight: 700, lineHeight: 1.4 }}>
+            {error}
+          </div>
+        )}
 
         {done ? (
           <div style={{ padding: '20px 16px', display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center' }}>
@@ -293,10 +302,6 @@ export default function AddToEstimateModal({ part, kit, onClose }: {
               ))}
             </div>
           </>
-        )}
-
-        {error && (
-          <div style={{ padding: '0 16px 12px', fontSize: '11px', color: '#f87171' }}>{error}</div>
         )}
       </div>
     </div>
