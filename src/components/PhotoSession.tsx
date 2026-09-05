@@ -37,6 +37,13 @@ import { visibleFrameRegion } from '@/lib/viewfinder-crop';
  * you see at any zoom or orientation is exactly what the saved photo holds
  * (cover-fit cropped the preview in when the phone was rotated while the
  * file kept the whole frame — it looked like rotating zoomed the camera).
+ *
+ * 0.5× (ultra-wide): offered on the back camera when either the track's
+ * zoom range reaches below 1× (then it is just a zoom value) or the device
+ * lists an ultra-wide camera (iOS Safari: "Back Ultra Wide Camera" — then
+ * 0.5× switches the stream to that lens and 1× switches back). The readout
+ * multiplies the lens factor in, so the slider on the ultra-wide lens reads
+ * 0.5×, 0.6×, … Phones with neither simply don't get the button.
  */
 
 export interface PhotoSessionProps {
@@ -64,6 +71,12 @@ interface ZoomRange { min: number; max: number; step: number; hardware: boolean 
 const DIGITAL_ZOOM: ZoomRange = { min: 1, max: 4, step: 0.05, hardware: false };
 
 const clampZoom = (z: number, r: ZoomRange) => Math.min(r.max, Math.max(r.min, z));
+
+type Lens = 'default' | 'ultrawide';
+/** Device label the platform gives its ultra-wide back camera (iOS: "Back Ultra Wide Camera"). */
+const ULTRA_WIDE_LABEL = /ultra\s*-?\s*wide/i;
+/** Field-of-view factor of the ultra-wide lens relative to the main camera, as phones label it. */
+const ULTRA_WIDE_FACTOR = 0.5;
 const pinchDist = (t: React.TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
 
 const shotName = () => {
@@ -89,6 +102,9 @@ export default function PhotoSession({ open, title = 'Take photos', subtitle, on
   const pendingZoomRef = useRef<number | null>(null);
   const applyingZoomRef = useRef(false);
   const pinchRef = useRef<{ dist: number; zoom: number } | null>(null);
+  // The specific camera the stream is on (null = whatever facingMode picks),
+  // so a resume-from-background reopens the same lens.
+  const deviceIdRef = useRef<string | null>(null);
 
   const [camera, setCamera] = useState<CameraState>('starting');
   const [cameraError, setCameraError] = useState('');
@@ -100,6 +116,8 @@ export default function PhotoSession({ open, title = 'Take photos', subtitle, on
   const [busy, setBusy] = useState(false);
   const [zoom, setZoomState] = useState(1);
   const [zoomRange, setZoomRangeState] = useState<ZoomRange | null>(null);
+  const [lens, setLens] = useState<Lens>('default');
+  const [ultraWideId, setUltraWideId] = useState<string | null>(null);
 
   const setZoomRange = useCallback((r: ZoomRange | null) => { zoomRangeRef.current = r; setZoomRangeState(r); }, []);
 
@@ -108,8 +126,9 @@ export default function PhotoSession({ open, title = 'Take photos', subtitle, on
     if (videoRef.current) videoRef.current.srcObject = null;
   }, []);
 
-  const startCamera = useCallback(async (mode: 'environment' | 'user') => {
+  const startCamera = useCallback(async (mode: 'environment' | 'user', deviceId: string | null = null) => {
     stopCamera();
+    deviceIdRef.current = deviceId;
     setCamera('starting');
     setCameraError('');
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
@@ -120,10 +139,22 @@ export default function PhotoSession({ open, title = 'Take photos', subtitle, on
     try {
       // Keep the constraints minimal (same as VinScanner) — Android rejects
       // exotic ones; ask for a high ideal so photos aren't viewfinder-sized.
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: mode, width: { ideal: 1920 }, height: { ideal: 1440 } },
-        audio: false,
-      });
+      // A specific lens (the 0.5× ultra-wide) is asked for by exact deviceId
+      // on its own — pairing it with facingMode over-constrains some browsers.
+      const size = { width: { ideal: 1920 }, height: { ideal: 1440 } };
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: deviceId ? { deviceId: { exact: deviceId }, ...size } : { facingMode: mode, ...size },
+          audio: false,
+        });
+      } catch (e) {
+        if (!deviceId) throw e;
+        // The lens went away (or the id is stale): drop back to the default
+        // camera rather than dead-ending the session.
+        setLens('default');
+        return startCamera(mode, null);
+      }
       streamRef.current = stream;
       if (!videoRef.current) { stopCamera(); return; }
       videoRef.current.srcObject = stream;
@@ -146,9 +177,11 @@ export default function PhotoSession({ open, title = 'Take photos', subtitle, on
       setZoomState(current);
       setZoomRange(range);
       try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        setCanFlip(devices.filter(d => d.kind === 'videoinput').length > 1);
-      } catch { setCanFlip(false); }
+        // Labels are populated only once permission is granted (i.e. here).
+        const inputs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+        setCanFlip(inputs.length > 1);
+        setUltraWideId(inputs.find(d => ULTRA_WIDE_LABEL.test(d.label))?.deviceId ?? null);
+      } catch { setCanFlip(false); setUltraWideId(null); }
     } catch (e: any) {
       setCamera('unavailable');
       if (e?.name === 'NotAllowedError') setCameraError('Camera permission was denied. Allow camera access for this site, or use the device camera below.');
@@ -223,7 +256,7 @@ export default function PhotoSession({ open, title = 'Take photos', subtitle, on
     // iOS suspends the stream when the app goes to the background; bring it
     // back when the user returns instead of showing a frozen frame.
     const onVisibility = () => {
-      if (document.visibilityState === 'visible' && open) startCamera(facing);
+      if (document.visibilityState === 'visible' && open) startCamera(facing, deviceIdRef.current);
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
@@ -285,8 +318,28 @@ export default function PhotoSession({ open, title = 'Take photos', subtitle, on
   const flip = useCallback(() => {
     const next = facing === 'environment' ? 'user' : 'environment';
     setFacing(next);
+    setLens('default');
     startCamera(next);
   }, [facing, startCamera]);
+
+  // 0.5× / 1× lens presets (back camera only). 0.5× is a plain zoom value
+  // when the track's range reaches it, else a switch to the ultra-wide lens.
+  const lensFactor = lens === 'ultrawide' ? ULTRA_WIDE_FACTOR : 1;
+  const zoomReachesHalf = !!zoomRange?.hardware && zoomRange.min <= ULTRA_WIDE_FACTOR;
+  const showLensPresets = camera === 'live' && facing === 'environment' && (zoomReachesHalf || !!ultraWideId);
+  const displayZoom = lensFactor * zoom;
+  const halfActive = lens === 'ultrawide' || Math.abs(displayZoom - ULTRA_WIDE_FACTOR) < 0.05;
+
+  const pickHalf = useCallback(() => {
+    if (lens === 'default' && zoomReachesHalf) { setZoom(ULTRA_WIDE_FACTOR); return; }
+    if (lens === 'default' && ultraWideId) { setLens('ultrawide'); startCamera(facing, ultraWideId); return; }
+    if (lens === 'ultrawide') setZoom(1);
+  }, [lens, zoomReachesHalf, ultraWideId, facing, setZoom, startCamera]);
+
+  const pickOne = useCallback(() => {
+    if (lens === 'ultrawide') { setLens('default'); startCamera(facing, null); return; }
+    setZoom(1);
+  }, [lens, facing, setZoom, startCamera]);
 
   // Fallback path: the OS camera / photo library through a file input.
   const onPick = useCallback((files: FileList | null) => {
@@ -381,14 +434,37 @@ export default function PhotoSession({ open, title = 'Take photos', subtitle, on
             <button type="button" onClick={() => deviceCameraRef.current?.click()} style={{ ...btn, background: '#3b82f6', borderColor: '#3b82f6' }}>
               📷 Use the device camera
             </button>
-            <button type="button" onClick={() => startCamera(facing)} style={btn}>Try again</button>
+            <button type="button" onClick={() => startCamera(facing, deviceIdRef.current)} style={btn}>Try again</button>
             <div style={{ fontSize: '12px', opacity: 0.7 }}>Each device-camera shot returns here — keep going, then tap Done.</div>
           </div>
         )}
         {/* Zoom readout + slider — above the last-shot thumbnail row (56px +
             margins) so the two never overlap on a narrow phone. */}
         {camera === 'live' && zoomRange && (
-          <div style={{ position: 'absolute', left: 0, right: 0, bottom: '84px', display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
+          <div style={{ position: 'absolute', left: 0, right: 0, bottom: '84px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', pointerEvents: 'none' }}>
+            {showLensPresets && (
+              <div
+                onTouchStart={e => e.stopPropagation()}
+                onTouchEnd={e => e.stopPropagation()}
+                style={{ display: 'flex', gap: '6px', padding: '4px', borderRadius: '999px', background: 'rgba(0,0,0,0.55)', pointerEvents: 'auto' }}
+              >
+                {([[ULTRA_WIDE_FACTOR, halfActive, pickHalf, 'Ultra-wide 0.5×'], [1, !halfActive, pickOne, 'Main camera 1×']] as const).map(([value, active, onPick, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={onPick}
+                    aria-label={label}
+                    aria-pressed={active}
+                    style={{
+                      minWidth: '44px', minHeight: '32px', padding: '0 10px', borderRadius: '999px', border: 'none', cursor: 'pointer',
+                      background: active ? '#fff' : 'transparent', color: active ? '#000' : '#fff', fontSize: '12px', fontWeight: 800,
+                    }}
+                  >
+                    {value === 1 ? '1×' : `${value}×`}
+                  </button>
+                ))}
+              </div>
+            )}
             <div
               onTouchStart={e => e.stopPropagation()}
               onTouchMove={e => e.stopPropagation()}
@@ -401,7 +477,7 @@ export default function PhotoSession({ open, title = 'Take photos', subtitle, on
                 aria-label="Reset zoom"
                 style={{ background: 'none', border: 'none', color: '#fff', fontSize: '13px', fontWeight: 800, minWidth: '44px', textAlign: 'center', cursor: 'pointer', fontVariantNumeric: 'tabular-nums' }}
               >
-                {zoom.toFixed(1)}×
+                {displayZoom.toFixed(1)}×
               </button>
               <input
                 type="range"
