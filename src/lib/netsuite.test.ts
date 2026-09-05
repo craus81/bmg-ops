@@ -5,6 +5,7 @@ import {
   createSalesOrder,
   createDirectInvoice,
   createInvoiceFromSO,
+  fulfillSalesOrder,
   createBillFromPo,
   createItemReceiptFromPo,
   createCustomerOrLead,
@@ -350,6 +351,74 @@ describe('createDirectInvoice', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('not assigned to the invoice\'s subsidiary');
     consoleSpy.mockRestore();
+  });
+});
+
+describe('fulfillSalesOrder', () => {
+  const soStatus = (status: string) => jsonResponse({ items: [{ status }] });
+
+  it('fulfils every remaining line via the documented transform, marked Shipped', async () => {
+    fetchMock
+      .mockResolvedValueOnce(soStatus('B')) // Pending Fulfillment
+      .mockResolvedValueOnce(new Response(null, {
+        status: 204,
+        headers: { Location: 'https://x/services/rest/record/v1/itemFulfillment/5001' },
+      }))
+      .mockResolvedValueOnce(jsonResponse({ items: [{ tranid: 'IF-77' }] }));
+
+    const result = await fulfillSalesOrder('766');
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).q).toContain("type = 'SalesOrd'");
+    const [url, init] = fetchMock.mock.calls[1];
+    expect(url).toBe(
+      'https://1234567-sb1.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/766/!transform/itemFulfillment'
+    );
+    expect(init.method).toBe('POST');
+    // No line body and no ?replace=item: the transform carries every open
+    // line itself. Shipped so the fulfillment posts and relieves inventory.
+    expect(JSON.parse(init.body)).toEqual({ shipStatus: { id: 'C' } });
+    expect(result).toEqual({ success: true, status: 'B', fulfillmentId: '5001', fulfillmentNumber: 'IF-77' });
+  });
+
+  it('skips an SO that is already Pending Billing / Billed instead of re-fulfilling', async () => {
+    fetchMock.mockResolvedValueOnce(soStatus('F'));
+    const result = await fulfillSalesOrder('767');
+    expect(result).toEqual({ success: true, skipped: 'already_fulfilled', status: 'F' });
+    expect(fetchMock).toHaveBeenCalledTimes(1); // status read only, no transform
+  });
+
+  it('refuses a Pending Approval SO with a plain message and creates nothing', async () => {
+    fetchMock.mockResolvedValueOnce(soStatus('A'));
+    const result = await fulfillSalesOrder('768');
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/Pending Approval/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries once without shipStatus when the account rejects that field', async () => {
+    fetchMock
+      .mockResolvedValueOnce(soStatus('D'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ 'o:errorDetails': [{ detail: "Invalid field shipStatus" }] }), { status: 400 }))
+      .mockResolvedValueOnce(new Response(null, {
+        status: 204,
+        headers: { Location: 'https://x/services/rest/record/v1/itemFulfillment/5002' },
+      }))
+      .mockResolvedValueOnce(jsonResponse({ items: [{ tranid: 'IF-78' }] }));
+
+    const result = await fulfillSalesOrder('769');
+
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({});
+    expect(result).toEqual({ success: true, status: 'D', fulfillmentId: '5002', fulfillmentNumber: 'IF-78' });
+  });
+
+  it('returns NetSuite\'s own message on any other failure', async () => {
+    fetchMock
+      .mockResolvedValueOnce(soStatus('B'))
+      .mockResolvedValueOnce(new Response('You cannot fulfil this line', { status: 400 }));
+    const result = await fulfillSalesOrder('770');
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('NetSuite error (400): You cannot fulfil this line');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 

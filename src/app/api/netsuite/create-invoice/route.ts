@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { createInvoiceFromSO, suiteqlQuery } from '@/lib/netsuite';
+import { createInvoiceFromSO, fulfillSalesOrder, suiteqlQuery } from '@/lib/netsuite';
 import { resolveLocationWithOverride } from '@/lib/invoice-location';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
@@ -53,6 +53,7 @@ export async function POST(req: NextRequest) {
       status: 'success' | 'error' | 'skipped';
       invoiceId?: string;
       invoiceNumber?: string;
+      fulfillmentNumber?: string;
       error?: string;
       warning?: string;
     }[] = [];
@@ -291,6 +292,22 @@ export async function POST(req: NextRequest) {
           name: po.ship_to?.name,
         });
 
+        // Fulfil the sales order first — every open line (owner rule,
+        // 2026-09-05). Fail closed: no invoice without its fulfillment.
+        const fulfil = await fulfillSalesOrder(soId);
+        if (!fulfil.success) {
+          results.push({
+            poId: po.id,
+            poNumber: po.po_number,
+            soId,
+            soNumber: po.netsuite_so_number || '',
+            status: 'error',
+            error: `Could not fulfil the sales order, so it was not invoiced: ${fulfil.error || 'NetSuite item fulfillment failed'}`,
+          });
+          await releaseClaim();
+          continue;
+        }
+
         // Create the invoice
         const invoiceResult = await createInvoiceFromSO({
           salesOrderId: soId,
@@ -351,6 +368,7 @@ export async function POST(req: NextRequest) {
             status: 'success',
             invoiceId: invoiceResult.invoiceId,
             invoiceNumber: invoiceResult.invoiceNumber,
+            ...(fulfil.fulfillmentNumber ? { fulfillmentNumber: fulfil.fulfillmentNumber } : {}),
             ...(warnings.length > 0 ? { warning: warnings.join('; ') } : {}),
           });
         } else {
@@ -360,7 +378,8 @@ export async function POST(req: NextRequest) {
             soId,
             soNumber: po.netsuite_so_number || '',
             status: 'error',
-            error: invoiceResult.error,
+            // The fulfillment already posted — say so, so nobody fulfils it twice by hand.
+            error: `${invoiceResult.error}${fulfil.fulfillmentNumber ? ` (the sales order WAS fulfilled: ${fulfil.fulfillmentNumber} — only the invoice is missing)` : ''}`,
           });
           await releaseClaim();
         }

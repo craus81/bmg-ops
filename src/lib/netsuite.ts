@@ -2175,6 +2175,132 @@ export async function createItemReceiptFromPo(payload: {
  * The transform endpoint creates an invoice from an existing SO
  * If installedQuantities is provided, only those quantities are billed
  */
+/**
+ * Sales-order status letters (transaction.status for type 'SalesOrd').
+ * Per-type: the same letter means something else on an invoice or estimate.
+ */
+export const SO_STATUS = {
+  pendingApproval: 'A',
+  pendingFulfillment: 'B',
+  cancelled: 'C',
+  partiallyFulfilled: 'D',
+  pendingBillingPartiallyFulfilled: 'E',
+  pendingBilling: 'F',
+  billed: 'G',
+  closed: 'H',
+} as const;
+
+/**
+ * Fulfil EVERY remaining line of a sales order — one Item Fulfillment via
+ * NetSuite's documented transform (salesOrder/{id}/!transform/itemFulfillment),
+ * marked Shipped so it posts and relieves inventory.
+ *
+ * Owner rule (2026-09-05): an SO FleetSuite invoices must be fulfilled first,
+ * every line. Billing straight off the SO left orders sitting at Pending
+ * Fulfillment in NetSuite with the inventory never relieved. Callers run this
+ * BEFORE createInvoiceFromSO and fail closed on an error: an invoice without
+ * its fulfillment is exactly the state this exists to prevent.
+ *
+ * Idempotent on status: an SO already Pending Billing / Billed / Closed has
+ * nothing left to fulfil (NetSuite moves service-only orders straight there),
+ * so it is skipped, not re-fulfilled. Pending Approval and Cancelled orders
+ * are refused with a plain message.
+ */
+export async function fulfillSalesOrder(salesOrderId: string): Promise<{
+  success: boolean;
+  /** Nothing was created: the SO was already past fulfillment. */
+  skipped?: 'already_fulfilled';
+  fulfillmentId?: string;
+  fulfillmentNumber?: string;
+  /** The SO's status letter before this call (see SO_STATUS). */
+  status?: string;
+  error?: string;
+}> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+
+  let status = '';
+  try {
+    const lookup = await suiteqlQuery(
+      `SELECT status FROM transaction WHERE id = ${parseInt(salesOrderId, 10)} AND type = 'SalesOrd'`,
+    );
+    status = String(lookup?.items?.[0]?.status ?? '');
+  } catch (e: any) {
+    return { success: false, error: `Could not read the sales order's status: ${e?.message || e}` };
+  }
+  if (!status) return { success: false, error: `Sales order ${salesOrderId} was not found in NetSuite` };
+  if (status === SO_STATUS.pendingApproval) {
+    return { success: false, status, error: 'The sales order is Pending Approval in NetSuite — approve it there first, then invoice.' };
+  }
+  if (status === SO_STATUS.cancelled) {
+    return { success: false, status, error: 'The sales order is cancelled in NetSuite.' };
+  }
+  if (status === SO_STATUS.pendingBilling || status === SO_STATUS.billed || status === SO_STATUS.closed) {
+    return { success: true, skipped: 'already_fulfilled', status };
+  }
+
+  const transformUrl = `${baseUrl}/services/rest/record/v1/salesOrder/${salesOrderId}/!transform/itemFulfillment`;
+  const { oauth, token } = createOAuth(config);
+
+  // Shipped ('C') so the fulfillment posts. Accounts without Pick/Pack/Ship
+  // may not accept the field at all — retry once without it.
+  const attempt = async (body: Record<string, unknown>) => {
+    const authHeader = getAuthHeader(oauth, token, { url: transformUrl, method: 'POST' });
+    return fetch(transformUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+  };
+
+  try {
+    let response = await attempt({ shipStatus: { id: 'C' } });
+    if (!response.ok) {
+      const text = await response.text();
+      if (response.status === 400 && /shipStatus/i.test(text)) {
+        response = await attempt({});
+        if (!response.ok) {
+          const text2 = await response.text();
+          console.error('NetSuite item fulfillment error:', text2);
+          return { success: false, status, error: `NetSuite error (${response.status}): ${text2}` };
+        }
+      } else {
+        console.error('NetSuite item fulfillment error:', text);
+        return { success: false, status, error: `NetSuite error (${response.status}): ${text}` };
+      }
+    }
+
+    let fulfillmentId = '';
+    const location = response.headers.get('Location');
+    if (location) fulfillmentId = location.match(/\/(\d+)$/)?.[1] || '';
+
+    let fulfillmentNumber = '';
+    try {
+      const result = await response.json();
+      fulfillmentId = fulfillmentId || result.id?.toString() || '';
+      fulfillmentNumber = result.tranId || result.tranid || '';
+    } catch {
+      // 204 No Content
+    }
+    if (fulfillmentId && !fulfillmentNumber) {
+      try {
+        const lookup = await suiteqlQuery(`SELECT tranid FROM transaction WHERE id = ${fulfillmentId}`);
+        fulfillmentNumber = lookup?.items?.[0]?.tranid || '';
+      } catch {
+        // Non-critical
+      }
+    }
+
+    return { success: true, status, fulfillmentId, fulfillmentNumber };
+  } catch (e: any) {
+    return { success: false, status, error: `Failed to fulfil the sales order: ${e.message}` };
+  }
+}
+
 export async function createInvoiceFromSO(payload: {
   salesOrderId: string;
   installedQuantities?: Record<number, number>; // lineNumber -> installed qty

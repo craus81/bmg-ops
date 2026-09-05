@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { createInvoiceFromSO } from '@/lib/netsuite';
+import { createInvoiceFromSO, fulfillSalesOrder } from '@/lib/netsuite';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -17,8 +17,11 @@ const supabase = createClient(
  * "the vehicle completion process should let you turn the sales order or
  * estimate into a NetSuite invoice").
  *
- * Bills the FULL sales order via NetSuite's SO→invoice transform (memo and
- * location inherited from the SO, so the vehicle context the SO carries
+ * Fulfils the sales order first — one Item Fulfillment for every open line
+ * (owner rule, 2026-09-05: an invoiced SO must be fulfilled; billing straight
+ * off it left orders at Pending Fulfillment with inventory never relieved) —
+ * then bills the FULL sales order via NetSuite's SO→invoice transform (memo
+ * and location inherited from the SO, so the vehicle context the SO carries
  * survives onto the invoice), then stamps the check-in's invoice fields —
  * the same ones the archived view shows and the unpaid-invoices tile reads.
  * The estimate path is driven client-side: an un-converted estimate goes
@@ -71,12 +74,27 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'That sales order is not linked to this vehicle.' }, { status: 400 });
     }
 
+    // Fulfil every line first. Fail closed: an invoice without its
+    // fulfillment is the exact state this step exists to prevent.
+    const fulfil = await fulfillSalesOrder(salesOrderId);
+    if (!fulfil.success) {
+      return NextResponse.json({
+        error: `Could not fulfil the sales order, so it was not invoiced: ${fulfil.error || 'NetSuite item fulfillment failed'}`,
+        step: 'fulfillment',
+      }, { status: 502 });
+    }
+
     // Full-SO transform: no line overrides, no memo/location overrides —
     // everything the SO carries (vehicle memo, VIN custom field, location)
     // inherits onto the invoice.
     const result = await createInvoiceFromSO({ salesOrderId });
     if (!result.success) {
-      return NextResponse.json({ error: result.error || 'NetSuite invoice create failed' }, { status: 502 });
+      // The fulfillment already posted — say so, so nobody fulfils it twice by hand.
+      return NextResponse.json({
+        error: `${result.error || 'NetSuite invoice create failed'}${fulfil.fulfillmentNumber ? ` (the sales order WAS fulfilled: ${fulfil.fulfillmentNumber} — only the invoice is missing)` : ''}`,
+        step: 'invoice',
+        fulfillmentNumber: fulfil.fulfillmentNumber || null,
+      }, { status: 502 });
     }
 
     // Stamp the check-in's invoice fields (migration 070). The invoice
@@ -101,6 +119,10 @@ export async function POST(req: NextRequest) {
       success: true,
       invoiceId: result.invoiceId,
       invoiceNumber: result.invoiceNumber || result.invoiceId,
+      fulfillmentId: fulfil.fulfillmentId || null,
+      fulfillmentNumber: fulfil.fulfillmentNumber || null,
+      // 'already_fulfilled' = the SO was past fulfillment before this call.
+      fulfillmentSkipped: fulfil.skipped || null,
     });
   } catch (err: any) {
     console.error('vehicle invoice error:', err);

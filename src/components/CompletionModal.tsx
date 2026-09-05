@@ -115,6 +115,7 @@ export default function CompletionModal({
   // Internal id of the invoice created in THIS session (opens the PDF
   // directly); a pre-stamped number is resolved by number instead.
   const [invId, setInvId] = useState<string | null>(null);
+  const [fulNumber, setFulNumber] = useState<string | null>(null);
   const [invPdfBusy, setInvPdfBusy] = useState(false);
   const [invWorking, setInvWorking] = useState<string | null>(null); // SO id in flight
   const [invError, setInvError] = useState<string | null>(null);
@@ -160,6 +161,7 @@ export default function CompletionModal({
       }
       setInvNumber(data.invoiceNumber || data.invoiceId || null);
       setInvId(data.invoiceId ? String(data.invoiceId) : null);
+      setFulNumber(data.fulfillmentNumber || null);
       onInvoiced?.();
     } catch (e: any) {
       setInvError(e?.message || 'Network error creating the invoice');
@@ -613,7 +615,9 @@ export default function CompletionModal({
               </div>
               {invNumber ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#22c55e' }}>✓ Invoice #{invNumber} created for this vehicle.</div>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#22c55e' }}>
+                    ✓ Invoice #{invNumber} created for this vehicle.{fulNumber ? ` Sales order fulfilled (${fulNumber}).` : ''}
+                  </div>
                   <button
                     type="button"
                     disabled={invPdfBusy}
@@ -636,7 +640,7 @@ export default function CompletionModal({
                     <button key={so.netsuite_sales_order_id}
                       onClick={() => invoiceSalesOrder(so.netsuite_sales_order_id)}
                       disabled={!!invWorking}
-                      title="Bill the full sales order as a NetSuite invoice and stamp it on this vehicle"
+                      title="Fulfil every line of the sales order, bill it as a NetSuite invoice, and stamp it on this vehicle"
                       style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', opacity: invWorking ? 0.6 : 1 }}>
                       {invWorking === so.netsuite_sales_order_id ? 'Invoicing…' : `Invoice SO ${so.sales_order_number || `#${so.netsuite_sales_order_id}`}`}
                     </button>
