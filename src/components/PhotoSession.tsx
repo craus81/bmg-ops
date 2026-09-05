@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { visibleFrameRegion } from '@/lib/viewfinder-crop';
 
 /**
  * PhotoSession — tap "Take photos" ONCE, shoot as many as you need, tap Done.
@@ -26,6 +27,16 @@ import { createPortal } from 'react-dom';
  * When a live camera isn't available (no permission, no camera, an insecure
  * context) the overlay offers the device camera / photo library through a
  * normal file input, so nothing is ever a dead end.
+ *
+ * Zoom: pinch the viewfinder or drag the slider. When the browser exposes
+ * the camera's own zoom (MediaStreamTrack capabilities — Android Chrome,
+ * iOS 17+ Safari) that is what moves, so the sensor does the work; anywhere
+ * else the same gesture is a digital zoom — the preview is enlarged and the
+ * shutter crops the capture to the very region on screen. The preview is
+ * letterboxed (`object-fit: contain`) rather than cropped to fill, so what
+ * you see at any zoom or orientation is exactly what the saved photo holds
+ * (cover-fit cropped the preview in when the phone was rotated while the
+ * file kept the whole frame — it looked like rotating zoomed the camera).
  */
 
 export interface PhotoSessionProps {
@@ -45,6 +56,16 @@ export interface PhotoSessionProps {
 
 type CameraState = 'starting' | 'live' | 'unavailable';
 
+/** Zoom range in effect: the camera's own (hardware) or our crop (digital). */
+interface ZoomRange { min: number; max: number; step: number; hardware: boolean }
+
+// Digital zoom ceiling — a 4× crop of a 1920-wide frame is still 480px
+// wide, about the floor for a usable damage / VIN-plate photo.
+const DIGITAL_ZOOM: ZoomRange = { min: 1, max: 4, step: 0.05, hardware: false };
+
+const clampZoom = (z: number, r: ZoomRange) => Math.min(r.max, Math.max(r.min, z));
+const pinchDist = (t: React.TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+
 const shotName = () => {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -60,6 +81,14 @@ export default function PhotoSession({ open, title = 'Take photos', subtitle, on
   const shotsRef = useRef<File[]>([]);
   const previewsRef = useRef<string[]>([]);
   const queueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const viewRef = useRef<HTMLDivElement>(null);
+  // Zoom lives in refs as well as state: the shutter and the pinch handler
+  // need the latest value without re-binding on every slider tick.
+  const zoomRef = useRef(1);
+  const zoomRangeRef = useRef<ZoomRange | null>(null);
+  const pendingZoomRef = useRef<number | null>(null);
+  const applyingZoomRef = useRef(false);
+  const pinchRef = useRef<{ dist: number; zoom: number } | null>(null);
 
   const [camera, setCamera] = useState<CameraState>('starting');
   const [cameraError, setCameraError] = useState('');
@@ -69,6 +98,10 @@ export default function PhotoSession({ open, title = 'Take photos', subtitle, on
   const [lastPreview, setLastPreview] = useState<string | null>(null);
   const [flash, setFlash] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [zoom, setZoomState] = useState(1);
+  const [zoomRange, setZoomRangeState] = useState<ZoomRange | null>(null);
+
+  const setZoomRange = useCallback((r: ZoomRange | null) => { zoomRangeRef.current = r; setZoomRangeState(r); }, []);
 
   const stopCamera = useCallback(() => {
     if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
@@ -96,6 +129,22 @@ export default function PhotoSession({ open, title = 'Take photos', subtitle, on
       videoRef.current.srcObject = stream;
       await videoRef.current.play();
       setCamera('live');
+      // Zoom: use the camera's own when the track advertises one, else crop.
+      const track = stream.getVideoTracks()[0];
+      let range: ZoomRange = DIGITAL_ZOOM;
+      let current = 1;
+      try {
+        const caps: any = track?.getCapabilities?.() ?? {};
+        const zc = caps.zoom;
+        if (zc && typeof zc.min === 'number' && typeof zc.max === 'number' && zc.max > zc.min) {
+          range = { min: zc.min, max: zc.max, step: typeof zc.step === 'number' && zc.step > 0 ? zc.step : 0.1, hardware: true };
+          const zs = (track.getSettings?.() as any)?.zoom;
+          current = typeof zs === 'number' ? zs : zc.min;
+        }
+      } catch { /* capabilities unsupported → digital */ }
+      zoomRef.current = current;
+      setZoomState(current);
+      setZoomRange(range);
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
         setCanFlip(devices.filter(d => d.kind === 'videoinput').length > 1);
@@ -106,7 +155,60 @@ export default function PhotoSession({ open, title = 'Take photos', subtitle, on
       else if (e?.name === 'NotFoundError' || e?.name === 'OverconstrainedError') setCameraError('No camera found on this device.');
       else setCameraError('Camera error: ' + (e?.message || 'unknown'));
     }
-  }, [stopCamera]);
+  }, [stopCamera, setZoomRange]);
+
+  // Push a hardware zoom to the track, one applyConstraints in flight at a
+  // time (a pinch fires dozens of values; only the latest matters). If the
+  // camera refuses, fall back to digital so the gesture still does something.
+  const applyHardwareZoom = useCallback((z: number) => {
+    pendingZoomRef.current = z;
+    if (applyingZoomRef.current) return;
+    applyingZoomRef.current = true;
+    (async () => {
+      while (pendingZoomRef.current != null) {
+        const next = pendingZoomRef.current;
+        pendingZoomRef.current = null;
+        const track = streamRef.current?.getVideoTracks()[0];
+        if (!track) break;
+        try {
+          // `zoom` is a real constraint (Media Capture spec, Chrome + iOS 17 Safari) that lib.dom doesn't type yet.
+          await track.applyConstraints({ advanced: [{ zoom: next }] } as unknown as MediaTrackConstraints);
+        } catch {
+          const digital = { ...DIGITAL_ZOOM };
+          const dz = clampZoom(next, digital);
+          zoomRef.current = dz;
+          setZoomState(dz);
+          setZoomRange(digital);
+          pendingZoomRef.current = null;
+        }
+      }
+      applyingZoomRef.current = false;
+    })();
+  }, [setZoomRange]);
+
+  const setZoom = useCallback((value: number) => {
+    const range = zoomRangeRef.current;
+    if (!range) return;
+    const z = clampZoom(value, range);
+    zoomRef.current = z;
+    setZoomState(z);
+    if (range.hardware) applyHardwareZoom(z);
+  }, [applyHardwareZoom]);
+
+  // Pinch to zoom on the viewfinder (touch-action: none keeps the page from
+  // pinch-zooming instead). Ratios only, so the text-size CSS zoom is moot.
+  const onTouchStart = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length === 2) pinchRef.current = { dist: pinchDist(e.touches), zoom: zoomRef.current };
+  }, []);
+  const onTouchMove = useCallback((e: React.TouchEvent) => {
+    const p = pinchRef.current;
+    if (!p || e.touches.length !== 2) return;
+    const d = pinchDist(e.touches);
+    if (p.dist > 0) setZoom(p.zoom * (d / p.dist));
+  }, [setZoom]);
+  const onTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length < 2) pinchRef.current = null;
+  }, []);
 
   // Open/close lifecycle: start the stream, lock page scroll, restore on close.
   useEffect(() => {
@@ -161,11 +263,17 @@ export default function PhotoSession({ open, title = 'Take photos', subtitle, on
     setFlash(true);
     setTimeout(() => setFlash(false), 120);
     try {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      // Save exactly what the viewfinder shows. With the camera's own zoom
+      // the frame already is the zoomed picture (digital factor 1); with
+      // digital zoom, crop the frame to the region on screen.
+      const digital = zoomRangeRef.current?.hardware ? 1 : zoomRef.current;
+      const box = viewRef.current?.getBoundingClientRect();
+      const region = visibleFrameRegion(video.videoWidth, video.videoHeight, box?.width ?? 0, box?.height ?? 0, digital);
+      canvas.width = Math.max(1, Math.round(region.sw));
+      canvas.height = Math.max(1, Math.round(region.sh));
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, region.sx, region.sy, region.sw, region.sh, 0, 0, canvas.width, canvas.height);
       const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
       if (!blob) return;
       registerShot(new File([blob], shotName(), { type: 'image/jpeg', lastModified: Date.now() }));
@@ -236,13 +344,30 @@ export default function PhotoSession({ open, title = 'Take photos', subtitle, on
       </div>
 
       {/* Viewfinder */}
-      <div style={{ flex: 1, position: 'relative', overflow: 'hidden', background: '#000' }}>
+      <div
+        ref={viewRef}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        onTouchCancel={onTouchEnd}
+        style={{ flex: 1, position: 'relative', overflow: 'hidden', background: '#000', touchAction: 'none' }}
+      >
+        {/* contain, not cover: the preview is the whole frame the shutter
+            saves (letterboxed if the shapes differ). The digital zoom is a
+            CSS scale about the centre; the shutter crops to match. */}
         <video
           ref={videoRef}
           playsInline
           muted
           autoPlay
-          style={{ width: '100%', height: '100%', objectFit: 'cover', display: camera === 'live' ? 'block' : 'none', transform: facing === 'user' ? 'scaleX(-1)' : undefined }}
+          style={{
+            width: '100%', height: '100%', objectFit: 'contain', display: camera === 'live' ? 'block' : 'none',
+            transform: (() => {
+              const dz = zoomRange && !zoomRange.hardware ? zoom : 1;
+              return `scale(${facing === 'user' ? -dz : dz}, ${dz})`;
+            })(),
+            transformOrigin: 'center center',
+          }}
         />
         {flash && <div style={{ position: 'absolute', inset: 0, background: '#fff', opacity: 0.7, pointerEvents: 'none' }} />}
         {camera === 'starting' && (
@@ -258,6 +383,37 @@ export default function PhotoSession({ open, title = 'Take photos', subtitle, on
             </button>
             <button type="button" onClick={() => startCamera(facing)} style={btn}>Try again</button>
             <div style={{ fontSize: '12px', opacity: 0.7 }}>Each device-camera shot returns here — keep going, then tap Done.</div>
+          </div>
+        )}
+        {/* Zoom readout + slider — above the last-shot thumbnail row (56px +
+            margins) so the two never overlap on a narrow phone. */}
+        {camera === 'live' && zoomRange && (
+          <div style={{ position: 'absolute', left: 0, right: 0, bottom: '84px', display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
+            <div
+              onTouchStart={e => e.stopPropagation()}
+              onTouchMove={e => e.stopPropagation()}
+              onTouchEnd={e => e.stopPropagation()}
+              style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '6px 12px', borderRadius: '999px', background: 'rgba(0,0,0,0.55)', pointerEvents: 'auto' }}
+            >
+              <button
+                type="button"
+                onClick={() => setZoom(zoomRange.min < 1 ? 1 : zoomRange.min)}
+                aria-label="Reset zoom"
+                style={{ background: 'none', border: 'none', color: '#fff', fontSize: '13px', fontWeight: 800, minWidth: '44px', textAlign: 'center', cursor: 'pointer', fontVariantNumeric: 'tabular-nums' }}
+              >
+                {zoom.toFixed(1)}×
+              </button>
+              <input
+                type="range"
+                min={zoomRange.min}
+                max={zoomRange.max}
+                step={zoomRange.step}
+                value={zoom}
+                onChange={e => setZoom(parseFloat(e.target.value))}
+                aria-label="Zoom"
+                style={{ width: '150px', accentColor: '#fff' }}
+              />
+            </div>
           </div>
         )}
         {count > 0 && lastPreview && (
