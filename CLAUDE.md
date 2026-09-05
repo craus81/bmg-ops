@@ -178,6 +178,15 @@ they tell you to go back to auto-shipping.
   no-op: report it (`laborSkipped`) so the person pushing sees the money that
   didn't go.
 
+- **Invoicing a sales order fulfils it first — every line.** Owner rule
+  (2026-09-05): billing straight off an SO left orders at Pending
+  Fulfillment in NetSuite with inventory never relieved. Every SO→invoice
+  path (`/api/vehicle-tracking/invoice`, `/api/netsuite/create-invoice`)
+  calls `fulfillSalesOrder()` in `src/lib/netsuite.ts` — one Item
+  Fulfillment for all open lines, marked Shipped — and fails closed if it
+  errors; an SO already Pending Billing/Billed is skipped, not
+  re-fulfilled. When adding a new way to invoice an SO, wire this in.
+
 - **Supabase reads silently cap at 1000 rows** (PostgREST default —
   `.limit(N > 1000)` does NOT raise it). Any read of a table that can
   grow unboundedly (netsuite_parts, scan_logs, po/invoice line items,
