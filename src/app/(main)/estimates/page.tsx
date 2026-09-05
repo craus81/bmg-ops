@@ -17,6 +17,7 @@ import { resolvePlatform, matchQualifiersToConfig } from '@/lib/vin-platform';
 import { sameVehicleVin, vinMatchOrFilter } from '@/lib/vin-match';
 import { IN_SHOP_STATUSES } from '@/lib/types';
 import { deepLinks } from '@/lib/deep-links';
+import { apiErrorMessage } from '@/lib/api-error-message';
 import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
@@ -1432,10 +1433,7 @@ export default function EstimatesPage() {
       } else {
         // A schema rejection (400) names the offending field in `details`
         // — show it, or the message is an unactionable "Invalid request".
-        const details = Array.isArray(data.details)
-          ? data.details.map((d: { path?: string; message?: string }) => [d.path, d.message].filter(Boolean).join(': ')).filter(Boolean).join('; ')
-          : '';
-        await dialog.alert('Save failed: ' + (data.error || 'Unknown error') + (details ? ` (${details})` : ''));
+        await dialog.alert('Save failed: ' + apiErrorMessage(data));
       }
     } catch (err) {
       await dialog.alert('Network error — please try again');
