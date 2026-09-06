@@ -74,8 +74,19 @@ export async function POST(req: NextRequest) {
   }
 
   const result = await createCustomerOrLead({ ...p, type: 'customer' });
-  if (!result.success || !result.customerId) {
+  if (!result.success) {
     return NextResponse.json({ error: result.error || 'NetSuite customer create failed' }, { status: 502 });
+  }
+  if (!result.customerId) {
+    // The customer EXISTS in NetSuite — the create succeeded but its id
+    // could not be read, and the in-lib name-lookup recovery also failed.
+    // This used to report a plain "create failed", the textbook
+    // retry-to-duplicate invitation (Round 3, §7.2.4). Say what actually
+    // happened and steer away from the retry.
+    return NextResponse.json({
+      error: 'NetSuite created the customer but did not return its id. Do NOT create it again — pick it from the customer search after the next sync (within ~2 hours), or find it in NetSuite directly.',
+      mayExist: true,
+    }, { status: 502 });
   }
 
   // Mirror into the local customers table (same shape as the customer sync)

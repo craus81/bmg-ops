@@ -572,7 +572,24 @@ export async function createCustomerOrLead(payload: {
     // NetSuite returns the new record location in the header
     const location = response.headers.get('location') || '';
     const idMatch = location.match(/\/customer\/(\d+)/);
-    const customerId = idMatch ? idMatch[1] : undefined;
+    let customerId = idMatch ? idMatch[1] : undefined;
+
+    // Success with an unparseable Location used to surface as "create
+    // failed" to callers, whose retry then minted a DUPLICATE customer
+    // (Round 3, §7.2.4). The record was created moments ago — recover its
+    // id by name, newest first, before reporting anything.
+    if (!customerId) {
+      try {
+        const lookup = await suiteqlQuery(
+          `SELECT id FROM customer WHERE UPPER(companyname) = UPPER('${safeStringLiteral(payload.companyName, 200)}') ORDER BY id DESC FETCH FIRST 1 ROWS ONLY`,
+        );
+        const recovered = lookup?.items?.[0]?.id;
+        if (recovered) {
+          customerId = String(recovered);
+          console.warn(`createCustomerOrLead: Location header unparseable ('${location}'); recovered customer id ${customerId} by name lookup`);
+        }
+      } catch { /* recovery is best-effort — the caller handles no-id */ }
+    }
 
     // Build the NetSuite URL
     const accountForUrl = config.accountId.replace(/-/g, '_').toUpperCase();

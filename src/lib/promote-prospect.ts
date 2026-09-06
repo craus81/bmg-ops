@@ -68,6 +68,50 @@ export async function promoteProspect(
     return { success: false, error: 'This is a vendor record — vendors are never created in NetSuite as customers' };
   }
 
+  // Atomic promotion claim (R3-9, migration 254). The netsuite_id check
+  // above reads the CALLER's copy of the row — two concurrent promotions
+  // (a double-clicked Promote button, or an estimate push racing it) both
+  // passed it and minted two NetSuite customers. The claim serializes them
+  // before the money call: exactly one request stamps promote_claimed_at
+  // on the still-unlinked row; the loser turns away. Stale claims (a crash
+  // mid-create) expire after 15 minutes. Missing-column grace per the #741
+  // lesson: a schema cache that hasn't seen 254 yet degrades to the old
+  // unclaimed behavior instead of bricking every promotion.
+  const claimStamp = new Date().toISOString();
+  let claimed = false;
+  {
+    const staleCutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+    const { data: claimRows, error: claimErr } = await supabase
+      .from('prospects')
+      .update({ promote_claimed_at: claimStamp })
+      .eq('id', prospect.id)
+      .is('netsuite_id', null)
+      .or(`promote_claimed_at.is.null,promote_claimed_at.lt.${staleCutoff}`)
+      .select('id');
+    if (claimErr) {
+      console.warn('promoteProspect claim unavailable, proceeding unclaimed:', claimErr.message);
+    } else if (!claimRows || claimRows.length === 0) {
+      // Either a concurrent promotion holds the claim, or the row got its
+      // netsuite_id since our read — re-read to tell the caller the truth.
+      const { data: fresh } = await supabase
+        .from('prospects').select('netsuite_id').eq('id', prospect.id).maybeSingle();
+      if (fresh?.netsuite_id) return { success: false, error: 'Already pushed to NetSuite' };
+      return { success: false, error: 'A promotion for this record is already in progress — retry in a moment.' };
+    } else {
+      claimed = true;
+    }
+  }
+  const releaseClaim = async () => {
+    if (!claimed) return;
+    try {
+      await supabase
+        .from('prospects')
+        .update({ promote_claimed_at: null })
+        .eq('id', prospect.id)
+        .eq('promote_claimed_at', claimStamp);
+    } catch { /* stale claims expire on their own */ }
+  };
+
   const type = opts?.type || 'customer';
   const result = await createCustomerOrLead({
     companyName: prospect.company_name,
@@ -83,12 +127,26 @@ export async function promoteProspect(
     type,
   });
   if (!result.success) {
+    await releaseClaim();
     return { success: false, error: result.error || 'Failed to create in NetSuite' };
+  }
+  if (!result.customerId) {
+    // The customer EXISTS in NetSuite but its id could not be read (and the
+    // in-lib recovery lookup also failed). Never stamp a falsy id, and hold
+    // the claim: releasing it would invite an immediate re-promote that
+    // duplicates the customer. The claim expires in 15 minutes, by which
+    // point a manual check (or the customer sync) can resolve it.
+    return {
+      success: false,
+      error: 'NetSuite created the customer but did not return its id. Do NOT retry immediately — the customer likely exists; find it with the customer search after the next sync.',
+    };
   }
 
   // Status is set here (not by the caller) so every promotion path lands in
-  // the same converted state.
-  await supabase
+  // the same converted state. Conditional on the row still being unlinked
+  // (belt for the unclaimed degraded mode) — and the stamp retires the
+  // claim.
+  const { data: stampRows, error: stampErr } = await supabase
     .from('prospects')
     .update({
       netsuite_id: result.customerId,
@@ -98,8 +156,18 @@ export async function promoteProspect(
       converted_customer_id: result.customerId,
       pushed_at: new Date().toISOString(),
       pushed_by: opts?.userId || null,
+      promote_claimed_at: null,
     })
-    .eq('id', prospect.id);
+    .eq('id', prospect.id)
+    .is('netsuite_id', null)
+    .select('id');
+  if (stampErr) {
+    console.error('promoteProspect stamp failed (customer exists in NetSuite):', stampErr.message);
+  } else if (!stampRows || stampRows.length === 0) {
+    console.error(
+      `promoteProspect: prospect ${prospect.id} was linked concurrently — NetSuite customer ${result.customerId} may be a duplicate; reconcile by hand.`,
+    );
+  }
 
   // Mirror into the local customers table (same shape as the customer sync)
   // so the new customer is immediately linkable — the estimate builder's
