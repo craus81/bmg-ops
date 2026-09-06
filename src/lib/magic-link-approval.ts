@@ -70,7 +70,11 @@ export function getRequestUserAgent(req: NextRequest | Request): string {
  * window rolls naturally.
  */
 export async function checkRateLimit(ip: string, action: string): Promise<boolean> {
-  if (!ip || ip === 'unknown') return true; // can't rate-limit without IP
+  // No forwarding header used to mean NO limit at all — a fail-open a
+  // direct-to-origin client could sit in forever (Round 3, §7.2.5). Real
+  // traffic on Vercel always carries x-forwarded-for; whatever doesn't
+  // shares one bucket and gets rate-limited together.
+  if (!ip || ip === 'unknown') ip = 'no-ip';
   const supabase = getServiceClient();
   const cutoff = new Date(Date.now() - RATE_LIMIT_WINDOW_MS).toISOString();
 

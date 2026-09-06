@@ -33,12 +33,23 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (!app) return NextResponse.json({ error: 'Application not found' }, { status: 404 });
 
   // Candidate prospects by exact email or exact (case-insensitive) company
-  // name. Display-only until the reviewer links one.
-  const escaped = (app.company_name || '').replace(/[%_,()]/g, ' ').trim();
+  // name. Display-only until the reviewer links one. Both values are
+  // attacker-supplied (public form): strip PostgREST's ilike wildcards —
+  // `*` included, which the original class missed (Round 3, §7.2.5: a
+  // hostile submitter could steer which real customers appear as link
+  // candidates) — and only use the email arm when it carries no wildcard
+  // or .or()-syntax characters at all.
+  const escaped = (app.company_name || '').replace(/[%_*,()]/g, ' ').trim();
+  // `_` stays allowed: it's common in real addresses, and as a single-char
+  // wildcard it can't meaningfully steer an exact-email match the way
+  // `%`/`*` (match-anything) or `,()` (filter-syntax breakage) can.
+  const emailSafe = /^[A-Za-z0-9._+@-]+$/.test(app.contact_email || '');
   let matches: any[] = [];
   try {
-    const ors = [`email.ilike.${app.contact_email}`];
+    const ors: string[] = [];
+    if (emailSafe) ors.push(`email.ilike.${app.contact_email}`);
     if (escaped) ors.push(`company_name.ilike.${escaped}`);
+    if (ors.length === 0) throw new Error('no safe candidate filters');
     const { data: cand } = await service
       .from('prospects')
       .select('id, company_name, contact_name, email, netsuite_id')

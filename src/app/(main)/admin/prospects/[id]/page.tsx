@@ -542,7 +542,7 @@ export default function CustomerRecordPage() {
     // it. Routed through the API so the propagation can't be skipped.
     const ok = await dialog.confirm(
       prospect.netsuite_id
-        ? `Delete ${prospect.company_name} and all associated contacts, deals, reminders, and activity?\n\nThis also deletes the linked NetSuite customer (or marks it inactive if NetSuite refuses because it has transactions). Admins only.`
+        ? `Delete ${prospect.company_name} and all associated contacts, deals, reminders, and activity?\n\nThis also deletes the linked NetSuite customer (or marks it inactive if NetSuite refuses because it has transactions), and permanently deletes any files stored on the customer record — W-9s and tax certificates included. Admins only.`
         : `Delete ${prospect.company_name} and all associated contacts, deals, reminders, and activity?`,
       { destructive: true, confirmLabel: 'Delete', title: 'Delete record' },
     );
@@ -551,9 +551,14 @@ export default function CustomerRecordPage() {
       const res = await fetch(`/api/prospects?id=${prospect.id}`, { method: 'DELETE' });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      const notes: string[] = [];
       if (body.netsuite === 'deactivated') {
-        await dialog.alert('Deleted here. NetSuite refused a hard delete (the customer has transactions), so it was marked inactive there instead.');
+        notes.push('NetSuite refused a hard delete (the customer has transactions), so it was marked inactive there instead.');
       }
+      if (body.mirror === 'kept_inactive') {
+        notes.push('The local customer row has linked quotes or shop visits, so it was kept (marked inactive) instead of deleted — its files were not touched.');
+      }
+      if (notes.length > 0) await dialog.alert(`Deleted here. ${notes.join(' ')}`);
     } catch (e: any) {
       await dialog.alert(`Could not delete: ${e?.message || 'unknown error'}`);
       return;
@@ -603,19 +608,30 @@ export default function CustomerRecordPage() {
   // Creates the missing CRM row for a NetSuite-synced customer, so
   // "Not in CRM" records stop being read-only dead ends.
   const [addingToCrm, setAddingToCrm] = useState(false);
+  // Routed through the API (R3-9): the CRM row's NetSuite identity is
+  // copied server-side from the customers mirror, never asserted by the
+  // browser — migration 254's trigger refuses client-set identity columns.
   const addToCrm = async () => {
     if (!customer || prospect || addingToCrm) return;
     setAddingToCrm(true);
-    const { data, error } = await supabase.from('prospects').insert({
-      company_name: customer.company_name || customer.entity_id || 'Unknown',
-      email: customer.email, phone: customer.phone, address: customer.address,
-      status: 'converted', netsuite_id: customer.netsuite_id, netsuite_url: customer.netsuite_url,
-      created_by: user?.id,
-    }).select().single();
-    setAddingToCrm(false);
-    if (error || !data) { await dialog.alert(`Could not create the record: ${error?.message || 'unknown error'}`); return; }
-    setProspect(data as Prospect);
-    loadFiles(data.id);
+    try {
+      const res = await fetch('/api/prospects', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_name: customer.company_name || customer.entity_id || 'Unknown',
+          fromNetsuiteCustomerId: customer.netsuite_id,
+          created_by: user?.id,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.prospect) throw new Error(body?.error || `HTTP ${res.status}`);
+      setProspect(body.prospect as Prospect);
+      loadFiles(body.prospect.id);
+    } catch (e: any) {
+      await dialog.alert(`Could not create the record: ${e?.message || 'unknown error'}`);
+    } finally {
+      setAddingToCrm(false);
+    }
   };
 
   // No free-form add path any more: tags come from the controlled

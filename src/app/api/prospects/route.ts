@@ -35,9 +35,23 @@ const ProspectFields = {
 
 const CreateProspectSchema = z.object({
   ...ProspectFields,
+  record_type: z.enum(['customer', 'vendor']).optional(),
+  location_count: z.number().int().min(1).max(10_000).optional(),
   /** Skip the duplicate guard — set only after a human saw the matches. */
   force: z.boolean().optional().default(false),
+  /**
+   * "Add Record" for an existing NetSuite customer (the ns- record pages):
+   * creates the CRM row LINKED, with the identity fields copied from the
+   * customers-mirror row this id names — never from the client. Skips the
+   * duplicate guard (the "duplicate" it would find is the customer itself)
+   * and instead refuses when a CRM row already carries this netsuite_id.
+   */
+  fromNetsuiteCustomerId: z.union([z.string().max(40), z.number()]).optional().nullable(),
 });
+// No .passthrough() (Round 3, §7.2.5 — it let any staff caller write ANY
+// prospects column, netsuite_id included, unaudited): unknown keys are now
+// a loud 400, and the NetSuite identity fields are handled explicitly
+// below (admin + audit), never spread into the update.
 const UpdateProspectSchema = z
   .object({
     id: z.string().uuid(),
@@ -53,10 +67,15 @@ const UpdateProspectSchema = z
     website: ProspectFields.website,
     notes: ProspectFields.notes,
     source: ProspectFields.source,
+    lead_source: ProspectFields.lead_source,
+    lead_source_other: z.string().max(120).optional().nullable(),
+    record_type: z.enum(['customer', 'vendor']).optional(),
+    location_count: z.number().int().min(1).max(10_000).optional(),
     created_by: ProspectFields.created_by,
+    /** Re-pointing the NetSuite linkage is admin-only and audit-logged. */
     netsuite_id: z.string().max(40).optional().nullable(),
   })
-  .passthrough();
+  .strict();
 
 /** GET /api/prospects — list all prospects */
 export async function GET(req: NextRequest) {
@@ -81,14 +100,53 @@ export async function POST(req: NextRequest) {
   if (parsed.error) return parsed.error;
   const body = parsed.data;
 
+  // "Add Record" mode: the identity comes from the customers mirror, never
+  // the client (the browser used to insert netsuite_id directly — migration
+  // 254's trigger closes that; this is the sanctioned path).
+  if (body.fromNetsuiteCustomerId) {
+    const nsId = String(body.fromNetsuiteCustomerId);
+    const { data: mirror } = await supabase
+      .from('customers')
+      .select('id, netsuite_id, netsuite_url, company_name, entity_id, email, phone, address')
+      .eq('netsuite_id', nsId)
+      .maybeSingle();
+    if (!mirror) {
+      return NextResponse.json({ error: 'No NetSuite customer with that id is in the local mirror.' }, { status: 404 });
+    }
+    const { data: already } = await supabase
+      .from('prospects').select('id').eq('netsuite_id', nsId).limit(1).maybeSingle();
+    if (already) {
+      return NextResponse.json({ error: 'This NetSuite customer already has a CRM record.', prospectId: already.id }, { status: 409 });
+    }
+    const { data, error } = await supabase
+      .from('prospects')
+      .insert({
+        company_name: mirror.company_name || mirror.entity_id || 'Unknown',
+        email: mirror.email || null,
+        phone: mirror.phone || null,
+        address: mirror.address || null,
+        status: 'converted',
+        netsuite_id: mirror.netsuite_id,
+        netsuite_url: mirror.netsuite_url || null,
+        created_by: body.created_by || auth.user.id,
+      })
+      .select()
+      .single();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, prospect: data });
+  }
+
   // Shared duplicate guard (audit Stage 1: this path previously had NO
   // check of any kind). 409 carries the matches; a deliberate re-submit
-  // with force:true proceeds.
+  // with force:true proceeds. This is now ENFORCED for the browser create
+  // paths too — they insert through here, so a failed pre-flight can no
+  // longer slip an unchecked create past the guard (Round 3, §7.2.5).
   if (!body.force) {
     const matches = await findCustomerDuplicates(supabase, {
       companyName: body.company_name,
       email: body.email,
       phone: body.phone,
+      recordType: body.record_type,
     });
     if (matches.length > 0) {
       return NextResponse.json({
@@ -114,7 +172,9 @@ export async function POST(req: NextRequest) {
       notes: body.notes || null,
       source: body.source || 'manual',
       lead_source: body.lead_source || null,
-      created_by: body.created_by || null,
+      record_type: body.record_type || 'customer',
+      location_count: body.location_count || 1,
+      created_by: body.created_by || auth.user.id,
     })
     .select()
     .single();
@@ -130,11 +190,38 @@ export async function PUT(req: NextRequest) {
 
   const parsed = await validateBody(req, UpdateProspectSchema);
   if (parsed.error) return parsed.error;
-  const { id, ...fields } = parsed.data;
+  const { id, netsuite_id, ...fields } = parsed.data;
+
+  // Re-pointing the NetSuite linkage decides which REAL NetSuite customer a
+  // later delete destroys and where money documents attach — admin-only,
+  // and the old → new pair lands in the audit log (Round 3, §7.2.5).
+  const relink = 'netsuite_id' in parsed.data;
+  if (relink) {
+    const adminAuth = await requireAdmin(req);
+    if (adminAuth.error) {
+      return NextResponse.json(
+        { error: 'Changing the NetSuite linkage needs an admin.' },
+        { status: 403 },
+      );
+    }
+    const { data: before } = await supabase
+      .from('prospects').select('netsuite_id, company_name').eq('id', id).maybeSingle();
+    await logAudit(supabase, {
+      actorId: auth.user.id,
+      table: 'prospects',
+      recordId: id,
+      action: 'prospect_netsuite_relink',
+      detail: {
+        company_name: before?.company_name || null,
+        from: before?.netsuite_id || null,
+        to: netsuite_id || null,
+      },
+    });
+  }
 
   const { data, error } = await supabase
     .from('prospects')
-    .update(fields)
+    .update(relink ? { ...fields, netsuite_id: netsuite_id || null } : fields)
     .eq('id', id)
     .select()
     .single();
@@ -179,6 +266,8 @@ export async function DELETE(req: NextRequest) {
   if (!row) return NextResponse.json({ error: 'Record not found' }, { status: 404 });
 
   let netsuite: 'deleted' | 'deactivated' | null = null;
+  let mirror: 'deleted' | 'kept_inactive' | null = null;
+  let filesOnMirror = 0;
   if (row.netsuite_id) {
     const adminAuth = await requireAdmin(req);
     if (adminAuth.error) {
@@ -203,7 +292,32 @@ export async function DELETE(req: NextRequest) {
 
     // The mirror row would resurrect the CRM record on the next sync run
     // that still sees the customer cached — remove it with the prospect.
-    await supabase.from('customers').delete().eq('netsuite_id', row.netsuite_id);
+    // CHECKED now (Round 3, §7.2.5): wrap_quotes / fleet_checkins FKs have
+    // no ON DELETE clause, so a customer with quotes or visits blocks the
+    // delete — previously that failure was silent and the stale row lived
+    // on. Count the customer_files that ride on the mirror first, so the
+    // response can say what the cascade took (W-9s, tax certificates).
+    const { data: mirrorRow } = await supabase
+      .from('customers').select('id').eq('netsuite_id', row.netsuite_id).maybeSingle();
+    if (mirrorRow) {
+      const { count } = await supabase
+        .from('customer_files')
+        .select('id', { count: 'exact', head: true })
+        .eq('customer_id', mirrorRow.id);
+      filesOnMirror = count || 0;
+      const { error: mirrorErr } = await supabase
+        .from('customers').delete().eq('id', mirrorRow.id);
+      if (mirrorErr) {
+        // FK-blocked (quotes / check-ins reference it). The NetSuite side is
+        // already deleted/deactivated so nothing resurrects via sync — mark
+        // the survivor inactive so pickers stop offering it, and say so.
+        await supabase.from('customers').update({ active: false }).eq('id', mirrorRow.id);
+        mirror = 'kept_inactive';
+        filesOnMirror = 0; // nothing cascaded — the row survived
+      } else {
+        mirror = 'deleted';
+      }
+    }
   }
 
   const { error } = await supabase.from('prospects').delete().eq('id', id);
@@ -218,8 +332,10 @@ export async function DELETE(req: NextRequest) {
       company_name: row.company_name,
       netsuite_id: row.netsuite_id || null,
       netsuite: netsuite || 'not_linked',
+      mirror: mirror || 'not_linked',
+      files_deleted: filesOnMirror,
     },
   });
 
-  return NextResponse.json({ success: true, netsuite });
+  return NextResponse.json({ success: true, netsuite, mirror, filesDeleted: filesOnMirror });
 }

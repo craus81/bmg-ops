@@ -382,14 +382,62 @@ export default function ProspectsPage() {
       if (!anyway) { setSaving(false); return; }
     }
 
-    const { data, error } = await supabase.from('prospects')
-      .insert({ ...form, company_name: name, lead_source: form.lead_source || null, location_count: form.location_count || 1, created_by: user?.id })
-      .select().single();
-    if (error || !data) {
+    // Create through the API so the server-side duplicate guard is ENFORCED,
+    // not just previewed — a failed pre-flight above used to mean an
+    // unchecked browser insert (Round 3, §7.2.5). force only when a human
+    // actually saw matches and chose to proceed; a clean (or failed)
+    // pre-flight leaves the server to check again.
+    const createBody = {
+      ...form,
+      company_name: name,
+      email: form.email || null,
+      lead_source: form.lead_source || null,
+      location_count: form.location_count || 1,
+      created_by: user?.id,
+      force: dupes.length > 0,
+    };
+    let data: any = null;
+    try {
+      let res = await fetch('/api/prospects', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createBody),
+      });
+      let body = await res.json().catch(() => ({}));
+      if (res.status === 409 && Array.isArray(body.matches) && body.matches.length > 0) {
+        // The pre-flight missed (or failed) and the server found matches —
+        // run the same conversation it would have had.
+        const srvName = body.matches.find((m: any) => m.matchedOn?.includes('name'));
+        if (srvName) {
+          setSaving(false);
+          const url = dupeUrl(srvName);
+          const open = await dialog.confirm(
+            `"${srvName.company_name || name}" already exists${srvName.source === 'customers' ? ' in NetSuite' : ''}.\n\nOpen the existing record instead? If this really is a different company, go back and adjust the name (e.g. add the city).`,
+            { confirmLabel: 'Open Existing', cancelLabel: 'Go Back' },
+          );
+          if (open && url) router.push(url);
+          return;
+        }
+        const top = body.matches[0];
+        const what = (top.matchedOn || []).map((f: string) => f === 'email' ? 'email' : 'phone number').join(' and ');
+        const anyway = await dialog.confirm(
+          `"${top.company_name || 'An existing record'}" already has this ${what}. If it's the same company, open it from the list instead of creating a duplicate.\n\nCreate "${name}" anyway?`,
+          { confirmLabel: 'Create Anyway', cancelLabel: 'Go Back' },
+        );
+        if (!anyway) { setSaving(false); return; }
+        res = await fetch('/api/prospects', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...createBody, force: true }),
+        });
+        body = await res.json().catch(() => ({}));
+      }
+      if (res.ok && body.prospect?.id) data = body.prospect;
+      else throw new Error(body?.error || `HTTP ${res.status}`);
+    } catch (e: any) {
       setSaving(false);
-      await dialog.alert(`Could not create the ${isVendor ? 'vendor' : 'customer'}: ${error?.message || 'unknown error'}`);
+      await dialog.alert(`Could not create the ${isVendor ? 'vendor' : 'customer'}: ${e?.message || 'unknown error'}`);
       return;
     }
+    if (!data) { setSaving(false); return; }
     if (form.location_count > 1) {
       await supabase.from('prospect_tags').insert({ prospect_id: data.id, tag: 'multilocation', auto_generated: true });
     }
