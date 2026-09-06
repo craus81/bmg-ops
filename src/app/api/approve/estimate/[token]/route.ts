@@ -20,6 +20,7 @@ import { approvalContentHash } from '@/lib/magic-link-approval';
 import { reconcileLinkedWrapQuotes } from '@/lib/wrap-quote-reconcile';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
+import { logQuoteResponse } from '@/lib/quote-response-activity';
 import { validateBody, z } from '@/lib/validate';
 import { renderEstimateDocument, escHtml } from '@/lib/estimate-document';
 import { publicEstimate, publicLines, publicProofs, loadApprovalLines } from '@/lib/estimate-approval-view';
@@ -388,6 +389,20 @@ async function noteRejectionOnLinkedJobs(estimate: any, proofBlocks: EstimatePro
 }
 
 async function notifySalesRep(estimate: any, verdict: 'accepted' | 'rejected', reason?: string) {
+  // The customer's answer belongs on their account history too — the
+  // timeline showed the estimate going out (the email row) but never what
+  // came back. Best-effort; the approval itself already succeeded.
+  await logQuoteResponse(supabase, {
+    verdict,
+    label: `Estimate #${estimate.estimate_number}`,
+    total: estimate.grand_total,
+    reason,
+    url: deepLinks.estimate(estimate.id),
+    customerId: estimate.customer_id,
+    prospectId: estimate.prospect_id,
+    netsuiteCustomerId: estimate.customer_netsuite_id,
+  });
+
   const targetIds = new Set<string>();
   if (estimate.created_by) targetIds.add(estimate.created_by);
   if (estimate.sent_for_approval_by) targetIds.add(estimate.sent_for_approval_by);

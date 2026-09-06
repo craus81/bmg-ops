@@ -5,10 +5,15 @@ import { safeStringLiteral } from '@/lib/sql-safe';
 /**
  * Promotion: the moment a FleetSuite lead becomes a NetSuite customer.
  *
- * Since the lead tier (owner decision 2026-08-30), creating a CRM record no
- * longer creates a NetSuite customer — a record without netsuite_id IS a
- * lead. Promotion happens exactly here, from three places:
+ * Since the lead tier (owner decision 2026-08-30), a record without
+ * netsuite_id IS a lead. Creating a CRM record normally promotes it in the
+ * same click (owner decision 2026-09-02 — the create form's ticked-by-
+ * default "Create the customer in NetSuite now"); unticking that box, or a
+ * NetSuite failure, leaves the lead for one of the paths below.
  *
+ * Promotion happens exactly here, from four places:
+ *
+ *   - the CRM create form, through push-to-netsuite, when the box is ticked;
  *   - /api/prospects/push-to-netsuite — the record page's explicit
  *     "Promote to NetSuite Customer" button;
  *   - /api/estimates/push — pushing a lead's estimate to NetSuite needs a
@@ -16,8 +21,8 @@ import { safeStringLiteral } from '@/lib/sql-safe';
  *   - /api/estimates/convert-to-so — same, for the rare estimate converted
  *     without ever being pushed.
  *
- * Kept in one module so the three paths can't drift on what "promoted"
- * writes (netsuite_id + status + the customers-mirror row).
+ * Kept in one module so those paths can't drift on what "promoted" writes
+ * (netsuite_id + status + the customers-mirror row).
  */
 
 export interface ProspectRow {

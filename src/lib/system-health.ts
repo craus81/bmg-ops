@@ -67,13 +67,16 @@ export interface HeartbeatResult {
  *
  * `touchLastSyncedAt: false` writes only last_result/updated_at — for jobs
  * whose last_synced_at is a data cursor that must not advance on a failed run
- * (e.g. the calendar pull).
+ * (e.g. the calendar pull). `lastSyncedAt` writes an explicit cursor value
+ * instead of "now" — for jobs that drain a window opened earlier (the
+ * sales-order sync), where advancing to the write time would skip records
+ * modified while the window was being processed.
  */
 export async function recordHeartbeat(
   service: SupabaseClient,
   syncType: string,
   lastResult: unknown,
-  opts?: { touchLastSyncedAt?: boolean },
+  opts?: { touchLastSyncedAt?: boolean; lastSyncedAt?: string },
 ): Promise<HeartbeatResult> {
   const wroteAt = new Date().toISOString();
   try {
@@ -82,7 +85,8 @@ export async function recordHeartbeat(
       last_result: lastResult,
       updated_at: wroteAt,
     };
-    if (opts?.touchLastSyncedAt !== false) row.last_synced_at = wroteAt;
+    if (opts?.lastSyncedAt) row.last_synced_at = opts.lastSyncedAt;
+    else if (opts?.touchLastSyncedAt !== false) row.last_synced_at = wroteAt;
     const { error } = await service
       .from('sync_state')
       .upsert(row, { onConflict: 'sync_type' });
@@ -129,29 +133,42 @@ const errorOf = (lastResult: any): string | null => {
   return null;
 };
 
+export interface SyncStateRow {
+  sync_type: string;
+  last_synced_at: string | null;
+  last_result: any;
+  updated_at: string | null;
+}
+
+/**
+ * Health of one job from its sync_state row (or its absence). Shared by the
+ * System Health board and by pages that read a mirror this job feeds, so a
+ * "0 rows" on such a page can say WHY (never ran / failed / stale) with the
+ * same verdict the board would give.
+ */
+export function evaluateHealthRow(m: HealthMonitor, row: SyncStateRow | null | undefined, now = Date.now()): HealthCheck {
+  // updated_at moves on every write; last_synced_at can be a data cursor
+  // (e.g. "fetch records modified since"), so recency uses updated_at.
+  const lastRunAt = row?.updated_at || row?.last_synced_at || null;
+  if (!row || !lastRunAt) {
+    return { ...m, status: 'never', lastRunAt: null, ageMinutes: null, problem: 'has never run (or never wrote a heartbeat)' };
+  }
+  const ageMinutes = Math.round((now - new Date(lastRunAt).getTime()) / 60000);
+  const error = errorOf(row.last_result);
+  if (error) {
+    return { ...m, status: 'error', lastRunAt, ageMinutes, problem: error };
+  }
+  if (ageMinutes > staleThresholdMinutes(m)) {
+    return { ...m, status: 'stale', lastRunAt, ageMinutes, problem: `no run in ${Math.round(ageMinutes / 60)}h — scheduled every ${m.intervalMinutes} min` };
+  }
+  return { ...m, status: 'ok', lastRunAt, ageMinutes, problem: null };
+}
+
 export async function evaluateSystemHealth(service: SupabaseClient): Promise<HealthCheck[]> {
   const { data: rows } = await service
     .from('sync_state')
     .select('sync_type, last_synced_at, last_result, updated_at');
-  const bySyncType = new Map((rows || []).map(r => [r.sync_type, r]));
+  const bySyncType = new Map<string, SyncStateRow>((rows || []).map(r => [r.sync_type, r]));
   const now = Date.now();
-
-  return HEALTH_MONITORS.map(m => {
-    const row = bySyncType.get(m.syncType);
-    // updated_at moves on every write; last_synced_at can be a data cursor
-    // (e.g. "fetch records modified since"), so recency uses updated_at.
-    const lastRunAt = row?.updated_at || row?.last_synced_at || null;
-    if (!row || !lastRunAt) {
-      return { ...m, status: 'never' as const, lastRunAt: null, ageMinutes: null, problem: 'has never run (or never wrote a heartbeat)' };
-    }
-    const ageMinutes = Math.round((now - new Date(lastRunAt).getTime()) / 60000);
-    const error = errorOf(row.last_result);
-    if (error) {
-      return { ...m, status: 'error' as const, lastRunAt, ageMinutes, problem: error };
-    }
-    if (ageMinutes > staleThresholdMinutes(m)) {
-      return { ...m, status: 'stale' as const, lastRunAt, ageMinutes, problem: `no run in ${Math.round(ageMinutes / 60)}h — scheduled every ${m.intervalMinutes} min` };
-    }
-    return { ...m, status: 'ok' as const, lastRunAt, ageMinutes, problem: null };
-  });
+  return HEALTH_MONITORS.map(m => evaluateHealthRow(m, bySyncType.get(m.syncType), now));
 }

@@ -7,6 +7,7 @@ import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import VinScanner from '@/components/VinScanner';
 import RfidCapture, { type RfidCompletion } from '@/components/RfidCapture';
+import PhotoSession from '@/components/PhotoSession';
 import { locationBillingOverride } from '@/lib/scan-billing';
 import { loadBillableCustomers, findBillableCustomer, matchesBillableCustomer, type BillableCustomer } from '@/lib/billable-customers';
 import { isVerizonRfidPart } from '@/lib/rfid';
@@ -98,7 +99,8 @@ export default function ScanPage() {
   const [photoTargets, setPhotoTargets] = useState<string[]>([]);
   const [photoCount, setPhotoCount] = useState(0);
   const [photoUploading, setPhotoUploading] = useState(false);
-  const photoInputRef = useRef<HTMLInputElement>(null);
+  // In-app camera session (PhotoSession): tap once, shoot many, Done.
+  const [photoSession, setPhotoSession] = useState(false);
 
   const uploadScanPhoto = async (file: File) => {
     if (photoTargets.length === 0) return;
@@ -1340,20 +1342,15 @@ export default function ScanPage() {
               {/* Optional completion photo (K8) — one tap to add, zero to skip. */}
               {photoTargets.length > 0 && (
                 <span style={{ marginLeft: '8px' }}>
-                  <input
-                    ref={photoInputRef}
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    style={{ display: 'none' }}
-                    onChange={async (e) => {
-                      const f = e.target.files?.[0];
-                      e.target.value = '';
-                      if (f) await uploadScanPhoto(f);
-                    }}
+                  <PhotoSession
+                    open={photoSession}
+                    title="Install photos"
+                    subtitle="Tap Done when finished — each shot uploads as you go"
+                    onShot={(file) => uploadScanPhoto(file)}
+                    onClose={() => setPhotoSession(false)}
                   />
                   <button
-                    onClick={() => photoInputRef.current?.click()}
+                    onClick={() => setPhotoSession(true)}
                     disabled={photoUploading}
                     style={{ padding: '3px 10px', borderRadius: '6px', border: '1px solid rgba(34,197,94,0.35)', background: 'transparent', color: '#22c55e', fontSize: '11px', fontWeight: 700, cursor: 'pointer', opacity: photoUploading ? 0.6 : 1 }}
                   >

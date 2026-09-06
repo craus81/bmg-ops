@@ -17,9 +17,11 @@ import { resolvePlatform, matchQualifiersToConfig } from '@/lib/vin-platform';
 import { sameVehicleVin, vinMatchOrFilter } from '@/lib/vin-match';
 import { IN_SHOP_STATUSES } from '@/lib/types';
 import { deepLinks } from '@/lib/deep-links';
+import { apiErrorMessage } from '@/lib/api-error-message';
 import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
+import { roundCentsHalfEven } from '@/lib/estimate-totals';
 import { FALLBACK_SALES_TAX_RATE, pctToRate, rateToPct } from '@/lib/sales-tax';
 import NumberInput from '@/components/NumberInput';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
@@ -32,7 +34,8 @@ interface Part {
   display_name: string;
   description: string;
   sales_price: number;
-  labor_hours: number;
+  /** NULL = labor not set on the part yet; 0 = no labor (migration 258). */
+  labor_hours: number | null;
   catalog: string;
   purchase_price: number | null;
   avg_install_cost: number | null;
@@ -46,7 +49,9 @@ interface LineItem {
   description: string;
   quantity: number;
   unit_price: number;
-  labor_hours: number;
+  /** NULL = the part had no labor set when added (flagged on the line);
+   *  0 = no labor. Summed as 0 either way. */
+  labor_hours: number | null;
   is_custom: boolean;
   notes?: string;
   // Which wrap quote produced this line (Add Graphics flow) — preserved
@@ -146,6 +151,9 @@ interface Estimate {
   grand_total: number;
   netsuite_estimate_id: string | null;
   netsuite_estimate_number: string | null;
+  /** Migration 259: the SO no longer matches the estimate (set on save). */
+  so_out_of_date?: boolean | null;
+  so_pushed_hash?: string | null;
   netsuite_so_id: string | null;
   netsuite_so_number: string | null;
   // Delivery state of the LATEST approval email (Resend webhook — same
@@ -177,6 +185,8 @@ interface Estimate {
   supersedes_estimate_id: string | null;
   // Approval provenance + rejection record (Stage 3: these lived only in
   // the DB and one push notification — the builder now shows them).
+  /** The customer accepted this document — its contents are locked. */
+  customer_approved: boolean | null;
   customer_approved_at: string | null;
   customer_approved_via: string | null;
   customer_rejected_at: string | null;
@@ -229,7 +239,10 @@ type ViewMode = 'list' | 'builder';
 // Settings → Sales Tax, super admin only). Used until that load returns, or
 // if it fails.
 const DEFAULT_TAX_RATE = FALLBACK_SALES_TAX_RATE;
-const DEFAULT_LABOR_RATE = 120;
+// Standard shop labor rate for a new estimate (owner decision, 2026-09-03:
+// $115). Editable per estimate; saved estimates keep whatever rate they
+// were quoted at.
+const DEFAULT_LABOR_RATE = 115;
 
 const STATUS_COLORS: Record<string, string> = {
   draft: '#60a5fa',
@@ -286,6 +299,12 @@ export default function EstimatesPage() {
   // halves of "who is this for" — exactly one is set once a customer is
   // picked, and the approval/send paths accept either.
   const [prospectId, setProspectId] = useState<string | null>(null);
+  // Item numbers NetSuite marks non-taxable (netsuite_parts.is_taxable =
+  // false, migration 252). Resolved from the line set rather than threaded
+  // through every add-a-line path — catalog search, the browser, packages,
+  // wrap quotes and reload all feed the same list, and one lookup can't
+  // drift from the server's.
+  const [nonTaxableItems, setNonTaxableItems] = useState<Set<string>>(new Set());
   // Sales tax is company-wide and NOT editable here — it comes from
   // quote_settings and only a super admin can change it (Settings → Sales
   // Tax). `taxRate` still holds a per-estimate value because an already-saved
@@ -551,6 +570,8 @@ export default function EstimatesPage() {
   // wrap quotes with estimate_attach) — from the preview response; null =
   // no attachment.
   const [approvalPdfName, setApprovalPdfName] = useState<string | null>(null);
+  // The follow-up send auto-attaches the estimate PDF; the preview names it.
+  const [followupPdfName, setFollowupPdfName] = useState<string | null>(null);
   // Proof picker for the approval compose (linked graphics jobs): each
   // job's files, and which are checked to ride on the send. Approving the
   // estimate will also approve the jobs whose proofs are included.
@@ -907,13 +928,39 @@ export default function EstimatesPage() {
     if (f.customerId) loadCustomerDefaults(f.customerId);
   };
 
+  /**
+   * Is this estimate's content frozen, so a save would be refused?
+   *
+   * Mirrors the SAVE gate in /api/estimates exactly — customer_approved OR
+   * status 'accepted'. Deliberately NOT netsuite_so_id, which locks
+   * DELETION only: a converted-but-unaccepted estimate still saves, and
+   * treating it as frozen here would silently keep on-screen edits out of
+   * its PDF.
+   */
+  const isContentFrozen = (est?: Estimate | null): boolean =>
+    !!(est && (est.customer_approved || est.status === 'accepted'));
+
   // Offer the device-local backup for this estimate (null = the unsaved
   // builder). True = restored. Declining discards the backup.
   const maybeOfferDraft = async (id: string | null, est?: Estimate): Promise<boolean> => {
     const draft = readEstimateDraft(id);
     if (!draft) return false;
+
+    // NEVER onto a customer-accepted estimate. Its contents are frozen, so
+    // restoring can only mislead — or, if someone then saves with an admin
+    // override, overwrite the document the customer actually signed with a
+    // backup up to 14 days old. That is how an accepted estimate came back
+    // as a pre-approval version. The backup is deliberately NOT discarded:
+    // it may be wanted on a revision, and it expires on its own.
+    if (isContentFrozen(est)) return false;
+
     const savedAt = new Date(draft.savedAt);
-    const staleNote = est?.updated_at && new Date(est.updated_at) > savedAt
+    // Older than what's saved: the safe answer is almost always "keep what's
+    // saved", so the restore is styled as the destructive choice and the
+    // labels say which version each button keeps. The old wording made
+    // "Restore" the plain primary action on a backup that undoes newer work.
+    const stale = !!(est?.updated_at && new Date(est.updated_at) > savedAt);
+    const staleNote = stale
       ? '\n\nNote: this estimate has been saved more recently (possibly on another device) than this backup — restoring brings back the older unsaved edits.'
       : '';
     const lineCount = Array.isArray(draft.fields?.lines) ? draft.fields.lines.length : 0;
@@ -921,7 +968,9 @@ export default function EstimatesPage() {
     const ok = await dialog.confirm(
       `Unsaved work${label ? ` (“${label}”)` : ''} from ${savedAt.toLocaleString()} was backed up on this device — ` +
       `${lineCount} line item${lineCount === 1 ? '' : 's'}. Restore it?${staleNote}`,
-      { title: 'Restore unsaved estimate?', confirmLabel: 'Restore', cancelLabel: 'Discard backup' },
+      stale
+        ? { title: 'Restore older unsaved edits?', confirmLabel: 'Restore the older version', cancelLabel: 'Keep what’s saved', destructive: true }
+        : { title: 'Restore unsaved estimate?', confirmLabel: 'Restore', cancelLabel: 'Discard backup' },
     );
     if (!ok) { clearEstimateDraft(id); return false; }
     applyDraft(id, draft);
@@ -1024,7 +1073,9 @@ export default function EstimatesPage() {
       description: part.display_name || part.description || part.item_number,
       quantity: 1,
       unit_price: part.sales_price || 0,
-      labor_hours: part.labor_hours || 0,
+      // Carry "not set" onto the line so the builder can flag it instead of
+      // quietly quoting zero labor (migration 258).
+      labor_hours: part.labor_hours ?? null,
       is_custom: false,
       catalog: part.catalog,
       purchase_price: part.purchase_price,
@@ -1050,7 +1101,7 @@ export default function EstimatesPage() {
       description: m.part.display_name || m.part.marketing_description || m.part.description || m.part.item_number,
       quantity: m.quantity,
       unit_price: m.part.sales_price || 0,
-      labor_hours: m.part.labor_hours || 0,
+      labor_hours: m.part.labor_hours ?? null,
       is_custom: false,
       catalog: m.part.catalog || undefined,
       purchase_price: m.part.purchase_price,
@@ -1157,15 +1208,58 @@ export default function EstimatesPage() {
 
   // ── Computed totals ──
   const subtotal = lines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
-  const autoLaborHours = lines.reduce((s, l) => s + (l.labor_hours * l.quantity), 0);
+  const autoLaborHours = lines.reduce((s, l) => s + ((l.labor_hours ?? 0) * l.quantity), 0);
+  // Lines built from parts whose labor was never set (NULL, migration 258):
+  // they sum as zero, which is exactly the silent under-quote to flag.
+  const laborUnsetCount = lines.filter(l => !l.is_custom && l.labor_hours == null).length;
   const effectiveLaborHours = laborOverride !== null ? laborOverride : autoLaborHours;
   const laborTotal = effectiveLaborHours * laborRate;
-  const taxableAmount = subtotal; // Tax on parts/materials only, not labor
-  const taxAmount = taxExempt ? 0 : taxableAmount * taxRate;
+  // Parts/materials only (never labor), minus anything NetSuite marks
+  // non-taxable — Freight is the live case. Mirrors computeTotals on the
+  // server, which is what actually gets stored: only an explicit false
+  // excludes, so an unmatched or un-synced item is still taxed.
+  const isLineTaxable = (l: LineItem) =>
+    !nonTaxableItems.has(String(l.item_number || '').trim().toUpperCase());
+  const taxableAmount = lines.reduce((s, l) => (isLineTaxable(l) ? s + l.quantity * l.unit_price : s), 0);
+  // Per line, each rounded to cents, ties to the even cent — the same math
+  // computeTotals runs server-side, which is the same math NetSuite books.
+  // Taxing `taxableAmount` in one go drifts a cent or two off the invoice.
+  const taxAmount = taxExempt
+    ? 0
+    : lines.reduce((s, l) => (isLineTaxable(l)
+      ? s + roundCentsHalfEven(l.quantity * l.unit_price * taxRate)
+      : s), 0);
   // Compare at the precision the rate is displayed and stored at — a float
   // round-trip through the database is not a "different rate".
   const atCompanyRate = Math.abs(rateToPct(taxRate) - rateToPct(companyTaxRate)) < 0.005;
   const grandTotal = subtotal + laborTotal + taxAmount;
+
+  // Refresh the non-taxable set whenever the line-up of items changes. Keyed
+  // on the sorted item numbers, so re-ordering or a quantity edit doesn't
+  // re-query. An item that can't be resolved simply isn't in the set, which
+  // means taxed — the same fallback the server takes.
+  const lineItemKey = [...new Set(lines.map(l => String(l.item_number || '').trim().toUpperCase()).filter(Boolean))]
+    .sort().join('|');
+  useEffect(() => {
+    const numbers = lineItemKey ? lineItemKey.split('|') : [];
+    if (numbers.length === 0) { setNonTaxableItems(new Set()); return; }
+    let cancelled = false;
+    (async () => {
+      const found = new Set<string>();
+      for (let i = 0; i < numbers.length; i += 200) {
+        const { data } = await supabase
+          .from('netsuite_parts')
+          .select('item_number, is_taxable')
+          .in('item_number', numbers.slice(i, i + 200));
+        for (const p of data || []) {
+          if (p.is_taxable === false) found.add(String(p.item_number || '').trim().toUpperCase());
+        }
+      }
+      if (!cancelled) setNonTaxableItems(found);
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the item line-up is the only real input; the client is stable
+  }, [lineItemKey]);
 
   // ── Margin (internal only — never on the customer-facing quote) ──
   // True cost per line = NetSuite part cost + avg installer cost. Lines with
@@ -1244,6 +1338,13 @@ export default function EstimatesPage() {
 
       let data = await res.json();
 
+      // The server is the source of truth for the lock: whatever the list's
+      // copy of the row said, it is frozen now. Fold that in so View/Print,
+      // Email PDF, and the draft-restore guard treat it as accepted from
+      // here on instead of re-tripping the lock.
+      if (res.status === 409 && data.step === 'accepted_locked' && editingId) {
+        setEstimates(prev => prev.map(e => e.id === editingId && !isContentFrozen(e) ? { ...e, status: 'accepted' } : e));
+      }
       // Revision lock: the customer signed this document, so its contents are
       // frozen. An admin can still save with a recorded reason — ask for it
       // and retry once. Anyone else gets the plain refusal below.
@@ -1323,15 +1424,64 @@ export default function EstimatesPage() {
         }
         await loadEstimates(true);
         setSaving(false);
+        // The estimate already has a sales order and this save changed
+        // what the SO carries (migration 259): ask, never push silently.
+        if (data.soOutOfDate && savedId) {
+          await offerSalesOrderPush(savedId, data.salesOrderNumber || null);
+        }
         return savedId;
       } else {
-        await dialog.alert('Save failed: ' + (data.error || 'Unknown error'));
+        // A schema rejection (400) names the offending field in `details`
+        // — show it, or the message is an unactionable "Invalid request".
+        await dialog.alert('Save failed: ' + apiErrorMessage(data));
       }
     } catch (err) {
       await dialog.alert('Network error — please try again');
     }
     setSaving(false);
     return null;
+  };
+
+  // ── Push estimate changes to its NetSuite sales order (migration 259) ──
+  // Never automatic: a save that changes what the SO carries asks first;
+  // the amber SO banner offers it again while the estimate is out of date.
+  const [pushingSo, setPushingSo] = useState(false);
+
+  const pushSalesOrderChanges = async (estimateId: string, soNumber: string | null) => {
+    if (pushingSo) return;
+    const reason = await dialog.prompt(
+      `Replace the lines on ${soNumber ? `SO #${soNumber}` : 'the sales order'} in NetSuite with this estimate's current lines, labor, reference number and VIN? NetSuite refuses changes to lines already billed or fulfilled. Why is the sales order changing?`,
+      '',
+      { title: 'Push changes to sales order', placeholder: 'e.g. customer added two units by phone', confirmLabel: 'Push to NetSuite' },
+    );
+    if (!reason?.trim()) return;
+    setPushingSo(true);
+    try {
+      const res = await fetch(`/api/estimates/${estimateId}/push-so`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        await dialog.alert(`Sales order not updated: ${data.error || `HTTP ${res.status}`}`);
+        return;
+      }
+      await loadEstimates(true);
+      await dialog.alert(`${data.salesOrderNumber ? `SO #${data.salesOrderNumber}` : 'The sales order'} now carries ${data.lines} line${data.lines !== 1 ? 's' : ''} from this estimate${data.laborItemNumber ? ` (labor on ${data.laborItemNumber})` : ''}.`);
+    } catch {
+      await dialog.alert('Network error — the sales order was not changed. Try again.');
+    } finally {
+      setPushingSo(false);
+    }
+  };
+
+  const offerSalesOrderPush = async (estimateId: string, soNumber: string | null) => {
+    const go = await dialog.confirm(
+      `This estimate has ${soNumber ? `Sales Order SO #${soNumber}` : 'a sales order'} in NetSuite, and it no longer matches what you just saved. Push these changes to the sales order now? (You can also do it later from the SO banner.)`,
+      { confirmLabel: 'Push to Sales Order', cancelLabel: 'Not now' },
+    );
+    if (!go) return;
+    await pushSalesOrderChanges(estimateId, soNumber);
   };
 
   // ── Quick graphics entry (no estimator) ──
@@ -1503,20 +1653,79 @@ export default function EstimatesPage() {
     setViewingPdf(false);
   };
 
+  /**
+   * On a locked estimate, warn when the screen is holding changes the
+   * document won't have. Returns false to abandon the open.
+   *
+   * This is the trap that made an accepted estimate look like it printed a
+   * "stale" copy: the builder showed edits made after the customer's
+   * rejection, the estimate row still held the version that was resent and
+   * accepted, and the PDF — correctly — rendered the row. The document was
+   * right; the screen was the unsaved copy.
+   */
+  const confirmFrozenPdf = async (): Promise<boolean> => {
+    if (draftSerialized === draftBaselineRef.current) return true;
+    return dialog.confirm(
+      'The customer accepted this estimate, so it is locked and the changes on screen are NOT saved — '
+      + 'the PDF shows the accepted document, not what you are looking at.\n\n'
+      + 'Open the accepted document anyway? To quote the changes instead, use "Duplicate as New Revision".',
+      { confirmLabel: 'Open accepted document', cancelLabel: 'Go back' },
+    );
+  };
+
+  // The frozen check above reads the list's copy of the row, which can be
+  // stale: a customer accepting online (or a conversion to a sales order)
+  // while the builder is open leaves the local row unlocked, so View/Print
+  // and Email PDF still tried to save and ran straight into the server's
+  // lock prompt. Ask the server for the current lock state first and fold
+  // it into the list, so the decision below matches what the save gate
+  // would say. Falls back to the local row if the fetch fails.
+  const freshEstimateRow = async (id: string): Promise<Estimate | undefined> => {
+    try {
+      const res = await fetch(`/api/estimates?id=${id}`);
+      const data = await res.json();
+      const row = res.ok ? data.estimates?.[0] : null;
+      if (row) {
+        const patch = { customer_approved: row.customer_approved, status: row.status, netsuite_so_id: row.netsuite_so_id, updated_at: row.updated_at };
+        setEstimates(prev => prev.map(e => e.id === id ? { ...e, ...patch } : e));
+        const local = estimates.find(e => e.id === id);
+        return local ? { ...local, ...patch } : row;
+      }
+    } catch { /* offline or transient — the local row decides */ }
+    return estimates.find(e => e.id === id);
+  };
+
   // ── FleetSuite enhanced-estimate PDF: view / print in a new tab ──
   // The endpoint renders the same customer-facing copy as the approval email
   // (photos + product links) as a real PDF. The tab must open inside the
   // click gesture (popup blockers), so open it blank, save so the PDF
   // matches the screen, then point it at the endpoint.
-  const openFleetsuitePdf = (print = false) => {
+  //
+  // The save is SKIPPED on a frozen estimate. Reading a document is not
+  // editing it, and saving one the server has locked turned View PDF and
+  // Print into the accepted-lock override prompt — "why are you changing
+  // it?" — for anyone trying to print a signed estimate. Frozen contents
+  // can't have drifted from the screen anyway, so there is nothing to
+  // persist.
+  const openFleetsuitePdf = async (print = false) => {
     if (!editingId) return;
     const w = window.open('', '_blank');
-    const currentStatus = estimates.find(e => e.id === editingId)?.status || 'draft';
-    saveEstimate(currentStatus).then(() => {
-      const url = `/api/estimates/${editingId}/pdf${print ? '?print=1' : ''}`;
-      if (w) w.location.href = url;
-      else window.open(url, '_blank');
-    });
+    const est = await freshEstimateRow(editingId);
+    if (isContentFrozen(est)) {
+      // Locked, so nothing to save — but the builder can still be holding
+      // changes that are NOT in the document. Removing the save took away
+      // the only (accidental) signal that they differ: the lock prompt. Say
+      // it plainly instead, and point at the revision that CAN carry them.
+      if (!(await confirmFrozenPdf())) { w?.close(); return; }
+    } else {
+      const saved = await saveEstimate(est?.status || 'draft');
+      // Refused or cancelled: handing over a PDF that silently differs from
+      // the screen is worse than handing over nothing.
+      if (!saved) { w?.close(); return; }
+    }
+    const url = `/api/estimates/${editingId}/pdf${print ? '?print=1' : ''}`;
+    if (w) w.location.href = url;
+    else window.open(url, '_blank');
   };
 
   // ── Files attached to the estimate's customer emails ──
@@ -1582,9 +1791,20 @@ export default function EstimatesPage() {
   // ── Email the enhanced-estimate PDF (standard compose screen) ──
   const openPdfEmailModal = async () => {
     if (!editingId) return;
-    // Persist current edits so the attached PDF matches what's on screen.
-    const currentStatus = estimates.find(e => e.id === editingId)?.status || 'draft';
-    await saveEstimate(currentStatus);
+    // Persist current edits so the attached PDF matches what's on screen —
+    // skipped on a frozen estimate for the same reason as View/Print: its
+    // contents can't have moved, and saving would demand an override reason
+    // just to email the customer their own signed copy.
+    const est = await freshEstimateRow(editingId);
+    if (isContentFrozen(est)) {
+      // Emailing the customer the accepted document while the screen shows
+      // something else is the version of this trap that reaches them.
+      if (!(await confirmFrozenPdf())) return;
+    } else {
+      const saved = await saveEstimate(est?.status || 'draft');
+      // Don't open a compose screen that would attach a stale PDF.
+      if (!saved) return;
+    }
     await loadEstimateFiles(editingId);
     setPdfEmailModal(true);
   };
@@ -1618,7 +1838,7 @@ export default function EstimatesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           emails: fields.emails,
-          bccSelf: fields.bccSelf,
+          bccSelf: fields.bccSelf, cc: fields.cc,
           message: fields.message || undefined,
           attachmentFileIds: fields.attachmentIds,
         }),
@@ -1688,7 +1908,10 @@ export default function EstimatesPage() {
         }),
       });
       const data = await res.json();
-      if (res.ok && data.preview) return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      if (res.ok && data.preview) {
+        setFollowupPdfName((Array.isArray(data.attachments) && data.attachments[0]) || null);
+        return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      }
       return { error: data.error || 'Unknown error' };
     } catch {
       return { error: 'Network error — please try again.' };
@@ -1703,7 +1926,7 @@ export default function EstimatesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           type: 'estimate', id: followupEmailFor.id,
-          emails: fields.emails, bccSelf: fields.bccSelf, message: fields.message || undefined,
+          emails: fields.emails, bccSelf: fields.bccSelf, cc: fields.cc, message: fields.message || undefined,
           attachmentFileIds: fields.attachmentIds,
         }),
       });
@@ -1812,7 +2035,7 @@ export default function EstimatesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           emails: fields.emails,
-          bccSelf: fields.bccSelf,
+          bccSelf: fields.bccSelf, cc: fields.cc,
           message: fields.message || undefined,
           proofSelections: approvalProofSelectionPayload(),
           attachmentFileIds: fields.attachmentIds,
@@ -2055,7 +2278,7 @@ export default function EstimatesPage() {
       description: l.description || '',
       quantity: l.quantity || 1,
       unit_price: l.unit_price || 0,
-      labor_hours: l.labor_hours || 0,
+      labor_hours: l.labor_hours ?? null,
       is_custom: l.is_custom || false,
       notes: l.notes || '',
       wrap_quote_id: l.wrap_quote_id || null,
@@ -2652,6 +2875,19 @@ export default function EstimatesPage() {
             }}>
               {customerName}
               {customerNsId && <span style={{ color: 'var(--text-label)', fontWeight: 400, marginLeft: '6px' }}>NS #{customerNsId}</span>}
+              {/* Deep link to the customer record — the estimate knew the
+                  customer but gave no way to get there (history, contacts,
+                  open invoices) without searching for them again. */}
+              {(customerNsId || prospectId) && (
+                <a
+                  href={customerNsId ? deepLinks.customerByNetsuiteId(customerNsId) : deepLinks.prospect(prospectId!)}
+                  onClick={e => e.stopPropagation()}
+                  title="Open the customer record"
+                  style={{ marginLeft: '10px', color: '#60a5fa', fontWeight: 700, fontSize: '11px', textDecoration: 'none' }}
+                >
+                  Open record →
+                </a>
+              )}
             </div>
             {(
               <button
@@ -3124,7 +3360,8 @@ export default function EstimatesPage() {
                       </div>
                       <div style={{ display: 'flex', gap: '10px', flexShrink: 0 }}>
                         <span style={{ color: '#22c55e', fontWeight: 700 }}>{fmt(p.sales_price)}</span>
-                        {p.labor_hours > 0 && <span style={{ color: '#fbbf24', fontSize: '10px' }}>{p.labor_hours}h labor</span>}
+                        {(p.labor_hours ?? 0) > 0 && <span style={{ color: '#fbbf24', fontSize: '10px' }}>{p.labor_hours}h labor</span>}
+                        {p.labor_hours == null && <span title="Labor not set on this part — set it on the Parts page" style={{ color: '#f59e0b', fontSize: '10px' }}>labor not set</span>}
                         <span style={{ color: 'var(--text-label)', fontSize: '10px', textTransform: 'uppercase' }}>{p.catalog}</span>
                       </div>
                     </div>
@@ -3312,9 +3549,17 @@ export default function EstimatesPage() {
                     })()}
                   </div>
 
-                  <div className="est-c-labor" style={{ fontSize: '10px', color: line.labor_hours > 0 ? '#fbbf24' : 'var(--text-label)', textAlign: 'center' }}>
+                  <div
+                    className="est-c-labor"
+                    title={!line.is_custom && line.labor_hours == null
+                      ? 'This part has no labor hours set in the catalog, so it adds nothing to Auto Labor Hours. Set it on the Parts page (0 = no labor).'
+                      : line.labor_hours === 0 ? 'No labor for this part' : undefined}
+                    style={{ fontSize: '10px', color: !line.is_custom && line.labor_hours == null ? '#f59e0b' : (line.labor_hours ?? 0) > 0 ? '#fbbf24' : 'var(--text-label)', textAlign: 'center' }}
+                  >
                     <div className="est-cell-label">Labor</div>
-                    {line.labor_hours > 0 ? `${(line.labor_hours * line.quantity).toFixed(1)}h` : '—'}
+                    {!line.is_custom && line.labor_hours == null
+                      ? '⚠ not set'
+                      : (line.labor_hours ?? 0) > 0 ? `${((line.labor_hours ?? 0) * line.quantity).toFixed(1)}h` : '—'}
                   </div>
 
                   {(
@@ -3592,6 +3837,12 @@ export default function EstimatesPage() {
               {autoLaborHours.toFixed(1)}h
               <span style={{ color: 'var(--text-label)', fontWeight: 400, fontSize: '10px', marginLeft: '4px' }}>(from parts)</span>
             </div>
+            {laborUnsetCount > 0 && (
+              <div title="These parts have no labor hours in the catalog and add nothing here — the quote may be under-labored. Set hours on the Parts page (0 = no labor), or use Override."
+                style={{ marginTop: '4px', fontSize: '10px', fontWeight: 700, color: '#f59e0b' }}>
+                ⚠ {laborUnsetCount} part{laborUnsetCount !== 1 ? 's' : ''} with labor not set
+              </div>
+            )}
           </div>
           <div>
             <div style={labelStyle}>Labor Override</div>
@@ -3718,7 +3969,16 @@ export default function EstimatesPage() {
           </div>
           {!taxExempt && (
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-body)', marginBottom: '4px' }}>
-              <span>Sales Tax on Parts ({rateToPct(taxRate).toFixed(2)}%)</span>
+              <span>
+                Sales Tax on Parts ({rateToPct(taxRate).toFixed(2)}%)
+                {/* Say WHY the tax is below parts × rate, so nobody has to
+                    reverse-engineer it off a NetSuite invoice again. */}
+                {taxableAmount < subtotal && (
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                    {' '}— on {fmt(taxableAmount)}; {fmt(subtotal - taxableAmount)} is non-taxable in NetSuite
+                  </span>
+                )}
+              </span>
               <span>{fmt(taxAmount)}</span>
             </div>
           )}
@@ -4094,16 +4354,34 @@ export default function EstimatesPage() {
           </button>
         )}
 
-        {/* Show SO number if already converted */}
-        {editingId && estimates.find(e => e.id === editingId)?.netsuite_so_id && (
-          <div style={{
-            width: '100%', padding: '10px 12px', borderRadius: '10px',
-            background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)',
-            fontSize: '12px', fontWeight: 700, color: '#22c55e', textAlign: 'center',
-          }}>
-            Sales Order: SO #{estimates.find(e => e.id === editingId)?.netsuite_so_number || estimates.find(e => e.id === editingId)?.netsuite_so_id}
-          </div>
-        )}
+        {/* Show SO number if already converted — amber with a Push button
+            while the estimate no longer matches the sales order (migration
+            259), so a declined or failed push isn't lost. */}
+        {editingId && estimates.find(e => e.id === editingId)?.netsuite_so_id && (() => {
+          const est = estimates.find(e => e.id === editingId)!;
+          const stale = !!est.so_out_of_date;
+          return (
+            <div style={{
+              width: '100%', padding: '10px 12px', borderRadius: '10px',
+              background: stale ? 'rgba(245,158,11,0.08)' : 'rgba(34,197,94,0.08)',
+              border: `1px solid ${stale ? 'rgba(245,158,11,0.35)' : 'rgba(34,197,94,0.2)'}`,
+              fontSize: '12px', fontWeight: 700, color: stale ? '#f59e0b' : '#22c55e', textAlign: 'center',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', flexWrap: 'wrap',
+            }}>
+              <span>Sales Order: SO #{est.netsuite_so_number || est.netsuite_so_id}{stale ? ' — out of date with this estimate' : ''}</span>
+              {stale && (
+                <button
+                  onClick={() => pushSalesOrderChanges(est.id, est.netsuite_so_number || null)}
+                  disabled={pushingSo}
+                  title="Replace the sales order's lines in NetSuite with this estimate's current lines (admin, with a recorded reason)"
+                  style={{ padding: '5px 10px', borderRadius: '7px', border: '1px solid rgba(245,158,11,0.5)', background: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontSize: '11px', fontWeight: 800, cursor: pushingSo ? 'wait' : 'pointer' }}
+                >
+                  {pushingSo ? 'Pushing…' : 'Push changes to SO'}
+                </button>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Duplicate (R3-17) — copy header + lines into a fresh draft. On a
             locked source this is the revision escape hatch; on an editable
@@ -4155,6 +4433,7 @@ export default function EstimatesPage() {
       {approvalModal && (
         <EmailComposeModal
           title="Review Approval Email Before Sending"
+          customerId={customerId}
           sendLabel="Send for Approval"
           messagePlaceholder="Optional note to the customer — added above the estimate…"
           allowSendWithoutTo
@@ -4218,7 +4497,7 @@ export default function EstimatesPage() {
               )}
               {approvalPdfName && (
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                  📎 <b style={{ color: 'var(--text-secondary)' }}>{approvalPdfName}</b> is attached automatically — the merged estimate PDF with the linked coverage pictures, proofs, and vinyl details.
+                  📎 <b style={{ color: 'var(--text-secondary)' }}>{approvalPdfName}</b> is attached automatically — a PDF copy of this estimate the customer can save or forward, with any linked coverage pictures, proofs, and vinyl details merged in.
                 </div>
               )}
             </div>
@@ -4238,7 +4517,13 @@ export default function EstimatesPage() {
       {followupEmailFor && (
         <EmailComposeModal
           title={`Follow Up — Estimate #${estimateHeadlineNumber(followupEmailFor)}`}
+          customerId={followupEmailFor.customer_id || customerId}
           sendLabel="Send Follow-Up"
+          intro={followupPdfName ? (
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              📎 <b style={{ color: 'var(--text-secondary)' }}>{followupPdfName}</b> is attached automatically — a PDF copy of the estimate the customer can save or forward.
+            </div>
+          ) : undefined}
           messagePlaceholder="Personal note — shown at the top of the follow-up email…"
           attachments={estimateFiles}
           onUploadAttachment={f => uploadEstimateFile(followupEmailFor.id, f)}
@@ -4320,6 +4605,7 @@ export default function EstimatesPage() {
       {pdfEmailModal && (
         <EmailComposeModal
           title="Email Estimate PDF"
+          customerId={customerId}
           sendLabel="Send PDF"
           messagePlaceholder="Optional note to the customer — shown in the email above the attached PDF…"
           attachments={estimateFiles}
@@ -4348,7 +4634,7 @@ export default function EstimatesPage() {
           display_name: p.display_name || p.item_number,
           description: p.marketing_description || p.description || '',
           sales_price: p.sales_price || 0,
-          labor_hours: p.labor_hours || 0,
+          labor_hours: p.labor_hours ?? null,
           catalog: p.catalog,
           purchase_price: p.purchase_price,
           avg_install_cost: p.avg_install_cost,

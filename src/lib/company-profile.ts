@@ -10,15 +10,13 @@
  * there would hand the popup blocker a reason to intervene.
  */
 
-export interface CompanyProfile {
-  name: string | null;
-  address: string | null;
-  city: string | null;
-  state: string | null;
-  zip: string | null;
-  phone: string | null;
-  email: string | null;
-}
+import type { CompanyProfile } from './statement-pdf-doc';
+
+// The profile shape and the address-block helper live in the pure
+// statement renderer (statement-pdf-doc.ts) so server code can use them
+// without importing this client module; re-exported here for callers.
+export type { CompanyProfile } from './statement-pdf-doc';
+export { companyLines } from './statement-pdf-doc';
 
 export interface CompanyLetterhead {
   company: CompanyProfile;
@@ -37,15 +35,4 @@ export async function fetchCompanyLetterhead(): Promise<CompanyLetterhead | null
   } catch {
     return null;
   }
-}
-
-/** Letterhead address block, one entry per line, empties dropped. */
-export function companyLines(c: CompanyProfile | null | undefined): string[] {
-  if (!c) return [];
-  return [
-    c.address,
-    [c.city, c.state, c.zip].filter(Boolean).join(', '),
-    c.phone,
-    c.email,
-  ].filter((l): l is string => !!l && l.trim().length > 0);
 }

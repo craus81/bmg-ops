@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeTotals } from './estimate-totals';
+import { computeTotals, roundCentsHalfEven } from './estimate-totals';
 
 // Characterization tests: these lock in the production behavior of the
 // estimate money math. If one of these fails, pricing changed — make sure
@@ -109,5 +109,95 @@ describe('computeTotals', () => {
     expect(result.subtotal).toBe(400);
     expect(result.tax_amount).toBe(40);
     expect(result.grand_total).toBe(440);
+  });
+});
+
+// Per-item taxability (migration 252) and NetSuite-identical rounding.
+//
+// EST-2608-024, reproduced line for line from the NetSuite estimate EST942
+// it was pushed to. Two things made the quote disagree with the invoice:
+// Freight is non-taxable in NetSuite, and NetSuite books tax per line with
+// half-cent ties going to the even cent. Both are pinned here — if this
+// fails, a customer is signing a total we won't bill.
+describe('computeTotals — EST-2608-024 against NetSuite EST942', () => {
+  const lines = [
+    { quantity: 4, unit_price: 697.50, labor_hours: 0 }, // 5010 — exactly $221.805 of tax
+    { quantity: 1, unit_price: 182.70, labor_hours: 0 }, // 5048
+    { quantity: 1, unit_price: 81.00, labor_hours: 0 },  // 5014
+    { quantity: 2, unit_price: 44.47, labor_hours: 0 },  // 202991
+    { quantity: 1, unit_price: 595.97, labor_hours: 0 }, // 256500
+    { quantity: 1, unit_price: 63.14, labor_hours: 0 },  // 202003
+    { quantity: 1, unit_price: 94.73, labor_hours: 0 },  // 202999
+    { quantity: 1, unit_price: 150.00, labor_hours: 0, taxable: false }, // Freight
+  ];
+
+  it('matches the NetSuite invoice to the penny', () => {
+    const r = computeTotals(lines, 0.0795, false, 115, 4.5);
+    expect(r.subtotal).toBe(4046.48);
+    expect(r.labor_total).toBe(517.5);
+    expect(r.tax_amount).toBe(309.76);   // NetSuite EST942
+    expect(r.grand_total).toBe(4873.74); // NetSuite EST942
+  });
+
+  it('taxing the combined base instead would be a cent high', () => {
+    // The pre-fix arithmetic, kept as the contrast: 3896.48 × 7.95% rounds
+    // to 309.77, and per-line booking is what makes it 309.76.
+    expect(roundCentsHalfEven(3896.48 * 0.0795)).toBe(309.77);
+  });
+
+  it('still taxes freight when NetSuite has not said otherwise', () => {
+    const r = computeTotals(lines.map(({ taxable, ...l }) => l), 0.0795, false, 115, 4.5);
+    // 309.76 + 11.92 — the freight line's own tax is a tie too ($11.925),
+    // so it books down as well. Slightly under the $321.70 the builder used
+    // to show, because that taxed the combined base in one go.
+    expect(r.tax_amount).toBe(321.68);
+  });
+
+  it('tax-exempt still wins over everything', () => {
+    expect(computeTotals(lines, 0.0795, true, 115, 4.5).tax_amount).toBe(0);
+  });
+
+  it('only an explicit false excludes — unknown stays taxable', () => {
+    const unknown = [
+      { quantity: 1, unit_price: 100, labor_hours: 0 },
+      { quantity: 1, unit_price: 100, labor_hours: 0, taxable: null },
+      { quantity: 1, unit_price: 100, labor_hours: 0, taxable: undefined },
+      { quantity: 1, unit_price: 100, labor_hours: 0, taxable: true },
+    ];
+    expect(computeTotals(unknown, 0.1, false, 0, 0).tax_amount).toBe(40);
+  });
+
+  it('an all-non-taxable estimate has no tax but keeps its subtotal', () => {
+    const r = computeTotals(
+      [{ quantity: 2, unit_price: 75, labor_hours: 0, taxable: false }],
+      0.0795, false, 115, 0,
+    );
+    expect(r.subtotal).toBe(150);
+    expect(r.tax_amount).toBe(0);
+    expect(r.grand_total).toBe(150);
+  });
+});
+
+// The tie rule is the whole reason the totals matched NetSuite, and float
+// error is what makes it easy to get wrong.
+describe('roundCentsHalfEven', () => {
+  it('sends an exact half-cent to the even cent, both directions', () => {
+    expect(roundCentsHalfEven(221.805)).toBe(221.8);  // 22180 is even — down
+    expect(roundCentsHalfEven(221.815)).toBe(221.82); // 22181 is odd — up
+    expect(roundCentsHalfEven(0.005)).toBe(0);
+    expect(roundCentsHalfEven(0.015)).toBe(0.02);
+  });
+
+  it('survives the float representation of a tie', () => {
+    // 2790 × 0.0795 is 221.80500000000000682 in IEEE754; a naive === 0.5
+    // tie test misses it and rounds up, which is the cent that started this.
+    expect(roundCentsHalfEven(2790 * 0.0795)).toBe(221.8);
+  });
+
+  it('rounds normally when there is no tie', () => {
+    expect(roundCentsHalfEven(6.4395)).toBe(6.44);
+    expect(roundCentsHalfEven(14.52465)).toBe(14.52);
+    expect(roundCentsHalfEven(47.379615)).toBe(47.38);
+    expect(roundCentsHalfEven(0)).toBe(0);
   });
 });

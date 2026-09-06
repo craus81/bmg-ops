@@ -13,6 +13,8 @@ on every send, not just estimates.
 | Control | Behavior |
 | --- | --- |
 | **To** | Editable, multiple addresses (comma/semicolon separated). Prefilled from the record's contact (primary external contact → customer profile), but always changeable at send time. Invalid entries are surfaced, never silently dropped. |
+| **Company contacts** | An "Add a company contact…" dropdown under To listing the customer's contacts (`external_contacts`, or the record page's own list); picking one appends it to To. Callers pass `contacts` (when the screen has them) or `customerId` (customers.id — the modal loads them). Hidden when neither is given. |
+| **Cc BMG teammates** | A "Cc a teammate…" picker of approved staff (name + email, same directory rule as @mentions) rendered as removable chips; the send carries them as real Cc (`cc: string[]` on `EmailComposeFields`, `cc` on `EmailMeta` → Resend cc). On for every flow; `hideCc` turns it off. |
 | **Bcc me** | One click copies the real send to the signed-in user's login email (`useAuth().user.email`). Off by default. |
 | **Personal message** | Free-text block rendered at the top of the email body, newlines preserved. |
 | **Attachments** | Where the flow has files (job files, PDFs), a picker with per-file sizes and a total-size cap (20MB — `MAX_ATTACHMENT_BYTES` in `src/lib/email-attachments.ts`, one definition for every flow). Flows that let the sender add a file from their device pass `onUploadAttachment` (and `onRemoveAttachment` for files marked `removable`) — the owner stores the file and returns its id, which checks it on for that send. Oversize or missing files are hard errors, never silent drops. |
@@ -30,10 +32,12 @@ on every send, not just estimates.
   `intro` slot; bump `previewKey` when they change. Callers supply
   `fetchPreview` and `onSend` against their API route.
 - **API route contract:** accept `emails: string[]`, `bccSelf: boolean`,
+  `cc: string[]` (BMG teammates, validated like To, max 10),
   `message: string`, `attachmentFileIds`/`attachmentPaths`, and
   `preview: boolean`. Preview returns `{ preview: true, to, subject,
   html }` with **zero side effects**. Real sends pass
-  `bcc: [auth.user.email]` when `bccSelf`, and `auth.user.email` as
+  `bcc: [auth.user.email]` when `bccSelf`, `cc` on the `EmailMeta`
+  (the send layer hands it to Resend as cc), and `auth.user.email` as
   Reply-To.
 - **Send layer:** `sendEmail` / `sendEmailDetailed` (`src/lib/resend.ts`)
   take `to: string | string[]`, attachments, `replyTo`, and `bcc`.
@@ -49,22 +53,36 @@ on every send, not just estimates.
   effect. A fetch failure fails the send with the file named. Where a
   document is auto-attached too (e.g. the estimate PDF), it takes its
   share of the budget first and the picked files get what's left.
+- **PDF copy of every transaction:** any email that carries a transaction
+  (estimate approval, estimate PDF, quote follow-up, wrap quote, invoices,
+  statement) auto-attaches a PDF copy of that transaction — the same
+  bytes the record's view/print endpoint hands out (`generateEstimatePdf`
+  in `src/lib/estimate-pdf-server.ts`, `generateWrapQuotePdf` in
+  `src/lib/wrap-quote-pdf-server.ts`, `generateStatementPdf` in
+  `src/lib/statement-pdf-server.ts`, NetSuite's PDF for invoices) — so
+  the customer can save or forward the document without the original
+  email. It rides first, is named in the body's attachment list, the
+  preview returns its filename in `attachments` so the compose screen can
+  say so (`intro` slot), and a render failure fails the send before any
+  side effect rather than emailing a body that promises a file.
 
 ## Where each flow stands
 
 | Flow | Compose screen | Notes |
 | --- | --- | --- |
-| Estimate approval (`/estimates`) | `EmailComposeModal` | Full standard, including the estimate-files picker (below). Approval doc is the email body; when a linked wrap quote contributes assets (`wrap_quotes.estimate_attach` — coverage diagram, proofs, vinyl details) the send auto-attaches the merged estimate PDF so the customer approves one document. Linked **graphics jobs** get a per-job proof picker in the intro slot (`graphics_jobs.estimate_attach`): checked files render in the email/page/PDF, and the customer's acceptance also approves those jobs' proofs for production (propagated by the approval route). Delivery tracked on the estimate (Resend webhook → `approval_email_status`); a bounce alerts the sales side. |
+| Estimate approval (`/estimates`) | `EmailComposeModal` | Full standard, including the estimate-files picker (below). Approval doc is the email body; every send auto-attaches the estimate PDF (the PDF-copy rule below) — with any linked wrap-quote assets (`wrap_quotes.estimate_attach` — coverage diagram, proofs, vinyl details) merged in, so the customer approves one document. Linked **graphics jobs** get a per-job proof picker in the intro slot (`graphics_jobs.estimate_attach`): checked files render in the email/page/PDF, and the customer's acceptance also approves those jobs' proofs for production (propagated by the approval route). Delivery tracked on the estimate (Resend webhook → `approval_email_status`); a bounce alerts the sales side. |
 | Estimate PDF (`/estimates` Email PDF button) | `EmailComposeModal` | Full standard, including the estimate-files picker (below). The FleetSuite enhanced-estimate copy (catalog photos + product links) rendered server-side as a PDF (`/api/estimates/[id]/email-pdf`, kind `estimate_pdf`) and attached — the same bytes the builder's Estimate PDF / Print buttons open (`/api/estimates/[id]/pdf`). Recipients prefill primary contact → customer email. |
-| Quote follow-up (`/estimates` and `/admin/wrap-quote` ✉ Follow Up buttons on sent rows) | `EmailComposeModal` | Full standard. One route for both quote types (`/api/quotes/follow-up/email`, kind `quote_followup`, admin/sales). Carries the live Review & Accept link while the approval token is valid; recipients prefill last-sent-to → primary contact → customer email. Estimate follow-ups also offer the estimate-files picker (below); wrap quotes reject `attachmentFileIds`. A real send also logs the follow-up (`last_followup_at` + `quote_followups` row), so the follow-up queue's quiet clock resets. |
+| Quote follow-up (`/estimates` and `/admin/wrap-quote` ✉ Follow Up buttons on sent rows) | `EmailComposeModal` | Full standard. One route for both quote types (`/api/quotes/follow-up/email`, kind `quote_followup`, admin/sales). Carries the live Review & Accept link while the approval token is valid; recipients prefill last-sent-to → primary contact → customer email. Every follow-up auto-attaches the PDF copy (estimate PDF or FleetSuite wrap-quote PDF). Estimate follow-ups also offer the estimate-files picker (below); wrap quotes reject `attachmentFileIds`. A real send also logs the follow-up (`last_followup_at` + `quote_followups` row), so the follow-up queue's quiet clock resets. |
 | Graphics proof approval (`/graphics/[id]`) | `EmailComposeModal` | Full standard + proof-file picker in the intro slot; attachments from `graphics_job_files`. SMS still rides along when a phone is on file. |
 | Invoice emails (`EmailInvoicesModal`) | Own modal, fits the standard | Multi-To, message, bcc-me, invoice-PDF attachments with verify + view, test-send, delivery tracking. Migrate to the shared component if it's ever rebuilt. |
-| Wrap quote (`/admin/wrap-quote`) | `EmailComposeModal` | Full standard. Recipients prefill customer email + cc from the send route's first preview; the quote's stored files are the attachment picker (all pre-checked); the Email Content checkboxes (pricing/line items/diagram/NetSuite PDF) stay on the Quote tab and are fixed while the modal is open. |
-| Statement (`/admin/prospects/[id]`) | `EmailComposeModal` | Full standard. Preview predicts the invoice-PDF attachment list without fetching from NetSuite; real filenames land at send time. |
+| Wrap quote (`/admin/wrap-quote`) | `EmailComposeModal` | Full standard. Recipients prefill customer email + cc from the send route's first preview; the quote's stored files are the attachment picker (all pre-checked); the Email Content checkboxes (pricing/line items/diagram/NetSuite PDF) stay on the Quote tab and are fixed while the modal is open. Every priced send auto-attaches a PDF copy: the NetSuite quote PDF when that box is checked, otherwise the FleetSuite wrap-quote PDF (`generateWrapQuotePdf`, same bytes as `/api/wrap-quote/[id]/pdf`, itemized as the body is). Coverage-only sends carry no quote PDF — there is no pricing to copy. |
+| Statement (`/admin/prospects/[id]`) | `EmailComposeModal` | Full standard. Every send attaches a PDF copy of the statement first (`generateStatementPdf` — the same document the Statement PDF / Print buttons open, via the pure renderer in `src/lib/statement-pdf-doc.ts`; a render failure fails the send), then the open invoices' NetSuite PDFs (best effort, capped). Preview predicts the attachment list without fetching from NetSuite; real invoice filenames land at send time. |
 | Install guide (`/graphics/install-guides/[id]`) | `EmailComposeModal` | Full standard. The guide PDF (dimensioned proof or BMG deck) is generated client-side, staged to R2 (`install-guides/<id>/exports/`), and attached by the server (`/api/install-guides/send`, `email_log` kind `install_guide`). No stored recipient — the sender types the installer's address. |
 | General customer email (`/admin/prospects/[id]` Email button + contact addresses, Contacts directory) | `EmailComposeModal` | Full standard + a Subject input in the intro slot (`/api/prospects/email`, kind `customer_email`). Replaced the bare `mailto:` links, which opened the DEVICE's mail app — composing from whichever account it defaulted to (iCloud vs BMG on Apple devices) and leaving no record in FleetSuite. |
 | Credit application invite (`/admin/prospects/[id]` Credit App button) | `EmailComposeModal` | Same route/flow as the general email with `includeCreditAppLink: true` (kind `credit_app_invite`): the server appends its own templated "Complete your credit application" CTA linking to the public `/credit-application` form — the link is never client-supplied — and the personal message becomes optional (a default intro renders when empty). Submissions land in the review queue (`/admin/credit-applications`, feature `credit_applications`). |
+| PO-status portal link (`/admin/prospects/[id]` PO status link card → Send link) | `EmailComposeModal` | Same route/flow as the general email with `includePortalLink: true` (kind `po_portal_link`): the server resolves the customer, mints the shared portal link if none exists (`customers.portal_token`, migration 260 — never client-supplied) and appends its own "View your purchase order status" CTA to the public `/portal/<token>` page; the personal message is optional (a default intro renders when empty). The card also offers Copy / Regenerate / Revoke (`/api/customers/portal-link`). |
 | Customer threads (`customer-threads`) | Chat-style thread | Deliberately not a compose modal (it's a running conversation). Reply-To = sender is in place. Entry points: the inbox itself, Message Customer on the pick-list/tracking pages (vehicle context), and **Reply to customer** on a rejected estimate (`/api/estimates/[id]/rejection-thread` — opens the estimate-context thread seeded with the customer's change request). The staff rejection alert email also carries Reply-To = the customer's address, so a plain mail-client reply reaches them directly. |
+| PO receipt confirmation (`src/lib/po-confirmation.ts`) | Exempt — automated | Sent automatically once a customer PO's lines are imported (Gmail import or PDF upload, both paths in `/api/gmail/import-po`), once per PO. To the **Buyer Information** email extracted from the PO PDF (`purchase_orders.buyer_email`, migration 256), else the customer's billing emails; skipped with a reason when neither exists. Lists the PO's lines, quantities, requested dates and total, and attaches the PO PDF from `po_files` as the transaction copy. Logged as kind `po_confirmation`; the PO record shows buyer + "Confirmation sent". Owner decision 2026-09-03: automatic, not a compose screen. |
 | Invites (CNI/admin), reminder crons, digests, notify-pickup | Exempt | Automated/transactional — nobody is composing. Reply-To falls back to `RESEND_REPLY_TO_EMAIL`. |
 
 ## Delivery tracking (all flows, automatic)

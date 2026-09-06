@@ -10,6 +10,7 @@ import {
 } from '@/lib/magic-link-approval';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
+import { logQuoteResponse } from '@/lib/quote-response-activity';
 import { validateBody, z } from '@/lib/validate';
 import { r2PublicUrl } from '@/lib/r2';
 import { escHtml, renderQuoteDocument } from '@/lib/quote-document';
@@ -200,6 +201,18 @@ function publicQuote(q: any) {
 const WRAP_QUOTE_ROLES = ['admin', 'super_admin', 'sales', 'graphics_production', 'production'];
 
 async function notifySalesRep(quote: any, verdict: 'accepted' | 'rejected', reason?: string) {
+  // The customer's answer belongs on their account history too. Wrap
+  // quotes only carry customers.id — the resolver hops to the CRM record;
+  // a quote for a lead with no customer row has no timeline and no-ops.
+  await logQuoteResponse(supabase, {
+    verdict,
+    label: `Wrap quote ${quote.quote_number}`,
+    total: quote.total,
+    reason,
+    url: deepLinks.wrapQuote(quote.id),
+    customerId: quote.customer_id,
+  });
+
   const targetIds = new Set<string>();
   if (quote.created_by) targetIds.add(quote.created_by);
   if (quote.customer_id) {

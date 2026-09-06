@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { normalizeItemNumber, isOpenPoStatus } from './vendor-po-sync';
 import { fetchAllRows } from './fetch-all';
+import { evaluateHealthRow, HEALTH_MONITORS, type SyncStateRow } from './system-health';
 
 /**
  * Total parts demand across every open job — "what do we need to buy to
@@ -107,6 +108,26 @@ export interface DemandRow {
   requested: number;
   pos: DemandPoRef[];
   sources: DemandSourceRef[];
+  /** Staff dismissed this part (purchasing_demand_dismissals, migration
+   *  255) and its needed quantity hasn't grown since — hidden by default.
+   *  Null when live. A dismissal whose quantity has since grown is stale
+   *  and reported as null: new demand is never hidden by an old decision. */
+  dismissed: { at: string; by: string | null; reason: string | null; neededAtDismiss: number } | null;
+}
+
+/**
+ * Health of the sales-order mirror this list reads, so "0 open sales orders"
+ * can say WHY. The number is only as true as the sync feeding it, and the
+ * sync's first version silently never finished (see sales-order-sync.ts) —
+ * the page showed a confident zero for weeks.
+ */
+export interface SoMirrorHealth {
+  /** Every SO row in the mirror, open or not. 0 after a healthy run means
+   *  NetSuite returned nothing — a permission problem, not a sync bug. */
+  mirrorRows: number;
+  status: 'ok' | 'partial' | 'stale' | 'error' | 'never';
+  lastRunAt: string | null;
+  problem: string | null;
 }
 
 export interface PartsDemandResult {
@@ -122,7 +143,30 @@ export interface PartsDemandResult {
     skippedNonStock: number;
     /** Newest last_synced_at across the open SOs — how fresh this is. */
     soSyncedAt: string | null;
+    soSync: SoMirrorHealth;
+    /** Rows hidden by a live dismissal — so the page can offer to show them. */
+    dismissed: number;
   };
+}
+
+const SO_SYNC_TYPE = 'netsuite_sales_orders';
+
+/** The mirror's health from its sync_state row, with the same verdict the
+ *  System Health board gives plus the backfill-in-progress case. */
+export function describeSoMirrorHealth(row: SyncStateRow | null | undefined, mirrorRows: number, now = Date.now()): SoMirrorHealth {
+  const monitor = HEALTH_MONITORS.find(m => m.syncType === SO_SYNC_TYPE)
+    || { syncType: SO_SYNC_TYPE, label: 'NetSuite sales order sync', intervalMinutes: 120 };
+  const check = evaluateHealthRow(monitor, row, now);
+  if (check.status === 'ok' && row?.last_result?.partial === true) {
+    const processed = Number(row.last_result?.resume?.processed) || 0;
+    return {
+      mirrorRows,
+      status: 'partial',
+      lastRunAt: check.lastRunAt,
+      problem: `backfill in progress — ${processed} sales order${processed !== 1 ? 's' : ''} pulled so far, newest first; the rest land over the next 2-hour runs`,
+    };
+  }
+  return { mirrorRows, status: check.status, lastRunAt: check.lastRunAt, problem: check.problem };
 }
 
 interface Working {
@@ -174,6 +218,13 @@ export async function computePartsDemand(service: SupabaseClient<any, any, any>)
     .range(from, to)), 'sales orders');
   const openSos = allSos.filter(so => isOpenSalesOrderStatus(so.status, so.status_label));
   const soById = new Map(openSos.map(so => [so.id, so]));
+  // Not through must(): the list is still whole without its health note.
+  const { data: syncState } = await service
+    .from('sync_state')
+    .select('sync_type, last_synced_at, last_result, updated_at')
+    .eq('sync_type', SO_SYNC_TYPE)
+    .maybeSingle();
+  const soSync = describeSoMirrorHealth(syncState as SyncStateRow | null, allSos.length);
   const soSyncedAt = openSos.reduce<string | null>(
     (latest, so) => (!latest || (so.last_synced_at && so.last_synced_at > latest) ? so.last_synced_at || latest : latest),
     null,
@@ -342,8 +393,35 @@ export async function computePartsDemand(service: SupabaseClient<any, any, any>)
     }
   }
 
+  // ── Dismissals (migration 255) ────────────────────────────────────────
+  // A dismissal is a buying decision about the part and applies only while
+  // the needed quantity is at or below what it was when dismissed: a new
+  // job pushing the number past it brings the row back on its own, so an
+  // old "not buying this" can never hide new demand. Read failures (e.g.
+  // the migration not applied yet) degrade to "nothing dismissed".
+  const dismissals = new Map<string, { at: string; by: string | null; reason: string | null; neededAtDismiss: number }>();
+  if (parts.size > 0) {
+    const keys = [...parts.keys()];
+    for (let i = 0; i < keys.length; i += 200) {
+      const { data, error } = await service
+        .from('purchasing_demand_dismissals')
+        .select('item_number, needed_at_dismiss, reason, dismissed_by, dismissed_at')
+        .in('item_number', keys.slice(i, i + 200));
+      if (error) { console.warn('[parts-demand] dismissals unavailable:', error.message); break; }
+      for (const d of data || []) {
+        dismissals.set(String(d.item_number), {
+          at: d.dismissed_at,
+          by: d.dismissed_by || null,
+          reason: d.reason || null,
+          neededAtDismiss: Number(d.needed_at_dismiss) || 0,
+        });
+      }
+    }
+  }
+
   const rows: DemandRow[] = [...parts.values()].map(p => {
     const c = catalog.get(p.item_number);
+    const d = dismissals.get(p.item_number) || null;
     return {
       item_number: p.item_number,
       description: p.description || c?.description || c?.display_name || null,
@@ -358,20 +436,25 @@ export async function computePartsDemand(service: SupabaseClient<any, any, any>)
       // Biggest contributor first — the job driving the number is the one
       // you want to see without expanding anything else.
       sources: p.sources.sort((a, b) => b.quantity - a.quantity),
+      dismissed: d && p.needed <= d.neededAtDismiss + 1e-6 ? d : null,
     };
   });
   // Most-needed first; ties alphabetical so the order is stable between loads.
   rows.sort((a, b) => b.needed - a.needed || a.item_number.localeCompare(b.item_number));
 
+  const live = rows.filter(r => !r.dismissed);
   return {
     rows,
     meta: {
       salesOrders: openSos.length,
       estimates: pendingEstimates.length,
-      parts: rows.length,
-      units: rows.reduce((sum, r) => sum + r.needed, 0),
+      // Counts describe what's LIVE — a dismissed part isn't something to buy.
+      parts: live.length,
+      units: live.reduce((sum, r) => sum + r.needed, 0),
       skippedNonStock,
       soSyncedAt,
+      soSync,
+      dismissed: rows.length - live.length,
     },
   };
 }

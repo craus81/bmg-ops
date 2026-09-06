@@ -39,6 +39,9 @@ interface TimelineItem {
 }
 
 interface Props {
+  /** Pin the timeline to one visit (fleet_checkins.id). Without it the
+   *  newest check-in for the VIN is shown — archived or not. */
+  visit?: string | null;
   vin: string;
   variant?: 'internal' | 'customer';
   refreshKey?: number;
@@ -64,7 +67,7 @@ const CATEGORY_LABELS: Record<PhotoCategory, string> = {
 
 const ALL_CATEGORIES: PhotoCategory[] = ['before', 'during', 'completion', 'damage', 'proof', 'design_file', 'other'];
 
-export default function VehiclePhotoTimeline({ vin, variant = 'internal', refreshKey }: Props) {
+export default function VehiclePhotoTimeline({ vin, variant = 'internal', refreshKey, visit }: Props) {
   const supabase = createClient();
   const [items, setItems] = useState<TimelineItem[]>([]);
   // Per-tile load fallback: R2 first (where uploads live), then legacy
@@ -79,7 +82,7 @@ export default function VehiclePhotoTimeline({ vin, variant = 'internal', refres
 
   const load = useCallback(async () => {
     setLoading(true);
-    const res = await fetch(`/api/vehicles/${encodeURIComponent(vin)}/photos`);
+    const res = await fetch(`/api/vehicles/${encodeURIComponent(vin)}/photos${visit ? `?visit=${encodeURIComponent(visit)}` : ''}`);
     if (!res.ok) {
       setItems([]);
       setLoading(false);
@@ -88,7 +91,7 @@ export default function VehiclePhotoTimeline({ vin, variant = 'internal', refres
     const data = await res.json();
     setItems((data.items || []) as TimelineItem[]);
     setLoading(false);
-  }, [vin]);
+  }, [vin, visit]);
 
   useEffect(() => { load(); }, [load, refreshKey]);
 

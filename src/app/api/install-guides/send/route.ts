@@ -19,6 +19,7 @@ const SendSchema = z.object({
   // Standard compose fields (docs/customer-email-standard.md).
   emails: z.array(z.string().email().max(254)).max(20).default([]),
   bccSelf: z.boolean().optional().default(false),
+  cc: z.array(z.string().email().max(254)).max(10).optional(),
   message: z.string().trim().max(5000).optional(),
   // The generated guide PDF(s), staged to R2 by the editor right before
   // this call. Paths are pinned under install-guides/ so this route can't
@@ -168,7 +169,7 @@ export async function POST(req: NextRequest) {
     attachments,
     auth.user?.email || undefined,
     bcc,
-    { kind: 'install_guide', sentBy: auth.user?.id, contextUrl: deepLinks.installGuide(guide.id) },
+    { kind: 'install_guide', cc: parsed.data.cc, sentBy: auth.user?.id, contextUrl: deepLinks.installGuide(guide.id) },
   );
   if (!ok) {
     return NextResponse.json({ error: 'Email send failed (is Resend configured?)' }, { status: 502 });

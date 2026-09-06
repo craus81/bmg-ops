@@ -14,13 +14,15 @@ import { r2PublicUrl } from '@/lib/r2';
 import { loadEstimateAttachmentRows, fetchEstimateAttachments } from '@/lib/estimate-attachments';
 import { resolveEstimateEmail, resolveEstimatePhone } from '@/lib/estimate-recipients';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/email-attachments';
+import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
+import { estimatePdfFilename } from '@/lib/estimate-pdf';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
-// When linked wrap quotes contribute assets, the send generates the merged
-// estimate PDF (R2 fetches + pdf-lib) — same budget as the other
-// generateEstimatePdf routes (/pdf, /email-pdf); the platform default is
-// too tight for a cold start with several assets.
+// Every send generates the estimate PDF (catalog photo fetches, and R2 +
+// pdf-lib when linked wrap quotes / proofs merge on) — same budget as the
+// other generateEstimatePdf routes (/pdf, /email-pdf); the platform default
+// is too tight for a cold start with several assets.
 export const maxDuration = 60;
 
 const supabase = createClient(
@@ -34,6 +36,7 @@ const SendForApprovalSchema = z.object({
   // multi-recipient To and bcc-the-sender.
   emails: z.array(z.string().email().max(254)).max(20).optional(),
   bccSelf: z.boolean().optional().default(false),
+  cc: z.array(z.string().email().max(254)).max(10).optional(),
   phone: z.string().trim().max(40).optional().nullable(),
   expiryDays: z.number().int().positive().max(365).optional(),
   // Personal note rendered at the top of the estimate email (plain text,
@@ -207,26 +210,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   // validated against THIS estimate.
   const picked = await loadEstimateAttachmentRows(supabase, estimate.id, body.attachmentFileIds);
   if (!picked.ok) return NextResponse.json({ error: picked.error }, { status: picked.status });
-  const pickedNames = picked.rows.map(r => r.file_name);
+
+  // Every transaction email carries a PDF copy of the transaction (CLAUDE.md
+  // domain note): the estimate PDF — the same bytes as the Estimate PDF /
+  // Email PDF buttons, with any linked wrap assets and proofs merged on —
+  // rides first on every approval send, so the customer can save or
+  // forward the estimate without digging through the original email. It is
+  // named in the document's Attached section alongside the rep's picks.
+  const pdfFilename = estimatePdfFilename(estimate);
+  const attachmentNames = [pdfFilename, ...picked.rows.map(r => r.file_name)];
 
   // Preview: show exactly what would go out (message, line items, totals,
   // Approve button) without minting a token, sending, or touching status.
   // The CTA points at a placeholder — the real link is minted on send.
   if (body.preview) {
-    // Predict the auto-attachment so the compose screen can say so: linked
-    // wrap quotes with estimate_attach — or included graphics-job proofs —
-    // mean the merged estimate PDF rides along on the real send (generated
-    // then, not here — this only names it).
-    let attachments: string[] = [];
-    const { count: attachCount } = await supabase
-      .from('wrap_quotes')
-      .select('id', { count: 'exact', head: true })
-      .eq('estimate_id', estimate.id)
-      .not('estimate_attach', 'is', null);
-    if ((attachCount || 0) > 0 || proofBlocks.length > 0) {
-      const { estimatePdfFilename } = await import('@/lib/estimate-pdf');
-      attachments = [estimatePdfFilename(estimate)];
-    }
+    // The PDF is generated on the real send, not here — the preview only
+    // names it so the compose screen can say so.
     const html = renderEstimateDocument(estimate, lineItems || [], {
       company,
       logoUrl,
@@ -237,9 +236,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       signature,
       graphics: approvalGraphics,
       proofs: proofBlocks,
-      attachmentNames: pickedNames,
+      attachmentNames,
     });
-    return NextResponse.json({ preview: true, to: emailList.join(', ') || null, subject, html, attachments });
+    return NextResponse.json({ preview: true, to: emailList.join(', ') || null, subject, html, attachments: [pdfFilename] });
   }
 
   // Attachments are assembled BEFORE the token is minted or the estimate is
@@ -247,33 +246,28 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   // fail the whole send, not leave a rotated link on a record that already
   // claims it went out.
   //
-  // The merged estimate PDF rides first and takes its share of the budget;
-  // the rep's picked files get what's left. The PDF stays best-effort — a
-  // render hiccup never blocks the approval email — but a picked file that
-  // can't be fetched is a hard error, because the sender chose it and would
-  // otherwise never learn it didn't go.
+  // The estimate PDF rides first and takes its share of the budget; the
+  // rep's picked files get what's left. Both are hard errors when they
+  // can't be produced: the document's Attached section names them, so an
+  // email that promises a PDF and arrives without one is worse than asking
+  // the sender to try again.
   const approvalAttachments: { filename: string; content: Buffer; contentType: string }[] = [];
   if (emailList.length > 0) {
-    // When linked wrap quotes contribute assets (estimate_attach — coverage
-    // diagram, proofs, vinyl details) or linked graphics jobs contribute
-    // proof files, attach the merged estimate PDF so the customer approves
-    // ONE document carrying all of it.
+    // The PDF copy of the estimate — with any linked wrap-quote assets
+    // (estimate_attach: coverage diagram, attachments, vinyl details) and
+    // graphics-job proofs merged on, so the customer approves ONE document
+    // carrying all of it.
+    let pdf: Awaited<ReturnType<typeof generateEstimatePdf>>;
     try {
-      const { count: attachCount } = await supabase
-        .from('wrap_quotes')
-        .select('id', { count: 'exact', head: true })
-        .eq('estimate_id', estimate.id)
-        .not('estimate_attach', 'is', null);
-      if ((attachCount || 0) > 0 || proofBlocks.length > 0) {
-        const { generateEstimatePdf } = await import('@/lib/estimate-pdf-server');
-        const pdf = await generateEstimatePdf(supabase, estimate.id);
-        if (pdf.ok) {
-          approvalAttachments.push({ filename: pdf.filename, content: pdf.buffer, contentType: 'application/pdf' });
-        }
-      }
+      pdf = await generateEstimatePdf(supabase, estimate.id);
     } catch (err: any) {
-      console.warn('[send-for-approval] estimate PDF attach skipped:', err?.message || err);
+      console.error('[send-for-approval] estimate PDF failed:', err?.message || err);
+      pdf = { ok: false, status: 500, error: err?.message || 'PDF render failed' };
     }
+    if (!pdf.ok) {
+      return NextResponse.json({ error: `Could not generate the estimate PDF (${pdf.error}). Nothing was sent — try again.` }, { status: pdf.status === 404 ? 404 : 502 });
+    }
+    approvalAttachments.push({ filename: pdf.filename, content: pdf.buffer, contentType: 'application/pdf' });
 
     const usedBytes = approvalAttachments.reduce((sum, a) => sum + a.content.byteLength, 0);
     const extras = await fetchEstimateAttachments(picked.rows, Math.max(0, MAX_ATTACHMENT_BYTES - usedBytes));
@@ -341,7 +335,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       signature,
       graphics: approvalGraphics,
       proofs: proofBlocks,
-      attachmentNames: pickedNames,
+      attachmentNames,
     });
     const bcc = body.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
 
@@ -350,7 +344,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         emailList, subject, html, undefined,
         approvalAttachments.length > 0 ? approvalAttachments : undefined,
         auth.user?.email || undefined, bcc,
-        { kind: 'estimate_approval', sentBy: auth.user?.id, contextUrl: deepLinks.estimate(estimate.id), customerId: estimate.customer_id, netsuiteCustomerId: estimate.customer_netsuite_id },
+        { kind: 'estimate_approval', cc: body.cc, sentBy: auth.user?.id, contextUrl: deepLinks.estimate(estimate.id), customerId: estimate.customer_id, netsuiteCustomerId: estimate.customer_netsuite_id },
       );
       dispatch.email = { target: emailList.join(', '), ok, bcc: bcc ? bcc.join(', ') : undefined };
       // Delivery tracking (same scheme as invoice emails): store the Resend

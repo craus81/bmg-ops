@@ -10,10 +10,13 @@
  * round-trip to the CRM list (which is just the index/pipeline view).
  *
  * Prospects and customers are unified, with a lead tier (owner decision
- * 2026-08-30): a record with no netsuite_id IS a lead — creating it no
- * longer creates a NetSuite customer. Promotion happens here (the
- * "Promote to NetSuite Customer" button) or automatically the first time
- * an estimate for the lead is pushed to NetSuite / converted to an SO.
+ * 2026-08-30): a record with no netsuite_id IS a lead. Creating a record
+ * normally creates the NetSuite customer too (2026-09-02 — the create
+ * form's ticked-by-default box), so a lead here is one that was created
+ * with that box unticked, or whose NetSuite create failed. Promotion
+ * happens here (the "Promote to NetSuite Customer" button) or
+ * automatically the first time an estimate for the lead is pushed to
+ * NetSuite / converted to an SO.
  *
  * Routes:
  *   /admin/prospects/<uuid>       — CRM prospect id
@@ -100,6 +103,10 @@ interface CustomerRow {
   billing_portal: string | null;
   billing_notes: string | null;
   internal_notes: string | null;
+  /** Customer PO-status portal link (migration 260). */
+  portal_token?: string | null;
+  portal_token_created_at?: string | null;
+  portal_last_viewed_at?: string | null;
 }
 
 interface ParentRef { id: string; netsuite_id: string | null; company_name: string | null; source: 'manual' | 'netsuite' }
@@ -116,7 +123,7 @@ const BILLING_WORKFLOWS: Record<string, string> = {
 
 interface Contact { id: string; name: string; title: string | null; email: string | null; phone: string | null; is_decision_maker: boolean; netsuite_contact_id: string | null }
 interface Opportunity { id: string; title: string; type: string; stage: string; value: number | null; expected_close_date: string | null; created_at: string }
-interface Activity { id: string; type: string; summary: string; created_by: string | null; created_at: string; creator_name?: string | null; email_log_id?: string | null }
+interface Activity { id: string; type: string; summary: string; created_by: string | null; created_at: string; creator_name?: string | null; email_log_id?: string | null; url?: string | null }
 interface Reminder { id: string; title: string; description: string | null; due_at: string }
 interface Tag { id: string; tag: string }
 interface CustDocument {
@@ -579,8 +586,12 @@ export default function CustomerRecordPage() {
     }
   };
 
-  // Retry path for records whose NetSuite create failed at creation time —
-  // customers are normally pushed to NetSuite the moment they're created.
+  // Promote a lead. Customers are normally created in NetSuite the moment
+  // they're entered (the CRM create form's "Create the customer in NetSuite
+  // now", ticked by default), so a record reaches this button in one of two
+  // ways: someone unticked that box, or NetSuite refused at create time.
+  // Either way the CRM row already exists — this only fills in the missing
+  // NetSuite half.
   const [converting, setConverting] = useState(false);
   const addToNetSuite = async () => {
     if (!prospect || converting) return;
@@ -971,7 +982,7 @@ export default function CustomerRecordPage() {
     setActsLoadingMore(true);
     const from = activities.length;
     const { data } = await supabase.from('prospect_activities')
-      .select('id, type, summary, created_by, created_at, email_log_id')
+      .select('id, type, summary, created_by, created_at, email_log_id, url')
       .eq('prospect_id', prospect.id)
       .order('created_at', { ascending: false }).order('id')
       .range(from, from + ACTS_PAGE_SIZE - 1);
@@ -991,7 +1002,7 @@ export default function CustomerRecordPage() {
   // server-side (it parses the transcript into both).
   const refreshFeed = async (pid: string) => {
     const [aRes, rRes] = await Promise.all([
-      supabase.from('prospect_activities').select('id, type, summary, created_by, created_at, email_log_id').eq('prospect_id', pid).order('created_at', { ascending: false }).order('id').limit(20),
+      supabase.from('prospect_activities').select('id, type, summary, created_by, created_at, email_log_id, url').eq('prospect_id', pid).order('created_at', { ascending: false }).order('id').limit(20),
       supabase.from('prospect_reminders').select('id, title, description, due_at').eq('prospect_id', pid).is('completed_at', null).order('due_at'),
     ]);
     const acts = (aRes.data || []) as Activity[];
@@ -1106,7 +1117,7 @@ export default function CustomerRecordPage() {
     let cust: CustomerRow | null = null;
     if (nsId) {
       const { data } = await supabase.from('customers')
-        .select('id, netsuite_id, netsuite_url, company_name, entity_id, email, phone, address, total_spend, avg_order_value, ytd_spend, ytd_orders, last_year_spend, total_orders, last_order_date, netsuite_parent_id, parent_customer_id, parent_source, account_owner_id, billing_workflow, billing_portal, billing_notes, internal_notes')
+        .select('id, netsuite_id, netsuite_url, company_name, entity_id, email, phone, address, total_spend, avg_order_value, ytd_spend, ytd_orders, last_year_spend, total_orders, last_order_date, netsuite_parent_id, parent_customer_id, parent_source, account_owner_id, billing_workflow, billing_portal, billing_notes, internal_notes, portal_token, portal_token_created_at, portal_last_viewed_at')
         .eq('netsuite_id', nsId).maybeSingle();
       cust = data as CustomerRow | null;
     }
@@ -1120,7 +1131,7 @@ export default function CustomerRecordPage() {
       const [cRes, oRes, aRes, tRes, rRes] = await Promise.all([
         supabase.from('prospect_contacts').select('id, name, title, email, phone, is_decision_maker, netsuite_contact_id').eq('prospect_id', p.id).order('is_decision_maker', { ascending: false }),
         supabase.from('prospect_opportunities').select('id, title, type, stage, value, expected_close_date, created_at').eq('prospect_id', p.id).order('created_at', { ascending: false }),
-        supabase.from('prospect_activities').select('id, type, summary, created_by, created_at, email_log_id').eq('prospect_id', p.id).order('created_at', { ascending: false }).order('id').limit(20),
+        supabase.from('prospect_activities').select('id, type, summary, created_by, created_at, email_log_id, url').eq('prospect_id', p.id).order('created_at', { ascending: false }).order('id').limit(20),
         supabase.from('prospect_tags').select('id, tag').eq('prospect_id', p.id),
         supabase.from('prospect_reminders').select('id, title, description, due_at').eq('prospect_id', p.id).is('completed_at', null).order('due_at'),
       ]);
@@ -1217,7 +1228,10 @@ export default function CustomerRecordPage() {
         }),
       });
       const data = await res.json();
-      if (res.ok && data.preview) return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      if (res.ok && data.preview) {
+        setStPdfName((Array.isArray(data.attachments) && data.attachments[0]) || null);
+        return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      }
       return { error: data.error || 'Unknown error' };
     } catch {
       return { error: 'Network error — please try again.' };
@@ -1235,7 +1249,7 @@ export default function CustomerRecordPage() {
           customerId: nsId,
           recipients: fields.emails,
           customBody: fields.message || undefined,
-          bccSelf: fields.bccSelf,
+          bccSelf: fields.bccSelf, cc: fields.cc,
           scope: stScope,
           from: stFrom || undefined,
           to: stTo || undefined,
@@ -1243,7 +1257,7 @@ export default function CustomerRecordPage() {
       });
       const body = await res.json();
       if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
-      await dialog.alert(`Statement sent to ${body.sent.join(', ')} with ${body.attached} invoice PDF${body.attached === 1 ? '' : 's'} attached.${body.failedAttachments?.length ? `\n\nPDFs unavailable for: ${body.failedAttachments.join(', ')}` : ''}`);
+      await dialog.alert(`Statement sent to ${body.sent.join(', ')} with the statement PDF${body.statementPdf ? ` (${body.statementPdf})` : ''} and ${body.attached} invoice PDF${body.attached === 1 ? '' : 's'} attached.${body.failedAttachments?.length ? `\n\nPDFs unavailable for: ${body.failedAttachments.join(', ')}` : ''}`);
       setStModalOpen(false);
       setEmailingSt(false);
       return { ok: true };
@@ -1496,9 +1510,40 @@ export default function CustomerRecordPage() {
   // log the send as credit_app_invite (audit Stage 1 — staff previously
   // had no way to send the form's URL from inside the app).
   const [composeCreditApp, setComposeCreditApp] = useState(false);
-  const openCompose = (to: string, creditApp = false) => {
-    setComposeTo(to); setComposeSubject(''); setComposeCreditApp(creditApp);
+  // PO-status portal link (migration 260) rides the same flow: the server
+  // mints the customer's shared link if needed and appends the CTA.
+  const [composePortalLink, setComposePortalLink] = useState(false);
+  const openCompose = (to: string, creditApp = false, portalLink = false) => {
+    setComposeTo(to); setComposeSubject(''); setComposeCreditApp(creditApp); setComposePortalLink(portalLink);
     setComposeSubjectKey(k => k + 1); setComposeOpen(true);
+  };
+
+  // ── PO-status portal link: create / copy / regenerate / revoke ──
+  const [portalBusy, setPortalBusy] = useState(false);
+  const [pageOrigin, setPageOrigin] = useState('');
+  useEffect(() => { setPageOrigin(window.location.origin); }, []);
+  const portalUrl = customer?.portal_token ? `${pageOrigin}${deepLinks.customerPoPortal(customer.portal_token)}` : null;
+  const copyText = async (text: string) => {
+    try { await navigator.clipboard.writeText(text); await dialog.alert('Link copied.'); }
+    catch { await dialog.alert(text); }
+  };
+  const portalAction = async (action: 'create' | 'regenerate' | 'revoke') => {
+    if (!customer) return;
+    if (action === 'revoke' && !(await dialog.confirm('Revoke the portal link? Anyone holding it will see "no longer active".', { destructive: true, confirmLabel: 'Revoke' }))) return;
+    if (action === 'regenerate' && !(await dialog.confirm('Issue a new link? The current link stops working immediately.', { confirmLabel: 'New link' }))) return;
+    setPortalBusy(true);
+    try {
+      const res = await fetch('/api/customers/portal-link', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerId: customer.id, action }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { await dialog.alert(data.error || 'Could not update the portal link.'); return; }
+      setCustomer(prev => (prev ? { ...prev, portal_token: data.token, portal_token_created_at: data.createdAt || null } : prev));
+      if (data.url) await copyText(data.url);
+    } finally {
+      setPortalBusy(false);
+    }
   };
 
   // ?compose=1&to=… — the Contacts directory's email addresses land here
@@ -1522,10 +1567,11 @@ export default function CustomerRecordPage() {
         customerId: customer?.id || null,
         netsuiteCustomerId: prospect?.netsuite_id || customer?.netsuite_id || null,
         emails: fields.emails,
-        bccSelf: fields.bccSelf,
+        bccSelf: fields.bccSelf, cc: fields.cc,
         subject: composeSubject,
         message: fields.message,
         includeCreditAppLink: composeCreditApp,
+        includePortalLink: composePortalLink,
         preview,
       }),
     });
@@ -1540,6 +1586,12 @@ export default function CustomerRecordPage() {
     if (!res.ok || !data.success) { await dialog.alert(data.error || 'Email send failed'); return { ok: false }; }
     await dialog.alert(`Email sent to ${(data.to || []).join(', ')}${data.bcc?.length ? ` (bcc ${data.bcc.join(', ')})` : ''}.`);
     if (prospect) refreshFeed(prospect.id);
+    // A portal-link send mints the link server-side when none existed;
+    // reflect it on the card without a reload.
+    if (composePortalLink && customer && !customer.portal_token) {
+      const { data: fresh } = await supabase.from('customers').select('portal_token, portal_token_created_at').eq('id', customer.id).maybeSingle();
+      if (fresh) setCustomer(prev => (prev ? { ...prev, ...fresh } : prev));
+    }
     return { ok: true };
   };
 
@@ -1560,6 +1612,8 @@ export default function CustomerRecordPage() {
   const [stWorking, setStWorking] = useState(false);
   // Standard compose screen for the statement email
   const [stEmailOpen, setStEmailOpen] = useState(false);
+  // The statement send auto-attaches the statement PDF; the preview names it.
+  const [stPdfName, setStPdfName] = useState<string | null>(null);
 
   const fetchStatementData = async (): Promise<StatementInvoice[]> => {
     const nsId = prospect?.netsuite_id || customer?.netsuite_id;
@@ -2081,6 +2135,44 @@ export default function CustomerRecordPage() {
             </div>
           )}
 
+          {/* PO-status portal (migration 260) — the shared, no-login link
+              where this customer sees where each PO they sent us stands. */}
+          {customer && !isVendor && (
+            <div style={card}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <div style={{ ...eyebrow, marginBottom: 0 }}>PO status link</div>
+                {customer.portal_last_viewed_at && (
+                  <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>Last opened {new Date(customer.portal_last_viewed_at).toLocaleDateString()}</span>
+                )}
+              </div>
+              <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.45 }}>
+                A private page (no login) where {customer.company_name || 'this customer'} can see every purchase order they sent us and where each one stands — received, in production, shipped, installed.
+              </div>
+              {portalUrl ? (
+                <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <input readOnly value={portalUrl} onFocus={e => e.currentTarget.select()} style={{ ...cInput, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '10.5px' }} />
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    <button onClick={() => copyText(portalUrl)} disabled={portalBusy} style={btnSm}>Copy link</button>
+                    <button onClick={() => openCompose(email || '', false, true)} disabled={portalBusy}
+                      title="Email the link through the standard compose screen — the message carries a View-your-purchase-order-status button" style={btnSm}>Send link…</button>
+                    <a href={portalUrl} target="_blank" rel="noopener noreferrer" style={btnSm}>Preview ↗</a>
+                    <button onClick={() => portalAction('regenerate')} disabled={portalBusy} title="Issue a new link; the current one stops working" style={btnSm}>New link</button>
+                    <button onClick={() => portalAction('revoke')} disabled={portalBusy} style={{ ...btnSm, color: 'var(--error, #ef4444)' }}>Revoke</button>
+                  </div>
+                  {customer.portal_token_created_at && (
+                    <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>Issued {new Date(customer.portal_token_created_at).toLocaleDateString()}</div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ marginTop: '8px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  <button onClick={() => portalAction('create')} disabled={portalBusy} style={btnSm}>{portalBusy ? 'Working…' : 'Create link'}</button>
+                  <button onClick={() => openCompose(email || '', false, true)} disabled={portalBusy}
+                    title="Creates the link and emails it through the standard compose screen" style={btnSm}>Send link…</button>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Sub-accounts (K1) — children by manual link or NetSuite hierarchy,
               with consolidated spend and each child's contacts. */}
           {customer && children.length > 0 && (
@@ -2433,6 +2525,16 @@ export default function CustomerRecordPage() {
                       View email
                     </button>
                   )}
+                  {/* Activities about a record (quote accepted / rejected,
+                      migration 257) carry its deep link — open it, don't
+                      make the reader hunt for the quote. */}
+                  {a.url && (
+                    <button onClick={() => router.push(a.url!)}
+                      title="Open the record this is about"
+                      style={{ marginLeft: '6px', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '11px', fontWeight: 700, color: '#60a5fa' }}>
+                      Open ›
+                    </button>
+                  )}
                 </span>
                 <span style={{ flexShrink: 0, color: 'var(--text-muted)', fontSize: '11px', textAlign: 'right' }}>
                   {a.creator_name ? `${a.creator_name} · ` : ''}{timeAgo(a.created_at)}
@@ -2729,8 +2831,14 @@ export default function CustomerRecordPage() {
       {stEmailOpen && (
         <EmailComposeModal
           title={`Email Statement — ${prospect?.company_name || customer?.company_name || ''}`}
+          contacts={[...extContacts, ...contacts].filter(c => !!c.email).map(c => ({ name: c.name, email: c.email as string, title: c.title }))}
           sendLabel="Send Statement"
           messagePlaceholder="Optional note — shown above the statement table…"
+          intro={stPdfName ? (
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              📎 <b style={{ color: 'var(--text-secondary)' }}>{stPdfName}</b> is attached automatically — a PDF copy of the statement the customer can save or forward, ahead of the open invoices&apos; PDFs.
+            </div>
+          ) : undefined}
           initialTo={(prospect?.billing_emails?.length ? prospect.billing_emails.join(', ') : '') || prospect?.email || customer?.email || ''}
           fetchPreview={fetchStatementPreview}
           onSend={sendStatementEmail}
@@ -2742,14 +2850,19 @@ export default function CustomerRecordPage() {
           button and contact addresses (formerly mailto: links). */}
       {composeOpen && (
         <EmailComposeModal
+          contacts={[...extContacts, ...contacts].filter(c => !!c.email).map(c => ({ name: c.name, email: c.email as string, title: c.title }))}
           title={composeCreditApp
             ? `Send credit application — ${prospect?.company_name || customer?.company_name || ''}`
-            : `Email — ${prospect?.company_name || customer?.company_name || ''}`}
-          sendLabel={composeCreditApp ? 'Send Credit Application' : 'Send Email'}
+            : composePortalLink
+              ? `Send PO status link — ${prospect?.company_name || customer?.company_name || ''}`
+              : `Email — ${prospect?.company_name || customer?.company_name || ''}`}
+          sendLabel={composeCreditApp ? 'Send Credit Application' : composePortalLink ? 'Send Portal Link' : 'Send Email'}
           initialTo={composeTo}
           messagePlaceholder={composeCreditApp
             ? 'Optional note — the email carries the credit-application button either way…'
-            : 'Write your message…'}
+            : composePortalLink
+              ? 'Optional note — the email carries the "View your purchase order status" button either way…'
+              : 'Write your message…'}
           intro={
             <div>
               <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '3px' }}>Subject</div>

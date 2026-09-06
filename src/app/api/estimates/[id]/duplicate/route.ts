@@ -138,7 +138,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         quantity: l.quantity ?? 0,
         unit_price: l.unit_price ?? 0,
         line_total: l.line_total ?? 0,
-        labor_hours: l.labor_hours ?? 0,
+        labor_hours: l.labor_hours ?? null,
         is_custom: !!l.is_custom,
         notes: l.notes ?? null,
         wrap_quote_id: l.wrap_quote_id ?? null,

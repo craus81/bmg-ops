@@ -150,6 +150,20 @@ they tell you to go back to auto-shipping.
   `dialog.prompt` recipients. Update the doc's flow table when adding a
   flow.
 
+- **Every transaction email carries a PDF copy of the transaction.** When
+  staff email an estimate, quote, invoice, or statement to a customer, the
+  send auto-attaches a PDF of that record (estimate approval + Email PDF +
+  follow-up → `generateEstimatePdf`; wrap quote send + follow-up →
+  `generateWrapQuotePdf`, or NetSuite's own PDF when that box is checked;
+  invoices → NetSuite PDFs; statement → `generateStatementPdf` plus the
+  open invoices' NetSuite PDFs) so the receiver can download or
+  forward the transaction without the original email. The PDF rides first
+  in the attachment budget, is named in the email body, the preview names
+  it (`attachments`) so the compose screen can say so, and a render
+  failure fails the send before any side effect. When adding a new
+  transaction email flow, wire this in — see the "PDF copy" bullet in
+  `docs/customer-email-standard.md`.
+
 - **Labor reaches NetSuite as ONE line on ONE item — resolve it through
   `src/lib/labor-item.ts`.** Estimate/SO labor is `labor_hours_override ??
   labor_hours` × `labor_rate`, pushed as a single line item; NetSuite has no
@@ -163,6 +177,15 @@ they tell you to go back to auto-shipping.
   add a second lookup, and never let a caller treat "no labor item" as a
   no-op: report it (`laborSkipped`) so the person pushing sees the money that
   didn't go.
+
+- **Invoicing a sales order fulfils it first — every line.** Owner rule
+  (2026-09-05): billing straight off an SO left orders at Pending
+  Fulfillment in NetSuite with inventory never relieved. Every SO→invoice
+  path (`/api/vehicle-tracking/invoice`, `/api/netsuite/create-invoice`)
+  calls `fulfillSalesOrder()` in `src/lib/netsuite.ts` — one Item
+  Fulfillment for all open lines, marked Shipped — and fails closed if it
+  errors; an SO already Pending Billing/Billed is skipped, not
+  re-fulfilled. When adding a new way to invoice an SO, wire this in.
 
 - **Supabase reads silently cap at 1000 rows** (PostgREST default —
   `.limit(N > 1000)` does NOT raise it). Any read of a table that can

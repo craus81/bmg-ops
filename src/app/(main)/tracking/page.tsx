@@ -19,8 +19,10 @@ import { deepLinks } from '@/lib/deep-links';
 import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto, GraphicsJob, GraphicsInstallStatus, CheckinSalesOrder } from '@/lib/types';
 import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS, GRAPHICS_STATUS_LABELS, GRAPHICS_INSTALL_PIPELINE, GRAPHICS_INSTALL_LABELS, GRAPHICS_INSTALL_COLORS, IN_SHOP_STATUSES } from '@/lib/types';
 import NetSuitePdf from '@/components/NetSuitePdf';
+import { openNetSuiteInvoicePdfByNumber } from '@/lib/netsuite-pdf-client';
 import ProofThumbnail from '@/components/ProofThumbnail';
 import CompletionModal from '@/components/CompletionModal';
+import PhotoSession from '@/components/PhotoSession';
 import { useDialog } from '@/components/DialogProvider';
 import { DropZone } from '@/components/DropZone';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
@@ -165,7 +167,8 @@ export default function TrackingPage() {
   const [notesSaving, setNotesSaving] = useState<string | null>(null);
   const [completionModalVehicleId, setCompletionModalVehicleId] = useState<string | null>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
+  // In-app camera session (PhotoSession) — which vehicle is being photographed.
+  const [photoSessionVehicle, setPhotoSessionVehicle] = useState<string | null>(null);
 
   // Notes state
   interface VehicleNote {
@@ -2375,21 +2378,37 @@ export default function TrackingPage() {
                       }}>
                         <div>
                           <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Invoice #</div>
-                          <input
-                            value={(vehicle as any).invoice_number || ''}
-                            placeholder="Invoice number"
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={async (e) => {
-                              const val = e.target.value || null;
-                              await supabase.from('fleet_checkins').update({ invoice_number: val, updated_at: new Date().toISOString() }).eq('id', vehicle.id);
-                              setVehicles(prev => prev.map(v => v.id === vehicle.id ? { ...v, invoice_number: val } as any : v));
-                            }}
-                            style={{
-                              width: '100%', padding: '6px 8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
-                              border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)',
-                              boxSizing: 'border-box',
-                            }}
-                          />
+                          <div style={{ display: 'flex', gap: '6px' }}>
+                            <input
+                              value={(vehicle as any).invoice_number || ''}
+                              placeholder="Invoice number"
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={async (e) => {
+                                const val = e.target.value || null;
+                                await supabase.from('fleet_checkins').update({ invoice_number: val, updated_at: new Date().toISOString() }).eq('id', vehicle.id);
+                                setVehicles(prev => prev.map(v => v.id === vehicle.id ? { ...v, invoice_number: val } as any : v));
+                              }}
+                              style={{
+                                flex: 1, minWidth: 0, padding: '6px 8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
+                                border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)',
+                                boxSizing: 'border-box',
+                              }}
+                            />
+                            {/* The stamped number is the only handle here — the PDF opens by
+                                resolving it to NetSuite's internal id. */}
+                            {(vehicle as any).invoice_number && (
+                              <button
+                                type="button"
+                                title="Open this invoice's NetSuite PDF to print or save"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  const r = await openNetSuiteInvoicePdfByNumber(String((vehicle as any).invoice_number));
+                                  if (!r.ok) await dialog.alert(`Could not open the invoice PDF: ${r.error}`);
+                                }}
+                                style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text-primary)', whiteSpace: 'nowrap' }}
+                              >🖨 PDF</button>
+                            )}
+                          </div>
                         </div>
                         <div>
                           <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Date Invoiced</div>
@@ -2836,7 +2855,7 @@ export default function TrackingPage() {
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setPhotoType('completion');
-                                cameraInputRef.current?.click();
+                                setPhotoSessionVehicle(vehicle.id);
                               }}
                               style={{
                                 flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
@@ -2886,7 +2905,7 @@ export default function TrackingPage() {
                         {showCompletionPrompt !== vehicle.id && (
                           <div style={{ display: 'flex', gap: '6px' }}>
                             <button
-                              onClick={(e) => { e.stopPropagation(); cameraInputRef.current?.click(); }}
+                              onClick={(e) => { e.stopPropagation(); setPhotoSessionVehicle(vehicle.id); }}
                               disabled={photoUploading}
                               style={{
                                 padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
@@ -2934,22 +2953,6 @@ export default function TrackingPage() {
                       </div>
 
                       {/* Hidden file inputs */}
-                      <input
-                        ref={cameraInputRef}
-                        type="file"
-                        accept="image/*"
-                        capture="environment"
-                        multiple
-                        style={{ display: 'none' }}
-                        onChange={async (e) => {
-                          const hadFiles = !!(e.target.files && e.target.files.length);
-                          await handlePhotoFiles(vehicle.id, e.target.files);
-                          e.target.value = '';
-                          // Mobile camera capture is single-shot; re-open it so
-                          // the installer keeps shooting until they cancel.
-                          if (hadFiles) cameraInputRef.current?.click();
-                        }}
-                      />
                       <input
                         ref={photoInputRef}
                         type="file"
@@ -3037,6 +3040,7 @@ export default function TrackingPage() {
                       </div>
                       <VehiclePhotoTimeline
                         vin={vehicle.vin}
+                        visit={vehicle.id}
                         variant="internal"
                         refreshKey={vehiclePhotos[vehicle.id]?.length || 0}
                       />
@@ -3323,6 +3327,14 @@ export default function TrackingPage() {
           )}
         </div>
       )}
+
+      <PhotoSession
+        open={photoSessionVehicle !== null}
+        title={`${photoType === 'before' ? 'Check-in' : photoType === 'during' ? 'In-progress' : 'Completion'} photos`}
+        subtitle={(() => { const v = vehicles.find(x => x.id === photoSessionVehicle); return v ? `${vehicleTitle(v)} — tap Done when finished` : undefined; })()}
+        onShot={(file) => { if (photoSessionVehicle) return handlePhotoFiles(photoSessionVehicle, [file]); }}
+        onClose={() => setPhotoSessionVehicle(null)}
+      />
 
       {completionModalVehicleId && (() => {
         const v = vehicles.find(x => x.id === completionModalVehicleId);

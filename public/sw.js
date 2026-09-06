@@ -1,29 +1,39 @@
 /**
- * FleetSuite Service Worker — Offline Scan Support + Push Notifications
+ * FleetSuite Service Worker — offline app shell + Web Push.
  *
- * Caches the app shell and offline scan page so the scanner works
- * underground without cell service. Uses a network-first strategy
- * for most requests, falling back to cache when offline.
+ * Network-first for pages and static assets, falling back to cache when
+ * the device is offline.
  *
- * Also handles Web Push notifications (Safari, Chrome, Firefox, Edge).
+ * API responses are NEVER cached or served from cache. They used to be,
+ * and it printed a stale estimate: /api/estimates/<id>/pdf is a GET, so a
+ * successful render was stored under that URL, and any later request that
+ * failed or timed out — the PDF route inlines photos and can take a while
+ * on a phone — silently served the OLD document. Nothing server-side ever
+ * looked wrong, because nothing server-side WAS wrong. cache.put also
+ * ignores Cache-Control, so the route's `no-store` did nothing to stop it.
+ * A cached PDF handed to a customer as current is the failure this file
+ * exists to not cause.
  */
 
-const CACHE_NAME = 'fleetsuite-offline-v2';
+const CACHE_NAME = 'fleetsuite-offline-v3';
 
-// App shell: pages and assets needed for offline scanning
+// App shell: assets worth having offline. '/offline-scan' used to be listed
+// here and no longer exists as a route — addAll rejects atomically on a 404,
+// so install failed every time and the previously-activated worker could
+// never be replaced OR have its stale cache cleaned. Entries are added
+// individually now, so one missing file can't wedge the whole worker.
 const APP_SHELL = [
-  '/offline-scan',
   '/icon-192.png',
   '/icon-512.png',
   '/manifest.json',
 ];
 
-// Install: pre-cache the app shell
+// Install: pre-cache the app shell, tolerating individual misses.
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(APP_SHELL);
-    })
+    caches.open(CACHE_NAME).then((cache) => Promise.allSettled(
+      APP_SHELL.map((url) => cache.add(url)),
+    ))
   );
   self.skipWaiting();
 });
@@ -122,6 +132,25 @@ self.addEventListener('notificationclick', (event) => {
 
 // ═══════════ OFFLINE CACHING ═══════════
 
+/** Anything under /api/ is live data or a generated document. Never cached,
+ *  never served from cache: a stale answer here is worse than no answer,
+ *  and for a PDF it is a wrong document that looks right. */
+function isApiRequest(url) {
+  try {
+    const u = new URL(url);
+    return u.origin === self.location.origin && u.pathname.startsWith('/api/');
+  } catch {
+    return false;
+  }
+}
+
+/** Responses that ask not to be stored. cache.put honours nothing on its
+ *  own, so the check has to happen here. */
+function isNoStore(response) {
+  const cc = response.headers.get('Cache-Control') || '';
+  return /no-store/i.test(cc);
+}
+
 // Fetch: network-first, fall back to cache
 self.addEventListener('fetch', (event) => {
   const { request } = event;
@@ -129,12 +158,18 @@ self.addEventListener('fetch', (event) => {
   // Skip non-GET requests
   if (request.method !== 'GET') return;
 
+  // Let API calls go straight to the network, unintercepted — no caching on
+  // the way out, and no cached fallback on failure. A failed request has to
+  // look like a failure so the caller can say so.
+  if (isApiRequest(request.url)) return;
+
   // For navigation requests (page loads) and JS/CSS assets: network-first
   event.respondWith(
     fetch(request)
       .then((response) => {
-        // Cache successful responses for offline use
-        if (response.ok) {
+        // Cache successful responses for offline use, unless the response
+        // asked not to be stored.
+        if (response.ok && !isNoStore(response)) {
           const clone = response.clone();
           caches.open(CACHE_NAME).then((cache) => {
             cache.put(request, clone);
@@ -146,10 +181,6 @@ self.addEventListener('fetch', (event) => {
         // Offline: serve from cache
         return caches.match(request).then((cached) => {
           if (cached) return cached;
-          // If requesting a page and we don't have it cached, show offline-scan
-          if (request.mode === 'navigate') {
-            return caches.match('/offline-scan');
-          }
           return new Response('Offline', { status: 503 });
         });
       })

@@ -96,6 +96,11 @@ export const deepLinks = {
     `/admin/cni/installers/${userId}${noteId ? `?note=${noteId}` : ''}`,
   /** Dedicated prospect / customer record page. */
   prospect: (prospectId: string) => `/admin/prospects/${prospectId}`,
+  /** The same record page, addressed by the customer's NetSuite internal id
+   *  (the page resolves `ns-<id>` to the prospect row + synced customer, so
+   *  records with no CRM row still land). Use when a record only carries
+   *  the NetSuite id — estimates, POs, sales orders. */
+  customerByNetsuiteId: (netsuiteId: string | number) => `/admin/prospects/ns-${netsuiteId}`,
   /** Purchasing queue — pending purchase requests grouped by vendor;
    *  ?req= scroll-flashes one request's row. */
   purchaseRequests: (requestId?: string | null) =>
@@ -125,6 +130,9 @@ export const deepLinks = {
    *  customer login can open; use for customer email CTAs when no public
    *  page (carrier tracking, approval magic link) fits. */
   customerPortal: () => '/customer/dashboard',
+  /** Customer PO-status portal — the shared link on a customer record
+   *  (customers.portal_token, migration 260). Public page, no login. */
+  customerPoPortal: (token: string) => `/portal/${encodeURIComponent(token)}`,
   /** The installer's own earnings/payout history — the destination for CNI
    *  payout-status notifications (there is no per-payout page). */
   earnings: () => '/earnings',

@@ -151,6 +151,11 @@ export default function ProspectsPage() {
   const emptyForm = { company_name: '', contact_name: '', title: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1, record_type: 'customer', lead_source: '' };
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  // Create the NetSuite customer in the same click (owner decision
+  // 2026-09-02, restoring the pre-lead-tier default). Unticking it keeps a
+  // business card or a tyre-kicker out of NetSuite until they're real —
+  // the record stays a lead, promotable from its page.
+  const [createInNetsuite, setCreateInNetsuite] = useState(true);
   // "What do they want" — one deal per checked type at create time, so a
   // combined upfit+graphics inquiry is two deals, not a free-text note that
   // gets re-typed into the estimate later. UI-only state: `form` spreads
@@ -321,17 +326,20 @@ export default function ProspectsPage() {
   // Create a customer, then land on its record page — the record is where
   // everything else (contacts, deals, activity) gets added.
   //
-  // Since the lead tier (owner decision 2026-08-30) creation does NOT touch
-  // NetSuite: the new record is a LEAD (prospects row, netsuite_id null),
-  // promoted later from its record page or automatically by the first push
-  // of one of its estimates. Vendor records are FleetSuite-only always.
+  // The NetSuite customer is created in the same click by default (owner
+  // decision 2026-09-02), with an opt-out on the form. The lead tier (#706)
+  // is still the machinery underneath: unticking the box — or a NetSuite
+  // failure — leaves a lead (prospects row, netsuite_id null) that the
+  // record page's Promote button, or the first push of one of its
+  // estimates, finishes later. Vendor records are FleetSuite-only always.
   //
   // `startEstimate` (Valarie's new-client-to-quote flow) lands in the
-  // estimate builder with the new record pre-selected instead — as a lead
-  // (?prospect=), which the builder records on the estimate as prospect_id
-  // (migration 251). That link is what makes the estimate sendable for
-  // approval and lets the push promote this exact lead rather than matching
-  // on its name.
+  // estimate builder with the new record pre-selected instead: as a real
+  // customer when the push succeeded, else as a lead (?prospect=), which
+  // the builder records on the estimate as prospect_id (migration 251).
+  // That link is what makes a lead's estimate sendable for approval and
+  // lets a later push promote this exact lead rather than matching on its
+  // name.
   const createCustomer = async (startEstimate = false) => {
     if (!form.company_name.trim() || saving) return;
     setSaving(true);
@@ -455,14 +463,12 @@ export default function ProspectsPage() {
         })),
       );
     }
-    // Lead tier (owner decision 2026-08-30): creating a record no longer
-    // creates a NetSuite customer. The record IS the lead (netsuite_id
-    // null); it's promoted from its record page, or automatically the first
-    // time an estimate for it is pushed to NetSuite / converted to an SO.
     // The contact person (typed or scanned off a card) becomes a real
     // contact row on the record — and a NetSuite contact when linked — not
-    // just the header contact field. Best-effort: the record is already
-    // created, and contacts can be added on the record page.
+    // just the header contact field. Written BEFORE the NetSuite push so a
+    // promoted record carries its person from the first moment.
+    // Best-effort: the record is already created, and contacts can be added
+    // on the record page.
     if (form.contact_name.trim()) {
       await fetch('/api/prospects/contacts', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -472,8 +478,49 @@ export default function ProspectsPage() {
         }),
       }).catch(() => {});
     }
+
+    // Create the NetSuite customer in the same click (owner decision
+    // 2026-09-02). The lead tier (#706) still exists underneath — this is
+    // its default, not its removal: unticking the box, or a NetSuite
+    // failure here, leaves a perfectly good lead that the record page's
+    // Promote button finishes later.
+    //
+    // Order matters: the CRM row is saved FIRST and never rolled back. A
+    // NetSuite hiccup must not discard what someone just typed, which is
+    // exactly what the pre-#706 flow got right.
+    //
+    // `force` is deliberately NOT sent: the pre-flight above is best-effort
+    // (a network hiccup leaves `dupes` empty), so the route's own
+    // NetSuite-double guard is the real backstop and must be allowed to
+    // fire. It only blocks on a NAME match in the mirror — which the
+    // pre-flight already blocks outright — so it can't reject a record the
+    // human deliberately approved.
+    let promotedCustomerId: string | null = null;
+    if (createInNetsuite && !isVendor) {
+      try {
+        const res = await fetch('/api/prospects/push-to-netsuite', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prospectId: data.id, type: 'customer', userId: user?.id }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+        promotedCustomerId = body.localCustomerId || null;
+      } catch (err: any) {
+        // Never silent: the sender has to know the record is FleetSuite-only
+        // so far, or they'll assume NetSuite has it.
+        await dialog.alert(
+          `"${name}" was saved, but NetSuite refused to create the customer:\n\n${err?.message || 'unknown error'}\n\n`
+          + 'The record is a lead for now — open it and use "Promote to NetSuite Customer" once the problem is sorted.',
+        );
+      }
+    }
+
     if (startEstimate && !isVendor) {
-      router.push(deepLinks.newEstimate(null, data.id));
+      // A promoted record has a customers-mirror row, so the builder gets a
+      // real customer_id; without one it quotes the lead (migration 251).
+      router.push(promotedCustomerId
+        ? deepLinks.newEstimate(promotedCustomerId)
+        : deepLinks.newEstimate(null, data.id));
       return;
     }
     router.push(`/admin/prospects/${data.id}`);
@@ -744,6 +791,22 @@ export default function ProspectsPage() {
             )}
             <div style={{ gridColumn: '1 / -1' }}><div style={labelStyle}>Notes</div><textarea style={{ ...inputStyle, minHeight: '50px', resize: 'vertical' }} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
           </div>
+          {form.record_type !== 'vendor' && (
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '12px', color: 'var(--text-secondary)', cursor: 'pointer', marginBottom: '10px' }}>
+              <input
+                type="checkbox"
+                checked={createInNetsuite}
+                onChange={e => setCreateInNetsuite(e.target.checked)}
+                style={{ accentColor: '#22c55e', marginTop: '2px' }}
+              />
+              <span>
+                Create the customer in NetSuite now
+                <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)' }}>
+                  Untick for a business card or a maybe — it stays a FleetSuite lead you can promote from its record later.
+                </span>
+              </span>
+            </label>
+          )}
           <div style={{ display: 'flex', gap: '8px' }}>
             <button onClick={() => createCustomer()} disabled={saving || !form.company_name.trim()} style={{
               flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,

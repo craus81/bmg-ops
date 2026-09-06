@@ -888,7 +888,7 @@ export default function GraphicsJobRecordPage() {
         body: JSON.stringify({
           proofFileId: approvalPickerFileId,
           emails: fields.emails,
-          bccSelf: fields.bccSelf,
+          bccSelf: fields.bccSelf, cc: fields.cc,
           message: fields.message || undefined,
           attachmentFileIds: fields.attachmentIds,
         }),

@@ -54,6 +54,8 @@ const CRM_LABELS: Record<string, string> = {
   meeting: 'Logged a meeting',
   quote_sent: 'Sent a quote',
   status_change: 'Updated status',
+  quote_accepted: 'Customer accepted a quote',
+  quote_rejected: 'Customer requested changes',
 };
 
 const timeAgo = (d: string) => {

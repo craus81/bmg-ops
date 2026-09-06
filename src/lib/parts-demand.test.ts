@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isOpenSalesOrderStatus, isStockableItemType, CLOSED_SO_STATUS_CODES } from './parts-demand';
+import { isOpenSalesOrderStatus, isStockableItemType, CLOSED_SO_STATUS_CODES, describeSoMirrorHealth } from './parts-demand';
 
 // The demand list is only as right as its "is this job still open" gate.
 // NetSuite reuses the same status letters across transaction types with
@@ -72,5 +72,45 @@ describe('isStockableItemType', () => {
     // items missing from the catalog entirely are kept by the caller.
     expect(isStockableItemType(null)).toBe(false);
     expect(isStockableItemType('')).toBe(false);
+  });
+});
+
+// "0 open sales orders" is only meaningful if the mirror behind it is
+// healthy — the first sync never finished and the page showed a confident
+// zero for weeks. The note must name the actual condition.
+describe('describeSoMirrorHealth', () => {
+  const now = Date.parse('2026-09-02T12:00:00Z');
+  const row = (over: Partial<{ updated_at: string; last_result: any }>) => ({
+    sync_type: 'netsuite_sales_orders',
+    last_synced_at: '2026-09-01T00:00:00Z',
+    updated_at: '2026-09-02T11:30:00Z',
+    last_result: { modified: 12, synced: 12 },
+    ...over,
+  });
+
+  it('never ran', () => {
+    expect(describeSoMirrorHealth(null, 0, now)).toMatchObject({ status: 'never', mirrorRows: 0, lastRunAt: null });
+  });
+
+  it('backfill in progress, with how far it got', () => {
+    const h = describeSoMirrorHealth(row({ last_result: { partial: true, synced: 200, resume: { beforeId: '251', processed: 200 } } }), 200, now);
+    expect(h.status).toBe('partial');
+    expect(h.problem).toContain('200 sales orders');
+  });
+
+  it('last run failed', () => {
+    const h = describeSoMirrorHealth(row({ last_result: { error: 'NetSuite SuiteQL error (401): bad token' } }), 0, now);
+    expect(h.status).toBe('error');
+    expect(h.problem).toContain('401');
+  });
+
+  it('overdue', () => {
+    const h = describeSoMirrorHealth(row({ updated_at: '2026-09-02T01:00:00Z' }), 40, now);
+    expect(h.status).toBe('stale');
+    expect(h.mirrorRows).toBe(40);
+  });
+
+  it('healthy', () => {
+    expect(describeSoMirrorHealth(row({}), 40, now)).toMatchObject({ status: 'ok', problem: null, lastRunAt: '2026-09-02T11:30:00Z' });
   });
 });

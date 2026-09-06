@@ -70,6 +70,12 @@ export interface PurchaseOrder {
   requested_delivery_date: string | null;
   notes: string | null;
   ship_to: { name?: string; address?: string; city?: string; state?: string; zip?: string } | null;
+  /** Buyer Information off the PO PDF (migration 256). */
+  buyer_name?: string | null;
+  buyer_email?: string | null;
+  /** Automatic receipt confirmation (src/lib/po-confirmation.ts). */
+  confirmation_sent_at?: string | null;
+  confirmation_sent_to?: string[] | null;
   created_by: string;
   created_at: string;
   line_items?: POLineItem[];
@@ -646,6 +652,9 @@ export interface NotificationPreferences {
   sms_messages: boolean;
   sms_messages_mode: 'always' | 'unread_only';
   email_messages: boolean;
+  /** Opt-out (migration 254, default true): email on every @mention. Optional
+   *  because rows written before the column existed read it as undefined. */
+  email_mentions?: boolean;
 }
 
 // ═══════════ MESSAGING ═══════════

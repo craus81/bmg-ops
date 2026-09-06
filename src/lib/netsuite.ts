@@ -62,45 +62,80 @@ function getAuthHeader(oauth: OAuth, token: { key: string; secret: string }, req
   return params.Authorization;
 }
 
+export interface SuiteqlOptions {
+  /** Extra attempts after a 429, a 5xx, or a network failure — NetSuite
+   *  throws the occasional UNEXPECTED_ERROR that succeeds on re-send.
+   *  Default 0: callers opt in (a background sync can afford the wait; an
+   *  interactive lookup usually shouldn't). 4xx never retries. */
+  retries?: number;
+  /** Base backoff between attempts; doubles each time. */
+  retryDelayMs?: number;
+}
+
+/** A failed SuiteQL request. `status` is the HTTP status NetSuite returned. */
+export interface SuiteqlError extends Error {
+  status: number;
+}
+
+export function isSuiteqlError(err: unknown): err is SuiteqlError {
+  return err instanceof Error && typeof (err as any).status === 'number';
+}
+
+const isRetryableStatus = (status: number) => status === 429 || status >= 500;
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
 /**
  * Execute a SuiteQL query against NetSuite
  */
-export async function suiteqlQuery(query: string, limit: number = 1000, offset: number = 0): Promise<any> {
+export async function suiteqlQuery(query: string, limit: number = 1000, offset: number = 0, opts?: SuiteqlOptions): Promise<any> {
   const config = getConfig();
   const baseUrl = getBaseUrl(config.accountId);
   const url = `${baseUrl}/services/rest/query/v1/suiteql?limit=${limit}&offset=${offset}`;
   const { oauth, token } = createOAuth(config);
+  const retries = Math.max(0, opts?.retries ?? 0);
+  const baseDelay = opts?.retryDelayMs ?? 1500;
 
-  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+  for (let attempt = 0; ; attempt++) {
+    // Signed per attempt: the OAuth nonce/timestamp must be fresh.
+    const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': authHeader,
-      'Content-Type': 'application/json',
-      'Prefer': 'transient',
-    },
-    body: JSON.stringify({ q: query }),
-  });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': authHeader,
+          'Content-Type': 'application/json',
+          'Prefer': 'transient',
+        },
+        body: JSON.stringify({ q: query }),
+      });
+    } catch (err) {
+      if (attempt < retries) { await sleep(baseDelay * 2 ** attempt); continue; }
+      throw err;
+    }
 
-  if (!response.ok) {
+    if (response.ok) return response.json();
+
     const text = await response.text();
-    throw new Error(`NetSuite SuiteQL error (${response.status}): ${text}`);
+    if (isRetryableStatus(response.status) && attempt < retries) {
+      await sleep(baseDelay * 2 ** attempt);
+      continue;
+    }
+    throw Object.assign(new Error(`NetSuite SuiteQL error (${response.status}): ${text}`), { status: response.status });
   }
-
-  return response.json();
 }
 
 /**
  * Execute a paginated SuiteQL query — fetches all rows across multiple pages
  */
-export async function suiteqlQueryAll(query: string, pageSize: number = 1000): Promise<any[]> {
+export async function suiteqlQueryAll(query: string, pageSize: number = 1000, opts?: SuiteqlOptions): Promise<any[]> {
   let allItems: any[] = [];
   let offset = 0;
   let hasMore = true;
 
   while (hasMore) {
-    const result = await suiteqlQuery(query, pageSize, offset);
+    const result = await suiteqlQuery(query, pageSize, offset, opts);
     const items = result?.items || [];
     allItems = allItems.concat(items);
 
@@ -202,6 +237,12 @@ export interface SalesOrderSearchOptions {
   limit?: number;
   /** Rows to skip (for "load 20 more"). */
   offset?: number;
+  /** Match on the transaction's VIN (custbody_vin_number_) instead of —
+   *  or as well as — the customer name. Last-8 tail match, so a full VIN
+   *  finds an SO entered with just the tail and vice versa. With a VIN the
+   *  customer name may be empty: this is the check-in's "scan the VIN,
+   *  find the sales order" path. */
+  vin?: string;
   /** Restrict to these record types; omit for all three. */
   types?: SalesOrderSearchType[];
 }
@@ -217,7 +258,8 @@ export async function getOpenSalesOrdersByCustomer(
   error?: string;
 }> {
   const searchTerm = customerName.trim().replace(/'/g, "''");
-  if (!searchTerm) {
+  const vinTail = (opts.vin || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(-8);
+  if (!searchTerm && vinTail.length < 5) {
     return { found: false, count: 0, data: null, hasMore: false, error: 'Customer name cannot be empty' };
   }
 
@@ -255,8 +297,14 @@ export async function getOpenSalesOrdersByCustomer(
       ${typeConditions}
     )
     AND (
-      UPPER(c.companyname) LIKE UPPER('%${searchTerm}%')
-      OR UPPER(c.entityid) LIKE UPPER('%${searchTerm}%')
+      ${[
+        searchTerm
+          ? `(UPPER(c.companyname) LIKE UPPER('%${searchTerm}%') OR UPPER(c.entityid) LIKE UPPER('%${searchTerm}%'))`
+          : null,
+        vinTail.length >= 5
+          ? `UPPER(t.custbody_vin_number_) LIKE '%${vinTail}'`
+          : null,
+      ].filter(Boolean).join('\n      OR ')}
     )
     ORDER BY c.companyname, t.trandate DESC, t.id DESC
     OFFSET ${offset} ROWS FETCH NEXT ${limit + 1} ROWS ONLY
@@ -2144,6 +2192,132 @@ export async function createItemReceiptFromPo(payload: {
  * The transform endpoint creates an invoice from an existing SO
  * If installedQuantities is provided, only those quantities are billed
  */
+/**
+ * Sales-order status letters (transaction.status for type 'SalesOrd').
+ * Per-type: the same letter means something else on an invoice or estimate.
+ */
+export const SO_STATUS = {
+  pendingApproval: 'A',
+  pendingFulfillment: 'B',
+  cancelled: 'C',
+  partiallyFulfilled: 'D',
+  pendingBillingPartiallyFulfilled: 'E',
+  pendingBilling: 'F',
+  billed: 'G',
+  closed: 'H',
+} as const;
+
+/**
+ * Fulfil EVERY remaining line of a sales order — one Item Fulfillment via
+ * NetSuite's documented transform (salesOrder/{id}/!transform/itemFulfillment),
+ * marked Shipped so it posts and relieves inventory.
+ *
+ * Owner rule (2026-09-05): an SO FleetSuite invoices must be fulfilled first,
+ * every line. Billing straight off the SO left orders sitting at Pending
+ * Fulfillment in NetSuite with the inventory never relieved. Callers run this
+ * BEFORE createInvoiceFromSO and fail closed on an error: an invoice without
+ * its fulfillment is exactly the state this exists to prevent.
+ *
+ * Idempotent on status: an SO already Pending Billing / Billed / Closed has
+ * nothing left to fulfil (NetSuite moves service-only orders straight there),
+ * so it is skipped, not re-fulfilled. Pending Approval and Cancelled orders
+ * are refused with a plain message.
+ */
+export async function fulfillSalesOrder(salesOrderId: string): Promise<{
+  success: boolean;
+  /** Nothing was created: the SO was already past fulfillment. */
+  skipped?: 'already_fulfilled';
+  fulfillmentId?: string;
+  fulfillmentNumber?: string;
+  /** The SO's status letter before this call (see SO_STATUS). */
+  status?: string;
+  error?: string;
+}> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+
+  let status = '';
+  try {
+    const lookup = await suiteqlQuery(
+      `SELECT status FROM transaction WHERE id = ${parseInt(salesOrderId, 10)} AND type = 'SalesOrd'`,
+    );
+    status = String(lookup?.items?.[0]?.status ?? '');
+  } catch (e: any) {
+    return { success: false, error: `Could not read the sales order's status: ${e?.message || e}` };
+  }
+  if (!status) return { success: false, error: `Sales order ${salesOrderId} was not found in NetSuite` };
+  if (status === SO_STATUS.pendingApproval) {
+    return { success: false, status, error: 'The sales order is Pending Approval in NetSuite — approve it there first, then invoice.' };
+  }
+  if (status === SO_STATUS.cancelled) {
+    return { success: false, status, error: 'The sales order is cancelled in NetSuite.' };
+  }
+  if (status === SO_STATUS.pendingBilling || status === SO_STATUS.billed || status === SO_STATUS.closed) {
+    return { success: true, skipped: 'already_fulfilled', status };
+  }
+
+  const transformUrl = `${baseUrl}/services/rest/record/v1/salesOrder/${salesOrderId}/!transform/itemFulfillment`;
+  const { oauth, token } = createOAuth(config);
+
+  // Shipped ('C') so the fulfillment posts. Accounts without Pick/Pack/Ship
+  // may not accept the field at all — retry once without it.
+  const attempt = async (body: Record<string, unknown>) => {
+    const authHeader = getAuthHeader(oauth, token, { url: transformUrl, method: 'POST' });
+    return fetch(transformUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+  };
+
+  try {
+    let response = await attempt({ shipStatus: { id: 'C' } });
+    if (!response.ok) {
+      const text = await response.text();
+      if (response.status === 400 && /shipStatus/i.test(text)) {
+        response = await attempt({});
+        if (!response.ok) {
+          const text2 = await response.text();
+          console.error('NetSuite item fulfillment error:', text2);
+          return { success: false, status, error: `NetSuite error (${response.status}): ${text2}` };
+        }
+      } else {
+        console.error('NetSuite item fulfillment error:', text);
+        return { success: false, status, error: `NetSuite error (${response.status}): ${text}` };
+      }
+    }
+
+    let fulfillmentId = '';
+    const location = response.headers.get('Location');
+    if (location) fulfillmentId = location.match(/\/(\d+)$/)?.[1] || '';
+
+    let fulfillmentNumber = '';
+    try {
+      const result = await response.json();
+      fulfillmentId = fulfillmentId || result.id?.toString() || '';
+      fulfillmentNumber = result.tranId || result.tranid || '';
+    } catch {
+      // 204 No Content
+    }
+    if (fulfillmentId && !fulfillmentNumber) {
+      try {
+        const lookup = await suiteqlQuery(`SELECT tranid FROM transaction WHERE id = ${fulfillmentId}`);
+        fulfillmentNumber = lookup?.items?.[0]?.tranid || '';
+      } catch {
+        // Non-critical
+      }
+    }
+
+    return { success: true, status, fulfillmentId, fulfillmentNumber };
+  } catch (e: any) {
+    return { success: false, status, error: `Failed to fulfil the sales order: ${e.message}` };
+  }
+}
+
 export async function createInvoiceFromSO(payload: {
   salesOrderId: string;
   installedQuantities?: Record<number, number>; // lineNumber -> installed qty
@@ -2340,6 +2514,126 @@ export async function updateInvoiceLocation(
       return { success: false, error: `NetSuite ${response.status}: ${detail}` };
     }
 
+    return { success: true };
+  } catch (e: any) {
+    const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';
+    return { success: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Stamp a VIN on an existing NetSuite sales order (custbody_vin_number_).
+ *
+ * The SO carries the VIN only when it was created from an estimate that
+ * already had one; an SO entered in NetSuite, or converted before the VIN
+ * was known, has none — and until now nothing could set it from FleetSuite.
+ * The check-in is the moment the VIN becomes certain, so the check-in
+ * route calls this (best-effort, tightly bounded so a slow NetSuite never
+ * stalls the check-in). Modeled on updateInvoiceLocation.
+ */
+export async function updateSalesOrderVin(
+  salesOrderId: string | number,
+  vin: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<{ success: boolean; error?: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/salesOrder/${salesOrderId}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'PATCH' });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 10000);
+  try {
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify({ custbody_vin_number_: vin }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+    return { success: true };
+  } catch (e: any) {
+    const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';
+    return { success: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Replace an existing sales order's lines (and reference/VIN/memo) with the
+ * estimate's current ones — the "push changes to the sales order" path
+ * (migration 259). `?replace=item` makes NetSuite replace the whole item
+ * sublist rather than append (same trick as the estimate re-push). Lines
+ * with a rate keep the "Custom" price level pin exactly as createSalesOrder
+ * sets it, so NetSuite doesn't re-source the money from the customer's
+ * price level. Never called automatically — a person confirms first.
+ */
+export async function updateSalesOrderLines(
+  salesOrderId: string | number,
+  payload: {
+    lineItems: { itemId: string | number; quantity: number; rate: number; description?: string }[];
+    poNumber?: string | null;
+    memo?: string | null;
+    vin?: string | null;
+  },
+): Promise<{ success: boolean; error?: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/salesOrder/${salesOrderId}?replace=item`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'PATCH' });
+
+  const items = payload.lineItems.map((li) => ({
+    item: { id: li.itemId },
+    quantity: li.quantity,
+    ...(li.rate > 0 ? { price: { id: '-1' }, rate: li.rate } : {}),
+    ...(li.description ? { description: li.description } : {}),
+  }));
+  const body: any = { item: { items } };
+  if (payload.poNumber?.trim()) body.otherRefNum = payload.poNumber.trim();
+  if (payload.memo) body.memo = payload.memo;
+  if (payload.vin !== undefined) body.custbody_vin_number_ = payload.vin || null;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      // NetSuite's own message: a billed/fulfilled line it refuses to
+      // change, a closed period, a missing permission — say which.
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
     return { success: true };
   } catch (e: any) {
     const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';

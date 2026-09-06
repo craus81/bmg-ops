@@ -7,7 +7,9 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import ProofThumbnail from '@/components/ProofThumbnail';
 import { DropZone } from '@/components/DropZone';
+import PhotoSession from '@/components/PhotoSession';
 import { estimateHeadlineNumber } from '@/lib/estimate-number';
+import { openNetSuitePdf, openNetSuiteInvoicePdfByNumber } from '@/lib/netsuite-pdf-client';
 
 interface Task {
   id: string;
@@ -104,10 +106,17 @@ export default function CompletionModal({
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const fileRef = useRef<HTMLInputElement>(null);
+  // In-app camera session (PhotoSession): tap once, shoot many, Done.
+  const [photoSession, setPhotoSession] = useState(false);
 
   // ── Admin invoicing (turn the vehicle's SO or estimate into a NetSuite
   // invoice, right from the completion process) ──
   const [invNumber, setInvNumber] = useState<string | null>(invoiceNumber || null);
+  // Internal id of the invoice created in THIS session (opens the PDF
+  // directly); a pre-stamped number is resolved by number instead.
+  const [invId, setInvId] = useState<string | null>(null);
+  const [fulNumber, setFulNumber] = useState<string | null>(null);
+  const [invPdfBusy, setInvPdfBusy] = useState(false);
   const [invWorking, setInvWorking] = useState<string | null>(null); // SO id in flight
   const [invError, setInvError] = useState<string | null>(null);
   const [linkedEstimates, setLinkedEstimates] = useState<LinkedEstimateLite[]>([]);
@@ -151,6 +160,8 @@ export default function CompletionModal({
         return;
       }
       setInvNumber(data.invoiceNumber || data.invoiceId || null);
+      setInvId(data.invoiceId ? String(data.invoiceId) : null);
+      setFulNumber(data.fulfillmentNumber || null);
       onInvoiced?.();
     } catch (e: any) {
       setInvError(e?.message || 'Network error creating the invoice');
@@ -303,13 +314,7 @@ export default function CompletionModal({
   };
 
   const onPhotoPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const uploadedAny = await uploadPhotos(Array.from(e.target.files || []));
-    // Auto re-open the camera after a successful shot so the installer
-    // keeps capturing without re-tapping. Cancelling the camera UI returns
-    // no files and never fires onChange, which breaks the loop naturally.
-    if (uploadedAny) {
-      fileRef.current?.click();
-    }
+    await uploadPhotos(Array.from(e.target.files || []));
   };
 
   const submit = async (force = false) => {
@@ -412,17 +417,36 @@ export default function CompletionModal({
               onChange={e => setCaption(e.target.value)}
               style={{ width: '100%', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', marginBottom: '6px' }}
             />
-            <button
-              onClick={() => fileRef.current?.click()}
-              disabled={uploading}
-              style={{
-                width: '100%', padding: '8px 12px', borderRadius: '8px',
-                border: '1px dashed var(--border)', background: 'var(--card)',
-                color: 'var(--text-primary)',
-                fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-              }}
-            >{uploading ? 'Uploading…' : '+ Take / upload completion photo'}</button>
-            <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple onChange={onPhotoPick} style={{ display: 'none' }} />
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                onClick={() => setPhotoSession(true)}
+                disabled={uploading}
+                style={{
+                  flex: 1, padding: '8px 12px', borderRadius: '8px',
+                  border: '1px solid rgba(34,197,94,0.35)', background: 'rgba(34,197,94,0.08)',
+                  color: '#16a34a',
+                  fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                }}
+              >{uploading ? 'Uploading…' : '📷 Take completion photos'}</button>
+              <button
+                onClick={() => fileRef.current?.click()}
+                disabled={uploading}
+                style={{
+                  padding: '8px 12px', borderRadius: '8px',
+                  border: '1px dashed var(--border)', background: 'var(--card)',
+                  color: 'var(--text-primary)',
+                  fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                }}
+              >Upload</button>
+            </div>
+            <input ref={fileRef} type="file" accept="image/*" multiple onChange={onPhotoPick} style={{ display: 'none' }} />
+            <PhotoSession
+              open={photoSession}
+              title="Completion photos"
+              subtitle="Tap Done when finished — each shot uploads as you go"
+              onShot={(file) => uploadPhotos([file]).then(() => undefined)}
+              onClose={() => setPhotoSession(false)}
+            />
           </div>
           </DropZone>
 
@@ -590,14 +614,33 @@ export default function CompletionModal({
                 NetSuite Invoice <span style={{ fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>· admin</span>
               </div>
               {invNumber ? (
-                <div style={{ fontSize: '12px', fontWeight: 700, color: '#22c55e' }}>✓ Invoice #{invNumber} created for this vehicle.</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#22c55e' }}>
+                    ✓ Invoice #{invNumber} created for this vehicle.{fulNumber ? ` Sales order fulfilled (${fulNumber}).` : ''}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={invPdfBusy}
+                    title="Open this invoice's NetSuite PDF in a new tab to print or save"
+                    onClick={async () => {
+                      setInvPdfBusy(true);
+                      setInvError(null);
+                      const r = invId ? await openNetSuitePdf('invoice', invId) : await openNetSuiteInvoicePdfByNumber(invNumber);
+                      if (!r.ok) setInvError(`Could not open the invoice PDF: ${r.error}`);
+                      setInvPdfBusy(false);
+                    }}
+                    style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text-primary)', opacity: invPdfBusy ? 0.6 : 1 }}
+                  >
+                    {invPdfBusy ? 'Opening…' : '🖨 Print / PDF'}
+                  </button>
+                </div>
               ) : invoiceSos.length > 0 ? (
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                   {invoiceSos.map(so => (
                     <button key={so.netsuite_sales_order_id}
                       onClick={() => invoiceSalesOrder(so.netsuite_sales_order_id)}
                       disabled={!!invWorking}
-                      title="Bill the full sales order as a NetSuite invoice and stamp it on this vehicle"
+                      title="Fulfil every line of the sales order, bill it as a NetSuite invoice, and stamp it on this vehicle"
                       style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', opacity: invWorking ? 0.6 : 1 }}>
                       {invWorking === so.netsuite_sales_order_id ? 'Invoicing…' : `Invoice SO ${so.sales_order_number || `#${so.netsuite_sales_order_id}`}`}
                     </button>

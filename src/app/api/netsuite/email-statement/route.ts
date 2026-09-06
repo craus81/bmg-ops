@@ -8,6 +8,8 @@ import { sendEmailDetailed } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { r2PublicUrl } from '@/lib/r2';
 import { getEmailSignature, renderSignatureHtml, type EmailSignature } from '@/lib/email-signature';
+import { generateStatementPdf } from '@/lib/statement-pdf-server';
+import { statementPdfFilename } from '@/lib/statement-pdf-doc';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -16,9 +18,12 @@ export const maxDuration = 60;
  * POST /api/netsuite/email-statement
  *
  * Email a customer their open-item statement: a branded HTML statement in
- * the email body (invoice table + aging summary), with the open invoices'
- * NetSuite PDFs attached (capped — fetching many PDFs server-side runs into
- * Vercel's 60s limit, the same reason bulk-download zips client-side).
+ * the email body (invoice table + aging summary), with a PDF copy of the
+ * statement itself attached first (the same document the Statement PDF /
+ * Print buttons open — CLAUDE.md "every transaction email carries a PDF
+ * copy"), then the open invoices' NetSuite PDFs (capped — fetching many
+ * PDFs server-side runs into Vercel's 60s limit, the same reason
+ * bulk-download zips client-side).
  *
  * Body: { customerId: <NetSuite internal id>, recipients: string[] (1-10),
  *         customBody?: string, attachInvoices?: boolean (default true),
@@ -168,9 +173,27 @@ export async function POST(req: NextRequest) {
           .sort((a, b) => b.daysPastDue - a.daysPastDue || (a.date || '').localeCompare(b.date || ''))
           .slice(0, MAX_ATTACH)
       : [];
+    const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const statementFilename = statementPdfFilename(customerName);
     const attachments: { filename: string; content: Buffer; contentType: string }[] = [];
     const failedAttachments: string[] = [];
     if (!preview) {
+      // The statement's own PDF rides first. Unlike the invoice PDFs it is
+      // a hard requirement — the body names it, so a render failure fails
+      // the send before anything goes out rather than emailing a body that
+      // promises a file.
+      let statementPdf: Awaited<ReturnType<typeof generateStatementPdf>>;
+      try {
+        statementPdf = await generateStatementPdf(supabase, { customer: customerName, invoices, scope, from, to });
+      } catch (err: any) {
+        console.error('[email-statement] statement PDF failed:', err?.message || err);
+        statementPdf = { ok: false, status: 500, error: err?.message || 'PDF render failed' };
+      }
+      if (!statementPdf.ok) {
+        return NextResponse.json({ error: `Could not generate the statement PDF (${statementPdf.error}). Nothing was sent — try again.` }, { status: 502 });
+      }
+      attachments.push({ filename: statementPdf.filename, content: statementPdf.buffer, contentType: 'application/pdf' });
+
       for (const inv of toAttach) {
         const pdf = await getNetSuitePdf('invoice', inv.id);
         if (pdf.success && pdf.pdfBase64) {
@@ -185,21 +208,22 @@ export async function POST(req: NextRequest) {
       }
     }
     const openCount = invoices.filter(i => i.status === 'open').length;
-    const attachedCount = preview ? toAttach.length : attachments.length;
+    // Invoice PDFs only — the statement PDF is always the first attachment.
+    const invoicesAttached = preview ? toAttach.length : Math.max(0, attachments.length - 1);
     const attachNote = [
-      attachInvoices && openCount > MAX_ATTACH ? `The ${Math.min(MAX_ATTACH, attachedCount)} most overdue invoices are attached; the table above covers all ${invoices.length}.` : '',
+      'A PDF copy of this statement is attached.',
+      attachInvoices && openCount > MAX_ATTACH ? `The ${Math.min(MAX_ATTACH, invoicesAttached)} most overdue invoices are attached; the table above covers all ${invoices.length}.` : '',
       failedAttachments.length ? `PDFs unavailable for: ${failedAttachments.join(', ')}.` : '',
     ].filter(Boolean).join(' ');
 
     // Letterhead from the same settings singleton the wrap quote uses, so
     // both documents carry identical branding.
-    const supabaseLh = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-    const { data: settings } = await supabaseLh.from('wrap_quote_settings').select('company').eq('id', 1).maybeSingle();
+    const { data: settings } = await supabase.from('wrap_quote_settings').select('company').eq('id', 1).maybeSingle();
     const co: any = settings?.company || {};
     const lh = { company: co, logoUrl: co.logo_path ? r2PublicUrl('vehicle-templates', co.logo_path) : null };
 
     // Sender's signature — in the preview too, so what they see is what goes.
-    const signature = await getEmailSignature(supabaseLh, auth.user?.id);
+    const signature = await getEmailSignature(supabase, auth.user?.id);
     const html = statementEmailHtml(customerName, invoices, scope, rangeNote, lh, body?.customBody, attachNote, signature);
     const subject = `Statement — ${customerName} — ${new Date().toLocaleDateString('en-US')}`;
 
@@ -212,17 +236,19 @@ export async function POST(req: NextRequest) {
         to: recipients.join(', ') || null,
         subject,
         html,
-        attachments: toAttach.map(i => `Invoice_${i.tranid}.pdf`),
+        attachments: [statementFilename, ...toAttach.map(i => `Invoice_${i.tranid}.pdf`)],
       });
     }
 
     // Standard compose behavior: replies reach the sender (the from address
     // has no mailbox), and bcc-me copies the send to their inbox.
     const bcc = body?.bccSelf === true && auth.user?.email ? [auth.user.email] : undefined;
+    // Cc BMG teammates (compose screen row) — validated like To.
+    const cc: string[] = (Array.isArray(body?.cc) ? body.cc : []).map((r: any) => String(r).trim()).filter((r: string) => EMAIL_RE.test(r)).slice(0, 10);
     const result = await sendEmailDetailed(
       recipients, subject, html, undefined, attachments, auth.user?.email || undefined, bcc,
       // ns-<id> routes to the customer record even when no CRM row exists.
-      { kind: 'statement', sentBy: auth.user?.id, contextUrl: deepLinks.prospect(`ns-${customerId}`), netsuiteCustomerId: String(customerId) },
+      { kind: 'statement', cc, sentBy: auth.user?.id, contextUrl: deepLinks.prospect(`ns-${customerId}`), netsuiteCustomerId: String(customerId) },
     );
     if (!result.ok) {
       return NextResponse.json({ error: 'Email send failed' }, { status: 502 });
@@ -233,7 +259,7 @@ export async function POST(req: NextRequest) {
     // 'email' activity with the log row attached, so the bespoke insert
     // that used to live here would double-log.
 
-    return NextResponse.json({ success: true, sent: recipients, attached: attachments.length, failedAttachments });
+    return NextResponse.json({ success: true, sent: recipients, statementPdf: statementFilename, attached: invoicesAttached, failedAttachments });
   } catch (e: any) {
     if (e instanceof SqlSafeError) {
       return NextResponse.json({ error: e.message }, { status: 400 });

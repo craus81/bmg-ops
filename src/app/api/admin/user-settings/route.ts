@@ -60,6 +60,7 @@ const PrefsSchema = z.object({
   notify_sms: z.boolean().optional(),
   sms_messages: z.boolean().optional(),
   email_messages: z.boolean().optional(),
+  email_mentions: z.boolean().optional(),
   sms_messages_mode: z.enum(['always', 'unread_only']).optional(),
   phone_number: z.string().max(40).nullable().optional(),
   custom_statuses: z.array(z.string().max(60)).max(30).nullable().optional(),

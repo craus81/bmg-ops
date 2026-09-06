@@ -5,6 +5,7 @@ import {
   createSalesOrder,
   createDirectInvoice,
   createInvoiceFromSO,
+  fulfillSalesOrder,
   createBillFromPo,
   createItemReceiptFromPo,
   createCustomerOrLead,
@@ -79,6 +80,76 @@ describe('suiteqlQuery', () => {
     await expect(suiteqlQuery('SELECT bogus')).rejects.toThrow(
       'NetSuite SuiteQL error (400): Invalid search query'
     );
+  });
+
+  it('carries the HTTP status on the thrown error', async () => {
+    fetchMock.mockResolvedValue(new Response('nope', { status: 503 }));
+
+    await expect(suiteqlQuery('SELECT 1')).rejects.toMatchObject({ status: 503 });
+  });
+
+  // NetSuite throws the odd UNEXPECTED_ERROR that succeeds on re-send. The
+  // sales-order sync opts in; everything else keeps today's fail-fast.
+  describe('retries', () => {
+    const fail500 = () => new Response('{"o:errorDetails":[{"o:errorCode":"UNEXPECTED_ERROR"}]}', { status: 500 });
+
+    it('does not retry by default', async () => {
+      fetchMock.mockResolvedValue(fail500());
+
+      await expect(suiteqlQuery('SELECT 1')).rejects.toThrow('SuiteQL error (500)');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-sends after a 5xx and returns the eventual success', async () => {
+      fetchMock
+        .mockResolvedValueOnce(fail500())
+        .mockResolvedValueOnce(fail500())
+        .mockResolvedValueOnce(jsonResponse({ items: [{ id: '1' }] }));
+
+      const result = await suiteqlQuery('SELECT 1', 10, 0, { retries: 2, retryDelayMs: 0 });
+
+      expect(result.items).toEqual([{ id: '1' }]);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      // Each attempt is signed afresh — the OAuth nonce must not repeat.
+      const nonces = fetchMock.mock.calls.map(c => c[1].headers['Authorization'].match(/oauth_nonce="([^"]+)"/)![1]);
+      expect(new Set(nonces).size).toBe(3);
+    });
+
+    it('re-sends after a network failure', async () => {
+      fetchMock
+        .mockRejectedValueOnce(new Error('ECONNRESET'))
+        .mockResolvedValueOnce(jsonResponse({ items: [] }));
+
+      await expect(suiteqlQuery('SELECT 1', 10, 0, { retries: 1, retryDelayMs: 0 })).resolves.toEqual({ items: [] });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('never retries a 4xx — a bad query does not get better', async () => {
+      fetchMock.mockResolvedValue(new Response('Invalid search query', { status: 400 }));
+
+      await expect(suiteqlQuery('SELECT bogus', 10, 0, { retries: 2, retryDelayMs: 0 })).rejects.toMatchObject({ status: 400 });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('gives up after the budget with the last status', async () => {
+      // A fresh Response per attempt — a body can only be read once.
+      fetchMock.mockImplementation(async () => fail500());
+
+      await expect(suiteqlQuery('SELECT 1', 10, 0, { retries: 2, retryDelayMs: 0 })).rejects.toMatchObject({ status: 500 });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('suiteqlQueryAll passes the retry budget to every page', async () => {
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse({ items: [{ id: 1 }, { id: 2 }] }))
+        .mockResolvedValueOnce(fail500())
+        .mockResolvedValueOnce(jsonResponse({ items: [{ id: 3 }] }));
+
+      const rows = await suiteqlQueryAll('SELECT id FROM item', 2, { retries: 1, retryDelayMs: 0 });
+
+      expect(rows).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }]);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
   });
 });
 
@@ -280,6 +351,74 @@ describe('createDirectInvoice', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('not assigned to the invoice\'s subsidiary');
     consoleSpy.mockRestore();
+  });
+});
+
+describe('fulfillSalesOrder', () => {
+  const soStatus = (status: string) => jsonResponse({ items: [{ status }] });
+
+  it('fulfils every remaining line via the documented transform, marked Shipped', async () => {
+    fetchMock
+      .mockResolvedValueOnce(soStatus('B')) // Pending Fulfillment
+      .mockResolvedValueOnce(new Response(null, {
+        status: 204,
+        headers: { Location: 'https://x/services/rest/record/v1/itemFulfillment/5001' },
+      }))
+      .mockResolvedValueOnce(jsonResponse({ items: [{ tranid: 'IF-77' }] }));
+
+    const result = await fulfillSalesOrder('766');
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).q).toContain("type = 'SalesOrd'");
+    const [url, init] = fetchMock.mock.calls[1];
+    expect(url).toBe(
+      'https://1234567-sb1.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/766/!transform/itemFulfillment'
+    );
+    expect(init.method).toBe('POST');
+    // No line body and no ?replace=item: the transform carries every open
+    // line itself. Shipped so the fulfillment posts and relieves inventory.
+    expect(JSON.parse(init.body)).toEqual({ shipStatus: { id: 'C' } });
+    expect(result).toEqual({ success: true, status: 'B', fulfillmentId: '5001', fulfillmentNumber: 'IF-77' });
+  });
+
+  it('skips an SO that is already Pending Billing / Billed instead of re-fulfilling', async () => {
+    fetchMock.mockResolvedValueOnce(soStatus('F'));
+    const result = await fulfillSalesOrder('767');
+    expect(result).toEqual({ success: true, skipped: 'already_fulfilled', status: 'F' });
+    expect(fetchMock).toHaveBeenCalledTimes(1); // status read only, no transform
+  });
+
+  it('refuses a Pending Approval SO with a plain message and creates nothing', async () => {
+    fetchMock.mockResolvedValueOnce(soStatus('A'));
+    const result = await fulfillSalesOrder('768');
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/Pending Approval/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries once without shipStatus when the account rejects that field', async () => {
+    fetchMock
+      .mockResolvedValueOnce(soStatus('D'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ 'o:errorDetails': [{ detail: "Invalid field shipStatus" }] }), { status: 400 }))
+      .mockResolvedValueOnce(new Response(null, {
+        status: 204,
+        headers: { Location: 'https://x/services/rest/record/v1/itemFulfillment/5002' },
+      }))
+      .mockResolvedValueOnce(jsonResponse({ items: [{ tranid: 'IF-78' }] }));
+
+    const result = await fulfillSalesOrder('769');
+
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({});
+    expect(result).toEqual({ success: true, status: 'D', fulfillmentId: '5002', fulfillmentNumber: 'IF-78' });
+  });
+
+  it('returns NetSuite\'s own message on any other failure', async () => {
+    fetchMock
+      .mockResolvedValueOnce(soStatus('B'))
+      .mockResolvedValueOnce(new Response('You cannot fulfil this line', { status: 400 }));
+    const result = await fulfillSalesOrder('770');
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('NetSuite error (400): You cannot fulfil this line');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 

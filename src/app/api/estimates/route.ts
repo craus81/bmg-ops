@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { soContentHash } from '@/lib/so-sync';
 import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { logAudit } from '@/lib/audit';
@@ -16,7 +17,10 @@ const LineItemSchema = z.object({
   description: z.string().max(2000).optional().nullable(),
   quantity: z.union([z.number(), z.string()]).optional(),
   unit_price: z.union([z.number(), z.string()]).optional(),
-  labor_hours: z.union([z.number(), z.string()]).optional(),
+  // NULL = the part had no labor set when the line was added (migration
+  // 258) — the builder sends it through as null, so it must be accepted
+  // here or every estimate with an unpriced part fails to save.
+  labor_hours: z.union([z.number(), z.string()]).optional().nullable(),
   is_custom: z.boolean().optional(),
   notes: z.string().max(2000).optional().nullable(),
   // Which wrap quote produced the line (Add Graphics flow) — must survive
@@ -94,6 +98,57 @@ function stripApprovalSecrets<T extends Record<string, any>>(row: T | null): T |
   const clone: any = { ...row };
   for (const f of APPROVAL_SECRET_FIELDS) delete clone[f];
   return clone;
+}
+
+/**
+ * Attach `taxable` to each line from netsuite_parts.is_taxable.
+ *
+ * Only an explicit false makes a line non-taxable; a part we can't match,
+ * or one NetSuite never reported taxability for, stays taxable — the
+ * pre-252 behavior — so this can never quietly reduce tax on an estimate.
+ */
+async function resolveLineTaxability(supabase: any, lines: any[]): Promise<any[]> {
+  const partIds = [...new Set(lines.map(l => l.part_id).filter(Boolean))];
+  const itemNumbers = [...new Set(
+    lines.map(l => String(l.item_number || '').trim().toUpperCase()).filter(Boolean),
+  )];
+  if (partIds.length === 0 && itemNumbers.length === 0) return lines;
+
+  const byId = new Map<string, boolean | null>();
+  const byNumber = new Map<string, boolean | null>();
+  try {
+    if (partIds.length > 0) {
+      const { data } = await supabase
+        .from('netsuite_parts')
+        .select('id, item_number, is_taxable')
+        .in('id', partIds);
+      for (const p of data || []) byId.set(p.id, p.is_taxable ?? null);
+    }
+    if (itemNumbers.length > 0) {
+      // Chunked: a long line list would otherwise overflow the request URL.
+      for (let i = 0; i < itemNumbers.length; i += 200) {
+        const { data } = await supabase
+          .from('netsuite_parts')
+          .select('item_number, is_taxable')
+          .in('item_number', itemNumbers.slice(i, i + 200));
+        for (const p of data || []) {
+          byNumber.set(String(p.item_number || '').trim().toUpperCase(), p.is_taxable ?? null);
+        }
+      }
+    }
+  } catch (err: any) {
+    // A catalog hiccup must not reprice the estimate: fall through with
+    // everything taxable rather than dropping tax off the quote.
+    console.warn('[estimates] taxability lookup failed, taxing all lines:', err?.message || err);
+    return lines;
+  }
+
+  return lines.map(l => {
+    const resolved = l.part_id && byId.has(l.part_id)
+      ? byId.get(l.part_id)
+      : byNumber.get(String(l.item_number || '').trim().toUpperCase());
+    return resolved === false ? { ...l, taxable: false } : l;
+  });
 }
 
 function getSupabase() {
@@ -191,7 +246,13 @@ export async function POST(req: NextRequest) {
       ? parseFloat(String(labor_hours_override))
       : null;
 
-    const totals = computeTotals(lines, effectiveTaxRate, !!tax_exempt, effectiveLaborRate, override);
+    // Per-item taxability from the catalog (migration 252). Resolved
+    // server-side so the stored total is authoritative — the builder does
+    // the same lookup for the live figure, and this is what settles it.
+    // Matched on part_id first (exact), then the normalized item number for
+    // lines typed or imported without one. No match = unknown = taxable.
+    const taxableByLine = await resolveLineTaxability(supabase, lines);
+    const totals = computeTotals(taxableByLine, effectiveTaxRate, !!tax_exempt, effectiveLaborRate, override);
 
     if (id) {
       // ── Revision lock ─────────────────────────────────────────────────
@@ -334,7 +395,9 @@ export async function POST(req: NextRequest) {
           quantity: parseFloat(l.quantity || 0),
           unit_price: parseFloat(l.unit_price || 0),
           line_total: parseFloat(l.quantity || 0) * parseFloat(l.unit_price || 0),
-          labor_hours: parseFloat(l.labor_hours || 0),
+          // NULL stays NULL ("labor not set on the part", migration 258);
+          // 0 is a real value.
+          labor_hours: l.labor_hours == null || l.labor_hours === '' ? null : (parseFloat(l.labor_hours) || 0),
           is_custom: !!l.is_custom,
           notes: l.notes || null,
           wrap_quote_id: l.wrap_quote_id || null,
@@ -350,7 +413,33 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      return NextResponse.json({ success: true, id });
+      // ── Sales order still in sync? (migration 259) ──
+      // An estimate that already has a NetSuite sales order is compared
+      // against the contract last pushed; a mismatch flags the row so the
+      // builder can offer "push changes" — never pushed silently.
+      let soOutOfDate = false;
+      let salesOrderNumber: string | null = null;
+      try {
+        const { data: after } = await supabase
+          .from('estimates')
+          .select('netsuite_so_id, netsuite_so_number, so_pushed_hash, labor_hours, labor_hours_override, labor_rate, po_number, estimate_number, vin')
+          .eq('id', id)
+          .maybeSingle();
+        if (after?.netsuite_so_id) {
+          salesOrderNumber = after.netsuite_so_number || null;
+          const nowHash = soContentHash(after, lines.map((l: any, idx: number) => ({
+            item_number: l.item_number || null, quantity: l.quantity, unit_price: l.unit_price, sort_order: idx,
+          })));
+          // A null pushed hash (converted before migration 259) is unknown,
+          // not "in sync" — offer the push with the softer wording client-side.
+          soOutOfDate = after.so_pushed_hash ? nowHash !== after.so_pushed_hash : true;
+          await supabase.from('estimates').update({ so_out_of_date: soOutOfDate }).eq('id', id);
+        }
+      } catch (err: any) {
+        console.warn('[estimates] SO sync check skipped:', err?.message || err);
+      }
+
+      return NextResponse.json({ success: true, id, soOutOfDate, salesOrderNumber });
     } else {
       // ── CREATE new estimate ──
       // The number has a UNIQUE constraint and a 4-char random suffix — two
@@ -420,7 +509,9 @@ export async function POST(req: NextRequest) {
           quantity: parseFloat(l.quantity || 0),
           unit_price: parseFloat(l.unit_price || 0),
           line_total: parseFloat(l.quantity || 0) * parseFloat(l.unit_price || 0),
-          labor_hours: parseFloat(l.labor_hours || 0),
+          // NULL stays NULL ("labor not set on the part", migration 258);
+          // 0 is a real value.
+          labor_hours: l.labor_hours == null || l.labor_hours === '' ? null : (parseFloat(l.labor_hours) || 0),
           is_custom: !!l.is_custom,
           notes: l.notes || null,
           wrap_quote_id: l.wrap_quote_id || null,
