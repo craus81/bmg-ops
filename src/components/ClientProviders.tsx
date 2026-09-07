@@ -61,7 +61,7 @@ function DeniedScreen() {
 function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { user, loading, profile } = useAuth();
-  const { clockStatus, activePart, appLoading } = useApp();
+  const { activePart, appLoading } = useApp();
 
   useEffect(() => {
     if (!loading && !user) {
@@ -97,11 +97,11 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div style={{ minHeight: 'calc(100vh / var(--ts))', paddingBottom: '85px', background: 'var(--bg)' }}>
-      <Header clockStatus={clockStatus} activePartNumber={activePart?.part_number} activeEndCustomer={activePart?.end_customer} />
+      <Header activePartNumber={activePart?.part_number} activeEndCustomer={activePart?.end_customer} />
       <main id="main" style={{ maxWidth: '1200px', margin: '0 auto', padding: '14px 20px', boxSizing: 'border-box' }}>
         {children}
       </main>
-      <BottomNav clockStatus={clockStatus} />
+      <BottomNav />
       <AiChat />
     </div>
   );

@@ -9,7 +9,6 @@ import { useFocusTrap } from '@/lib/use-focus-trap';
 import { useMentions, mentionUrl } from '@/lib/use-mentions';
 
 interface HeaderProps {
-  clockStatus: 'out' | 'in' | 'break';
   activePartNumber?: string;
   activeEndCustomer?: string;
 }
@@ -25,7 +24,7 @@ interface Notification {
   created_at: string;
 }
 
-export default function Header({ clockStatus, activePartNumber, activeEndCustomer }: HeaderProps) {
+export default function Header({ activePartNumber, activeEndCustomer }: HeaderProps) {
   const { user, profile, isAdmin, isActualAdmin, viewAsRole, setViewAsRole, hasFeature, signOut } = useAuth();
   const router = useRouter();
   const [showMenu, setShowMenu] = useState(false);
@@ -267,11 +266,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
     window.location.href = '/home';
   };
 
-  const subtitle = clockStatus === 'in'
-    ? 'Clocked In'
-    : clockStatus === 'break'
-    ? 'On Break'
-    : activePartNumber
+  const subtitle = activePartNumber
     ? `${activePartNumber} • ${activeEndCustomer}`
     : '';
 

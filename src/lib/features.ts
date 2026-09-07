@@ -13,7 +13,6 @@ export const FEATURES = {
   in_shop: 'In-Shop Tracking',
   graphics: 'Graphics Production',
   estimates: 'Estimates',
-  time: 'Time Tracking',
   messages: 'Messages / Chat',
 
   // Admin / More menu
@@ -66,7 +65,7 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
 
   sales: [
     'home', 'fleet_checkin', 'in_shop', 'graphics', 'estimates',
-    'time', 'messages', 'customers', 'parts_catalog', 'schedule', 'prospects', 'upfit_projects',
+    'messages', 'customers', 'parts_catalog', 'schedule', 'prospects', 'upfit_projects',
     'upfit_configurator', 'parts_ordering',
   ],
 
@@ -76,31 +75,31 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
   // pushes bounced every non-admin/sales assignee once /upfit was gated).
   graphics_production: [
     'home', 'in_shop', 'graphics', 'estimates',
-    'time', 'messages', 'customers', 'parts_catalog', 'schedule', 'upfit_projects',
+    'messages', 'customers', 'parts_catalog', 'schedule', 'upfit_projects',
   ],
 
   // parts_ordering: shop techs are the ones staring at a short readiness
   // card — raising the purchase request is exactly their moment.
   shop_tech: [
     'home', 'scan', 'fleet_checkin', 'in_shop',
-    'time', 'messages', 'schedule', 'upfit_projects', 'parts_ordering',
+    'messages', 'schedule', 'upfit_projects', 'parts_ordering',
   ],
 
   // schedule: install events are about field techs and calendar-note mentions
   // deep-link them to /admin/schedule (shop_tech already held it).
   field_tech: [
-    'home', 'scan', 'in_shop', 'fleet_checkin', 'time', 'messages', 'schedule',
+    'home', 'scan', 'in_shop', 'fleet_checkin', 'messages', 'schedule',
     'upfit_projects',
   ],
 
   installer: [
-    'home', 'scan', 'time', 'messages', 'cni_portal',
+    'home', 'scan', 'messages', 'cni_portal',
   ],
 
   // AP/bookkeeping: the payment queue plus enough context to verify what's
   // being paid — without admin's user management or data tools.
   finance: [
-    'home', 'messages', 'time', 'reports', 'vendor_payments', 'customers',
+    'home', 'messages', 'reports', 'vendor_payments', 'customers',
     'credit_applications',
   ],
 
