@@ -67,6 +67,10 @@
     {
       "path": "/api/cron/exceptions-digest",
       "schedule": "30 12 * * 1"
+    },
+    {
+      "path": "/api/cron/promised-back-check",
+      "schedule": "15 12 * * *"
     }
   ],
   "headers": [
