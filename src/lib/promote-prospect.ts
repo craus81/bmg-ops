@@ -177,29 +177,47 @@ export async function promoteProspect(
   // so the new customer is immediately linkable — the estimate builder's
   // customer search reads this table, and waiting on the next NetSuite sync
   // left just-entered clients unpickable.
+  //
+  // Find-then-write, NOT upsert (§7.4 item 12's wrinkle): ON CONFLICT
+  // (netsuite_id) requires a unique index that no migration guaranteed
+  // until 264 — and 264 skips the index while production data is dirty —
+  // so an upsert here failed quietly on every promotion wherever the
+  // index is absent. This shape works either way; the fresh NetSuite id
+  // can't race itself.
   const addressLine = [
     prospect.address,
     [prospect.city, prospect.state].filter(Boolean).join(', '),
     prospect.zip,
   ].filter(Boolean).join(', ');
-  const { data: local, error: upsertErr } = await supabase
-    .from('customers')
-    .upsert({
-      netsuite_id: result.customerId,
-      netsuite_url: result.netsuiteUrl || null,
-      company_name: prospect.company_name,
-      entity_id: result.entityId || '',
-      email: prospect.email || null,
-      phone: prospect.phone || null,
-      address: addressLine || null,
-      active: true,
-    }, { onConflict: 'netsuite_id' })
-    .select('id')
-    .single();
-  if (upsertErr) {
-    // The NetSuite record exists — don't fail the promotion; the next
-    // customer sync heals the local mirror.
-    console.error('promoteProspect local customer upsert failed:', upsertErr.message);
+  const mirrorRow = {
+    netsuite_id: result.customerId,
+    netsuite_url: result.netsuiteUrl || null,
+    company_name: prospect.company_name,
+    entity_id: result.entityId || '',
+    email: prospect.email || null,
+    phone: prospect.phone || null,
+    address: addressLine || null,
+    active: true,
+  };
+  let local: { id: string } | null = null;
+  {
+    const { data: existingMirror } = await supabase
+      .from('customers').select('id').eq('netsuite_id', result.customerId).limit(1).maybeSingle();
+    if (existingMirror) {
+      const { error: updErr } = await supabase
+        .from('customers').update(mirrorRow).eq('id', existingMirror.id);
+      if (updErr) console.error('promoteProspect local customer update failed:', updErr.message);
+      local = existingMirror;
+    } else {
+      const { data: inserted, error: insErr } = await supabase
+        .from('customers').insert(mirrorRow).select('id').single();
+      if (insErr) {
+        // The NetSuite record exists — don't fail the promotion; the next
+        // customer sync heals the local mirror.
+        console.error('promoteProspect local customer insert failed:', insErr.message);
+      }
+      local = inserted || null;
+    }
   }
 
   // R3-16a: promotion used to send only the header fields — contacts added

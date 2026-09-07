@@ -25,6 +25,12 @@ const REPORTS: ReportLink[] = [
     source: 'NetSuite',
   },
   {
+    title: 'NetSuite Duplicate IDs',
+    blurb: 'Which NetSuite-id money columns hold duplicated ids \u2014 the rows blocking migration 264\u2019s unique indexes. Clean them here, redeploy, and the indexes build themselves.',
+    href: '/admin/reports/netsuite-dupes',
+    source: 'FleetSuite',
+  },
+  {
     title: 'Vehicle Job Margin',
     blurb: 'Each invoiced vehicle end to end: invoice revenue vs parts bought for its project (vendor-PO lines + priced stock allocations) and the installer\u2019s bill for its VIN. Labor lands with per-vehicle labor capture.',
     href: '/admin/reports/vehicle-margin',
