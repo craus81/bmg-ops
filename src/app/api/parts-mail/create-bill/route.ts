@@ -3,6 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 import { requireRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { createBillFromPo } from '@/lib/netsuite';
+import { loadThreeWayMatchForPo } from '@/lib/three-way-match';
+import { logAudit } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -12,7 +14,13 @@ const service = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
 );
 
-const Schema = z.object({ invoiceId: z.string().uuid() });
+const Schema = z.object({
+  invoiceId: z.string().uuid(),
+  // R4-8: a non-green three-way match blocks the bill unless the caller
+  // explicitly overrides with a recorded reason (audit-logged).
+  override: z.boolean().optional(),
+  overrideReason: z.string().max(500).optional(),
+});
 
 /**
  * POST /api/parts-mail/create-bill — turn a captured vendor parts invoice
@@ -40,6 +48,34 @@ export async function POST(req: NextRequest) {
   const po = (invoice as any).netsuite_vendor_pos;
   if (!po?.netsuite_id) {
     return NextResponse.json({ error: 'Link this invoice to a vendor PO first — the bill is created from the PO.' }, { status: 422 });
+  }
+
+  // R4-8 three-way match, enforced server-side on every click (the card's
+  // panel is display only): invoice total vs PO, dock receipts vs ordered,
+  // prior bills against the PO. Green bills as before; anything else needs
+  // an explicit override with a typed reason. Fail closed — if the match
+  // can't be computed, the money call doesn't happen.
+  const wantsOverride = parsed.data.override === true;
+  const overrideReason = (parsed.data.overrideReason || '').trim();
+  let matchResult: Awaited<ReturnType<typeof loadThreeWayMatchForPo>>['match'] | null = null;
+  try {
+    const { match } = await loadThreeWayMatchForPo(
+      service, invoice.matched_po_id, invoice.total != null ? Number(invoice.total) : null, invoice.id,
+    );
+    matchResult = match;
+  } catch (e: any) {
+    return NextResponse.json({
+      error: `Could not verify this invoice against the PO (${e?.message || 'match failed'}) — nothing was billed. Try again, or check the PO mirror.`,
+    }, { status: 502 });
+  }
+  if (matchResult.verdict !== 'green' && !(wantsOverride && overrideReason)) {
+    return NextResponse.json({
+      error: matchResult.verdict === 'red'
+        ? 'The three-way match failed — review the variances, then bill with an override reason if this is deliberate.'
+        : 'The three-way match has warnings — confirm with an override reason to bill anyway.',
+      match: matchResult,
+      canOverride: true,
+    }, { status: 409 });
   }
 
   // Atomic claim (migration 251): the status check above is check-then-act,
@@ -78,6 +114,27 @@ export async function POST(req: NextRequest) {
       } catch { /* stale takeover covers a lost release */ }
     }
     return NextResponse.json({ error: bill.error || 'NetSuite bill creation failed' }, { status: 502 });
+  }
+
+  // A bill posted past a non-green match is an exception the weekly digest
+  // reads (R4-5) — recorded as soon as the bill exists, whatever happens
+  // to the stamp below.
+  if (matchResult.verdict !== 'green') {
+    await logAudit(service, {
+      actorId: auth.user!.id,
+      table: 'vendor_parts_invoices',
+      recordId: invoice.id,
+      action: 'vendor_bill_variance_override',
+      detail: {
+        reason: overrideReason,
+        verdict: matchResult.verdict,
+        variances: matchResult.variances,
+        po: po.tranid,
+        invoiceNumber: invoice.invoice_number,
+        invoiceTotal: invoice.total,
+        billNumber: bill.billNumber || bill.billId || null,
+      },
+    });
   }
 
   // The bill EXISTS from here on — never report failure, never stamp falsy

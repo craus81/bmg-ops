@@ -55,4 +55,11 @@ describe('computeThreeWayMatch — vendor bill three-way match', () => {
   it('no receipt data at all stays quiet on that leg', () => {
     expect(computeThreeWayMatch({ ...base }).verdict).toBe('green');
   });
+
+  it('a terminal PO (fully billed / closed) is red; an open one adds nothing', () => {
+    const closed = computeThreeWayMatch({ ...base, poIsOpen: false, poStatusLabel: 'Fully Billed' });
+    expect(closed.verdict).toBe('red');
+    expect(closed.variances[0]).toContain('Fully Billed');
+    expect(computeThreeWayMatch({ ...base, poIsOpen: true }).verdict).toBe('green');
+  });
 });

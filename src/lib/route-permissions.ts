@@ -246,6 +246,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/netsuite/transaction-packing/[id]/route.ts': staff(),
   'src/app/api/netsuite/vendors/route.ts': admin(),
   'src/app/api/notifications/send/route.ts': staff(),
+  'src/app/api/parts-mail/bill-match/route.ts': role(),
   'src/app/api/parts-mail/create-bill/route.ts': role(),
   'src/app/api/parts-mail/link/route.ts': staff(),
   'src/app/api/parts-mail/sync-pos/route.ts': admin(),
