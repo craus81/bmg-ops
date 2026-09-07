@@ -10,9 +10,6 @@ import {
   LayoutGrid, Settings, MoreHorizontal, Wrench, Receipt,
 } from 'lucide-react';
 
-interface BottomNavProps {
-  clockStatus: 'out' | 'in' | 'break';
-}
 
 export interface Tab {
   id: string;
@@ -36,7 +33,6 @@ export const allTabs: Tab[] = [
   { id: 'prospects', path: '/admin/prospects', label: 'Customers', feature: 'prospects', priority: 3.5 },
   { id: 'schedule', path: '/admin/schedule', label: 'Schedule', feature: 'schedule', priority: 4 },
   { id: 'scan', path: '/scan', label: 'Scan', feature: 'scan', priority: 5 },
-  { id: 'time', path: '/time', label: 'Time', feature: 'time', priority: 6 },
   { id: 'estimates', path: '/estimates', label: 'Estimates', feature: 'estimates', priority: 7 },
   { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', feature: 'cni_portal', priority: 8 },
   // Customer-only
@@ -69,7 +65,7 @@ export const MAX_TABS = 7; // + More = 8 total
 // the customer role.
 const STAFF_ROLES = Object.keys(ROLE_DEFAULT_FEATURES).filter(r => r !== 'customer');
 
-export default function BottomNav({ clockStatus }: BottomNavProps) {
+export default function BottomNav() {
   const pathname = usePathname();
   const router = useRouter();
   const { hasFeature, isCustomer, hasRole } = useAuth();
