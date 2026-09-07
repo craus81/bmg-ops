@@ -7,6 +7,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { suiteqlQuery, createItemReceiptFromPo } from '@/lib/netsuite';
 import { mapReceiptLines, type NsPoLine } from '@/lib/po-receiving';
 import { normalizeItemNumber, isOpenPoStatus } from '@/lib/vendor-po-sync';
+import { computePartsReadiness } from '@/lib/parts-readiness';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -244,6 +245,84 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // ── R3-13: received parts land RESERVED for the project that asked. ──
+  // Receipts used to drop everything into free stock, and the project that
+  // raised the request had to re-reserve by hand (or lose the parts to the
+  // next allocate-all). Follow each received item back through its ordered
+  // purchase request to the source project and reserve it there — capped by
+  // the live readiness math at what the project still needs AND what's
+  // actually free (allocatable), and by the request's own quantity when a
+  // line has to split across projects. Posted receipts only: a
+  // manual_needed receipt hasn't relieved NetSuite, so the availability the
+  // cap reads doesn't hold those parts yet. Non-fatal throughout.
+  const autoReserved: { projectId: string; projectName: string | null; itemNumber: string; quantity: number }[] = [];
+  if (posted) {
+    try {
+      const receivedRemaining = new Map<string, number>();
+      for (const l of body.lines) {
+        const key = normalizeItemNumber(l.itemNumber);
+        receivedRemaining.set(key, (receivedRemaining.get(key) || 0) + l.quantity);
+      }
+      const { data: projReqs } = await supabase
+        .from('purchase_requests')
+        .select('id, item_number, quantity, source_project_id, created_at')
+        .eq('ordered_po_id', po.id)
+        .eq('status', 'ordered')
+        .not('source_project_id', 'is', null)
+        .order('created_at');
+      const wanting = (projReqs || []).filter((r: any) =>
+        receivedRemaining.has(normalizeItemNumber(r.item_number)));
+      const projectIds = [...new Set(wanting.map((r: any) => r.source_project_id))] as string[];
+      for (const projectId of projectIds) {
+        const readiness = await computePartsReadiness(supabase, projectId);
+        if (!readiness.available) continue;
+        let projectName: string | null = null;
+        for (const r of wanting.filter((x: any) => x.source_project_id === projectId)) {
+          const item = normalizeItemNumber(r.item_number);
+          const remaining = receivedRemaining.get(item) || 0;
+          if (remaining <= 0) continue;
+          const row = readiness.parts?.find(p => p.item_number === item);
+          if (!row || row.allocatable <= 0) continue;
+          const add = Math.min(remaining, row.allocatable, Number(r.quantity) || 0);
+          if (add <= 0) continue;
+          await supabase.from('part_allocations').upsert({
+            project_id: projectId,
+            item_number: item,
+            quantity: row.allocated + add,
+            status: 'reserved',
+            released_at: null,
+            created_by: auth.user.id,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'project_id,item_number' });
+          row.allocated += add;
+          row.allocatable -= add;
+          receivedRemaining.set(item, remaining - add);
+          if (projectName === null) {
+            const { data: proj } = await supabase
+              .from('upfit_projects').select('project_name').eq('id', projectId).maybeSingle();
+            projectName = proj?.project_name || null;
+          }
+          autoReserved.push({ projectId, projectName, itemNumber: item, quantity: add });
+        }
+      }
+      // One attributable timeline note per project.
+      const byProject = new Map<string, typeof autoReserved>();
+      for (const a of autoReserved) {
+        byProject.set(a.projectId, [...(byProject.get(a.projectId) || []), a]);
+      }
+      for (const [projectId, allocs] of byProject) {
+        await supabase.from('upfit_project_notes').insert({
+          project_id: projectId,
+          note_type: 'parts_order',
+          content: `Received on PO ${po.tranid || ''} and reserved to this project: ${allocs.map(a => `${a.quantity}× ${a.itemNumber}`).join(', ')}`.slice(0, 500),
+          created_by: auth.user.id,
+        });
+      }
+    } catch (err) {
+      console.error('po-receipts: auto-allocation failed:', err);
+    }
+  }
+
   // Whoever asked for these parts hears they arrived. One PO = one record →
   // everyone deep-links to this PO on the receiving page.
   try {
@@ -258,10 +337,13 @@ export async function POST(req: NextRequest) {
       .map((r: any) => r.requested_by))] as string[];
     if (requesterIds.length > 0) {
       const summary = body.lines.map(l => `${l.quantity}× ${normalizeItemNumber(l.itemNumber)}`).join(' · ');
+      const reservedNote = autoReserved.length > 0
+        ? ` — reserved to ${[...new Set(autoReserved.map(a => a.projectName || 'the requesting project'))].join(', ')}`
+        : '';
       await notifyMany(requesterIds, {
         type: 'po_received',
         title: `📬 Arrived — PO ${po.tranid || ''}${po.vendor_name ? ` (${po.vendor_name})` : ''}`.trim(),
-        body: summary.slice(0, 900),
+        body: `${summary}${reservedNote}`.slice(0, 900),
         url: deepLinks.receiving(po.id),
         channels: ['in_app', 'push'],
       });
@@ -277,6 +359,7 @@ export async function POST(req: NextRequest) {
     receiptId,
     receiptNumber,
     nsError,
+    autoReserved: autoReserved.length > 0 ? autoReserved : undefined,
   });
 }
 
