@@ -31,8 +31,11 @@ history. Every week they wait is trend history lost forever.
 
 Highest leverage per effort, anchored on the stated CEO-dashboard priority and capture-before-reporting sequencing. metric-snapshots leads because history cannot be backfilled — every week of delay is trend data lost forever; executive-bands is the CEO view's visible first win (M, mostly rendering, one role-guard fix). order-book-unbilled-revenue (value 5, 3 lenses) is both a top ask and the feeder for CEO Phase 3. exceptions-overrides-digest is effectively S per its own risk note, riding existing audit/cron/email machinery. promised-back-guardian and three-way-match are value-5, 3-lens, M-effort wins. punch-clock-timesheets carries the highest convergence in the whole set (5 lenses) and unblocks crew-utilization and payroll reporting downstream. reorder-points-replenishment is value 5 with 4 lenses; scan-type classification is its only real design work. Eight M-or-smaller items that light up the dashboard's data spine plus the three most-demanded operational wins.
 
+> **Ship log (2026-09-07).** The whole tier was decided and built the day the audit landed, one auto-merged PR per item: metric snapshots **#837**, CEO view Phase 1 **#840**, Order Book **#839**, Exceptions & Overrides Digest **#841**, Promised-Back Guardian + On-Time Scorecard **#842**, Reorder Points & Auto-Replenishment **#843**, Three-Way Match **#844 + #845**. Punch-clock timesheets was the one deliberate no: the crew clocks in and out in the payroll app, so the in-app time clock was retired instead (**#838**) — see that block for the decision. Deferred stretch pieces are noted per item.
+
 #### Nightly metric snapshots + trend charts
 *Value 5/5 · effort M · proposed independently by 1 lens · NEW*
+> **SHIPPED — PR #837** (migration 270). `metric_snapshots` + nightly cron at 04:30 UTC computing 14 metrics through `src/lib/exec-metrics.ts`; each metric fails independently (null + error meta, never a lying zero). Sparklines landed with #840. History started accruing 2026-09-08; quoted-margin stamping rides the Tier-2 margin-ledger cluster as specced.
 
 **The problem.** Every financial number is a live read that evaporates at midnight — no A/R-over-time, no backlog trend, no cash trend, and history can never be backfilled: every week unshipped is trend data lost forever.
 
@@ -46,6 +49,7 @@ Highest leverage per effort, anchored on the stated CEO-dashboard priority and c
 
 #### CEO view Phase 1: executive bands on the Financials tab
 *Value 5/5 · effort M · proposed independently by 1 lens · PARTIAL — builds on existing pieces*
+> **SHIPPED — PR #840.** Revenue / Sales / Operations bands on the Financials tab via `/api/reports/executive-summary` (requireFinancials), all computed by the same shared libs as the reports and snapshots (`sales-facts`, `revenue-summary`, `order-book`, `exec-metrics`) so a band can never disagree with the report behind it. Sparklines read `metric_snapshots`; each section fails independently.
 
 **The problem.** The owner asked for a CEO dashboard but his executive login sees only four balance tiles; win rate, avg job size, open-quote dollars, pipeline, and revenue beyond this-month exist in the app but are scattered across pages his role can't open, and 'A/R over 60' requires mentally adding two drill-down buckets.
 
@@ -59,6 +63,7 @@ Highest leverage per effort, anchored on the stated CEO-dashboard priority and c
 
 #### Order Book & Unbilled Revenue
 *Value 5/5 · effort M · proposed independently by 3 lenses · MOSTLY NEW*
+> **SHIPPED — PR #839.** `src/lib/order-book.ts` (one loader for the report, the snapshots, and the CEO band), `/admin/reports/order-book` with aging buckets, billed %, CSV, and NetSuite links. Unbilled = line amount scaled by the unbilled quantity fraction, over-billed lines clamped.
 
 **The problem.** FleetSuite mirrors every NetSuite sales order 2-hourly back to 2024 (netsuite_sales_orders + _lines with status, total, trandate, quantity vs quantity_billed, rate) but the only reader is parts-demand math. 'How much work have we sold that isn't delivered or billed yet?' is unanswerable: backlog value, aging Pending Fulfillment orders, and sold-but-unbilled dollars are invisible; the owner runs NetSuite saved searches or guesses, and revenue leaks surface only at month-end reconciliation, if at all.
 
@@ -72,6 +77,7 @@ Highest leverage per effort, anchored on the stated CEO-dashboard priority and c
 
 #### Exceptions & Overrides Digest
 *Value 4/5 · effort S · proposed independently by 1 lens · PARTIAL — builds on existing pieces*
+> **SHIPPED — PR #841** (+ #845 added `vendor_bill_variance_override` to the action list). The three unaudited override paths now write audit rows (`status_forced`, `invoice_allow_additional` at both invoice sites), and a Monday-morning digest to super admins summarizes the week's ten exception actions with actor names; a quiet week sends nothing. Audience is super_admin (the audit_log feature holders) — the executive role is deliberately walled to home + financials, so the /admin/audit link would be a dead click for them.
 
 **The problem.** Every guardrail has a field-used bypass (convert-to-SO override, 'invoice anyway', force-completed checklists whose flag isn't even persisted, hand-created bills, manual SO links) — each logged individually and never aggregated, so the owner can't see how often controls are stepped around, whether it's trending, or whether it's always the same person.
 
@@ -85,6 +91,7 @@ Highest leverage per effort, anchored on the stated CEO-dashboard priority and c
 
 #### Promised-Back Guardian & On-Time Scorecard
 *Value 5/5 · effort M · proposed independently by 3 lenses · PARTIAL — builds on existing pieces*
+> **SHIPPED — PR #842.** Daily guardian cron (2 days out / day-of / daily overdue escalation, sync_state dedupe, role-aware links per the stuck-vehicle pattern), Monday due-this-week digest, `/admin/reports/on-time` scorecard (monthly + per-customer kept %, no-promise discipline count, overdue-now table), and the check-in wizard's turnaround-based date suggestion — all four spec halves, on one shared `src/lib/on-time.ts`.
 
 **The problem.** Every check-in captures promised_back_date (indexed since m158) but nothing defends it: it renders as silent chips and two /tracking tiles that only help if someone looks. The only date-watching cron (stuck-vehicle-check) watches stuck_* statuses, not promises — a vehicle idling in 'in progress' sails past its promised date unremarked, and the customer's angry call is the alarm. There is also no record of how often BMG keeps its dates.
 
@@ -98,6 +105,7 @@ Highest leverage per effort, anchored on the stated CEO-dashboard priority and c
 
 #### Punch-Clock Timesheets: Sweep, Corrections & Payroll Export
 *Value 4/5 · effort M · proposed independently by 5 lenses · MOSTLY NEW*
+> **NOT BUILT — owner decision (2026-09-07), and the clock was retired instead (PR #838).** The crew clocks in and out in the payroll app, so attendance capture is duplicate work: `time_entries` had zero readers (verified — only the /time page and AppProvider ever wrote it). The /time page, Time tab, and clock state are gone; per-JOB labor capture (R3-21 shop shifts, the pick-list timer) is unaffected and remains the costing source. The downstream clusters this item was meant to unblock (crew utilization, payroll export) are payroll-app territory now.
 
 **The problem.** The punch clock is a dead-end dataset: time_entries has zero API consumers — no payroll export (someone reads /time screens and re-keys hours into Paychex every period), no correction path for a missed punch, and no auto-close sweep (per-vehicle work_shifts timers get a daily 12h-cap sweep since m269; the payroll clock doesn't, so one forgotten clock-out silently corrupts a paycheck). Clocked hours are also never compared to job-attributed hours.
 
@@ -111,6 +119,7 @@ Highest leverage per effort, anchored on the stated CEO-dashboard priority and c
 
 #### Reorder Points & Auto-Replenishment Sweep
 *Value 5/5 · effort M · proposed independently by 4 lenses · MOSTLY NEW*
+> **SHIPPED — PR #843** (migration 271). Per-part Reorder At / Up To on /parts, nightly sweep raising tagged `purchase_requests` into /admin/purchasing (AUTO chip, velocity note, one digest for new rows), pending-request netting + demand-dismissal watermarks so it never double-queues or nags past a buying decision. The feared scan-type classification dissolved: `scan_logs` has no type column because every row IS one installed unit — velocity is a row count. Deferred: the reorder-point seeding helper (needs lead-time history that only starts accruing now) and low-stock chips outside the queue.
 
 **The problem.** Ordering is entirely reactive: a shortage exists only when a person opens a readiness card or the demand tab and notices — a missed look means a vehicle stranded in a bay waiting on a $40 bracket, plus rush freight. There are no reorder points, min/max levels, or consumption-based suggestions anywhere, even though the app already knows consumption velocity (scan_logs per-part install counters), live stock (netsuite_parts.quantity_available, 2-hourly), what's inbound (netsuite_vendor_po_lines quantity − quantity_received), reservations (part_allocations), and pending requests — nothing connects them.
 
@@ -124,6 +133,7 @@ Highest leverage per effort, anchored on the stated CEO-dashboard priority and c
 
 #### Three-Way Match on Vendor Bills
 *Value 5/5 · effort M · proposed independently by 3 lenses · MOSTLY NEW*
+> **SHIPPED — PR #844 + #845.** Every Create Bill click now runs the match server-side before the NetSuite call: invoice vs PO total (2%/$25 tolerance), dock receipts vs ordered (mirror + unposted manual receipts), prior bills (sibling billed invoices + NetSuite quantity_billed) and terminal PO status. Green bills one-click; anything else needs a typed override, audit-logged as `vendor_bill_variance_override` and surfaced in the Monday exceptions digest. Deferred: AI line-item extraction + per-line rate matching, the short-received worklist, and the weekly finance variance digest.
 
 **The problem.** The one-click 'Create Bill' on Parts Mail posts a real NetSuite vendor bill by blindly copying the PO — the AI-extracted vendor_parts_invoices.total is never compared to anything (verified in /api/parts-mail/create-bill). If the vendor over-invoiced, added freight, short-shipped, or already billed part of the PO, BMG pays anyway. All three legs of the match are already in the database; nothing joins them, and only header fields are extracted from the invoice PDF (m163).
 
