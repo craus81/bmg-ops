@@ -122,7 +122,11 @@ const BILLING_WORKFLOWS: Record<string, string> = {
 };
 
 interface Contact { id: string; name: string; title: string | null; email: string | null; phone: string | null; is_decision_maker: boolean; netsuite_contact_id: string | null }
-interface Opportunity { id: string; title: string; type: string; stage: string; value: number | null; expected_close_date: string | null; created_at: string }
+interface Opportunity { id: string; title: string; type: string; stage: string; value: number | null; expected_close_date: string | null; created_at: string; lost_reason?: string | null; lost_note?: string | null }
+
+const LOST_REASONS: Record<string, string> = {
+  price: 'Price', timing: 'Timing', competitor: 'Went with a competitor', no_response: 'No response', other: 'Other',
+};
 interface Activity { id: string; type: string; summary: string; created_by: string | null; created_at: string; creator_name?: string | null; email_log_id?: string | null; url?: string | null }
 interface Reminder { id: string; title: string; description: string | null; due_at: string }
 interface Tag { id: string; tag: string }
@@ -934,14 +938,34 @@ export default function CustomerRecordPage() {
     setOppFormOpen(false);
   };
 
-  const setOppStage = async (opp: Opportunity, newStage: string) => {
+  // Marking a deal lost requires a reason (R3-18) — the funnel used to show
+  // WHAT died, never WHY. The inline prompt below collects it; reopening a
+  // lost deal clears the reason so a re-loss re-asks.
+  const [lostPromptFor, setLostPromptFor] = useState<{ oppId: string; reason: string; note: string } | null>(null);
+
+  const setOppStage = async (opp: Opportunity, newStage: string, lost?: { reason: string; note: string }) => {
     if (opp.stage === newStage) return;
-    const { error } = await supabase.from('prospect_opportunities')
-      .update({ stage: newStage, ...(newStage === 'won' || newStage === 'lost' ? { closed_at: new Date().toISOString() } : {}) })
-      .eq('id', opp.id);
+    if (newStage === 'lost' && !lost) {
+      setLostPromptFor({ oppId: opp.id, reason: 'price', note: '' });
+      return;
+    }
+    const patch: Record<string, unknown> = {
+      stage: newStage,
+      ...(newStage === 'won' || newStage === 'lost' ? { closed_at: new Date().toISOString() } : {}),
+      ...(newStage === 'lost' && lost
+        ? { lost_reason: lost.reason, lost_note: lost.note.trim() || null }
+        : opp.stage === 'lost' ? { lost_reason: null, lost_note: null } : {}),
+    };
+    const { error } = await supabase.from('prospect_opportunities').update(patch).eq('id', opp.id);
     if (error) { await dialog.alert(`Could not update the deal: ${error.message}`); return; }
-    setOpportunities(prev => prev.map(o => (o.id === opp.id ? { ...o, stage: newStage } : o)));
-    logAuto('status_change', `${opp.title}: ${OPP_STAGES[opp.stage] || opp.stage} → ${OPP_STAGES[newStage] || newStage}`);
+    setOpportunities(prev => prev.map(o => (o.id === opp.id
+      ? {
+        ...o, stage: newStage,
+        ...('lost_reason' in patch ? { lost_reason: patch.lost_reason as string | null, lost_note: patch.lost_note as string | null } : {}),
+      }
+      : o)));
+    setLostPromptFor(null);
+    logAuto('status_change', `${opp.title}: ${OPP_STAGES[opp.stage] || opp.stage} → ${OPP_STAGES[newStage] || newStage}${lost ? ` (${LOST_REASONS[lost.reason] || lost.reason}${lost.note.trim() ? ` — ${lost.note.trim()}` : ''})` : ''}`);
   };
 
   const completeReminder = async (r: Reminder) => {
@@ -1133,7 +1157,7 @@ export default function CustomerRecordPage() {
     if (p) {
       const [cRes, oRes, aRes, tRes, rRes] = await Promise.all([
         supabase.from('prospect_contacts').select('id, name, title, email, phone, is_decision_maker, netsuite_contact_id').eq('prospect_id', p.id).order('is_decision_maker', { ascending: false }),
-        supabase.from('prospect_opportunities').select('id, title, type, stage, value, expected_close_date, created_at').eq('prospect_id', p.id).order('created_at', { ascending: false }),
+        supabase.from('prospect_opportunities').select('id, title, type, stage, value, expected_close_date, created_at, lost_reason, lost_note').eq('prospect_id', p.id).order('created_at', { ascending: false }),
         supabase.from('prospect_activities').select('id, type, summary, created_by, created_at, email_log_id, url').eq('prospect_id', p.id).order('created_at', { ascending: false }).order('id').limit(20),
         supabase.from('prospect_tags').select('id, tag').eq('prospect_id', p.id),
         supabase.from('prospect_reminders').select('id, title, description, due_at').eq('prospect_id', p.id).is('completed_at', null).order('due_at'),
@@ -2400,6 +2424,11 @@ export default function CustomerRecordPage() {
                   )}
                   <span style={{ fontSize: '12.5px', fontWeight: 800, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{o.value ? fmtMoney(o.value) : '—'}</span>
                 </div>
+                {o.stage === 'lost' && o.lost_reason && (
+                  <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                    Lost — {LOST_REASONS[o.lost_reason] || o.lost_reason}{o.lost_note ? ` · ${o.lost_note}` : ''}
+                  </div>
+                )}
                 {prospect && (
                   <div style={{ display: 'flex', gap: '3px', marginTop: '5px', flexWrap: 'wrap' }}>
                     {Object.entries(OPP_STAGES).map(([k, v]) => (
@@ -2412,9 +2441,69 @@ export default function CustomerRecordPage() {
                     ))}
                   </div>
                 )}
+                {prospect && lostPromptFor?.oppId === o.id && (
+                  <div style={{ display: 'flex', gap: '6px', marginTop: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <select value={lostPromptFor.reason} onChange={e => setLostPromptFor(p => (p ? { ...p, reason: e.target.value } : p))}
+                      style={{ padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}>
+                      {Object.entries(LOST_REASONS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                    </select>
+                    <input value={lostPromptFor.note} onChange={e => setLostPromptFor(p => (p ? { ...p, note: e.target.value } : p))}
+                      placeholder="Optional note (who / what happened)"
+                      style={{ flex: 1, minWidth: '160px', padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }} />
+                    <button onClick={() => setOppStage(o, 'lost', { reason: lostPromptFor.reason, note: lostPromptFor.note })}
+                      style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.35)', color: '#ef4444' }}>
+                      Mark lost
+                    </button>
+                    <button onClick={() => setLostPromptFor(null)}
+                      style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>
+                      Cancel
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
+
+          {/* Lead lifecycle (migration 263): active / nurturing / lost on
+              unconverted records. 'Converted' is promotion's to set. */}
+          {prospect && !prospect.netsuite_id && (
+            <div style={card}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <div style={{ ...eyebrow, marginBottom: 0 }}>Lead status</div>
+                <span style={{ flex: 1 }} />
+                {([['active', 'Active', '#22c55e'], ['nurturing', 'Nurture', '#f59e0b'], ['lost', 'Lost', '#ef4444']] as const).map(([k, label, color]) => (
+                  <button key={k}
+                    onClick={async () => {
+                      if (prospect.status === k) return;
+                      const res = await fetch('/api/prospects', {
+                        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ id: prospect.id, status: k }),
+                      });
+                      const data = await res.json().catch(() => ({}));
+                      if (!res.ok || !data.success) { await dialog.alert(`Could not change the status: ${data?.error || `HTTP ${res.status}`}`); return; }
+                      logAuto('status_change', `Lead status: ${prospect.status || 'active'} → ${k}`);
+                      setProspect(prev => (prev ? { ...prev, status: k } : prev));
+                    }}
+                    style={{
+                      padding: '4px 12px', borderRadius: '999px', fontSize: '10px', fontWeight: 800, cursor: prospect.status === k ? 'default' : 'pointer',
+                      background: prospect.status === k ? `${color}26` : 'transparent',
+                      border: `1px solid ${prospect.status === k ? color : 'var(--border)'}`,
+                      color: prospect.status === k ? color : 'var(--text-muted)',
+                    }}>{label}</button>
+                ))}
+              </div>
+              {prospect.status === 'nurturing' && (
+                <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                  Nurture: not buying right now, worth a periodic touch — it stays out of the quiet-leads count.
+                </div>
+              )}
+              {prospect.status === 'lost' && (
+                <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                  Lost: out of every active view. Flip back to Active if they resurface.
+                </div>
+              )}
+            </div>
+          )}
 
           {(prospect || reminders.length > 0) && (
             <div style={card}>

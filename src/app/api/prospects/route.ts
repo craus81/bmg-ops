@@ -72,6 +72,9 @@ const UpdateProspectSchema = z
     record_type: z.enum(['customer', 'vendor']).optional(),
     location_count: z.number().int().min(1).max(10_000).optional(),
     created_by: ProspectFields.created_by,
+    /** Lead lifecycle (migration 263). 'converted' is deliberately absent —
+     *  only the promotion path sets it, server-side. */
+    status: z.enum(['active', 'nurturing', 'lost']).optional(),
     /** Re-pointing the NetSuite linkage is admin-only and audit-logged. */
     netsuite_id: z.string().max(40).optional().nullable(),
   })
