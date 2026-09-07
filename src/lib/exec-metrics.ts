@@ -1,7 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from './fetch-all';
 import { fetchOpenArInvoices, computeArAging, fetchAccountGroups, fetchOpenVendorBills } from './financials-data';
-import { isOpenSalesOrderStatus } from './parts-demand';
+import { loadOrderBook } from './order-book';
+
+export { unbilledLineValue } from './order-book';
 
 /**
  * Executive metrics (Round 4 / R4-1): the one place the numbers behind the
@@ -28,28 +30,6 @@ export interface ExecMetric {
 export function chicagoDay(at: Date = new Date()): string {
   // en-CA formats as YYYY-MM-DD.
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(at);
-}
-
-interface UnbilledLine {
-  quantity: number | string | null;
-  quantity_billed: number | string | null;
-  rate: number | string | null;
-  amount: number | string | null;
-}
-
-/**
- * Sold-but-not-yet-invoiced dollars on one mirrored SO line. Prefer the
- * line's real amount scaled by the unbilled fraction (amount already carries
- * discounts); fall back to remaining × rate when amount is missing.
- */
-export function unbilledLineValue(line: UnbilledLine): number {
-  const qty = Number(line.quantity) || 0;
-  const billed = Number(line.quantity_billed) || 0;
-  const remaining = Math.max(0, qty - billed);
-  if (remaining <= 0) return 0;
-  const amount = line.amount != null ? Number(line.amount) : NaN;
-  if (qty > 0 && Number.isFinite(amount)) return amount * (remaining / qty);
-  return remaining * (Number(line.rate) || 0);
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -136,28 +116,12 @@ async function collectSales(service: SupabaseClient, out: ExecMetric[]): Promise
 
 async function collectOrderBook(service: SupabaseClient, out: ExecMetric[]): Promise<void> {
   try {
-    const { data: sos, error } = await fetchAllRows<any>((from, to) => service
-      .from('netsuite_sales_orders')
-      .select('id, status, status_label, total')
-      .order('id').range(from, to));
-    if (error) throw new Error(error.message);
-    const open = (sos || []).filter(so => isOpenSalesOrderStatus(so.status, so.status_label));
-    out.push({ metric: 'so_order_book_count', value: open.length });
-    out.push({ metric: 'so_order_book_value', value: round2(open.reduce((s, so) => s + (Number(so.total) || 0), 0)) });
-
-    let unbilled = 0;
-    const openIds = open.map(so => so.id);
-    for (let i = 0; i < openIds.length; i += 100) {
-      const chunk = openIds.slice(i, i + 100);
-      const { data: lines, error: lErr } = await fetchAllRows<any>((from, to) => service
-        .from('netsuite_sales_order_lines')
-        .select('quantity, quantity_billed, rate, amount')
-        .in('so_id', chunk)
-        .order('id').range(from, to));
-      if (lErr) throw new Error(lErr.message);
-      for (const line of lines || []) unbilled += unbilledLineValue(line);
-    }
-    out.push({ metric: 'so_unbilled_value', value: round2(unbilled) });
+    // Same loader as the Order Book report and the CEO Operations band —
+    // the snapshot can never disagree with the report behind it.
+    const { totals } = await loadOrderBook(service);
+    out.push({ metric: 'so_order_book_count', value: totals.count });
+    out.push({ metric: 'so_order_book_value', value: totals.value });
+    out.push({ metric: 'so_unbilled_value', value: totals.unbilled });
   } catch (e: any) {
     const meta = { error: String(e?.message || e).slice(0, 300) };
     for (const m of ['so_order_book_count', 'so_order_book_value', 'so_unbilled_value']) {

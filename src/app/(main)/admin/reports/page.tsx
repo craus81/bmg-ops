@@ -31,6 +31,12 @@ const REPORTS: ReportLink[] = [
     source: 'FleetSuite',
   },
   {
+    title: 'Open Order Book',
+    blurb: 'Every open sales order: sold vs billed vs unbilled, with aging — money sold but not yet invoiced.',
+    href: '/admin/reports/order-book',
+    source: 'NetSuite',
+  },
+  {
     title: 'Vehicle Job Margin',
     blurb: 'Each invoiced vehicle end to end: invoice revenue vs parts bought for its project (vendor-PO lines + priced stock allocations) and the installer\u2019s bill for its VIN. Labor lands with per-vehicle labor capture.',
     href: '/admin/reports/vehicle-margin',
