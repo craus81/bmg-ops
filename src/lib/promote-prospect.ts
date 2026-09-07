@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { createCustomerOrLead, suiteqlQuery } from '@/lib/netsuite';
+import { createCustomerOrLead, createContact, suiteqlQuery } from '@/lib/netsuite';
 import { safeStringLiteral } from '@/lib/sql-safe';
 
 /**
@@ -49,6 +49,10 @@ export interface PromoteResult {
   netsuiteUrl?: string;
   /** customers-mirror row id, for deep links into the estimate builder. */
   localCustomerId?: string | null;
+  /** CRM contacts created as NetSuite Contacts under the new customer (R3-16a). */
+  contactsPushed?: number;
+  /** Contacts NetSuite refused (logged; re-savable from the record page). */
+  contactsFailed?: number;
 }
 
 /**
@@ -198,12 +202,60 @@ export async function promoteProspect(
     console.error('promoteProspect local customer upsert failed:', upsertErr.message);
   }
 
+  // R3-16a: promotion used to send only the header fields — contacts added
+  // while the record was a lead never reached NetSuite as Contacts (the
+  // contacts route only pushes once the record is ALREADY linked, and
+  // createCustomerOrLead sends no contact record at all). Walk the unlinked
+  // contacts and create each under the new customer, stamping the NetSuite
+  // id back so the contacts route updates rather than re-creates. Best
+  // effort per contact: a NetSuite refusal (usually a missing Lists >
+  // Contacts permission, or a single-word name where the account wants a
+  // last name) skips that one — re-saving it from the record page retries.
+  // Notes are deliberately NOT pushed: whether internal CRM notes belong in
+  // NetSuite at all is an open owner decision (audit §7.4 item 7).
+  let contactsPushed = 0;
+  let contactsFailed = 0;
+  try {
+    const { data: contacts } = await supabase
+      .from('prospect_contacts')
+      .select('id, name, title, email, phone')
+      .eq('prospect_id', prospect.id)
+      .is('netsuite_contact_id', null);
+    for (const c of contacts || []) {
+      const nm = String(c.name || '').trim();
+      if (!nm) continue;
+      const [firstName, ...rest] = nm.split(/\s+/);
+      const r = await createContact({
+        companyId: String(result.customerId),
+        firstName,
+        lastName: rest.join(' ') || undefined,
+        email: c.email || undefined,
+        phone: c.phone || undefined,
+        title: c.title || undefined,
+      });
+      if (r.success && r.internalId) {
+        await supabase
+          .from('prospect_contacts')
+          .update({ netsuite_contact_id: r.internalId })
+          .eq('id', c.id);
+        contactsPushed++;
+      } else {
+        contactsFailed++;
+        console.warn(`promoteProspect: contact "${nm}" push failed:`, r.error || 'no internal id returned');
+      }
+    }
+  } catch (err) {
+    console.error('promoteProspect contact push failed:', err);
+  }
+
   return {
     success: true,
     netsuiteId: result.customerId,
     entityId: result.entityId,
     netsuiteUrl: result.netsuiteUrl,
     localCustomerId: local?.id || null,
+    contactsPushed,
+    contactsFailed,
   };
 }
 

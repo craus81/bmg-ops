@@ -94,6 +94,8 @@ export async function POST(req: NextRequest) {
       entityId: result.entityId,
       netsuiteUrl: result.netsuiteUrl,
       localCustomerId: result.localCustomerId || null,
+      contactsPushed: result.contactsPushed || 0,
+      contactsFailed: result.contactsFailed || 0,
     });
   } catch (error: any) {
     console.error('Push to NetSuite error:', error);
