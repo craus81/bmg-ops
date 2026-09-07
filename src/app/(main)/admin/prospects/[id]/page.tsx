@@ -605,7 +605,10 @@ export default function CustomerRecordPage() {
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data?.error || `HTTP ${res.status}`);
-      logAuto('status_change', `Added to NetSuite as customer #${data.entityId}`);
+      logAuto('status_change', `Added to NetSuite as customer #${data.entityId}${data.contactsPushed ? ` with ${data.contactsPushed} contact${data.contactsPushed !== 1 ? 's' : ''}` : ''}`);
+      if (data.contactsFailed) {
+        await dialog.alert(`Customer created, but NetSuite refused ${data.contactsFailed} contact${data.contactsFailed !== 1 ? 's' : ''} — re-save them from the Contacts card to retry.`);
+      }
       setProspect(prev => (prev ? { ...prev, status: 'converted', netsuite_id: data.customerId, netsuite_url: data.netsuiteUrl, converted_customer_id: data.customerId } : prev));
       // The record is linked now — the NetSuite panels can load.
       const nsId = String(data.customerId);
