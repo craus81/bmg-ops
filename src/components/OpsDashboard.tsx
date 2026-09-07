@@ -148,7 +148,7 @@ export default function OpsDashboard() {
       scansTodayRes, scansWeekRes, msgRes, unreadRes,
       oppsRes, custRes, quotesRes, openEstRes, estRes, unpricedRes,
       apSubmittedRes, sentEstRes, sentWrapRes, staleProofRes, healthRes, atRiskRes,
-      neverInvoicedRes,
+      neverInvoicedRes, quietLeadsRes,
     ] = await Promise.allSettled([
       // KPI 1 — NetSuite invoiced totals (authoritative revenue)
       fetch('/api/reports/invoiced-summary').then(r => r.json()),
@@ -296,6 +296,14 @@ export default function OpsDashboard() {
         }
         return ids.filter(id => !billed.has(id)).length;
       })(),
+      // Quiet leads worth a nurture touch (R3-18): ACTIVE, unconverted
+      // records nobody has touched in 30+ days. Records deliberately
+      // parked as 'nurturing' or closed as 'lost' stay out of the count —
+      // the tile exists to make someone touch, park, or close each one.
+      supabase.from('prospects').select('*', { count: 'exact', head: true })
+        .eq('status', 'active')
+        .neq('record_type', 'vendor')
+        .lt('updated_at', new Date(Date.now() - 30 * 86_400_000).toISOString()),
     ]);
 
     const val = <T,>(r: PromiseSettledResult<T>): T | null => (r.status === 'fulfilled' ? r.value : null);
@@ -396,6 +404,12 @@ export default function OpsDashboard() {
       key: 'never-invoiced', count: neverInvoiced, tone: 'err', path: '/tracking',
       title: 'Completed vehicles never invoiced',
       detail: 'Done or shipped in the last 180 days with no invoice recorded — check Archived too',
+    });
+    const quietLeads = count(quietLeadsRes);
+    if (quietLeads > 0) queue.push({
+      key: 'quiet-leads', count: quietLeads, tone: 'blue', path: '/admin/prospects',
+      title: 'Quiet leads worth a nurture touch',
+      detail: 'Active records untouched for 30+ days — touch, park as Nurture, or mark Lost',
     });
     const cniPhotos = count(cniPhotosRes);
     if (cniPhotos > 0) queue.push({
