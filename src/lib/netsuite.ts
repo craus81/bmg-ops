@@ -1094,6 +1094,61 @@ export async function deleteContact(contactId: string): Promise<{ success: boole
 }
 
 /**
+ * Create a NetSuite user note on an entity (customer). Used by the CRM
+ * notes sync (R3-16a, owner decision 2026-09-07): FleetSuite call/note/
+ * meeting activity lands on the customer record as plain user notes so the
+ * relationship history is visible on the NetSuite side too.
+ * POST /services/rest/record/v1/note — same create shape as createContact.
+ */
+export async function createNote(payload: {
+  entityId: string;
+  title?: string;
+  note: string;
+}): Promise<{ success: boolean; internalId?: string; error?: string }> {
+  const body: any = {
+    entity: { id: payload.entityId },
+    note: payload.note,
+  };
+  if (payload.title) body.title = payload.title;
+
+  try {
+    const config = getConfig();
+    const baseUrl = getBaseUrl(config.accountId);
+    const url = `${baseUrl}/services/rest/record/v1/note`;
+    const { oauth, token } = createOAuth(config);
+    const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create note error:', response.status, text);
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+
+    const location = response.headers.get('location') || '';
+    const idMatch = location.match(/\/note\/(\d+)/) || location.match(/\/(\d+)(?:\?|$)/);
+    return { success: true, internalId: idMatch ? idMatch[1] : undefined };
+  } catch (error: any) {
+    console.error('NetSuite create note exception:', error);
+    return { success: false, error: error?.message || 'Unknown error' };
+  }
+}
+
+/**
  * Delete a NetSuite customer record.
  * DELETE /services/rest/record/v1/customer/{id}. A 404 counts as success —
  * the customer is already gone, which is the state the caller wants.

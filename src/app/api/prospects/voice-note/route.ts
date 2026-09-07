@@ -1,7 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { pushProspectNotes } from '@/lib/prospect-notes-sync';
+
+/** Owner decision 2026-09-07 (R3-16a): human notes sync to NetSuite. A
+ *  voice note on an already-linked record pushes right away (and drains
+ *  any unsynced backlog with it); unlinked records push at promotion. */
+async function syncIfLinked(service: SupabaseClient, prospectId: string) {
+  try {
+    const { data: pros } = await service.from('prospects').select('netsuite_id').eq('id', prospectId).maybeSingle();
+    if (pros?.netsuite_id) await pushProspectNotes(service, prospectId, String(pros.netsuite_id));
+  } catch (err) {
+    console.warn('voice-note NetSuite notes sync failed:', err);
+  }
+}
 
 export const maxDuration = 30;
 
@@ -91,6 +104,7 @@ export async function POST(req: NextRequest) {
         summary: noteText.trim(),
         created_by: userId,
       }).select('id').single();
+      await syncIfLinked(supabase, prospectId);
 
       return NextResponse.json({ summary: noteText.trim(), actions: [], activityId: activity?.id });
     }
@@ -129,6 +143,8 @@ export async function POST(req: NextRequest) {
       }).select().single();
       if (reminder) reminders.push(reminder);
     }
+
+    await syncIfLinked(supabase, prospectId);
 
     return NextResponse.json({
       summary: parsed.summary,
