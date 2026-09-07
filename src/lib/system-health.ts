@@ -43,6 +43,7 @@ export const HEALTH_MONITORS: HealthMonitor[] = [
   { syncType: 'stuck_vehicle_check', label: 'Stuck-vehicle sweep', intervalMinutes: 1440 },
   { syncType: 'stale_purchase_request_check', label: 'Aging parts-request sweep', intervalMinutes: 1440 },
   { syncType: 'shop_shift_sweep', label: 'Forgotten shop-timer sweep', intervalMinutes: 1440 },
+  { syncType: 'metric_snapshots', label: 'Nightly executive metric snapshots', intervalMinutes: 1440 },
   { syncType: 'weekly_customer_digest', label: 'Weekly customer digest', intervalMinutes: 10080 },
 ];
 

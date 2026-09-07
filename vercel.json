@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/cron/metric-snapshots",
+      "schedule": "30 4 * * *"
+    },
+    {
       "path": "/api/gmail/auto-import",
       "schedule": "*/20 * * * *"
     },
