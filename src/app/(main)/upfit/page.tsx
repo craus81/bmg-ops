@@ -121,6 +121,17 @@ interface UpfitProject {
   upfit_project_tasks?: { id: string; completed_at: string | null }[];
 }
 
+interface ProjectPoLink {
+  id: string;
+  po_id: string;
+  po_number: string | null;
+  source: string;
+  po: {
+    id: string; tranid: string | null; vendor_name: string | null;
+    status_label: string | null; eta_date: string | null; tracking_number: string | null;
+  } | null;
+}
+
 const STATUSES = [
   { key: 'opportunity', label: 'Opportunity', color: '#a78bfa' },
   { key: 'estimate', label: 'Estimate', color: '#fbbf24' },
@@ -196,6 +207,12 @@ export default function UpfitProjectsPage() {
   // Parts readiness — needed vs on hand vs on order for the project's SO
   const [readiness, setReadiness] = useState<any | null>(null);
   const [readinessLoading, setReadinessLoading] = useState(false);
+
+  // ALL vendor POs linked to the selected project (upfit_project_pos,
+  // migration 267) — the scalar column on the project is only the first.
+  const [projectPos, setProjectPos] = useState<ProjectPoLink[]>([]);
+  const [poLinkInput, setPoLinkInput] = useState('');
+  const [poLinkBusy, setPoLinkBusy] = useState(false);
 
   // New project form
   const [showCreate, setShowCreate] = useState(false);
@@ -644,14 +661,76 @@ export default function UpfitProjectsPage() {
     allocate({ action: 'set', itemNumber: p.item_number, quantity: qty });
   };
 
+  // The project's linked vendor POs — a handful per project, read straight
+  // off the join table with the mirror row embedded for status/ETA display.
+  const loadProjectPos = async (projectId: string) => {
+    try {
+      const { data } = await supabase
+        .from('upfit_project_pos')
+        .select('id, po_id, po_number, source, po:netsuite_vendor_pos(id, tranid, vendor_name, status_label, eta_date, tracking_number)')
+        .eq('project_id', projectId)
+        .order('created_at');
+      setProjectPos((data as unknown as ProjectPoLink[]) || []);
+    } catch {
+      setProjectPos([]);
+    }
+  };
+
+  const linkPo = async () => {
+    if (!selected || !poLinkInput.trim() || poLinkBusy) return;
+    setPoLinkBusy(true);
+    try {
+      const res = await fetch('/api/upfit-projects/link-po', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: selected.id, poNumber: poLinkInput.trim() }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        await dialog.alert(json?.error || 'Could not link the PO.');
+      } else {
+        setPoLinkInput('');
+        loadProjectPos(selected.id);
+        loadNotes(selected.id);
+        if (json?.alreadyLinked) await dialog.alert(`PO ${json.po?.tranid || ''} is already linked to this project.`.trim());
+      }
+    } catch (e: any) {
+      await dialog.alert(`Could not link the PO: ${e?.message || 'unknown error'}`);
+    }
+    setPoLinkBusy(false);
+  };
+
+  const unlinkPo = async (link: ProjectPoLink) => {
+    if (!selected || poLinkBusy) return;
+    const label = link.po?.tranid || link.po_number || 'this PO';
+    if (!(await dialog.confirm(`Unlink ${label} from this project? Vendor ETA emails for it will stop updating the project.`))) return;
+    setPoLinkBusy(true);
+    try {
+      const res = await fetch(`/api/upfit-projects/link-po?id=${link.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        await dialog.alert(j?.error || 'Could not unlink the PO.');
+      } else {
+        loadProjectPos(selected.id);
+        loadNotes(selected.id);
+      }
+    } catch (e: any) {
+      await dialog.alert(`Could not unlink the PO: ${e?.message || 'unknown error'}`);
+    }
+    setPoLinkBusy(false);
+  };
+
   const openProject = (p: UpfitProject) => {
     setSelected(p);
+    setProjectPos([]);
+    setPoLinkInput('');
     loadNotes(p.id);
     loadTasks(p.id);
     loadFiles(p.id);
     loadLinkedCheckin(p.fleet_checkin_id);
     loadLinkedGraphics(p.id);
     loadReadiness(p.id, !!p.netsuite_so_id);
+    loadProjectPos(p.id);
     recordProjectView(p.id);
   };
 
@@ -833,9 +912,46 @@ export default function UpfitProjectsPage() {
               <span style={{ color: theme.textMuted }}>Sales Order: </span>
               <span style={{ color: theme.textPrimary, fontWeight: 600 }}>{selected.netsuite_so_number || '—'}</span>
             </div>
-            <div>
-              <span style={{ color: theme.textMuted }}>Vendor PO: </span>
-              <span style={{ color: theme.textPrimary, fontWeight: 600 }}>{selected.netsuite_vendor_po_number || '—'}</span>
+            {/* All linked vendor POs (upfit_project_pos) — the scalar
+                netsuite_vendor_po_number holds only the first, shown as a
+                fallback while the join rows load or if none exist. */}
+            <div style={{ gridColumn: '1 / -1' }}>
+              <span style={{ color: theme.textMuted }}>Vendor PO{projectPos.length > 1 ? 's' : ''}: </span>
+              {projectPos.length === 0 && (
+                <span style={{ color: theme.textPrimary, fontWeight: 600 }}>{selected.netsuite_vendor_po_number || '—'}</span>
+              )}
+              {projectPos.map(l => (
+                <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '3px' }}>
+                  <span style={{ color: theme.textPrimary, fontWeight: 600 }}>{l.po?.tranid || l.po_number || '—'}</span>
+                  {l.po?.vendor_name && <span style={{ color: theme.textMuted }}>{l.po.vendor_name}</span>}
+                  {l.po?.status_label && (
+                    <span style={{ fontSize: '10px', fontWeight: 700, color: theme.textSecondary, border: `1px solid ${theme.border}`, borderRadius: '999px', padding: '1px 7px' }}>
+                      {l.po.status_label}
+                    </span>
+                  )}
+                  {l.po?.eta_date && <span style={{ color: theme.textSecondary }}>ETA {fmt(l.po.eta_date)}</span>}
+                  <button
+                    onClick={() => unlinkPo(l)}
+                    disabled={poLinkBusy}
+                    title="Unlink this PO from the project"
+                    style={{ background: 'none', border: 'none', color: theme.textMuted, fontSize: '13px', fontWeight: 700, cursor: 'pointer', padding: '0 2px' }}
+                  >×</button>
+                </div>
+              ))}
+              <div style={{ display: 'flex', gap: '6px', marginTop: '6px', alignItems: 'center' }}>
+                <input
+                  value={poLinkInput}
+                  onChange={e => setPoLinkInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') linkPo(); }}
+                  placeholder="Link a PO # (e.g. 376)"
+                  style={{ flex: '0 1 160px', padding: '4px 8px', fontSize: '12px', background: theme.inputBg, border: `1px solid ${theme.border}`, borderRadius: '6px', color: theme.textPrimary }}
+                />
+                <button
+                  onClick={linkPo}
+                  disabled={poLinkBusy || !poLinkInput.trim()}
+                  style={{ padding: '4px 10px', fontSize: '11px', fontWeight: 700, background: 'none', border: `1px solid ${theme.border}`, borderRadius: '6px', color: theme.textSecondary, cursor: poLinkBusy || !poLinkInput.trim() ? 'default' : 'pointer', opacity: poLinkBusy || !poLinkInput.trim() ? 0.5 : 1 }}
+                >Link</button>
+              </div>
             </div>
             <div>
               <span style={{ color: theme.textMuted }}>Schedule: </span>

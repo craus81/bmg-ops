@@ -7,6 +7,7 @@ import { r2Upload } from '@/lib/r2';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
+import { isOpenPoStatus } from '@/lib/vendor-po-sync';
 
 /**
  * Parts-ETA email scan: read watched BMG mailboxes (domain-wide delegation,
@@ -136,39 +137,91 @@ export async function applyEmailToPo(
 
   await service.from('netsuite_vendor_pos').update(updates).eq('id', po.id);
 
-  // Upfit projects that name this PO get the ETA (and a timeline note so
-  // the change is attributable). Paginated: the unpaginated read silently
-  // capped at PostgREST's 1000 rows, so projects past it never got ETAs.
+  // Upfit projects linked to this PO get the ETA (and a timeline note so
+  // the change is attributable). Join-table links (migration 267) govern
+  // when a project has any; the scalar first-PO match covers only projects
+  // with NO join rows at all — post-backfill that means "nothing linked",
+  // so a deliberate unlink stays unlinked. A project's parts_eta is the
+  // MAX across its open linked POs (it waits for all its parts), which is
+  // exactly today's date for the single-PO majority.
   const affectedProjects: {
     id: string; project_name: string | null;
-    assigned_to: string | null; created_by: string | null; prevEta: string | null;
+    assigned_to: string | null; created_by: string | null;
   }[] = [];
-  if (po.tranid) {
-    const { data: projects } = await fetchAllRows<any>((from, to) => service
-      .from('upfit_projects')
-      .select('id, project_name, netsuite_vendor_po_number, parts_eta, parts_ordered_date, assigned_to, created_by')
-      .not('netsuite_vendor_po_number', 'is', null)
-      .order('id')
-      .range(from, to));
-    const poDigits = digitsOnly(po.tranid);
-    for (const proj of projects || []) {
-      const ref = String(proj.netsuite_vendor_po_number || '').trim();
-      const matches = ref.toLowerCase() === po.tranid.toLowerCase() || (poDigits && digitsOnly(ref) === poDigits);
-      if (!matches) continue;
-      const projUpdates: Record<string, unknown> = {};
-      if (eta && proj.parts_eta !== eta) projUpdates.parts_eta = eta;
-      if (Object.keys(projUpdates).length === 0) continue;
-      await service.from('upfit_projects').update(projUpdates).eq('id', proj.id);
-      await service.from('upfit_project_notes').insert({
-        project_id: proj.id,
-        note_type: 'parts_order',
-        content: `Parts ETA set to ${eta} from ${po.vendor_name || 'vendor'} email (${sourceLabel})${extracted.tracking_number ? ` — tracking ${extracted.tracking_number}` : ''}`,
-      });
-      affectedProjects.push({
-        id: proj.id, project_name: proj.project_name || null,
-        assigned_to: proj.assigned_to || null, created_by: proj.created_by || null,
-        prevEta: proj.parts_eta || null,
-      });
+  {
+    const linkedIds = new Set<string>();
+    const { data: joinRows } = await service
+      .from('upfit_project_pos')
+      .select('project_id')
+      .eq('po_id', po.id);
+    for (const j of joinRows || []) linkedIds.add(j.project_id as string);
+
+    // Scalar fallback — same exact/digits match as always. Paginated: the
+    // unpaginated read silently capped at PostgREST's 1000 rows, so
+    // projects past it never got ETAs.
+    const scalarIds = new Set<string>();
+    if (po.tranid) {
+      const { data: projects } = await fetchAllRows<any>((from, to) => service
+        .from('upfit_projects')
+        .select('id, netsuite_vendor_po_number')
+        .not('netsuite_vendor_po_number', 'is', null)
+        .order('id')
+        .range(from, to));
+      const poDigits = digitsOnly(po.tranid);
+      for (const proj of projects || []) {
+        const ref = String(proj.netsuite_vendor_po_number || '').trim();
+        const matches = ref.toLowerCase() === po.tranid.toLowerCase() || (poDigits && digitsOnly(ref) === poDigits);
+        if (matches && !linkedIds.has(proj.id)) scalarIds.add(proj.id);
+      }
+      // A scalar match on a project that HAS join rows (to other POs) is
+      // stale wiring — the join table governs it, so drop the match.
+      if (scalarIds.size > 0) {
+        const { data: anyLinks } = await service
+          .from('upfit_project_pos')
+          .select('project_id')
+          .in('project_id', [...scalarIds]);
+        for (const l of anyLinks || []) scalarIds.delete(l.project_id as string);
+      }
+    }
+
+    const candidateIds = [...linkedIds, ...scalarIds];
+    if (eta && candidateIds.length > 0) {
+      const [{ data: projRows }, { data: allLinks }] = await Promise.all([
+        service.from('upfit_projects')
+          .select('id, project_name, parts_eta, assigned_to, created_by')
+          .in('id', candidateIds),
+        service.from('upfit_project_pos')
+          .select('project_id, po:netsuite_vendor_pos(id, eta_date, status)')
+          .in('project_id', candidateIds),
+      ]);
+      // Other open POs' ETAs per project — this PO's FRESH date joins below.
+      const otherEtas = new Map<string, string[]>();
+      for (const l of (allLinks || []) as any[]) {
+        if (!l.po || l.po.id === po.id) continue;
+        if (!isOpenPoStatus(l.po.status) || !l.po.eta_date) continue;
+        otherEtas.set(l.project_id, [...(otherEtas.get(l.project_id) || []), l.po.eta_date]);
+      }
+      for (const proj of projRows || []) {
+        // ISO dates compare lexicographically, so string max is date max.
+        const projectEta = [eta, ...(otherEtas.get(proj.id) || [])].reduce((a, b) => (a >= b ? a : b));
+        const projChanged = proj.parts_eta !== projectEta;
+        // A re-send of an already-reflected date writes and pings nothing.
+        if (!etaChanged && !projChanged) continue;
+        if (projChanged) {
+          await service.from('upfit_projects').update({ parts_eta: projectEta }).eq('id', proj.id);
+        }
+        await service.from('upfit_project_notes').insert({
+          project_id: proj.id,
+          note_type: 'parts_order',
+          content: etaChanged
+            ? `Parts ETA: PO ${po.tranid || ''} now ${eta} from ${po.vendor_name || 'vendor'} email (${sourceLabel})${extracted.tracking_number ? ` — tracking ${extracted.tracking_number}` : ''}${projectEta !== eta ? `; project waits for ${projectEta} (latest open PO)` : ''}`.trim()
+            : `Project parts ETA recomputed to ${projectEta} across open POs (${sourceLabel})`,
+        });
+        affectedProjects.push({
+          id: proj.id, project_name: proj.project_name || null,
+          assigned_to: proj.assigned_to || null, created_by: proj.created_by || null,
+        });
+      }
     }
   }
 
@@ -184,17 +237,18 @@ export async function applyEmailToPo(
 
 /**
  * Fan out a PO's ETA change to the people waiting on it: each affected
- * project's assignee + creator (project link), plus the requesters whose
- * purchase requests were ordered on this PO (their own request link when a
- * project isn't in play — the multi-PO gap: a project is stamped with its
- * FIRST PO only, so an email about PO #2 reaches its people through the
- * request join instead of not at all).
+ * project's assignee + creator (project link — projects reach here through
+ * upfit_project_pos, so PO #2's people hear it too), plus the requesters
+ * whose purchase requests were ordered on this PO (their own request link
+ * when a project isn't in play). The "was" date is the PO's own prior
+ * expectation (po.eta_date is read before the write), not the project's —
+ * a project gated by a later PO never said this PO's old date.
  */
 async function notifyEtaChange(
   service: SupabaseClient,
   po: MatchedPo,
   eta: string,
-  affectedProjects: { id: string; project_name: string | null; assigned_to: string | null; created_by: string | null; prevEta: string | null }[],
+  affectedProjects: { id: string; project_name: string | null; assigned_to: string | null; created_by: string | null }[],
   actorId: string | null,
 ): Promise<void> {
   const { data: reqs } = await service
@@ -219,7 +273,7 @@ async function notifyEtaChange(
     await notifyMany([...ids], {
       type: 'po_eta_changed',
       title: `📦 Parts ETA updated — ${poLabel}`,
-      body: `${vendor} now expects ${eta}${proj.prevEta ? ` (was ${proj.prevEta})` : ''} — ${proj.project_name || 'upfit project'}.`.slice(0, 900),
+      body: `${vendor} now expects ${eta}${po.eta_date ? ` (was ${po.eta_date})` : ''} — ${proj.project_name || 'upfit project'}.`.slice(0, 900),
       url: deepLinks.upfitProject(proj.id),
     });
     for (const id of ids) notified.add(id);
