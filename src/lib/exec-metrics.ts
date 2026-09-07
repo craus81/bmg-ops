@@ -73,24 +73,57 @@ async function collectFinancials(out: ExecMetric[]): Promise<void> {
   }
 }
 
+/** Open quotes = wrap quotes (draft/sent, unarchived) + estimates
+ *  (draft/pushed/sent) — the OpsDashboard/quote-list semantics. */
+export async function loadOpenQuotes(service: SupabaseClient): Promise<{ count: number; value: number }> {
+  const [{ data: wraps, error: wErr }, { data: ests, error: eErr }] = await Promise.all([
+    fetchAllRows<any>((from, to) => service.from('wrap_quotes')
+      .select('total').in('status', ['draft', 'sent']).is('archived_at', null)
+      .order('id').range(from, to)),
+    fetchAllRows<any>((from, to) => service.from('estimates')
+      .select('grand_total').in('status', ['draft', 'pushed', 'sent'])
+      .order('id').range(from, to)),
+  ]);
+  if (wErr || eErr) throw new Error((wErr || eErr)!.message);
+  const count = (wraps || []).length + (ests || []).length;
+  const value = (wraps || []).reduce((s, q) => s + (Number(q.total) || 0), 0)
+    + (ests || []).reduce((s, e2) => s + (Number(e2.grand_total) || 0), 0);
+  return { count, value: round2(value) };
+}
+
+/** Pipeline = open deal stages only (lead/quoted/negotiating), matching the
+ *  dashboard's pipeline band. */
+export async function loadPipeline(service: SupabaseClient): Promise<{ stage: string; count: number; value: number }[]> {
+  const { data, error } = await fetchAllRows<any>((from, to) => service
+    .from('prospect_opportunities').select('stage, value')
+    .in('stage', ['lead', 'quoted', 'negotiating'])
+    .order('id').range(from, to));
+  if (error) throw new Error(error.message);
+  return ['lead', 'quoted', 'negotiating'].map(stage => {
+    const inStage = (data || []).filter(o => o.stage === stage);
+    return { stage, count: inStage.length, value: round2(inStage.reduce((s, o) => s + (Number(o.value) || 0), 0)) };
+  });
+}
+
+/** Vehicles actively in the shop, and complete-but-not-shipped, both unarchived. */
+export async function loadShopCounts(service: SupabaseClient): Promise<{ inShop: number; completeNotShipped: number }> {
+  const [{ count: inShop, error: e1 }, { count: doneNotShipped, error: e2 }] = await Promise.all([
+    service.from('fleet_checkins').select('id', { count: 'exact', head: true })
+      .in('status', ['received', 'checked_in', 'in_progress', 'stuck_parts', 'stuck_graphics'])
+      .is('archived_at', null),
+    service.from('fleet_checkins').select('id', { count: 'exact', head: true })
+      .eq('status', 'complete')
+      .is('archived_at', null),
+  ]);
+  if (e1 || e2) throw new Error((e1 || e2)!.message);
+  return { inShop: inShop || 0, completeNotShipped: doneNotShipped || 0 };
+}
+
 async function collectSales(service: SupabaseClient, out: ExecMetric[]): Promise<void> {
   try {
-    // Open quotes = wrap quotes (draft/sent, unarchived) + estimates
-    // (draft/pushed/sent) — the OpsDashboard/quote-list semantics.
-    const [{ data: wraps, error: wErr }, { data: ests, error: eErr }] = await Promise.all([
-      fetchAllRows<any>((from, to) => service.from('wrap_quotes')
-        .select('total').in('status', ['draft', 'sent']).is('archived_at', null)
-        .order('id').range(from, to)),
-      fetchAllRows<any>((from, to) => service.from('estimates')
-        .select('grand_total').in('status', ['draft', 'pushed', 'sent'])
-        .order('id').range(from, to)),
-    ]);
-    if (wErr || eErr) throw new Error((wErr || eErr)!.message);
-    const count = (wraps || []).length + (ests || []).length;
-    const value = (wraps || []).reduce((s, q) => s + (Number(q.total) || 0), 0)
-      + (ests || []).reduce((s, e2) => s + (Number(e2.grand_total) || 0), 0);
-    out.push({ metric: 'open_quotes_count', value: count });
-    out.push({ metric: 'open_quotes_value', value: round2(value) });
+    const quotes = await loadOpenQuotes(service);
+    out.push({ metric: 'open_quotes_count', value: quotes.count });
+    out.push({ metric: 'open_quotes_value', value: quotes.value });
   } catch (e: any) {
     const meta = { error: String(e?.message || e).slice(0, 300) };
     out.push({ metric: 'open_quotes_count', value: null, meta });
@@ -98,15 +131,9 @@ async function collectSales(service: SupabaseClient, out: ExecMetric[]): Promise
   }
 
   try {
-    // Pipeline = open deal stages only (lead/quoted/negotiating), matching
-    // the dashboard's pipeline band.
-    const { data, error } = await fetchAllRows<any>((from, to) => service
-      .from('prospect_opportunities').select('stage, value')
-      .in('stage', ['lead', 'quoted', 'negotiating'])
-      .order('id').range(from, to));
-    if (error) throw new Error(error.message);
-    out.push({ metric: 'pipeline_deals', value: (data || []).length });
-    out.push({ metric: 'pipeline_value', value: round2((data || []).reduce((s, o) => s + (Number(o.value) || 0), 0)) });
+    const stages = await loadPipeline(service);
+    out.push({ metric: 'pipeline_deals', value: stages.reduce((s, x) => s + x.count, 0) });
+    out.push({ metric: 'pipeline_value', value: round2(stages.reduce((s, x) => s + x.value, 0)) });
   } catch (e: any) {
     const meta = { error: String(e?.message || e).slice(0, 300) };
     out.push({ metric: 'pipeline_deals', value: null, meta });
@@ -132,17 +159,9 @@ async function collectOrderBook(service: SupabaseClient, out: ExecMetric[]): Pro
 
 async function collectShop(service: SupabaseClient, out: ExecMetric[]): Promise<void> {
   try {
-    const [{ count: inShop, error: e1 }, { count: doneNotShipped, error: e2 }] = await Promise.all([
-      service.from('fleet_checkins').select('id', { count: 'exact', head: true })
-        .in('status', ['received', 'checked_in', 'in_progress', 'stuck_parts', 'stuck_graphics'])
-        .is('archived_at', null),
-      service.from('fleet_checkins').select('id', { count: 'exact', head: true })
-        .eq('status', 'complete')
-        .is('archived_at', null),
-    ]);
-    if (e1 || e2) throw new Error((e1 || e2)!.message);
-    out.push({ metric: 'vehicles_in_shop', value: inShop || 0 });
-    out.push({ metric: 'vehicles_complete_not_shipped', value: doneNotShipped || 0 });
+    const counts = await loadShopCounts(service);
+    out.push({ metric: 'vehicles_in_shop', value: counts.inShop });
+    out.push({ metric: 'vehicles_complete_not_shipped', value: counts.completeNotShipped });
   } catch (e: any) {
     const meta = { error: String(e?.message || e).slice(0, 300) };
     out.push({ metric: 'vehicles_in_shop', value: null, meta });
