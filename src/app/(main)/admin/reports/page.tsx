@@ -78,6 +78,12 @@ const REPORTS: ReportLink[] = [
     href: '/admin/reports/at-risk',
     source: 'FleetSuite',
   },
+  {
+    title: 'On-Time Delivery',
+    blurb: 'Promises kept: vehicles completed by their promised-back date, monthly and per customer, plus what’s overdue on the floor right now. A daily guardian alerts before dates slip.',
+    href: '/admin/reports/on-time',
+    source: 'FleetSuite',
+  },
 ];
 
 export default function ReportsIndexPage() {

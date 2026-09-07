@@ -117,6 +117,10 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [scheduledUpfitDate, setScheduledUpfitDate] = useState('');
   const [promisedBackDate, setPromisedBackDate] = useState('');
+  // Advisory promised-back suggestion (R4-6): median received→complete
+  // days for this customer (their own history when ≥3 jobs, shop-wide
+  // otherwise). Never auto-fills — a hint + one-tap apply under the field.
+  const [turnaroundHint, setTurnaroundHint] = useState<{ days: number; basis: 'customer' | 'shop'; samples: number } | null>(null);
 
   // Check-in photos — REQUIRED, at least one (audit item 12): the check-in
   // is the moment custody transfers, and it went unphotographed for years.
@@ -663,6 +667,21 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
     return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
   }, [manualCustomerName, manualCustomerId]);
+
+  // Promised-back suggestion, refetched (debounced) as the effective
+  // customer settles so a fleet with its own rhythm beats the shop median.
+  useEffect(() => {
+    const customer = selectedOrder?.customer_name || manualCustomerName.trim();
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/vehicle-tracking/turnaround-suggest?customer=${encodeURIComponent(customer)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        setTurnaroundHint(data?.suggestDays ? { days: data.suggestDays, basis: data.basis, samples: data.samples } : null);
+      } catch { /* advisory only — a failed fetch just means no hint */ }
+    }, 600);
+    return () => clearTimeout(t);
+  }, [selectedOrder?.customer_name, manualCustomerName]);
 
   const linkManualCustomer = async (id: string) => {
     setManualCustomerId(id);
@@ -2142,6 +2161,33 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
                 color: theme.textPrimary, fontSize: '13px', boxSizing: 'border-box',
               }}
             />
+            {turnaroundHint && (
+              <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '5px' }}>
+                Typical turnaround ~{turnaroundHint.days} day{turnaroundHint.days !== 1 ? 's' : ''} ({turnaroundHint.samples} {turnaroundHint.basis === 'customer' ? 'jobs for this customer' : 'recent shop jobs'})
+                {!promisedBackDate && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const d = new Date();
+                      d.setDate(d.getDate() + turnaroundHint.days);
+                      const pad = (n: number) => String(n).padStart(2, '0');
+                      setPromisedBackDate(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`);
+                    }}
+                    style={{
+                      marginLeft: '6px', padding: '2px 8px', borderRadius: '6px', cursor: 'pointer',
+                      border: `1px solid ${theme.border}`, background: theme.bg,
+                      color: theme.textPrimary, fontSize: '11px', fontWeight: 700,
+                    }}
+                  >
+                    Use {(() => {
+                      const d = new Date();
+                      d.setDate(d.getDate() + turnaroundHint.days);
+                      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                    })()}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
