@@ -281,6 +281,9 @@ export async function POST(req: NextRequest) {
   // in POST /api/estimates; 'pushed' only replaces 'draft'.
   const SALES_STAGES = ['sent', 'accepted', 'rejected'];
 
+  // Assigned once the claim is taken, so the catch below can release it.
+  let releaseOnError: (() => Promise<void>) | null = null;
+
   try {
     const supabase = getSupabase();
 
@@ -299,6 +302,46 @@ export async function POST(req: NextRequest) {
 
     const isUpdate = !!estimate.netsuite_estimate_id;
 
+    // Atomic push claim (§7.4 item 1, migration 262). The create-vs-update
+    // branch above reads ONE stale row: two concurrent pushes — or a push
+    // whose write-back silently failed, then a retry — both took CREATE and
+    // minted two real NetSuite estimates. Exactly one request claims the
+    // row before the NetSuite call; the checked stamp below retires the
+    // claim; failure releases it; a 15-minute-old claim is stale. Missing-
+    // column grace per the #741 lesson: a schema cache that hasn't seen 262
+    // degrades to the old unclaimed behavior instead of bricking pushes.
+    const claimStamp = new Date().toISOString();
+    let claimed = false;
+    {
+      const staleCutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+      const { data: claimRows, error: claimErr } = await supabase
+        .from('estimates')
+        .update({ push_claimed_at: claimStamp })
+        .eq('id', estimateId)
+        .or(`push_claimed_at.is.null,push_claimed_at.lt.${staleCutoff}`)
+        .select('id');
+      if (claimErr) {
+        console.warn('estimate push claim unavailable, proceeding unclaimed:', claimErr.message);
+      } else if (!claimRows || claimRows.length === 0) {
+        return NextResponse.json({
+          error: 'A push for this estimate is already in progress — wait a moment and refresh.',
+        }, { status: 409 });
+      } else {
+        claimed = true;
+      }
+    }
+    const releaseClaim = async () => {
+      if (!claimed) return;
+      try {
+        await supabase
+          .from('estimates')
+          .update({ push_claimed_at: null })
+          .eq('id', estimateId)
+          .eq('push_claimed_at', claimStamp);
+      } catch { /* stale claims expire on their own */ }
+    };
+    releaseOnError = releaseClaim;
+
     if (!estimate.customer_netsuite_id) {
       // Lead tier: an estimate built for a CRM lead carries a name and no
       // NetSuite id. Pushing to NetSuite is the promotion moment — promote
@@ -309,14 +352,18 @@ export async function POST(req: NextRequest) {
         supabase, estimate.customer_name || '', userId || null, estimate.prospect_id || null,
       );
       if (!resolved) {
+        await releaseClaim();
         return NextResponse.json({
           error: 'No NetSuite customer linked to this estimate, and no CRM lead matches the customer name. Promote the record from its CRM page, or pick a NetSuite customer.',
         }, { status: 400 });
       }
       estimate.customer_netsuite_id = resolved.netsuiteId;
-      await supabase.from('estimates')
+      const { error: custStampErr } = await supabase.from('estimates')
         .update({ customer_netsuite_id: resolved.netsuiteId })
         .eq('id', estimateId);
+      // Non-fatal — the resolved id is in memory for THIS push — but a
+      // silent failure would re-run the promotion resolve on every push.
+      if (custStampErr) console.error('estimate customer stamp failed:', custStampErr.message);
     }
 
     // Load line items
@@ -327,6 +374,7 @@ export async function POST(req: NextRequest) {
       .order('sort_order');
 
     if (!lines || lines.length === 0) {
+      await releaseClaim();
       return NextResponse.json({ error: 'No line items on this estimate' }, { status: 400 });
     }
 
@@ -410,6 +458,7 @@ export async function POST(req: NextRequest) {
     };
 
     if (nsLineItems.length === 0) {
+      await releaseClaim();
       return NextResponse.json({
         error: 'No pushable line items. Match every line to a NetSuite item, or create the FS-CUSTOM placeholder item in NetSuite.',
         unmappedItems: unmappedLineDescriptions,
@@ -435,22 +484,35 @@ export async function POST(req: NextRequest) {
       });
 
       if (!updateResult.success) {
+        await releaseClaim();
         return NextResponse.json({ error: updateResult.error }, { status: 500 });
       }
 
-      await supabase
+      // Checked stamp; the same write retires the claim. A failure here is
+      // benign-ish (NetSuite IS updated; only local status/pushed_at go
+      // stale) — report success with the warning and release the claim so
+      // the next sync isn't blocked for 15 minutes.
+      const { error: updStampErr } = await supabase
         .from('estimates')
         .update({
           status: SALES_STAGES.includes(estimate.status) ? estimate.status : 'pushed',
           updated_at: new Date().toISOString(),
           pushed_at: new Date().toISOString(),
           pushed_by: auth.user.id,
+          push_claimed_at: null,
         })
         .eq('id', estimateId);
+      let updateWarning: string | undefined;
+      if (updStampErr) {
+        console.error('estimate push (update) stamp failed:', updStampErr.message);
+        updateWarning = 'NetSuite was updated, but saving the local push status failed — the estimate may still look un-synced here. Refresh or sync again.';
+        await releaseClaim();
+      }
 
       return NextResponse.json({
         success: true,
         updated: true,
+        warning: updateWarning,
         ...laborReport,
         netsuite_estimate_id: estimate.netsuite_estimate_id,
         netsuite_estimate_number: estimate.netsuite_estimate_number,
@@ -471,32 +533,59 @@ export async function POST(req: NextRequest) {
     });
 
     if (!result.success) {
+      await releaseClaim();
       return NextResponse.json({ error: result.error }, { status: 500 });
     }
 
-    // Update local estimate with NS data
-    await supabase
+    // Write-back, the whole point of this PR (§7.4 item 1): the NetSuite
+    // estimate now EXISTS, so the stamp must be truthy (a falsy id would
+    // re-arm isUpdate=false and mint a duplicate on the next push — the
+    // sentinel keeps the guard armed at the cost of an honest 404 if
+    // someone syncs before the link is repaired), conditional (first
+    // writer wins in the unclaimed degraded mode), and CHECKED — a failed
+    // stamp reports success WITH a loud warning and holds the claim, which
+    // blocks a re-push for 15 minutes instead of inviting the duplicate.
+    const stampId = result.estimateId || 'created-id-unknown';
+    let createWarning: string | undefined;
+    if (!result.estimateId) {
+      createWarning = 'NetSuite created the estimate but did not return its id — the local link uses a placeholder. Do NOT push again; re-open after the next NetSuite sync (or link it manually) before syncing changes.';
+    }
+    const { data: stampRows, error: stampErr } = await supabase
       .from('estimates')
       .update({
-        netsuite_estimate_id: result.estimateId,
-        netsuite_estimate_number: result.estimateNumber,
+        netsuite_estimate_id: stampId,
+        netsuite_estimate_number: result.estimateNumber || null,
         status: SALES_STAGES.includes(estimate.status) ? estimate.status : 'pushed',
         pushed_at: new Date().toISOString(),
         pushed_by: auth.user.id,
         updated_at: new Date().toISOString(),
+        push_claimed_at: null,
       })
-      .eq('id', estimateId);
+      .eq('id', estimateId)
+      .is('netsuite_estimate_id', null)
+      .select('id');
+    if (stampErr) {
+      console.error('estimate push stamp FAILED (estimate exists in NetSuite):', stampErr.message);
+      createWarning = `The estimate was created in NetSuite (#${result.estimateNumber || stampId}) but saving the link here FAILED — do NOT push again. The push stays locked for 15 minutes; if the link is still missing after a refresh, attach it manually.`;
+      // Claim deliberately HELD: it is the only thing standing between a
+      // retry and a duplicate NetSuite estimate.
+    } else if (!stampRows || stampRows.length === 0) {
+      console.error(`estimate push: ${estimateId} gained a NetSuite link concurrently — estimate ${stampId} may be a duplicate; reconcile by hand.`);
+      createWarning = 'Another push linked this estimate at the same time — check NetSuite for a duplicate estimate before sending anything.';
+    }
 
     return NextResponse.json({
       success: true,
+      warning: createWarning,
       ...laborReport,
-      netsuite_estimate_id: result.estimateId,
+      netsuite_estimate_id: stampId,
       netsuite_estimate_number: result.estimateNumber,
       customLines: customLineDescriptions.length > 0 ? customLineDescriptions : undefined,
       unmappedItems: unmappedLineDescriptions.length > 0 ? unmappedLineDescriptions : undefined,
     });
   } catch (err: any) {
     console.error('Push estimate error:', err);
+    if (releaseOnError) await releaseOnError();
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
@@ -534,8 +623,11 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: result.error }, { status: 500 });
     }
 
-    // Clear NS fields from local record (don't delete the local estimate here — that's done by the main estimates API)
-    await supabase
+    // Clear NS fields from local record (don't delete the local estimate
+    // here — that's done by the main estimates API). Checked: a silent
+    // failure leaves the estimate pointing at a DELETED NetSuite record, so
+    // the next sync would 404 confusingly — say so instead.
+    const { error: clearErr } = await supabase
       .from('estimates')
       .update({
         netsuite_estimate_id: null,
@@ -546,6 +638,13 @@ export async function DELETE(req: NextRequest) {
         updated_at: new Date().toISOString(),
       })
       .eq('id', estimateId);
+    if (clearErr) {
+      console.error('estimate NS clear failed after NetSuite delete:', clearErr.message);
+      return NextResponse.json({
+        success: true,
+        warning: 'The NetSuite estimate was deleted, but clearing the link here failed — this estimate still shows as pushed. Refresh and try the delete again to clear it.',
+      });
+    }
 
     return NextResponse.json({ success: true });
   } catch (err: any) {
