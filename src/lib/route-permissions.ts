@@ -326,6 +326,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/storage/route.ts': authScoped('every bucket/path goes through the storage-guard ACL before any presign', 'checkStoragePath'),
   'src/app/api/system-health/route.ts': cron('requireAdmin('),
   'src/app/api/upfit-projects/allocations/route.ts': staff(),
+  'src/app/api/upfit-projects/link-po/route.ts': staff(),
   'src/app/api/upfit-projects/notes/route.ts': staff(),
   'src/app/api/upfit-projects/parts-readiness/route.ts': staff(),
   'src/app/api/upfit-projects/readiness-board/route.ts': staff(),

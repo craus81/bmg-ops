@@ -29,7 +29,9 @@ export const maxDuration = 60;
  * line ids. Source projects get their never-before-written
  * netsuite_vendor_po_id/_number/parts_ordered_date stamped (first PO wins
  * — they're single columns), which also lights up parts-email-scan's ETA
- * matching against the PO number.
+ * matching against the PO number. EVERY source project additionally gets
+ * an upfit_project_pos row for this PO (migration 267) — the multi-PO
+ * link the single columns can't hold.
  */
 
 const Schema = z.object({
@@ -261,6 +263,27 @@ export async function POST(req: NextRequest) {
       }
     } catch (err) {
       console.error('create-po: project stamp failed:', err);
+    }
+  }
+
+  // Every source project gets a join row for THIS PO (migration 267) —
+  // the second and later POs the first-wins scalars above drop. Best
+  // effort like the rest of this section: the migration's backfill plus
+  // the manual link route cover a miss, and a duplicate pair is ignored.
+  if (mirrorRowId && projects.length > 0) {
+    try {
+      await supabase.from('upfit_project_pos').upsert(
+        projects.map(p => ({
+          project_id: p.id,
+          po_id: mirrorRowId,
+          po_number: po.purchaseOrderNumber || null,
+          source: 'request_queue',
+          created_by: admin.user.id,
+        })),
+        { onConflict: 'project_id,po_id', ignoreDuplicates: true },
+      );
+    } catch (err) {
+      console.error('create-po: project PO link failed:', err);
     }
   }
 
