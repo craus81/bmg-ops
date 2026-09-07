@@ -97,6 +97,7 @@ export async function POST(req: NextRequest) {
     },
     po,
     email.subject?.slice(0, 120) || 'manually linked email',
+    auth.user.id,
   );
 
   await service.from('vendor_shipment_emails')
