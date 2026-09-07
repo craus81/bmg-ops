@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireStaff } from '@/lib/api-auth';
+import { requireStaff, isAdminRole } from '@/lib/api-auth';
 import { notify, notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { loadChecklistTemplate, buildTaskRows } from '@/lib/install-checklist';
@@ -67,7 +67,7 @@ export async function POST(request: Request) {
     const userRoles: string[] = profileResult.data?.roles?.length
       ? profileResult.data.roles
       : (profileResult.data?.role ? [profileResult.data.role] : []);
-    const isAdmin = userRoles.includes('admin');
+    const isAdmin = isAdminRole(userRoles);
 
     // No-op: same status
     if (currentStatus === newStatus) {
@@ -241,7 +241,7 @@ async function notifyCompletion(vehicle: any, actorName: string, actorEmail: str
   // Shop team: admins + any assigned installers
   const targetUserIds = new Set<string>();
   const [adminsRes, assignmentsRes] = await Promise.all([
-    serviceSupabase.from('profiles').select('id').eq('role', 'admin').eq('status', 'approved'),
+    serviceSupabase.from('profiles').select('id').in('role', ['admin', 'super_admin']).eq('status', 'approved'),
     serviceSupabase
       .from('job_assignments')
       .select('user_id')

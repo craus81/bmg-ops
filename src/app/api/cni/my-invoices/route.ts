@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireRole } from '@/lib/api-auth';
+import { requireRole, isAdminRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { recordVendorInvoice } from '@/lib/vendor-invoice-record';
 import { financeUserIds } from '@/lib/ap';
@@ -88,7 +88,7 @@ export async function GET(req: NextRequest) {
   const previewCompanyId = req.nextUrl.searchParams.get('companyId')?.trim() || '';
 
   let company: { id: string; name: string } | null = null;
-  if (roles.includes('admin') && previewCompanyId) {
+  if (isAdminRole(roles) && previewCompanyId) {
     const { data } = await service.from('companies').select('id, name').eq('id', previewCompanyId).maybeSingle();
     company = data || null;
   } else {

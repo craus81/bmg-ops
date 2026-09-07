@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth, isInternalStaffRole } from '@/lib/api-auth';
+import { requireAuth, isInternalStaffRole, isAdminRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { logScan, resolveScannerCompany } from '@/lib/scan-log';
 import { matchScansToOpenPos } from '@/lib/scan-match';
@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
   let creditsError: string | null = null;
   if (shift_id) {
     shift = await loadShift(service, shift_id);
-    const isAdmin = roles.includes('admin');
+    const isAdmin = isAdminRole(roles);
     if (!shift || shift.context !== 'field') {
       shift = null;
       creditsError = 'Shift not found — scan saved without pay credits';

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireAuth, isAdminRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { rolesOf } from '@/lib/cni-access';
 import { loadShift, canManageShift } from '@/lib/shifts';
@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
   const shift = await loadShift(service, parsed.data.shiftId);
   if (!shift) return NextResponse.json({ error: 'Shift not found' }, { status: 404 });
 
-  const isAdmin = rolesOf(auth.profile).includes('admin');
+  const isAdmin = isAdminRole(rolesOf(auth.profile));
   if (!(await canManageShift(service, auth.user.id, shift, isAdmin))) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }

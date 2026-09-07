@@ -189,7 +189,7 @@ export async function POST(req: NextRequest) {
           const { data: admins } = await service
             .from('profiles')
             .select('id')
-            .eq('role', 'admin')
+            .in('role', ['admin', 'super_admin'])
             .eq('status', 'approved');
           for (const a of admins || []) targetIds.add(a.id);
         }

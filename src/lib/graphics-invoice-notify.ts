@@ -13,6 +13,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
+import { isAdminRole } from '@/lib/features';
 
 /**
  * The billing users are the approved admins who opted in to invoicing
@@ -34,7 +35,7 @@ export async function getBillingUserIds(supabase: SupabaseClient): Promise<strin
   const optedIn = new Set((prefs || []).map((p) => p.user_id));
   const adminIds = (profiles || [])
     .filter((p: any) => !p.deactivated)
-    .filter((p) => (Array.isArray(p.roles) && p.roles.length > 0 ? p.roles : [p.role]).includes('admin'))
+    .filter((p) => isAdminRole(Array.isArray(p.roles) && p.roles.length > 0 ? p.roles : [p.role]))
     .map((p) => p.id);
   const opted = adminIds.filter((id) => optedIn.has(id));
   return opted.length > 0 ? opted : adminIds;

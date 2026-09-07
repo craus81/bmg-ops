@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireAuth, isAdminRole } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { rolesOf, canActOnCniJob } from '@/lib/cni-access';
 import { getOpenCniShift, getFieldRate } from '@/lib/pay-credits';
@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
 
   const q = validateSearchParams(req, GetSchema);
   if (q.error) return q.error;
-  const isAdmin = rolesOf(auth.profile).includes('admin');
+  const isAdmin = isAdminRole(rolesOf(auth.profile));
 
   if (q.data.cniJobId) {
     const { data: job } = await service
@@ -108,7 +108,7 @@ export async function POST(req: NextRequest) {
   const parsed = await validateBody(req, StartSchema);
   if (parsed.error) return parsed.error;
   const { context, cniJobId, partNumber } = parsed.data;
-  const isAdmin = rolesOf(auth.profile).includes('admin');
+  const isAdmin = isAdminRole(rolesOf(auth.profile));
 
   let allowedIds: Set<string>;
   let ratePerVehicle: number | null = null;

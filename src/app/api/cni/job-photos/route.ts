@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireAuth, isAdminRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { canActOnCniJob } from '@/lib/cni-access';
 
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
   const { data: profile } = await supabase
     .from('profiles').select('role, roles').eq('id', auth.user.id).single();
   const roles: string[] = profile?.roles?.length ? profile.roles : (profile?.role ? [profile.role] : []);
-  const isAdmin = roles.includes('admin');
+  const isAdmin = isAdminRole(roles);
   if (!isAdmin && !(await canActOnCniJob(supabase, auth.user.id, job))) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }

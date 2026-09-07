@@ -9,7 +9,11 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { resolveFeatures, type FeatureKey } from '@/lib/features';
+import { resolveFeatures, isAdminRole, type FeatureKey } from '@/lib/features';
+
+// Server-side call sites read admin authority through api-auth; the predicate
+// itself lives in features.ts (client-safe) so AuthProvider shares it.
+export { isAdminRole };
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -82,7 +86,10 @@ function extractAccessToken(req: NextRequest): string | null {
 
 // Roles that belong to internal BMG staff. Excludes 'customer' accounts and
 // external CNI 'installer' accounts, which must never see company-wide data.
-const INTERNAL_STAFF_ROLES = ['admin', 'sales', 'graphics_production', 'shop_tech', 'field_tech', 'finance'];
+// Mirrors the DB's is_internal_staff() allowlist (migration 224) — which has
+// included super_admin all along; the app-side list omitting it was the
+// inconsistency the super_admin ⊇ admin decision (2026-09-07) closed.
+const INTERNAL_STAFF_ROLES = ['admin', 'super_admin', 'sales', 'graphics_production', 'shop_tech', 'field_tech', 'finance'];
 
 function profileRoles(profile: any): string[] {
   return profile?.roles?.length > 0 ? profile.roles : [profile?.role];
@@ -172,13 +179,17 @@ export async function requireStaff(req: NextRequest): Promise<AuthResult> {
 
 /**
  * Verify the request has a valid session AND the user is an admin.
+ * super_admin passes too — it is a strict superset of admin (see isAdminRole);
+ * before 2026-09-07 this checked the literal 'admin' role only, so an account
+ * holding just super_admin was 403'd by every admin route while the DB
+ * policies and the feature resolver admitted it.
  */
 export async function requireAdmin(req: NextRequest): Promise<AuthResult> {
   const auth = await requireAuth(req);
   if (auth.error) return auth;
 
   const roles = profileRoles(auth.profile);
-  if (!roles.includes('admin')) {
+  if (!isAdminRole(roles)) {
     return { user: auth.user, profile: auth.profile, error: NextResponse.json({ error: 'Forbidden: admin required' }, { status: 403 }) };
   }
 
@@ -256,14 +267,16 @@ export async function requireFeature(req: NextRequest, key: FeatureKey): Promise
 }
 
 /**
- * Verify the request has a valid session AND the user has one of the specified roles.
+ * Verify the request has a valid session AND the user has one of the specified
+ * roles. Admins (and super_admins — the superset) auto-pass, which is why a
+ * super-admin-ONLY wall must use requireSuperAdmin instead.
  */
 export async function requireRole(req: NextRequest, allowedRoles: string[]): Promise<AuthResult> {
   const auth = await requireAuth(req);
   if (auth.error) return auth;
 
   const roles = profileRoles(auth.profile);
-  if (roles.includes('admin')) return auth;
+  if (isAdminRole(roles)) return auth;
 
   const hasRole = roles.some(r => allowedRoles.includes(r));
   if (!hasRole) {

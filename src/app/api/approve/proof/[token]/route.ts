@@ -246,7 +246,7 @@ async function notifyGraphicsTeam(job: any, verdict: 'approved' | 'revision', re
   const { data: prod } = await supabase
     .from('profiles')
     .select('id')
-    .in('role', ['admin', 'graphics_production', 'production'])
+    .in('role', ['admin', 'super_admin', 'graphics_production', 'production'])
     .eq('status', 'approved');
   for (const p of prod || []) targetIds.add(p.id);
 

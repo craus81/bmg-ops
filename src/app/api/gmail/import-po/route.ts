@@ -655,7 +655,7 @@ export async function POST(req: NextRequest) {
       const catalogItems = await loadCatalogItems(supabase);
       const { customer, customerNetsuiteId } = await resolvePoCustomer(supabase, extracted.customer);
 
-      const { data: adminUser } = await supabase.from('profiles').select('id').eq('role', 'admin').limit(1).single();
+      const { data: adminUser } = await supabase.from('profiles').select('id').in('role', ['admin', 'super_admin']).limit(1).single();
       const insertPayload: any = {
         po_number: String(poNumber), customer,
         customer_netsuite_id: customerNetsuiteId,
@@ -1206,7 +1206,7 @@ export async function POST(req: NextRequest) {
       const { data: adminUser } = await supabase
         .from('profiles')
         .select('id')
-        .eq('role', 'admin')
+        .in('role', ['admin', 'super_admin'])
         .limit(1)
         .single();
 

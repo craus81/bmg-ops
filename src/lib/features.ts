@@ -115,6 +115,21 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
 };
 
 /**
+ * Does this role set carry admin authority? super_admin is a strict SUPERSET
+ * of admin (owner decision 2026-09-07): everywhere the app accepts an admin
+ * it accepts a super_admin, matching what the DB policies (233/234/248/250),
+ * `is_internal_staff()` (224), and the feature resolver below already do.
+ * The only walls that stay narrower are the deliberate ones — requireSuperAdmin
+ * (owner-level) and requireFinancials (super_admin/executive, NOT admin).
+ * Use this instead of `roles.includes('admin')` for any authorization or
+ * admin-audience decision; a literal check is correct only when the question
+ * is about the 'admin' role VALUE itself (role pickers, chip styling).
+ */
+export function isAdminRole(roles: string[]): boolean {
+  return roles.includes('admin') || roles.includes('super_admin');
+}
+
+/**
  * Resolve the effective features for a user.
  * Starts with role defaults, then applies per-user overrides.
  */
