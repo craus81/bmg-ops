@@ -330,6 +330,40 @@ export default function PoPortalPage() {
           </section>
         )}
 
+        {/* Estimates (R3-17 remainder): where each quote stands — sent /
+            approved / expired — with a live Review & Approve link while one
+            is waiting on the customer. */}
+        {(data.estimates || []).length > 0 && (
+          <section style={{ marginBottom: '22px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 800, color: '#374151', marginBottom: '8px' }}>Your estimates ({data.estimates.length})</div>
+            <div style={{ ...card, padding: '6px 0' }}>
+              {data.estimates.map((e, idx) => (
+                <div key={`${e.number || 'est'}-${idx}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', padding: '10px 14px', borderTop: idx > 0 ? '1px solid #f1f5f9' : 'none', fontSize: '13px' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 700 }}>
+                      {e.number || 'Estimate'}{e.title ? <span style={{ fontWeight: 500, color: '#374151' }}> — {e.title}</span> : null}
+                    </div>
+                    <div style={{ ...muted, display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                      <span>Sent {fmtDate(e.sentAt)}</span>
+                      {e.total != null && <span>{e.total.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</span>}
+                      {e.decidedAt && <span>{e.state === 'changes_requested' ? 'Responded' : 'Approved'} {fmtDate(e.decidedAt)}</span>}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <span style={chip(e.color)}>{e.stateLabel}</span>
+                    {e.approveUrl && (
+                      <a href={e.approveUrl} target="_blank" rel="noopener noreferrer"
+                        style={{ padding: '6px 12px', borderRadius: '8px', background: '#2563eb', color: '#fff', fontSize: '12px', fontWeight: 800, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                        Review &amp; approve
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         <div style={{ ...muted, textAlign: 'center', marginTop: '30px' }}>
           Questions about an order? Reply to any of our emails or contact your BMG representative.<br />
           This page is private to your company — please don&apos;t forward the link outside your team.
