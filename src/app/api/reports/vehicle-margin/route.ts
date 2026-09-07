@@ -4,6 +4,7 @@ import { requireRole } from '@/lib/api-auth';
 import { suiteqlQuery } from '@/lib/netsuite';
 import { safeStringLiteral } from '@/lib/sql-safe';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { getShopLaborForCheckins, getShopLaborRate } from '@/lib/shop-labor';
 import { z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -30,7 +31,8 @@ const supabase = createClient(
  * Parts (stock, est.): the project's reserved/consumed allocations priced
  * at the catalog's purchase_price (0 = unknown, skipped and counted).
  * Installer: vendor_invoice_lines matched on the VIN (full or last-8).
- * Labor: not captured yet — the column lights up when R3-21 lands.
+ * Labor (R3-21): pick-list timer member-hours × the blended shop cost rate
+ * (Settings → Shop Labor Cost Rate); hours-only when no rate is set.
  */
 const Query = z.object({
   start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -292,6 +294,14 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // ── Shop labor (R3-21): pick-list timer hours × the blended cost rate
+    // (Settings → Shop Labor Cost Rate). Hours from auto-closed or
+    // still-open timers are reported as approximate; no configured rate
+    // means hours show but labor stays out of the margin math, said so in
+    // the meta note. ──
+    const laborByCheckin = await getShopLaborForCheckins(supabase, allIds);
+    const shopLaborRate = await getShopLaborRate(supabase);
+
     // ── Assemble. ──
     const vehicles = checkins.map(c => {
       const invoiceNumbers = invoiceNumbersByCheckin.get(c.id) || [];
@@ -301,6 +311,9 @@ export async function GET(req: NextRequest) {
       const projId = projectByCheckinId.get(c.id);
       const stock = projId ? stockByProject.get(projId) : undefined;
       const installer = installerByCheckin.get(c.id) || 0;
+      const laborInfo = laborByCheckin.get(c.id);
+      const laborHours = laborInfo?.hours || 0;
+      const labor = laborInfo?.cost ?? (laborHours > 0 ? null : 0);
       const label = [c.vehicle_year, c.vehicle_make, c.vehicle_model].filter(Boolean).join(' ')
         || (c.vin ? `VIN …${String(c.vin).slice(-8)}` : 'Vehicle');
       return {
@@ -317,8 +330,10 @@ export async function GET(req: NextRequest) {
         partsStock: Math.round((stock?.cost || 0) * 100) / 100,
         partsUnpriced: stock?.unpriced || 0,
         installer: Math.round(installer * 100) / 100,
-        labor: null as number | null,
-        margin: Math.round((revenue - partsPo - (stock?.cost || 0) - installer) * 100) / 100,
+        labor: labor as number | null,
+        laborHours,
+        laborApproxHours: laborInfo?.approxHours || 0,
+        margin: Math.round((revenue - partsPo - (stock?.cost || 0) - installer - (labor || 0)) * 100) / 100,
       };
     }).sort((a, b) => (b.dateInvoiced || '').localeCompare(a.dateInvoiced || ''));
 
@@ -327,9 +342,11 @@ export async function GET(req: NextRequest) {
       revenue: t.revenue + v.revenue,
       parts: t.parts + v.partsPo + v.partsStock,
       installer: t.installer + v.installer,
+      labor: t.labor + (v.labor || 0),
+      laborHours: t.laborHours + v.laborHours,
       margin: t.margin + v.margin,
-    }), { vehicles: 0, revenue: 0, parts: 0, installer: 0, margin: 0 });
-    for (const k of ['revenue', 'parts', 'installer', 'margin'] as const) totals[k] = Math.round(totals[k] * 100) / 100;
+    }), { vehicles: 0, revenue: 0, parts: 0, installer: 0, labor: 0, laborHours: 0, margin: 0 });
+    for (const k of ['revenue', 'parts', 'installer', 'labor', 'laborHours', 'margin'] as const) totals[k] = Math.round(totals[k] * 100) / 100;
 
     return NextResponse.json({
       range: { start, end },
@@ -337,9 +354,10 @@ export async function GET(req: NextRequest) {
       totals,
       meta: {
         ...meta,
-        // Honest disclosure until R3-21: shop labor isn't captured per
-        // vehicle yet, so margin excludes it.
-        laborNote: 'Shop labor is not captured per vehicle yet (R3-21) — margin excludes it.',
+        shopLaborRate,
+        laborNote: shopLaborRate != null
+          ? `Labor = pick-list timer hours × the blended shop rate ($${shopLaborRate}/hr). ≈ marks hours from timers nobody stopped (closed by completion or the daily sweep). A vehicle with no recorded hours shows $0 labor.`
+          : 'Timer hours are recorded, but no Shop Labor Cost Rate is set (Settings) — margin excludes labor until it is.',
       },
     });
   } catch (err: any) {

@@ -94,6 +94,51 @@ export default function SettingsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once, when the Company section becomes visible
   useEffect(() => { if (isSuperAdmin) loadLaborItem(); }, [isSuperAdmin]);
 
+  // Blended shop labor cost rate (R3-21, migration 269) — super-admin write,
+  // same posture as the tax rate and labor item above.
+  const [shopRate, setShopRate] = useState('');
+  const [shopRateBusy, setShopRateBusy] = useState(false);
+  const [shopRateSaved, setShopRateSaved] = useState(false);
+  const [shopRateError, setShopRateError] = useState('');
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    (async () => {
+      try {
+        const res = await apiFetch('/api/admin/shop-labor-rate');
+        const data = await res.json();
+        if (res.ok) setShopRate(data.rate != null ? String(data.rate) : '');
+      } catch { /* the card still renders; saving surfaces errors */ }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per admin session
+  }, [isSuperAdmin]);
+
+  const handleSaveShopRate = async () => {
+    setShopRateBusy(true);
+    setShopRateError('');
+    try {
+      const trimmed = shopRate.trim();
+      const parsedRate = trimmed === '' ? null : parseFloat(trimmed);
+      if (parsedRate != null && (!Number.isFinite(parsedRate) || parsedRate < 0)) {
+        setShopRateError('Enter a dollar amount per hour, or leave blank to clear.');
+        return;
+      }
+      const res = await apiFetch('/api/admin/shop-labor-rate', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rate: parsedRate }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setShopRateError(data?.error || 'Could not save the rate.'); return; }
+      setShopRate(data.rate != null ? String(data.rate) : '');
+      setShopRateSaved(true);
+      setTimeout(() => setShopRateSaved(false), 2500);
+    } catch (e: any) {
+      setShopRateError(e?.message || 'Could not save the rate.');
+    } finally {
+      setShopRateBusy(false);
+    }
+  };
+
   const handleSaveTax = async () => {
     setTaxSaving(true);
     setTaxError('');
@@ -587,6 +632,43 @@ export default function SettingsPage() {
             )}
             {laborError && (
               <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{laborError}</div>
+            )}
+          </div>
+
+          <div style={sectionStyle}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>Shop Labor Cost Rate</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
+              What an hour of shop floor time COSTS the company (blended, loaded — not the rate estimates
+              sell labor at). The Vehicle Job Margin report multiplies pick-list timer hours by this number.
+              Leave it blank and the report shows recorded hours but excludes labor from the margin math.
+            </div>
+            <div style={labelStyle}>$ per hour</div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input
+                type="number"
+                step={0.5}
+                min={0}
+                max={500}
+                value={shopRate}
+                onChange={e => setShopRate(e.target.value)}
+                placeholder="e.g. 55"
+                style={{ ...inputStyle, width: '120px' }}
+              />
+              <button
+                onClick={handleSaveShopRate}
+                disabled={shopRateBusy}
+                style={{
+                  padding: '8px 16px', borderRadius: '8px', border: 'none',
+                  background: shopRateSaved ? '#22c55e' : '#3b82f6', color: '#fff',
+                  fontSize: '12px', fontWeight: 800,
+                  cursor: shopRateBusy ? 'default' : 'pointer', opacity: shopRateBusy ? 0.5 : 1,
+                }}
+              >
+                {shopRateBusy ? 'Saving...' : shopRateSaved ? 'Saved!' : 'Save Rate'}
+              </button>
+            </div>
+            {shopRateError && (
+              <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{shopRateError}</div>
             )}
           </div>
         </>

@@ -8,7 +8,7 @@ import { downloadCsv } from '@/lib/csv';
 /**
  * Per-vehicle job margin (R3-19): each invoiced vehicle end to end —
  * invoice revenue vs the parts bought for its project and the installer's
- * bill for its VIN. Labor lights up when R3-21 lands.
+ * bill for its VIN, plus shop labor from the pick-list timers (R3-21).
  */
 
 interface VehicleRow {
@@ -26,13 +26,15 @@ interface VehicleRow {
   partsUnpriced: number;
   installer: number;
   labor: number | null;
+  laborHours: number;
+  laborApproxHours: number;
   margin: number;
 }
 interface Report {
   range: { start: string; end: string };
   vehicles: VehicleRow[];
-  totals: { vehicles: number; revenue: number; parts: number; installer: number; margin: number };
-  meta: { netsuiteError?: string; netsuiteCapped?: { lookedUp: number; of: number }; laborNote?: string };
+  totals: { vehicles: number; revenue: number; parts: number; installer: number; labor: number; laborHours: number; margin: number };
+  meta: { netsuiteError?: string; netsuiteCapped?: { lookedUp: number; of: number }; laborNote?: string; shopLaborRate?: number | null };
 }
 
 const toDateStr = (d: Date) => d.toISOString().split('T')[0];
@@ -71,10 +73,11 @@ export default function VehicleMarginPage() {
     if (!report) return;
     downloadCsv(
       `vehicle-margin-${report.range.start}-to-${report.range.end}.csv`,
-      ['Vehicle', 'VIN', 'Customer', 'SO', 'Invoices', 'Invoiced', 'Revenue', 'Parts (PO)', 'POs', 'Parts (stock est.)', 'Installer', 'Margin'],
+      ['Vehicle', 'VIN', 'Customer', 'SO', 'Invoices', 'Invoiced', 'Revenue', 'Parts (PO)', 'POs', 'Parts (stock est.)', 'Installer', 'Labor Hours', 'Labor', 'Margin'],
       report.vehicles.map(v => [
         v.label, v.vin || '', v.customer || '', v.soNumber || '', v.invoiceNumbers.join(' '),
-        v.dateInvoiced || '', v.revenue, v.partsPo, v.partsPoNumbers.join(' '), v.partsStock, v.installer, v.margin,
+        v.dateInvoiced || '', v.revenue, v.partsPo, v.partsPoNumbers.join(' '), v.partsStock, v.installer,
+        v.laborHours, v.labor ?? '', v.margin,
       ]),
     );
   };
@@ -90,8 +93,8 @@ export default function VehicleMarginPage() {
     <div style={{ maxWidth: '1100px' }}>
       <h1 style={{ fontSize: '20px', fontWeight: 800, marginBottom: '4px' }}>Vehicle Job Margin</h1>
       <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
-        Each invoiced vehicle end to end: invoice revenue vs parts bought for its project and the installer&apos;s bill for its VIN.
-        Shop labor isn&apos;t captured per vehicle yet — margin excludes it.
+        Each invoiced vehicle end to end: invoice revenue vs parts bought for its project, the installer&apos;s bill for its VIN,
+        and shop labor from the pick-list timers.
       </div>
 
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '14px' }}>
@@ -121,6 +124,7 @@ export default function VehicleMarginPage() {
             {tile('Revenue', fmtMoney(report.totals.revenue), '#22c55e')}
             {tile('Parts', fmtMoney(report.totals.parts), '#f59e0b')}
             {tile('Installer', fmtMoney(report.totals.installer), '#8b5cf6')}
+            {tile('Labor', `${fmtMoney(report.totals.labor)} (${report.totals.laborHours}h)`, '#0ea5e9')}
             {tile('Margin', fmtMoney(report.totals.margin), report.totals.margin >= 0 ? '#22c55e' : '#ef4444')}
           </div>
 
@@ -159,7 +163,12 @@ export default function VehicleMarginPage() {
                       {fmtMoney(v.partsStock)}{v.partsUnpriced > 0 ? ' *' : ''}
                     </td>
                     <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmtMoney(v.installer)}</td>
-                    <td style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--text-muted)' }}>—</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right', whiteSpace: 'nowrap', color: v.laborHours > 0 ? 'inherit' : 'var(--text-muted)' }}
+                        title={v.laborApproxHours > 0 ? `${v.laborApproxHours}h from timers nobody stopped (auto-closed)` : undefined}>
+                      {v.laborHours > 0
+                        ? `${v.labor != null ? fmtMoney(v.labor) : 'no rate set'} · ${v.laborHours}h${v.laborApproxHours > 0 ? ' ≈' : ''}`
+                        : '—'}
+                    </td>
                     <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 800, color: v.margin >= 0 ? '#22c55e' : '#ef4444' }}>{fmtMoney(v.margin)}</td>
                   </tr>
                 ))}
@@ -170,7 +179,8 @@ export default function VehicleMarginPage() {
             </table>
           </div>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px' }}>
-            * some allocated parts have no synced cost and aren&apos;t priced into the stock estimate. Labor lands when per-vehicle labor capture ships.
+            * some allocated parts have no synced cost and aren&apos;t priced into the stock estimate.
+            {report.meta.laborNote ? ` ${report.meta.laborNote}` : ''}
           </div>
         </>
       )}

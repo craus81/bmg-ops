@@ -4,7 +4,8 @@ import { requireAuth, isAdminRole } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { rolesOf, canActOnCniJob } from '@/lib/cni-access';
 import { getOpenCniShift, getFieldRate } from '@/lib/pay-credits';
-import { FIELD_ROLES, memberViews, cniRoster, fieldRoster } from '@/lib/shifts';
+import { FIELD_ROLES, memberViews, cniRoster, fieldRoster, shopRoster } from '@/lib/shifts';
+import { getOpenShopShift, getShopLaborForCheckins } from '@/lib/shop-labor';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,6 +18,7 @@ const GetSchema = z.object({
   cniJobId: z.string().uuid().optional(),
   context: z.enum(['cni', 'field']).optional(),
   shiftId: z.string().uuid().optional(),
+  checkinId: z.string().uuid().optional(),
 });
 
 /**
@@ -24,6 +26,8 @@ const GetSchema = z.object({
  *   GET /api/shifts?cniJobId=…               → open shift + company roster + rate
  *   GET /api/shifts?context=field&shiftId=…  → that shift + field roster + rate
  *   GET /api/shifts?context=field            → field roster only (pre-shift)
+ *   GET /api/shifts?checkinId=…              → open SHOP shift + shop roster +
+ *                                              logged hours (R3-21 pick-list timer)
  */
 export async function GET(req: NextRequest) {
   const auth = await requireAuth(req);
@@ -50,6 +54,31 @@ export async function GET(req: NextRequest) {
       shift,
       roster,
       ratePerVehicle: job.pay_per_vehicle != null ? Number(job.pay_per_vehicle) : null,
+    });
+  }
+
+  if (q.data.checkinId) {
+    // Shop timer context (R3-21): internal floor roles only — the FIELD_ROLES
+    // wall keeps external CNI installers out even though the pick-list page
+    // itself admits them for their own install views.
+    if (!rolesOf(auth.profile).some(r => FIELD_ROLES.includes(r))) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    const { data: checkin } = await service
+      .from('fleet_checkins')
+      .select('id')
+      .eq('id', q.data.checkinId)
+      .maybeSingle();
+    if (!checkin) return NextResponse.json({ error: 'Check-in not found' }, { status: 404 });
+    const open = await getOpenShopShift(service, q.data.checkinId);
+    const shift = open ? { ...open, members: await memberViews(service, open.id) } : null;
+    const labor = (await getShopLaborForCheckins(service, [q.data.checkinId])).get(q.data.checkinId);
+    return NextResponse.json({
+      shift,
+      roster: await shopRoster(service),
+      // Hours only — the blended COST rate is admin-side job costing and
+      // never returned here.
+      loggedHours: labor?.hours ?? 0,
     });
   }
 
@@ -86,8 +115,9 @@ const MemberInput = z.object({
 });
 
 const StartSchema = z.object({
-  context: z.enum(['cni', 'field']),
+  context: z.enum(['cni', 'field', 'shop']),
   cniJobId: z.string().uuid().optional().nullable(),
+  checkinId: z.string().uuid().optional().nullable(),
   partNumber: z.string().trim().max(120).optional().nullable(),
   partDescription: z.string().trim().max(300).optional().nullable(),
   billableCustomer: z.string().trim().max(200).optional().nullable(),
@@ -107,7 +137,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, StartSchema);
   if (parsed.error) return parsed.error;
-  const { context, cniJobId, partNumber } = parsed.data;
+  const { context, cniJobId, checkinId, partNumber } = parsed.data;
   const isAdmin = isAdminRole(rolesOf(auth.profile));
 
   let allowedIds: Set<string>;
@@ -132,6 +162,25 @@ export async function POST(req: NextRequest) {
     allowedIds = new Set(roster.map(r => r.profile_id));
     allowedIds.add(auth.user.id); // legacy assigned installer may predate company link
     ratePerVehicle = job.pay_per_vehicle != null ? Number(job.pay_per_vehicle) : null;
+  } else if (context === 'shop') {
+    // R3-21 pick-list timer: internal floor roles only, one open shift per
+    // check-in, and — job costing only — never a rate and never credits.
+    if (!rolesOf(auth.profile).some(r => FIELD_ROLES.includes(r))) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    if (!checkinId) return NextResponse.json({ error: 'checkinId required' }, { status: 400 });
+    const { data: checkin } = await service
+      .from('fleet_checkins')
+      .select('id')
+      .eq('id', checkinId)
+      .maybeSingle();
+    if (!checkin) return NextResponse.json({ error: 'Check-in not found' }, { status: 404 });
+    const existing = await getOpenShopShift(service, checkinId);
+    if (existing) {
+      return NextResponse.json({ shift: { ...existing, members: await memberViews(service, existing.id) }, existing: true });
+    }
+    allowedIds = new Set((await shopRoster(service)).map(r => r.profile_id));
+    allowedIds.add(auth.user.id);
   } else {
     if (!rolesOf(auth.profile).some(r => FIELD_ROLES.includes(r))) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -161,7 +210,8 @@ export async function POST(req: NextRequest) {
     .insert({
       context,
       cni_job_id: context === 'cni' ? cniJobId : null,
-      part_number: partNumber || null,
+      fleet_checkin_id: context === 'shop' ? checkinId : null,
+      part_number: context === 'shop' ? null : (partNumber || null),
       part_description: context === 'cni' ? (parsed.data.partDescription || null) : null,
       billable_customer: context === 'cni' ? (parsed.data.billableCustomer || null) : null,
       location_id: parsed.data.locationId || null,
