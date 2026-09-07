@@ -274,6 +274,7 @@ export default function VehiclePickListPage() {
   const startLaborTimer = async () => {
     if (!vehicle || laborBusy) return;
     setLaborBusy(true);
+    let started = false;
     try {
       const res = await fetch('/api/shifts', {
         method: 'POST',
@@ -282,11 +283,22 @@ export default function VehiclePickListPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) await dialog.alert(data.error || 'Failed to start the timer');
-      else if (data.shift) setLaborShift(data.shift as ShopShift);
+      else if (data.shift) {
+        setLaborShift(data.shift as ShopShift);
+        started = true;
+      }
     } catch (err: any) {
       await dialog.alert(err.message || 'Network error');
     }
     setLaborBusy(false);
+    // Clocking in on a freshly received vehicle IS starting the install
+    // (owner call 2026-09-07): chain the real Start Install transition so
+    // the history row, checklist instantiation, and notifications all go
+    // through the one status writer. Only 'received' chains — a timer on
+    // an in-flight or completed vehicle (rework) must not move the board.
+    // The timer keeps running either way; a transition failure surfaces
+    // through postStatusChange's own error UI.
+    if (started && vehicle.status === 'received') await postStatusChange('in_progress');
   };
 
   const stopLaborTimer = async () => {
