@@ -1091,7 +1091,6 @@ export default function TrackingPage() {
         // Completion requirements missing — surface the list and offer
         // admin override.
         const lines = data.missing.join('\n• ');
-        const isAdmin = profile?.role === 'admin';
         let proceed = false;
         if (isAdmin) {
           proceed = await dialog.confirm(`Cannot mark complete yet:\n\n• ${lines}\n\nOverride and mark complete anyway?`);
@@ -1951,7 +1950,6 @@ export default function TrackingPage() {
                       const showLane = hasGraphics || (lane !== 'pending' && lane !== 'n/a');
                       if (!showLane) return null;
                       const isUpdating = updatingId === vehicle.id;
-                      const isAdmin = profile?.role === 'admin';
                       // 'n/a' is opt-out and only really makes sense if an
                       // admin needs to bypass the gate without doing the work
                       // (e.g. graphics shipped direct to customer); hide it

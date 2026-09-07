@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireAuth, isAdminRole } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,7 +52,7 @@ export async function GET(req: NextRequest) {
   if (auth.error) return auth.error;
 
   const roles: string[] = auth.profile?.roles?.length ? auth.profile.roles : [auth.profile?.role];
-  const isAdmin = roles.includes('admin');
+  const isAdmin = isAdminRole(roles);
   const isCustomer = roles.includes('customer');
   if (!isCustomer && !isAdmin) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

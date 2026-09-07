@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import type { User } from '@supabase/supabase-js';
 import type { Profile } from '@/lib/types';
-import { resolveFeatures, type FeatureKey } from '@/lib/features';
+import { resolveFeatures, isAdminRole, type FeatureKey } from '@/lib/features';
 
 interface AuthContextType {
   user: User | null;
@@ -131,13 +131,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Multi-role check — actual roles (for permission checks)
   const rawRoles = profile?.roles?.length ? profile.roles : (profile?.role ? [profile.role] : []);
   const actualRoles = rawRoles.map((r: string) => r === 'production' ? 'graphics_production' : r);
-  const isActualAdmin = actualRoles.includes('admin');
+  // super_admin ⊇ admin (owner decision 2026-09-07): both flags below admit it.
+  const isActualAdmin = isAdminRole(actualRoles);
 
   // Effective roles — when admin uses "View As", override to the selected role
   const userRoles = (isActualAdmin && viewAsRole) ? [viewAsRole] : actualRoles;
 
   const hasRole = (r: string) => userRoles.includes(r as any) || (r === 'production' && userRoles.includes('graphics_production'));
-  const isAdmin = hasRole('admin');
+  const isAdmin = isAdminRole(userRoles);
   const isGraphicsProduction = hasRole('graphics_production') || isAdmin;
   const isProduction = isGraphicsProduction;
   const isSales = hasRole('sales') || isAdmin;

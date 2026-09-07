@@ -346,7 +346,7 @@ async function notifyGraphicsTeamCombined(job: any, estimate: any) {
     const { data: prod } = await supabase
       .from('profiles')
       .select('id')
-      .in('role', ['admin', 'graphics_production', 'production'])
+      .in('role', ['admin', 'super_admin', 'graphics_production', 'production'])
       .eq('status', 'approved');
     for (const p of prod || []) targetIds.add(p.id);
     if (targetIds.size === 0) return;
@@ -423,7 +423,7 @@ async function notifySalesRep(estimate: any, verdict: 'accepted' | 'rejected', r
     const { data: admins } = await supabase
       .from('profiles')
       .select('id')
-      .eq('role', 'admin')
+      .in('role', ['admin', 'super_admin'])
       .eq('status', 'approved');
     for (const a of admins || []) targetIds.add(a.id);
   }

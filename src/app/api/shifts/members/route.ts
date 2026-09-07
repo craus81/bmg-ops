@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireAuth, isAdminRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { rolesOf } from '@/lib/cni-access';
 import { loadShift, canManageShift, eligibleMemberIds, memberViews } from '@/lib/shifts';
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
 
   // Installers manage only open shifts; admins also edit ended ones for
   // after-the-fact corrections (followed by a credit recompute).
-  const isAdmin = rolesOf(auth.profile).includes('admin');
+  const isAdmin = isAdminRole(rolesOf(auth.profile));
   if (shift.ended_at && !isAdmin) {
     return NextResponse.json({ error: 'Shift has ended' }, { status: 400 });
   }

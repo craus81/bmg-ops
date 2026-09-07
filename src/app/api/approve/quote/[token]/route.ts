@@ -251,7 +251,7 @@ async function notifySalesRep(quote: any, verdict: 'accepted' | 'rejected', reas
     const { data: admins } = await supabase
       .from('profiles')
       .select('id')
-      .eq('role', 'admin')
+      .in('role', ['admin', 'super_admin'])
       .eq('status', 'approved');
     for (const a of admins || []) targetIds.add(a.id);
   }

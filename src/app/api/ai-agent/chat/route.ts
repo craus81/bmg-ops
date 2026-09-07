@@ -821,7 +821,7 @@ async function executeAction(action: string, params: Record<string, any>): Promi
       const { data: adminUser } = await supabase
         .from('profiles')
         .select('id')
-        .eq('role', 'admin')
+        .in('role', ['admin', 'super_admin'])
         .eq('status', 'approved')
         .limit(1)
         .single();

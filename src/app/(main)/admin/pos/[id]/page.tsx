@@ -32,6 +32,7 @@ import { deepLinks } from '@/lib/deep-links';
 import type { PurchaseOrder, POLineItem, PoLocation, GraphicsJobStatus } from '@/lib/types';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import NumberInput from '@/components/NumberInput';
+import { isAdminRole } from '@/lib/features';
 
 type ShipTo = NonNullable<PurchaseOrder['ship_to']>;
 
@@ -347,7 +348,7 @@ export default function PoRecordPage() {
     // Only ADMINS are taggable on PO notes — never CNI installers or other
     // roles (roles may live in the legacy `role` column or the `roles` array).
     setTeamProfiles(
-      ((profRes.data || []) as any[]).filter(p => p.role === 'admin' || (Array.isArray(p.roles) && p.roles.includes('admin'))),
+      ((profRes.data || []) as any[]).filter(p => isAdminRole(Array.isArray(p.roles) && p.roles.length > 0 ? p.roles : [p.role])),
     );
 
     // Catalog matches for the per-line "Add to Catalog" state: linked part

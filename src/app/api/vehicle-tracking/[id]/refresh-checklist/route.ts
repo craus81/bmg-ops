@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireStaff } from '@/lib/api-auth';
+import { requireStaff, isAdminRole } from '@/lib/api-auth';
 import { loadChecklistTemplate, buildTaskRows } from '@/lib/install-checklist';
 import { createClient } from '@supabase/supabase-js';
 
@@ -32,7 +32,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .eq('id', auth.user.id)
     .single();
   const roles: string[] = profile?.roles?.length ? profile.roles : [profile?.role];
-  if (!roles.includes('admin')) {
+  if (!isAdminRole(roles)) {
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
   }
 

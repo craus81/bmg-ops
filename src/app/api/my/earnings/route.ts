@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireAuth, isAdminRole } from '@/lib/api-auth';
 import { validateSearchParams, z } from '@/lib/validate';
 import { rolesOf } from '@/lib/cni-access';
 
@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
 
   const q = validateSearchParams(req, QuerySchema);
   if (q.error) return q.error;
-  const viewerIsAdmin = rolesOf(auth.profile).includes('admin');
+  const viewerIsAdmin = isAdminRole(rolesOf(auth.profile));
   let target = auth.user.id;
   if (q.data.profileId && q.data.profileId !== auth.user.id) {
     if (!viewerIsAdmin) {

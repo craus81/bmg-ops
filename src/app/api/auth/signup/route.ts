@@ -127,7 +127,7 @@ export async function POST(req: NextRequest) {
         supabase
           .from('profiles')
           .select('id, roles')
-          .eq('role', 'admin')
+          .in('role', ['admin', 'super_admin'])
           .eq('status', 'approved'),
         supabase
           .from('user_feature_overrides')
