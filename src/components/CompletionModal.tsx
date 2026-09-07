@@ -10,6 +10,7 @@ import { DropZone } from '@/components/DropZone';
 import PhotoSession from '@/components/PhotoSession';
 import { estimateHeadlineNumber } from '@/lib/estimate-number';
 import { openNetSuitePdf, openNetSuiteInvoicePdfByNumber } from '@/lib/netsuite-pdf-client';
+import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 
 interface Task {
   id: string;
@@ -128,6 +129,9 @@ export default function CompletionModal({
   const [ledgerLoaded, setLedgerLoaded] = useState(false);
   // SO id whose invoice needs the legacy allowAdditional confirmation.
   const [legacyPromptFor, setLegacyPromptFor] = useState<string | null>(null);
+  // Invoice(s) queued for the standard email screen (R3-14b: completion
+  // could print an invoice but not send it to the customer).
+  const [emailFor, setEmailFor] = useState<EmailableInvoice[] | null>(null);
   const [linkedEstimates, setLinkedEstimates] = useState<LinkedEstimateLite[]>([]);
   const [overrideFor, setOverrideFor] = useState<string | null>(null); // estimate id awaiting override reason
   const [overrideReason, setOverrideReason] = useState('');
@@ -705,6 +709,14 @@ export default function CompletionModal({
                             >
                               {invPdfBusy ? 'Opening…' : '🖨 Print / PDF'}
                             </button>
+                            <button
+                              type="button"
+                              title="Email this invoice to the customer with its NetSuite PDF attached"
+                              onClick={() => setEmailFor([{ invoiceNumber: inv.invoice_number!, invoiceId: inv.netsuite_invoice_id || undefined }])}
+                              style={{ padding: '5px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
+                            >
+                              ✉ Email
+                            </button>
                           </div>
                         ) : (
                           <>
@@ -749,6 +761,14 @@ export default function CompletionModal({
                     style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text-primary)', opacity: invPdfBusy ? 0.6 : 1 }}
                   >
                     {invPdfBusy ? 'Opening…' : '🖨 Print / PDF'}
+                  </button>
+                  <button
+                    type="button"
+                    title="Email this invoice to the customer with its NetSuite PDF attached"
+                    onClick={() => setEmailFor([{ invoiceNumber: invNumber, invoiceId: invId || undefined }])}
+                    style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
+                  >
+                    ✉ Email
                   </button>
                 </div>
               ) : linkedEstimates.length > 0 ? (
@@ -836,6 +856,18 @@ export default function CompletionModal({
           </div>
         </div>
       </div>
+
+      {/* Standard invoice-email screen (the Invoices hub's), one click from
+          the billed rows above. Rendered INSIDE this overlay: its z-index
+          (1100) is local to our z-1500 stacking context, so it stacks on
+          top here — as a sibling it would land behind the completion modal. */}
+      {emailFor && (
+        <EmailInvoicesModal
+          customerName={customerName || ''}
+          invoices={emailFor}
+          onClose={() => setEmailFor(null)}
+        />
+      )}
     </div>
   );
 }

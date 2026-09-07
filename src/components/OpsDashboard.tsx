@@ -148,6 +148,7 @@ export default function OpsDashboard() {
       scansTodayRes, scansWeekRes, msgRes, unreadRes,
       oppsRes, custRes, quotesRes, openEstRes, estRes, unpricedRes,
       apSubmittedRes, sentEstRes, sentWrapRes, staleProofRes, healthRes, atRiskRes,
+      neverInvoicedRes,
     ] = await Promise.allSettled([
       // KPI 1 — NetSuite invoiced totals (authoritative revenue)
       fetch('/api/reports/invoiced-summary').then(r => r.json()),
@@ -267,6 +268,34 @@ export default function OpsDashboard() {
         .not('status', 'in', '("cancelled","shipped","picked_up","installed")'),
       isAdmin ? fetch('/api/system-health').then(r => r.ok ? r.json() : null) : Promise.resolve(null),
       isAdmin ? fetch('/api/reports/at-risk').then(r => r.ok ? r.json() : null) : Promise.resolve(null),
+      // Completed vehicles nobody ever invoiced (R3-14c): the work is done
+      // (or shipped) but no invoice exists anywhere — neither the legacy
+      // scalar nor a stamped per-SO ledger row (migration 261; unstamped
+      // rows are in-flight claims, not invoices). The 180-day window keeps
+      // pre-invoicing history out; archived rows stay IN — an archived
+      // never-billed vehicle is exactly the leak this tile catches.
+      (async () => {
+        const cutoff = new Date(Date.now() - 180 * 86_400_000).toISOString();
+        const { data: done } = await fetchAllRows<{ id: string }>((from, to) => supabase
+          .from('fleet_checkins')
+          .select('id')
+          .in('status', ['complete', 'shipped'])
+          .is('invoice_number', null)
+          .gte('created_at', cutoff)
+          .order('id')
+          .range(from, to));
+        const ids = done.map(c => c.id);
+        const billed = new Set<string>();
+        for (let i = 0; i < ids.length; i += 200) {
+          const { data } = await supabase
+            .from('fleet_checkin_invoices')
+            .select('fleet_checkin_id')
+            .in('fleet_checkin_id', ids.slice(i, i + 200))
+            .not('invoice_number', 'is', null);
+          for (const r of data || []) billed.add(r.fleet_checkin_id);
+        }
+        return ids.filter(id => !billed.has(id)).length;
+      })(),
     ]);
 
     const val = <T,>(r: PromiseSettledResult<T>): T | null => (r.status === 'fulfilled' ? r.value : null);
@@ -361,6 +390,12 @@ export default function OpsDashboard() {
     if (unpaid > 0) queue.push({
       key: 'unpaid', count: unpaid, tone: 'warn', path: '/tracking',
       title: 'Vehicles invoiced, awaiting payment', detail: 'From in-shop tracking',
+    });
+    const neverInvoiced = neverInvoicedRes.status === 'fulfilled' ? (neverInvoicedRes.value as number) || 0 : 0;
+    if (neverInvoiced > 0) queue.push({
+      key: 'never-invoiced', count: neverInvoiced, tone: 'err', path: '/tracking',
+      title: 'Completed vehicles never invoiced',
+      detail: 'Done or shipped in the last 180 days with no invoice recorded — check Archived too',
     });
     const cniPhotos = count(cniPhotosRes);
     if (cniPhotos > 0) queue.push({
