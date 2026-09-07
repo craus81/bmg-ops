@@ -119,6 +119,15 @@ export default function CompletionModal({
   const [invPdfBusy, setInvPdfBusy] = useState(false);
   const [invWorking, setInvWorking] = useState<string | null>(null); // SO id in flight
   const [invError, setInvError] = useState<string | null>(null);
+  // Per-SO invoice ledger (migration 261): each linked sales order carries
+  // its OWN invoice state, so a multi-SO vehicle can bill every order —
+  // the old single invNumber hid the remaining buttons after the first.
+  const [soInvoices, setSoInvoices] = useState<Record<string, {
+    invoice_number: string | null; netsuite_invoice_id: string | null; fulfillment_number: string | null;
+  }>>({});
+  const [ledgerLoaded, setLedgerLoaded] = useState(false);
+  // SO id whose invoice needs the legacy allowAdditional confirmation.
+  const [legacyPromptFor, setLegacyPromptFor] = useState<string | null>(null);
   const [linkedEstimates, setLinkedEstimates] = useState<LinkedEstimateLite[]>([]);
   const [overrideFor, setOverrideFor] = useState<string | null>(null); // estimate id awaiting override reason
   const [overrideReason, setOverrideReason] = useState('');
@@ -128,6 +137,27 @@ export default function CompletionModal({
   const invoiceSos = (salesOrders && salesOrders.length > 0)
     ? salesOrders
     : netsuiteSalesOrderId ? [{ netsuite_sales_order_id: netsuiteSalesOrderId, sales_order_number: null }] : [];
+
+  // Per-SO ledger load — which of this vehicle's sales orders are already
+  // billed, so each button reflects ITS order, not the vehicle's first.
+  useEffect(() => {
+    if (!isAdmin) return;
+    (async () => {
+      try {
+        const res = await fetch(`/api/vehicle-tracking/invoice?checkinId=${vehicleId}`);
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && Array.isArray(data.soInvoices)) {
+          const map: typeof soInvoices = {};
+          for (const r of data.soInvoices) {
+            if (r.invoice_number) map[r.netsuite_sales_order_id] = r;
+          }
+          setSoInvoices(map);
+        }
+      } catch { /* ledger is a display nicety; the API enforces */ }
+      setLedgerLoaded(true);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one load per open
+  }, [isAdmin, vehicleId]);
 
   // Estimates tied to this vehicle — the fallback when no SO is linked yet.
   useEffect(() => {
@@ -143,25 +173,49 @@ export default function CompletionModal({
   // eslint-disable-next-line react-hooks/exhaustive-deps -- one load per open
   }, [isAdmin, vehicleId, sourceEstimateId]);
 
-  const invoiceSalesOrder = async (salesOrderId: string) => {
+  const invoiceSalesOrder = async (salesOrderId: string, allowAdditional = false) => {
     setInvWorking(salesOrderId);
     setInvError(null);
+    setLegacyPromptFor(null);
     try {
       const res = await fetch('/api/vehicle-tracking/invoice', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ checkinId: vehicleId, salesOrderId }),
+        body: JSON.stringify({ checkinId: vehicleId, salesOrderId, ...(allowAdditional ? { allowAdditional: true } : {}) }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        // 409 already-invoiced still tells us the number — show it.
-        if (data.invoiceNumber) setInvNumber(data.invoiceNumber);
+        // Legacy pre-ledger invoice of unknown coverage: the server wants a
+        // human to check NetSuite first — offer the explicit confirm.
+        if (res.status === 409 && data.legacyInvoice && data.canAdditional) {
+          setLegacyPromptFor(salesOrderId);
+          setInvError(data.error || 'This vehicle carries a pre-tracking invoice.');
+          return;
+        }
+        // 409 already-invoiced still tells us the number — reflect it on
+        // this order's row rather than the whole vehicle.
+        if (data.invoiceNumber) {
+          setSoInvoices(prev => ({
+            ...prev,
+            [salesOrderId]: { invoice_number: data.invoiceNumber, netsuite_invoice_id: null, fulfillment_number: null },
+          }));
+        }
         setInvError(data.error || 'Invoice create failed');
         return;
       }
+      setSoInvoices(prev => ({
+        ...prev,
+        [salesOrderId]: {
+          invoice_number: data.invoiceNumber ? String(data.invoiceNumber) : null,
+          netsuite_invoice_id: data.invoiceId ? String(data.invoiceId) : null,
+          fulfillment_number: data.fulfillmentNumber || null,
+        },
+      }));
+      // Keep the single-invoice state for the estimate path + legacy banner.
       setInvNumber(data.invoiceNumber || data.invoiceId || null);
       setInvId(data.invoiceId ? String(data.invoiceId) : null);
       setFulNumber(data.fulfillmentNumber || null);
+      if (data.warning) setInvError(`⚠ ${data.warning}`);
       onInvoiced?.();
     } catch (e: any) {
       setInvError(e?.message || 'Network error creating the invoice');
@@ -613,7 +667,70 @@ export default function CompletionModal({
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
                 NetSuite Invoice <span style={{ fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>· admin</span>
               </div>
-              {invNumber ? (
+              {invoiceSos.length > 0 ? (
+                /* Per-SO rows (migration 261): every linked sales order
+                   shows ITS OWN invoice state — billing one no longer hides
+                   the rest of a multi-SO vehicle's buttons. */
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {invoiceNumber && !Object.values(soInvoices).some(r => r.invoice_number === invoiceNumber) && (
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Invoiced #{invoiceNumber} before per-SO tracking — billing another order below asks for confirmation.
+                    </div>
+                  )}
+                  {invoiceSos.map(so => {
+                    const soId = so.netsuite_sales_order_id;
+                    const soLabel = so.sales_order_number || `#${soId}`;
+                    const inv = soInvoices[soId];
+                    return (
+                      <div key={soId}>
+                        {inv?.invoice_number ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                            <div style={{ fontSize: '12px', fontWeight: 700, color: '#22c55e' }}>
+                              ✓ SO {soLabel} billed as invoice #{inv.invoice_number}{inv.fulfillment_number ? ` (fulfilled ${inv.fulfillment_number})` : ''}
+                            </div>
+                            <button
+                              type="button"
+                              disabled={invPdfBusy}
+                              title="Open this invoice's NetSuite PDF in a new tab to print or save"
+                              onClick={async () => {
+                                setInvPdfBusy(true);
+                                setInvError(null);
+                                const r = inv.netsuite_invoice_id
+                                  ? await openNetSuitePdf('invoice', inv.netsuite_invoice_id)
+                                  : await openNetSuiteInvoicePdfByNumber(inv.invoice_number!);
+                                if (!r.ok) setInvError(`Could not open the invoice PDF: ${r.error}`);
+                                setInvPdfBusy(false);
+                              }}
+                              style={{ padding: '5px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text-primary)', opacity: invPdfBusy ? 0.6 : 1 }}
+                            >
+                              {invPdfBusy ? 'Opening…' : '🖨 Print / PDF'}
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => invoiceSalesOrder(soId)}
+                              disabled={!!invWorking || !ledgerLoaded}
+                              title="Fulfil every line of the sales order, bill it as a NetSuite invoice, and record it on this vehicle"
+                              style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', opacity: invWorking || !ledgerLoaded ? 0.6 : 1 }}>
+                              {invWorking === soId ? 'Invoicing…' : `Invoice SO ${soLabel}`}
+                            </button>
+                            {legacyPromptFor === soId && (
+                              <div style={{ marginTop: '6px', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                                <button onClick={() => invoiceSalesOrder(soId, true)}
+                                  disabled={!!invWorking}
+                                  style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.4)', color: '#f59e0b' }}>
+                                  I checked NetSuite — invoice SO {soLabel} anyway
+                                </button>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : invNumber ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                   <div style={{ fontSize: '12px', fontWeight: 700, color: '#22c55e' }}>
                     ✓ Invoice #{invNumber} created for this vehicle.{fulNumber ? ` Sales order fulfilled (${fulNumber}).` : ''}
@@ -633,18 +750,6 @@ export default function CompletionModal({
                   >
                     {invPdfBusy ? 'Opening…' : '🖨 Print / PDF'}
                   </button>
-                </div>
-              ) : invoiceSos.length > 0 ? (
-                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                  {invoiceSos.map(so => (
-                    <button key={so.netsuite_sales_order_id}
-                      onClick={() => invoiceSalesOrder(so.netsuite_sales_order_id)}
-                      disabled={!!invWorking}
-                      title="Fulfil every line of the sales order, bill it as a NetSuite invoice, and stamp it on this vehicle"
-                      style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', opacity: invWorking ? 0.6 : 1 }}>
-                      {invWorking === so.netsuite_sales_order_id ? 'Invoicing…' : `Invoice SO ${so.sales_order_number || `#${so.netsuite_sales_order_id}`}`}
-                    </button>
-                  ))}
                 </div>
               ) : linkedEstimates.length > 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>

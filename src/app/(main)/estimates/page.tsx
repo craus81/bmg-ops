@@ -1612,6 +1612,9 @@ export default function EstimatesPage() {
         let msg = data.updated
           ? 'Estimate synced to NetSuite!'
           : `Estimate pushed to NetSuite!\nEstimate #: ${data.netsuite_estimate_number || data.netsuite_estimate_id}`;
+        if (data.warning) {
+          msg += `\n\n⚠ ${data.warning}`;
+        }
         if (data.customLines?.length) {
           msg += `\n\nPushed via FS-CUSTOM placeholder (no catalog match): ${data.customLines.join(', ')}`;
         }
