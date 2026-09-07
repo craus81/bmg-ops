@@ -100,15 +100,88 @@ export interface PortalPo {
   /** Older fulfilled/closed POs are listed as a summary only. */
   detail: boolean;
 }
+export interface PortalEstimate {
+  number: string | null;
+  title: string | null;
+  sentAt: string | null;
+  total: number | null;
+  state: 'awaiting' | 'approved' | 'ordered' | 'changes_requested' | 'expired';
+  stateLabel: string;
+  color: string;
+  decidedAt: string | null;
+  /** Live Review & Approve path while the link is valid and undecided —
+   *  the portal token already scopes the page to this customer, and the
+   *  approval link's audience IS this customer. Null once decided/expired. */
+  approveUrl: string | null;
+}
+
 export interface PortalData {
   company: { name: string };
   generatedAt: string;
   summary: { open: number; inProduction: number; installing: number; fulfilled90d: number; total: number };
   pos: PortalPo[];
+  /** Estimates section (R3-17 remainder) — where each quote stands. */
+  estimates: PortalEstimate[];
 }
 
 const DETAIL_WINDOW_DAYS = 90;
 const OLDER_CAP = 300;
+const ESTIMATE_WINDOW_DAYS = 180;
+const ESTIMATE_CAP = 100;
+
+/**
+ * The customer-safe estimates projection (R3-17's remainder: the portal
+ * showed PO status but nothing about where their quotes stand). Only
+ * estimates actually SENT to the customer appear — drafts and
+ * pushed-but-unsent internals never leave the shop. States, plainly:
+ * awaiting (live Review & Approve link), approved, ordered (approved and
+ * an order exists), changes requested, expired (link lapsed undecided).
+ */
+async function buildPortalEstimates(
+  service: SupabaseClient,
+  netsuiteId: string,
+): Promise<PortalEstimate[]> {
+  const cutoff = new Date(Date.now() - ESTIMATE_WINDOW_DAYS * 86_400_000).toISOString();
+  const { data: rows } = await service
+    .from('estimates')
+    .select('estimate_number, title, grand_total, sent_for_approval_at, customer_approved, customer_approved_at, customer_rejected_at, approval_token, approval_token_expires_at, netsuite_so_id, status')
+    .eq('customer_netsuite_id', netsuiteId)
+    .not('sent_for_approval_at', 'is', null)
+    .gte('sent_for_approval_at', cutoff)
+    .order('sent_for_approval_at', { ascending: false })
+    .limit(ESTIMATE_CAP);
+
+  const now = Date.now();
+  return (rows || []).map((e: any): PortalEstimate => {
+    const approved = !!e.customer_approved || e.status === 'accepted';
+    const tokenLive = !!e.approval_token
+      && (!e.approval_token_expires_at || new Date(e.approval_token_expires_at).getTime() > now);
+    let state: PortalEstimate['state'];
+    if (approved && e.netsuite_so_id) state = 'ordered';
+    else if (approved) state = 'approved';
+    else if (e.customer_rejected_at) state = 'changes_requested';
+    else if (tokenLive) state = 'awaiting';
+    else state = 'expired';
+    const meta: Record<PortalEstimate['state'], { label: string; color: string }> = {
+      awaiting: { label: 'Awaiting your approval', color: '#f59e0b' },
+      approved: { label: 'Approved', color: '#16a34a' },
+      ordered: { label: 'Approved — order placed', color: '#16a34a' },
+      changes_requested: { label: 'Changes requested', color: '#8b5cf6' },
+      expired: { label: 'Approval link expired — ask us to resend', color: '#9ca3af' },
+    };
+    return {
+      number: e.estimate_number || null,
+      title: e.title || null,
+      sentAt: e.sent_for_approval_at || null,
+      total: e.grand_total != null ? Number(e.grand_total) || null : null,
+      state,
+      stateLabel: meta[state].label,
+      color: meta[state].color,
+      decidedAt: e.customer_approved_at || e.customer_rejected_at || null,
+      approveUrl: state === 'awaiting' ? `/approve/estimate/${e.approval_token}` : null,
+    };
+  });
+}
 
 const num = (v: unknown) => parseFloat(String(v ?? 0)) || 0;
 
@@ -267,6 +340,7 @@ export async function buildPoPortalData(
   const detailViews = await Promise.all(detailPos.map(p => buildPo(p, true)));
   const olderViews = await Promise.all(olderPos.map(p => buildPo(p, false)));
   const all = [...detailViews, ...olderViews];
+  const estimates = await buildPortalEstimates(service, customer.netsuite_id);
 
   const fulfilled90 = detailViews.filter(p => p.stage.key === 'fulfilled' || p.stage.key === 'closed').length;
   return {
@@ -280,5 +354,6 @@ export async function buildPoPortalData(
       total: pos.length,
     },
     pos: all,
+    estimates,
   };
 }
