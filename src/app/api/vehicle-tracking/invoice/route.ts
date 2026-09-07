@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { createInvoiceFromSO, fulfillSalesOrder } from '@/lib/netsuite';
+import { logAudit } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -100,6 +101,8 @@ export async function POST(req: NextRequest) {
 
   // Assigned once the claim row exists, so the catch below can release it.
   let releaseOnError: (() => Promise<void>) | null = null;
+  // Set when allowAdditional suppressed the legacy-invoice guard (R4-5 audit).
+  let legacyGuardBypassed = false;
 
   try {
     const { data: checkin, error: cErr } = await supabase
@@ -152,6 +155,11 @@ export async function POST(req: NextRequest) {
           legacyInvoice: true,
           canAdditional: true,
         }, { status: 409 });
+      }
+      // The flag actually suppressed the guard above — an exception worth a
+      // paper trail (R4-5), written only if the invoice really gets created.
+      if (checkin.invoice_number && ledger.length === 0 && allowAdditional) {
+        legacyGuardBypassed = true;
       }
     }
 
@@ -275,6 +283,22 @@ export async function POST(req: NextRequest) {
         .eq('id', checkinId)
         .is('invoice_number', null);
       if (stampErr) console.error('checkin invoice stamp failed:', stampErr.message);
+    }
+
+    // R4-5: the exceptions digest reads this — a human overrode the
+    // unknown-coverage guard and an invoice actually posted.
+    if (legacyGuardBypassed) {
+      await logAudit(supabase, {
+        actorId: auth.user.id,
+        table: 'fleet_checkins',
+        recordId: checkinId,
+        action: 'invoice_allow_additional',
+        detail: {
+          existingInvoice: checkin.invoice_number,
+          salesOrderId,
+          newInvoice: stampNumber,
+        },
+      });
     }
 
     const finalLedger = ledger !== null ? await loadSoInvoices(checkinId) : null;

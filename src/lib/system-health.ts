@@ -45,6 +45,7 @@ export const HEALTH_MONITORS: HealthMonitor[] = [
   { syncType: 'shop_shift_sweep', label: 'Forgotten shop-timer sweep', intervalMinutes: 1440 },
   { syncType: 'metric_snapshots', label: 'Nightly executive metric snapshots', intervalMinutes: 1440 },
   { syncType: 'weekly_customer_digest', label: 'Weekly customer digest', intervalMinutes: 10080 },
+  { syncType: 'exceptions_digest', label: 'Weekly exceptions & overrides digest', intervalMinutes: 10080 },
 ];
 
 /** A run is stale once it's overdue by more than a full interval (2× spacing), plus grace for slow runs. */
