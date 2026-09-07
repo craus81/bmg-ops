@@ -34,6 +34,7 @@ import { PartLabel } from '@/components/PartLabel';
 import { canonicalPartFromCache } from '@/lib/parts-cache';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
 import GraphicsMaterialsCard from '@/components/GraphicsMaterialsCard';
+import GraphicsRollPlan from '@/components/GraphicsRollPlan';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { DropZone } from '@/components/DropZone';
 import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
@@ -1552,6 +1553,18 @@ export default function GraphicsJobRecordPage() {
           compact
         />
       </div>
+
+      {/* ── Roll plan (migration 266) — the wrap-quote nesting engine on
+          this job's pieces; "Log material from plan" writes the computed
+          usage into the material log below. ── */}
+      <GraphicsRollPlan
+        jobId={job.id}
+        jobQuantity={job.quantity ?? null}
+        vinylType={job.vinyl_type ?? null}
+        vinylColor={job.vinyl_color ?? null}
+        wrapQuoteId={(job as any).wrap_quote_id ?? null}
+        nesting={(job as any).nesting ?? null}
+      />
 
       {/* ── Material usage log — feeds the Graphics Costs report ── */}
       <div style={card}>
