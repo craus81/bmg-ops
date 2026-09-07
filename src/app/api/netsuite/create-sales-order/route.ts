@@ -3,6 +3,7 @@ import { createSalesOrder, findCustomer, findItems, findLocation } from '@/lib/n
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { ensureUpfitProjectForSo } from '@/lib/upfit-projects';
 
 const Schema = z.object({ poId: z.string().uuid() });
 
@@ -144,12 +145,34 @@ export async function POST(req: NextRequest) {
         netsuite_so_number: result.salesOrderNumber || null,
       })
       .eq('id', poId);
+
+    // A PO-driven SO gets its upfit project like a converted estimate does
+    // (R3-11 — this path created nothing downstream, so someone re-typed
+    // the SO number into a hand-made project). Only with a real NetSuite
+    // id: a project keyed on the sentinel would never match anything.
+    // Non-fatal, and runs even when the PO stamp failed — the SO exists.
+    let upfitProject: { id: string; created: boolean } | null = null;
+    if (result.salesOrderId) {
+      const soTotal = Math.round(soLineItems.reduce((s, li) => s + (li.quantity * li.rate || 0), 0) * 100) / 100;
+      upfitProject = await ensureUpfitProjectForSo(supabase, {
+        netsuiteSoId: result.salesOrderId,
+        netsuiteSoNumber: result.salesOrderNumber || null,
+        customerName: po.customer || nsCustomer.name || null,
+        customerNetsuiteId: nsCustomer.id,
+        projectName: [po.customer || nsCustomer.name, `PO ${po.po_number}`].filter(Boolean).join(' — '),
+        soTotal,
+        createdBy: auth.user.id,
+        noteContent: `Project created automatically: customer PO #${po.po_number} pushed to NetSuite as SO #${result.salesOrderNumber || result.salesOrderId}`,
+      });
+    }
+
     if (soStampErr || !result.salesOrderId) {
       console.error('create-sales-order: stamp issue after NetSuite create:', soStampErr?.message || 'no id returned');
       return NextResponse.json({
         status: 'created',
         salesOrderId: result.salesOrderId || null,
         salesOrderNumber: result.salesOrderNumber || null,
+        upfitProject: upfitProject || undefined,
         warning: soStampErr
           ? `The sales order was created but the PO reference stamp failed (${soStampErr.message}) — record it on the PO by hand.`
           : 'The sales order was created but NetSuite did not return its id — find it in NetSuite and fix the PO reference by hand.',
@@ -163,6 +186,7 @@ export async function POST(req: NextRequest) {
       customer: nsCustomer.name,
       lineItemCount: soLineItems.length,
       unmatchedParts: unmatchedParts.length > 0 ? unmatchedParts : undefined,
+      upfitProject: upfitProject || undefined,
     });
   } catch (err: any) {
     console.error('Create NetSuite SO error:', err);

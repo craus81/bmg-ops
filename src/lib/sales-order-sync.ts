@@ -2,6 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQuery, suiteqlQueryAll, isSuiteqlError } from '@/lib/netsuite';
 import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 import { normalizeItemNumber } from '@/lib/vendor-po-sync';
+import { isOpenSalesOrderStatus } from '@/lib/parts-demand';
+import { ensureUpfitProjectForSo } from '@/lib/upfit-projects';
 
 /**
  * Incremental sync of customer sales orders from NetSuite into
@@ -82,6 +84,9 @@ export interface SalesOrderSyncResult {
   lines: number;
   matched: number;
   backfilled: number;
+  /** Upfit projects auto-created for newly discovered, estimate-matched,
+   *  open SOs (R3-11) — the conversion's project step arriving late. */
+  projectsCreated: number;
   /** Header upserts that failed (with samples in the heartbeat) — a stale
    *  mirror is a visible System Health condition, not a silent one. */
   headerErrors: number;
@@ -431,6 +436,7 @@ export async function syncSalesOrders(
   let lineCount = 0;
   let matched = 0;
   let backfilled = 0;
+  let projectsCreated = 0;
   let headerErrors = 0;
   const headerErrorSamples: string[] = [];
   let lineErrors = 0;
@@ -502,6 +508,19 @@ export async function syncSalesOrders(
         matches.set(String(so.id), classifySoMatch({ createdfrom: so.createdfrom, otherrefnum: so.otherrefnum, memo: so.memo }));
       }
       const estimates = await resolveEstimates(service, matches);
+
+      // Which of this page's SOs the mirror has never seen — only those get
+      // the auto-project treatment below. An SO already mirrored was either
+      // handled on discovery or predates the feature; re-creating a
+      // deliberately deleted project on every sync would fight the user.
+      const preExisting = new Set<string>();
+      for (let i = 0; i < soIds.length; i += FILTER_CHUNK) {
+        const { data: seen } = await service
+          .from('netsuite_sales_orders')
+          .select('netsuite_id')
+          .in('netsuite_id', soIds.slice(i, i + FILTER_CHUNK));
+        for (const r of seen || []) preExisting.add(String(r.netsuite_id));
+      }
 
       const syncedAt = new Date().toISOString();
       const headerRows = sos.map(so => {
@@ -578,6 +597,40 @@ export async function syncSalesOrders(
         if (!backfillErr) backfilled++;
       }
 
+      // R3-11: a NEWLY discovered SO that matches one of our estimates gets
+      // its upfit project, exactly as an in-app conversion would have made —
+      // the SO was created inside NetSuite (or a conversion's write-back
+      // died), and without this the job never reaches parts readiness or
+      // the shop board. Strong matches only (memo is review-only), open SOs
+      // only, and never when the estimate is linked to a DIFFERENT order.
+      for (const so of sos) {
+        const nsId = String(so.id);
+        const match = matches.get(nsId);
+        const estimate = estimates.get(nsId);
+        if (preExisting.has(nsId) || !idByNsId.has(nsId)) continue;
+        if (!estimate || !match || match.source === 'memo') continue;
+        if (estimate.netsuite_so_id && String(estimate.netsuite_so_id) !== nsId) continue;
+        if (!isOpenSalesOrderStatus(so.status, so.status_label)) continue;
+        const { data: est } = await service
+          .from('estimates')
+          .select('estimate_number, title, customer_name, customer_netsuite_id, grand_total')
+          .eq('id', estimate.id)
+          .maybeSingle();
+        const ensured = await ensureUpfitProjectForSo(service, {
+          netsuiteSoId: nsId,
+          netsuiteSoNumber: so.tranid || null,
+          estimateId: estimate.id,
+          estimateNumber: est?.estimate_number || null,
+          title: est?.title || null,
+          customerName: est?.customer_name || so.customer_name || null,
+          customerNetsuiteId: est?.customer_netsuite_id || (so.customer_id ? String(so.customer_id) : null),
+          estimatedTotal: est?.grand_total ?? null,
+          soTotal: so.total != null ? Math.abs(parseFloat(so.total)) || null : null,
+          noteContent: `Project created automatically: the NetSuite sync discovered SO #${so.tranid || nsId} for ${est?.estimate_number || 'a linked estimate'}`,
+        });
+        if (ensured?.created) projectsCreated++;
+      }
+
       // Replace lines wholesale for every header that landed — quantities/
       // billing move and lines get deleted in NetSuite; delete+insert keeps
       // us exact. One delete and a few inserts per page instead of two
@@ -642,6 +695,7 @@ export async function syncSalesOrders(
   const droppedColumns: OptionalHeaderColumn[] = settled ? ALL_OPTIONAL_HEADER_COLUMNS.filter(c => !settled.includes(c)) : [];
   const counts = {
     modified, synced, lines: lineCount, matched, backfilled,
+    ...(projectsCreated > 0 ? { projectsCreated } : {}),
     ...(headerErrors > 0 ? { headerErrors, headerErrorSamples } : {}),
     ...(lineErrors > 0 ? { lineErrors, lineErrorSamples } : {}),
     // Surfaces in System Health: which nice-to-have columns this account
@@ -681,7 +735,7 @@ export async function syncSalesOrders(
   }
 
   return {
-    modified, synced, lines: lineCount, matched, backfilled, headerErrors,
+    modified, synced, lines: lineCount, matched, backfilled, projectsCreated, headerErrors,
     partial, windowProcessed: win.processed, droppedColumns,
     ...(error ? { error } : {}),
     syncStateWrite,

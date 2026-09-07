@@ -8,6 +8,7 @@ import { logAudit } from '@/lib/audit';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { syncShopInboundForSalesOrder } from '@/lib/shop-inbound';
+import { ensureUpfitProjectForSo } from '@/lib/upfit-projects';
 import { estimateContextMemo } from '@/lib/estimate-document';
 import { resolveOrPromoteByName } from '@/lib/promote-prospect';
 import { isGraphicsLine } from '@/lib/graphics-lines';
@@ -324,69 +325,23 @@ export async function POST(req: NextRequest) {
     // Conversion used to create nothing downstream: someone had to know to
     // open Upfit Projects, hand-create a project, and re-type the SO number
     // the app just generated before parts readiness/allocations were even
-    // reachable. Find-or-create by estimate_id (migration 225's partial
-    // unique index guards the race). Non-fatal — the SO already exists.
-    let upfitProject: { id: string; created: boolean } | null = null;
-    try {
-      const { data: existing } = await supabase
-        .from('upfit_projects')
-        .select('id, netsuite_so_id')
-        .eq('estimate_id', estimateId)
-        .maybeSingle();
-      if (existing) {
-        if (!existing.netsuite_so_id) {
-          await supabase
-            .from('upfit_projects')
-            .update({
-              netsuite_so_id: result.salesOrderId,
-              netsuite_so_number: result.salesOrderNumber || null,
-              so_total: estimate.grand_total ?? null,
-            })
-            .eq('id', existing.id);
-        }
-        upfitProject = { id: existing.id, created: false };
-      } else {
-        const projectName = [estimate.customer_name, estimate.title || estimate.estimate_number]
-          .filter(Boolean).join(' — ') || `Estimate ${estimate.estimate_number || estimateId.slice(0, 8)}`;
-        const { data: createdProject, error: projectErr } = await supabase
-          .from('upfit_projects')
-          .insert({
-            project_name: projectName,
-            status: 'sold',
-            customer_name: estimate.customer_name || null,
-            customer_netsuite_id: customerId,
-            estimate_id: estimateId,
-            estimate_number: estimate.estimate_number || null,
-            netsuite_so_id: result.salesOrderId,
-            netsuite_so_number: result.salesOrderNumber || null,
-            estimated_total: estimate.grand_total ?? null,
-            so_total: estimate.grand_total ?? null,
-            created_by: auth.user.id,
-          })
-          .select('id')
-          .single();
-        if (projectErr) {
-          if (projectErr.code === '23505') {
-            // Racing conversion created it between our select and insert.
-            const { data: winner } = await supabase
-              .from('upfit_projects').select('id').eq('estimate_id', estimateId).maybeSingle();
-            if (winner) upfitProject = { id: winner.id, created: false };
-          } else {
-            console.error('auto upfit-project create failed:', projectErr);
-          }
-        } else if (createdProject) {
-          upfitProject = { id: createdProject.id, created: true };
-          await supabase.from('upfit_project_notes').insert({
-            project_id: createdProject.id,
-            note_type: 'sales_order',
-            content: `Project created automatically: ${estimate.estimate_number || 'estimate'} converted to SO #${result.salesOrderNumber || result.salesOrderId}`,
-            created_by: auth.user.id,
-          });
-        }
-      }
-    } catch (projErr) {
-      console.error('auto upfit-project step failed:', projErr);
-    }
+    // reachable. Shared with the PO-push, link-so, and SO-sync paths
+    // (R3-11); never throws — the SO already exists.
+    const upfitProject = !result.salesOrderId ? null : await ensureUpfitProjectForSo(supabase, {
+      netsuiteSoId: result.salesOrderId,
+      netsuiteSoNumber: result.salesOrderNumber || null,
+      estimateId,
+      estimateNumber: estimate.estimate_number || null,
+      title: estimate.title || null,
+      customerName: estimate.customer_name || null,
+      customerNetsuiteId: customerId,
+      estimatedTotal: estimate.grand_total ?? null,
+      soTotal: estimate.grand_total ?? null,
+      projectName: [estimate.customer_name, estimate.title || estimate.estimate_number]
+        .filter(Boolean).join(' — ') || `Estimate ${estimate.estimate_number || estimateId.slice(0, 8)}`,
+      createdBy: auth.user.id,
+      noteContent: `Project created automatically: ${estimate.estimate_number || 'estimate'} converted to SO #${result.salesOrderNumber || result.salesOrderId}`,
+    });
 
     // Put the vehicle on the shop's Arriving board (V1). Non-fatal — the SO
     // already exists; a board hiccup shouldn't fail the conversion.
