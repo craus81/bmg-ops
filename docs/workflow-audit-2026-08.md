@@ -82,7 +82,7 @@ _Living status of the Part 5 roadmap. Updated as fixes ship._
 | **Hygiene** — delete the dead set | ✅ done | Dead routes/components/libs/page deleted + stale doc passages fixed after a 14-agent zero-reference verification (#667). CI dead-code check added (knip `--include files` in ci.yml), which also caught + deleted the two orphaned demo Buttons. Dormant tables dropped after owner sign-off 2026-08-27 (migration 230, #669) — the drop surfaced a production-only policy drift that blocked deploys for ~4h until #675; see the Hygiene section. |
 | **Round 2** — re-verified 2026-08-28 (Part 6) | ⚠️ partial | A fresh code-level re-verification of all 118 findings: 32 fixed, 65 open, 21 partial. Roadmap items **1–8 are shipped** (#679, #680, #682, #683, #684, #685, #686) — including a CRITICAL this document never had (self-service privilege escalation, migration 233). Four owner decisions were taken 2026-08-28 and built; only the R2-goes-private call is still open. **Items 19 and 21 remain open** (2 — R2-goes-private, labor capture). Shipped 2026-08-30: the Stage 1 build-out (#701–#704, closing item 18), the two Stage 1 owner decisions (#706 lead tier, #707 deletion→NetSuite), and estimate integrity (#708–#710, items 9–11). Shipped 2026-08-30: the whole **vehicle custody** block (#712–#715, items 12–16). Shipped 2026-08-30 (second wave): **parts ordering & receiving** (#717–#719, item 17 — the audit's largest build: request queue → NetSuite PO → receiving with item receipts) and the **route→permission manifest** (#721, item 20 — all 251 routes declare + prove their guard; the sweep fixed the unauthenticated Google OAuth pair). |
 
-| **Round 3** — re-audit 2026-08-30 (Part 7) | 🔄 roadmap open | Nine-probe re-verification at `1ea2015`, every MAJOR+ finding re-verified by hand. **Round 2 holds** — all 19 ships confirmed at HEAD (5 partial caveats). ~90 new findings distilled into the Part 7 roadmap: 6 CRITICAL truncation bugs that move money/state, 8 E-SIGN forgery/loss holes, 7 non-idempotent NetSuite money paths (zero unique-index backing), 3 custody/CNI blockers — one, CNI company invites, failing 500 in production since #715 — the `forceChannels` no-op, and this week's parts-loop regressions (hotfixed same day, #724). Items 19 and 21 now carry written decision packages (the R2-flip tier checklist, the labor-capture touch-map). Shipped 2026-08-31: **Stage 2 closed** — the estimate correctness set (#726) and E-SIGN hardening (#727, migration 242) retire R3-6, R3-7, and every remaining Stage 2 walkthrough finding, and #729 ships the R3-17 change-order core (Duplicate + duplicate-as-revision with `supersedes_estimate_id` lineage, migration 243) — Stage 2 closed outright. **R3-1 closed in full** (#732 the six CRITICALs with fail-closed reads, #733 the MAJOR sweep) — every §7.2.2 truncation finding fixed. **Stage 3 closed** (#735 wrap-quote reconciliation + honest win counting + visible provenance, #736 customer reminders w/ migration 244) — all six capture-side findings shipped. **Stage 4 closed** (#740 atomic conversion claim + vendor-PO sync honesty, #741 schema-cache hardening after the live SO1064 stranding that #738/#739 repaired in parallel with migration 246 + a manual SO link) — the earlier findings were verified already fixed at HEAD (N2 phase 1 auto-project, item 9 staff walls, item 10 estimate closing, 17A–C ordering) and the dead-list re-verdicted. **Stage 5 closed** (#746 + migration 247: graphics_jobs UPDATE wall, presigned proof artwork, pre-invoice packing list; fan-out/transition-rules/proof-gate verified already shipped) — roll-nesting for production stays as the stage's one open enhancement. **Stage 6 closed** (#751 + migration 248: guide links w/ auto-stamp on attach, the CNI completion photo gate, scale-change recalibration with px_source provenance, the verification modal's 📐 guide link, super_admin walls; the inverted checklist was already fixed) — a full CNI checklist stays as its open enhancement, and the app-wide requireAdmin-excludes-super_admin question is flagged for an owner call. **Stage 7 closed** 2026-09-01 (#756 + migration 249: `POST /api/checkins` is the one writer with photos verified in storage before the row exists and the table's INSERT policies dropped — Round 3 caveat 12; arrival back-link + dedupe walk VIN → SO → unique customer and upfit rows carry SO identifiers — caveat 14; and the VIN→SO prefill the docs promised finally exists) — #712/#713/#714 held; R3-10's remainder (per-visit links, profileRoles, scans gate, auto-archive) stays with Stage 8. **Stage 8 closed** 2026-09-02 (#759 + migration 250: the completion gate moves to the DB — a 233-style trigger denies signed-in clients writing status/lane/QC, closing the route-only bypass; roles[]-aware admin override; scans allowlist; per-visit `?visit=` pick-list links; daily auto-archive of week-old shipped visits; Message Customer admin-only, ending the installer dead-end) — R3-10 shipped in full across the two custody closes; #650/#632/#634/#635/#638/#663 re-verified at HEAD; R3-21 labor capture stays the stage's open decision-package build. **Stage 9 closed** 2026-09-02 (#761 + migration 251: the invoice money paths get the claim/checked-stamp/never-falsy discipline — create-invoice refuses re-billing without an explicit tranche flag, graphics + parts-mail claims, the `created-id-unknown` sentinel keeps every already-created guard armed; invoice-vehicles always stamps billed scans; ar-payment-sync matches internal ids and backfills tranids; billing asks fall back to all admins and fire on picked_up/installed too; finance admitted to /invoices, ending the bounce-alert dead-end; dead scanPhotos deleted) — R3-8's invoice half shipped; the estimates/push, create-customer and promote-prospect paths ride with R3-9/R3-16, unique netsuite_*_id indexes stay open (blind index builds could brick deploys on existing dupes); R3-14's build half (per-SO invoices, a send step, a never-invoiced tile) is the stage's open build. **Stage 10 closed** 2026-09-02 (#763 + migration 252: the shop sees the approved 3D layout — the project's Linked Records resolves the design through the shared estimate id, snapshot for every role + designer link for configurator holders; a confirmed Cancel action finally reaches 228's release-on-cancel; unplaced parts get an undoable remove in the Review card; and `upfit_designs`' USING(true) read — the stage's own CRITICAL class, recreated on a post-224 table — is staff-only) — API walls/auto-project/allocation trigger held at HEAD; per-SKU meshes, trade packages and the magic-link viewer stay Part 4's build tier. **CNI subsystem closed** 2026-09-02 (#765 + migration 253: R3-2 in full — reviewers see the photos they judge via the credentialed download route, denials are re-reviewable and closure counts the newest photo per vin+type so a reshoot un-bricks the payout, `photos_approved` is route-maintained, installers get thumbnails; invites/bids writes close at the DB with the mark-seen stamp routed and scoped; R3-15's writeback flips the source check-in's graphics lane on VIN completion) — the notification lifecycle, 226's job walls, the invoice-flow kill (231) and the outsource bridge (232) all held at HEAD; the CNI task checklist stays the section's open build. Every Part 1 walkthrough section is now closed. **Shipped 2026-09-02 (post-Part-1):** the **estimate change-request reply path** (#767 — a rejected estimate's change request opens as a seeded customer thread in the comms inbox via "Reply to customer", and the rejection alert reliably emails the sales targets with Reply-To pointed at the customer, so a plain mail-client reply reaches them; the inbox's estimate context now links back to the estimate) and **R3-4 in full** (#768 — the `forceChannels` no-op fixed: explicit channels intersect with user preferences and force is the real bypass, all 38 force sites triaged to 11 justified keeps; `getCniStaffIds` scoped to `cni_admin` feature holders with an all-admins fallback; per-VIN CNI photo fan-out collapsed to one ping per review batch) — and **R3-5 in full** (#770 — per-recipient `cniJobLinkFor` ends cross-portal mention bounces, the ready-for-install gate admits the techs its notification targets, thread replies CTA to the customer portal, and the hand-built-URL migration is finished: the sweep finds zero). **§7.2.7 is closed outright.** **R3-9 shipped in full** 2026-09-02 (#805 + migration 254 — CRM creates enforce the dupe guard through the API with Add-Record identity copied from the mirror; the NetSuite linkage columns are service-role-only at the DB with the PUT `.strict()`, admin-gated and audited; customer deletes are checked with a kept-inactive fallback and an honest file-cascade confirm; the credit-app matcher strips `*` and sanitizes its email arm; `checkRateLimit` buckets no-IP traffic; and the two §7.2.4 riders closed with it — the promote race via the atomic claim, create-customer's 502-on-success via id recovery). **§7.2.5 is closed outright.** **Remainder re-verified 2026-09-06 (§7.4)** after 33 parallel-session PRs (#772–#804): R3-16's link-by-id half shipped in parallel (migration 251), the lead tier was deliberately reversed to a create-time default (#772), and every other open item re-verdicted at HEAD with a plain-language proposed fix — sharpest: the estimate-push write-back (still unchecked, duplicate-on-retry) and a NEW per-SO invoice trap (per-SO buttons over a one-invoice-per-check-in data model). **§7.4 items 1+2 shipped** 2026-09-07 (#808 + migrations 261/262): the estimate push gets the full claim/checked-stamp discipline — `push_claimed_at` claimed before the NetSuite call, the create write-back conditional + checked + never-falsy (`created-id-unknown` sentinel), a failed create-stamp HOLDS the claim and warns on the push dialog — and vehicles bill one invoice PER sales order via the `fleet_checkin_invoices` insert-as-claim ledger (UNIQUE pair turns concurrent clicks away, per-SO chips + print in the completion modal, first invoice still on the legacy scalar, explicit confirm over pre-ledger invoices of unknown coverage). |
+| **Round 3** — re-audit 2026-08-30 (Part 7) | 🔄 roadmap open | Nine-probe re-verification at `1ea2015`, every MAJOR+ finding re-verified by hand. **Round 2 holds** — all 19 ships confirmed at HEAD (5 partial caveats). ~90 new findings distilled into the Part 7 roadmap: 6 CRITICAL truncation bugs that move money/state, 8 E-SIGN forgery/loss holes, 7 non-idempotent NetSuite money paths (zero unique-index backing), 3 custody/CNI blockers — one, CNI company invites, failing 500 in production since #715 — the `forceChannels` no-op, and this week's parts-loop regressions (hotfixed same day, #724). Items 19 and 21 now carry written decision packages (the R2-flip tier checklist, the labor-capture touch-map). Shipped 2026-08-31: **Stage 2 closed** — the estimate correctness set (#726) and E-SIGN hardening (#727, migration 242) retire R3-6, R3-7, and every remaining Stage 2 walkthrough finding, and #729 ships the R3-17 change-order core (Duplicate + duplicate-as-revision with `supersedes_estimate_id` lineage, migration 243) — Stage 2 closed outright. **R3-1 closed in full** (#732 the six CRITICALs with fail-closed reads, #733 the MAJOR sweep) — every §7.2.2 truncation finding fixed. **Stage 3 closed** (#735 wrap-quote reconciliation + honest win counting + visible provenance, #736 customer reminders w/ migration 244) — all six capture-side findings shipped. **Stage 4 closed** (#740 atomic conversion claim + vendor-PO sync honesty, #741 schema-cache hardening after the live SO1064 stranding that #738/#739 repaired in parallel with migration 246 + a manual SO link) — the earlier findings were verified already fixed at HEAD (N2 phase 1 auto-project, item 9 staff walls, item 10 estimate closing, 17A–C ordering) and the dead-list re-verdicted. **Stage 5 closed** (#746 + migration 247: graphics_jobs UPDATE wall, presigned proof artwork, pre-invoice packing list; fan-out/transition-rules/proof-gate verified already shipped) — roll-nesting for production stays as the stage's one open enhancement. **Stage 6 closed** (#751 + migration 248: guide links w/ auto-stamp on attach, the CNI completion photo gate, scale-change recalibration with px_source provenance, the verification modal's 📐 guide link, super_admin walls; the inverted checklist was already fixed) — a full CNI checklist stays as its open enhancement, and the app-wide requireAdmin-excludes-super_admin question is flagged for an owner call. **Stage 7 closed** 2026-09-01 (#756 + migration 249: `POST /api/checkins` is the one writer with photos verified in storage before the row exists and the table's INSERT policies dropped — Round 3 caveat 12; arrival back-link + dedupe walk VIN → SO → unique customer and upfit rows carry SO identifiers — caveat 14; and the VIN→SO prefill the docs promised finally exists) — #712/#713/#714 held; R3-10's remainder (per-visit links, profileRoles, scans gate, auto-archive) stays with Stage 8. **Stage 8 closed** 2026-09-02 (#759 + migration 250: the completion gate moves to the DB — a 233-style trigger denies signed-in clients writing status/lane/QC, closing the route-only bypass; roles[]-aware admin override; scans allowlist; per-visit `?visit=` pick-list links; daily auto-archive of week-old shipped visits; Message Customer admin-only, ending the installer dead-end) — R3-10 shipped in full across the two custody closes; #650/#632/#634/#635/#638/#663 re-verified at HEAD; R3-21 labor capture stays the stage's open decision-package build. **Stage 9 closed** 2026-09-02 (#761 + migration 251: the invoice money paths get the claim/checked-stamp/never-falsy discipline — create-invoice refuses re-billing without an explicit tranche flag, graphics + parts-mail claims, the `created-id-unknown` sentinel keeps every already-created guard armed; invoice-vehicles always stamps billed scans; ar-payment-sync matches internal ids and backfills tranids; billing asks fall back to all admins and fire on picked_up/installed too; finance admitted to /invoices, ending the bounce-alert dead-end; dead scanPhotos deleted) — R3-8's invoice half shipped; the estimates/push, create-customer and promote-prospect paths ride with R3-9/R3-16, unique netsuite_*_id indexes stay open (blind index builds could brick deploys on existing dupes); R3-14's build half (per-SO invoices, a send step, a never-invoiced tile) is the stage's open build. **Stage 10 closed** 2026-09-02 (#763 + migration 252: the shop sees the approved 3D layout — the project's Linked Records resolves the design through the shared estimate id, snapshot for every role + designer link for configurator holders; a confirmed Cancel action finally reaches 228's release-on-cancel; unplaced parts get an undoable remove in the Review card; and `upfit_designs`' USING(true) read — the stage's own CRITICAL class, recreated on a post-224 table — is staff-only) — API walls/auto-project/allocation trigger held at HEAD; per-SKU meshes, trade packages and the magic-link viewer stay Part 4's build tier. **CNI subsystem closed** 2026-09-02 (#765 + migration 253: R3-2 in full — reviewers see the photos they judge via the credentialed download route, denials are re-reviewable and closure counts the newest photo per vin+type so a reshoot un-bricks the payout, `photos_approved` is route-maintained, installers get thumbnails; invites/bids writes close at the DB with the mark-seen stamp routed and scoped; R3-15's writeback flips the source check-in's graphics lane on VIN completion) — the notification lifecycle, 226's job walls, the invoice-flow kill (231) and the outsource bridge (232) all held at HEAD; the CNI task checklist stays the section's open build. Every Part 1 walkthrough section is now closed. **Shipped 2026-09-02 (post-Part-1):** the **estimate change-request reply path** (#767 — a rejected estimate's change request opens as a seeded customer thread in the comms inbox via "Reply to customer", and the rejection alert reliably emails the sales targets with Reply-To pointed at the customer, so a plain mail-client reply reaches them; the inbox's estimate context now links back to the estimate) and **R3-4 in full** (#768 — the `forceChannels` no-op fixed: explicit channels intersect with user preferences and force is the real bypass, all 38 force sites triaged to 11 justified keeps; `getCniStaffIds` scoped to `cni_admin` feature holders with an all-admins fallback; per-VIN CNI photo fan-out collapsed to one ping per review batch) — and **R3-5 in full** (#770 — per-recipient `cniJobLinkFor` ends cross-portal mention bounces, the ready-for-install gate admits the techs its notification targets, thread replies CTA to the customer portal, and the hand-built-URL migration is finished: the sweep finds zero). **§7.2.7 is closed outright.** **R3-9 shipped in full** 2026-09-02 (#805 + migration 254 — CRM creates enforce the dupe guard through the API with Add-Record identity copied from the mirror; the NetSuite linkage columns are service-role-only at the DB with the PUT `.strict()`, admin-gated and audited; customer deletes are checked with a kept-inactive fallback and an honest file-cascade confirm; the credit-app matcher strips `*` and sanitizes its email arm; `checkRateLimit` buckets no-IP traffic; and the two §7.2.4 riders closed with it — the promote race via the atomic claim, create-customer's 502-on-success via id recovery). **§7.2.5 is closed outright.** **Remainder re-verified 2026-09-06 (§7.4)** after 33 parallel-session PRs (#772–#804): R3-16's link-by-id half shipped in parallel (migration 251), the lead tier was deliberately reversed to a create-time default (#772), and every other open item re-verdicted at HEAD with a plain-language proposed fix — sharpest: the estimate-push write-back (still unchecked, duplicate-on-retry) and a NEW per-SO invoice trap (per-SO buttons over a one-invoice-per-check-in data model). **§7.4 items 1+2 shipped** 2026-09-07 (#808 + migrations 261/262): the estimate push gets the full claim/checked-stamp discipline — `push_claimed_at` claimed before the NetSuite call, the create write-back conditional + checked + never-falsy (`created-id-unknown` sentinel), a failed create-stamp HOLDS the claim and warns on the push dialog — and vehicles bill one invoice PER sales order via the `fleet_checkin_invoices` insert-as-claim ledger (UNIQUE pair turns concurrent clicks away, per-SO chips + print in the completion modal, first invoice still on the legacy scalar, explicit confirm over pre-ledger invoices of unknown coverage). **§7.4 items 3–12 ALL shipped** 2026-09-07 as ten same-day PRs (#810–#819, migrations 263/264 — see §7.5): invoice email from completion + never-invoiced tile; auto-projects on every SO path incl. the sync; ETA-change notifications + stale-request cron + board readiness chips; receipts auto-reserve to the requesting project; promotion carries contacts; the portal's Estimates section; lost reasons + the restored lead lifecycle + quiet-leads tile; the per-vehicle job-margin report; the pick-list stage chip + menu queue badges; and the guarded unique-index program with its look-first dupe report. Open: the two floor builds (CNI checklist, roll-nesting), the multi-PO join table, notes-to-NetSuite, and the standing owner decisions. |
 
 Per-item status is tagged inline in Part 5 below; Part 6 carries the Round 2 verification and roadmap; Part 7 carries Round 3.
 
@@ -1963,7 +1963,7 @@ compiler.
    number of unknown coverage, so billing another SO there takes an
    explicit "I checked NetSuite" confirmation (the #761 tranche-flag
    precedent).*
-3. **Invoice send step + never-invoiced tile (R3-14 b/c) — OPEN.**
+3. **Invoice send step + never-invoiced tile (R3-14 b/c) — ✅ SHIPPED 2026-09-07 (PR #811).**
    Completion can now PRINT the invoice but not email it, and no tile
    or sweep catches a completed vehicle nobody ever invoiced (the
    dashboard only counts un-invoiced graphics jobs and scan batches).
@@ -1971,14 +1971,14 @@ compiler.
    already uses, with recipients/preview/PDF attach) one click from the
    completion modal, and add a "completed, never invoiced" count that
    looks at vehicles specifically.*
-4. **Projects for PO-driven SOs (R3-11) — PARTIAL.** Converting an
+4. **Projects for PO-driven SOs (R3-11) — ✅ SHIPPED 2026-09-07 (PR #810).** Converting an
    estimate auto-creates the project; a sales order born from a PO, or
    discovered by the sync, still gets no project — someone re-types the
    SO number by hand.
    *Fix: run the same find-or-create block in the create-sales-order
    route and in the SO sync. The mirror was just rebuilt and reliable,
    so the sync half finally has solid ground.*
-5. **Readiness that pushes (R3-12) — 2 of 5.** One-click "request the
+5. **Readiness that pushes (R3-12) — ✅ SHIPPED 2026-09-07 (PR #812; multi-PO join table stays deferred).** One-click "request the
    short parts" and ETA propagation exist. Still missing: readiness
    computed at conversion, a daily sweep that nags about aging pending
    requests, verdicts on the board, an actual notification when a PO's
@@ -1988,42 +1988,42 @@ compiler.
    moves (the write already happens — add the ping); a daily cron that
    lists requests older than N days; then the board chip. Multi-PO needs
    a small join table and is the biggest lift.*
-6. **Receiving → allocation (R3-13) — OPEN.** Received parts land in
+6. **Receiving → allocation (R3-13) — ✅ SHIPPED 2026-09-07 (PR #813).** Received parts land in
    free stock; the project that requested them must re-reserve by hand.
    *Fix: when a receipt posts, follow the purchase request back to its
    project and reserve the received quantity to it automatically —
    capped at what the project still needs.*
-7. **Promote carries everything (R3-16a) — OPEN.** Promotion sends only
+7. **Promote carries everything (R3-16a) — ✅ SHIPPED 2026-09-07, contacts half (PR #814; notes stay an owner decision).** Promotion sends only
    the header fields; contacts added before promotion never reach
    NetSuite as Contacts, and notes never sync at all.
    *Fix: on promote, walk the record's contact list and create each as a
    NetSuite Contact under the new customer (the create-contact call
    already exists and runs for contacts added after linking); decide
    whether notes belong in NetSuite at all before building that half.*
-8. **Customer-facing estimate status (R3-17 remainder) — OPEN.** The
+8. **Customer-facing estimate status (R3-17 remainder) — ✅ SHIPPED 2026-09-07 (PR #815).** The
    brand-new PO portal shows customers where each purchase order stands;
    estimates have no equivalent.
    *Fix: extend that same token portal with an Estimates section —
    sent / approved / expired per estimate — rather than building a
    second portal.*
-9. **Lead lifecycle (R3-18) — OPEN, and nurture regressed.** Deals can
+9. **Lead lifecycle (R3-18) — ✅ SHIPPED 2026-09-07 (PR #816, migration 263).** Deals can
    be marked lost but no reason is ever captured, and the older
    lost/inactive record statuses were dropped in a past migration.
    *Fix: a required "why did we lose this?" picker when a deal is marked
    lost (price / timing / competitor / no response / other + note),
    stored on the deal; restore a lost/nurture status on the record; a
    tile for "quiet leads worth a nurture touch".*
-10. **Job-margin report (R3-19) — PARTIAL.** Installer-cost and
+10. **Job-margin report (R3-19) — ✅ SHIPPED 2026-09-07 (PR #818; labor column lights up with R3-21).** Installer-cost and
     graphics-material half-reports exist; nothing shows a vehicle's
     whole picture (parts from receipts/bills + labor vs the invoice).
     *Fix: one per-vehicle margin report joining item receipts and vendor
     bills to the invoice; the labor column lights up when R3-21 lands.*
-11. **Floor ergonomics (R3-20) — mostly OPEN.** The pick-list shows the
+11. **Floor ergonomics (R3-20) — ✅ SHIPPED 2026-09-07 (PR #817).** The pick-list shows the
     graphics status as a raw green word; purchasing/receiving have no
     pending-count badges.
     *Fix: a real stage chip (color by state, plain-English label) on the
     pick-list, and count badges on the Purchasing/Receiving menu rows.*
-12. **Unique NetSuite-id indexes — OPEN, plus a new wrinkle.** Still no
+12. **Unique NetSuite-id indexes — ✅ SHIPPED 2026-09-07 (PR #819, migration 264).** Still no
     DB-level duplicate protection on the money columns, and the
     promotion flow's customers-mirror upsert assumes a unique constraint
     on the mirror's netsuite id that no migration file defines — if
@@ -2040,3 +2040,73 @@ compiler.
     new PO portal presigns). The requireAdmin-excludes-super_admin
     question is still the owner's call. Roll-nesting for production and
     the CNI install checklist remain the two open floor builds.
+
+## 7.5 The remainder ships — 2026-09-07
+
+Every shippable §7.4 item landed as its own PR the same day, in the
+roadmap's order (#808 took items 1–2 first; see their annotations above):
+
+- **Item 3 (PR #811):** the completion modal's billed rows carry an
+  ✉ Email button opening the standard invoice-email screen (recipients /
+  preview / PDF attach / test-send) prefilled with that invoice; the ops
+  dashboard gained "Completed vehicles never invoiced" — done or shipped
+  in 180 days with no invoice anywhere (legacy scalar or stamped per-SO
+  ledger row), archived included.
+- **Item 4 (PR #810):** one shared `ensureUpfitProjectForSo` (the
+  conversion block's exact semantics) now runs on every path an SO is
+  born — the PO-driven push, the manual link-so repair (which also gets
+  its Arriving-board row), and the SO sync for newly discovered, open,
+  estimate-matched orders. The sync reports `projectsCreated`; a six-way
+  test pins exactly when a project is and isn't created.
+- **Item 5 (PR #812):** a PO's ETA CHANGE now notifies each affected
+  project's assignee + creator and the requesters whose orders ride the
+  PO (the request join also covers the multi-PO gap — a project stamped
+  with its first PO still hears about PO two); a daily cron nags
+  purchasing admins about requests pending 5+ days (3-day re-alert
+  dedupe); and the upfit board cards show parts verdicts — short / on
+  order with last ETA / ready — from one synced-data batch call, zero
+  NetSuite. The multi-PO join *table* stays the deferred big lift.
+- **Item 6 (PR #813):** a posted receipt follows each item's ordered
+  purchase request back to its project and reserves it there — capped by
+  live readiness (what the project still needs AND what's free), the
+  request quantity, and the received amount — with a project timeline
+  note and the requester's arrival ping saying where the parts went.
+- **Item 7 (PR #814):** promotion walks the record's contacts and
+  creates each as a NetSuite Contact under the new customer, stamping
+  ids back so later edits update instead of re-create; failures are
+  counted, surfaced, and retryable from the Contacts card. Notes stay
+  deliberately unpushed — the owner decision the audit called for.
+- **Item 8 (PR #815):** the token portal gained a customer-safe
+  Estimates section — awaiting your approval (with the live Review &
+  Approve link), approved, order placed, changes requested, or link
+  expired — sent estimates only, scoped by real NetSuite customer id.
+- **Item 9 (PR #816, migration 263):** marking a deal lost requires a
+  reason (price / timing / competitor / no response / other + note),
+  shown on the deal and the activity log; the record gets its lifecycle
+  back (Active / Nurture / Lost through the strict PUT — 'converted'
+  stays promotion-only); the dashboard counts quiet ACTIVE leads
+  untouched 30+ days, and parking or closing a record removes it.
+- **Item 10 (PR #818):** `/admin/reports/vehicle-margin` — each invoiced
+  vehicle end to end: live NetSuite invoice totals (scalar + per-SO
+  ledger numbers) vs vendor-PO line costs for the project's POs
+  (request-join + first-PO column) vs priced stock allocations (unpriced
+  parts flagged, never priced as free) vs the installer's VIN-matched
+  bill. Labor shows as — until R3-21 lands, stated on the page.
+- **Item 11 (PR #817):** the pick-list's raw green status word became a
+  real chip (canonical label + color by state), and the More menu's
+  Purchasing/Receiving rows carry live pending counts (requests waiting,
+  receipts needing NetSuite hand-entry).
+- **Item 12 (PR #819, migration 264):** guarded unique indexes on
+  `customers.netsuite_id` and the estimate money columns — each DO block
+  skips if any unique index already covers the column, builds only on
+  CLEAN data, and on dirty data warns with the count and proceeds; the
+  new `/admin/reports/netsuite-dupes` page lists exactly the rows
+  blocking an index, and the loop closes itself (clean → redeploy →
+  the idempotent migration builds it). promote-prospect's mirror write
+  became find-then-write, ending the quiet per-promotion failure
+  wherever the unique index is absent.
+
+Still open after this pass: the two floor builds (CNI install checklist,
+roll-nesting for production — both in progress), the multi-PO join
+table, R3-16a's notes half, and the standing owner decisions (R3-21
+labor capture, R3-22 R2-goes-private, requireAdmin vs super_admin).
