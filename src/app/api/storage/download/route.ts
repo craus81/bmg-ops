@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/api-auth';
+import { requireAuth, storageAccessOf } from '@/lib/api-auth';
 import { checkStoragePath } from '@/lib/storage-guard';
 import { r2PresignGet } from '@/lib/r2';
 
@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
   if (!bucket || !path || bucket.length > 80 || path.length > 1000 || name.length > 300) {
     return NextResponse.json({ error: 'Missing or invalid bucket/path/name' }, { status: 400 });
   }
-  const readErr = checkStoragePath(bucket, path, { write: false });
+  const readErr = checkStoragePath(bucket, path, { write: false, access: storageAccessOf(auth.profile) });
   if (readErr) return NextResponse.json({ error: readErr }, { status: 403 });
 
   try {

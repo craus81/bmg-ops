@@ -5,6 +5,37 @@ import { createClient } from './supabase-browser';
 
 const R2_PUBLIC_URL = process.env.NEXT_PUBLIC_R2_PUBLIC_URL || '';
 
+// R3-22 (owner decision C2, 2026-09-07): the public R2 domain is being
+// edge-limited to non-sensitive paths, so only these prefixes may still be
+// linked through it client-side. Everything else renders through the
+// auth-gated same-origin route (GET /api/storage streams the object behind
+// requireAuth + storage-guard read scoping) — same-origin <img>/fetch/pdfjs
+// all ride the session cookie, so no call site changes shape.
+const PUBLIC_READ_PREFIXES = new Set(['vehicle-templates']);
+
+function readUrl(bucket: string, path: string): string {
+  if (R2_PUBLIC_URL && PUBLIC_READ_PREFIXES.has(bucket)) {
+    return `${R2_PUBLIC_URL}/${bucket}/${path}`;
+  }
+  return `/api/storage?bucket=${bucket}&path=${encodeURIComponent(path)}`;
+}
+
+/**
+ * Rewrite a DB-stored public R2 URL (rows written before R3-22, e.g.
+ * fleet_checkins.proof_url, prospect/estimate file rows) to today's read
+ * path: legacy public-domain URLs for non-allowlisted prefixes become the
+ * auth-gated same-origin URL; anything else passes through untouched.
+ */
+export function resolveStoredFileUrl(url: string | null): string | null {
+  if (!url || !R2_PUBLIC_URL || !url.startsWith(R2_PUBLIC_URL + '/')) return url;
+  const rest = url.slice(R2_PUBLIC_URL.length + 1);
+  const slash = rest.indexOf('/');
+  if (slash <= 0) return url;
+  const bucket = rest.slice(0, slash);
+  if (PUBLIC_READ_PREFIXES.has(bucket)) return url;
+  return `/api/storage?bucket=${bucket}&path=${encodeURIComponent(rest.slice(slash + 1))}`;
+}
+
 // Pull the current Supabase access token and attach it as a Bearer header
 // so requireAuth() on our API routes accepts the request even when the
 // cookie-based path fails (e.g. cookie too large, blocked third-party
@@ -161,20 +192,16 @@ export const storage = {
         return { data: { key: presign.key, publicUrl: presign.publicUrl }, error: null };
       },
 
-      // Get a public URL for a file
+      // URL to render/view a file: public domain only for the C2-allowlisted
+      // prefixes, the auth-gated same-origin stream for everything else.
       getPublicUrl(path: string) {
-        const publicUrl = R2_PUBLIC_URL
-          ? `${R2_PUBLIC_URL}/${bucket}/${path}`
-          : `/api/storage?bucket=${bucket}&path=${path}`;
-        return { data: { publicUrl } };
+        return { data: { publicUrl: readUrl(bucket, path) } };
       },
 
-      // Create a signed URL (for R2, we just return the public URL since the bucket is public)
+      // Same shape as getPublicUrl — the same-origin route is auth-gated,
+      // which is the property callers wanted from a signed URL.
       async createSignedUrl(path: string, _expiresIn: number) {
-        const publicUrl = R2_PUBLIC_URL
-          ? `${R2_PUBLIC_URL}/${bucket}/${path}`
-          : `/api/storage?bucket=${bucket}&path=${path}`;
-        return { data: { signedUrl: publicUrl }, error: null };
+        return { data: { signedUrl: readUrl(bucket, path) }, error: null };
       },
 
       // Delete file(s)

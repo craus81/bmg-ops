@@ -121,12 +121,13 @@ export async function loadEstimateProofs(
   supabase: SupabaseClient,
   estimateId: string,
   override?: { jobId: string; fileIds: string[] }[],
-  // presign: serve the artwork behind short-lived presigned URLs instead of
-  // permanent public ones (Stage 5 finding: the token gated the PAGE, not
-  // the artwork). The approval PAGES presign; the approval EMAIL keeps
-  // public URLs because mail clients fetch images days after the send,
-  // beyond any presign lifetime.
-  opts?: { presign?: boolean },
+  // Artwork is ALWAYS presigned (Stage 5 finding: the token gated the PAGE,
+  // not the artwork — and R3-22/C2 takes the public graphics-proofs URLs
+  // away entirely). The approval PAGE re-presigns on every visit; the
+  // approval EMAIL passes the 7-day SigV4 maximum so its inline images
+  // cover the actionable window — beyond that the attached PDF (proofs
+  // inlined as bytes) and the approval link carry the artwork forever.
+  opts?: { expiresIn?: number },
 ): Promise<EstimateProofBlock[]> {
   try {
     const { data: jobs, error } = await supabase
@@ -163,9 +164,7 @@ export async function loadEstimateProofs(
         files.push({
           id: f.id,
           name: f.file_name,
-          url: opts?.presign
-            ? await r2PresignGet('graphics-proofs', f.storage_path, { disposition: 'inline', expiresIn: 3600 })
-            : r2PublicUrl('graphics-proofs', f.storage_path),
+          url: await r2PresignGet('graphics-proofs', f.storage_path, { disposition: 'inline', expiresIn: opts?.expiresIn ?? 3600 }),
           isPdf: isPdfFile(f.file_name, f.file_type),
           storagePath: f.storage_path,
         });

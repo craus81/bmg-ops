@@ -39,6 +39,11 @@ export async function enrichLinesWithPartAssets<T extends { part_id?: string | n
     const p = l.part_id ? byId.get(l.part_id) : null;
     return {
       ...l,
+      // Deliberately still the public URL (R3-22/C2): part product shots
+      // live under photos/parts/* — an edge-allowlisted, non-sensitive path
+      // — because this URL rides inside estimate approval EMAILS (rendered
+      // by renderEstimateDocument), where a presign would expire while the
+      // email lives on. The PDF generator fetches it server-side too.
       part_image_url: p?.image_path ? r2PublicUrl('photos', p.image_path) : null,
       part_product_url: safeUrl(p?.product_url),
     };

@@ -13,11 +13,12 @@
  *     only server-side by the approval flow and must never be reachable here);
  *   - rejects path traversal / absolute / control-char paths;
  *   - limits WRITES and DELETES to the app's known prefixes (an allowlist),
- *     so a caller can't create or destroy objects under an arbitrary prefix.
- *
- * Reads are not allowlisted (the bucket is public-read, so an auth-gated read
- * of a well-formed, non-denied prefix is not a regression) — but the
- * signed-documents deny and the traversal checks still apply.
+ *     so a caller can't create or destroy objects under an arbitrary prefix;
+ *   - scopes BOTH operations by caller tier (R3-22): staff read anything
+ *     non-denied, external installers only their floor prefixes, and
+ *     customer-only accounts nothing — see StorageAccess below. Before the
+ *     R2 flip the bucket was public-read, so reads were deliberately not
+ *     scoped; once these routes are the read path, they are the wall.
  */
 
 // Prefixes the app legitimately writes to / deletes from through the client
@@ -50,13 +51,49 @@ const DENIED_STORAGE_PREFIXES = new Set<string>(['signed-documents']);
 const PREFIX_RE = /^[a-z0-9][a-z0-9-]{0,79}$/;
 
 /**
+ * Caller tiers for the generic storage routes (R3-22, owner decision C2
+ * 2026-09-07). Once the public R2 domain is edge-limited, these routes ARE
+ * the read path, so who may read what finally matters:
+ *   'staff'     — internal BMG staff: every non-denied prefix.
+ *   'installer' — external CNI installers: only the prefixes their surfaces
+ *                 actually render (pick-list proofs/photos/guides, the scan
+ *                 page's part proofs, their own invoice + profile-doc
+ *                 uploads). Deliberately NOT cni-photos: those reads go
+ *                 through the record-scoped CNI routes (#765), and the
+ *                 generic route must not become a cross-company bypass.
+ *   'none'      — customer-only accounts: denied. Every customer surface
+ *                 (portal PDFs, approval pages, signed docs) presigns
+ *                 server-side with its own record checks.
+ * Compute the tier with storageAccessOf() from api-auth.
+ */
+export type StorageAccess = 'staff' | 'installer' | 'none';
+
+export const INSTALLER_READ_PREFIXES = new Set<string>([
+  'photos',
+  'graphics-proofs',
+  'graphics-files',
+  'proofs',
+  'install-guides',
+  'part-files',
+  'vehicle-templates',
+  'invoices',
+  'cni-docs',
+]);
+
+export const INSTALLER_WRITE_PREFIXES = new Set<string>([
+  'photos', // pick-list / PhotoSession uploads
+  'invoices', // their own vendor invoices
+  'cni-docs', // W-9s, insurance certs on their profile
+]);
+
+/**
  * Returns an error message if the (bucket, path) pair is not allowed for the
- * requested operation, or null if it is fine to proceed.
+ * requested operation at the caller's access tier, or null to proceed.
  */
 export function checkStoragePath(
   bucket: string,
   path: string,
-  opts: { write: boolean },
+  opts: { write: boolean; access: StorageAccess },
 ): string | null {
   if (!PREFIX_RE.test(bucket)) return 'Invalid bucket';
   if (DENIED_STORAGE_PREFIXES.has(bucket)) return 'Forbidden bucket';
@@ -72,9 +109,18 @@ export function checkStoragePath(
     return 'Invalid path';
   }
 
-  if (opts.write && !ALLOWED_STORAGE_PREFIXES.has(bucket)) {
-    return 'Forbidden bucket';
+  if (opts.access === 'none') return 'Forbidden';
+
+  if (opts.write) {
+    if (!ALLOWED_STORAGE_PREFIXES.has(bucket)) return 'Forbidden bucket';
+    if (opts.access === 'installer' && !INSTALLER_WRITE_PREFIXES.has(bucket)) {
+      return 'Forbidden bucket';
+    }
+    return null;
   }
 
+  if (opts.access === 'installer' && !INSTALLER_READ_PREFIXES.has(bucket)) {
+    return 'Forbidden bucket';
+  }
   return null;
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import JSZip from 'jszip';
 import { createClient } from '@supabase/supabase-js';
-import { r2Upload, r2Delete, r2PublicUrl } from '@/lib/r2';
+import { r2Upload, r2Delete } from '@/lib/r2';
 import { requireAdmin } from '@/lib/api-auth';
 import { isStagedZipPath, loadStagedZip } from '@/lib/zip-source';
 

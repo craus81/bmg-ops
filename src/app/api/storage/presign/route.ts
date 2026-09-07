@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { r2PresignPut, ensureR2Cors } from '@/lib/r2';
-import { requireAuth } from '@/lib/api-auth';
+import { r2PresignPut, ensureR2Cors, sameOriginStorageUrl } from '@/lib/r2';
+import { requireAuth, storageAccessOf } from '@/lib/api-auth';
 import { checkStoragePath } from '@/lib/storage-guard';
 import { validateBody, z } from '@/lib/validate';
 
@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
   const { bucket, path, contentType } = parsed.data;
   // A presigned PUT is a write — restrict to the app's known prefixes and
   // never hand out a signed URL for the signed-documents legal snapshots.
-  const writeErr = checkStoragePath(bucket, path, { write: true });
+  const writeErr = checkStoragePath(bucket, path, { write: true, access: storageAccessOf(auth.profile) });
   if (writeErr) return NextResponse.json({ error: writeErr }, { status: 403 });
 
   try {
@@ -41,7 +41,9 @@ export async function POST(req: NextRequest) {
       success: true,
       url: result.url,
       key: result.key,
-      publicUrl: result.publicUrl,
+      // R3-22: the auth-gated app URL — the raw public-domain URL goes dark
+      // for non-allowlisted prefixes at the flip.
+      publicUrl: sameOriginStorageUrl(bucket, path),
     });
   } catch (err: any) {
     console.error('Storage presign error:', err);

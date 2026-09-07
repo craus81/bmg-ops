@@ -18,6 +18,11 @@ import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
 import { estimatePdfFilename } from '@/lib/estimate-pdf';
 import { validateBody, z } from '@/lib/validate';
 
+// R3-22: proof images inlined in the approval email are presigned at the
+// 7-day SigV4 maximum — the actionable window. Beyond it the attached PDF
+// (proofs inlined as bytes) and the approval page carry the artwork.
+const EMAIL_PRESIGN_SECONDS = 7 * 24 * 3600;
+
 export const dynamic = 'force-dynamic';
 // Every send generates the estimate PDF (catalog photo fetches, and R2 +
 // pdf-lib when linked wrap quotes / proofs merge on) — same budget as the
@@ -195,13 +200,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
             return NextResponse.json({ error: 'Could not save the proof selection: ' + attachErr.message }, { status: 500 });
           }
         }
-        proofBlocks = await loadEstimateProofs(supabase, estimate.id);
+        proofBlocks = await loadEstimateProofs(supabase, estimate.id, undefined, { expiresIn: EMAIL_PRESIGN_SECONDS });
       } else {
-        proofBlocks = await loadEstimateProofs(supabase, estimate.id, cleaned);
+        proofBlocks = await loadEstimateProofs(supabase, estimate.id, cleaned, { expiresIn: EMAIL_PRESIGN_SECONDS });
       }
     } else {
       // Legacy caller without the picker — the stored selection still rides.
-      proofBlocks = await loadEstimateProofs(supabase, estimate.id);
+      proofBlocks = await loadEstimateProofs(supabase, estimate.id, undefined, { expiresIn: EMAIL_PRESIGN_SECONDS });
     }
   }
 

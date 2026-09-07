@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { r2Upload, r2Delete, r2Get, r2PublicUrl } from '@/lib/r2';
-import { requireAuth } from '@/lib/api-auth';
+import { r2Upload, r2Delete, r2Get, sameOriginStorageUrl } from '@/lib/r2';
+import { requireAuth, storageAccessOf } from '@/lib/api-auth';
 import { checkStoragePath } from '@/lib/storage-guard';
 import { validateBody, z } from '@/lib/validate';
 
@@ -11,9 +11,10 @@ const DeleteSchema = z.object({
   path: z.string().trim().min(1).max(1000),
 });
 
-// GET — stream a file from R2. This is the URL storage.getPublicUrl() falls
-// back to when NEXT_PUBLIC_R2_PUBLIC_URL isn't configured, so without it
-// those links 405'd.
+// GET — stream a file from R2. Since R3-22 this is the PRIMARY read path
+// for signed-in surfaces: storage.getPublicUrl() returns this URL for every
+// prefix outside the C2 public allowlist, and same-origin <img>/fetch/pdfjs
+// ride the session cookie through requireAuth.
 export async function GET(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
@@ -23,7 +24,7 @@ export async function GET(req: NextRequest) {
   if (!bucket || !path || bucket.length > 80 || path.length > 1000) {
     return NextResponse.json({ error: 'Missing bucket or path' }, { status: 400 });
   }
-  const readErr = checkStoragePath(bucket, path, { write: false });
+  const readErr = checkStoragePath(bucket, path, { write: false, access: storageAccessOf(auth.profile) });
   if (readErr) return NextResponse.json({ error: readErr }, { status: 403 });
 
   try {
@@ -34,7 +35,10 @@ export async function GET(req: NextRequest) {
     return new NextResponse(result.body as any, {
       headers: {
         'Content-Type': result.contentType || 'application/octet-stream',
-        'Cache-Control': 'private, max-age=300',
+        // Storage keys are timestamp-randomized and never rewritten, so a
+        // long private cache is safe — it keeps photo grids and part
+        // catalogs from re-streaming through the function on every render.
+        'Cache-Control': 'private, max-age=86400',
       },
     });
   } catch (err: any) {
@@ -57,7 +61,7 @@ export async function POST(req: NextRequest) {
     if (!file || !bucket || !path) {
       return NextResponse.json({ error: 'Missing file, bucket, or path' }, { status: 400 });
     }
-    const writeErr = checkStoragePath(bucket, path, { write: true });
+    const writeErr = checkStoragePath(bucket, path, { write: true, access: storageAccessOf(auth.profile) });
     if (writeErr) return NextResponse.json({ error: writeErr }, { status: 403 });
 
     const buffer = Buffer.from(await file.arrayBuffer());
@@ -70,7 +74,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       key: result.key,
-      publicUrl: result.publicUrl,
+      // R3-22: hand back the auth-gated app URL, not the raw public-domain
+      // one — the latter goes dark for non-allowlisted prefixes at the flip.
+      publicUrl: sameOriginStorageUrl(bucket, path),
     });
   } catch (err: any) {
     console.error('Storage upload error:', err);
@@ -86,7 +92,7 @@ export async function DELETE(req: NextRequest) {
   const parsed = await validateBody(req, DeleteSchema);
   if (parsed.error) return parsed.error;
   const { bucket, path } = parsed.data;
-  const delErr = checkStoragePath(bucket, path, { write: true });
+  const delErr = checkStoragePath(bucket, path, { write: true, access: storageAccessOf(auth.profile) });
   if (delErr) return NextResponse.json({ error: delErr }, { status: 403 });
 
   try {
