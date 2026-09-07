@@ -4,6 +4,8 @@ import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
 import { suiteqlQuery } from '@/lib/netsuite';
+import { ensureUpfitProjectForSo } from '@/lib/upfit-projects';
+import { syncShopInboundForSalesOrder } from '@/lib/shop-inbound';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,7 +50,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const { data: estimate, error: estError } = await supabase
     .from('estimates')
-    .select('id, estimate_number, netsuite_so_id, netsuite_so_number')
+    .select('id, estimate_number, netsuite_so_id, netsuite_so_number, title, customer_name, customer_netsuite_id, grand_total')
     .eq('id', params.id)
     .maybeSingle();
 
@@ -148,10 +150,35 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     },
   });
 
+  // The linked SO gets the same downstream records a conversion makes
+  // (R3-11): its upfit project and the Arriving-board row. This is the
+  // recovery path for exactly the conversions that died before reaching
+  // those steps, so without this the repaired estimate stayed invisible to
+  // parts readiness and the shop board. Non-fatal — the link is saved.
+  const upfitProject = await ensureUpfitProjectForSo(supabase, {
+    netsuiteSoId: so.id,
+    netsuiteSoNumber: so.tranid,
+    estimateId: params.id,
+    estimateNumber: estimate.estimate_number || null,
+    title: estimate.title || null,
+    customerName: estimate.customer_name || null,
+    customerNetsuiteId: estimate.customer_netsuite_id || null,
+    estimatedTotal: estimate.grand_total ?? null,
+    soTotal: estimate.grand_total ?? null,
+    createdBy: auth.user.id,
+    noteContent: `Project created automatically: SO #${so.tranid} linked by hand to ${estimate.estimate_number || 'the estimate'}`,
+  });
+  try {
+    await syncShopInboundForSalesOrder(supabase, params.id);
+  } catch (inboundErr) {
+    console.error('shop_inbound sync failed after manual SO link:', inboundErr);
+  }
+
   return NextResponse.json({
     success: true,
     salesOrderId: so.id,
     salesOrderNumber: so.tranid,
+    upfitProject: upfitProject || undefined,
     message: `Linked SO #${so.tranid} to this estimate.`,
   });
 }

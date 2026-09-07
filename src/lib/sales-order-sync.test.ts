@@ -146,12 +146,20 @@ interface Call { method: string; args: any[] }
 interface MirrorState {
   syncState?: any;
   estimates?: any[];
+  /** netsuite_ids the mirror already holds before the run (R3-11's
+   *  new-SO detection reads these). */
+  mirror?: string[];
+  /** upfit_projects rows that already exist, for the find arms. */
+  upfitProjects?: any[];
   failBulkUpsert?: boolean;
   failRow?: (row: any) => string | null;
 }
 
 function fakeService(state: MirrorState) {
-  const writes = { headers: [] as any[], lines: [] as any[], deletedSoIds: [] as string[], estimateUpdates: [] as any[] };
+  const writes = {
+    headers: [] as any[], lines: [] as any[], deletedSoIds: [] as string[], estimateUpdates: [] as any[],
+    projects: [] as any[], projectNotes: [] as any[],
+  };
   const queries = { estimateOr: [] as string[], estimateIn: [] as any[] };
 
   const respond = (table: string, calls: Call[]) => {
@@ -175,10 +183,36 @@ function fakeService(state: MirrorState) {
         queries.estimateIn.push(inn.args);
         return { data: ests.filter(e => inn.args[1].includes(e.netsuite_estimate_id)), error: null };
       }
+      const eq = has('eq');
+      if (eq) {
+        // R3-11: the project step's one-estimate detail read.
+        return { data: ests.find(e => e.id === eq.args[1]) || null, error: null };
+      }
       return { data: [], error: null };
     }
+    if (table === 'upfit_projects') {
+      const insert = has('insert');
+      if (insert) {
+        writes.projects.push(insert.args[0]);
+        return { data: { id: `proj-${writes.projects.length}` }, error: null };
+      }
+      if (has('update')) return { data: null, error: null };
+      const eq = has('eq');
+      const hit = (state.upfitProjects || []).find(p => eq && p[eq.args[0]] === eq.args[1]) || null;
+      return { data: hit, error: null };
+    }
+    if (table === 'upfit_project_notes') {
+      writes.projectNotes.push(has('insert')?.args[0]);
+      return { data: null, error: null };
+    }
     if (table === 'netsuite_sales_orders') {
-      const up = has('upsert')!;
+      const maybeUp = has('upsert');
+      if (!maybeUp) {
+        // R3-11: the pre-upsert read of which page ids the mirror holds.
+        const ids: string[] = has('in')?.args[1] || [];
+        return { data: (state.mirror || []).filter(id => ids.includes(id)).map(id => ({ netsuite_id: id })), error: null };
+      }
+      const up = maybeUp;
       const bulk = Array.isArray(up.args[0]);
       const rows = bulk ? up.args[0] : [up.args[0]];
       if (bulk && state.failBulkUpsert) return { data: null, error: { message: 'bulk boom' } };
@@ -201,7 +235,7 @@ function fakeService(state: MirrorState) {
     from(table: string) {
       const calls: Call[] = [];
       const b: any = {};
-      for (const m of ['select', 'eq', 'in', 'or', 'is', 'maybeSingle', 'single', 'upsert', 'insert', 'delete', 'update', 'order', 'range', 'not']) {
+      for (const m of ['select', 'eq', 'in', 'or', 'is', 'maybeSingle', 'single', 'upsert', 'insert', 'delete', 'update', 'order', 'range', 'not', 'limit']) {
         b[m] = (...args: any[]) => { calls.push({ method: m, args }); return b; };
       }
       b.then = (resolve: any, reject: any) => Promise.resolve().then(() => respond(table, calls)).then(resolve, reject);
@@ -497,6 +531,50 @@ describe('syncSalesOrders', () => {
     ]);
     expect(queries.estimateOr).toHaveLength(1);
     expect(queries.estimateIn).toHaveLength(1);
+  });
+
+  it('auto-creates an upfit project for a NEWLY discovered, estimate-matched, open SO — and only then (R3-11)', async () => {
+    installNetSuite([
+      so(1, { otherrefnum: 'EST-2608-041' }),               // new + strong + open → project created
+      so(2, { memo: 'FleetSuite Estimate #EST-2608-042' }), // weak match → no project
+      so(3, { otherrefnum: 'EST-2608-043' }),               // already mirrored → no project
+      so(4, { otherrefnum: 'EST-2608-044', status: 'C' }),  // closed SO → no project
+      so(5, { otherrefnum: 'EST-2608-045' }),               // estimate linked to a DIFFERENT SO → no project
+      so(6, { otherrefnum: 'EST-2608-046' }),               // estimate's project already exists → found, not created
+    ]);
+    const { service, writes } = fakeService({
+      syncState: null,
+      mirror: ['3'],
+      estimates: [
+        { id: 'e41', estimate_number: 'EST-2608-041', netsuite_so_id: null, title: 'Rack build', customer_name: 'Acme Fleet', customer_netsuite_id: '7', grand_total: 1234.5 },
+        { id: 'e42', estimate_number: 'EST-2608-042', netsuite_so_id: null },
+        { id: 'e43', estimate_number: 'EST-2608-043', netsuite_so_id: null },
+        { id: 'e44', estimate_number: 'EST-2608-044', netsuite_so_id: null },
+        { id: 'e45', estimate_number: 'EST-2608-045', netsuite_so_id: '999' },
+        { id: 'e46', estimate_number: 'EST-2608-046', netsuite_so_id: null },
+      ],
+      upfitProjects: [{ id: 'p46', estimate_id: 'e46', netsuite_so_id: null }],
+    });
+
+    const result = await syncSalesOrders(service, { deadline: far() });
+
+    expect(result.error).toBeUndefined();
+    expect(result.projectsCreated).toBe(1);
+    expect(writes.projects).toEqual([
+      expect.objectContaining({
+        project_name: 'Acme Fleet — Rack build',
+        status: 'sold',
+        estimate_id: 'e41',
+        estimate_number: 'EST-2608-041',
+        netsuite_so_id: '1',
+        netsuite_so_number: 'SO1',
+        customer_netsuite_id: '7',
+        estimated_total: 1234.5,
+        so_total: 100,
+      }),
+    ]);
+    expect(writes.projectNotes).toHaveLength(1);
+    expect(writes.projectNotes[0].content).toContain('SO1');
   });
 
   it('falls back to one row at a time when the bulk header write fails, and counts what still fails', async () => {
