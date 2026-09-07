@@ -494,16 +494,53 @@ export default function CustomerRecordPage() {
     }
     setActivities(prev => [{ ...(data as Activity), creator_name: profile?.full_name || null }, ...prev]);
     setActText('');
+    // Owner decision 2026-09-07 (R3-16a): human notes sync to NetSuite. A
+    // linked record pushes the fresh entry (and any unsynced backlog) right
+    // away; unlinked records push at promotion. Fire-and-forget — the sync
+    // is idempotent and the Sync notes action retries.
+    if (prospect.netsuite_id) {
+      fetch('/api/prospects/sync-notes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prospectId: prospect.id }),
+      }).catch(() => { /* retried by the Sync notes action */ });
+    }
   };
 
   // Auto-logged touches (status flips, deal changes, contact adds) — the
   // same prospect_activities insert, threaded into the feed silently.
+  // auto: true keeps these out of the NetSuite notes sync (migration 268):
+  // they're app bookkeeping, not relationship notes.
   const logAuto = async (type: string, summary: string) => {
     if (!prospect) return;
     const { data } = await supabase.from('prospect_activities').insert({
-      prospect_id: prospect.id, type, summary, created_by: user?.id,
+      prospect_id: prospect.id, type, summary, created_by: user?.id, auto: true,
     }).select().single();
     if (data) setActivities(prev => [{ ...(data as Activity), creator_name: profile?.full_name || null }, ...prev]);
+  };
+
+  // Manual drain for the NetSuite notes sync — retries refused notes and
+  // continues a backlog past the per-run cap.
+  const [notesSyncing, setNotesSyncing] = useState(false);
+  const syncNotesNow = async () => {
+    if (!prospect?.netsuite_id || notesSyncing) return;
+    setNotesSyncing(true);
+    try {
+      const res = await fetch('/api/prospects/sync-notes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prospectId: prospect.id }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
+      const bits = [
+        `${json.pushed} note${json.pushed !== 1 ? 's' : ''} pushed`,
+        json.failed ? `${json.failed} refused (check NetSuite permissions and retry)` : '',
+        json.remaining ? `${json.remaining} still queued — run Sync notes again` : '',
+      ].filter(Boolean).join(' · ');
+      await dialog.alert(`NetSuite notes sync: ${bits || 'nothing to push'}.`);
+    } catch (err: any) {
+      await dialog.alert(`Notes sync failed: ${err?.message || 'unknown error'}`);
+    }
+    setNotesSyncing(false);
   };
 
   // ── Record editing (ported from the CRM list card — the record page is
@@ -609,9 +646,16 @@ export default function CustomerRecordPage() {
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data?.error || `HTTP ${res.status}`);
-      logAuto('status_change', `Added to NetSuite as customer #${data.entityId}${data.contactsPushed ? ` with ${data.contactsPushed} contact${data.contactsPushed !== 1 ? 's' : ''}` : ''}`);
+      logAuto('status_change', `Added to NetSuite as customer #${data.entityId}${data.contactsPushed ? ` with ${data.contactsPushed} contact${data.contactsPushed !== 1 ? 's' : ''}` : ''}${data.notesPushed ? ` and ${data.notesPushed} note${data.notesPushed !== 1 ? 's' : ''}` : ''}`);
       if (data.contactsFailed) {
         await dialog.alert(`Customer created, but NetSuite refused ${data.contactsFailed} contact${data.contactsFailed !== 1 ? 's' : ''} — re-save them from the Contacts card to retry.`);
+      }
+      if (data.notesFailed || data.notesRemaining) {
+        const parts = [
+          data.notesFailed ? `NetSuite refused ${data.notesFailed} note${data.notesFailed !== 1 ? 's' : ''}` : '',
+          data.notesRemaining ? `${data.notesRemaining} note${data.notesRemaining !== 1 ? 's are' : ' is'} still queued` : '',
+        ].filter(Boolean).join(' and ');
+        await dialog.alert(`Customer created, but ${parts} — use "Sync notes" under Recent activity to finish.`);
       }
       setProspect(prev => (prev ? { ...prev, status: 'converted', netsuite_id: data.customerId, netsuite_url: data.netsuiteUrl, converted_customer_id: data.customerId } : prev));
       // The record is linked now — the NetSuite panels can load.
@@ -2601,6 +2645,16 @@ export default function CustomerRecordPage() {
                 {voiceResult && (
                   <div style={{ padding: '6px 10px', borderRadius: '6px', marginTop: '5px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', fontSize: '10.5px', color: '#22c55e', fontWeight: 600 }}>
                     Saved: {voiceResult.summary.slice(0, 80)}{voiceResult.summary.length > 80 ? '…' : ''}{voiceResult.reminders > 0 ? ` · ${voiceResult.reminders} reminder${voiceResult.reminders !== 1 ? 's' : ''} created` : ''}
+                  </div>
+                )}
+                {prospect.netsuite_id && (
+                  <div style={{ marginTop: '5px', textAlign: 'right' }}>
+                    <button
+                      onClick={syncNotesNow}
+                      disabled={notesSyncing}
+                      title="Push this record's calls, meetings, and notes to NetSuite as user notes (already-synced entries are skipped)"
+                      style={{ background: 'none', border: 'none', padding: '2px 4px', fontSize: '10.5px', fontWeight: 700, color: 'var(--text-muted)', textDecoration: 'underline', cursor: notesSyncing ? 'default' : 'pointer', opacity: notesSyncing ? 0.6 : 1 }}
+                    >{notesSyncing ? 'Syncing notes…' : '↻ Sync notes to NetSuite'}</button>
                   </div>
                 )}
               </div>

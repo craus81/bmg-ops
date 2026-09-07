@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createCustomerOrLead, createContact, suiteqlQuery } from '@/lib/netsuite';
+import { pushProspectNotes } from '@/lib/prospect-notes-sync';
 import { safeStringLiteral } from '@/lib/sql-safe';
 
 /**
@@ -53,6 +54,12 @@ export interface PromoteResult {
   contactsPushed?: number;
   /** Contacts NetSuite refused (logged; re-savable from the record page). */
   contactsFailed?: number;
+  /** Human CRM notes created as NetSuite user notes (R3-16a's second half). */
+  notesPushed?: number;
+  /** Notes NetSuite refused (retryable via the record page's Sync notes). */
+  notesFailed?: number;
+  /** Notes beyond this run's cap — the Sync notes action drains the rest. */
+  notesRemaining?: number;
 }
 
 /**
@@ -229,8 +236,6 @@ export async function promoteProspect(
   // effort per contact: a NetSuite refusal (usually a missing Lists >
   // Contacts permission, or a single-word name where the account wants a
   // last name) skips that one — re-saving it from the record page retries.
-  // Notes are deliberately NOT pushed: whether internal CRM notes belong in
-  // NetSuite at all is an open owner decision (audit §7.4 item 7).
   let contactsPushed = 0;
   let contactsFailed = 0;
   try {
@@ -266,6 +271,24 @@ export async function promoteProspect(
     console.error('promoteProspect contact push failed:', err);
   }
 
+  // R3-16a's second half (owner decision 2026-09-07: notes go to NetSuite).
+  // The record's human-authored activity — calls, meetings, notes, voice
+  // notes — lands on the new customer as NetSuite user notes, oldest first,
+  // each stamped back so nothing double-pushes. Best effort like contacts;
+  // the record page's Sync notes action retries failures and drains any
+  // backlog past the per-run cap.
+  let notesPushed = 0;
+  let notesFailed = 0;
+  let notesRemaining = 0;
+  try {
+    const notes = await pushProspectNotes(supabase, prospect.id, String(result.customerId));
+    notesPushed = notes.pushed;
+    notesFailed = notes.failed;
+    notesRemaining = notes.remaining;
+  } catch (err) {
+    console.error('promoteProspect notes push failed:', err);
+  }
+
   return {
     success: true,
     netsuiteId: result.customerId,
@@ -274,6 +297,9 @@ export async function promoteProspect(
     localCustomerId: local?.id || null,
     contactsPushed,
     contactsFailed,
+    notesPushed,
+    notesFailed,
+    notesRemaining,
   };
 }
 

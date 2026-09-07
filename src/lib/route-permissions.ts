@@ -278,6 +278,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/prospects/push-to-netsuite/route.ts': staff(),
   'src/app/api/prospects/route.ts': { kind: 'staff', contains: ['requireStaff(', 'requireAdmin('] },
   'src/app/api/prospects/scan-card/route.ts': staff(),
+  'src/app/api/prospects/sync-notes/route.ts': staff(),
   'src/app/api/prospects/voice-note/route.ts': staff(),
   'src/app/api/purchasing/demand/route.ts': feature('parts_ordering'),
   'src/app/api/purchasing/demand/dismiss/route.ts': feature('parts_ordering'),
