@@ -80,6 +80,9 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // GL account every labor dollar posts to.
   'src/app/api/admin/labor-item/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   'src/app/api/admin/link-customer/route.ts': admin(),
+  // Blended shop labor cost rate (R3-21 job costing): reading is admin
+  // (cost data); writing is super-admin — it moves every reported margin.
+  'src/app/api/admin/shop-labor-rate/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   'src/app/api/admin/payouts/route.ts': admin(),
   'src/app/api/admin/payroll/route.ts': admin(),
   'src/app/api/admin/resend-invite/route.ts': admin(),
@@ -146,6 +149,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cron/proof-reminder-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/prospect-reminder-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/quote-followup-check/route.ts': cron('requireAdmin('),
+  'src/app/api/cron/shop-shift-sweep/route.ts': cron('requireAdmin('),
   'src/app/api/cron/stale-purchase-requests/route.ts': cron('requireAdmin('),
   'src/app/api/cron/stuck-vehicle-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/weekly-customer-digest/route.ts': cron('requireAdmin('),
@@ -318,7 +322,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/shifts/end/route.ts': authScoped('ends the caller\'s own shift'),
   'src/app/api/shifts/members/route.ts': authScoped('crew presence for the shift flow; techs + installers'),
   'src/app/api/shifts/part/route.ts': authScoped('part usage logged against the caller\'s own shift'),
-  'src/app/api/shifts/route.ts': authScoped('time clock for techs AND external installers; job membership checked via canActOnCniJob', 'canActOnCniJob'),
+  'src/app/api/shifts/route.ts': authScoped('time clock for techs AND external installers; CNI job membership checked via canActOnCniJob, field/shop contexts FIELD_ROLES-gated in-route', 'canActOnCniJob'),
   'src/app/api/shop-inbound/arrival/route.ts': staff(),
   'src/app/api/shop-inbound/route.ts': staff(),
   'src/app/api/signed-documents/route.ts': featureDynamic('requireFeature(req, spec.feature)', 'gated per record type on the record\'s own feature key (estimates / graphics)'),

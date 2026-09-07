@@ -3,6 +3,7 @@ import { requireStaff, isAdminRole } from '@/lib/api-auth';
 import { notify, notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { loadChecklistTemplate, buildTaskRows } from '@/lib/install-checklist';
+import { closeShopShiftsForCheckin } from '@/lib/shop-labor';
 import { createClient as createServiceClient } from '@supabase/supabase-js';
 
 const serviceSupabase = createServiceClient(
@@ -168,6 +169,17 @@ export async function POST(request: Request) {
       changed_by: user.id,
       changed_by_name: userName,
     });
+
+    // R3-21: a pick-list labor timer nobody stopped ends when the vehicle
+    // does — completing or shipping closes any open shop shift, flagged
+    // auto_closed so the margin report shows those hours as approximate.
+    if (newStatus === 'complete' || newStatus === 'shipped') {
+      try {
+        await closeShopShiftsForCheckin(serviceSupabase, vehicleId);
+      } catch (err) {
+        console.warn('update-status: shop shift auto-close failed:', err);
+      }
+    }
 
     // On received → in_progress, instantiate a checklist from the default
     // template if one doesn't already exist for this vehicle.

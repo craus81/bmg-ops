@@ -60,21 +60,51 @@ export async function fieldRoster(service: SupabaseClient): Promise<{ profile_id
   return (data || []).map(p => ({ profile_id: p.id, full_name: p.full_name }));
 }
 
+/**
+ * Shop-floor crew for 'shop' shifts (R3-21): the internal roles that turn
+ * wrenches on check-ins. Admins aren't listed — whoever starts a shift is
+ * put on the crew by the route's caller-is-crew rule, so an admin can run
+ * a timer, but the mid-shift add list is this roster.
+ */
+export const SHOP_ROSTER_ROLES = ['shop_tech', 'field_tech', 'graphics_production'];
+
+export async function shopRoster(service: SupabaseClient): Promise<{ profile_id: string; full_name: string }[]> {
+  const { data } = await service
+    .from('profiles')
+    .select('id, full_name, role, roles')
+    .eq('status', 'approved')
+    .or(SHOP_ROSTER_ROLES.map(r => `role.eq.${r},roles.cs.{${r}}`).join(','))
+    .order('full_name');
+  return (data || []).map(p => ({ profile_id: p.id, full_name: p.full_name }));
+}
+
 export interface ShiftRow {
   id: string;
-  context: 'cni' | 'field';
+  context: 'cni' | 'field' | 'shop';
   cni_job_id: string | null;
+  fleet_checkin_id: string | null;
   part_number: string | null;
   started_by: string;
   ended_at: string | null;
 }
 
 export async function loadShift(service: SupabaseClient, shiftId: string): Promise<ShiftRow | null> {
-  const { data } = await service
+  const { data, error } = await service
     .from('work_shifts')
-    .select('id, context, cni_job_id, part_number, started_by, ended_at')
+    .select('id, context, cni_job_id, fleet_checkin_id, part_number, started_by, ended_at')
     .eq('id', shiftId)
     .maybeSingle();
+  if (error) {
+    // Schema-cache grace (#741 lesson): a PostgREST cache that hasn't seen
+    // migration 269 rejects the fleet_checkin_id column — fall back to the
+    // pre-269 shape so live cni/field shift flows never break on deploy.
+    const fallback = await service
+      .from('work_shifts')
+      .select('id, context, cni_job_id, part_number, started_by, ended_at')
+      .eq('id', shiftId)
+      .maybeSingle();
+    return fallback.data ? ({ ...fallback.data, fleet_checkin_id: null } as ShiftRow) : null;
+  }
   return (data as ShiftRow) || null;
 }
 
@@ -114,6 +144,9 @@ export async function eligibleMemberIds(service: SupabaseClient, shift: ShiftRow
     }
     if (job?.assigned_installer_id) ids.add(job.assigned_installer_id);
     return ids;
+  }
+  if (shift.context === 'shop') {
+    return new Set((await shopRoster(service)).map(r => r.profile_id));
   }
   return new Set((await fieldRoster(service)).map(r => r.profile_id));
 }

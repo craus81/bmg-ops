@@ -82,6 +82,19 @@ interface Photo {
   taken_at: string;
 }
 
+interface ShiftMemberView {
+  profile_id: string;
+  full_name: string;
+  share_weight: number;
+}
+
+interface ShopShift {
+  id: string;
+  started_by: string;
+  started_at: string;
+  members: ShiftMemberView[];
+}
+
 export default function VehiclePickListPage() {
   const router = useRouter();
   const params = useParams<{ vin: string }>();
@@ -118,6 +131,18 @@ export default function VehiclePickListPage() {
   const completionFileRef = useRef<HTMLInputElement>(null);
   // In-app camera session (PhotoSession): tap once, shoot many, Done.
   const [photoSession, setPhotoSession] = useState<'before' | 'completion' | null>(null);
+
+  // Shop labor timer (R3-21) — job costing only: hours land on the
+  // vehicle-margin report, never on pay. Internal floor roles only; the
+  // external CNI installer sees the pick-list but not the timer (and the
+  // API's FIELD_ROLES wall backs that up server-side).
+  const canUseShopTimer = isShopTech || isFieldTech; // each ORs in isAdmin
+  const [laborShift, setLaborShift] = useState<ShopShift | null>(null);
+  const [laborRoster, setLaborRoster] = useState<{ profile_id: string; full_name: string }[]>([]);
+  const [loggedHours, setLoggedHours] = useState(0);
+  const [laborLoaded, setLaborLoaded] = useState(false);
+  const [laborBusy, setLaborBusy] = useState(false);
+  const [nowTick, setNowTick] = useState(() => Date.now());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -218,6 +243,94 @@ export default function VehiclePickListPage() {
     }
     load();
   }, [user, isInstaller, isShopTech, isFieldTech, isAdmin, router, load]);
+
+  const loadLaborShift = useCallback(async (checkinId: string) => {
+    try {
+      const res = await fetch(`/api/shifts?checkinId=${checkinId}`);
+      if (!res.ok) return; // best-effort — the card just stays hidden
+      const data = await res.json();
+      setLaborShift(data.shift || null);
+      setLaborRoster(data.roster || []);
+      setLoggedHours(Number(data.loggedHours) || 0);
+      setLaborLoaded(true);
+    } catch { /* non-blocking */ }
+  }, []);
+
+  // Refresh whenever the vehicle reloads — a status change to complete
+  // auto-closes open shop shifts server-side, and this picks that up.
+  useEffect(() => {
+    if (!vehicle || !canUseShopTimer) return;
+    loadLaborShift(vehicle.id);
+  }, [vehicle, canUseShopTimer, loadLaborShift]);
+
+  // Tick the elapsed display while a timer runs.
+  useEffect(() => {
+    if (!laborShift) return;
+    setNowTick(Date.now());
+    const t = setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, [laborShift]);
+
+  const startLaborTimer = async () => {
+    if (!vehicle || laborBusy) return;
+    setLaborBusy(true);
+    try {
+      const res = await fetch('/api/shifts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context: 'shop', checkinId: vehicle.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) await dialog.alert(data.error || 'Failed to start the timer');
+      else if (data.shift) setLaborShift(data.shift as ShopShift);
+    } catch (err: any) {
+      await dialog.alert(err.message || 'Network error');
+    }
+    setLaborBusy(false);
+  };
+
+  const stopLaborTimer = async () => {
+    if (!vehicle || !laborShift || laborBusy) return;
+    setLaborBusy(true);
+    try {
+      const res = await fetch('/api/shifts/end', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shiftId: laborShift.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) await dialog.alert(data.error || 'Failed to stop the timer');
+      else {
+        setLaborShift(null);
+        await loadLaborShift(vehicle.id); // pull the new logged total
+      }
+    } catch (err: any) {
+      await dialog.alert(err.message || 'Network error');
+    }
+    setLaborBusy(false);
+  };
+
+  const changeCrew = async (change: { add?: string; remove?: string }) => {
+    if (!laborShift || laborBusy) return;
+    setLaborBusy(true);
+    try {
+      const res = await fetch('/api/shifts/members', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          shiftId: laborShift.id,
+          add: change.add ? [{ profileId: change.add }] : [],
+          remove: change.remove ? [change.remove] : [],
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) await dialog.alert(data.error || 'Failed to update the crew');
+      else if (data.members) setLaborShift(prev => (prev ? { ...prev, members: data.members } : prev));
+    } catch (err: any) {
+      await dialog.alert(err.message || 'Network error');
+    }
+    setLaborBusy(false);
+  };
 
   const postStatusChange = async (newStatus: string, opts: { note?: string; force?: boolean } = {}) => {
     if (!vehicle) return;
@@ -383,6 +496,10 @@ export default function VehiclePickListPage() {
   const hasCompletionPhoto = completionPhotos.length > 0;
   const readyToComplete = allRequiredDone && hasCompletionPhoto;
 
+  const laborElapsedMs = laborShift ? Math.max(0, nowTick - Date.parse(laborShift.started_at)) : 0;
+  const laborElapsedLabel = `${Math.floor(laborElapsedMs / 3_600_000)}h ${String(Math.floor((laborElapsedMs % 3_600_000) / 60_000)).padStart(2, '0')}m`;
+  const laborCrewAvailable = laborRoster.filter(r => !laborShift?.members.some(m => m.profile_id === r.profile_id));
+
   return (
     <div>
       {visitNote && (
@@ -481,6 +598,78 @@ export default function VehiclePickListPage() {
             fontSize: '15px', fontWeight: 700, cursor: 'pointer', marginBottom: '16px',
           }}
         >{actionLoading ? 'Starting...' : 'Start Install'}</button>
+      )}
+
+      {/* Shop labor timer (R3-21): start/stop + crew tags on THIS check-in.
+          Hours feed the vehicle-margin report at the blended shop rate —
+          never pay, and never the punch clock. */}
+      {canUseShopTimer && laborLoaded && (
+        <div style={{
+          background: 'var(--card)', border: laborShift ? '1px solid var(--accent, #2563eb)' : '1px solid var(--border)',
+          borderRadius: '14px', padding: '14px', marginBottom: '16px',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
+                Labor Timer
+              </div>
+              <div style={{ fontSize: '13px', color: 'var(--text-primary)', marginTop: '4px', fontWeight: laborShift ? 700 : 400 }}>
+                {laborShift
+                  ? <>⏱ {laborElapsedLabel} · crew of {laborShift.members.length}</>
+                  : loggedHours > 0 ? `${loggedHours}h logged on this vehicle` : 'No time logged yet'}
+              </div>
+            </div>
+            {(laborShift || !isComplete) && (
+              <button
+                onClick={laborShift ? stopLaborTimer : startLaborTimer}
+                disabled={laborBusy}
+                style={{
+                  padding: '10px 18px', borderRadius: '10px', border: 'none',
+                  background: laborShift ? 'var(--danger, #ef4444)' : 'var(--accent, #2563eb)',
+                  color: '#fff', fontSize: '13px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
+                }}
+              >{laborBusy ? '…' : laborShift ? '■ Stop' : '▶ Start Timer'}</button>
+            )}
+          </div>
+          {laborShift && (
+            <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
+                {laborShift.members.map(m => (
+                  <span key={m.profile_id} style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '6px',
+                    padding: '4px 8px', borderRadius: '8px', fontSize: '12px', fontWeight: 600,
+                    background: 'color-mix(in srgb, var(--accent, #2563eb) 12%, transparent)',
+                    color: 'var(--text-primary)',
+                  }}>
+                    {m.full_name}
+                    <button
+                      onClick={() => changeCrew({ remove: m.profile_id })}
+                      disabled={laborBusy}
+                      title="Remove from crew"
+                      style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '13px', padding: 0, lineHeight: 1 }}
+                    >×</button>
+                  </span>
+                ))}
+                {laborCrewAvailable.length > 0 && (
+                  <select
+                    value=""
+                    disabled={laborBusy}
+                    onChange={e => { if (e.target.value) changeCrew({ add: e.target.value }); }}
+                    style={{
+                      padding: '4px 8px', borderRadius: '8px', fontSize: '12px',
+                      border: '1px dashed var(--border)', background: 'var(--card)', color: 'var(--text-muted)', cursor: 'pointer',
+                    }}
+                  >
+                    <option value="">+ Add crew…</option>
+                    {laborCrewAvailable.map(r => (
+                      <option key={r.profile_id} value={r.profile_id}>{r.full_name}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {/* Admin only (Round 3 dead-end): the thread this opens lives in

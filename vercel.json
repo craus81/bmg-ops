@@ -53,6 +53,10 @@
       "schedule": "45 14 * * *"
     },
     {
+      "path": "/api/cron/shop-shift-sweep",
+      "schedule": "0 15 * * *"
+    },
+    {
       "path": "/api/cron/weekly-customer-digest",
       "schedule": "0 14 * * 1"
     }
