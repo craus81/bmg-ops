@@ -25,6 +25,12 @@ const REPORTS: ReportLink[] = [
     source: 'NetSuite',
   },
   {
+    title: 'Vehicle Job Margin',
+    blurb: 'Each invoiced vehicle end to end: invoice revenue vs parts bought for its project (vendor-PO lines + priced stock allocations) and the installer\u2019s bill for its VIN. Labor lands with per-vehicle labor capture.',
+    href: '/admin/reports/vehicle-margin',
+    source: 'FleetSuite',
+  },
+  {
     title: 'Installer Cost vs Invoiced',
     blurb: 'What we paid CNI installers per VIN (from recorded vendor invoices) vs. estimated customer billing, rolled up by location, installer, and part number.',
     href: '/admin/reports/installer-costs',
