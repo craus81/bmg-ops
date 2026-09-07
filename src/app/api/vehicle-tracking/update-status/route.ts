@@ -4,6 +4,7 @@ import { notify, notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { loadChecklistTemplate, buildTaskRows } from '@/lib/install-checklist';
 import { closeShopShiftsForCheckin } from '@/lib/shop-labor';
+import { logAudit } from '@/lib/audit';
 import { createClient as createServiceClient } from '@supabase/supabase-js';
 
 const serviceSupabase = createServiceClient(
@@ -75,15 +76,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, noop: true, vehicleId, fromStatus: currentStatus, toStatus: newStatus });
     }
 
-    // Transition legality (admin can force)
+    // Transition legality (admin can force). Every gate a force actually
+    // bypasses is collected and written to audit_log as one status_forced
+    // entry (R4-5) — the exceptions digest reads it weekly.
+    const forcedBypasses: string[] = [];
     const allowed = LEGAL_TRANSITIONS[currentStatus] || [];
-    if (!allowed.includes(newStatus) && !(force && isAdmin)) {
-      return NextResponse.json({
-        error: 'Illegal status transition',
-        fromStatus: currentStatus,
-        toStatus: newStatus,
-        allowed,
-      }, { status: 400 });
+    if (!allowed.includes(newStatus)) {
+      if (!(force && isAdmin)) {
+        return NextResponse.json({
+          error: 'Illegal status transition',
+          fromStatus: currentStatus,
+          toStatus: newStatus,
+          allowed,
+        }, { status: 400 });
+      }
+      forcedBypasses.push(`illegal transition ${currentStatus} → ${newStatus}`);
     }
 
     // Enforce artifact requirements on EVERY transition into 'complete'.
@@ -131,11 +138,14 @@ export async function POST(request: Request) {
         missing.push(`Graphics install lane is "${graphicsLane}" — mark complete (or N/A) first`);
       }
 
-      if (missing.length > 0 && !(force && isAdmin)) {
-        return NextResponse.json({
-          error: 'Completion requirements not met',
-          missing,
-        }, { status: 422 });
+      if (missing.length > 0) {
+        if (!(force && isAdmin)) {
+          return NextResponse.json({
+            error: 'Completion requirements not met',
+            missing,
+          }, { status: 422 });
+        }
+        forcedBypasses.push(...missing);
       }
     }
 
@@ -169,6 +179,18 @@ export async function POST(request: Request) {
       changed_by: user.id,
       changed_by_name: userName,
     });
+
+    // Audit an admin force only when it actually bypassed a gate — forcing a
+    // transition that was legal anyway is not an exception.
+    if (forcedBypasses.length > 0) {
+      await logAudit(serviceSupabase, {
+        actorId: user.id,
+        table: 'fleet_checkins',
+        recordId: vehicleId,
+        action: 'status_forced',
+        detail: { from: currentStatus, to: newStatus, bypassed: forcedBypasses },
+      });
+    }
 
     // R3-21: a pick-list labor timer nobody stopped ends when the vehicle
     // does — completing or shipping closes any open shop shift, flagged

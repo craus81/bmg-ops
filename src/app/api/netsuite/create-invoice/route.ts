@@ -5,6 +5,7 @@ import { resolveLocationWithOverride } from '@/lib/invoice-location';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { normPart } from '@/lib/po-invoice-verify';
+import { logAudit, type AuditEntry } from '@/lib/audit';
 
 const Schema = z.object({
   salesOrderIds: z.array(z.string().regex(/^\d{1,15}$/, 'Sales order id must be numeric')).min(1).max(200),
@@ -57,6 +58,11 @@ export async function POST(req: NextRequest) {
       error?: string;
       warning?: string;
     }[] = [];
+
+    // R4-5: each PO whose already-invoiced guard was suppressed by
+    // allowAdditional AND actually billed again gets an audit entry — the
+    // weekly exceptions digest reads these.
+    const trancheAudits: AuditEntry[] = [];
 
     // For each sales order, look up the PO to get installed quantities
     for (const soId of salesOrderIds) {
@@ -360,6 +366,22 @@ export async function POST(req: NextRequest) {
             }
           }
 
+          if (allowAdditional && priorList.length > 0) {
+            trancheAudits.push({
+              actorId: auth.user.id,
+              table: 'purchase_orders',
+              recordId: po.id,
+              action: 'invoice_allow_additional',
+              detail: {
+                source: 'create-invoice',
+                poNumber: po.po_number,
+                salesOrderId: soId,
+                priorInvoices: priorList,
+                newInvoice: invoiceResult.invoiceNumber || stampId,
+              },
+            });
+          }
+
           results.push({
             poId: po.id,
             poNumber: po.po_number,
@@ -394,6 +416,10 @@ export async function POST(req: NextRequest) {
         });
         await releaseClaim();
       }
+    }
+
+    if (trancheAudits.length > 0) {
+      await logAudit(supabase, trancheAudits);
     }
 
     const successCount = results.filter(r => r.status === 'success').length;
