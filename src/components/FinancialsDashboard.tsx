@@ -15,6 +15,7 @@
 
 import { useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
+import { useAuth } from '@/components/AuthProvider';
 import FinancialsDrilldown, { AGE_META, DrillTarget } from './FinancialsDrilldown';
 
 export interface Overdue { key: string; customer: string; amount: number; days: number }
@@ -33,6 +34,86 @@ export interface FinancialsData {
 const usd = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const money = (n: number | null) => (n === null ? '—' : usd(n));
 const pct = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
+
+/** CEO bands (R4-4), served by /api/reports/executive-summary. */
+interface ExecSummary {
+  sales: {
+    error?: string;
+    window?: { start: string; end: string };
+    winRate?: number | null;
+    avgDaysToClose?: number | null;
+    avgJobSize?: number | null;
+    wonCount?: number;
+    wonValue?: number;
+    openQuotes?: { count: number; value: number };
+    pipeline?: { stage: string; count: number; value: number }[];
+    topCustomers?: { name: string; ytd: number }[];
+  };
+  revenue: {
+    error?: string;
+    mtd?: number; lastMonthToDate?: number; ytd?: number; qtd?: number; trailing12?: number;
+    monthly?: { month: string; total: number }[];
+  };
+  operations: {
+    error?: string;
+    orderBook?: { count: number; value: number; unbilled: number; over60Count: number };
+    inShop?: number;
+    completeNotShipped?: number;
+    turnaround?: { avgDays: number; completions: number } | null;
+  };
+  sparklines: Record<string, { day: string; value: number | null }[]>;
+}
+
+/** Tiny trend line under a tile — renders only once ≥2 snapshot points exist. */
+function Sparkline({ points }: { points?: { day: string; value: number | null }[] }) {
+  const vals = (points || []).filter(p => p.value != null) as { day: string; value: number }[];
+  if (vals.length < 2) return null;
+  const w = 110, h = 26, pad = 2;
+  const min = Math.min(...vals.map(p => p.value));
+  const max = Math.max(...vals.map(p => p.value));
+  const span = max - min || 1;
+  const pts = vals.map((p, i) => {
+    const x = pad + (i / (vals.length - 1)) * (w - pad * 2);
+    const y = h - pad - ((p.value - min) / span) * (h - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const [lx, ly] = pts[pts.length - 1].split(',');
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} width={w} height={h} aria-hidden style={{ display: 'block', marginTop: '7px', opacity: 0.9 }}>
+      <polyline points={pts.join(' ')} fill="none" stroke="var(--navy, #4d8ba6)" strokeWidth="1.6" />
+      <circle cx={lx} cy={ly} r="2.2" fill="var(--navy, #4d8ba6)" />
+    </svg>
+  );
+}
+
+/** 13-month revenue bars, hand-rolled SVG scaled to the series max. */
+function RevenueBars({ monthly }: { monthly: { month: string; total: number }[] }) {
+  if (monthly.length === 0) return null;
+  const w = 640, h = 150, padB = 18, padT = 12;
+  const max = Math.max(...monthly.map(m => m.total), 1);
+  const bw = w / monthly.length;
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', minWidth: '480px', display: 'block' }} role="img" aria-label="Monthly revenue, last 13 months">
+        {monthly.map((m, i) => {
+          const bh = Math.max(1, ((m.total > 0 ? m.total : 0) / max) * (h - padB - padT));
+          const cur = i === monthly.length - 1;
+          return (
+            <g key={m.month}>
+              <rect x={i * bw + bw * 0.18} y={h - padB - bh} width={bw * 0.64} height={bh}
+                rx="2.5" fill={cur ? 'var(--navy, #4d8ba6)' : 'color-mix(in srgb, var(--navy, #4d8ba6) 45%, var(--border))'}>
+                <title>{`${m.month} · ${usd(m.total)}`}</title>
+              </rect>
+              {i % 2 === (monthly.length - 1) % 2 && (
+                <text x={i * bw + bw / 2} y={h - 5} textAnchor="middle" fontSize="9.5" fill="var(--text-muted)">{m.month.slice(2).replace('-', '/')}</text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
 
 const card: React.CSSProperties = { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '15px 16px' };
 const eyebrow: React.CSSProperties = { fontSize: '11px', fontWeight: 800, letterSpacing: '.8px', textTransform: 'uppercase', color: 'var(--text-muted)' };
@@ -80,9 +161,13 @@ function HeaderLink({ label, onClick }: { label: string; onClick: () => void }) 
 }
 
 export default function FinancialsDashboard() {
+  const { isAdmin, isSales } = useAuth();
   const [data, setData] = useState<FinancialsData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [drill, setDrill] = useState<DrillTarget | null>(null);
+  // CEO bands load independently — the Money hero never waits on them and
+  // a band-side failure degrades to that band's own error note.
+  const [exec, setExec] = useState<ExecSummary | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -96,6 +181,13 @@ export default function FinancialsDashboard() {
       } catch {
         if (alive) setError('Could not reach NetSuite. Try again in a moment.');
       }
+    })();
+    (async () => {
+      try {
+        const res = await apiFetch('/api/reports/executive-summary');
+        const body = await res.json();
+        if (alive && res.ok) setExec(body);
+      } catch { /* bands stay hidden */ }
     })();
     return () => { alive = false; };
   }, []);
@@ -141,13 +233,13 @@ export default function FinancialsDashboard() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px' }}>
         <Tile swatch="var(--navy, #4d8ba6)" label="Cash on hand" value={money(cash)}
           onClick={() => setDrill({ view: 'cash' })}
-          sub={config.balancesOk ? 'Reconciled in NetSuite' : <span style={hint}>Balances RESTlet not deployed</span>} />
+          sub={<>{config.balancesOk ? 'Reconciled in NetSuite' : <span style={hint}>Balances RESTlet not deployed</span>}<Sparkline points={exec?.sparklines?.cash} /></>} />
         <Tile swatch="var(--success)" label="Owed to us · A/R" value={usd(ar.total)}
           onClick={() => setDrill({ view: 'ar' })}
           sub={<>{ar.openCount} open · <span
             onClick={(e) => { e.stopPropagation(); setDrill({ view: 'ar', bucket: 'pastdue' }); }}
             style={{ color: 'var(--error)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'color-mix(in srgb, var(--error) 45%, transparent)', textUnderlineOffset: '3px' }}
-            title="See past-due invoices">{usd(ar.pastDue)} past due</span></>} />
+            title="See past-due invoices">{usd(ar.pastDue)} past due</span><Sparkline points={exec?.sparklines?.ar_total} /></>} />
         <Tile swatch="var(--error)" label="We owe · A/P" value={money(ap.total)}
           onClick={() => setDrill({ view: 'bills' })}
           sub={<>Bills {money(ap.vendorBills)} · Card {money(ap.cardOwed)}{config.salesTaxConfigured && <> · Tax {money(ap.salesTax)}</>}</>} />
@@ -166,9 +258,20 @@ export default function FinancialsDashboard() {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.5fr) minmax(0,1fr)', gap: '12px' }} className="fin-ar">
           <div style={card}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
               <span style={{ fontSize: '12.5px', color: 'var(--text-secondary)', fontWeight: 600 }}>Total outstanding</span>
-              <span style={{ fontSize: '15px', fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{usd(ar.total)}</span>
+              <span style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
+                {(b.d61_90 + b.d90plus) > 0 && (
+                  <span role="button" tabIndex={0}
+                    onClick={() => setDrill({ view: 'ar', bucket: 'pastdue' })}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDrill({ view: 'ar', bucket: 'pastdue' }); } }}
+                    title="A/R older than 60 days — click to chase"
+                    style={{ fontSize: '11.5px', fontWeight: 800, color: 'var(--error)', background: 'color-mix(in srgb, var(--error) 12%, transparent)', padding: '2px 9px', borderRadius: '999px', cursor: 'pointer', fontVariantNumeric: 'tabular-nums' }}>
+                    {usd(b.d61_90 + b.d90plus)} over 60d
+                  </span>
+                )}
+                <span style={{ fontSize: '15px', fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{usd(ar.total)}</span>
+              </span>
             </div>
             <div style={{ display: 'flex', gap: '2px', height: '24px', borderRadius: '7px', overflow: 'hidden', margin: '10px 0 14px' }}>
               {bucketRows.filter(r => r.amt > 0).map(r => (
@@ -250,9 +353,90 @@ export default function FinancialsDashboard() {
         </div>
       </div>
 
+      {/* ── Revenue band (R4-4) — netted of credit memos, unlike the ops
+             dashboard's gross this-month tile; labeled so. ── */}
+      {exec?.revenue && !exec.revenue.error && (
+        <div>
+          <div style={{ ...eyebrow, margin: '2px 2px 10px' }}>Revenue — invoiced, net of credit memos</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', marginBottom: '12px' }}>
+            <Tile swatch="var(--navy, #4d8ba6)" label="This month" value={usd(exec.revenue.mtd || 0)}
+              sub={<>{usd(exec.revenue.lastMonthToDate || 0)} by this day last month</>} />
+            <Tile swatch="var(--navy, #4d8ba6)" label="Quarter to date" value={usd(exec.revenue.qtd || 0)} />
+            <Tile swatch="var(--navy, #4d8ba6)" label="Year to date" value={usd(exec.revenue.ytd || 0)} />
+            <Tile swatch="var(--navy, #4d8ba6)" label="Trailing 12 months" value={usd(exec.revenue.trailing12 || 0)} />
+          </div>
+          {exec.revenue.monthly && exec.revenue.monthly.length > 1 && (
+            <div style={card}><RevenueBars monthly={exec.revenue.monthly} /></div>
+          )}
+        </div>
+      )}
+      {exec?.revenue?.error && (
+        <div style={{ ...card, padding: '11px 14px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+          <span style={{ color: 'var(--warning)', fontWeight: 700 }}>Revenue band unavailable.</span> NetSuite said: <code>{exec.revenue.error}</code>
+        </div>
+      )}
+
+      {/* ── Sales band (R4-4) — same math as the Sales Performance report
+             (shared sales-facts lib), trailing 90 days. ── */}
+      {exec?.sales && !exec.sales.error && (
+        <div>
+          <div style={{ ...eyebrow, margin: '2px 2px 10px' }}>Sales — trailing 90 days</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', marginBottom: '12px' }}>
+            <Tile swatch="var(--success)" label="Win rate" value={exec.sales.winRate != null ? `${Math.round(exec.sales.winRate * 100)}%` : '—'}
+              sub={<>{exec.sales.wonCount} won · {money(exec.sales.wonValue ?? null)}</>} />
+            <Tile swatch="var(--success)" label="Avg days to close" value={exec.sales.avgDaysToClose != null ? `${Math.round(exec.sales.avgDaysToClose)}d` : '—'}
+              sub="Sent → customer decision" />
+            <Tile swatch="var(--success)" label="Avg job size" value={exec.sales.avgJobSize != null ? usd(exec.sales.avgJobSize) : '—'}
+              sub="Per won quote" />
+            <Tile swatch="var(--success)" label="Open quotes" value={usd(exec.sales.openQuotes?.value || 0)}
+              sub={<>{exec.sales.openQuotes?.count || 0} awaiting an answer<Sparkline points={exec.sparklines?.open_quotes_value} /></>} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '12px' }}>
+            <div style={card}>
+              <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: '6px' }}>Pipeline — open deals</div>
+              {(exec.sales.pipeline || []).map(p => (
+                <Row key={p.stage} label={`${p.stage[0].toUpperCase()}${p.stage.slice(1)} (${p.count})`} value={usd(p.value)} />
+              ))}
+            </div>
+            <div style={card}>
+              <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: '6px' }}>Top customers — YTD spend</div>
+              {(exec.sales.topCustomers || []).length === 0
+                ? <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '10px 0' }}>No spend synced yet</div>
+                : (exec.sales.topCustomers || []).map(c => <Row key={c.name} label={c.name} value={usd(c.ytd)} />)}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Operations band (R4-4) — the order book + shop pulse. ── */}
+      {exec?.operations && !exec.operations.error && (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '10px', margin: '2px 2px 10px' }}>
+            <div style={eyebrow}>Operations — order book & shop</div>
+            {(isAdmin || isSales) && (
+              <a href="/admin/reports/order-book" style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--text-muted)', textDecoration: 'none' }}>Full order book ›</a>
+            )}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px' }}>
+            <Tile swatch="var(--navy, #4d8ba6)" label="Open order book" value={usd(exec.operations.orderBook?.value || 0)}
+              sub={<>{exec.operations.orderBook?.count || 0} open orders{(exec.operations.orderBook?.over60Count || 0) > 0 && <> · <span style={{ color: 'var(--error)', fontWeight: 700 }}>{exec.operations.orderBook?.over60Count} over 60d</span></>}<Sparkline points={exec.sparklines?.so_order_book_value} /></>} />
+            <Tile swatch="var(--warning)" label="Unbilled revenue" value={usd(exec.operations.orderBook?.unbilled || 0)}
+              sub={<>Sold, not yet invoiced<Sparkline points={exec.sparklines?.so_unbilled_value} /></>} />
+            <Tile swatch="var(--navy, #4d8ba6)" label="Vehicles in shop" value={String(exec.operations.inShop ?? '—')}
+              sub={<>{exec.operations.completeNotShipped || 0} done, awaiting pickup</>} />
+            <Tile swatch="var(--navy, #4d8ba6)" label="Avg turnaround"
+              value={exec.operations.turnaround && exec.operations.turnaround.completions > 0 ? `${exec.operations.turnaround.avgDays}d` : '—'}
+              sub={exec.operations.turnaround && exec.operations.turnaround.completions > 0
+                ? <>received → complete · {exec.operations.turnaround.completions} vehicles, 30d</>
+                : 'No completions in the last 30 days'} />
+          </div>
+        </div>
+      )}
+
       <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: 1.6, borderTop: '1px solid var(--border)', paddingTop: '12px' }}>
         Live from NetSuite · Cash / A/P / cards / sales tax from GL account balances (financials RESTlet), A/R aged from open customer invoices. Net position = Cash + A/R − A/P (bills, cards & sales tax).
         {' '}Click any tile or row to see the transactions behind it, chase past dues, and print statements, invoices, and bills.
+        {' '}Revenue is net of credit memos; sales figures share their math with the Sales Performance report; order book and unbilled come from the 2-hourly NetSuite mirror. Trend lines appear as nightly snapshots accrue.
       </div>
 
       {drill && <FinancialsDrilldown target={drill} summary={data} onClose={() => setDrill(null)} />}
