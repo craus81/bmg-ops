@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
-import { r2PresignPut, r2Delete, r2PublicUrl } from '@/lib/r2';
+import { r2PresignPut, r2PresignGet, r2Delete, r2PublicUrl } from '@/lib/r2';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,6 +27,21 @@ function service() {
 
 function safeFileName(name: string): string {
   return name.replace(/[^\w.\- ]+/g, '_').slice(0, 120) || 'file';
+}
+
+/**
+ * R3-22: prospect files live on a private prefix, so every URL handed out is
+ * a fresh presigned GET (the page refetches the list, so an hour is plenty).
+ * The stored public_url column stays as written — legacy key carrier only.
+ */
+async function presignRow<T extends { file_name: string; storage_path?: string | null; public_url: string | null }>(row: T): Promise<T> {
+  const path = row.storage_path
+    || (row.public_url ? row.public_url.split('/prospect-files/')[1] : null);
+  if (!path) return row;
+  const url = await r2PresignGet('prospect-files', path, {
+    filename: row.file_name, disposition: 'inline', expiresIn: 3600,
+  });
+  return { ...row, public_url: url };
 }
 
 export async function POST(req: NextRequest) {
@@ -70,11 +85,12 @@ export async function POST(req: NextRequest) {
       content_type: contentType,
       size_bytes: size,
       storage_path: path,
+      // Legacy key carrier only — never served; reads presign (R3-22).
       public_url: r2PublicUrl('prospect-files', path),
       uploaded_by: auth.user?.id || null,
     }).select().single();
     if (error || !data) return NextResponse.json({ error: error?.message || 'Failed to save file record' }, { status: 500 });
-    return NextResponse.json({ success: true, file: data });
+    return NextResponse.json({ success: true, file: await presignRow(data) });
   }
 
   return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
@@ -88,12 +104,12 @@ export async function GET(req: NextRequest) {
   if (!UUID_RE.test(prospectId)) return NextResponse.json({ error: 'prospectId required' }, { status: 400 });
 
   const { data, error } = await service().from('prospect_files')
-    .select('id, file_name, content_type, size_bytes, public_url, created_at')
+    .select('id, file_name, content_type, size_bytes, public_url, storage_path, created_at')
     .eq('prospect_id', prospectId)
     .order('created_at', { ascending: false })
     .limit(200);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ success: true, files: data || [] });
+  return NextResponse.json({ success: true, files: await Promise.all((data || []).map(presignRow)) });
 }
 
 export async function DELETE(req: NextRequest) {

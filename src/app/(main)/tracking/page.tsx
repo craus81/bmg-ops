@@ -8,7 +8,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 const VehicleCheckIn = lazy(() => import('@/components/VehicleCheckIn'));
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
-import { storage } from '@/lib/storage';
+import { storage, resolveStoredFileUrl } from '@/lib/storage';
 import { fetchAllRows } from '@/lib/fetch-all';
 import StatusBadge from '@/components/StatusBadge';
 import AssignmentPicker from '@/components/AssignmentPicker';
@@ -2676,7 +2676,7 @@ export default function TrackingPage() {
                           multiple={false}
                           style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)' }}>
                           <ProofThumbnail
-                            pdfUrl={(vehicle as any).proof_url}
+                            pdfUrl={resolveStoredFileUrl((vehicle as any).proof_url)!}
                             dropboxPath={(vehicle as any).proof_dropbox_path || undefined}
                             label={(vehicle as any).proof_filename || 'Proof'}
                             thumbSize={48}
@@ -2684,7 +2684,7 @@ export default function TrackingPage() {
                           />
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <a
-                              href={(vehicle as any).proof_url}
+                              href={resolveStoredFileUrl((vehicle as any).proof_url)!}
                               target="_blank"
                               rel="noopener noreferrer"
                               style={{ fontSize: '12px', fontWeight: 700, color: '#22c55e', textDecoration: 'none' }}
@@ -3345,7 +3345,7 @@ export default function TrackingPage() {
             vehicleLabel={[v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ') || 'Unknown Vehicle'}
             customerName={v.customer_name}
             netsuiteSalesOrderId={v.netsuite_sales_order_id}
-            proofUrl={(v as any).proof_url || null}
+            proofUrl={resolveStoredFileUrl((v as any).proof_url) || null}
             proofIsPdf={proofName.endsWith('.pdf')}
             graphicsFiles={[]}
             isAdmin={!!isAdmin}

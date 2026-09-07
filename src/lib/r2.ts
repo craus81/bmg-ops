@@ -170,6 +170,17 @@ export async function r2Head(prefix: string, path: string): Promise<boolean> {
 }
 
 // ── Get public URL for a file ──
+/**
+ * R3-22 (owner decision C2, 2026-09-07): the public R2 domain is being
+ * edge-limited to an allowlist of non-sensitive paths — `vehicle-templates/*`
+ * (logos, coverage-diagram templates) and `photos/parts/*` (vendor part
+ * product shots). Those are the ONLY prefixes new code may hand this URL out
+ * for; they exist so images embedded in customer emails (past and future)
+ * keep rendering. Everything else must be served with credentials:
+ * `r2PresignGet` (short-lived, works sessionless), `sameOriginStorageUrl`
+ * (auth-gated app route, for signed-in surfaces), or `r2GetBytes`
+ * (server-side). See docs/r2-private-flip.md.
+ */
 export function r2PublicUrl(prefix: string, path: string): string {
   const publicUrl = process.env.R2_PUBLIC_URL;
   const key = `${prefix}/${path}`;
@@ -180,6 +191,17 @@ export function r2PublicUrl(prefix: string, path: string): string {
   const accountId = process.env.R2_ACCOUNT_ID || '';
   const bucket = process.env.R2_BUCKET_NAME || 'fleetsuite';
   return `https://${accountId}.r2.cloudflarestorage.com/${bucket}/${key}`;
+}
+
+/**
+ * Same-origin, auth-gated URL for an object: GET /api/storage streams it
+ * through requireAuth + the storage-guard read scoping. The private-prefix
+ * replacement for r2PublicUrl on signed-in surfaces (and the URL shape
+ * storage.getPublicUrl() now returns client-side). Relative on purpose —
+ * it is only meaningful inside the app.
+ */
+export function sameOriginStorageUrl(prefix: string, path: string): string {
+  return `/api/storage?bucket=${prefix}&path=${encodeURIComponent(path)}`;
 }
 
 // ── Generate a presigned PUT URL so the browser can upload directly to R2 ──

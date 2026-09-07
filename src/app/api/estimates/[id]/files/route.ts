@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
-import { r2PresignPut, r2Delete, r2PublicUrl } from '@/lib/r2';
+import { r2PresignPut, r2PresignGet, r2Delete, r2PublicUrl } from '@/lib/r2';
 import { MAX_ATTACHMENT_BYTES, attachmentLimitMb } from '@/lib/email-attachments';
 import { ESTIMATE_FILE_PREFIX } from '@/lib/estimate-attachments';
 
@@ -36,7 +36,23 @@ function safeFileName(name: string): string {
   return name.replace(/[^\w.\- ]+/g, '_').slice(0, 120) || 'file';
 }
 
-const publicFields = 'id, file_name, content_type, size_bytes, public_url, created_at';
+const publicFields = 'id, file_name, content_type, size_bytes, public_url, storage_path, created_at';
+
+/**
+ * R3-22: estimate-files live on a private prefix, so every URL handed out is
+ * a fresh presigned GET (the page refetches the list, so an hour is plenty).
+ * The stored public_url column stays as written — it is the legacy key
+ * carrier, never served.
+ */
+async function presignRow<T extends { file_name: string; storage_path?: string | null; public_url: string | null }>(row: T): Promise<T> {
+  const path = row.storage_path
+    || (row.public_url ? row.public_url.split(`/${ESTIMATE_FILE_PREFIX}/`)[1] : null);
+  if (!path) return row;
+  const url = await r2PresignGet(ESTIMATE_FILE_PREFIX, path, {
+    filename: row.file_name, disposition: 'inline', expiresIn: 3600,
+  });
+  return { ...row, public_url: url };
+}
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireFeature(req, 'estimates');
@@ -84,13 +100,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       content_type: contentType,
       size_bytes: size,
       storage_path: path,
+      // Legacy key carrier only — never served; reads presign (R3-22).
       public_url: r2PublicUrl(ESTIMATE_FILE_PREFIX, path),
       uploaded_by: auth.user?.id || null,
     }).select(publicFields).single();
     if (error || !data) {
       return NextResponse.json({ error: error?.message || 'Failed to save file record' }, { status: 500 });
     }
-    return NextResponse.json({ success: true, file: data });
+    return NextResponse.json({ success: true, file: await presignRow(data) });
   }
 
   return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
@@ -110,7 +127,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     .order('id')
     .limit(200);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ success: true, files: data || [] });
+  return NextResponse.json({ success: true, files: await Promise.all((data || []).map(presignRow)) });
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {

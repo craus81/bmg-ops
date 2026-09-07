@@ -326,9 +326,12 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/shop-inbound/arrival/route.ts': staff(),
   'src/app/api/shop-inbound/route.ts': staff(),
   'src/app/api/signed-documents/route.ts': featureDynamic('requireFeature(req, spec.feature)', 'gated per record type on the record\'s own feature key (estimates / graphics)'),
-  'src/app/api/storage/download/route.ts': authScoped('read presigns pass the storage-guard ACL first', 'checkStoragePath'),
-  'src/app/api/storage/presign/route.ts': authScoped('write presigns pass the storage-guard ACL first', 'checkStoragePath'),
-  'src/app/api/storage/route.ts': authScoped('every bucket/path goes through the storage-guard ACL before any presign', 'checkStoragePath'),
+  // R3-22: all three storage routes tier the caller via storageAccessOf —
+  // staff read/write broadly, external installers only floor prefixes,
+  // customer-only accounts nothing — on top of the path/prefix ACL.
+  'src/app/api/storage/download/route.ts': authScoped('read presigns pass the tiered storage-guard ACL first', 'checkStoragePath'),
+  'src/app/api/storage/presign/route.ts': authScoped('write presigns pass the tiered storage-guard ACL first', 'checkStoragePath'),
+  'src/app/api/storage/route.ts': authScoped('every bucket/path goes through the tiered storage-guard ACL', 'checkStoragePath'),
   'src/app/api/system-health/route.ts': cron('requireAdmin('),
   'src/app/api/upfit-projects/allocations/route.ts': staff(),
   'src/app/api/upfit-projects/link-po/route.ts': staff(),

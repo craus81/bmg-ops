@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { r2Upload, r2Delete, r2PublicUrl } from '@/lib/r2';
+import { r2Upload, r2Delete, sameOriginStorageUrl } from '@/lib/r2';
 import { requireAdmin } from '@/lib/api-auth';
 import { z } from '@/lib/validate';
 
@@ -237,7 +237,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Failed to save document: ' + insertError.message }, { status: 500 });
       }
 
-      const fileUrl = r2PublicUrl('knowledge-files', storagePath);
+      const fileUrl = sameOriginStorageUrl('knowledge-files', storagePath);
       return NextResponse.json({
         success: true,
         doc,
@@ -350,7 +350,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Get public URL for the file
-    const fileUrl = fileStored ? r2PublicUrl('knowledge-files', storagePath) : null;
+    const fileUrl = fileStored ? sameOriginStorageUrl('knowledge-files', storagePath) : null;
 
     return NextResponse.json({
       success: true,

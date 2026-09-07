@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { downloadFile } from '@/lib/dropbox';
-import { r2Upload } from '@/lib/r2';
+import { r2Upload, sameOriginStorageUrl } from '@/lib/r2';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
@@ -46,10 +46,14 @@ export async function POST(req: NextRequest) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
+    // R3-22: store the auth-gated app URL — the raw public-domain URL goes
+    // dark for the proofs prefix at the flip (legacy rows are rewritten at
+    // render by resolveStoredFileUrl).
+    const proofUrl = sameOriginStorageUrl('proofs', r2Path);
     const { error: dbError } = await supabase
       .from('fleet_checkins')
       .update({
-        proof_url: upload.publicUrl,
+        proof_url: proofUrl,
         proof_storage_key: upload.key,
         proof_dropbox_path: dropbox_path,
         proof_filename: name,
@@ -65,7 +69,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       filename: name,
-      publicUrl: upload.publicUrl,
+      publicUrl: proofUrl,
       r2Key: upload.key,
       size: buffer.length,
     });

@@ -115,6 +115,17 @@ export function isInternalStaffRole(profile: any): boolean {
 }
 
 /**
+ * Caller tier for the generic storage routes (see storage-guard.ts):
+ * internal staff read/write broadly, external CNI installers get their
+ * floor prefixes, customer-only accounts get nothing (their surfaces
+ * presign server-side with record checks).
+ */
+export function storageAccessOf(profile: any): 'staff' | 'installer' | 'none' {
+  if (isInternalStaffRole(profile)) return 'staff';
+  return profileRoles(profile).includes('installer') ? 'installer' : 'none';
+}
+
+/**
  * Verify the request has a valid authenticated session AND the account has
  * been approved by an admin. Pending, denied, and deactivated accounts are
  * rejected. Returns the user's profile so downstream checks can reuse it.
