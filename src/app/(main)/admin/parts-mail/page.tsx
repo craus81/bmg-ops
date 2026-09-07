@@ -75,6 +75,10 @@ export default function PartsMailPage() {
 
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
   const [invLinkInputs, setInvLinkInputs] = useState<Record<string, string>>({});
+  // Three-way match per captured invoice (R4-8): fetched for display; the
+  // create-bill route recomputes and enforces it server-side regardless.
+  // null = match unavailable (endpoint errored) — the server gate still runs.
+  const [matches, setMatches] = useState<Record<string, { verdict: 'green' | 'amber' | 'red'; variances: string[] } | null>>({});
   const [rows, setRows] = useState<MailRow[]>([]);
   const [filter, setFilter] = useState<'all' | MailRow['classification']>('all');
   const [loading, setLoading] = useState(true);
@@ -110,6 +114,29 @@ export default function PartsMailPage() {
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
   }, []);
+
+  // Fetch each billable card's three-way match once its invoice is on
+  // screen. Display only — the create-bill route re-runs the match on the
+  // click, so a stale panel can't slip a bad bill through.
+  useEffect(() => {
+    if (!canBill) return;
+    const targets = invoices.filter(i => i.status === 'captured' && i.matched_po_id && matches[i.id] === undefined);
+    if (targets.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const inv of targets) {
+        try {
+          const res = await fetch(`/api/parts-mail/bill-match?invoiceId=${inv.id}`);
+          const data = res.ok ? await res.json() : null;
+          if (!cancelled) setMatches(prev => ({ ...prev, [inv.id]: data?.match || null }));
+        } catch {
+          if (!cancelled) setMatches(prev => ({ ...prev, [inv.id]: null }));
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- matches is written here; the undefined guard stops refetch loops
+  }, [invoices, canBill]);
 
   useEffect(() => {
     load();
@@ -206,17 +233,41 @@ export default function PartsMailPage() {
 
   const createBill = async (inv: InvoiceRow) => {
     const label = `${inv.vendor_name || 'vendor'} invoice ${inv.invoice_number || inv.file_name}${inv.total ? ` for $${Number(inv.total).toLocaleString()}` : ''}`;
-    const ok = await dialog.confirm(`Create a NetSuite vendor bill from PO ${inv.po?.tranid || ''} for ${label}? This posts a real bill in NetSuite.`);
-    if (!ok) return;
+    // Non-green three-way match → the confirm becomes a typed override
+    // reason (audit-logged server-side). The route re-checks either way.
+    const match = matches[inv.id];
+    let override = false;
+    let overrideReason = '';
+    if (match && match.verdict !== 'green') {
+      const reason = await dialog.prompt(
+        `This bill does not match the PO:\n\n${match.variances.map(v => `• ${v}`).join('\n')}\n\nType the reason to bill anyway — it goes in the audit log.`,
+        '',
+        { title: 'Three-way match', confirmLabel: 'Bill anyway', placeholder: 'Reason for override' },
+      );
+      if (reason === null || !reason.trim()) return;
+      override = true;
+      overrideReason = reason.trim();
+    } else {
+      const ok = await dialog.confirm(`Create a NetSuite vendor bill from PO ${inv.po?.tranid || ''} for ${label}? This posts a real bill in NetSuite.`);
+      if (!ok) return;
+    }
     setBusy(inv.id);
     const res = await fetch('/api/parts-mail/create-bill', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ invoiceId: inv.id }),
+      body: JSON.stringify({ invoiceId: inv.id, ...(override ? { override: true, overrideReason } : {}) }),
     });
     const data = await res.json();
-    if (!res.ok) await dialog.alert(data.error || 'Bill creation failed');
-    else {
+    if (!res.ok) {
+      // The server recheck can surface variances a stale (or missing)
+      // panel didn't show — display them and refresh the panel.
+      if (res.status === 409 && data.canOverride && data.match) {
+        setMatches(prev => ({ ...prev, [inv.id]: data.match }));
+        await dialog.alert(`${data.error}\n\n${(data.match.variances || []).map((v: string) => `• ${v}`).join('\n')}`);
+      } else {
+        await dialog.alert(data.error || 'Bill creation failed');
+      }
+    } else {
       await dialog.alert(`Bill created${data.billNumber ? `: ${data.billNumber}` : ''} from PO ${data.po || ''}.`);
       load();
     }
@@ -318,14 +369,43 @@ export default function PartsMailPage() {
                   {inv.total != null && <span><b style={{ color: 'var(--text-secondary)' }}>${Number(inv.total).toLocaleString()}</b></span>}
                   {inv.po?.tranid ? <span>PO <b style={{ color: 'var(--text-secondary)' }}>{inv.po.tranid}</b></span> : <span style={{ color: '#fbbf24' }}>No PO linked</span>}
                 </div>
+                {inv.status === 'captured' && inv.matched_po_id && canBill && matches[inv.id] != null && (() => {
+                  const m = matches[inv.id]!;
+                  const tone = m.verdict === 'green'
+                    ? { bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.3)', color: '#22c55e', label: '✓ Three-way match: invoice, PO, and receipts agree' }
+                    : m.verdict === 'amber'
+                      ? { bg: 'rgba(251,191,36,0.08)', border: 'rgba(251,191,36,0.3)', color: '#fbbf24', label: '⚠ Check before billing' }
+                      : { bg: 'rgba(248,113,113,0.08)', border: 'rgba(248,113,113,0.3)', color: '#f87171', label: '✕ Does not match' };
+                  return (
+                    <div style={{ marginTop: '6px', padding: '6px 9px', borderRadius: '8px', fontSize: '10px', background: tone.bg, border: `1px solid ${tone.border}` }}>
+                      <div style={{ fontWeight: 800, color: tone.color }}>{tone.label}</div>
+                      {m.variances.map((v, idx) => (
+                        <div key={idx} style={{ color: 'var(--text-secondary)', marginTop: '2px' }}>• {v}</div>
+                      ))}
+                    </div>
+                  );
+                })()}
                 {inv.status === 'captured' && (
                   <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
                     {inv.matched_po_id ? (
-                      canBill && (
-                        <button onClick={() => createBill(inv)} disabled={busy === inv.id} style={{ padding: '7px 12px', borderRadius: '8px', background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)', color: '#22c55e', fontSize: '11px', fontWeight: 700, cursor: 'pointer', opacity: busy === inv.id ? 0.5 : 1 }}>
-                          Create NetSuite Bill
-                        </button>
-                      )
+                      canBill && (() => {
+                        const nonGreen = !!matches[inv.id] && matches[inv.id]!.verdict !== 'green';
+                        return (
+                          <button
+                            onClick={() => createBill(inv)}
+                            disabled={busy === inv.id}
+                            style={{
+                              padding: '7px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                              background: nonGreen ? 'rgba(251,191,36,0.15)' : 'rgba(34,197,94,0.15)',
+                              border: `1px solid ${nonGreen ? 'rgba(251,191,36,0.4)' : 'rgba(34,197,94,0.4)'}`,
+                              color: nonGreen ? '#fbbf24' : '#22c55e',
+                              opacity: busy === inv.id ? 0.5 : 1,
+                            }}
+                          >
+                            {nonGreen ? 'Bill Anyway…' : 'Create NetSuite Bill'}
+                          </button>
+                        );
+                      })()
                     ) : (
                       <>
                         <input
