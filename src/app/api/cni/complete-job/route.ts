@@ -61,6 +61,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Only an in-progress job can be marked complete.' }, { status: 409 });
   }
 
+  // Install checklist gate (migration 265): required tasks must be checked
+  // off before the job can go to review — the procedural steps photos can't
+  // show. Admin bypass mirrors the photo gate; a job with no tasks passes.
+  if (!isAdmin) {
+    const { data: openTasks } = await supabase
+      .from('cni_job_tasks')
+      .select('label')
+      .eq('job_id', jobId)
+      .eq('required', true)
+      .eq('completed', false)
+      .order('sort_order')
+      .limit(20);
+    if ((openTasks || []).length > 0) {
+      return NextResponse.json({
+        error: 'Finish the install checklist before marking the job complete.',
+        step: 'tasks_required',
+        missing: (openTasks || []).map(t => t.label),
+      }, { status: 409 });
+    }
+  }
+
   const { error } = await supabase.from('cni_jobs').update({
     status: 'completed_pending_review',
     completed_at: new Date().toISOString(),
