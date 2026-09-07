@@ -64,6 +64,16 @@ interface CniJob {
   created_at: string;
 }
 
+interface CniJobTask {
+  id: string;
+  label: string;
+  required: boolean;
+  completed: boolean;
+  completed_by_name: string | null;
+  completed_at: string | null;
+  sort_order: number;
+}
+
 interface CniVin {
   id: string;
   vin: string;
@@ -139,6 +149,11 @@ export default function CniJobDetailPage() {
 
   const [job, setJob] = useState<CniJob | null>(null);
   const [vins, setVins] = useState<CniVin[]>([]);
+  // Install checklist (migration 265): coordinator-authored, installer-checked.
+  const [jobTasks, setJobTasks] = useState<CniJobTask[]>([]);
+  const [newTaskLabel, setNewTaskLabel] = useState('');
+  const [taskBusy, setTaskBusy] = useState(false);
+  const [taskError, setTaskError] = useState('');
   const [history, setHistory] = useState<StatusHistoryEntry[]>([]);
   const [installerName, setInstallerName] = useState('');
   const [loading, setLoading] = useState(true);
@@ -188,6 +203,66 @@ export default function CniJobDetailPage() {
       await loadJob();
     } finally {
       setDeviceBusy(false);
+    }
+  };
+
+  // Install checklist actions — writes ride /api/cni/job-tasks (service
+  // role, per the installer-write lockdown); reads are browser-side RLS.
+  const addTask = async () => {
+    const label = newTaskLabel.trim();
+    if (!label || taskBusy) return;
+    setTaskBusy(true);
+    setTaskError('');
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/cni/job-tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+        body: JSON.stringify({ jobId, labels: [label] }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setTaskError(json.error || 'Could not add the task'); return; }
+      setJobTasks(prev => [...prev, ...(json.tasks || [])]);
+      setNewTaskLabel('');
+    } finally {
+      setTaskBusy(false);
+    }
+  };
+
+  const toggleTask = async (task: CniJobTask) => {
+    if (taskBusy) return;
+    setTaskBusy(true);
+    setTaskError('');
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/cni/job-tasks', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+        body: JSON.stringify({ taskId: task.id, completed: !task.completed }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setTaskError(json.error || 'Could not update the task'); return; }
+      setJobTasks(prev => prev.map(t => (t.id === task.id ? { ...t, completed: !task.completed } : t)));
+    } finally {
+      setTaskBusy(false);
+    }
+  };
+
+  const removeTask = async (task: CniJobTask) => {
+    if (taskBusy) return;
+    if (!window.confirm(`Remove "${task.label}" from the checklist?`)) return;
+    setTaskBusy(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`/api/cni/job-tasks?id=${task.id}`, {
+        method: 'DELETE',
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setTaskError(json.error || 'Could not remove the task'); return; }
+      setJobTasks(prev => prev.filter(t => t.id !== task.id));
+    } finally {
+      setTaskBusy(false);
     }
   };
 
@@ -400,6 +475,15 @@ export default function CniJobDetailPage() {
       .eq('job_id', jobId)
       .order('sort_order');
     setVins(vinData || []);
+
+    // Install checklist (migration 265) — coordinator-authored tasks the
+    // installer works through; required rows gate completion + closure.
+    const { data: taskData } = await supabase
+      .from('cni_job_tasks')
+      .select('id, label, required, completed, completed_by_name, completed_at, sort_order')
+      .eq('job_id', jobId)
+      .order('sort_order');
+    setJobTasks((taskData || []) as CniJobTask[]);
 
     // Count completed vehicles that have no live pay credit yet — these need an
     // installer tagged in Crew & Pay. Mirrors the shifts page's credited set.
@@ -1187,6 +1271,58 @@ export default function CniJobDetailPage() {
         </label>
       </div>
 
+      {/* Install checklist (migration 265) — the procedural steps photos
+          can't show. Required tasks gate Mark Job Complete and closure. */}
+      <div style={{
+        padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
+        background: 'var(--card)', border: '1px solid var(--border)',
+      }}>
+        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>
+          INSTALL CHECKLIST{jobTasks.length > 0 ? ` (${jobTasks.filter(t => t.completed).length}/${jobTasks.length})` : ''}
+        </div>
+        {jobTasks.length === 0 && (
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+            No tasks yet — list the install steps the crew must check off (prep, wiring, torque, cleanup, sign-off…). Required tasks block “Mark Job Complete” until done.
+          </div>
+        )}
+        {jobTasks.map(t => (
+          <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 0', borderTop: '1px solid var(--border)' }}>
+            <input
+              type="checkbox"
+              checked={t.completed}
+              disabled={taskBusy}
+              onChange={() => toggleTask(t)}
+              style={{ width: '16px', height: '16px', accentColor: 'var(--success, #22c55e)', flexShrink: 0 }}
+            />
+            <span style={{ flex: 1, fontSize: '13px', color: 'var(--text-primary)', textDecoration: t.completed ? 'line-through' : 'none', opacity: t.completed ? 0.7 : 1 }}>
+              {t.label}
+              {!t.required && <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}> · optional</span>}
+            </span>
+            {t.completed && t.completed_by_name && (
+              <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{t.completed_by_name}</span>
+            )}
+            <button onClick={() => removeTask(t)} disabled={taskBusy} title="Remove task"
+              style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px', padding: '0 4px' }}>×</button>
+          </div>
+        ))}
+        {taskError && (
+          <div style={{ fontSize: '12px', color: 'var(--error, #ef4444)', marginTop: '6px' }}>{taskError}</div>
+        )}
+        <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+          <input
+            value={newTaskLabel}
+            onChange={e => setNewTaskLabel(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') addTask(); }}
+            placeholder="Add an install step…"
+            style={{ flex: 1, padding: '7px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px' }}
+          />
+          <button onClick={addTask} disabled={!newTaskLabel.trim() || taskBusy}
+            style={{ padding: '7px 14px', borderRadius: '8px', border: 'none', background: newTaskLabel.trim() ? 'var(--orange, #f97316)' : 'var(--border)', color: '#fff', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>
+            + Task
+          </button>
+        </div>
+      </div>
+
       {/* VINs */}
       <div style={{
         padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
@@ -1679,7 +1815,11 @@ export default function CniJobDetailPage() {
             const invoiceApproved = individual
               ? payoutsSettled
               : (legacyApproved || modernApproved);
-            const canClose = allVinsComplete && allPhotosApproved && invoiceApproved;
+            // Install checklist (265): required tasks done — vacuously true
+            // when the job has none, so older jobs stay closable.
+            const requiredTasks = jobTasks.filter(t => t.required);
+            const tasksDone = requiredTasks.every(t => t.completed);
+            const canClose = allVinsComplete && allPhotosApproved && invoiceApproved && tasksDone;
 
             return (
               <>
@@ -1687,6 +1827,11 @@ export default function CniJobDetailPage() {
                   <div style={{ fontSize: '13px', color: allVinsComplete ? 'var(--success)' : 'var(--error)' }}>
                     {allVinsComplete ? '✓' : '✕'} All VINs completed ({vins.filter(v => v.status === 'completed').length}/{vins.length})
                   </div>
+                  {requiredTasks.length > 0 && (
+                    <div style={{ fontSize: '13px', color: tasksDone ? 'var(--success)' : 'var(--error)' }}>
+                      {tasksDone ? '✓' : '✕'} Install checklist done ({requiredTasks.filter(t => t.completed).length}/{requiredTasks.length} required)
+                    </div>
+                  )}
                   <div style={{ fontSize: '13px', color: allPhotosApproved ? 'var(--success)' : 'var(--error)' }}>
                     {allPhotosApproved ? '✓' : '✕'} All photos approved ({photoStats.approved}/{photoStats.total})
                   </div>

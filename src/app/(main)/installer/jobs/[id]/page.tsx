@@ -12,6 +12,14 @@ import PartPicker, { type PickedPart } from '@/components/PartPicker';
 import { isVerizonRfidPart } from '@/lib/rfid';
 import InstallerPreviewBanner from '@/components/InstallerPreviewBanner';
 import { getInstallerPreview } from '@/lib/installer-preview';
+
+interface InstallTask {
+  id: string;
+  label: string;
+  required: boolean;
+  completed: boolean;
+  sort_order: number;
+}
 import JobAttachments from '@/components/JobAttachments';
 import NumberInput from '@/components/NumberInput';
 
@@ -36,6 +44,9 @@ export default function InstallerJobDetailPage() {
 
   const [job, setJob] = useState<any>(null);
   const [vins, setVins] = useState<any[]>([]);
+  // Install checklist (migration 265) — required rows gate Mark Job Complete.
+  const [jobTasks, setJobTasks] = useState<InstallTask[]>([]);
+  const [taskBusy, setTaskBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
 
@@ -109,6 +120,15 @@ export default function InstallerJobDetailPage() {
       .eq('job_id', jobId)
       .order('sort_order');
     setVins(vinData || []);
+
+    // Install checklist (migration 265) — required tasks must be checked
+    // off before Mark Job Complete; RLS grants the assigned crew SELECT.
+    const { data: taskData } = await supabase
+      .from('cni_job_tasks')
+      .select('id, label, required, completed, sort_order')
+      .eq('job_id', jobId)
+      .order('sort_order');
+    setJobTasks((taskData || []) as InstallTask[]);
 
     // Photo count
     const { count: pCount } = await supabase
@@ -334,10 +354,36 @@ export default function InstallerJobDetailPage() {
         body: JSON.stringify({ jobId: job.id }),
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok) { setActionError('Failed to mark complete: ' + (json.error || 'unknown error')); return; }
+      if (!res.ok) {
+        // The checklist gate names exactly what's left — show the list.
+        if (json.step === 'tasks_required' && Array.isArray(json.missing)) {
+          setActionError(`Finish the install checklist first: ${json.missing.join(' · ')}`);
+        } else {
+          setActionError('Failed to mark complete: ' + (json.error || 'unknown error'));
+        }
+        return;
+      }
       await loadJob();
     } finally {
       setUpdating(false);
+    }
+  };
+
+  // Check off an install task — the write rides the service-role route
+  // (installers hold no write RLS on CNI tables).
+  const toggleTask = async (task: InstallTask) => {
+    if (taskBusy) return;
+    setTaskBusy(true);
+    try {
+      const res = await fetch('/api/cni/job-tasks', {
+        method: 'PATCH', headers: await authHeaders(),
+        body: JSON.stringify({ taskId: task.id, completed: !task.completed }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setActionError(json.error || 'Could not update the task'); return; }
+      setJobTasks(prev => prev.map(t => (t.id === task.id ? { ...t, completed: !task.completed } : t)));
+    } finally {
+      setTaskBusy(false);
     }
   };
 
@@ -702,6 +748,39 @@ export default function InstallerJobDetailPage() {
                 background: 'var(--orange)', color: '#fff', border: 'none',
               }}>Start Shift — Tag Your Crew</button>
             </>
+          )}
+        </div>
+      )}
+
+      {/* Install checklist (migration 265) — BMG's step list for this job.
+          Required steps must be checked before Mark Job Complete. */}
+      {jobTasks.length > 0 && (
+        <div style={sectionStyle}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>
+            INSTALL CHECKLIST ({jobTasks.filter(t => t.completed).length}/{jobTasks.length})
+          </div>
+          {jobTasks.map(t => {
+            const canToggle = ['in_progress', 'scheduled_confirmed', 'completed_pending_review'].includes(job.status);
+            return (
+              <label key={t.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '7px 0', borderTop: '1px solid var(--border)', cursor: canToggle ? 'pointer' : 'default' }}>
+                <input
+                  type="checkbox"
+                  checked={t.completed}
+                  disabled={!canToggle || taskBusy}
+                  onChange={() => toggleTask(t)}
+                  style={{ width: '18px', height: '18px', accentColor: 'var(--success, #22c55e)', flexShrink: 0 }}
+                />
+                <span style={{ flex: 1, fontSize: '14px', color: 'var(--text-primary)', textDecoration: t.completed ? 'line-through' : 'none', opacity: t.completed ? 0.65 : 1 }}>
+                  {t.label}
+                  {!t.required && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}> · optional</span>}
+                </span>
+              </label>
+            );
+          })}
+          {jobTasks.some(t => t.required && !t.completed) && (
+            <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '6px' }}>
+              Required steps must be checked off before the job can be marked complete.
+            </div>
           )}
         </div>
       )}
