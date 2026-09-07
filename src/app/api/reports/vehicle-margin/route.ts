@@ -169,18 +169,31 @@ export async function GET(req: NextRequest) {
     }
     const projectIds = [...new Set([...projByCheckin.values()].map(p => p.id))];
 
-    // Many-POs-per-project: the ordered purchase requests.
+    // Many-POs-per-project: the ordered purchase requests, plus the join
+    // table (migration 267) — which also carries manual links to POs cut
+    // directly in NetSuite, the ones no other source can see.
     const poRowIdsByProject = new Map<string, Set<string>>();
     for (const ids of chunk(projectIds, 100)) {
-      const { data } = await supabase
-        .from('purchase_requests')
-        .select('source_project_id, ordered_po_id')
-        .in('source_project_id', ids)
-        .not('ordered_po_id', 'is', null);
-      for (const r of data || []) {
+      const [{ data: reqRows }, { data: linkRows }] = await Promise.all([
+        supabase
+          .from('purchase_requests')
+          .select('source_project_id, ordered_po_id')
+          .in('source_project_id', ids)
+          .not('ordered_po_id', 'is', null),
+        supabase
+          .from('upfit_project_pos')
+          .select('project_id, po_id')
+          .in('project_id', ids),
+      ]);
+      for (const r of reqRows || []) {
         const set = poRowIdsByProject.get(r.source_project_id) || new Set<string>();
         set.add(r.ordered_po_id);
         poRowIdsByProject.set(r.source_project_id, set);
+      }
+      for (const r of linkRows || []) {
+        const set = poRowIdsByProject.get(r.project_id) || new Set<string>();
+        set.add(r.po_id);
+        poRowIdsByProject.set(r.project_id, set);
       }
     }
 
