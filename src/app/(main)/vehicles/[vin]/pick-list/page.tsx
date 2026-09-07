@@ -13,6 +13,7 @@ import { PartLabel } from '@/components/PartLabel';
 import { openOrCreateVehicleThread } from '@/lib/customer-thread';
 import { deepLinks } from '@/lib/deep-links';
 import { storage, storageDownloadUrl } from '@/lib/storage';
+import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 
 interface VehicleData {
   id: string;
@@ -704,9 +705,21 @@ export default function VehiclePickListPage() {
               Part: <PartLabel partNumber={graphicsJob.part_number} />
             </div>
           )}
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>
-            Status: <span style={{ fontWeight: 700, color: '#4ade80' }}>{graphicsJob.status}</span>
-            {graphicsJob.quantity ? ` · Qty: ${graphicsJob.quantity}` : ''}
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            <span>Status:</span>
+            {(() => {
+              // A real stage chip (R3-20) — the raw status word rendered
+              // green regardless of state, so "flagged" looked as done as
+              // "installed" to the floor.
+              const color = (GRAPHICS_STATUS_COLORS as Record<string, string>)[graphicsJob.status] || '#4ade80';
+              const label = (GRAPHICS_STATUS_LABELS as Record<string, string>)[graphicsJob.status] || graphicsJob.status;
+              return (
+                <span style={{ fontWeight: 800, fontSize: '11px', padding: '2px 10px', borderRadius: '999px', background: `${color}1f`, border: `1px solid ${color}55`, color, whiteSpace: 'nowrap' }}>
+                  {label}
+                </span>
+              );
+            })()}
+            {graphicsJob.quantity ? <span>· Qty: {graphicsJob.quantity}</span> : null}
           </div>
 
           {(graphicsJob.vinyl_type || graphicsJob.vinyl_color || graphicsJob.print_method || graphicsJob.cut_method || graphicsJob.premask) && (

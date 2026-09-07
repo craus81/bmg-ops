@@ -13,9 +13,12 @@ export default function MorePage() {
   const { mode, setMode, resolvedTheme } = useTheme();
   const supabase = createClient();
   const [pendingUserCount, setPendingUserCount] = useState(0);
+  // R3-20: pending-count badges for the Purchasing/Receiving rows — the
+  // queues were invisible until someone happened to open the page.
+  const [pendingRequestCount, setPendingRequestCount] = useState(0);
+  const [manualReceiptCount, setManualReceiptCount] = useState(0);
 
   useEffect(() => {
-    if (!hasFeature('user_management')) return;
     const load = async () => {
       if (hasFeature('user_management')) {
         const { count: userCount } = await supabase
@@ -23,6 +26,18 @@ export default function MorePage() {
           .select('*', { count: 'exact', head: true })
           .eq('status', 'pending');
         setPendingUserCount(userCount || 0);
+      }
+      if (hasFeature('parts_ordering')) {
+        const [{ count: reqCount }, { count: manualCount }] = await Promise.all([
+          supabase.from('purchase_requests')
+            .select('*', { count: 'exact', head: true })
+            .eq('status', 'pending'),
+          supabase.from('po_receipts')
+            .select('*', { count: 'exact', head: true })
+            .eq('ns_status', 'manual_needed'),
+        ]);
+        setPendingRequestCount(reqCount || 0);
+        setManualReceiptCount(manualCount || 0);
       }
     };
     load();
@@ -64,8 +79,8 @@ export default function MorePage() {
       items: [
         { title: 'Purchase Orders', sub: 'Manage POs', path: '/admin/pos', show: F('purchase_orders') },
         { title: 'Scan Log', sub: 'Review scans, match POs, export & invoice', path: '/admin/scans', show: F('reports') },
-        { title: 'Purchasing', sub: 'Requested parts waiting to be ordered, grouped by vendor', path: '/admin/purchasing', show: F('parts_ordering') },
-        { title: 'Receiving', sub: 'Check arriving parts in against vendor POs', path: '/admin/receiving', show: F('parts_ordering') },
+        { title: 'Purchasing', sub: pendingRequestCount > 0 ? `${pendingRequestCount} request${pendingRequestCount !== 1 ? 's' : ''} waiting to be ordered` : 'Requested parts waiting to be ordered, grouped by vendor', path: '/admin/purchasing', show: F('parts_ordering'), badge: pendingRequestCount > 0 ? pendingRequestCount : undefined },
+        { title: 'Receiving', sub: manualReceiptCount > 0 ? `${manualReceiptCount} receipt${manualReceiptCount !== 1 ? 's' : ''} still need NetSuite entry by hand` : 'Check arriving parts in against vendor POs', path: '/admin/receiving', show: F('parts_ordering'), badge: manualReceiptCount > 0 ? manualReceiptCount : undefined },
         { title: 'Parts Catalog', sub: 'Upfit & graphic parts from NetSuite', path: '/parts', show: F('parts_catalog') },
         { title: 'Inventory', sub: 'On hand · allocated to jobs · free · on order, at a glance', path: '/admin/inventory', show: F('parts_catalog') },
         { title: 'Part Tagging Rules', sub: 'Auto-categorize parts by vendor & name instead of one dropdown at a time', path: '/admin/part-category-rules', show: F('part_admin') },
