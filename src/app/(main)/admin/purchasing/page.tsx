@@ -41,6 +41,8 @@ interface RequestRow {
   needed_by: string | null;
   note: string | null;
   status: string;
+  /** NULL = raised by a person; 'auto_reorder' = the nightly reorder sweep (migration 271). */
+  source?: string | null;
   created_at: string;
   upfit_projects?: { id: string; project_name: string | null; netsuite_so_number: string | null } | null;
   requester?: { full_name: string | null } | null;
@@ -379,6 +381,11 @@ export default function PurchasingQueuePage() {
                       <td style={{ padding: '9px 10px', color: r.needed_by ? 'var(--text-body)' : theme.textMuted }}>{r.needed_by || '—'}</td>
                       <td style={{ padding: '9px 10px', color: theme.textMuted }}>
                         {age(r.created_at)}{r.requester?.full_name ? ` · ${r.requester.full_name}` : ''}
+                        {r.source === 'auto_reorder' && (
+                          <span title={r.note || 'Raised by the nightly reorder sweep'} style={{ marginLeft: '6px', fontSize: '9px', fontWeight: 800, padding: '1px 6px', borderRadius: '4px', background: 'rgba(56,189,248,0.12)', border: '1px solid rgba(56,189,248,0.3)', color: '#38bdf8', whiteSpace: 'nowrap' }}>
+                            AUTO
+                          </span>
+                        )}
                       </td>
                       <td style={{ padding: '9px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                         <button onClick={() => editVendor(r)} disabled={busyId === r.id} title="Set/change vendor"

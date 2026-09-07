@@ -29,6 +29,9 @@ interface Part {
   quantity_available: number;
   /** NULL = not set yet (dash); 0 = deliberately no labor (migration 258). */
   labor_hours: number | null;
+  /** NULL = not managed by the nightly reorder sweep (migration 271). */
+  reorder_point: number | null;
+  order_up_to: number | null;
   ns_class: string | null;
   ns_department: string | null;
   vendor: string | null;
@@ -134,6 +137,9 @@ export default function PartsPage() {
   const [pendingFocus, setPendingFocus] = useState<string | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [editingLabor, setEditingLabor] = useState<string | null>(null);
+  const [editingReorder, setEditingReorder] = useState<string | null>(null);
+  const [reorderPointValue, setReorderPointValue] = useState('');
+  const [orderUpToValue, setOrderUpToValue] = useState('');
   const [sortCol, setSortCol] = useState<'item_number' | 'sales_price' | 'quantity_on_hand' | 'labor_hours'>('item_number');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [laborValue, setLaborValue] = useState('');
@@ -419,6 +425,23 @@ export default function PartsPage() {
 
     setEditingLabor(null);
     setLaborValue('');
+    loadParts();
+  };
+
+  const updateReorder = async (partId: string) => {
+    // Blank clears to NULL (part leaves the nightly reorder sweep). Both are
+    // FleetSuite-owned columns the parts sync never names, so they stick.
+    const point = reorderPointValue.trim() === '' ? null : parseFloat(reorderPointValue);
+    const upTo = orderUpToValue.trim() === '' ? null : parseFloat(orderUpToValue);
+    if (point !== null && (isNaN(point) || point < 0)) return;
+    if (upTo !== null && (isNaN(upTo) || upTo < 0)) return;
+
+    await supabase
+      .from('netsuite_parts')
+      .update({ reorder_point: point, order_up_to: upTo, updated_at: new Date().toISOString() })
+      .eq('id', partId);
+
+    setEditingReorder(null);
     loadParts();
   };
 
@@ -1205,6 +1228,54 @@ export default function PartsPage() {
                             style={{ fontSize: '14px', fontWeight: 700, color: part.labor_hours == null ? 'var(--text-muted)' : '#c084fc', cursor: isAdmin ? 'pointer' : 'default' }}
                           >
                             {part.labor_hours == null ? '— not set' : `${part.labor_hours}h`}
+                            {isAdmin && <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '4px' }}>Edit</span>}
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>
+                          Reorder At / Up To
+                        </div>
+                        {editingReorder === part.id ? (
+                          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                            <input
+                              type="number" step="1" min="0" placeholder="pt"
+                              value={reorderPointValue}
+                              onChange={e => setReorderPointValue(e.target.value)}
+                              style={{ ...inputStyle, padding: '4px 6px', width: '56px' }}
+                              autoFocus
+                              onKeyDown={e => { if (e.key === 'Enter') updateReorder(part.id); if (e.key === 'Escape') setEditingReorder(null); }}
+                            />
+                            <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>/</span>
+                            <input
+                              type="number" step="1" min="0" placeholder="max"
+                              value={orderUpToValue}
+                              onChange={e => setOrderUpToValue(e.target.value)}
+                              style={{ ...inputStyle, padding: '4px 6px', width: '56px' }}
+                              onKeyDown={e => { if (e.key === 'Enter') updateReorder(part.id); if (e.key === 'Escape') setEditingReorder(null); }}
+                            />
+                            <button
+                              onClick={() => updateReorder(part.id)}
+                              style={{ padding: '4px 8px', borderRadius: '6px', background: 'var(--accent)', color: '#fff', fontSize: '10px', fontWeight: 700, border: 'none', cursor: 'pointer' }}
+                            >
+                              Save
+                            </button>
+                          </div>
+                        ) : (
+                          <div
+                            onClick={() => {
+                              if (isAdmin) {
+                                setEditingReorder(part.id);
+                                setReorderPointValue(part.reorder_point == null ? '' : String(part.reorder_point));
+                                setOrderUpToValue(part.order_up_to == null ? '' : String(part.order_up_to));
+                              }
+                            }}
+                            title={part.reorder_point == null
+                              ? 'Not managed — set a reorder point and the nightly sweep raises a purchase request when free stock + on-order falls to it'
+                              : `Nightly sweep reorders when free + on-order ≤ ${part.reorder_point}, filling to ${part.order_up_to ?? part.reorder_point}`}
+                            style={{ fontSize: '14px', fontWeight: 700, color: part.reorder_point == null ? 'var(--text-muted)' : '#38bdf8', cursor: isAdmin ? 'pointer' : 'default' }}
+                          >
+                            {part.reorder_point == null ? '— not managed' : `${part.reorder_point} / ${part.order_up_to ?? part.reorder_point}`}
                             {isAdmin && <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '4px' }}>Edit</span>}
                           </div>
                         )}
