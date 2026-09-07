@@ -2278,3 +2278,17 @@ roadmap's order (#808 took items 1–2 first; see their annotations above):
 audit is now decided and shipped. The single outstanding act is
 operational, not code: the owner applies the C2 edge-allowlist rule per
 `docs/r2-private-flip.md` and runs its ten-minute verification pass.
+
+---
+
+**Postscript — Round 4 (2026-09-07).** With this audit closed, the work
+moved from fixing what exists to building what's missing: a fresh
+opportunity audit (`docs/feature-audit-2026-09.md`, PR #836) mapped 86
+candidate features across four tiers, and its entire Tier 1 shipped the
+same day as PRs #837–#845 — nightly metric snapshots, the CEO view's
+executive bands, the Open Order Book, the exceptions & overrides digest,
+the promised-back guardian + on-time scorecard, reorder points with an
+auto-replenishment sweep, and a three-way match gate on vendor bills —
+plus the deliberate retirement of the in-app punch clock (#838; the
+payroll app owns attendance). Per-item ship notes live in that
+document's Tier 1 blocks.
