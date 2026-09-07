@@ -144,6 +144,11 @@ export default function UpfitProjectsPage() {
   const searchParams = useSearchParams();
 
   const [projects, setProjects] = useState<UpfitProject[]>([]);
+  // Per-project parts verdicts for the card chips (R3-12), keyed by id.
+  const [boardReadiness, setBoardReadiness] = useState<Record<string, {
+    verdict: 'reserved' | 'ready' | 'waiting' | 'short';
+    covered: number; onOrder: number; short: number; lastEta: string | null;
+  }>>({});
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('active');
   const [search, setSearch] = useState('');
@@ -206,6 +211,22 @@ export default function UpfitProjectsPage() {
     if (res.ok) {
       const data = await res.json();
       setProjects(data.projects || []);
+
+      // Parts-readiness chips for the cards (R3-12) — one batch call over
+      // synced data, non-blocking; the detail panel keeps the live compute.
+      const readyIds = (data.projects || [])
+        .filter((p: any) => p.netsuite_so_id && !['completed', 'cancelled'].includes(p.status))
+        .slice(0, 100)
+        .map((p: any) => p.id);
+      if (readyIds.length > 0) {
+        fetch('/api/upfit-projects/readiness-board', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: readyIds }),
+        }).then(r => (r.ok ? r.json() : null)).then(d => {
+          if (d?.readiness) setBoardReadiness(d.readiness);
+        }).catch(() => { /* chips are a nicety; the panel has the live view */ });
+      }
     }
 
     // Load profiles for display names
@@ -1548,6 +1569,23 @@ export default function UpfitProjectsPage() {
                   {p.estimate_number && <span>Est: {p.estimate_number}</span>}
                   {p.netsuite_so_number && <span>SO: {p.netsuite_so_number}</span>}
                   {p.scheduled_date && <span>Sched: {fmt(p.scheduled_date)}</span>}
+                  {(() => {
+                    const r = boardReadiness[p.id];
+                    if (!r) return null;
+                    const chip = r.verdict === 'short'
+                      ? { c: '#ef4444', t: `✗ ${r.short} part${r.short !== 1 ? 's' : ''} short` }
+                      : r.verdict === 'waiting'
+                        ? { c: '#60a5fa', t: `⏳ parts on order${r.lastEta ? ` · ETA ${fmt(r.lastEta)}` : ''}` }
+                        : r.verdict === 'reserved'
+                          ? { c: '#22c55e', t: '✓ parts reserved' }
+                          : { c: '#22c55e', t: '✓ parts ready' };
+                    return (
+                      <span
+                        title="Parts readiness from the last sync — open the project for the live picture"
+                        style={{ fontWeight: 700, padding: '0 6px', borderRadius: '4px', background: `${chip.c}18`, color: chip.c }}
+                      >{chip.t}</span>
+                    );
+                  })()}
                   {p.parts_eta && <span style={{ color: '#60a5fa' }}>Parts ETA: {fmt(p.parts_eta)}</span>}
                   {p.customer_dropoff_date && <span style={{ color: '#38bdf8' }}>Drop-off: {fmt(p.customer_dropoff_date)}</span>}
                   {p.need_back_date && <span style={{ color: '#fbbf24' }}>Back by: {fmt(p.need_back_date)}</span>}

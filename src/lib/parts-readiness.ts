@@ -271,3 +271,166 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
 
   return { available: true, soNumber: project.netsuite_so_number, parts: rows, summary };
 }
+
+export interface BoardReadiness {
+  verdict: 'reserved' | 'ready' | 'waiting' | 'short';
+  covered: number;
+  onOrder: number;
+  short: number;
+  lastEta: string | null;
+}
+
+/**
+ * Board-scale readiness (R3-12: "verdicts on the board"): the same per-part
+ * math as computePartsReadiness, but for N projects at once from SYNCED
+ * data only — the mirror's SO lines, the parts catalog's hourly
+ * quantity_available, reservations, and open vendor-PO lines. Zero NetSuite
+ * calls, ~6 reads for a whole board, at-most-an-hour stale. The detail
+ * panel keeps the live per-project compute; this feeds the card chips.
+ *
+ * Same physical-parts filter as the live path (InvtPart/NonInvtPart/
+ * Assembly/Kit, never FS-CUSTOM), applied through the catalog's item_type —
+ * an SO line whose item isn't in the catalog is skipped rather than
+ * guessed at, so labor/service lines can't manufacture false shorts
+ * (the exact Round 3 trap the live filter exists for).
+ *
+ * Returns only projects that resolve to a mirrored SO with at least one
+ * physical line — absent keys mean "no chip", never "ready".
+ */
+export async function computePartsReadinessBoard(
+  service: SupabaseClient,
+  projectIds: string[],
+): Promise<Record<string, BoardReadiness>> {
+  const out: Record<string, BoardReadiness> = {};
+  if (projectIds.length === 0) return out;
+
+  const { data: projects } = await service
+    .from('upfit_projects')
+    .select('id, netsuite_so_id')
+    .in('id', projectIds.slice(0, 100));
+  const withSo = (projects || []).filter(p => p.netsuite_so_id && /^\d+$/.test(p.netsuite_so_id));
+  if (withSo.length === 0) return out;
+
+  const { data: soRows } = await service
+    .from('netsuite_sales_orders')
+    .select('id, netsuite_id')
+    .in('netsuite_id', [...new Set(withSo.map(p => String(p.netsuite_so_id)))]);
+  const mirrorIdByNsId = new Map((soRows || []).map(r => [String(r.netsuite_id), r.id]));
+  const mirrorIds = [...mirrorIdByNsId.values()];
+  if (mirrorIds.length === 0) return out;
+
+  const { data: lines } = await fetchAllRows<any>((from, to) => service
+    .from('netsuite_sales_order_lines')
+    .select('so_id, item_number, quantity')
+    .in('so_id', mirrorIds)
+    .order('id')
+    .range(from, to));
+
+  // needed per (mirror SO row, item)
+  const neededBySo = new Map<string, Map<string, number>>();
+  const itemSet = new Set<string>();
+  for (const l of lines || []) {
+    const key = normalizeItemNumber(l.item_number);
+    if (!key || key === 'FS-CUSTOM') continue;
+    itemSet.add(key);
+    const m = neededBySo.get(l.so_id) || new Map<string, number>();
+    m.set(key, (m.get(key) || 0) + (Math.abs(Number(l.quantity)) || 0));
+    neededBySo.set(l.so_id, m);
+  }
+  if (itemSet.size === 0) return out;
+  const items = [...itemSet];
+
+  // Catalog: physical types only + the hourly-synced available pool.
+  const PHYSICAL = new Set(['InvtPart', 'NonInvtPart', 'Assembly', 'Kit']);
+  const availByItem = new Map<string, number>();
+  for (let i = 0; i < items.length; i += 200) {
+    const { data: cat } = await service
+      .from('netsuite_parts')
+      .select('item_number, item_type, quantity_available')
+      .in('item_number', items.slice(i, i + 200));
+    for (const c of cat || []) {
+      if (!PHYSICAL.has(String(c.item_type || ''))) continue;
+      const key = normalizeItemNumber(c.item_number);
+      availByItem.set(key, Math.max(availByItem.get(key) || 0, Math.max(0, Number(c.quantity_available) || 0)));
+    }
+  }
+
+  // Reservations: this project's vs the whole pool's, per item.
+  const { data: allocations } = await fetchAllRows<any>((from, to) => service
+    .from('part_allocations')
+    .select('project_id, item_number, quantity')
+    .eq('status', 'reserved')
+    .in('item_number', items)
+    .order('id')
+    .range(from, to));
+  const allocTotal = new Map<string, number>();
+  const allocByProject = new Map<string, Map<string, number>>();
+  for (const a of allocations || []) {
+    const qty = Number(a.quantity) || 0;
+    allocTotal.set(a.item_number, (allocTotal.get(a.item_number) || 0) + qty);
+    const m = allocByProject.get(a.project_id) || new Map<string, number>();
+    m.set(a.item_number, (m.get(a.item_number) || 0) + qty);
+    allocByProject.set(a.project_id, m);
+  }
+
+  // On order + latest ETA per item, open POs only.
+  const { data: poLines } = await fetchAllRows<any>((from, to) => service
+    .from('netsuite_vendor_po_lines')
+    .select('item_number, quantity, quantity_received, netsuite_vendor_pos!inner(status, eta_date)')
+    .in('item_number', items)
+    .order('id')
+    .range(from, to));
+  const onOrderByItem = new Map<string, number>();
+  const etaByItem = new Map<string, string>();
+  for (const l of poLines || []) {
+    const po = (l as any).netsuite_vendor_pos;
+    if (!isOpenPoStatus(po?.status)) continue;
+    const remaining = Math.max(0, (l.quantity || 0) - (l.quantity_received || 0));
+    if (remaining <= 0) continue;
+    onOrderByItem.set(l.item_number, (onOrderByItem.get(l.item_number) || 0) + remaining);
+    if (po?.eta_date && (!etaByItem.has(l.item_number) || po.eta_date > etaByItem.get(l.item_number)!)) {
+      etaByItem.set(l.item_number, po.eta_date);
+    }
+  }
+
+  for (const proj of withSo) {
+    const mirrorId = mirrorIdByNsId.get(String(proj.netsuite_so_id));
+    const needed = mirrorId ? neededBySo.get(mirrorId) : undefined;
+    if (!needed || needed.size === 0) continue;
+    const myAlloc = allocByProject.get(proj.id) || new Map<string, number>();
+    const states: PartState[] = [];
+    let lastEta: string | null = null;
+    for (const [item, qty] of needed) {
+      if (!availByItem.has(item) && !myAlloc.has(item) && !onOrderByItem.has(item)) {
+        // Not a catalog physical item and nothing tracked for it — skip
+        // (labor/service lines, or an unsynced item we can't judge).
+        continue;
+      }
+      const here = myAlloc.get(item) || 0;
+      const m = allocationMath({
+        needed: qty,
+        availPool: availByItem.get(item) || 0,
+        allocatedHere: here,
+        allocatedOthers: Math.max(0, (allocTotal.get(item) || 0) - here),
+        onOrder: onOrderByItem.get(item) || 0,
+      });
+      states.push(m.state);
+      if (m.state === 'waiting' || m.state === 'short') {
+        const eta = etaByItem.get(item) || null;
+        if (eta && (!lastEta || eta > lastEta)) lastEta = eta;
+      }
+    }
+    if (states.length === 0) continue;
+    out[proj.id] = {
+      covered: states.filter(s => s === 'reserved' || s === 'available').length,
+      onOrder: states.filter(s => s === 'waiting').length,
+      short: states.filter(s => s === 'short').length,
+      verdict: states.every(s => s === 'reserved') ? 'reserved'
+        : states.every(s => s === 'reserved' || s === 'available') ? 'ready'
+          : states.some(s => s === 'short') ? 'short'
+            : 'waiting',
+      lastEta,
+    };
+  }
+  return out;
+}

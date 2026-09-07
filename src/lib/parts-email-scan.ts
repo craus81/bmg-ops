@@ -5,6 +5,8 @@ import { callAnthropicWithRetry } from '@/lib/anthropic';
 import { getPdfAttachments } from '@/lib/google';
 import { r2Upload } from '@/lib/r2';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 
 /**
  * Parts-ETA email scan: read watched BMG mailboxes (domain-wide delegation,
@@ -32,7 +34,7 @@ const digitsOnly = (s: string | null | undefined) => String(s || '').replace(/\D
 const alnumOnly = (s: string | null | undefined) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 const PO_SELECT = 'id, tranid, vendor_name, eta_date, tracking_number';
-type MatchedPo = { id: string; tranid: string | null; vendor_name: string | null; eta_date: string | null; tracking_number: string | null };
+export type MatchedPo = { id: string; tranid: string | null; vendor_name: string | null; eta_date: string | null; tracking_number: string | null };
 
 export interface PartsEmailScanResult {
   skipped?: string;
@@ -109,14 +111,23 @@ export async function findPoByNumber(service: SupabaseClient, poNumber: string):
  * Write an email's extracted data onto a vendor PO and propagate the ETA to
  * upfit projects that reference the PO number. Returns 'applied' when
  * something was written, 'linked' when there was nothing new to write.
+ *
+ * R3-12: an ETA CHANGE also notifies the people waiting on it — the write
+ * used to happen silently, so nobody learned the date moved until they
+ * happened to open the project. `actorId` (the staff member on the manual
+ * link path) is excluded from the fan-out.
  */
 export async function applyEmailToPo(
   service: SupabaseClient,
   extracted: ExtractedEmail,
-  po: { id: string; tranid: string | null; vendor_name: string | null },
+  po: MatchedPo,
   sourceLabel: string,
+  actorId?: string | null,
 ): Promise<'applied' | 'linked'> {
   const eta = extracted.eta_date || extracted.ship_date || null;
+  // Compared against the PO's stored ETA BEFORE this write — the change is
+  // the signal; a re-send of the same date must not re-ping anyone.
+  const etaChanged = !!eta && po.eta_date !== eta;
   const updates: Record<string, unknown> = {};
   if (eta) { updates.eta_date = eta; updates.eta_source = 'email'; }
   if (extracted.tracking_number) updates.tracking_number = extracted.tracking_number;
@@ -126,12 +137,19 @@ export async function applyEmailToPo(
   await service.from('netsuite_vendor_pos').update(updates).eq('id', po.id);
 
   // Upfit projects that name this PO get the ETA (and a timeline note so
-  // the change is attributable). parts_ordered_date backfills too.
+  // the change is attributable). Paginated: the unpaginated read silently
+  // capped at PostgREST's 1000 rows, so projects past it never got ETAs.
+  const affectedProjects: {
+    id: string; project_name: string | null;
+    assigned_to: string | null; created_by: string | null; prevEta: string | null;
+  }[] = [];
   if (po.tranid) {
-    const { data: projects } = await service
+    const { data: projects } = await fetchAllRows<any>((from, to) => service
       .from('upfit_projects')
-      .select('id, netsuite_vendor_po_number, parts_eta, parts_ordered_date')
-      .not('netsuite_vendor_po_number', 'is', null);
+      .select('id, project_name, netsuite_vendor_po_number, parts_eta, parts_ordered_date, assigned_to, created_by')
+      .not('netsuite_vendor_po_number', 'is', null)
+      .order('id')
+      .range(from, to));
     const poDigits = digitsOnly(po.tranid);
     for (const proj of projects || []) {
       const ref = String(proj.netsuite_vendor_po_number || '').trim();
@@ -146,9 +164,84 @@ export async function applyEmailToPo(
         note_type: 'parts_order',
         content: `Parts ETA set to ${eta} from ${po.vendor_name || 'vendor'} email (${sourceLabel})${extracted.tracking_number ? ` — tracking ${extracted.tracking_number}` : ''}`,
       });
+      affectedProjects.push({
+        id: proj.id, project_name: proj.project_name || null,
+        assigned_to: proj.assigned_to || null, created_by: proj.created_by || null,
+        prevEta: proj.parts_eta || null,
+      });
+    }
+  }
+
+  if (etaChanged && eta) {
+    try {
+      await notifyEtaChange(service, po, eta, affectedProjects, actorId || null);
+    } catch (err) {
+      console.warn('PO ETA-change notification failed:', err);
     }
   }
   return 'applied';
+}
+
+/**
+ * Fan out a PO's ETA change to the people waiting on it: each affected
+ * project's assignee + creator (project link), plus the requesters whose
+ * purchase requests were ordered on this PO (their own request link when a
+ * project isn't in play — the multi-PO gap: a project is stamped with its
+ * FIRST PO only, so an email about PO #2 reaches its people through the
+ * request join instead of not at all).
+ */
+async function notifyEtaChange(
+  service: SupabaseClient,
+  po: MatchedPo,
+  eta: string,
+  affectedProjects: { id: string; project_name: string | null; assigned_to: string | null; created_by: string | null; prevEta: string | null }[],
+  actorId: string | null,
+): Promise<void> {
+  const { data: reqs } = await service
+    .from('purchase_requests')
+    .select('id, requested_by, source_project_id')
+    .eq('ordered_po_id', po.id);
+  const requests = reqs || [];
+  const poLabel = po.tranid ? `PO ${po.tranid}` : 'a vendor PO';
+  const vendor = po.vendor_name || 'The vendor';
+  const notified = new Set<string>(actorId ? [actorId] : []);
+
+  // Project-centric fan-out: one ping per affected project, linking to it.
+  for (const proj of affectedProjects) {
+    const ids = new Set<string>();
+    if (proj.assigned_to) ids.add(proj.assigned_to);
+    if (proj.created_by) ids.add(proj.created_by);
+    for (const r of requests) {
+      if (r.source_project_id === proj.id && r.requested_by) ids.add(r.requested_by);
+    }
+    for (const done of notified) ids.delete(done);
+    if (ids.size === 0) continue;
+    await notifyMany([...ids], {
+      type: 'po_eta_changed',
+      title: `📦 Parts ETA updated — ${poLabel}`,
+      body: `${vendor} now expects ${eta}${proj.prevEta ? ` (was ${proj.prevEta})` : ''} — ${proj.project_name || 'upfit project'}.`.slice(0, 900),
+      url: deepLinks.upfitProject(proj.id),
+    });
+    for (const id of ids) notified.add(id);
+  }
+
+  // Requesters not reached through a project (stock asks, or a project the
+  // PO-number match missed): link each to their own request.
+  const affectedIds = new Set(affectedProjects.map(p => p.id));
+  const byRequester = new Map<string, string[]>();
+  for (const r of requests) {
+    if (!r.requested_by || notified.has(r.requested_by)) continue;
+    if (r.source_project_id && affectedIds.has(r.source_project_id)) continue;
+    byRequester.set(r.requested_by, [...(byRequester.get(r.requested_by) || []), r.id]);
+  }
+  for (const [uid, requestIds] of byRequester) {
+    await notifyMany([uid], {
+      type: 'po_eta_changed',
+      title: `📦 Parts ETA updated — ${poLabel}`,
+      body: `${vendor} now expects ${eta} for part${requestIds.length !== 1 ? 's' : ''} you requested.`.slice(0, 900),
+      url: deepLinks.purchaseRequests(requestIds.length === 1 ? requestIds[0] : undefined),
+    });
+  }
 }
 
 async function classifyEmail(

@@ -45,6 +45,10 @@
       "schedule": "15 14 * * *"
     },
     {
+      "path": "/api/cron/stale-purchase-requests",
+      "schedule": "30 14 * * *"
+    },
+    {
       "path": "/api/cron/auto-archive-shipped",
       "schedule": "45 14 * * *"
     },
