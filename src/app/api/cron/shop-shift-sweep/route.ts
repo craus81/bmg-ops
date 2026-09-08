@@ -34,7 +34,9 @@ export async function GET(req: NextRequest) {
     const { data: stale, error } = await supabase
       .from('work_shifts')
       .select('id, started_at')
-      .eq('context', 'shop')
+      // R6-6: print-room shifts run on the same timer model, so the same
+      // runaway cap applies — nobody laminates for fourteen hours either.
+      .in('context', ['shop', 'graphics'])
       .is('ended_at', null)
       .lt('started_at', staleCutoff)
       .limit(200);
