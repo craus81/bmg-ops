@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
   // the page filters problems client-side.
   const { data: emails } = await service
     .from('email_log')
-    .select('id, kind, recipients, subject, sent_by, context_url, delivery_status, delivery_detail, delivery_updated_at, created_at')
+    .select('id, kind, recipients, subject, sent_by, context_url, delivery_status, delivery_detail, delivery_updated_at, created_at, resolved_at, resolution_note')
     .order('created_at', { ascending: false })
     .limit(100);
 

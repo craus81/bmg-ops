@@ -93,6 +93,10 @@ export const deepLinks = {
    *  land on the whole In-Shop board with no hint which vehicles leaked. */
   neverInvoicedQueue: (bucket?: 'has_so' | 'estimate_only' | 'no_paperwork') =>
     `/admin/reports/never-invoiced${bucket ? `?bucket=${bucket}` : ''}`,
+  /** Month-end close cockpit — one accounting month's gates. Defaults to
+   *  the month being closed (last month) when no period is given. */
+  monthClose: (period?: string | null) =>
+    `/admin/reports/month-close${period ? `?period=${period}` : ''}`,
   /** At-risk report — opens the account's note editor and flashes the row. */
   atRiskCustomer: (customerId: string) => `/admin/reports/at-risk?id=${customerId}`,
   /** Dedicated CNI job record page (admin side). */
