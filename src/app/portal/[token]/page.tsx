@@ -208,6 +208,209 @@ function LineRow({ line }: { line: PortalPo['lines'][number] }) {
   );
 }
 
+interface BillingData {
+  balance: number;
+  pastDue: number;
+  invoiceCount: number;
+  aging: Record<string, number>;
+  invoices: { id: string; tranid: string; date: string | null; dueDate: string | null; po: string | null; total: number; unpaid: number; daysPastDue: number }[];
+}
+const usd = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+const AGING_LABELS: [string, string][] = [
+  ['current', 'Current'], ['d1_30', '1–30 days'], ['d31_60', '31–60 days'], ['d61_90', '61–90 days'], ['d90plus', '90+ days'],
+];
+
+/** Billing section (R5-14): balance, aging, open invoices with PDF links,
+ *  statement download/email, and a per-invoice question box that lands in
+ *  the BMG inbox. Own fetch + states so a billing hiccup never takes down
+ *  the PO board above it. */
+function BillingSection({ token }: { token: string }) {
+  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [billing, setBilling] = useState<BillingData | null>(null);
+  const [askFor, setAskFor] = useState<string | null>(null); // invoice id
+  const [askText, setAskText] = useState('');
+  const [askDone, setAskDone] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/portal/${encodeURIComponent(token)}/billing`);
+        const json = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) { setState('error'); return; }
+        setBilling(json);
+        setState('ready');
+      } catch {
+        if (!cancelled) setState('error');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
+
+  const emailStatement = async () => {
+    setBusy('email');
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/portal/${encodeURIComponent(token)}/statement`, { method: 'POST' });
+      const json = await res.json().catch(() => ({}));
+      setNotice(res.ok
+        ? `Statement sent to ${json.sentTo} with ${json.attached} PDF${json.attached !== 1 ? 's' : ''} attached.`
+        : (json.error || 'Could not email the statement — try again shortly.'));
+    } catch {
+      setNotice('Could not email the statement — try again shortly.');
+    }
+    setBusy(null);
+  };
+
+  const sendQuestion = async (inv: BillingData['invoices'][number]) => {
+    if (askText.trim().length < 3) return;
+    setBusy(inv.id);
+    try {
+      const res = await fetch(`/api/portal/${encodeURIComponent(token)}/ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoiceId: inv.id, invoiceNumber: inv.tranid, message: askText.trim() }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (res.ok) { setAskDone(inv.id); setAskFor(null); setAskText(''); }
+      else setNotice(json.error || 'Could not send your question — try again shortly.');
+    } catch {
+      setNotice('Could not send your question — try again shortly.');
+    }
+    setBusy(null);
+  };
+
+  if (state === 'loading') {
+    return <section style={{ marginBottom: '22px' }}><div style={{ ...card, ...muted, textAlign: 'center' }}>Loading billing…</div></section>;
+  }
+  if (state === 'error' || !billing) {
+    return (
+      <section style={{ marginBottom: '22px' }}>
+        <div style={{ ...card, ...muted, textAlign: 'center' }}>Billing is temporarily unavailable — the purchase-order board below still works.</div>
+      </section>
+    );
+  }
+
+  const linkBtn: React.CSSProperties = {
+    padding: '8px 14px', borderRadius: '9px', fontSize: '12px', fontWeight: 800,
+    background: '#1a2b36', color: '#fff', border: 'none', cursor: 'pointer', textDecoration: 'none', display: 'inline-block',
+  };
+
+  return (
+    <section style={{ marginBottom: '22px' }}>
+      <div style={{ fontSize: '13px', fontWeight: 800, color: '#374151', marginBottom: '8px' }}>Billing</div>
+      <div style={card}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+          <div>
+            <div style={muted}>Current balance</div>
+            <div style={{ fontSize: '28px', fontWeight: 900 }}>{usd(billing.balance)}</div>
+            {billing.pastDue > 0.005 && (
+              <div style={{ fontSize: '13px', fontWeight: 800, color: '#b91c1c' }}>{usd(billing.pastDue)} past due</div>
+            )}
+          </div>
+          {billing.invoiceCount > 0 && (
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <a href={`/api/portal/${encodeURIComponent(token)}/statement`} style={linkBtn}>Download statement (PDF)</a>
+              <button type="button" onClick={emailStatement} disabled={busy === 'email'}
+                style={{ ...linkBtn, background: '#fff', color: '#1a2b36', border: '1px solid #d1d5db', opacity: busy === 'email' ? 0.6 : 1 }}>
+                {busy === 'email' ? 'Sending…' : 'Email me this statement'}
+              </button>
+            </div>
+          )}
+        </div>
+        {notice && <div style={{ fontSize: '12px', color: '#374151', marginTop: '8px', fontWeight: 600 }}>{notice}</div>}
+
+        {billing.invoiceCount === 0 ? (
+          <div style={{ ...muted, marginTop: '10px' }}>No open invoices — you&apos;re all paid up.</div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '12px 0' }}>
+              {AGING_LABELS.filter(([key]) => (billing.aging[key] || 0) > 0.005).map(([key, label]) => (
+                <span key={key} style={chip(key === 'current' ? '#16a34a' : key === 'd1_30' ? '#f59e0b' : '#dc2626')}>
+                  {label}: {usd(billing.aging[key])}
+                </span>
+              ))}
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                <thead>
+                  <tr style={{ fontSize: '11px', textTransform: 'uppercase', color: '#6b7280', textAlign: 'left' }}>
+                    <th style={{ padding: '7px 8px' }}>Invoice</th>
+                    <th style={{ padding: '7px 8px' }}>Date</th>
+                    <th style={{ padding: '7px 8px' }}>Due</th>
+                    <th style={{ padding: '7px 8px', textAlign: 'right' }}>Amount</th>
+                    <th style={{ padding: '7px 8px', textAlign: 'right' }}>Open</th>
+                    <th style={{ padding: '7px 8px' }} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {billing.invoices.map(inv => (
+                    <BillingRowGroup key={inv.id} inv={inv} token={token}
+                      asking={askFor === inv.id} askText={askText} setAskText={setAskText}
+                      onToggleAsk={() => { setAskFor(prev => prev === inv.id ? null : inv.id); setAskText(''); }}
+                      onSend={() => sendQuestion(inv)} sending={busy === inv.id} sent={askDone === inv.id} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ ...muted, marginTop: '8px' }}>
+              Amounts are open balances as of {fmtDateTime(new Date().toISOString())}. Payments applied in the last day may not show yet.
+            </div>
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function BillingRowGroup({ inv, token, asking, askText, setAskText, onToggleAsk, onSend, sending, sent }: {
+  inv: BillingData['invoices'][number]; token: string;
+  asking: boolean; askText: string; setAskText: (v: string) => void;
+  onToggleAsk: () => void; onSend: () => void; sending: boolean; sent: boolean;
+}) {
+  const td: React.CSSProperties = { padding: '7px 8px', borderTop: '1px solid #e5e7eb' };
+  return (
+    <>
+      <tr>
+        <td style={{ ...td, fontWeight: 800 }}>{inv.tranid}{inv.po ? <span style={{ ...muted, marginLeft: '6px' }}>PO {inv.po}</span> : null}</td>
+        <td style={td}>{fmtDate(inv.date)}</td>
+        <td style={{ ...td, color: inv.daysPastDue > 0 ? '#b91c1c' : undefined, fontWeight: inv.daysPastDue > 0 ? 800 : 400 }}>
+          {fmtDate(inv.dueDate)}{inv.daysPastDue > 0 ? ` · ${inv.daysPastDue}d late` : ''}
+        </td>
+        <td style={{ ...td, textAlign: 'right' }}>{usd(inv.total)}</td>
+        <td style={{ ...td, textAlign: 'right', fontWeight: 800 }}>{usd(inv.unpaid)}</td>
+        <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
+          <a href={`/api/portal/${encodeURIComponent(token)}/invoice-pdf?id=${encodeURIComponent(inv.id)}`}
+            target="_blank" rel="noopener noreferrer"
+            style={{ color: '#2563eb', fontWeight: 800, textDecoration: 'none', marginRight: '10px' }}>PDF</a>
+          <button type="button" onClick={onToggleAsk}
+            style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 700, cursor: 'pointer', padding: 0, fontSize: '12px' }}>
+            {sent ? 'Sent ✓' : asking ? 'Cancel' : 'Question?'}
+          </button>
+        </td>
+      </tr>
+      {asking && (
+        <tr>
+          <td colSpan={6} style={{ ...td, background: '#f9fafb' }}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+              <textarea value={askText} onChange={e => setAskText(e.target.value)} rows={2}
+                placeholder={`Your question about invoice ${inv.tranid}…`}
+                style={{ flex: 1, padding: '8px 10px', borderRadius: '8px', border: '1px solid #d1d5db', fontSize: '13px', fontFamily: 'inherit', resize: 'vertical' }} />
+              <button type="button" onClick={onSend} disabled={sending || askText.trim().length < 3}
+                style={{ padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 800, background: '#1a2b36', color: '#fff', border: 'none', cursor: 'pointer', opacity: sending || askText.trim().length < 3 ? 0.5 : 1 }}>
+                {sending ? 'Sending…' : 'Send to BMG'}
+              </button>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
 export default function PoPortalPage() {
   const params = useParams<{ token: string }>();
   const token = params?.token || '';
@@ -287,6 +490,8 @@ export default function PoPortalPage() {
           {tile('Installing', data.summary.installing, '#f59e0b')}
           {tile('Fulfilled (90 days)', data.summary.fulfilled90d, '#16a34a')}
         </div>
+
+        <BillingSection token={token} />
 
         <input
           value={query}

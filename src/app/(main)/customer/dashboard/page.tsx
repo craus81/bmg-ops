@@ -43,6 +43,57 @@ interface PortalData {
   graphics: { active: PortalGraphics[]; recent: PortalGraphics[] };
 }
 
+/** Billing card (R5-14): balance + aging + open invoices from the same
+ *  id-keyed loader as the tokenized portal. Fails quiet — a NetSuite
+ *  hiccup never takes down the vehicle board. */
+function BillingCard() {
+  const [billing, setBilling] = useState<{
+    linked: boolean; balance?: number; pastDue?: number; invoiceCount?: number;
+    invoices?: { id: string; tranid: string; dueDate: string | null; unpaid: number; daysPastDue: number }[];
+  } | null>(null);
+  useEffect(() => {
+    fetch('/api/customer/billing')
+      .then(r => r.ok ? r.json() : null)
+      .then(body => { if (body?.linked) setBilling(body); })
+      .catch(() => { /* card simply doesn't render */ });
+  }, []);
+  if (!billing || billing.invoiceCount === 0) return null;
+
+  const usd = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+  const fmtDue = (iso: string | null) => iso ? new Date(`${iso}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
+  return (
+    <div style={{ margin: '12px 0 4px', padding: '14px 16px', borderRadius: '12px', background: 'var(--card)', border: '1px solid var(--border)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
+        <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)' }}>Billing</div>
+        <div>
+          <span style={{ fontSize: '18px', fontWeight: 900, color: 'var(--text-primary)' }}>{usd(billing.balance || 0)}</span>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: '6px' }}>open balance</span>
+          {(billing.pastDue || 0) > 0.005 && (
+            <span style={{ fontSize: '12px', fontWeight: 800, color: '#ef4444', marginLeft: '10px' }}>{usd(billing.pastDue!)} past due</span>
+          )}
+        </div>
+      </div>
+      <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        {(billing.invoices || []).slice(0, 6).map(inv => (
+          <div key={inv.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '12px' }}>
+            <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{inv.tranid}</span>
+            <span style={{ color: inv.daysPastDue > 0 ? '#ef4444' : 'var(--text-muted)' }}>
+              due {fmtDue(inv.dueDate)}{inv.daysPastDue > 0 ? ` · ${inv.daysPastDue}d late` : ''}
+            </span>
+            <span style={{ fontWeight: 800, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{usd(inv.unpaid)}</span>
+          </div>
+        ))}
+        {(billing.invoices || []).length > 6 && (
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>+ {(billing.invoices || []).length - 6} more open invoice{(billing.invoices || []).length - 6 !== 1 ? 's' : ''}</div>
+        )}
+      </div>
+      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '8px' }}>
+        PDFs and statements are on your billing portal link — ask your BMG contact if you need a fresh one.
+      </div>
+    </div>
+  );
+}
+
 const fmtDate = (d: string | null) => d ? new Date(d).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '';
 
 const upsTracking = (carrier: string | null, tracking: string) =>
@@ -156,6 +207,8 @@ export default function CustomerDashboardPage() {
           </div>
         ))}
       </div>
+
+      <BillingCard />
 
       {/* Active vehicles */}
       <div style={sectionLabel}>In Our Shop ({vehicles.active.length})</div>
