@@ -150,8 +150,11 @@ Highest leverage per effort, anchored on the stated CEO-dashboard priority and c
 
 High value (mostly 4-5) with either a Tier-1 dependency now satisfied or one contained risk to settle. CEO Phases 3, 4, 6 slot in plan order: Phase 3 is cheap rendering once order-book ships; Phase 4 (P&L) is value 5 but L and needs a human hand-deploying the RESTlet in NetSuite — schedule the coordination, do not let it block the wave. Phase 6 and owners-weekly-brief are one feature wearing two names: build ONE composer serving both, or cut one — never both separately. days-to-pay-ar-trends belongs early for the same no-backfill reason as snapshots (ship its paid_at capture migration immediately even if the report waits); it also gates cash-outlook. portal-billing-tab, pickup-dropoff-booking and payout-autopilot are 3-lens customer/CNI wins; installer-scorecards and shop-week-planner are value-5 with known scoping rules (R3-2 effective-set; labor-hours coverage stat). quoted-margin-ledger is honest at M only if scoped to estimates. winloss-funnel must extend sales-performance, not fork it, and should coordinate with the CEO plan's metric list. vendor-scorecards: ship the event-capture migration first and separately — waiting loses history. close-date-forecast rounds out the sales lens once its server-side stage-change trigger ships.
 
+> **Ship log (2026-09-08).** Tier 2 went the way of Tier 1 — decided and built as one wave, one auto-merged PR per item (two for the L-sized booking build). The capture-first migrations landed in the first hours so history accrued while the reads were built: A/R paid_at + snapshots **#847**, vendor ETA events **#848**, opportunity stage capture **#849**, quoted-margin freeze **#850**. Then P&L RESTlet modes **#851**, days-to-pay band **#852**, the ONE Monday brief **#853** (absorbing the CEO digest per the rule above), deal forecast **#854**, win/loss analytics **#855**, the quoted-margin ledger reads **#856**, vendor scorecards **#857**, installer scorecards **#858**, payout autopilot **#859**, portal billing **#860**, operations pulse **#861**, the shop week planner **#862**, and pickup/drop-off booking **#863 + #864**. One act remains and it is the owner's, not engineering's: the ten-minute NetSuite RESTlet redeploy (`docs/pnl-restlet-deploy.md`) that turns the P&L view live.
+
 #### Operations pulse: order book, unbilled revenue, and cycle times
 *Value 4/5 · effort M · proposed independently by 1 lens · PARTIAL — builds on existing pieces*
+> **SHIPPED — PR #861** (completing the R4-4 band; order book + unbilled had shipped with #839/#840). The cycle-time third: slowest stage over 30-day completions (per-vehicle LAST cycle only — the m229 re-check-in rule — and ≥3 samples before a stage is crowned), graphics shipped/week with proof-approval median, the never-invoiced leak count (the exact R3-14c predicate), and the cached leading quoted-margin snapshot. The band reads cached/Supabase-local sources only — never inline per-request SuiteQL, as this block demanded.
 
 **The problem.** netsuite_sales_orders/_lines (2-hourly mirror back to 2024, with quantity_billed) and the three status-history ledgers are write-only — the owner can see neither backlog value, aging unfulfilled orders, sold-but-uninvoiced money, nor 'how fast do we turn a van around'.
 
@@ -163,6 +166,7 @@ High value (mostly 4-5) with either a Tier-1 dependency now satisfied or one con
 
 #### P&L unlock: incomeStatement + collections RESTlet modes
 *Value 5/5 · effort L · proposed independently by 1 lens · NEW*
+> **SHIPPED (code) — PR #851**; the human hand-deploy this block predicted is the one act still open. incomeStatement + collections modes in the RESTlet source, the /pnl route and Financials view behind the executive wall, and a ten-minute deploy runbook with verification + rollback (`docs/pnl-restlet-deploy.md`). Until the owner redeploys, the view says so honestly instead of guessing; P&L metric snapshots start accruing after the redeploy verifies.
 
 **The problem.** Gross Margin %, Net Profit %, total payroll, and labor-as-%-of-revenue exist nowhere in the app — the SuiteQL role can't read the account table or payment records, so leadership still pulls the P&L straight from NetSuite. The plan's #1 structural gap.
 
@@ -174,6 +178,7 @@ High value (mostly 4-5) with either a Tier-1 dependency now satisfied or one con
 
 #### Monday CEO email digest
 *Value 4/5 · effort S · proposed independently by 1 lens · MOSTLY NEW*
+> **ABSORBED into the Owner's Weekly Brief — PR #853.** This tier's own rule ('one feature wearing two names: build ONE composer serving both — never both separately') decided it: a single Monday email serves the owner/executive audience with the CEO-band numbers as brief sections. No second digest was built, and none should be.
 
 **The problem.** Every report in the app is pull-only — the dashboard only works if the owner remembers to open it, though the Resend email layer, cron slots, deep-links registry, and delivery tracking all exist.
 
@@ -185,6 +190,7 @@ High value (mostly 4-5) with either a Tier-1 dependency now satisfied or one con
 
 #### Owner's Weekly Brief
 *Value 5/5 · effort M · proposed independently by 2 lenses · MOSTLY NEW*
+> **SHIPPED — PR #853** (migration 276), as the ONE unified Monday email (see the digest block above). Monday 12:45 UTC to approved super-admins + executives with a per-user Settings opt-out: week's revenue vs prior week and same week last year, collections, sales, operations, and exceptions — every section fails independently (a broken source reports itself, never a lying zero), deltas read metric_snapshots, and the optional model-written narrative may only restate numbers verbatim and is dropped silently on any failure. In-app/push mirror with deep links.
 
 **The problem.** None of the 14+ cron jobs emails a report to leadership — report distribution is entirely pull. The owner's end-of-week answers (invoiced vs last week, quote dollars sent/won, vehicles shipped, promises kept/missed, backlog change, A/R-over-60 movement, which attention queues grew) live across six report pages, ~14 silent dashboard tiles, and NetSuite.
 
@@ -196,6 +202,7 @@ High value (mostly 4-5) with either a Tier-1 dependency now satisfied or one con
 
 #### Days-to-Pay & A/R Trend Intelligence
 *Value 4/5 · effort M · proposed independently by 2 lenses · MOSTLY NEW*
+> **SHIPPED — PRs #847 (capture, migration 272) + #852 (reads).** The ship-the-migration-first rule was honored literally: paid_at stamping + nightly ar_snapshots + AR-sweep run persistence landed as the round's first PR, hours before the report. The Financials band shows days-to-pay and aging trends computed from the snapshots as history accrues — windows labeled, never backfilled.
 
 **The problem.** The 2-hourly AR sweep flips is_paid without recording WHEN, and the Financials tab is a live NetSuite read never persisted — so DSO, days-to-pay per customer, and 'is our A/R getting better or worse' are literally uncomputable. The owner sees today's aging but never a trend; slow payers are identified by memory; and every week unshipped is history lost forever (flip times are unrecoverable).
 
@@ -207,6 +214,7 @@ High value (mostly 4-5) with either a Tier-1 dependency now satisfied or one con
 
 #### Portal Billing Tab (balance, invoices, statements)
 *Value 5/5 · effort M · proposed independently by 3 lenses · MOSTLY NEW*
+> **SHIPPED — PR #860** (migration 278). Balance, aging, and invoices on the tokenized PO portal and the logged-in customer dashboard; invoice-PDF streams and statement download/email with the recipient LOCKED to the customer's own record (never free input); and per-invoice questions landing in /admin/inbox as invoice-keyed threads. Every invoice id is ownership-checked against the token customer's own set before any NetSuite fetch — ids outside it 404 identically — and reads cache 5 minutes per customer.
 
 **The problem.** Customers cannot see what they owe: the token portal shows only PO-scoped invoice numbers and paid dots — no amounts, no due dates, no PDFs, no balance, no statements (verified on both customer surfaces). 'What's my balance?' and 'send me a copy of that invoice' are the highest-frequency staff interruptions, every month-end AP cycle at a fleet customer starts with an email to BMG, and the harder half (tokenized portal, NetSuite invoice PDFs via RESTlet, generateStatementPdf, fetchStatementInvoices true open balances) is already built.
 
@@ -218,6 +226,7 @@ High value (mostly 4-5) with either a Tier-1 dependency now satisfied or one con
 
 #### Auto-Computed Installer Scorecards
 *Value 5/5 · effort M · proposed independently by 1 lens · PARTIAL — builds on existing pieces*
+> **SHIPPED — PR #858.** Pure rollup over events the app already captures: completions, on-time vs deadline (only when a deadline was set), photo first-decision approval rate under the R3-2 effective-set rule this block insisted on (conditional approval counts as pass), and invite→bid response hours + decline rate — per company and per installer, current vs prior 90 days. Surfaced as roster score lines, bid-review context, and company chips; the manual jobs counter survives in a tooltip rather than silently changing meaning.
 
 **The problem.** Coordinators decide who gets work using hand-typed ratings that go stale and a 'jobs completed' counter nothing increments (verified: no writer in src/) — while the system already records every fact those ratings guess at: every status change with actor/timestamp, every photo approve/deny verdict, invite sent/seen times, and bid response times.
 
@@ -229,6 +238,7 @@ High value (mostly 4-5) with either a Tier-1 dependency now satisfied or one con
 
 #### Shop Week Planner with Capacity & Drag-to-Reschedule
 *Value 5/5 · effort M · proposed independently by 2 lenses · MOSTLY NEW*
+> **SHIPPED — PR #862** (migration 279). /admin/shop-week: the week as day columns of arrivals, scheduled upfits, and promised-backs, each day's sold labor hours (labor_hours_override ?? labor_hours, SUMMED across a check-in's open estimates) against crew × shift capacity with per-day overrides. The labor-hours coverage stat this block required is everywhere: unknown hours stay unknown with a '+N unpriced' flag, never zero demand. Drag (or tap-to-move) writes the SOURCE dates through each record's own editor path, so shop_inbound's auto-maintenance and the calendar syncs follow instead of fighting. OpsDashboard gained the two-week load strip; Settings the crew-capacity card.
 
 **The problem.** Google Calendar is the real shop schedule; the in-app pieces are scattered (ShopArrivals, the board, OpsDashboard's 7-day rail, /admin/schedule — which merges 6 event sources but has zero drag handlers). No screen answers 'what lands each day this week, what's promised back, and do we have the hours?' — booking a new drop-off is a capacity guess, and rescheduling means dragging in Google Calendar.
 
@@ -240,6 +250,7 @@ High value (mostly 4-5) with either a Tier-1 dependency now satisfied or one con
 
 #### Quoted-Margin Ledger & Floor Governance
 *Value 5/5 · effort M · proposed independently by 2 lenses · PARTIAL — builds on existing pieces*
+> **SHIPPED — PRs #850 (freeze, migration 275) + #856 (ledger reads).** Margin frozen on the estimate at send (quoted_margin_pct/quoted_margin_at) with floor governance at the gate; the Quoted Margin report (totals, by rep, by customer, monthly trend, distribution vs the floor, below-floor list), quoted-vs-actual joined into the vehicle-margin report, and the nightly quoted_margin_pct_30d leading metric the CEO band reads. Scoped to estimates exactly as this block priced it — the wrap-quote freeze remains deliberately deferred.
 
 **The problem.** The estimate builder computes per-line true cost, margin %, and floor breaches (quote_settings.margin_floor_pct) live on screen — then throws them away: estimate_line_items stores no cost. 'What margin did we quote this month, by rep and by customer' is unanswerable, the floor is purely advisory (a rep can send below floor and nobody ever finds out), and the owner sees actual margin only months later on the post-invoice vehicle-margin report.
 
@@ -251,6 +262,7 @@ High value (mostly 4-5) with either a Tier-1 dependency now satisfied or one con
 
 #### Win/Loss Funnel & Quote Outcomes Analytics
 *Value 4/5 · effort M · proposed independently by 2 lenses · PARTIAL — builds on existing pieces*
+> **SHIPPED — PRs #849 (capture, migration 274) + #855 (analytics).** A server-side audit trigger on prospect_opportunities captures stage changes wherever they happen (the capture gap this block flagged), and the sales-performance page grew funnel/outcome/timing tabs — extending it, not forking it, per the audit's must. The existing facts section still fails hard; the new sections fail soft with their own error states.
 
 **The problem.** The app forces reps to record WHY at every exit — lead_source on every prospect, required lost reasons + notes on deals, the customer's own written rejection words on estimates — and every approval writes full forensics (sent/approved/rejected timestamps, time-on-page, channel, reminder counts). None of it is readable in aggregate: 'is the Chamber membership paying for itself', 'what share of losses are price', and 'does reminder #3 ever work' are all unanswerable; the hard-coded 3-day/max-3 reminder cadence is a guess with no evidence.
 
@@ -262,6 +274,7 @@ High value (mostly 4-5) with either a Tier-1 dependency now satisfied or one con
 
 #### Vendor Scorecards
 *Value 4/5 · effort M · proposed independently by 2 lenses · MOSTLY NEW*
+> **SHIPPED — PRs #848 (capture-first, migration 273) + #857 (report).** The 'ship the event-capture migration first and separately — waiting loses history' rule was followed to the letter: append-only po_eta_events began accruing as the round's second PR. The scorecards rank vendors on actual lead times (receipt history), promises kept vs first ETA, slips, short lines, spend, and repeat-item price drift, with per-vendor drill-ins and buying-flow chips in purchasing. Thin history is labeled with its own accrual dates, never hidden.
 
 **The problem.** Buyers pick vendors and believe promised dates on memory. The system watches every vendor promise (email-scanned ETAs), arrival (po_receipts.received_at), price (netsuite_vendor_po_lines.rate), and vendor email — but ETAs overwrite in place (verified in parts-email-scan.ts), so 'Ranger said the 12th, delivered the 21st' is unprovable a week later, chronic slippage looks like bad luck, and receipts vanish from view once received (no receiving history exists at all).
 
@@ -273,6 +286,7 @@ High value (mostly 4-5) with either a Tier-1 dependency now satisfied or one con
 
 #### Installer Payout Autopilot: Paid-Sync, Batching & Aging
 *Value 4/5 · effort M · proposed independently by 3 lenses · PARTIAL — builds on existing pieces*
+> **SHIPPED — PR #859** (migration 277). The NetSuite sync now flips billed payouts to paid when their vendor bills pay (guarded update + audit + installer notification), pay-period batching gathers an installer's unlinked credits into ONE cni_period payout — fail-closed on unpriced work — billed as a single vendor bill with a per-job memo breakdown (multi-line bills stay untested territory, exactly as the trap warned), and the payouts console shows draft/approved/billed aging with pending-credit rollups. payroll_period semantics untouched: batches use the new kind.
 
 **The problem.** The 2-hourly AP sweep already auto-flips CNI company vendor invoices to Paid when NetSuite pays the bill (syncVendorBillPayments), but individual-mode installer payouts — which store the same netsuite_bill_id — stop at 'billed': a human must remember to click 'Mark Paid (after you actually pay it)' (verified: the sweep reads vendor_invoices only). Installers ping staff 'was I paid?', forgotten clicks leave the payout queue lying, nothing shows how long payouts sit at each stage, and individual-mode generates one vendor bill per job — four small jobs means four bills, four approvals, four payment runs.
 
@@ -284,6 +298,7 @@ High value (mostly 4-5) with either a Tier-1 dependency now satisfied or one con
 
 #### Pickup & Drop-off Booking + Ready-for-Pickup Queue
 *Value 5/5 · effort L · proposed independently by 3 lenses · MOSTLY NEW*
+> **SHIPPED — PRs #863 + #864** (migrations 280/281). The tokenized /book page books a vehicle's pickup on its customer_portal_token (auto-minted since migration 001 — this is its first reader) or an approved estimate's drop-off on the approval token, from the approval landing page CTA the data-correction here called for. Slot races are settled by a partial unique index; drop-off dates write the project's own dropoff field (and the SO inbound row's resync now preserves booked dates instead of nulling them — the auto-maintenance trap). The completion email's 'contact us' line became the booking CTA. Part 2 closed the aging gap: a ranked ready-for-pickup queue, weekly opt-in-respecting reminder emails carrying the booking link, one-time sales-rep escalation at 2N days, and an OpsDashboard tile.
 
 **The problem.** Both ends of a shop visit are phone tag: the completion email literally says 'Please contact us to arrange pickup', and after an estimate approval nothing captures when the vans will arrive (shop_inbound estimate rows carry no expected date), so a fleet manager with 8 vans makes up to 16 coordination calls per job and the arrival board runs on guesses. Meanwhile auto-archive only covers shipped vehicles — a completed vehicle whose customer never comes sits in the lot indefinitely with no aging view, no owner, and no follow-up.
 
@@ -295,6 +310,7 @@ High value (mostly 4-5) with either a Tier-1 dependency now satisfied or one con
 
 #### Closing-This-Month Forecast & Slippage Nudges
 *Value 4/5 · effort M · proposed independently by 2 lenses · MOSTLY NEW*
+> **SHIPPED — PR #854.** The OpsDashboard sales column gained the closing forecast (overdue / this month / next / later / undated with days-late chips and an honesty line for undated deals), deep-linking into each opportunity with a one-shot flash; a Friday cron nudges deal owners about overdue close dates and digests the week's movement — stage moves, wins with value, losses with reasons, slips, new deals. A quiet week sends nothing.
 
 **The problem.** Reps enter value, stage, and expected_close_date on every deal and the date does nothing: no 'closing this month' number, nothing lists what should land, and nothing fires when a close date passes — forecast dollars silently roll forward month after month and the pipeline total never confesses.
 
