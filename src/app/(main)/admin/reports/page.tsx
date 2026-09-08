@@ -42,6 +42,13 @@ const REPORTS: ReportLink[] = [
     visibility: 'financials',
   },
   {
+    title: 'Crew Hours \u0026 Field Productivity',
+    blurb: 'Crew hours from job timers against what was planned: per CNI job actual-vs-estimated with vehicles per crew hour, per company by week, per person by context. Hours from timers nobody stopped are counted separately, never blended in \u2014 and there is deliberately no \u201cutilization %\u201d, because the punch clock that provided its denominator was retired.',
+    href: '/admin/reports/crew-utilization',
+    source: 'FleetSuite',
+    visibility: 'admin',
+  },
+  {
     title: 'Cycle Time \u0026 Throughput',
     blurb: 'One report across vehicles, graphics and CNI: median and p90 dwell per stage, the bottleneck (only once enough cycles have run through it), turnaround trended by month, rework counted from backward transitions with the reasons typed on them, plus per-person completions and arrival-forecast accuracy.',
     href: '/admin/reports/throughput',

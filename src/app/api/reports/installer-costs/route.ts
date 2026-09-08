@@ -6,6 +6,7 @@ import { suiteqlQuery } from '@/lib/netsuite';
 import { safeStringLiteral } from '@/lib/sql-safe';
 import { fetchPartRowsCI } from '@/lib/part-number';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { loadShifts, summarizeHours } from '@/lib/crew-utilization';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -51,6 +52,66 @@ interface ScanInfo {
 
 // How many distinct customer invoices we'll ask NetSuite about per report run.
 const NETSUITE_LOOKUP_CAP = 200;
+
+/**
+ * Measured crew hours per installer company over the range, keyed by
+ * UPPER-CASED company name so the page can join them to vendor rows.
+ *
+ * Matching is by NAME because vendor_invoices carries a name snapshot, not
+ * a company id. That is a heuristic, so the result says which names matched
+ * nothing (`unmatchedJobs`) instead of implying full coverage — and
+ * auto-closed hours stay a separate figure, as everywhere else.
+ */
+async function vendorCrewHours(start: string, end: string): Promise<{
+  byCompany: Record<string, { hours: number; approximateHours: number }>;
+  unmatchedJobs: string[];
+}> {
+  try {
+    const shifts = (await loadShifts(service, `${start}T00:00:00.000Z`))
+      .filter(s => s.startedAt <= `${end}T23:59:59.999Z` && s.cniJobId);
+    if (shifts.length === 0) return { byCompany: {}, unmatchedJobs: [] };
+
+    const jobIds = [...new Set(shifts.map(s => s.cniJobId!))];
+    const companyByJob = new Map<string, string>();
+    const companyIds = new Set<string>();
+    for (let i = 0; i < jobIds.length; i += 200) {
+      const { data } = await service.from('cni_jobs')
+        .select('id, assigned_company_id').in('id', jobIds.slice(i, i + 200));
+      for (const j of data || []) {
+        if (!j.assigned_company_id) continue;
+        companyByJob.set(j.id, j.assigned_company_id);
+        companyIds.add(j.assigned_company_id);
+      }
+    }
+    const names = new Map<string, string>();
+    const ids = [...companyIds];
+    for (let i = 0; i < ids.length; i += 200) {
+      const { data } = await service.from('companies').select('id, name').in('id', ids.slice(i, i + 200));
+      for (const c of data || []) names.set(c.id, c.name || '');
+    }
+
+    const byCompany: Record<string, { hours: number; approximateHours: number }> = {};
+    const unmatched = new Set<string>();
+    const grouped = new Map<string, typeof shifts>();
+    for (const s of shifts) {
+      const companyId = companyByJob.get(s.cniJobId!);
+      const name = companyId ? names.get(companyId) : null;
+      if (!name) { unmatched.add(s.cniJobId!); continue; }
+      const key = name.toUpperCase();
+      const arr = grouped.get(key) || [];
+      arr.push(s);
+      grouped.set(key, arr);
+    }
+    for (const [key, group] of grouped) {
+      const split = summarizeHours(group);
+      byCompany[key] = { hours: split.totalHours, approximateHours: split.autoClosedHours };
+    }
+    return { byCompany, unmatchedJobs: [...unmatched] };
+  } catch (e: any) {
+    console.error('installer-costs crew hours failed:', e?.message || e);
+    return { byCompany: {}, unmatchedJobs: [] };
+  }
+}
 
 function rollup(lines: ReportLine[], keyOf: (l: ReportLine) => string) {
   // Group case-insensitively (part numbers especially can arrive in mixed
@@ -346,9 +407,17 @@ export async function GET(req: NextRequest) {
     };
     totals.margin = totals.invoiced - totals.paid;
 
+    // Crew hours per vendor (R6-12) — the sanity check on payout rates:
+    // what did we pay per MEASURED crew hour? Matched by company NAME
+    // (vendor_invoices.vendor_name is a snapshot of it), so coverage is
+    // reported rather than assumed: a renamed company drops out of the
+    // match, and jobs with no company at all are listed in `unmatchedJobs`.
+    const crewHours = await vendorCrewHours(start, end);
+
     return NextResponse.json({
       range: { start, end },
       lines,
+      crewHours,
       perVendor: rollup(lines, l => l.vendor),
       perLocation: rollup(lines, l => l.location),
       perPart: rollup(lines, l => l.partNumber || 'No Part'),
