@@ -18,6 +18,8 @@ import { Fragment, useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
+import BuyListModal from '@/components/BuyListModal';
+import { buildBuyList } from '@/lib/buy-list';
 
 interface DemandSourceRef {
   kind: 'sales_order' | 'estimate';
@@ -107,7 +109,12 @@ const qty = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
  *  customer names both carry commas often enough to matter. */
 const csvCell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 
-export default function PartsDemandTab({ onQueued }: { onQueued?: () => void }) {
+export default function PartsDemandTab({ onQueued, onBatchQueued }: {
+  onQueued?: () => void;
+  /** R6-7: the buy list raised these request ids in one shot — the page
+   *  switches to the queue and flashes exactly them. */
+  onBatchQueued?: (createdIds: string[]) => void;
+}) {
   const dialog = useDialog();
   const { isAdmin } = useAuth();
 
@@ -122,6 +129,7 @@ export default function PartsDemandTab({ onQueued }: { onQueued?: () => void }) 
   const [hideCovered, setHideCovered] = useState(false);
   const [showDismissed, setShowDismissed] = useState(false);
   const [dismissing, setDismissing] = useState<string | null>(null);
+  const [showBuyList, setShowBuyList] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -288,6 +296,10 @@ export default function PartsDemandTab({ onQueued }: { onQueued?: () => void }) 
     URL.revokeObjectURL(url);
   };
 
+  // Same builder the modal runs, so the button's count can never
+  // disagree with the list it opens.
+  const buyableCount = buildBuyList(filtered).lineCount;
+
   const soNotice = meta ? soMirrorNotice(meta) : null;
 
   if (loading) return <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Building the demand list…</div>;
@@ -357,6 +369,16 @@ export default function PartsDemandTab({ onQueued }: { onQueued?: () => void }) 
           <input type="checkbox" checked={hideCovered} onChange={e => setHideCovered(e.target.checked)} style={{ accentColor: '#3b82f6' }} />
           Hide parts already on order or queued
         </label>
+        {/* R6-7 one-click buy list. It reads the FILTERED rows, so a search
+            or "hide covered" narrows what it offers — the preview always
+            matches the table the buyer is looking at. */}
+        <button onClick={() => setShowBuyList(true)} disabled={buyableCount === 0}
+          title={buyableCount === 0
+            ? 'Nothing uncovered to queue — every part shown is already on order or in the queue'
+            : `Preview ${buyableCount} purchase request${buyableCount !== 1 ? 's' : ''}, grouped by vendor`}
+          style={{ padding: '6px 12px', borderRadius: '8px', border: '1px solid rgba(96,165,250,0.35)', background: buyableCount ? 'rgba(96,165,250,0.12)' : 'transparent', color: buyableCount ? '#60a5fa' : theme.textMuted, fontSize: '11px', fontWeight: 800, cursor: buyableCount ? 'pointer' : 'not-allowed', opacity: buyableCount ? 1 : 0.6 }}>
+          🛒 Queue all uncovered{buyableCount > 0 ? ` (${buyableCount})` : ''}
+        </button>
         <button onClick={downloadCsv} disabled={filtered.length === 0}
           style={{ padding: '6px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.textSecondary, fontSize: '11px', fontWeight: 700, cursor: filtered.length ? 'pointer' : 'not-allowed', opacity: filtered.length ? 1 : 0.5 }}>
           ⬇ CSV
@@ -505,6 +527,22 @@ export default function PartsDemandTab({ onQueued }: { onQueued?: () => void }) 
             </table>
           </div>
         </div>
+      )}
+
+      {showBuyList && (
+        <BuyListModal
+          rows={filtered}
+          onClose={() => setShowBuyList(false)}
+          onDone={async (createdIds) => {
+            setShowBuyList(false);
+            // Refresh either way: the queued quantities change every row's
+            // "already in the queue" column, so a stale table would invite
+            // a second round of the same order.
+            await load();
+            if (createdIds.length > 0 && onBatchQueued) onBatchQueued(createdIds);
+            else onQueued?.();
+          }}
+        />
       )}
     </div>
   );

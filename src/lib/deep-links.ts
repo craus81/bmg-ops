@@ -109,6 +109,15 @@ export const deepLinks = {
    *  ?req= scroll-flashes one request's row. */
   purchaseRequests: (requestId?: string | null) =>
     `/admin/purchasing${requestId ? `?req=${requestId}` : ''}`,
+  /** Purchasing queue with a BATCH of new requests flashed (the one-click
+   *  buy list raises dozens at once). A digest of many records may link to
+   *  the list, but it can still land on exactly the rows it is about. */
+  purchaseRequestBatch: (requestIds: string[]) => {
+    const ids = requestIds.filter(Boolean).slice(0, 40);
+    return ids.length === 1
+      ? `/admin/purchasing?req=${ids[0]}`
+      : `/admin/purchasing${ids.length ? `?reqs=${ids.join(',')}` : ''}`;
+  },
   /** Receiving page — ?po= expands and flashes one vendor PO (the local
    *  netsuite_vendor_pos row id). */
   receiving: (poId?: string | null) =>

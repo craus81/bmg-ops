@@ -11,6 +11,7 @@ import DropboxProofSearch, { type DropboxProofFile } from '@/components/DropboxP
 import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 import { DropZone } from '@/components/DropZone';
 import PartCatalogBrowser from '@/components/PartCatalogBrowser';
+import CatalogHealthPanel from '@/components/CatalogHealthPanel';
 import PartTransactionsModal from '@/components/PartTransactionsModal';
 import PartPosModal from '@/components/PartPosModal';
 import { loadBillableCustomers, type BillableCustomer } from '@/lib/billable-customers';
@@ -923,6 +924,9 @@ export default function PartsPage() {
           </button>
         ))}
       </div>
+
+      {/* R6-7: coverage bars, fix-it worklists, enrichment review */}
+      {isAdmin && <CatalogHealthPanel />}
 
       {/* Duplicate cleanup — merge rows that share a part number */}
       {isAdmin && duplicateGroups.length > 0 && (
