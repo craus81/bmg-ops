@@ -105,6 +105,12 @@ interface ShopShift {
   members: ShiftMemberView[];
 }
 
+/** Burn-chip colours: grey when there are no sold hours to measure against,
+ *  green under 80%, amber at 80%, red at 100%. */
+const BURN_COLOR: Record<'unknown' | 'ok' | 'warn' | 'over', string> = {
+  unknown: '#94a3b8', ok: '#22c55e', warn: '#f59e0b', over: '#ef4444',
+};
+
 export default function VehiclePickListPage() {
   const router = useRouter();
   const params = useParams<{ vin: string }>();
@@ -150,6 +156,12 @@ export default function VehiclePickListPage() {
   const [laborShift, setLaborShift] = useState<ShopShift | null>(null);
   const [laborRoster, setLaborRoster] = useState<{ profile_id: string; full_name: string }[]>([]);
   const [loggedHours, setLoggedHours] = useState(0);
+  // Labor burn meter (R6-12): hours logged against hours SOLD. Null sold
+  // hours renders as "no sold hours on file" — never a 0% or 100% budget.
+  const [burn, setBurn] = useState<{
+    loggedHours: number; soldHours: number | null; pct: number | null;
+    tone: 'unknown' | 'ok' | 'warn' | 'over'; label: string; sourceLabel: string | null;
+  } | null>(null);
   const [laborLoaded, setLaborLoaded] = useState(false);
   const [laborBusy, setLaborBusy] = useState(false);
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -262,6 +274,7 @@ export default function VehiclePickListPage() {
       setLaborShift(data.shift || null);
       setLaborRoster(data.roster || []);
       setLoggedHours(Number(data.loggedHours) || 0);
+      setBurn(data.burn || null);
       setLaborLoaded(true);
     } catch { /* non-blocking */ }
   }, []);
@@ -648,6 +661,24 @@ export default function VehiclePickListPage() {
                   ? <>⏱ {laborElapsedLabel} · crew of {laborShift.members.length}</>
                   : loggedHours > 0 ? `${loggedHours}h logged on this vehicle` : 'No time logged yet'}
               </div>
+              {/* Burn chip (R6-12) — the comparison the floor never had:
+                  hours logged against hours SOLD, amber at 80%, red at 100%. */}
+              {burn && (
+                <div style={{
+                  display: 'inline-flex', alignItems: 'center', gap: '6px', marginTop: '6px',
+                  padding: '3px 9px', borderRadius: '999px', fontSize: '12px', fontWeight: 800,
+                  color: BURN_COLOR[burn.tone],
+                  background: `${BURN_COLOR[burn.tone]}1f`,
+                }}>
+                  {burn.label}
+                  {burn.pct != null && <span style={{ fontWeight: 600 }}>· {burn.pct}%</span>}
+                </div>
+              )}
+              {burn?.sourceLabel && (
+                <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                  sold hours from {burn.sourceLabel}
+                </div>
+              )}
             </div>
             {(laborShift || !isComplete) && (
               <button

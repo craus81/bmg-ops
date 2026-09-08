@@ -4,6 +4,9 @@ import { requireAuth, isAdminRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { rolesOf } from '@/lib/cni-access';
 import { loadShift, canManageShift } from '@/lib/shifts';
+import { maybeNotifyLaborBurn, laborBurnAdminIds } from '@/lib/labor-burn';
+import { notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,6 +39,18 @@ export async function POST(req: NextRequest) {
       .update({ ended_at: new Date().toISOString() })
       .eq('id', shift.id);
     if (error) return NextResponse.json({ error: 'Failed to end shift: ' + error.message }, { status: 500 });
+
+    // Labor burn meter (R6-12): stopping the timer is the moment the hours
+    // become real, so it is the moment to check them against the hours
+    // sold. Fires once per visit and never throws — a notification problem
+    // must not fail the tech's Stop button.
+    if (shift.context === 'shop' && shift.fleet_checkin_id) {
+      await maybeNotifyLaborBurn(service, shift.fleet_checkin_id, {
+        notifyMany,
+        adminIds: () => laborBurnAdminIds(service),
+        pickListUrl: (vin, checkinId) => deepLinks.pickList(vin, checkinId),
+      });
+    }
   }
   return NextResponse.json({ success: true });
 }
