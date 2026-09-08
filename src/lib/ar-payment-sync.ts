@@ -110,7 +110,23 @@ async function fetchPaidInvoiceNumbers(numbers: string[]): Promise<{
   return { paid, tranidByStoredId };
 }
 
-export async function syncArInvoicePayments(supabase: any): Promise<ArPaymentSyncResult> {
+/** Persist the run (R5-1) — fire-and-forget; a logging failure never fails the sweep. */
+async function recordSyncRun(supabase: any, source: string, r: ArPaymentSyncResult): Promise<void> {
+  try {
+    const { error } = await supabase.from('ar_sync_runs').insert({
+      source,
+      checked_invoices: r.checkedInvoices,
+      paid_invoices: r.paidInvoices,
+      fleet_checkins_updated: r.fleetCheckinsUpdated,
+      scan_logs_updated: r.scanLogsUpdated,
+    });
+    if (error) console.warn('ar_sync_runs insert failed:', error.message);
+  } catch (e: any) {
+    console.warn('ar_sync_runs insert failed:', e?.message || e);
+  }
+}
+
+export async function syncArInvoicePayments(supabase: any, source: 'cron' | 'manual' = 'cron'): Promise<ArPaymentSyncResult> {
   // Distinct invoice numbers still marked unpaid across both AR tables.
   const [fleetNums, scanNums] = await Promise.all([
     unpaidInvoiceNumbers(supabase, 'fleet_checkins'),
@@ -124,14 +140,24 @@ export async function syncArInvoicePayments(supabase: any): Promise<ArPaymentSyn
     fleetCheckinsUpdated: 0,
     scanLogsUpdated: 0,
   };
-  if (allNumbers.length === 0) return result;
+  if (allNumbers.length === 0) {
+    await recordSyncRun(supabase, source, result);
+    return result;
+  }
 
   const { paid: paidNumbers, tranidByStoredId } = await fetchPaidInvoiceNumbers(allNumbers);
   result.paidInvoices = paidNumbers.size;
-  if (paidNumbers.size === 0) return result;
+  if (paidNumbers.size === 0) {
+    await recordSyncRun(supabase, source, result);
+    return result;
+  }
 
-  // Flip is_paid true for the now-paid invoices. Chunk the IN list on the
-  // update filter too so a large paid batch doesn't blow the URL length.
+  // Flip is_paid true for the now-paid invoices, stamping paid_at = now
+  // (R5-1): the moment the sweep NOTICED Paid In Full — not the payment's
+  // posting date, and readers label it that way. Manually-ticked rows keep
+  // paid_at NULL (date unknown). Chunk the IN list on the update filter
+  // too so a large paid batch doesn't blow the URL length.
+  const paidStamp = new Date().toISOString();
   const paidList = Array.from(paidNumbers);
   const UPDATE_BATCH = 100;
   for (let i = 0; i < paidList.length; i += UPDATE_BATCH) {
@@ -139,13 +165,13 @@ export async function syncArInvoicePayments(supabase: any): Promise<ArPaymentSyn
     const [fleetRes, scanRes] = await Promise.all([
       supabase
         .from('fleet_checkins')
-        .update({ is_paid: true })
+        .update({ is_paid: true, paid_at: paidStamp })
         .in('invoice_number', batch)
         .eq('is_paid', false)
         .select('id'),
       supabase
         .from('scan_logs')
-        .update({ is_paid: true })
+        .update({ is_paid: true, paid_at: paidStamp })
         .in('invoice_number', batch)
         .eq('is_paid', false)
         .select('id'),
@@ -166,5 +192,6 @@ export async function syncArInvoicePayments(supabase: any): Promise<ArPaymentSyn
     ]);
   }
 
+  await recordSyncRun(supabase, source, result);
   return result;
 }

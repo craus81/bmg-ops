@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
   if (auth.error) return auth.error;
 
   try {
-    const result = await syncArInvoicePayments(service);
+    const result = await syncArInvoicePayments(service, 'manual');
     return NextResponse.json({ success: true, ...result });
   } catch (e: any) {
     return NextResponse.json({ error: e.message || 'NetSuite payment check failed' }, { status: 502 });
