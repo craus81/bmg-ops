@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireStaff, isAdminRole } from '@/lib/api-auth';
 import { loadChecklistTemplate, buildTaskRows } from '@/lib/install-checklist';
+import { appendSoLineTasks } from '@/lib/so-line-tasks';
 import { createClient } from '@supabase/supabase-js';
 
 export const dynamic = 'force-dynamic';
@@ -66,5 +67,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     await supabase.from('job_tasks').insert(rows);
   }
 
-  return NextResponse.json({ ok: true, count: rows.length, templateId: template.id });
+  // R6-10: regenerate the sales order's parts too, or "Reset checklist"
+  // would quietly hand the floor a shorter list than the automatic
+  // instantiation gave it — the exact divergence this shared helper pair
+  // was created to prevent.
+  const soTasks = await appendSoLineTasks(supabase, params.id, rows.length);
+
+  return NextResponse.json({
+    ok: true, count: rows.length + soTasks, templateTasks: rows.length,
+    soLineTasks: soTasks, templateId: template.id,
+  });
 }
