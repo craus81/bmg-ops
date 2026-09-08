@@ -219,7 +219,9 @@ export async function POST(req: NextRequest) {
           type: 'purchase_request',
           title: `🛒 Parts requested${projectLabel ? ` — ${projectLabel}` : ''}`,
           body: `${lines}${body.neededBy ? ` · needed by ${body.neededBy}` : ''}`.slice(0, 900),
-          url: deepLinks.purchaseRequests(created.length === 1 ? created[0] : undefined),
+          // A batch lands on exactly the rows it is about, not a bare list
+          // the reader then has to search (R6-7 buy list raises dozens).
+          url: deepLinks.purchaseRequestBatch(created),
           channels: ['in_app', 'push'],
         });
       }
@@ -233,7 +235,12 @@ export async function POST(req: NextRequest) {
     readiness = await computePartsReadiness(supabase, body.projectId);
   }
 
-  return NextResponse.json({ success: true, created: created.length, raised: raised.length, readiness });
+  // createdIds so a batch caller can flash exactly what it made; `created`
+  // stays the count every existing caller already reads.
+  return NextResponse.json({
+    success: true, created: created.length, createdIds: created,
+    raised: raised.length, readiness,
+  });
 }
 
 /** PATCH — edit quantity/vendor/date/note, or cancel. */

@@ -66,8 +66,12 @@ export default function PurchasingQueuePage() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
+  /** R6-7: the one-click buy list raises dozens of requests at once, so
+   *  ?reqs=a,b,c (and the modal's own callback) flashes the whole set. */
+  const [flashIds, setFlashIds] = useState<Set<string>>(new Set());
   const [reqNotice, setReqNotice] = useState<string | null>(null);
   const flashedRef = useRef(false);
+  const batchFlashedRef = useRef(false);
 
   // R5-11: vendor reality chips for the group headers — "Meyer: avg 8d
   // late vs promise · 2 ETA slips" — so the scorecard is in front of the
@@ -143,6 +147,28 @@ export default function PurchasingQueuePage() {
         }
       } catch { /* banner is best-effort */ }
     })();
+  }, [loading, requests, searchParams]);
+
+  // ?reqs=a,b,c — the batch form. Flashes every row that's still pending
+  // and scrolls to the first; ids that already left the queue are simply
+  // not flashed (the single-id path above is the one that explains a fate).
+  useEffect(() => {
+    if (loading || batchFlashedRef.current) return;
+    const raw = searchParams.get('reqs');
+    if (!raw) return;
+    const wanted = new Set(raw.split(',').map(s => s.trim()).filter(Boolean));
+    if (wanted.size === 0) return;
+    // Once per landing, like ?req=. Without this, every later reload of the
+    // queue (a cancel, a PO created) re-flashes the same rows.
+    batchFlashedRef.current = true;
+    const present = requests.filter(r => wanted.has(r.id)).map(r => r.id);
+    if (present.length === 0) return;
+    setFlashIds(new Set(present));
+    setTimeout(() => {
+      document.getElementById(`preq-${present[0]}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 100);
+    const t = setTimeout(() => setFlashIds(new Set()), 4500);
+    return () => clearTimeout(t);
   }, [loading, requests, searchParams]);
 
   const patch = async (id: string, fields: Record<string, unknown>, confirmText?: string) => {
@@ -342,7 +368,20 @@ export default function PurchasingQueuePage() {
             this is what the jobs require. Parts already on a vendor PO show in their own column
             rather than being netted out.
           </div>
-          <PartsDemandTab onQueued={load} />
+          <PartsDemandTab
+            onQueued={load}
+            onBatchQueued={async (ids) => {
+              // Land on the rows that were just created, not on a list the
+              // buyer then has to search — same contract as the ?reqs= link.
+              await load();
+              setTab('requests');
+              setFlashIds(new Set(ids));
+              setTimeout(() => {
+                document.getElementById(`preq-${ids[0]}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }, 150);
+              setTimeout(() => setFlashIds(new Set()), 4500);
+            }}
+          />
         </>
       )}
 
@@ -463,7 +502,7 @@ export default function PurchasingQueuePage() {
                   {rows.map(r => (
                     <tr key={r.id} id={`preq-${r.id}`} style={{
                       borderTop: `1px solid ${theme.border}`,
-                      background: flashId === r.id ? 'rgba(96,165,250,0.12)' : 'transparent',
+                      background: (flashId === r.id || flashIds.has(r.id)) ? 'rgba(96,165,250,0.12)' : 'transparent',
                       transition: 'background 0.6s',
                     }}>
                       <td style={{ padding: '9px 14px' }}>
