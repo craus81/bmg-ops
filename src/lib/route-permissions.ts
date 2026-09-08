@@ -306,6 +306,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/reports/executive-summary/route.ts': financials(),
   'src/app/api/reports/financials/accounts/route.ts': financials(),
   'src/app/api/reports/financials/ap-bills/route.ts': financials(),
+  'src/app/api/reports/financials/ar-trends/route.ts': financials(),
   'src/app/api/reports/financials/ar-invoices/route.ts': financials(),
   'src/app/api/reports/financials/invoice-pdf/route.ts': financials(),
   'src/app/api/reports/financials/pnl/route.ts': financials(),

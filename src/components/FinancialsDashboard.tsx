@@ -87,6 +87,32 @@ function Sparkline({ points }: { points?: { day: string; value: number | null }[
 }
 
 /** 13-month revenue bars, hand-rolled SVG scaled to the series max. */
+/** Stacked A/R aging bars, one per snapshot day (R5-6). Oldest → newest. */
+function AgingStack({ days }: { days: { day: string; buckets: Record<string, number> }[] }) {
+  if (!days || days.length === 0) return null;
+  const order = ['current', 'd1_30', 'd31_60', 'd61_90', 'd90plus'];
+  const colors = ['#22c55e', '#a3e635', '#f59e0b', '#f97316', '#ef4444'];
+  const totals = days.map(d => order.reduce((s, k) => s + (d.buckets[k] || 0), 0));
+  const max = Math.max(...totals, 1);
+  const w = 100 / days.length;
+  return (
+    <svg viewBox="0 0 100 34" preserveAspectRatio="none" style={{ width: '100%', height: '110px', display: 'block' }}>
+      {days.map((d, i) => {
+        let y = 32;
+        return order.map((k, bi) => {
+          const h = ((d.buckets[k] || 0) / max) * 30;
+          y -= h;
+          return h > 0.05 ? (
+            <rect key={`${d.day}-${k}`} x={i * w + w * 0.12} y={y} width={w * 0.76} height={h} fill={colors[bi]} rx={0.4}>
+              <title>{`${d.day} · ${k}: $${Math.round(d.buckets[k]).toLocaleString()}`}</title>
+            </rect>
+          ) : null;
+        });
+      })}
+    </svg>
+  );
+}
+
 function RevenueBars({ monthly }: { monthly: { month: string; total: number }[] }) {
   if (monthly.length === 0) return null;
   const w = 640, h = 150, padB = 18, padT = 12;
@@ -184,6 +210,16 @@ export default function FinancialsDashboard() {
     }[];
     payrollConfigured: boolean;
   } | null>(null);
+  // A/R trends band (R5-6): DSO, nightly aging snapshots, slowest payers.
+  const [trends, setTrends] = useState<{
+    dsoNow: number | null;
+    trailing12Revenue: number | null;
+    snapshots: { day: string; total: number; buckets: Record<string, number> }[];
+    snapshotsSince: string | null;
+    slowestPayers: { customer: string; medianDays: number; invoices: number }[];
+    paidSamples: number;
+    paymentsThisWeek: { total: number; count: number } | { error: string };
+  } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -210,6 +246,13 @@ export default function FinancialsDashboard() {
         const res = await apiFetch('/api/reports/financials/pnl');
         const body = await res.json();
         if (alive && res.ok) setPnl(body);
+      } catch { /* band stays hidden */ }
+    })();
+    (async () => {
+      try {
+        const res = await apiFetch('/api/reports/financials/ar-trends');
+        const body = await res.json();
+        if (alive && res.ok) setTrends(body);
       } catch { /* band stays hidden */ }
     })();
     return () => { alive = false; };
@@ -443,6 +486,57 @@ export default function FinancialsDashboard() {
           </div>
         );
       })()}
+
+      {/* ── Receivables trend band (R5-6) — DSO now is live; the aging
+             stack and days-to-pay accrue from the R5-1 capture ship date. ── */}
+      {trends && (
+        <div>
+          <div style={{ ...eyebrow, margin: '2px 2px 10px' }}>Receivables — trend &amp; days to pay</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', marginBottom: '12px' }}>
+            <Tile swatch="var(--navy, #4d8ba6)" label="DSO (now)" value={trends.dsoNow != null ? `${trends.dsoNow}d` : '—'}
+              sub={<>Open A/R ÷ daily revenue, trailing 12 mo</>} />
+            <Tile swatch="var(--success)" label="Collected this week"
+              value={'total' in trends.paymentsThisWeek ? usd(trends.paymentsThisWeek.total) : '—'}
+              sub={'total' in trends.paymentsThisWeek
+                ? <>{trends.paymentsThisWeek.count} payments in 7 days</>
+                : <span style={hint}>{/RESTlet/i.test(trends.paymentsThisWeek.error) ? 'Needs the updated financials RESTlet (docs/pnl-restlet-deploy.md)' : trends.paymentsThisWeek.error}</span>} />
+            <Tile swatch="var(--navy, #4d8ba6)" label="Aging history"
+              value={trends.snapshots.length > 0 ? `${trends.snapshots.length}d` : '—'}
+              sub={trends.snapshots.length > 0
+                ? <>Nightly snapshots since {trends.snapshotsSince}</>
+                : <>History starts accruing tonight (nightly snapshot)</>} />
+          </div>
+          {trends.snapshots.length > 1 && (
+            <div style={{ ...card, marginBottom: '12px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>
+                Open A/R by aging bucket, nightly (green current → red 90+)
+              </div>
+              <AgingStack days={trends.snapshots} />
+            </div>
+          )}
+          {trends.slowestPayers.length > 0 ? (
+            <div style={card}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>
+                Slowest payers — median days from invoice to paid ({trends.paidSamples} paid rows; dates are when the 2-hourly sweep saw Paid In Full)
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '6px 16px', fontSize: '12px' }}>
+                {trends.slowestPayers.map(p => (
+                  <div key={p.customer} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.customer}</span>
+                    <span style={{ fontWeight: 700, color: p.medianDays > 45 ? 'var(--error)' : p.medianDays > 30 ? 'var(--warning)' : 'var(--text-primary)', whiteSpace: 'nowrap' }}>
+                      {p.medianDays}d <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>· {p.invoices} inv</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '0 2px' }}>
+              Days-to-pay per customer appears as invoices get marked paid from here on (payment-date capture shipped {trends.snapshotsSince || 'today'}).
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Sales band (R4-4) — same math as the Sales Performance report
              (shared sales-facts lib), trailing 90 days. ── */}
