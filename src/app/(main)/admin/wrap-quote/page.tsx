@@ -78,6 +78,14 @@ interface Film {
   // charge) — drives the internal margin readout.
   cost_per_sqft: number | null;
   laminate_cost_per_sqft: number | null;
+  // R6-1: the two consumables the shop burns on every printed job.
+  // Premask and ink are billed on PRINTED area, not roll area.
+  premask_name: string | null;
+  premask_cost_per_sqft: number | null;
+  ink_cost_per_sqft: number | null;
+  // Full-roll geometry, so the R6-2 stock ledger can seed from the catalog.
+  roll_width_in: number | null;
+  roll_length_ft: number | null;
 }
 
 const FILM_COLORS = ['#06b6d4', '#a78bfa', '#f472b6', '#4ade80', '#fb923c', '#facc15', '#60a5fa', '#f87171'];
@@ -519,7 +527,7 @@ export default function WrapQuotePage() {
 
   // ----- Pricing tab state (edit copies) -----
   const [subSel, setSubSel] = useState(''); // '' = new
-  const [subForm, setSubForm] = useState({ name: '', price_per_sqft: '', bleed_in: '', laminate_name: '', laminate_price_per_sqft: '', labor_per_sqft: '', color: '', cost_per_sqft: '', laminate_cost_per_sqft: '' });
+  const [subForm, setSubForm] = useState({ name: '', price_per_sqft: '', bleed_in: '', laminate_name: '', laminate_price_per_sqft: '', labor_per_sqft: '', color: '', cost_per_sqft: '', laminate_cost_per_sqft: '', premask_name: '', premask_cost_per_sqft: '', ink_cost_per_sqft: '', roll_width_in: '', roll_length_ft: '' });
   const [savingSettings, setSavingSettings] = useState(false);
   // Margin floor (%) shared with the estimate builder (quote_settings singleton).
   const [marginFloor, setMarginFloor] = useState(30);
@@ -1973,8 +1981,8 @@ export default function WrapQuotePage() {
     setSubSel(id);
     const s = substrates.find(x => x.id === id);
     setSubForm(s
-      ? { name: s.name, price_per_sqft: String(s.price_per_sqft), bleed_in: String(s.bleed_in), laminate_name: s.laminate_name || '', laminate_price_per_sqft: s.laminate_price_per_sqft ? String(s.laminate_price_per_sqft) : '', labor_per_sqft: s.labor_per_sqft ? String(s.labor_per_sqft) : '', color: s.color || '', cost_per_sqft: s.cost_per_sqft != null ? String(s.cost_per_sqft) : '', laminate_cost_per_sqft: s.laminate_cost_per_sqft != null ? String(s.laminate_cost_per_sqft) : '' }
-      : { name: '', price_per_sqft: '', bleed_in: '', laminate_name: '', laminate_price_per_sqft: '', labor_per_sqft: '', color: '', cost_per_sqft: '', laminate_cost_per_sqft: '' });
+      ? { name: s.name, price_per_sqft: String(s.price_per_sqft), bleed_in: String(s.bleed_in), laminate_name: s.laminate_name || '', laminate_price_per_sqft: s.laminate_price_per_sqft ? String(s.laminate_price_per_sqft) : '', labor_per_sqft: s.labor_per_sqft ? String(s.labor_per_sqft) : '', color: s.color || '', cost_per_sqft: s.cost_per_sqft != null ? String(s.cost_per_sqft) : '', laminate_cost_per_sqft: s.laminate_cost_per_sqft != null ? String(s.laminate_cost_per_sqft) : '', premask_name: s.premask_name || '', premask_cost_per_sqft: s.premask_cost_per_sqft != null ? String(s.premask_cost_per_sqft) : '', ink_cost_per_sqft: s.ink_cost_per_sqft != null ? String(s.ink_cost_per_sqft) : '', roll_width_in: s.roll_width_in != null ? String(s.roll_width_in) : '', roll_length_ft: s.roll_length_ft != null ? String(s.roll_length_ft) : '' }
+      : { name: '', price_per_sqft: '', bleed_in: '', laminate_name: '', laminate_price_per_sqft: '', labor_per_sqft: '', color: '', cost_per_sqft: '', laminate_cost_per_sqft: '', premask_name: '', premask_cost_per_sqft: '', ink_cost_per_sqft: '', roll_width_in: '', roll_length_ft: '' });
   };
 
   const saveSubstrate = async () => {
@@ -1989,6 +1997,13 @@ export default function WrapQuotePage() {
       // Empty = cost unknown (margin readout says so) rather than $0.
       cost_per_sqft: subForm.cost_per_sqft.trim() === '' ? null : num(subForm.cost_per_sqft),
       laminate_cost_per_sqft: subForm.laminate_cost_per_sqft.trim() === '' ? null : num(subForm.laminate_cost_per_sqft),
+      // R6-1 consumables + roll geometry. Blank = unknown (the material log
+      // says so and falls back to the shop default) rather than free.
+      premask_name: subForm.premask_name.trim() || null,
+      premask_cost_per_sqft: subForm.premask_cost_per_sqft.trim() === '' ? null : num(subForm.premask_cost_per_sqft),
+      ink_cost_per_sqft: subForm.ink_cost_per_sqft.trim() === '' ? null : num(subForm.ink_cost_per_sqft),
+      roll_width_in: subForm.roll_width_in.trim() === '' ? null : num(subForm.roll_width_in),
+      roll_length_ft: subForm.roll_length_ft.trim() === '' ? null : num(subForm.roll_length_ft),
       // Default a palette color for new films so boxes are distinct from day one
       color: subForm.color || FILM_COLORS[substrates.length % FILM_COLORS.length],
       updated_at: new Date().toISOString(),
@@ -1997,7 +2012,7 @@ export default function WrapQuotePage() {
       ? await supabase.from('wrap_substrates').update(row).eq('id', subSel)
       : await supabase.from('wrap_substrates').insert({ ...row, is_active: true });
     if (error) { await dialog.alert(`Save failed: ${saveErrorMessage(error)}`); return; }
-    setSubSel(''); setSubForm({ name: '', price_per_sqft: '', bleed_in: '', laminate_name: '', laminate_price_per_sqft: '', labor_per_sqft: '', color: '', cost_per_sqft: '', laminate_cost_per_sqft: '' });
+    setSubSel(''); setSubForm({ name: '', price_per_sqft: '', bleed_in: '', laminate_name: '', laminate_price_per_sqft: '', labor_per_sqft: '', color: '', cost_per_sqft: '', laminate_cost_per_sqft: '', premask_name: '', premask_cost_per_sqft: '', ink_cost_per_sqft: '', roll_width_in: '', roll_length_ft: '' });
     await loadAll();
   };
 
@@ -3330,6 +3345,26 @@ export default function WrapQuotePage() {
             <div>
               <div style={labelStyle}>Labor ($/ft²)</div>
               <input type="number" value={subForm.labor_per_sqft} onChange={e => setSubForm({ ...subForm, labor_per_sqft: e.target.value })} style={{ ...inputStyle, width: '85px' }} />
+            </div>
+            <div>
+              <div style={labelStyle} title="Application tape used on this film">Premask</div>
+              <input value={subForm.premask_name} onChange={e => setSubForm({ ...subForm, premask_name: e.target.value })} placeholder="e.g. R-Tape 4075" style={{ ...inputStyle, width: '120px' }} />
+            </div>
+            <div>
+              <div style={labelStyle} title="Premask cost per PRINTED ft² — it never touches the blank roll margins">Premask ($/ft²)</div>
+              <input type="number" value={subForm.premask_cost_per_sqft} onChange={e => setSubForm({ ...subForm, premask_cost_per_sqft: e.target.value })} placeholder="our cost" style={{ ...inputStyle, width: '85px' }} />
+            </div>
+            <div>
+              <div style={labelStyle} title="Ink cost per PRINTED ft² for this media — cartridge cost ÷ observed coverage, or Epson's published ml/m² for the media + mode. Blank falls back to the shop default in Settings.">Ink ($/ft²)</div>
+              <input type="number" value={subForm.ink_cost_per_sqft} onChange={e => setSubForm({ ...subForm, ink_cost_per_sqft: e.target.value })} placeholder="our cost" style={{ ...inputStyle, width: '85px' }} />
+            </div>
+            <div>
+              <div style={labelStyle} title="A full roll of this film — seeds the stock ledger and the roll plan's footage warning">Roll W × L</div>
+              <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                <input type="number" value={subForm.roll_width_in} onChange={e => setSubForm({ ...subForm, roll_width_in: e.target.value })} placeholder='in' style={{ ...inputStyle, width: '62px' }} />
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>×</span>
+                <input type="number" value={subForm.roll_length_ft} onChange={e => setSubForm({ ...subForm, roll_length_ft: e.target.value })} placeholder="ft" style={{ ...inputStyle, width: '62px' }} />
+              </div>
             </div>
             <div>
               <div style={labelStyle}>Box Color</div>

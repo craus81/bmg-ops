@@ -235,6 +235,57 @@ export default function SettingsPage() {
     }
   };
 
+  // Shop fallback ink/premask rates (R6-1, migration 282) — per PRINTED
+  // ft², used when a film in the catalog carries no rate of its own.
+  const [inkRate, setInkRate] = useState('');
+  const [premaskRate, setPremaskRate] = useState('');
+  const [matBusy, setMatBusy] = useState(false);
+  const [matSaved, setMatSaved] = useState(false);
+  const [matError, setMatError] = useState('');
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    (async () => {
+      try {
+        const res = await apiFetch('/api/admin/material-defaults');
+        const data = await res.json();
+        if (res.ok) {
+          setInkRate(data.inkCostPerSqft != null ? String(data.inkCostPerSqft) : '');
+          setPremaskRate(data.premaskCostPerSqft != null ? String(data.premaskCostPerSqft) : '');
+        }
+      } catch { /* the card still renders; saving surfaces errors */ }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per admin session
+  }, [isSuperAdmin]);
+
+  const handleSaveMaterialDefaults = async () => {
+    setMatBusy(true);
+    setMatError('');
+    try {
+      const parse = (v: string) => (v.trim() === '' ? null : parseFloat(v));
+      const ink = parse(inkRate);
+      const premask = parse(premaskRate);
+      if ((ink != null && (!Number.isFinite(ink) || ink < 0)) || (premask != null && (!Number.isFinite(premask) || premask < 0))) {
+        setMatError('Enter a dollar amount per square foot, or leave blank to clear.');
+        return;
+      }
+      const res = await apiFetch('/api/admin/material-defaults', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inkCostPerSqft: ink, premaskCostPerSqft: premask }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setMatError(data?.error || 'Could not save the rates.'); return; }
+      setInkRate(data.inkCostPerSqft != null ? String(data.inkCostPerSqft) : '');
+      setPremaskRate(data.premaskCostPerSqft != null ? String(data.premaskCostPerSqft) : '');
+      setMatSaved(true);
+      setTimeout(() => setMatSaved(false), 2500);
+    } catch (e: any) {
+      setMatError(e?.message || 'Could not save the rates.');
+    } finally {
+      setMatBusy(false);
+    }
+  };
+
   const handleSaveTax = async () => {
     setTaxSaving(true);
     setTaxError('');
@@ -767,6 +818,53 @@ export default function SettingsPage() {
             </div>
             {shopRateError && (
               <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{shopRateError}</div>
+            )}
+          </div>
+
+          <div style={sectionStyle}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>Ink &amp; Premask Rates</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
+              What ink and application tape cost per <strong>printed</strong> ft² — the two consumables every wrap
+              burns and nobody was costing. A film in Wrap Quote → Pricing can carry its own rates (different media
+              and print modes lay down different ink); these fill in when it doesn&apos;t. Leave blank and those
+              lines log as unpriced rather than free.
+            </div>
+            <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <div>
+                <div style={labelStyle}>Ink $/printed ft²</div>
+                <input
+                  type="number" step={0.01} min={0} max={100}
+                  value={inkRate}
+                  onChange={e => setInkRate(e.target.value)}
+                  placeholder="e.g. 0.35"
+                  style={{ ...inputStyle, width: '110px' }}
+                />
+              </div>
+              <div>
+                <div style={labelStyle}>Premask $/printed ft²</div>
+                <input
+                  type="number" step={0.01} min={0} max={100}
+                  value={premaskRate}
+                  onChange={e => setPremaskRate(e.target.value)}
+                  placeholder="e.g. 0.22"
+                  style={{ ...inputStyle, width: '110px' }}
+                />
+              </div>
+              <button
+                onClick={handleSaveMaterialDefaults}
+                disabled={matBusy}
+                style={{
+                  padding: '8px 16px', borderRadius: '8px', border: 'none',
+                  background: matSaved ? '#22c55e' : '#3b82f6', color: '#fff',
+                  fontSize: '12px', fontWeight: 800,
+                  cursor: matBusy ? 'default' : 'pointer', opacity: matBusy ? 0.5 : 1,
+                }}
+              >
+                {matBusy ? 'Saving...' : matSaved ? 'Saved!' : 'Save Rates'}
+              </button>
+            </div>
+            {matError && (
+              <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{matError}</div>
             )}
           </div>
 

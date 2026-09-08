@@ -87,6 +87,9 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // Blended shop labor cost rate (R3-21 job costing): reading is admin
   // (cost data); writing is super-admin — it moves every reported margin.
   'src/app/api/admin/shop-labor-rate/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
+  // Shop fallback ink/premask $/ft² (R6-1): reading is admin (cost data);
+  // writing is super-admin — it moves every graphics job's material cost.
+  'src/app/api/admin/material-defaults/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   // Shop crew capacity (R5-16 week planner): reading the crew/shift config
   // is admin; writing is super-admin — it recolors every load bar.
   'src/app/api/admin/shop-capacity/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
@@ -350,6 +353,9 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/scans/log/route.ts': authScoped('external installer companies log field scans by design; the route enforces an internal-staff-or-installer allowlist itself', 'isInternalStaffRole('),
   'src/app/api/scans/match-po/route.ts': staff(),
   'src/app/api/scans/photos/route.ts': authScoped('completion photos ride the same field-scanner flow and enforce the same staff-or-installer allowlist as scans/log', 'isInternalStaffRole('),
+  // Actual-consumption import (R6-1): graphics production owns the
+  // printer's own numbers, so they can reconcile without an admin.
+  'src/app/api/materials/import/route.ts': role(),
   'src/app/api/search/route.ts': staff(),
   'src/app/api/shifts/end/route.ts': authScoped('ends the caller\'s own shift'),
   'src/app/api/shifts/members/route.ts': authScoped('crew presence for the shift flow; techs + installers'),

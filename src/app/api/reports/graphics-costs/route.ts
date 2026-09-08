@@ -45,13 +45,13 @@ export async function GET(req: NextRequest) {
     if (jobsErr) return NextResponse.json({ error: jobsErr.message }, { status: 500 });
 
     const jobIds = (jobs || []).map(j => j.id);
-    const materials: { graphics_job_id: string; material_name: string; category: string; quantity_sqft: number | null; cost: number | null }[] = [];
+    const materials: { graphics_job_id: string; material_name: string; category: string; quantity_sqft: number | null; cost: number | null; substrate_id: string | null; cost_source: string | null }[] = [];
     for (let i = 0; i < jobIds.length; i += 200) {
       // Each chunk paginated too: 200 jobs' materials can pass 1000 rows.
       const { data, error: matErr } = await fetchAllRows<any>((from, to) =>
         service
           .from('graphics_job_materials')
-          .select('graphics_job_id, material_name, category, quantity_sqft, cost')
+          .select('graphics_job_id, material_name, category, quantity_sqft, cost, substrate_id, cost_source')
           .in('graphics_job_id', jobIds.slice(i, i + 200))
           .order('id')
           .range(from, to));
@@ -60,7 +60,7 @@ export async function GET(req: NextRequest) {
     }
 
     const byJob = new Map<string, { cost: number; sqft: number; entries: number }>();
-    const byMaterial = new Map<string, { name: string; category: string; sqft: number; cost: number; entries: number }>();
+    const byMaterial = new Map<string, { name: string; category: string; sqft: number; cost: number; entries: number; substrateId: string | null; unpriced: number }>();
     for (const m of materials) {
       const j = byJob.get(m.graphics_job_id) || { cost: 0, sqft: 0, entries: 0 };
       j.cost += m.cost != null ? Number(m.cost) : 0;
@@ -68,11 +68,18 @@ export async function GET(req: NextRequest) {
       j.entries += 1;
       byJob.set(m.graphics_job_id, j);
 
-      const key = m.material_name.trim().toUpperCase();
-      const mat = byMaterial.get(key) || { name: m.material_name.trim(), category: m.category, sqft: 0, cost: 0, entries: 0 };
+      // R6-1: roll up by the CATALOG row when the line is linked, so two
+      // spellings of one film stop reading as two materials; unlinked
+      // lines still fold together on their normalized name.
+      const key = m.substrate_id ? `sub:${m.substrate_id}` : `name:${m.material_name.trim().toUpperCase()}`;
+      const mat = byMaterial.get(key) || {
+        name: m.material_name.trim(), category: m.category, sqft: 0, cost: 0, entries: 0,
+        substrateId: m.substrate_id || null, unpriced: 0,
+      };
       mat.sqft += m.quantity_sqft != null ? Number(m.quantity_sqft) : 0;
       mat.cost += m.cost != null ? Number(m.cost) : 0;
       mat.entries += 1;
+      if (m.cost == null) mat.unpriced += 1;
       byMaterial.set(key, mat);
     }
 
@@ -106,6 +113,10 @@ export async function GET(req: NextRequest) {
       revenue: invoiced.reduce((s, r) => s + (r.revenue || 0), 0),
       materialCost: rows.reduce((s, r) => s + r.materialCost, 0),
       materialSqft: rows.reduce((s, r) => s + r.materialSqft, 0),
+      // R6-1 honesty: a logged line with no rate on file contributes $0 to
+      // the cost column, so say how many there are rather than let the
+      // margin read better than it is.
+      unpricedLines: materials.filter(m => m.cost == null).length,
     };
 
     return NextResponse.json({
