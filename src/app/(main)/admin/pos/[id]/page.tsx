@@ -112,6 +112,7 @@ const eyebrow: React.CSSProperties = { fontSize: '10px', fontWeight: 800, textTr
 const btnSm: React.CSSProperties = { padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)', whiteSpace: 'nowrap', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '5px' };
 const labelStyle: React.CSSProperties = { display: 'block', fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' };
 const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12.5px' };
+const inputSm: React.CSSProperties = { ...inputStyle, padding: '5px 7px', fontSize: '11.5px', borderRadius: '6px' };
 const th: React.CSSProperties = { fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', padding: '7px 8px', borderBottom: '1px solid var(--border)', textAlign: 'left', whiteSpace: 'nowrap' };
 const td: React.CSSProperties = { fontSize: '12.5px', color: 'var(--text-secondary)', padding: '7px 8px', borderBottom: '1px solid var(--border)', verticalAlign: 'middle' };
 const num: React.CSSProperties = { textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' };
@@ -273,6 +274,14 @@ export default function PoRecordPage() {
   const [uploadingPdf, setUploadingPdf] = useState(false);
   const [pdfPreview, setPdfPreview] = useState<{ url: string; name: string } | null>(null);
   const [extractingShipTo, setExtractingShipTo] = useState(false);
+
+  // ── Buyer + receipt confirmation ─────────────────────────────────────────
+  // The confirmation goes out automatically at import, to the buyer on the
+  // PDF or whoever emailed the PO in. When the PDF names nobody (or names
+  // the wrong person) this is where staff correct it and send.
+  const [editingBuyer, setEditingBuyer] = useState(false);
+  const [buyerForm, setBuyerForm] = useState({ name: '', email: '' });
+  const [sendingConfirmation, setSendingConfirmation] = useState(false);
 
   // ── Invoices ─────────────────────────────────────────────────────────────
   const [rechecking, setRechecking] = useState(false);
@@ -698,6 +707,56 @@ export default function PoRecordPage() {
     setPostingNote(false);
   };
 
+  const openBuyerEditor = () => {
+    if (!po) return;
+    setBuyerForm({ name: po.buyer_name || '', email: po.buyer_email || '' });
+    setEditingBuyer(true);
+  };
+
+  // Save the buyer (if edited) and send the receipt confirmation. Re-sends
+  // are allowed — a confirmation that reached the wrong mailbox still needs
+  // to reach the right one.
+  const sendConfirmation = async (opts: { withBuyerEdits: boolean }) => {
+    if (!po || sendingConfirmation) return;
+    const email = (opts.withBuyerEdits ? buyerForm.email : po.buyer_email || '').trim();
+    if (po.confirmation_sent_at) {
+      const prior = (po.confirmation_sent_to || []).join(', ');
+      const ok = await dialog.confirm(
+        `This PO's confirmation already went to ${prior || 'someone'}. Send it again${email ? ` to ${email}` : ''}?`,
+        { confirmLabel: 'Send again' },
+      );
+      if (!ok) return;
+    }
+    setSendingConfirmation(true);
+    try {
+      const res = await fetch('/api/pos/send-confirmation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          poId: po.id,
+          ...(opts.withBuyerEdits ? { buyerName: buyerForm.name, buyerEmail: buyerForm.email } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        await dialog.alert(`Could not send: ${data.error || `request failed (${res.status})`}`);
+      } else {
+        if (data.po) setPo(prev => (prev ? { ...prev, ...data.po } : prev));
+        setEditingBuyer(false);
+        if (data.sent) {
+          await dialog.alert(
+            `Receipt confirmation sent to ${(data.to || []).join(', ')}.${data.warning ? `\n\n${data.warning}` : ''}`,
+          );
+        } else {
+          await dialog.alert(`Not sent — ${data.reason || 'no reason given'}.`);
+        }
+      }
+    } catch (err: any) {
+      await dialog.alert(`Could not send: ${err?.message || 'network error'}`);
+    }
+    setSendingConfirmation(false);
+  };
+
   // ── Billing recheck (same endpoint as the list's per-PO recheck) ─────────
   const recheckBilling = async () => {
     if (!po || rechecking) return;
@@ -1047,20 +1106,58 @@ export default function PoRecordPage() {
             <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{fmtDate(po.requested_delivery_date)}</div>
           </div>
           {/* Buyer Information off the PO PDF (migration 256) — who sent it,
-              and whether the automatic receipt confirmation reached them. */}
+              and whether the automatic receipt confirmation reached them.
+              Editable: when the PDF names nobody the confirmation is skipped,
+              and when it named the wrong mailbox it has to be re-sent. */}
           <div>
             <div style={labelStyle}>Buyer</div>
-            <div style={{ fontSize: '13px', fontWeight: 700, color: po.buyer_name || po.buyer_email ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-              {po.buyer_name || po.buyer_email || 'Not on the PO'}
-            </div>
-            {po.buyer_name && po.buyer_email && (
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{po.buyer_email}</div>
+            {editingBuyer ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                <input
+                  value={buyerForm.name}
+                  onChange={e => setBuyerForm(f => ({ ...f, name: e.target.value }))}
+                  placeholder="Buyer name"
+                  style={inputSm}
+                />
+                <input
+                  value={buyerForm.email}
+                  onChange={e => setBuyerForm(f => ({ ...f, email: e.target.value }))}
+                  placeholder="buyer@customer.com"
+                  type="email"
+                  style={inputSm}
+                />
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    onClick={() => sendConfirmation({ withBuyerEdits: true })}
+                    disabled={sendingConfirmation || !buyerForm.email.trim()}
+                    style={{ ...btnSm, padding: '4px 8px', fontSize: '10px', opacity: sendingConfirmation || !buyerForm.email.trim() ? 0.5 : 1, color: '#34d399' }}
+                  >{sendingConfirmation ? 'Sending…' : 'Save & send'}</button>
+                  <button
+                    onClick={() => setEditingBuyer(false)}
+                    disabled={sendingConfirmation}
+                    style={{ ...btnSm, padding: '4px 8px', fontSize: '10px' }}
+                  >Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize: '13px', fontWeight: 700, color: po.buyer_name || po.buyer_email ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                  {po.buyer_name || po.buyer_email || 'Not on the PO'}
+                </div>
+                {po.buyer_name && po.buyer_email && (
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{po.buyer_email}</div>
+                )}
+                <button
+                  onClick={openBuyerEditor}
+                  style={{ marginTop: '3px', padding: 0, background: 'none', border: 'none', color: '#60a5fa', fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}
+                >Edit buyer</button>
+              </>
             )}
           </div>
           <div>
             <div style={labelStyle}>Confirmation</div>
             <div
-              title={po.confirmation_sent_at ? `Sent ${new Date(po.confirmation_sent_at).toLocaleString()} to ${(po.confirmation_sent_to || []).join(', ')}` : 'The receipt confirmation goes out automatically when the PO’s lines are imported — to the buyer on the PDF, or the customer’s billing email.'}
+              title={po.confirmation_sent_at ? `Sent ${new Date(po.confirmation_sent_at).toLocaleString()} to ${(po.confirmation_sent_to || []).join(', ')}` : 'The receipt confirmation goes out automatically when the PO’s lines are imported — to the buyer on the PDF, else whoever emailed the PO in. It is never sent to an accounts-payable mailbox.'}
               style={{ fontSize: '13px', fontWeight: 700, color: po.confirmation_sent_at ? '#34d399' : 'var(--text-muted)' }}
             >
               {po.confirmation_sent_at ? `Sent ${fmtDate(po.confirmation_sent_at)}` : 'Not sent'}
@@ -1068,6 +1165,11 @@ export default function PoRecordPage() {
             {po.confirmation_sent_at && (po.confirmation_sent_to || []).length > 0 && (
               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{(po.confirmation_sent_to || []).join(', ')}</div>
             )}
+            <button
+              onClick={() => sendConfirmation({ withBuyerEdits: false })}
+              disabled={sendingConfirmation}
+              style={{ marginTop: '3px', padding: 0, background: 'none', border: 'none', color: '#60a5fa', fontSize: '10px', fontWeight: 700, cursor: sendingConfirmation ? 'default' : 'pointer', opacity: sendingConfirmation ? 0.5 : 1 }}
+            >{sendingConfirmation ? 'Sending…' : po.confirmation_sent_at ? 'Send again' : 'Send now'}</button>
           </div>
           <div>
             <div style={labelStyle}>PO total</div>

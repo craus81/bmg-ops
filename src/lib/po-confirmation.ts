@@ -11,11 +11,20 @@
  * RESEND_REPLY_TO_EMAIL) and is logged like every other email.
  *
  * Recipient: the PO's Buyer Information email (extracted at import), else
- * the customer's billing emails from the CRM record, else nothing — the
- * import never fails over the confirmation, and a skipped send says why.
+ * the person who emailed us the PO (the From on the Gmail import), else
+ * nothing — the import never fails over the confirmation, and a skipped
+ * send says why.
+ *
+ * NEVER the customer's billing emails. That was the original fallback and
+ * it mailed a PO acknowledgement to Masterack's AP department, because
+ * `prospects.billing_emails` is the *invoice* list (what EmailInvoicesModal
+ * saves), not the buyer. An accounts-payable mailbox is not the person who
+ * placed the order, so an AP-shaped address is refused on every derived
+ * path — only a human at the manual send screen can aim this email at one.
  *
  * Sent once per PO: a re-import of the same PO number does not email
- * again unless the first confirmation never went out.
+ * again unless the first confirmation never went out. Staff can correct
+ * the buyer and re-send from the PO page (`force`/`overrideTo`).
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -28,6 +37,17 @@ export type PoConfirmationResult =
   | { sent: true; to: string[]; attachments: number }
   | { sent: false; reason: string };
 
+export interface PoConfirmationOptions {
+  /** Re-send a PO that already has a confirmation on record. */
+  force?: boolean;
+  /**
+   * Send to this address verbatim, skipping the derivation below and the
+   * AP guard with it. Only for the manual send screen, where a person
+   * typed the address and owns the choice.
+   */
+  overrideTo?: string;
+}
+
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, c => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!
 ));
@@ -39,6 +59,42 @@ const fmtD = (iso: string | null | undefined): string => {
   return y && m && d ? `${Number(m)}/${Number(d)}/${y}` : String(iso);
 };
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/*
+ * Mailboxes that belong to an accounts-payable / invoicing function rather
+ * than to the buyer who placed the order. A PO receipt confirmation sent
+ * there is a dead end — AP can't answer a question about the order — so no
+ * derived address matching this ever becomes a recipient. Only the mailbox
+ * (local part) is judged, and the tests below pin both directions.
+ */
+// Terms distinctive enough to spot anywhere in the mailbox, because no
+// person is named them — "MSRAccountsPayable", "corp_invoices".
+const AP_STRONG_RE = /accounts?[._-]?payable|payables|invoices|invoicing|remittance/i;
+// Terms that only read as AP when they are a whole separator-delimited
+// segment, so a person is never caught: aparker@ and billings@ are people,
+// ap@ and msr.billing@ are desks.
+const AP_SEGMENTS = new Set([
+  'ap', 'ar', 'acctspay', 'acctspayable', 'accountspayable',
+  'payable', 'payables', 'invoice', 'invoices', 'invoicing',
+  'billing', 'remit', 'remittance',
+]);
+
+/** true when `email`'s mailbox looks like an AP/invoicing function. */
+export function isApMailbox(email: string): boolean {
+  const local = String(email).split('@')[0] || '';
+  if (!local) return false;
+  if (AP_STRONG_RE.test(local)) return true;
+  return local.toLowerCase().split(/[._+-]+/).some(seg => AP_SEGMENTS.has(seg));
+}
+
+/** Pull the address out of a raw From header ("Name <a@b.com>" or "a@b.com"). */
+function addressOf(raw: string | null | undefined): string | null {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  const angled = s.match(/<([^<>]+)>/);
+  const candidate = (angled ? angled[1] : s).trim().replace(/^["']|["']$/g, '').toLowerCase();
+  return EMAIL_RE.test(candidate) ? candidate : null;
+}
 
 interface PoLine {
   part_number: string | null;
@@ -119,6 +175,7 @@ function confirmationHtml(po: any, lines: PoLine[], company: any, attachmentName
 export async function sendPoConfirmation(
   supabase: SupabaseClient,
   poId: string,
+  opts: PoConfirmationOptions = {},
 ): Promise<PoConfirmationResult> {
   try {
     const { data: po, error } = await supabase
@@ -127,7 +184,7 @@ export async function sendPoConfirmation(
       .eq('id', poId)
       .maybeSingle();
     if (error || !po) return { sent: false, reason: error?.message || 'PO not found' };
-    if (po.confirmation_sent_at) return { sent: false, reason: 'already confirmed' };
+    if (po.confirmation_sent_at && !opts.force) return { sent: false, reason: 'already confirmed' };
 
     const { data: lines } = await supabase
       .from('po_line_items')
@@ -143,20 +200,38 @@ export async function sendPoConfirmation(
     }));
     if (poLines.length === 0) return { sent: false, reason: 'no lines imported yet' };
 
-    // Recipient: the buyer on the PDF, else the customer's billing emails.
+    // Recipient. An address a person typed at the send screen wins
+    // outright; otherwise derive it, and an AP mailbox is never derived —
+    // the buyer placed the order, AP just pays for it.
     let to: string[] = [];
-    if (po.buyer_email && EMAIL_RE.test(String(po.buyer_email).trim())) {
-      to = [String(po.buyer_email).trim().toLowerCase()];
-    } else if (po.customer_netsuite_id) {
-      const { data: prospect } = await supabase
-        .from('prospects')
-        .select('billing_emails, email')
-        .eq('netsuite_id', String(po.customer_netsuite_id))
-        .maybeSingle();
-      const billing = (prospect?.billing_emails || []).filter((e: string) => EMAIL_RE.test(e));
-      to = billing.length > 0 ? billing : (prospect?.email && EMAIL_RE.test(prospect.email) ? [prospect.email] : []);
+    let skipReason = 'no buyer email on the PO and no sender on the import';
+    const override = addressOf(opts.overrideTo);
+    if (opts.overrideTo && !override) return { sent: false, reason: 'the address given is not a valid email' };
+
+    if (override) {
+      to = [override];
+    } else {
+      const buyer = addressOf(po.buyer_email);
+      if (buyer && !isApMailbox(buyer)) {
+        to = [buyer];
+      } else {
+        if (buyer) skipReason = `the buyer email on the PO (${buyer}) is an accounts-payable mailbox, not the buyer`;
+        // Who actually emailed us the PO. In practice that IS the buyer,
+        // and it is the only other address on file that belongs to a person.
+        const { data: imports } = await supabase
+          .from('gmail_po_imports')
+          .select('from_email, received_at, created_at')
+          .eq('po_id', poId)
+          .order('received_at', { ascending: false })
+          .order('created_at', { ascending: false })
+          .limit(50);
+        for (const row of imports || []) {
+          const sender = addressOf(row.from_email);
+          if (sender && !isApMailbox(sender)) { to = [sender]; break; }
+        }
+      }
     }
-    if (to.length === 0) return { sent: false, reason: 'no buyer email on the PO and no billing email on the customer record' };
+    if (to.length === 0) return { sent: false, reason: skipReason };
 
     // Letterhead — the same settings singleton every customer document uses.
     const { data: settings } = await supabase.from('wrap_quote_settings').select('company').eq('id', 1).maybeSingle();
