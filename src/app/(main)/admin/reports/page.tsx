@@ -31,6 +31,12 @@ const REPORTS: ReportLink[] = [
     source: 'FleetSuite',
   },
   {
+    title: 'Cycle Time \u0026 Throughput',
+    blurb: 'One report across vehicles, graphics and CNI: median and p90 dwell per stage, the bottleneck (only once enough cycles have run through it), turnaround trended by month, rework counted from backward transitions with the reasons typed on them, plus per-person completions and arrival-forecast accuracy.',
+    href: '/admin/reports/throughput',
+    source: 'FleetSuite',
+  },
+  {
     title: 'Month-End Close',
     blurb: 'One page per accounting month: is everything finished in the month billed, is the AP/payout pipeline drained, did a money email bounce and never get fixed, and have the NetSuite-side checks been signed off. A check the app could not run says \u201cnot checked\u201d \u2014 never \u201cclear.\u201d',
     href: '/admin/reports/month-close',
