@@ -37,6 +37,7 @@ const UpdateSchema = z.object({
   leadDays: z.number().int().min(0).max(30),
   horizonDays: z.number().int().min(7).max(60),
   blockedDates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(100),
+  nudgeDays: z.number().int().min(1).max(30),
 });
 
 export async function PUT(req: NextRequest) {

@@ -909,6 +909,12 @@ export default function SettingsPage() {
                   onChange={e => setBookingCfg({ ...bookingCfg, horizonDays: parseInt(e.target.value || '21', 10) })}
                   style={{ ...inputStyle, width: '80px' }} />
               </div>
+              <div>
+                <div style={labelStyle} title="Days after completion before the automated pickup reminder; the sales rep hears at double this.">Nudge after (days)</div>
+                <input type="number" min={1} max={30} value={bookingCfg.nudgeDays ?? 3}
+                  onChange={e => setBookingCfg({ ...bookingCfg, nudgeDays: parseInt(e.target.value || '3', 10) })}
+                  style={{ ...inputStyle, width: '80px' }} />
+              </div>
             </div>
             <div style={labelStyle}>Blocked dates</div>
             <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px' }}>
