@@ -1629,6 +1629,23 @@ export default function CustomerRecordPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on arrival
   }, [searchParams]);
 
+  // ?opp=… — slippage nudges (R5-8) land on the exact deal: scroll to and
+  // flash that opportunity card once the deals have loaded.
+  const [flashOppId, setFlashOppId] = useState<string | null>(null);
+  const oppParamHandled = useRef(false);
+  useEffect(() => {
+    if (oppParamHandled.current) return;
+    const oppId = searchParams.get('opp');
+    if (!oppId || opportunities.length === 0) return;
+    oppParamHandled.current = true;
+    setFlashOppId(oppId);
+    setTimeout(() => {
+      document.getElementById(`opp-${oppId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 150);
+    setTimeout(() => setFlashOppId(null), 4000);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot once deals load
+  }, [searchParams, opportunities]);
+
   const composeRequest = async (fields: EmailComposeFields, preview: boolean) => {
     const res = await fetch('/api/prospects/email', {
       method: 'POST',
@@ -2457,7 +2474,10 @@ export default function CustomerRecordPage() {
             )}
             {opportunities.length === 0 && !oppFormOpen && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px' }}>{prospect ? 'No deals yet.' : '—'}</div>}
             {[...openDeals, ...closedDeals].map(o => (
-              <div key={o.id} style={{ padding: '8px 0', borderTop: '1px solid var(--border)' }}>
+              <div key={o.id} id={`opp-${o.id}`} style={{
+                padding: flashOppId === o.id ? '8px' : '8px 0', borderTop: '1px solid var(--border)',
+                ...(flashOppId === o.id ? { background: 'rgba(59,130,246,0.12)', borderRadius: '8px' } : {}),
+              }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span style={{ flex: 1, minWidth: 0, fontSize: '12.5px', fontWeight: 600, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {o.title}

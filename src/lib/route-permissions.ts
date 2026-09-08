@@ -142,6 +142,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cron/at-risk-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/auto-archive-shipped/route.ts': cron('requireAdmin('),
   'src/app/api/cron/calendar-pull/route.ts': cron('requireAdmin('),
+  'src/app/api/cron/deal-forecast-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/exceptions-digest/route.ts': cron('requireAdmin('),
   'src/app/api/cron/health-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/netsuite-sync/route.ts': cron('requireAdmin('),

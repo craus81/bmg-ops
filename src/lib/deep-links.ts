@@ -96,6 +96,10 @@ export const deepLinks = {
     `/admin/cni/installers/${userId}${noteId ? `?note=${noteId}` : ''}`,
   /** Dedicated prospect / customer record page. */
   prospect: (prospectId: string) => `/admin/prospects/${prospectId}`,
+  /** One deal on the prospect record — ?opp= scroll-flashes that
+   *  opportunity card (R5-8 slippage nudges land on the exact deal). */
+  opportunity: (prospectId: string, opportunityId: string) =>
+    `/admin/prospects/${prospectId}?opp=${opportunityId}`,
   /** The same record page, addressed by the customer's NetSuite internal id
    *  (the page resolves `ns-<id>` to the prospect row + synced customer, so
    *  records with no CRM row still land). Use when a record only carries
