@@ -2743,6 +2743,89 @@ export async function getCustomerPaymentsFromRestlet(customerId: string, limit =
   }
 }
 
+export interface RestletPnlRow {
+  accountId: string;
+  accountName: string;
+  accountType: string;
+  segment: string | null;
+  amount: number;
+}
+
+/**
+ * Income-statement totals from the financials RESTlet (R5-5): posting sums
+ * per account for a date range. Same stale-deployment guard as
+ * customerPayments — an old deployment falls through to accountBalances,
+ * so a missing `rows` array means "re-upload the script", never $0.
+ */
+export async function getIncomeStatementFromRestlet(
+  from: string,
+  to: string,
+  groupBy?: 'class' | 'department',
+): Promise<{ success: boolean; rows?: RestletPnlRow[]; error?: string }> {
+  const restletUrl = process.env.NETSUITE_FINANCIALS_RESTLET_URL;
+  if (!restletUrl) return { success: false, error: 'Financials RESTlet URL not configured' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    return { success: false, error: 'Invalid date range' };
+  }
+  try {
+    const result = await callRestlet(restletUrl, 'GET', {
+      action: 'incomeStatement', from, to, ...(groupBy ? { groupBy } : {}),
+    });
+    if (!result?.success) return { success: false, error: result?.error || 'RESTlet error' };
+    if (!Array.isArray(result.rows)) {
+      return { success: false, error: 'The P&L needs the updated financials RESTlet — re-upload scripts/netsuite-financials-restlet.js in NetSuite (see docs/pnl-restlet-deploy.md)' };
+    }
+    return {
+      success: true,
+      rows: result.rows.map((r: any) => ({
+        accountId: String(r.accountId || ''),
+        accountName: String(r.accountName || ''),
+        accountType: String(r.accountType || ''),
+        segment: r.segment ? String(r.segment) : null,
+        amount: Number(r.amount) || 0,
+      })),
+    };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'RESTlet call failed' };
+  }
+}
+
+/** Company-wide customer payments + deposits for a range (R5-5 collections mode). */
+export async function getCollectionsFromRestlet(from: string, to: string): Promise<{
+  success: boolean;
+  total?: number;
+  count?: number;
+  collections?: { id: string; tranid: string; date: string; customer: string | null; amount: number }[];
+  error?: string;
+}> {
+  const restletUrl = process.env.NETSUITE_FINANCIALS_RESTLET_URL;
+  if (!restletUrl) return { success: false, error: 'Financials RESTlet URL not configured' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    return { success: false, error: 'Invalid date range' };
+  }
+  try {
+    const result = await callRestlet(restletUrl, 'GET', { action: 'collections', from, to });
+    if (!result?.success) return { success: false, error: result?.error || 'RESTlet error' };
+    if (!Array.isArray(result.collections)) {
+      return { success: false, error: 'Collections need the updated financials RESTlet — re-upload scripts/netsuite-financials-restlet.js in NetSuite (see docs/pnl-restlet-deploy.md)' };
+    }
+    return {
+      success: true,
+      total: Number(result.total) || 0,
+      count: Number(result.count) || 0,
+      collections: result.collections.map((t: any) => ({
+        id: String(t.id),
+        tranid: String(t.tranid || t.id),
+        date: String(t.date || ''),
+        customer: t.customer ? String(t.customer) : null,
+        amount: Number(t.amount) || 0,
+      })),
+    };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'RESTlet call failed' };
+  }
+}
+
 /**
  * Fetch a transaction PDF from the NetSuite RESTlet.
  * Supports: salesOrder, invoice, estimate (matches the RESTlet's query
