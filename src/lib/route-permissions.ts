@@ -362,6 +362,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/reports/on-time/route.ts': role(),
   'src/app/api/reports/never-invoiced/route.ts': role(),
   'src/app/api/reports/month-close/route.ts': role(),
+  'src/app/api/reports/throughput/route.ts': role(),
   'src/app/api/reports/order-book/route.ts': role(),
   'src/app/api/reports/quoted-margin/route.ts': role(),
   'src/app/api/reports/vehicle-margin/route.ts': role(),
