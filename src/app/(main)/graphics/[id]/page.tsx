@@ -36,6 +36,7 @@ import DropboxProofSearch from '@/components/DropboxProofSearch';
 import GraphicsMaterialsCard from '@/components/GraphicsMaterialsCard';
 import GraphicsRollPlan from '@/components/GraphicsRollPlan';
 import GraphicsPackChecklist from '@/components/GraphicsPackChecklist';
+import PrintRoomTimer from '@/components/PrintRoomTimer';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { DropZone } from '@/components/DropZone';
 import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
@@ -1566,6 +1567,9 @@ export default function GraphicsJobRecordPage() {
         wrapQuoteId={(job as any).wrap_quote_id ?? null}
         nesting={(job as any).nesting ?? null}
       />
+
+      {/* ── Print-room timer (R6-6): the shop timer pointed at this job. ── */}
+      <PrintRoomTimer jobId={job.id} />
 
       {/* ── Pack & ship bench (R6-4): per-line pack/verify by two people,
           with a photo per line as the evidence for "a piece was missing". ── */}

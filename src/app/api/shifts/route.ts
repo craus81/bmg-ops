@@ -115,9 +115,11 @@ const MemberInput = z.object({
 });
 
 const StartSchema = z.object({
-  context: z.enum(['cni', 'field', 'shop']),
+  context: z.enum(['cni', 'field', 'shop', 'graphics']),
   cniJobId: z.string().uuid().optional().nullable(),
   checkinId: z.string().uuid().optional().nullable(),
+  graphicsJobId: z.string().uuid().optional().nullable(),
+  taskTag: z.enum(['print', 'cut', 'laminate', 'design', 'other']).optional().nullable(),
   partNumber: z.string().trim().max(120).optional().nullable(),
   partDescription: z.string().trim().max(300).optional().nullable(),
   billableCustomer: z.string().trim().max(200).optional().nullable(),
@@ -137,7 +139,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, StartSchema);
   if (parsed.error) return parsed.error;
-  const { context, cniJobId, checkinId, partNumber } = parsed.data;
+  const { context, cniJobId, checkinId, graphicsJobId, partNumber } = parsed.data;
   const isAdmin = isAdminRole(rolesOf(auth.profile));
 
   let allowedIds: Set<string>;
@@ -181,6 +183,33 @@ export async function POST(req: NextRequest) {
     }
     allowedIds = new Set((await shopRoster(service)).map(r => r.profile_id));
     allowedIds.add(auth.user.id);
+  } else if (context === 'graphics') {
+    // R6-6 print-room timer: same shape as the shop timer — one open shift
+    // per graphics job, costing only, never a rate and never credits. The
+    // print room is graphics production, so that is the roster.
+    const roles = rolesOf(auth.profile);
+    if (!roles.some(r => ['graphics_production', 'production', 'admin', 'super_admin'].includes(r))) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    if (!graphicsJobId) return NextResponse.json({ error: 'graphicsJobId required' }, { status: 400 });
+    const { data: gjob } = await service
+      .from('graphics_jobs').select('id').eq('id', graphicsJobId).maybeSingle();
+    if (!gjob) return NextResponse.json({ error: 'Graphics job not found' }, { status: 404 });
+    const { data: openShift } = await service
+      .from('work_shifts')
+      .select('*')
+      .eq('context', 'graphics')
+      .eq('graphics_job_id', graphicsJobId)
+      .is('ended_at', null)
+      .maybeSingle();
+    if (openShift) {
+      return NextResponse.json({ shift: { ...openShift, members: await memberViews(service, openShift.id) }, existing: true });
+    }
+    const { data: crew } = await service
+      .from('profiles').select('id, role, roles').eq('status', 'approved')
+      .or('role.in.(graphics_production,production,admin,super_admin),roles.cs.{graphics_production},roles.cs.{production}');
+    allowedIds = new Set((crew || []).map((p: any) => p.id));
+    allowedIds.add(auth.user.id);
   } else {
     if (!rolesOf(auth.profile).some(r => FIELD_ROLES.includes(r))) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -211,7 +240,9 @@ export async function POST(req: NextRequest) {
       context,
       cni_job_id: context === 'cni' ? cniJobId : null,
       fleet_checkin_id: context === 'shop' ? checkinId : null,
-      part_number: context === 'shop' ? null : (partNumber || null),
+      graphics_job_id: context === 'graphics' ? graphicsJobId : null,
+      task_tag: context === 'graphics' ? (parsed.data.taskTag || null) : null,
+      part_number: (context === 'shop' || context === 'graphics') ? null : (partNumber || null),
       part_description: context === 'cni' ? (parsed.data.partDescription || null) : null,
       billable_customer: context === 'cni' ? (parsed.data.billableCustomer || null) : null,
       location_id: parsed.data.locationId || null,

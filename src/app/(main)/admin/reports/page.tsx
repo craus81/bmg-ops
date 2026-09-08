@@ -49,6 +49,12 @@ const REPORTS: ReportLink[] = [
     source: 'FleetSuite',
   },
   {
+    title: 'Material Yield & Scrap',
+    blurb: 'How much of every roll became graphic and how much went in the bin \u2014 per film, worst waste first, with the scrap priced at what that film actually cost. Lines with no recorded printed area are counted separately, never scored as total waste.',
+    href: '/admin/reports/material-yield',
+    source: 'FleetSuite',
+  },
+  {
     title: 'Quoted Margin',
     blurb: 'The margin we OFFERED, frozen at each estimate send — by rep, customer, and month, distribution vs the floor, and every below-floor send with its typed reason. The leading indicator vehicle-margin confirms months later.',
     href: '/admin/reports/quoted-margin',

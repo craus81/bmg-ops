@@ -243,6 +243,12 @@ export default function GraphicsRollPlan({ jobId, jobQuantity, vinylType, vinylC
           category: l.category,
           substrate_id: l.substrateId,
           quantity_sqft: l.quantitySqft,
+          // R6-6: film and laminate bill on ROLL area, so record the graphic
+          // area beside it — the difference is this job's scrap. Premask and
+          // ink already bill on graphic area, where waste isn't a concept.
+          graphic_sqft: (l.category === 'vinyl' || l.category === 'laminate')
+            ? Math.round(film.graphicSqft * 10) / 10
+            : null,
           linear_feet: l.linearFeet,
           rate_per_sqft: l.ratePerSqft,
           cost_source: l.costSource,
