@@ -242,6 +242,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/graphics/notify-shipped-invoice/route.ts': staff(),
   'src/app/api/install-checklists/[id]/route.ts': admin(),
   'src/app/api/install-checklists/route.ts': { kind: 'staff', contains: ['requireStaff(', 'requireAdmin('] },
+  'src/app/api/install-guides/templates/route.ts': staff(),
   'src/app/api/install-guides/send/route.ts': staff(),
   'src/app/api/installer/ready-for-install/route.ts': authScoped('field installer flow; vehicle status transition validated in-route'),
   'src/app/api/invoices/backfill-emails/route.ts': admin(),
