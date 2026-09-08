@@ -395,6 +395,10 @@ export default function CniJobDetailPage() {
   const [inviteCompanies, setInviteCompanies] = useState<{ id: string; name: string; memberCount: number }[]>([]);
   const [invitedIds, setInvitedIds] = useState<string[]>([]); // invited company ids
   const [inviteError, setInviteError] = useState('');
+  // R6-5: ranked matches for the invite picker. Falls back to the plain
+  // list when ranking is unavailable, so the modal never goes blank.
+  const [matches, setMatches] = useState<any[] | null>(null);
+  const [matchMeta, setMatchMeta] = useState<{ distanceAvailable: boolean; serviceType: string | null } | null>(null);
   const [bidCount, setBidCount] = useState(0);
 
   // Phase 3: photos + messages
@@ -807,6 +811,16 @@ export default function CniJobDetailPage() {
   const loadInviteList = async () => {
     setInviteCompanies(await loadCompaniesWithCounts(supabase));
     setShowInvite(true);
+    setMatches(null);
+    try {
+      const res = await fetch(`/api/cni/invite-matches?jobId=${jobId}`);
+      if (res.ok) {
+        const body = await res.json();
+        setMatches(body.matches || []);
+        setMatchMeta({ distanceAvailable: !!body.distanceAvailable, serviceType: body.job?.serviceType || null });
+        if (Array.isArray(body.invitedIds)) setInvitedIds(body.invitedIds);
+      }
+    } catch { /* the unranked list still works */ }
   };
 
   const sendInvite = async (companyId: string) => {
@@ -1920,9 +1934,63 @@ export default function CniJobDetailPage() {
             {inviteError && (
               <div style={{ marginBottom: '10px', padding: '8px 12px', borderRadius: '8px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>{inviteError}</div>
             )}
+            {matchMeta && !matchMeta.distanceAvailable && (
+              <div style={{ marginBottom: '10px', fontSize: '11px', color: 'var(--text-muted)', background: 'var(--input-bg)', border: '1px dashed var(--border)', borderRadius: '8px', padding: '8px 10px' }}>
+                Ranked on service area, capability, availability and scorecard. Mileage needs the ZIP
+                centroid table loaded — until then nothing here claims a distance it can&apos;t compute.
+              </div>
+            )}
             {inviteCompanies.length === 0 ? (
               <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
                 No CNI companies available
+              </div>
+            ) : matches && matches.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {matches.map((m: any) => {
+                  const alreadyInvited = invitedIds.includes(m.companyId);
+                  const memberCount = inviteCompanies.find(c => c.id === m.companyId)?.memberCount ?? 0;
+                  const toneColor = (t: string) => t === 'good' ? 'var(--success)' : t === 'warn' ? '#f59e0b' : t === 'bad' ? '#ef4444' : 'var(--text-muted)';
+                  return (
+                    <div key={m.companyId} style={{
+                      padding: '11px 13px', borderRadius: '10px',
+                      background: alreadyInvited ? 'color-mix(in srgb, var(--success) 5%, var(--input-bg))' : 'var(--input-bg)',
+                      border: alreadyInvited ? '1px solid var(--success-border)' : '1px solid var(--border)',
+                      opacity: m.excluded ? 0.55 : 1,
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                            {m.companyName}
+                            {m.excluded && <span style={{ marginLeft: '6px', fontSize: '10px', fontWeight: 800, color: '#ef4444' }}>{m.excludedReason}</span>}
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                            {memberCount} installer{memberCount !== 1 ? 's' : ''}
+                          </div>
+                        </div>
+                        {alreadyInvited ? (
+                          <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--success)', whiteSpace: 'nowrap' }}>✓ Invited</span>
+                        ) : (
+                          <button
+                            onClick={() => sendInvite(m.companyId)}
+                            disabled={updating}
+                            style={{
+                              padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                              background: m.excluded ? 'var(--border)' : 'var(--orange)', color: '#fff', border: 'none', whiteSpace: 'nowrap',
+                            }}
+                          >Invite</button>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '6px' }}>
+                        {(m.chips || []).map((chip: any, i: number) => (
+                          <span key={i} style={{
+                            fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '999px',
+                            border: `1px solid ${toneColor(chip.tone)}44`, color: toneColor(chip.tone),
+                          }}>{chip.text}</span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
