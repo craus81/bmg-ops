@@ -43,8 +43,12 @@ export interface ApprovalShellCopy {
 }
 
 export interface ApprovalShellProps {
-  /** API path segment: GET/POST /api/approve/<kind>/<token>. */
-  kind: 'estimate' | 'quote' | 'proof';
+  /** API path segment: GET/POST /api/approve/<kind>/<token>.
+   *  'condition' (R6-10) is an acknowledgment rather than an approval —
+   *  accept means "this record is accurate", request-changes means "this
+   *  isn't right" — but the state machine and forensics are identical, so
+   *  it rides the same shell rather than growing a fourth copy. */
+  kind: 'estimate' | 'quote' | 'proof' | 'condition';
   /** Lowercase noun for the loading line ('Loading estimate...'). */
   noun: string;
   /** The sentence beside the checkbox, sent with the accept POST. Defaults
