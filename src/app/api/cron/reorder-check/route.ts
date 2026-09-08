@@ -6,6 +6,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
 import { loadReorderCandidates, computeReorderSuggestion, weeklyVelocity } from '@/lib/reorder';
 import { findLowStock, summarizeStock, type StockPolicy, type StockRoll } from '@/lib/roll-stock';
+import { buildCostHistory, computeDrift, staleCostWorklist, type Buy } from '@/lib/part-cost-book';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -160,6 +161,50 @@ export async function GET(req: NextRequest) {
     created.push(...materialCreated);
     bumped += materialBumped;
 
+    // ── Price drift (R6-7) ──────────────────────────────────────────────
+    // Catalog purchase_price ages silently while real costs move. Counted
+    // every night so system-health shows the number, but only ANNOUNCED on
+    // Mondays: a nightly "prices drifted" ping about a list that barely
+    // changes is exactly the notification people learn to ignore.
+    let driftMaterial = 0;
+    let driftMinor = 0;
+    try {
+      const [{ data: lines }, { data: parts }] = await Promise.all([
+        service.from('netsuite_vendor_po_lines')
+          .select('item_number, quantity, rate, po:netsuite_vendor_pos(vendor_name, trandate)')
+          .not('rate', 'is', null).gt('rate', 0),
+        service.from('netsuite_parts').select('item_number, purchase_price').eq('is_active', true),
+      ]);
+      const byItem = new Map<string, Buy[]>();
+      for (const l of lines || []) {
+        const key = String((l as any).item_number || '').trim().toUpperCase();
+        if (!key) continue;
+        const arr = byItem.get(key) || [];
+        arr.push({
+          itemNumber: key,
+          poTranid: null,
+          vendorName: (l as any).po?.vendor_name || null,
+          trandate: (l as any).po?.trandate || null,
+          quantity: Number((l as any).quantity) || 0,
+          rate: Number((l as any).rate) || 0,
+        });
+        byItem.set(key, arr);
+      }
+      const drifts = (parts || [])
+        .map((p: any) => {
+          const key = String(p.item_number || '').trim().toUpperCase();
+          const buys = byItem.get(key);
+          if (!buys) return null;
+          return computeDrift(buildCostHistory(key, buys), p.purchase_price != null ? Number(p.purchase_price) : null);
+        })
+        .filter(Boolean) as ReturnType<typeof computeDrift>[];
+      const worklist = staleCostWorklist(drifts);
+      driftMaterial = worklist.filter(d => d.severity === 'material').length;
+      driftMinor = worklist.filter(d => d.severity === 'minor').length;
+    } catch (e: any) {
+      console.error('price drift pass failed:', e?.message || e);
+    }
+
     // One digest to purchasing (admins) about NEW auto requests — top-ups
     // stay quiet, the queue shows them.
     let notified = 0;
@@ -188,6 +233,24 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Monday-only drift ping (see the counting note above).
+    if (driftMaterial > 0 && new Date().getUTCDay() === 1) {
+      const { data: staff } = await service
+        .from('profiles').select('id, role, roles, status, deactivated').eq('status', 'approved');
+      const adminIds = (staff || [])
+        .filter((p: any) => !p.deactivated && (p.roles?.length ? p.roles : [p.role]).some((r: string) => r === 'admin' || r === 'super_admin'))
+        .map((p: any) => p.id);
+      if (adminIds.length > 0) {
+        await notifyMany(adminIds, {
+          type: 'price_drift',
+          title: `💸 ${driftMaterial} catalog price${driftMaterial !== 1 ? 's' : ''} out of date`,
+          body: `What we actually pay has moved 15%+ from the catalog on ${driftMaterial} part${driftMaterial !== 1 ? 's' : ''}${driftMinor > 0 ? ` (plus ${driftMinor} smaller)` : ''}. Every margin built on those numbers is off.`,
+          url: '/admin/purchasing',
+          channels: ['in_app'],
+        });
+      }
+    }
+
     const syncStateWrite = await recordHeartbeat(service, 'reorder_check', {
       status: 'ok',
       managed: candidates.length,
@@ -197,6 +260,8 @@ export async function GET(req: NextRequest) {
       skipped_dismissed: skippedDismissed,
       material_created: materialCreated.length,
       material_bumped: materialBumped,
+      price_drift_material: driftMaterial,
+      price_drift_minor: driftMinor,
       notified,
     });
 

@@ -59,7 +59,7 @@ export default function PurchasingQueuePage() {
   const searchParams = useSearchParams();
   const dialog = useDialog();
 
-  const [tab, setTab] = useState<'requests' | 'demand'>(
+  const [tab, setTab] = useState<'requests' | 'demand' | 'metrics'>(
     searchParams.get('tab') === 'demand' ? 'demand' : 'requests',
   );
   const [requests, setRequests] = useState<RequestRow[]>([]);
@@ -73,6 +73,21 @@ export default function PurchasingQueuePage() {
   // late vs promise · 2 ETA slips" — so the scorecard is in front of the
   // buyer at the moment of ordering. Keyed by lowercased vendor name;
   // missing key = no history yet, no chip.
+  // R6-7: cycle-time KPIs and the stale-cost worklist. Loaded only when
+  // the tab is opened — neither is needed to work the queue.
+  const [kpis, setKpis] = useState<any | null>(null);
+  const [drift, setDrift] = useState<any | null>(null);
+  const [metricsLoading, setMetricsLoading] = useState(false);
+  useEffect(() => {
+    if (tab !== 'metrics' || kpis || metricsLoading) return;
+    setMetricsLoading(true);
+    Promise.all([
+      fetch('/api/reports/purchasing-kpis?days=180').then(r => r.json()).catch(() => null),
+      fetch('/api/parts/cost-history').then(r => r.json()).catch(() => null),
+    ]).then(([k, d]) => { setKpis(k); setDrift(d); }).finally(() => setMetricsLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one load per tab open
+  }, [tab]);
+
   const [vendorChips, setVendorChips] = useState<Record<string, string>>({});
   useEffect(() => {
     fetch('/api/reports/vendors?chips=1&days=90')
@@ -224,6 +239,7 @@ export default function PurchasingQueuePage() {
         {([
           ['requests', 'Request queue'],
           ['demand', 'Open-job demand'],
+          ['metrics', 'Cycle time & cost'],
         ] as const).map(([key, label]) => (
           <button
             key={key}
@@ -240,6 +256,82 @@ export default function PurchasingQueuePage() {
           </button>
         ))}
       </div>
+
+      {tab === 'metrics' && (
+        <div>
+          {metricsLoading && <div style={{ fontSize: '12px', color: theme.textMuted, padding: '14px 0' }}>Loading…</div>}
+
+          {kpis && !kpis.error && (
+            <>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                {[
+                  { label: 'Request → order', value: kpis.medianRequestToOrderDays != null ? `${kpis.medianRequestToOrderDays}d` : '—', sub: `${kpis.requestToOrderSamples} samples` },
+                  { label: 'Order → arrival', value: kpis.medianOrderToReceiptDays != null ? `${kpis.medianOrderToReceiptDays}d` : '—', sub: `${kpis.orderToReceiptSamples} samples` },
+                  { label: 'Needed-by hit rate', value: kpis.neededByHitRate != null ? `${Math.round(kpis.neededByHitRate * 100)}%` : '—', sub: `${kpis.neededBySamples} with a date` },
+                  { label: 'Cancelled', value: kpis.cancellationRate != null ? `${Math.round(kpis.cancellationRate * 100)}%` : '—', sub: `${kpis.cancelled} of ${kpis.requests}` },
+                  { label: 'Oldest open ask', value: `${kpis.oldestOpenDays}d`, sub: `${kpis.openAging.d30plus} over 30d` },
+                ].map(t => (
+                  <div key={t.label} style={{ flex: '1 1 130px', background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '11px', padding: '11px 13px' }}>
+                    <div style={{ fontSize: '19px', fontWeight: 800, color: 'var(--text-primary)' }}>{t.value}</div>
+                    <div style={{ fontSize: '10.5px', color: theme.textMuted, fontWeight: 600 }}>{t.label}</div>
+                    <div style={{ fontSize: '9.5px', color: theme.textMuted }}>{t.sub}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '16px' }}>
+                Medians over the last {kpis.days} days — a median, so one back-ordered part that took
+                ninety days doesn&apos;t redefine a normal week.
+              </div>
+
+              {kpis.byVendor?.length > 0 && (
+                <div style={{ marginBottom: '18px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '6px' }}>Slowest vendors to arrive</div>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    {kpis.byVendor.slice(0, 8).map((v: any) => (
+                      <span key={v.vendor} style={{ fontSize: '11px', padding: '4px 9px', borderRadius: '999px', background: 'var(--subtle-bg)', color: 'var(--text-body)' }}>
+                        {v.vendor}: <b>{v.medianOrderToReceiptDays ?? '—'}d</b> <span style={{ color: theme.textMuted }}>({v.ordered})</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {drift && !drift.error && (
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '2px' }}>
+                Catalog cost stale ({drift.totals?.material || 0} material)
+              </div>
+              <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '9px' }}>
+                What we actually pay, against the catalog&apos;s purchase price. Every margin built on a stale
+                number is off by the same amount.
+                {drift.totals?.noCatalogPrice > 0 && ` ${drift.totals.noCatalogPrice} bought part${drift.totals.noCatalogPrice !== 1 ? 's have' : ' has'} no catalog price at all.`}
+              </div>
+              {(drift.worklist || []).length === 0 ? (
+                <div style={{ fontSize: '12px', color: theme.textMuted, fontStyle: 'italic' }}>Nothing has drifted past the threshold.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                  {drift.worklist.slice(0, 25).map((d: any) => (
+                    <div key={d.itemNumber} style={{ display: 'flex', alignItems: 'center', gap: '9px', flexWrap: 'wrap', background: 'var(--subtle-bg)', borderRadius: '8px', padding: '7px 10px' }}>
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{d.itemNumber}</span>
+                      <span style={{ fontSize: '11px', color: theme.textMuted, flex: 1, minWidth: '120px' }}>{d.displayName || ''}</span>
+                      <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                        catalog ${Number(d.catalogPrice).toFixed(2)} → last paid ${Number(d.lastRate).toFixed(2)}
+                      </span>
+                      <span style={{
+                        fontSize: '11px', fontWeight: 800,
+                        color: d.severity === 'material' ? '#ef4444' : '#f59e0b',
+                      }}>{d.driftPct > 0 ? '+' : ''}{d.driftPct}%</span>
+                      {d.lastVendor && <span style={{ fontSize: '10px', color: theme.textMuted }}>{d.lastVendor}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {tab === 'demand' && (
         <>
