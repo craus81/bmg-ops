@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireRole } from '@/lib/api-auth';
 import { loadQuoteFacts, summarizeQuoteFacts, type QuoteFact } from '@/lib/sales-facts';
+import { loadLeadFunnel, loadOutcomeRows, loadLostReasons, summarizeOutcomes } from '@/lib/sales-outcomes';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 const service = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -35,8 +36,19 @@ export async function GET(req: NextRequest) {
   try {
     // Fact building lives in src/lib/sales-facts.ts (R4-4) — shared with
     // the CEO view's Sales band so the two can never disagree. Pagination
-    // (the R3-1 MAJOR sweep) rides inside it.
-    const facts: QuoteFact[] = await loadQuoteFacts(service, start, endNext);
+    // (the R3-1 MAJOR sweep) rides inside it. The R5-9 sections (funnel /
+    // outcomes / lost reasons) gather alongside and fail independently:
+    // a broken new tab must never take down the original report.
+    const [factsRes, funnelRes, outcomeRes, lostRes] = await Promise.allSettled([
+      loadQuoteFacts(service, start, endNext),
+      loadLeadFunnel(service, start, endNext),
+      loadOutcomeRows(service, start, endNext),
+      loadLostReasons(service, start, endNext),
+    ]);
+    if (factsRes.status === 'rejected') throw factsRes.reason;
+    const facts: QuoteFact[] = factsRes.value;
+    const sectionErr = (r: PromiseSettledResult<unknown>) =>
+      r.status === 'rejected' ? { error: String((r.reason as any)?.message || r.reason).slice(0, 300) } : null;
 
     // Per-rep rollup.
     const byRep = new Map<string, QuoteFact[]>();
@@ -46,28 +58,45 @@ export async function GET(req: NextRequest) {
       arr.push(f);
       byRep.set(key, arr);
     }
-    const repIds = [...byRep.keys()].filter(k => k !== 'unassigned');
+    const funnel = funnelRes.status === 'fulfilled' ? funnelRes.value : null;
+    const repIds = [...new Set([
+      ...[...byRep.keys()],
+      ...(funnel?.byRep.map(r => r.repId) || []),
+    ])].filter(k => k !== 'unassigned');
     const names = new Map<string, string>();
     if (repIds.length > 0) {
       const { data: reps } = await service.from('profiles').select('id, full_name').in('id', repIds);
       for (const r of reps || []) names.set(r.id, r.full_name);
     }
+    const repName = (id: string) => id === 'unassigned' ? 'Unassigned' : names.get(id) || 'Unknown';
 
     const summarize = summarizeQuoteFacts;
 
     const perRep = [...byRep.entries()]
       .map(([repId, rows]) => ({
         repId,
-        repName: repId === 'unassigned' ? 'Unassigned' : names.get(repId) || 'Unknown',
+        repName: repName(repId),
         ...summarize(rows),
       }))
       .sort((a, b) => b.sentValue - a.sentValue);
+
+    const outcomes = outcomeRes.status === 'fulfilled'
+      ? {
+        estimates: summarizeOutcomes(outcomeRes.value.estimates),
+        proofs: summarizeOutcomes(outcomeRes.value.proofs),
+      }
+      : sectionErr(outcomeRes);
 
     return NextResponse.json({
       range: { start, end },
       totals: summarize(facts),
       perRep,
       quotes: facts.sort((a, b) => (b.sentAt || '').localeCompare(a.sentAt || '')),
+      funnel: funnel
+        ? { ...funnel, byRep: funnel.byRep.map(r => ({ ...r, repName: repName(r.repId) })) }
+        : sectionErr(funnelRes),
+      outcomes,
+      lostReasons: lostRes.status === 'fulfilled' ? lostRes.value : sectionErr(lostRes),
     });
   } catch (e: any) {
     return NextResponse.json({ error: e.message || 'Report failed' }, { status: 500 });
