@@ -56,7 +56,7 @@ function statusColor(status: string): string {
   return 'var(--text-body)';
 }
 
-function renderResult(group: string, item: any, onSelect: (group: string, item: any) => void) {
+function renderResult(group: string, item: any, onSelect: (group: string, item: any) => void, onLogCall?: (item: any) => void) {
   // Tapping a result pops out the shared detail view instead of navigating away.
   const select = () => onSelect(group, item);
 
@@ -157,12 +157,25 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
 
     case 'customers':
       return (
-        <button key={item.id} onClick={select} style={resultBtnStyle}>
-          <span style={titleStyle}>{item.company_name}</span>
-          <div style={subtitleStyle}>
-            {[item.contact_name, item.email, item.phone].filter(Boolean).join(' · ')}
-          </div>
-        </button>
+        <div key={item.id} style={{ display: 'flex', alignItems: 'stretch', gap: '6px' }}>
+          <button onClick={select} style={{ ...resultBtnStyle, flex: 1 }}>
+            <span style={titleStyle}>{item.company_name}</span>
+            <div style={subtitleStyle}>
+              {[item.contact_name, item.email, item.phone].filter(Boolean).join(' · ')}
+            </div>
+          </button>
+          {onLogCall && (
+            <button
+              onClick={() => onLogCall(item)}
+              title="Log a call against this record without leaving the search"
+              style={{
+                flex: '0 0 auto', padding: '0 12px', borderRadius: '8px', cursor: 'pointer',
+                background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)',
+                color: '#60a5fa', fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap',
+              }}
+            >Log call</button>
+          )}
+        </div>
       );
 
     case 'messages':
@@ -240,6 +253,46 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
   const [totals, setTotals] = useState<Record<string, number>>({});
   const [searching, setSearching] = useState(false);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  // ── One-tap call logging (R6-3) ──────────────────────────────────────
+  // The search already answers "who is calling"; this answers "what was
+  // the call" in the same overlay, before the note evaporates.
+  const [callFor, setCallFor] = useState<any | null>(null);
+  const [callForm, setCallForm] = useState({ direction: 'inbound', summary: '', details: '', followUpDate: '' });
+  const [callBusy, setCallBusy] = useState(false);
+  const [callMsg, setCallMsg] = useState<string | null>(null);
+
+  const openLogCall = useCallback((item: any) => {
+    setCallFor(item);
+    setCallForm({ direction: 'inbound', summary: '', details: '', followUpDate: '' });
+    setCallMsg(null);
+  }, []);
+
+  const submitCall = async () => {
+    if (!callFor || callBusy || !callForm.summary.trim()) return;
+    setCallBusy(true);
+    setCallMsg(null);
+    try {
+      const res = await fetch('/api/prospects/log-call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prospectId: callFor.id,
+          direction: callForm.direction,
+          summary: callForm.summary.trim(),
+          details: callForm.details.trim() || undefined,
+          followUpDate: callForm.followUpDate || undefined,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) { setCallMsg(body?.error || 'Could not log the call.'); return; }
+      setCallMsg('saved');
+    } catch (e: any) {
+      setCallMsg(e?.message || 'Could not log the call.');
+    } finally {
+      setCallBusy(false);
+    }
+  };
 
   // Tapping a result closes the search and goes straight to the record's own
   // page. It used to stop at the shared popout preview first — a few fields
@@ -409,12 +462,104 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
                 </div>
 
                 {/* Group results */}
-                {items.map((item: any) => renderResult(group, item, openDetail))}
+                {items.map((item: any) => renderResult(group, item, openDetail, group === 'customers' ? openLogCall : undefined))}
               </div>
             );
           })}
         </div>
       </div>
+
+      {/* Log-call sheet (R6-3) — sits over the overlay so the number you
+          just found is still on screen while you write what the call was. */}
+      {callFor && (
+        <div
+          onClick={() => setCallFor(null)}
+          style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
+        >
+          <div onClick={e => e.stopPropagation()} style={{
+            background: 'var(--card)', borderRadius: '14px', padding: '18px', width: '100%', maxWidth: '420px',
+            maxHeight: 'calc(88vh / var(--ts))', overflowY: 'auto', boxShadow: '0 8px 30px rgba(0,0,0,0.3)',
+          }}>
+            <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Log a call</div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+              {callFor.company_name}{callFor.phone ? ` · ${callFor.phone}` : ''}
+            </div>
+
+            {callMsg === 'saved' ? (
+              <>
+                <div style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.35)', color: '#22c55e', borderRadius: '8px', padding: '10px 12px', fontSize: '12.5px', fontWeight: 700, marginBottom: '12px' }}>
+                  ✓ Logged to the timeline{callForm.followUpDate ? ` · follow-up set for ${callForm.followUpDate}` : ''}.
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    onClick={() => { const item = callFor; setCallFor(null); openDetail('customers', item); }}
+                    style={{ flex: 1, padding: '10px', borderRadius: '9px', fontSize: '13px', fontWeight: 800, background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer' }}
+                  >Open record</button>
+                  <button onClick={() => setCallFor(null)}
+                    style={{ padding: '10px 14px', borderRadius: '9px', fontSize: '13px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', cursor: 'pointer' }}
+                  >Done</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+                  {(['inbound', 'outbound'] as const).map(d => (
+                    <button key={d} onClick={() => setCallForm(f => ({ ...f, direction: d }))} style={{
+                      flex: 1, padding: '7px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                      background: callForm.direction === d ? 'rgba(59,130,246,0.12)' : 'transparent',
+                      border: `1px solid ${callForm.direction === d ? 'rgba(59,130,246,0.4)' : 'var(--border)'}`,
+                      color: callForm.direction === d ? '#60a5fa' : 'var(--text-muted)',
+                    }}>{d === 'inbound' ? 'They called' : 'We called'}</button>
+                  ))}
+                </div>
+                <input
+                  autoFocus
+                  value={callForm.summary}
+                  onChange={e => setCallForm(f => ({ ...f, summary: e.target.value }))}
+                  onKeyDown={e => { if (e.key === 'Enter' && callForm.summary.trim()) submitCall(); }}
+                  placeholder="One line — what was it about?"
+                  maxLength={300}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '10px', borderRadius: '9px', fontSize: '13px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', marginBottom: '8px' }}
+                />
+                <textarea
+                  value={callForm.details}
+                  onChange={e => setCallForm(f => ({ ...f, details: e.target.value }))}
+                  placeholder="Details (optional)"
+                  rows={3}
+                  maxLength={2000}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '10px', borderRadius: '9px', fontSize: '13px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', resize: 'vertical', fontFamily: 'inherit', marginBottom: '8px' }}
+                />
+                <div style={{ marginBottom: '12px' }}>
+                  <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Follow up on (optional)</div>
+                  <input
+                    type="date"
+                    value={callForm.followUpDate}
+                    onChange={e => setCallForm(f => ({ ...f, followUpDate: e.target.value }))}
+                    style={{ padding: '9px 10px', borderRadius: '9px', fontSize: '13px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }}
+                  />
+                </div>
+                {callMsg && <div style={{ fontSize: '12px', color: '#ef4444', marginBottom: '10px' }}>{callMsg}</div>}
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={() => setCallFor(null)}
+                    style={{ padding: '10px 14px', borderRadius: '9px', fontSize: '13px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', cursor: 'pointer' }}
+                  >Cancel</button>
+                  <button
+                    onClick={submitCall}
+                    disabled={callBusy || !callForm.summary.trim()}
+                    style={{
+                      flex: 1, padding: '10px', borderRadius: '9px', fontSize: '13px', fontWeight: 800, border: 'none',
+                      background: callBusy || !callForm.summary.trim() ? 'var(--border)' : '#22c55e',
+                      color: callBusy || !callForm.summary.trim() ? 'var(--text-muted)' : '#fff',
+                      cursor: callBusy || !callForm.summary.trim() ? 'default' : 'pointer',
+                    }}
+                  >{callBusy ? 'Saving…' : 'Log call'}</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

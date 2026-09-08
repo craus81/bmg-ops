@@ -360,6 +360,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // print are the people standing at the printer, so reads and receiving
   // are staff-wide; only the reorder POINT (which makes the nightly sweep
   // spend money) is admin.
+  'src/app/api/prospects/log-call/route.ts': staff(),
   'src/app/api/materials/rolls/route.ts': staff(),
   'src/app/api/materials/rolls/draw/route.ts': staff(),
   'src/app/api/materials/stock-settings/route.ts': { kind: 'admin', contains: ['requireAdmin(', 'requireStaff('] },
@@ -400,6 +401,10 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/vendor-invoices/sync-paid/route.ts': role(),
   'src/app/api/vendor-invoices/workflow/route.ts': role(),
   'src/app/api/webhooks/resend/route.ts': webhook('Resend delivery events; svix HMAC verified', 'verifySvixSignature'),
+  // Dialpad Event Subscriptions (R6-3): deliveries are HS256 JWTs signed
+  // with the shared secret set on the subscription, verified fail-closed —
+  // no secret configured means reject, since this route writes CRM rows.
+  'src/app/api/webhooks/dialpad/route.ts': webhook('Dialpad signs every delivery as an HS256 JWT with the subscription secret; an unverifiable payload is rejected before any write', 'verifyDialpadJwt('),
   'src/app/api/wrap-quote/[id]/pdf/route.ts': staff(),
   'src/app/api/wrap-quote/create-customer/route.ts': staff(),
   'src/app/api/wrap-quote/netsuite/route.ts': staff(),
