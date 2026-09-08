@@ -9,6 +9,10 @@ interface ReportLink {
   blurb: string;
   href: string;
   source: 'NetSuite' | 'FleetSuite';
+  /** Who the destination page actually admits. Omit for anyone who can
+   *  reach this index. Listing a report someone will be bounced out of is a
+   *  dead click, so the card is hidden instead of explaining itself. */
+  visibility?: 'admin' | 'financials';
 }
 
 const REPORTS: ReportLink[] = [
@@ -31,6 +35,13 @@ const REPORTS: ReportLink[] = [
     source: 'FleetSuite',
   },
   {
+    title: 'Cash Outlook (4 weeks)',
+    blurb: 'Week by week: collections placed at the date each customer ACTUALLY pays (falling back to stated terms), minus vendor bills, approved payouts and a payroll run-rate, over the real bank balance. Everything it can\u2019t see \u2014 late money, undateable invoices, missing payroll \u2014 is named rather than folded in.',
+    href: '/admin/reports/cash-outlook',
+    source: 'NetSuite',
+    visibility: 'financials',
+  },
+  {
     title: 'Cycle Time \u0026 Throughput',
     blurb: 'One report across vehicles, graphics and CNI: median and p90 dwell per stage, the bottleneck (only once enough cycles have run through it), turnaround trended by month, rework counted from backward transitions with the reasons typed on them, plus per-person completions and arrival-forecast accuracy.',
     href: '/admin/reports/throughput',
@@ -41,12 +52,14 @@ const REPORTS: ReportLink[] = [
     blurb: 'One page per accounting month: is everything finished in the month billed, is the AP/payout pipeline drained, did a money email bounce and never get fixed, and have the NetSuite-side checks been signed off. A check the app could not run says \u201cnot checked\u201d \u2014 never \u201cclear.\u201d',
     href: '/admin/reports/month-close',
     source: 'FleetSuite',
+    visibility: 'admin',
   },
   {
     title: 'Never-Invoiced Recovery',
     blurb: 'Every completed or shipped vehicle with no invoice anywhere \u2014 oldest first, bucketed by what each needs: a linked sales order to bill, an estimate someone has to convert, or no paperwork at all. The queue behind the dashboard tile.',
     href: '/admin/reports/never-invoiced',
     source: 'FleetSuite',
+    visibility: 'admin',
   },
   {
     title: 'Open Order Book',
@@ -104,9 +117,10 @@ const REPORTS: ReportLink[] = [
   },
   {
     title: 'Invoice Reconciliation',
-    blurb: 'NetSuite invoices for a period vs the FleetSuite records claiming them — amount mismatches, invoices with no FleetSuite record, and FleetSuite records pointing at invoices NetSuite doesn\'t have. CSV export. Admin only.',
+    blurb: 'NetSuite invoices for a period vs the FleetSuite records claiming them — amount mismatches, invoices with no FleetSuite record, and FleetSuite records pointing at invoices NetSuite doesn\'t have. CSV export.',
     href: '/admin/reports/invoice-reconciliation',
     source: 'NetSuite',
+    visibility: 'admin',
   },
   {
     title: 'At-Risk Accounts',
@@ -124,7 +138,7 @@ const REPORTS: ReportLink[] = [
 
 export default function ReportsIndexPage() {
   const router = useRouter();
-  const { user, isAdmin, isSales, hasFeature } = useAuth();
+  const { user, isAdmin, isSales, hasRole, hasFeature } = useAuth();
 
   useEffect(() => {
     if (!user) return;
@@ -143,7 +157,11 @@ export default function ReportsIndexPage() {
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-        {REPORTS.map(r => (
+        {REPORTS.filter(r =>
+          !r.visibility
+          || (r.visibility === 'admin' && (isAdmin || hasRole('executive')))
+          || (r.visibility === 'financials' && hasFeature('financials'))
+        ).map(r => (
           <button
             key={r.href}
             onClick={() => router.push(r.href)}
