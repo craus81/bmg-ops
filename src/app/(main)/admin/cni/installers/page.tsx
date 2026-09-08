@@ -31,6 +31,17 @@ export default function CniInstallersPage() {
   const supabase = createClient();
   const [installers, setInstallers] = useState<CniInstaller[]>([]);
   const [loading, setLoading] = useState(true);
+  // R5-12: computed 90-day scorecards by user_id — replaces the hand-typed
+  // jobs_completed counter (nothing increments it) as the roster's number.
+  const [scorecards, setScorecards] = useState<Record<string, { jobsCompleted: number; onTimeRate: number | null; photoFirstPassRate: number | null; vehiclesCompleted: number; prev: { jobsCompleted: number } }>>({});
+  useEffect(() => {
+    if (authLoading || !hasFeature('cni_admin')) return;
+    fetch('/api/cni/scorecards')
+      .then(r => r.ok ? r.json() : null)
+      .then(body => { if (body?.installers) setScorecards(body.installers); })
+      .catch(() => { /* roster renders without chips */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- once after auth
+  }, [authLoading]);
   const [search, setSearch] = useState('');
   const [availFilter, setAvailFilter] = useState('all');
   const [capFilter, setCapFilter] = useState('all');
@@ -393,8 +404,23 @@ export default function CniInstallersPage() {
                   )}
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: '10px', marginTop: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                <span>{inst.jobs_completed} jobs</span>
+              <div style={{ display: 'flex', gap: '10px', marginTop: '8px', fontSize: '11px', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+                {(() => {
+                  const s = scorecards[inst.user_id];
+                  if (!s) {
+                    // Computed history not loaded (or none) — the stale
+                    // hand counter is all we have; say which it is.
+                    return <span title="Hand-typed counter (no computed history)">{inst.jobs_completed} jobs</span>;
+                  }
+                  return (
+                    <span title={`Computed from job history, last 90 days (prior 90: ${s.prev.jobsCompleted}). The old hand-typed counter says ${inst.jobs_completed}.`}
+                      style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>
+                      {s.jobsCompleted} job{s.jobsCompleted !== 1 ? 's' : ''} · {s.vehiclesCompleted} veh (90d)
+                      {s.onTimeRate != null ? ` · ${s.onTimeRate}% on time` : ''}
+                      {s.photoFirstPassRate != null ? ` · ${s.photoFirstPassRate}% photo pass` : ''}
+                    </span>
+                  );
+                })()}
                 {inst.service_types.length > 0 && (
                   <span>{inst.service_types.map(s => s.replace('_', ' ')).join(', ')}</span>
                 )}

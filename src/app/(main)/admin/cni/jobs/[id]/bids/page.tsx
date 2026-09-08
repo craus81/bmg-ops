@@ -51,6 +51,38 @@ export default function BidReviewPage() {
   const [loading, setLoading] = useState(true);
   const [assigning, setAssigning] = useState(false);
   const [tab, setTab] = useState<'interested' | 'declined'>('interested');
+  // R5-12: computed 90-day scorecards so accept decisions run on real
+  // history, not the hand-typed dropdowns (which stay as override notes).
+  interface Card { jobsCompleted: number; onTimeRate: number | null; photoFirstPassRate: number | null; medianResponseHours: number | null; declineRate: number | null; vehiclesCompleted: number; prev: { jobsCompleted: number; onTimeRate: number | null } }
+  const [scorecards, setScorecards] = useState<{ companies: Record<string, Card>; installers: Record<string, Card> }>({ companies: {}, installers: {} });
+  useEffect(() => {
+    if (authLoading || !hasFeature('cni_admin')) return;
+    fetch('/api/cni/scorecards')
+      .then(r => r.ok ? r.json() : null)
+      .then(body => { if (body?.companies) setScorecards({ companies: body.companies, installers: body.installers || {} }); })
+      .catch(() => { /* the page works without chips */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- once after auth
+  }, [authLoading]);
+
+  const scoreLine = (card: Card | undefined) => {
+    if (!card) return null;
+    const parts: string[] = [];
+    if (card.jobsCompleted > 0) parts.push(`${card.jobsCompleted} job${card.jobsCompleted !== 1 ? 's' : ''}`);
+    if (card.vehiclesCompleted > 0) parts.push(`${card.vehiclesCompleted} veh`);
+    if (card.onTimeRate != null) parts.push(`${card.onTimeRate}% on time`);
+    if (card.photoFirstPassRate != null) parts.push(`${card.photoFirstPassRate}% photo first-pass`);
+    if (card.medianResponseHours != null) parts.push(`~${card.medianResponseHours}h response`);
+    if (parts.length === 0) return null;
+    const trend = card.prev.jobsCompleted > 0 || card.jobsCompleted > 0
+      ? ` (prior 90d: ${card.prev.jobsCompleted} job${card.prev.jobsCompleted !== 1 ? 's' : ''}${card.prev.onTimeRate != null ? `, ${card.prev.onTimeRate}% on time` : ''})`
+      : '';
+    return (
+      <div title={`Computed from job history — last 90 days${trend}`}
+        style={{ fontSize: '11px', fontWeight: 700, color: 'var(--success)', marginTop: '4px' }}>
+        ⚡ {parts.join(' · ')} <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>90d</span>
+      </div>
+    );
+  };
 
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
@@ -311,6 +343,9 @@ export default function BidReviewPage() {
                         : (legacyBid?.company_name || 'Legacy bid (no company)') +
                           (legacyBid?.business_address?.city ? ` • ${legacyBid.business_address.city}, ${legacyBid.business_address.state || ''}` : '')}
                     </div>
+                    {scoreLine(group.company_id
+                      ? scorecards.companies[group.company_id]
+                      : legacyBid ? scorecards.installers[legacyBid.installer_id] : undefined)}
                   </div>
                   {!group.company_id && legacyBid && (
                     <div style={{ display: 'flex', gap: '4px' }}>
