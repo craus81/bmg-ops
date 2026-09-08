@@ -14,6 +14,7 @@ import { openOrCreateVehicleThread } from '@/lib/customer-thread';
 import { deepLinks } from '@/lib/deep-links';
 import { hoursNote, summarizeTaskHours } from '@/lib/so-line-tasks';
 import { storage, storageDownloadUrl } from '@/lib/storage';
+import ConditionReportCard from '@/components/ConditionReportCard';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 
 interface VehicleData {
@@ -729,6 +730,10 @@ export default function VehiclePickListPage() {
           {vehicle.qc_completed_at && ` · ${new Date(vehicle.qc_completed_at).toLocaleString()}`}
         </div>
       )}
+
+      {/* R6-10: what the vehicle looked like when it arrived, and the
+          customer's acknowledgment of it. */}
+      {vehicle?.id && <ConditionReportCard checkinId={vehicle.id} />}
 
       {/* R6-10: the parts this order actually calls for. The QC checklist
           below says how to work and what to verify; this says WHAT to
