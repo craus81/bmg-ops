@@ -31,7 +31,11 @@ interface InboundFields {
   customer_name: string | null;
   work_summary: string | null;
   install_location: string | null;
-  expected_date: string | null;
+  // Optional so a source that doesn't OWN the date can omit it: sales_order
+  // rows get their expected_date from customer drop-off booking (R5-17),
+  // and the SO resync must not null it back out — JSON.stringify drops
+  // undefined keys before the upsert, so an omitted key is never written.
+  expected_date?: string | null;
   need_back_date: string | null;
   // Written by sources that know them (sales_order rows; upfit rows carry
   // the SO pair since the Stage 7 close) — omitted (and so never written)
@@ -126,9 +130,10 @@ export async function syncShopInboundForSalesOrder(
   if (!est) return;
 
   // A vehicle is expected once the estimate becomes a Sales Order and hasn't
-  // been cancelled/lost. Estimates carry no drop-off date, so there's no
-  // expected_date — the row lands under "Further Out / No Date" until a date
-  // is known. Keyed on the estimate UUID (see migration 185).
+  // been cancelled/lost. Estimates carry no drop-off date, so expected_date
+  // is OMITTED (not nulled): a fresh row lands under "Further Out / No
+  // Date", and a date later booked by the customer (R5-17 /book) survives
+  // every resync. Keyed on the estimate UUID (see migration 185).
   const qualifies =
     !!est.netsuite_so_id && !['cancelled', 'rejected', 'lost'].includes(est.status);
 
@@ -140,7 +145,6 @@ export async function syncShopInboundForSalesOrder(
     customer_name: est.customer_name || null,
     work_summary: est.netsuite_so_number ? `Sales Order #${est.netsuite_so_number}` : 'Sales Order',
     install_location: SHOP_INSTALL_LOCATION,
-    expected_date: null,
     need_back_date: null,
     netsuite_so_id: est.netsuite_so_id || null,
     netsuite_so_number: est.netsuite_so_number || null,

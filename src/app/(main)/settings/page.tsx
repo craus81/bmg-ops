@@ -196,6 +196,45 @@ export default function SettingsPage() {
     }
   };
 
+  // Customer booking hours/slots (R5-17) — plain-admin ops config for the
+  // public pickup/drop-off pages. Whole-object load/save via
+  // /api/admin/booking-settings.
+  const [bookingCfg, setBookingCfg] = useState<any | null>(null);
+  const [bookingBusy, setBookingBusy] = useState(false);
+  const [bookingSaved, setBookingSaved] = useState(false);
+  const [bookingError, setBookingError] = useState('');
+  const [blockDraft, setBlockDraft] = useState('');
+  useEffect(() => {
+    if (!isAdmin) return;
+    apiFetch('/api/admin/booking-settings')
+      .then(r => r.json())
+      .then(d => { if (d && !d.error) setBookingCfg(d); })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per admin session
+  }, [isAdmin]);
+
+  const handleSaveBooking = async () => {
+    if (!bookingCfg) return;
+    setBookingBusy(true);
+    setBookingError('');
+    try {
+      const res = await apiFetch('/api/admin/booking-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bookingCfg),
+      });
+      const data = await res.json();
+      if (!res.ok) { setBookingError(data?.error || 'Could not save booking settings.'); return; }
+      setBookingCfg(data);
+      setBookingSaved(true);
+      setTimeout(() => setBookingSaved(false), 2500);
+    } catch (e: any) {
+      setBookingError(e?.message || 'Could not save booking settings.');
+    } finally {
+      setBookingBusy(false);
+    }
+  };
+
   const handleSaveTax = async () => {
     setTaxSaving(true);
     setTaxError('');
@@ -786,6 +825,126 @@ export default function SettingsPage() {
             </div>
             {capError && (
               <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{capError}</div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Customer booking (R5-17) — admin ops config for the public
+          pickup/drop-off pages, not owner-only like the money settings. */}
+      {isAdmin && bookingCfg && (
+        <>
+          <div style={{ fontSize: '16px', fontWeight: 800, marginBottom: '10px', marginTop: '20px' }}>Customer Booking</div>
+          <div style={sectionStyle}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>Pickup &amp; Drop-off Slots</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
+              The completion email and estimate-approval page link customers to a booking page.
+              These hours define its open slots; block a date for holidays or short crews.
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', cursor: 'pointer' }}>
+              <input type="checkbox" checked={bookingCfg.enabled !== false}
+                onChange={e => setBookingCfg({ ...bookingCfg, enabled: e.target.checked })}
+                style={{ width: '16px', height: '16px' }} />
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>Online booking enabled</span>
+            </label>
+            <div style={labelStyle}>Booking days</div>
+            <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', flexWrap: 'wrap' }}>
+              {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d, i) => {
+                const iso = i + 1;
+                const on = (bookingCfg.businessDays || []).includes(iso);
+                return (
+                  <button key={d} onClick={() => setBookingCfg({
+                    ...bookingCfg,
+                    businessDays: on
+                      ? (bookingCfg.businessDays || []).filter((n: number) => n !== iso)
+                      : [...(bookingCfg.businessDays || []), iso].sort(),
+                  })} style={{
+                    padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                    background: on ? 'rgba(59,130,246,0.12)' : 'transparent',
+                    border: `1px solid ${on ? 'rgba(59,130,246,0.4)' : 'var(--border-color)'}`,
+                    color: on ? '#60a5fa' : 'var(--text-label)',
+                  }}>{d}</button>
+                );
+              })}
+            </div>
+            <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', marginBottom: '12px' }}>
+              <div>
+                <div style={labelStyle}>First slot (hour)</div>
+                <input type="number" min={0} max={23} value={bookingCfg.startHour}
+                  onChange={e => setBookingCfg({ ...bookingCfg, startHour: parseInt(e.target.value || '8', 10) })}
+                  style={{ ...inputStyle, width: '80px' }} />
+              </div>
+              <div>
+                <div style={labelStyle}>Last hour (exclusive)</div>
+                <input type="number" min={1} max={24} value={bookingCfg.endHour}
+                  onChange={e => setBookingCfg({ ...bookingCfg, endHour: parseInt(e.target.value || '16', 10) })}
+                  style={{ ...inputStyle, width: '80px' }} />
+              </div>
+              <div>
+                <div style={labelStyle}>Slot length</div>
+                <select value={bookingCfg.slotMinutes}
+                  onChange={e => setBookingCfg({ ...bookingCfg, slotMinutes: parseInt(e.target.value, 10) })}
+                  style={{ ...inputStyle, width: '110px' }}>
+                  <option value={30}>30 min</option>
+                  <option value={60}>1 hour</option>
+                  <option value={90}>90 min</option>
+                  <option value={120}>2 hours</option>
+                </select>
+              </div>
+              <div>
+                <div style={labelStyle}>Max / day</div>
+                <input type="number" min={1} max={50} value={bookingCfg.maxPerDay}
+                  onChange={e => setBookingCfg({ ...bookingCfg, maxPerDay: parseInt(e.target.value || '6', 10) })}
+                  style={{ ...inputStyle, width: '80px' }} />
+              </div>
+              <div>
+                <div style={labelStyle}>Lead days</div>
+                <input type="number" min={0} max={30} value={bookingCfg.leadDays}
+                  onChange={e => setBookingCfg({ ...bookingCfg, leadDays: parseInt(e.target.value || '1', 10) })}
+                  style={{ ...inputStyle, width: '80px' }} />
+              </div>
+              <div>
+                <div style={labelStyle}>Horizon (days)</div>
+                <input type="number" min={7} max={60} value={bookingCfg.horizonDays}
+                  onChange={e => setBookingCfg({ ...bookingCfg, horizonDays: parseInt(e.target.value || '21', 10) })}
+                  style={{ ...inputStyle, width: '80px' }} />
+              </div>
+            </div>
+            <div style={labelStyle}>Blocked dates</div>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px' }}>
+              {(bookingCfg.blockedDates || []).map((d: string) => (
+                <span key={d} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}>
+                  {d}
+                  <button onClick={() => setBookingCfg({ ...bookingCfg, blockedDates: (bookingCfg.blockedDates || []).filter((x: string) => x !== d) })}
+                    style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '11px', padding: 0, fontWeight: 700 }}>✕</button>
+                </span>
+              ))}
+              <input type="date" value={blockDraft} onChange={e => setBlockDraft(e.target.value)} style={{ ...inputStyle, width: '150px' }} />
+              <button
+                onClick={() => {
+                  if (blockDraft && !(bookingCfg.blockedDates || []).includes(blockDraft)) {
+                    setBookingCfg({ ...bookingCfg, blockedDates: [...(bookingCfg.blockedDates || []), blockDraft].sort() });
+                  }
+                  setBlockDraft('');
+                }}
+                disabled={!blockDraft}
+                style={{ padding: '8px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border-color)', color: 'var(--text-body)', cursor: blockDraft ? 'pointer' : 'default', opacity: blockDraft ? 1 : 0.5 }}
+              >Block date</button>
+            </div>
+            <button
+              onClick={handleSaveBooking}
+              disabled={bookingBusy}
+              style={{
+                padding: '8px 16px', borderRadius: '8px', border: 'none',
+                background: bookingSaved ? '#22c55e' : '#3b82f6', color: '#fff',
+                fontSize: '12px', fontWeight: 800,
+                cursor: bookingBusy ? 'default' : 'pointer', opacity: bookingBusy ? 0.5 : 1,
+              }}
+            >
+              {bookingBusy ? 'Saving...' : bookingSaved ? 'Saved!' : 'Save Booking Settings'}
+            </button>
+            {bookingError && (
+              <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{bookingError}</div>
             )}
           </div>
         </>

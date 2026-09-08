@@ -80,6 +80,10 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // GL account every labor dollar posts to.
   'src/app/api/admin/labor-item/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   'src/app/api/admin/link-customer/route.ts': admin(),
+  // Booking hours/slots/blocked days (R5-17): day-to-day ops config, so
+  // plain admin on both verbs (unlike the financial settings' super-admin
+  // writes).
+  'src/app/api/admin/booking-settings/route.ts': admin(),
   // Blended shop labor cost rate (R3-21 job costing): reading is admin
   // (cost data); writing is super-admin — it moves every reported margin.
   'src/app/api/admin/shop-labor-rate/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
@@ -105,6 +109,10 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/portal/[token]/invoice-pdf/route.ts': token('token-guarded invoice-PDF stream; the id must belong to the token customer\'s open set before any fetch', 'resolvePortalCustomer('),
   'src/app/api/portal/[token]/statement/route.ts': token('portal statement download/email; recipients locked to the customer\'s own record, never free input', 'resolvePortalCustomer('),
   'src/app/api/approve/quote/[token]/route.ts': token('customer wrap-quote approval via the emailed magic link; token + expiry enforced', '\'approval_token\''),
+  // R5-17: pickup/drop-off booking. The token IS the credential (a
+  // check-in's portal token or an approved estimate's approval token);
+  // rate-limited both verbs, slot race settled by a partial unique index.
+  'src/app/api/book/[token]/route.ts': token('customer pickup/drop-off booking via the completion-email or approval-page link; token resolved + state-gated before any write', 'resolveBookingToken('),
   'src/app/api/auth/google/callback/route.ts': staff(),
   'src/app/api/auth/google/route.ts': staff(),
   'src/app/api/auth/signup/route.ts': pub('account creation; new profiles land status=pending and every guard rejects them until an admin approves'),

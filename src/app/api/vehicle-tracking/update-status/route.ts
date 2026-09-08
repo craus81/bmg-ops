@@ -50,7 +50,7 @@ export async function POST(request: Request) {
     const [vehicleResult, profileResult] = await Promise.all([
       serviceSupabase
         .from('fleet_checkins')
-        .select('id, status, vin, customer_name, vehicle_year, vehicle_make, vehicle_model, assigned_to, matched_graphics_job_id, graphics_install_status, qc_completed_at')
+        .select('id, status, vin, customer_name, vehicle_year, vehicle_make, vehicle_model, assigned_to, matched_graphics_job_id, graphics_install_status, qc_completed_at, customer_portal_token')
         .eq('id', vehicleId)
         .single(),
       serviceSupabase.from('profiles').select('id, full_name, role, roles').eq('id', user.id).single(),
@@ -301,19 +301,25 @@ async function notifyCompletion(vehicle: any, actorName: string, actorEmail: str
   const { notifyCustomerByName } = await import('@/lib/customer-notify');
   const { buildNotificationEmail } = await import('@/lib/resend');
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
-  // Customer CTA: the portal dashboard is the only in-app page a customer
-  // login can open — the internal pick-list job card bounces customers to
-  // /home (and non-logins to the login wall), a guaranteed dead click.
-  const portalUrl = `${appUrl}${deepLinks.customerPortal()}`;
-  const emailBody = `The install for your ${vehicleLabel} (VIN ending ${vehicle.vin?.slice(-8)}) is complete. Please contact us to arrange pickup.`;
+  // Customer CTA (R5-17): the tokenized booking page — the customer picks
+  // a pickup slot instead of playing phone tag ("contact us to arrange
+  // pickup" was the whole flow). Every check-in has a portal token
+  // (auto-minted since migration 001); fall back to the portal dashboard
+  // only if a legacy row somehow lacks one — never a dead click.
+  const bookUrl = vehicle.customer_portal_token
+    ? `${appUrl}/book/${vehicle.customer_portal_token}`
+    : `${appUrl}${deepLinks.customerPortal()}`;
+  const emailBody = vehicle.customer_portal_token
+    ? `The install for your ${vehicleLabel} (VIN ending ${vehicle.vin?.slice(-8)}) is complete. Book a pickup time online — or reply to this email if another arrangement works better.`
+    : `The install for your ${vehicleLabel} (VIN ending ${vehicle.vin?.slice(-8)}) is complete. Please contact us to arrange pickup.`;
   await notifyCustomerByName(serviceSupabase, vehicle.customer_name, {
     contextEntityType: 'fleet_checkin',
     contextEntityId: vehicle.id,
     threadSubject: `${vehicleLabel} ready for pickup`,
     emailSubject: `[BMG Fleet] Your vehicle is ready — ${vehicleLabel}`,
-    emailHtml: buildNotificationEmail(`Your vehicle is ready — ${vehicleLabel}`, emailBody, portalUrl, 'View order status'),
+    emailHtml: buildNotificationEmail(`Your vehicle is ready — ${vehicleLabel}`, emailBody, bookUrl, vehicle.customer_portal_token ? 'Book your pickup time' : 'View order status'),
     messageBody: emailBody,
-    smsBody: `[BMG Fleet] Your ${vehicleLabel} is ready for pickup. VIN ending ${vehicle.vin?.slice(-8)}.`,
+    smsBody: `[BMG Fleet] Your ${vehicleLabel} is ready for pickup. Book a time: ${bookUrl}`,
     replyTo: actorEmail,
   });
 }

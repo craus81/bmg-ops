@@ -21,7 +21,7 @@ interface CalendarEvent {
   subtitle?: string;
   date: string; // YYYY-MM-DD
   time?: string;
-  type: 'graphics' | 'upfit' | 'cni' | 'reminder' | 'manual' | 'google';
+  type: 'graphics' | 'upfit' | 'cni' | 'reminder' | 'manual' | 'google' | 'pickup';
   color: string;
   status?: string;
   linkTo?: string;
@@ -38,6 +38,7 @@ const TYPE_COLORS: Record<string, string> = {
   reminder: '#fbbf24',
   manual: '#f472b6',
   google: '#2dd4bf',
+  pickup: '#38bdf8',
 };
 
 /** "14:30" / "14:30:00" → "2:30 PM". Passes through anything unparseable. */
@@ -55,6 +56,7 @@ const TYPE_LABELS: Record<string, string> = {
   reminder: 'Sales',
   manual: 'Event',
   google: 'Google',
+  pickup: 'Pickup',
 };
 
 export default function SchedulePage() {
@@ -165,6 +167,25 @@ export default function SchedulePage() {
         title: [u.vehicle_year, u.vehicle_make, u.vehicle_model].filter(Boolean).join(' ') || u.vin,
         subtitle: u.customer_name, date: u.scheduled_upfit_date.split('T')[0],
         type: 'upfit', color: TYPE_COLORS.upfit, status: u.status, linkTo: `/tracking?vehicle=${u.id}`,
+      }));
+    }
+
+    // 2b. Customer-booked pickups (R5-17 shop_appointments mirror on the
+    // check-in) — same audience as upfit dates.
+    if (isAdmin || profile?.role === 'shop_tech') {
+      const { data: pickups } = await supabase
+        .from('fleet_checkins')
+        .select('id, vin, vehicle_year, vehicle_make, vehicle_model, customer_name, pickup_scheduled_date, pickup_scheduled_time')
+        .is('archived_at', null)
+        .neq('status', 'shipped')
+        .gte('pickup_scheduled_date', startDate)
+        .lte('pickup_scheduled_date', endDate);
+      (pickups || []).forEach((p: any) => allEvents.push({
+        id: `pk-${p.id}`,
+        title: `Pickup: ${[p.vehicle_year, p.vehicle_make, p.vehicle_model].filter(Boolean).join(' ') || p.vin}`,
+        subtitle: p.customer_name, date: p.pickup_scheduled_date,
+        time: p.pickup_scheduled_time || undefined,
+        type: 'pickup', color: TYPE_COLORS.pickup, linkTo: `/tracking?vehicle=${p.id}`,
       }));
     }
 
@@ -509,7 +530,7 @@ export default function SchedulePage() {
 
       {/* Type filter */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', flexWrap: 'wrap' }}>
-        {['all', 'graphics', 'upfit', 'cni', 'reminder', 'manual', 'google'].map(t => (
+        {['all', 'graphics', 'upfit', 'pickup', 'cni', 'reminder', 'manual', 'google'].map(t => (
           <button key={t} onClick={() => setShowTypeFilter(t)} style={{
             padding: '4px 8px', borderRadius: '5px', fontSize: '9px', fontWeight: 700,
             background: showTypeFilter === t ? (t === 'all' ? 'var(--tab-active-bg)' : `${TYPE_COLORS[t]}18`) : 'transparent',
