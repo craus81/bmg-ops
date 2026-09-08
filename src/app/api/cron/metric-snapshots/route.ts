@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { recordHeartbeat } from '@/lib/system-health';
 import { collectExecMetrics, chicagoDay } from '@/lib/exec-metrics';
+import { writeArSnapshots } from '@/lib/ar-snapshots';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -43,13 +44,25 @@ export async function GET(req: NextRequest) {
       .upsert(rows, { onConflict: 'metric,day' });
     if (error) throw new Error(error.message);
 
+    // A/R snapshots ride the same nightly slot (R5-1): open total, aging
+    // buckets, top open customers — its own try/catch so an AR read failure
+    // never costs the exec metrics above (and vice versa: they upserted first).
+    let arSnapshot: { rows: number; total: number } | { error: string };
+    try {
+      arSnapshot = await writeArSnapshots(supabase, day);
+    } catch (e: any) {
+      arSnapshot = { error: String(e?.message || e).slice(0, 300) };
+      console.error('ar_snapshots write failed:', e);
+    }
+
     const nulls = metrics.filter(m => m.value === null).map(m => m.metric);
     const syncStateWrite = await recordHeartbeat(supabase, 'metric_snapshots', {
       day,
       wrote: rows.length,
       nullMetrics: nulls,
+      arSnapshot,
     });
-    return NextResponse.json({ success: true, day, wrote: rows.length, nullMetrics: nulls, syncStateWrite });
+    return NextResponse.json({ success: true, day, wrote: rows.length, nullMetrics: nulls, arSnapshot, syncStateWrite });
   } catch (err: any) {
     console.error('metric-snapshots failed:', err);
     await recordHeartbeat(supabase, 'metric_snapshots', { error: String(err?.message || err).slice(0, 300) }).catch(() => {});
