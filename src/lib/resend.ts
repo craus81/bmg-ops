@@ -348,6 +348,71 @@ export function buildCustomerDigestEmail(
 </html>`;
 }
 
+export interface BriefRow {
+  text: string;
+  /** Absolute URL — rows without one render as plain text (never a dead link). */
+  url?: string;
+  /** Render emphasized (the section's headline number). */
+  strong?: boolean;
+}
+
+/**
+ * Owner's Weekly Brief (R5-7): the one Monday email for the owner/executive
+ * audience — optional AI narrative up top, then multi-section metric rows.
+ * Light theme like the customer digest (it gets printed and forwarded).
+ * Links are per-audience: the CALLER builds admin-page URLs only for
+ * recipients whose role can open them.
+ */
+export function buildOwnerBriefEmail(
+  weekLabel: string,
+  narrative: string | null,
+  sections: { title: string; rows: BriefRow[] }[],
+  ctaUrl?: string,
+): string {
+  const rowHtml = (r: BriefRow) => {
+    const inner = `<span style="font-size:13px;color:#111827;${r.strong ? 'font-weight:700;' : ''}">${escapeHtml(r.text)}</span>`;
+    const body = r.url
+      ? `<a href="${r.url}" style="text-decoration:none;color:#111827;">${inner} <span style="color:#2563eb;font-size:12px;">→</span></a>`
+      : inner;
+    return `<div style="padding:6px 10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:4px;">${body}</div>`;
+  };
+  const sectionHtml = sections
+    .filter(s => s.rows.length > 0)
+    .map(s => `
+      <div style="margin-top:18px;">
+        <div style="font-size:11px;font-weight:800;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">${escapeHtml(s.title)}</div>
+        ${s.rows.map(rowHtml).join('')}
+      </div>`)
+    .join('');
+  const narrativeHtml = narrative?.trim()
+    ? `<div style="margin-top:14px;font-size:14px;color:#374151;line-height:1.6;border-left:3px solid #ee3120;padding:2px 0 2px 12px;">${escapeHtml(narrative.trim()).replace(/\n/g, '<br>')}</div>`
+    : '';
+
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <div style="max-width:560px;margin:0 auto;padding:24px;">
+    <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:28px;">
+      <div style="font-size:11px;font-weight:800;color:#ee3120;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px;">BMG Fleet</div>
+      <div style="font-size:19px;font-weight:800;color:#111827;">Owner&#39;s weekly brief</div>
+      <div style="font-size:13px;color:#6b7280;margin-top:2px;">${escapeHtml(weekLabel)}</div>
+      ${narrativeHtml}
+      ${sectionHtml}
+      ${ctaUrl ? `
+      <div style="margin-top:22px;">
+        <a href="${ctaUrl}" style="display:inline-block;padding:11px 22px;background:#111827;color:#ffffff;font-weight:800;font-size:13px;border-radius:10px;text-decoration:none;">Open the dashboard</a>
+      </div>` : ''}
+    </div>
+    <div style="text-align:center;padding:14px;font-size:11px;color:#9ca3af;">
+      Sent every Monday morning. Turn it off in Settings → Notifications.
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
 /**
  * Build a styled HTML email for sending invoices to customers
  */

@@ -48,6 +48,7 @@ export const HEALTH_MONITORS: HealthMonitor[] = [
   { syncType: 'exceptions_digest', label: 'Weekly exceptions & overrides digest', intervalMinutes: 10080 },
   { syncType: 'promised_back_check', label: 'Promised-back guardian sweep', intervalMinutes: 1440 },
   { syncType: 'reorder_check', label: 'Nightly reorder-point sweep', intervalMinutes: 1440 },
+  { syncType: 'owner_brief', label: "Monday owner's brief", intervalMinutes: 10080 },
 ];
 
 /** A run is stale once it's overdue by more than a full interval (2× spacing), plus grace for slow runs. */

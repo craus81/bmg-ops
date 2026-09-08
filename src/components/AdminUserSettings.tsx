@@ -33,6 +33,8 @@ interface Prefs {
   email_messages: boolean;
   /** Opt-out (default true): email on every @mention. */
   email_mentions: boolean;
+  /** Opt-out (default true): Monday owner's brief — only reaches super_admin/executive accounts. */
+  notify_weekly_brief: boolean;
   sms_messages_mode: 'always' | 'unread_only';
   phone_number: string | null;
   custom_statuses: string[] | null;
@@ -42,8 +44,8 @@ const DEFAULT_PREFS: Prefs = {
   notify_new_job: true, notify_status_change: true, notify_ready: true,
   notify_ready_for_install: false, notify_invoicing: false, notify_shipped: true,
   notify_new_po: false, notify_in_app: true, notify_email: false, notify_sms: false,
-  sms_messages: false, email_messages: false, email_mentions: true, sms_messages_mode: 'always',
-  phone_number: null, custom_statuses: null,
+  sms_messages: false, email_messages: false, email_mentions: true, notify_weekly_brief: true,
+  sms_messages_mode: 'always', phone_number: null, custom_statuses: null,
 };
 
 // Same vocabulary as the user's own Settings page.
@@ -65,6 +67,7 @@ const MESSAGE_TOGGLES: [keyof Prefs, string][] = [
   ['sms_messages', 'Text me about direct messages'],
   ['email_messages', 'Email me about direct messages'],
   ['email_mentions', 'Email me when I\'m @mentioned (on by default)'],
+  ['notify_weekly_brief', 'Monday owner\'s brief (only reaches super admins & executives)'],
 ];
 
 export default function AdminUserSettings({ userId, userName }: { userId: string; userName: string }) {
@@ -128,6 +131,7 @@ export default function AdminUserSettings({ userId, userName }: { userId: string
             sms_messages: prefs.sms_messages,
             email_messages: prefs.email_messages,
             email_mentions: prefs.email_mentions ?? true,
+            notify_weekly_brief: prefs.notify_weekly_brief ?? true,
             sms_messages_mode: prefs.sms_messages_mode,
             phone_number: prefs.phone_number,
             custom_statuses: prefs.custom_statuses,

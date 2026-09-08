@@ -349,6 +349,7 @@ export default function SettingsPage() {
         sms_messages_mode: 'always' as const,
         email_messages: false,
         email_mentions: true,
+        notify_weekly_brief: true,
       });
     }
     setLoading(false);
@@ -377,6 +378,7 @@ export default function SettingsPage() {
       sms_messages_mode: prefs.sms_messages_mode,
       email_messages: prefs.email_messages,
       email_mentions: prefs.email_mentions ?? true,
+      notify_weekly_brief: prefs.notify_weekly_brief ?? true,
       updated_at: new Date().toISOString(),
     };
 
@@ -1000,6 +1002,21 @@ export default function SettingsPage() {
           )}
         </div>
       </div>
+
+      {/* Owner's weekly brief — only super_admin/executive accounts are ever
+          targeted by the Monday cron, so only they see the toggle. */}
+      {(hasRole('super_admin') || hasRole('executive')) && (
+        <div style={sectionStyle}>
+          <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>Owner&apos;s Weekly Brief</div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+            <input type="checkbox" checked={prefs.notify_weekly_brief ?? true} onChange={e => setPrefs({ ...prefs, notify_weekly_brief: e.target.checked })} />
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>Monday morning brief</div>
+              <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>One email each Monday with last week&apos;s revenue, quotes, shipments, promises kept, and overrides. On by default for owners and executives.</div>
+            </div>
+          </label>
+        </div>
+      )}
 
       {/* Save button */}
       <button
