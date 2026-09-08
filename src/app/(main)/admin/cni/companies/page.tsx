@@ -26,6 +26,16 @@ export default function CniCompaniesPage() {
   const supabase = createClient();
   const [companies, setCompanies] = useState<CniCompany[]>([]);
   const [loading, setLoading] = useState(true);
+  // R5-12: computed 90-day scorecards per company for the record cards.
+  const [scorecards, setScorecards] = useState<Record<string, { jobsCompleted: number; onTimeRate: number | null; photoFirstPassRate: number | null; vehiclesCompleted: number }>>({});
+  useEffect(() => {
+    if (authLoading || !hasFeature('cni_admin')) return;
+    fetch('/api/cni/scorecards')
+      .then(r => r.ok ? r.json() : null)
+      .then(body => { if (body?.companies) setScorecards(body.companies); })
+      .catch(() => { /* cards render without chips */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- once after auth
+  }, [authLoading]);
 
   // New company inline form
   const [showNew, setShowNew] = useState(false);
@@ -274,6 +284,13 @@ export default function CniCompaniesPage() {
                 </span>
               </div>
               <div style={{ display: 'flex', gap: '12px', marginTop: '6px', fontSize: '11px', color: 'var(--text-muted)', alignItems: 'center', flexWrap: 'wrap' }}>
+                {scorecards[c.id] && (scorecards[c.id].jobsCompleted > 0 || scorecards[c.id].vehiclesCompleted > 0) && (
+                  <span title="Computed from job history — last 90 days" style={{ color: 'var(--success)', fontWeight: 700 }}>
+                    ⚡ {scorecards[c.id].jobsCompleted} job{scorecards[c.id].jobsCompleted !== 1 ? 's' : ''}
+                    {scorecards[c.id].onTimeRate != null ? ` · ${scorecards[c.id].onTimeRate}% on time` : ''}
+                    {scorecards[c.id].photoFirstPassRate != null ? ` · ${scorecards[c.id].photoFirstPassRate}% photo pass` : ''}
+                  </span>
+                )}
                 <span>NetSuite vendor: {c.netsuite_vendor_id || '—'}</span>
                 {([
                   ['W9', !!c.w9_file_path],
