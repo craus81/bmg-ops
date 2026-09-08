@@ -10,6 +10,7 @@
  */
 
 import ApprovalPageShell, { ApprovalHeader } from '@/components/ApprovalPageShell';
+import { roundLabel } from '@/lib/proof-rounds';
 import ZoomableImage from '@/components/ZoomableImage';
 
 // Proof-specific E-SIGN copy — approving artwork for production, not
@@ -32,11 +33,33 @@ export default function ProofApprovalPage() {
         acceptedTitle: 'Thanks — proof approved',
         rejectedTitle: 'Thanks — we’ll revise',
       }}
-      parsePayload={json => ({ job: json.job, files: json.files || [] })}
+      parsePayload={json => ({ job: json.job, files: json.files || [], round: json.round || null })}
       docLabel={d => d?.job?.job_number ? `Job #${d.job.job_number}` : null}
       acceptedAt={d => d?.job?.customer_approved_at || null}
       canAccept={d => (d?.files || []).length > 0}
-      renderDocument={d => <ProofDocument job={d.job} files={d.files} />}
+      renderDocument={d => (
+        <>
+          {/* R6-10: on a revision, say which round this is and what the
+              customer asked for last time — reviewing artwork without
+              that in front of you is how the same note gets missed. */}
+          {d.round && d.round.number > 1 && (
+            <div style={{
+              padding: '10px 12px', borderRadius: '10px', marginBottom: '14px',
+              background: 'rgba(245,158,11,0.09)', border: '1px solid rgba(245,158,11,0.32)',
+            }}>
+              <div style={{ fontSize: '12px', fontWeight: 800, color: '#b45309' }}>
+                {roundLabel(d.round.number)}
+              </div>
+              {d.round.addressing && (
+                <div style={{ fontSize: '12.5px', color: '#475569', marginTop: '3px' }}>
+                  Addressing: “{d.round.addressing}”
+                </div>
+              )}
+            </div>
+          )}
+          <ProofDocument job={d.job} files={d.files} />
+        </>
+      )}
     />
   );
 }
