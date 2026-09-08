@@ -31,6 +31,12 @@ const REPORTS: ReportLink[] = [
     source: 'FleetSuite',
   },
   {
+    title: 'Never-Invoiced Recovery',
+    blurb: 'Every completed or shipped vehicle with no invoice anywhere \u2014 oldest first, bucketed by what each needs: a linked sales order to bill, an estimate someone has to convert, or no paperwork at all. The queue behind the dashboard tile.',
+    href: '/admin/reports/never-invoiced',
+    source: 'FleetSuite',
+  },
+  {
     title: 'Open Order Book',
     blurb: 'Every open sales order: sold vs billed vs unbilled, with aging — money sold but not yet invoiced.',
     href: '/admin/reports/order-book',

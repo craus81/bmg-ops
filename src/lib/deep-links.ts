@@ -87,6 +87,12 @@ export const deepLinks = {
   /** Schedule — opens a calendar event card (optionally flashing one note). */
   scheduleCard: (eventId: string, noteId?: string | null) =>
     `/admin/schedule?card=${eventId}${noteId ? `&note=${noteId}` : ''}`,
+  /** Never-invoiced recovery queue — completed vehicles with no invoice,
+   *  bucketed by what each needs. Optionally opens on one bucket. The
+   *  destination for the dashboard's never-invoiced tile, which used to
+   *  land on the whole In-Shop board with no hint which vehicles leaked. */
+  neverInvoicedQueue: (bucket?: 'has_so' | 'estimate_only' | 'no_paperwork') =>
+    `/admin/reports/never-invoiced${bucket ? `?bucket=${bucket}` : ''}`,
   /** At-risk report — opens the account's note editor and flashes the row. */
   atRiskCustomer: (customerId: string) => `/admin/reports/at-risk?id=${customerId}`,
   /** Dedicated CNI job record page (admin side). */
