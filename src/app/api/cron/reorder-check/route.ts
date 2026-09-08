@@ -5,6 +5,7 @@ import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
 import { loadReorderCandidates, computeReorderSuggestion, weeklyVelocity } from '@/lib/reorder';
+import { findLowStock, summarizeStock, type StockPolicy, type StockRoll } from '@/lib/roll-stock';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -22,6 +23,11 @@ const service = createServiceClient();
  * row is topped up, not duplicated, and top-ups don't re-notify); demand-tab
  * dismissals hold with their watermark semantics (a "not buying this" stands
  * until the suggested quantity grows past what it was when dismissed).
+ *
+ * R6-2 folds shop MATERIALS into the same sweep, as the audit's batching
+ * note asked: film, premask and ink with a reorder point set raise the
+ * same kind of request into the same queue, tagged 'material_low_stock'.
+ * Materials with stock tracked but no point are watched, never ordered.
  */
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get('authorization');
@@ -93,6 +99,67 @@ export async function GET(req: NextRequest) {
       created.push({ id: row.id, itemNumber: c.itemNumber, qty: suggestedQty });
     }
 
+    // ── Materials (R6-2): rolls of film/premask, cartridges of ink ──────
+    const materialCreated: { id: string; itemNumber: string; qty: number }[] = [];
+    let materialBumped = 0;
+    try {
+      const [{ data: rollRows }, { data: policyRows }] = await Promise.all([
+        service.from('material_rolls')
+          .select('id, substrate_id, material_name, kind, unit, width_in, remaining_qty, received_at, status')
+          .eq('status', 'open'),
+        service.from('material_stock_settings')
+          .select('kind, material_key, material_name, unit, reorder_at, order_up_to, vendor_name, item_number'),
+      ]);
+      const rolls: StockRoll[] = (rollRows || []).map((r: any) => ({
+        id: r.id, substrateId: r.substrate_id, materialName: r.material_name, kind: r.kind,
+        unit: r.unit, widthIn: r.width_in != null ? Number(r.width_in) : null,
+        remainingQty: Number(r.remaining_qty), receivedAt: r.received_at, status: r.status,
+      }));
+      const policies: StockPolicy[] = (policyRows || []).map((p: any) => ({
+        key: `${p.kind}:${p.material_key}`, kind: p.kind, materialName: p.material_name, unit: p.unit,
+        reorderAt: p.reorder_at != null ? Number(p.reorder_at) : null,
+        orderUpTo: p.order_up_to != null ? Number(p.order_up_to) : null,
+        vendorName: p.vendor_name, itemNumber: p.item_number,
+      }));
+
+      for (const hit of findLowStock(summarizeStock(rolls), policies)) {
+        // One standing row per material, same non-spam rule as parts: top
+        // up the open request rather than stacking a second one.
+        const requestItem = hit.itemNumber || hit.materialName;
+        const note = `Auto: ${hit.onHand} ${hit.unit} on hand, reorder at ${hit.reorderAt}.`;
+        const { data: pending } = await service
+          .from('purchase_requests')
+          .select('id, quantity')
+          .eq('item_number', requestItem)
+          .eq('source', 'material_low_stock')
+          .eq('status', 'pending')
+          .maybeSingle();
+        if (pending) {
+          await service.from('purchase_requests')
+            .update({ quantity: hit.suggestedQty, note, updated_at: new Date().toISOString() })
+            .eq('id', pending.id).eq('status', 'pending');
+          materialBumped++;
+          continue;
+        }
+        const { data: row } = await service.from('purchase_requests').insert({
+          item_number: requestItem,
+          description: `${hit.materialName} (${hit.kind}) — ${hit.suggestedQty} ${hit.unit}`,
+          vendor_name: hit.vendorName,
+          quantity: hit.suggestedQty,
+          note,
+          source: 'material_low_stock',
+          requested_by: null,
+        }).select('id').single();
+        if (row) materialCreated.push({ id: row.id, itemNumber: hit.materialName, qty: hit.suggestedQty });
+      }
+    } catch (e: any) {
+      // Materials are a bolt-on to this sweep: a failure here must not cost
+      // the parts replenishment that already ran.
+      console.error('material low-stock pass failed:', e?.message || e);
+    }
+    created.push(...materialCreated);
+    bumped += materialBumped;
+
     // One digest to purchasing (admins) about NEW auto requests — top-ups
     // stay quiet, the queue shows them.
     let notified = 0;
@@ -128,6 +195,8 @@ export async function GET(req: NextRequest) {
       created: created.length,
       bumped,
       skipped_dismissed: skippedDismissed,
+      material_created: materialCreated.length,
+      material_bumped: materialBumped,
       notified,
     });
 

@@ -21,6 +21,7 @@ import {
   summarizeLines,
   type CatalogFilm,
 } from '@/lib/material-costing';
+import { linearFeetForSqft, materialKey, stockVerdict, type StockSummary } from '@/lib/roll-stock';
 
 /**
  * The production Roll Plan (§7.4 floor build): the wrap-quote nesting
@@ -120,6 +121,28 @@ export default function GraphicsRollPlan({ jobId, jobQuantity, vinylType, vinylC
 
   const usage = useMemo(() => computeUsage(nestPieces, placements, config), [nestPieces, placements, config]);
   const film = usage.films[0];
+
+  // ── Stock (R6-2): does the shelf actually hold this run? ──────────────
+  const [stock, setStock] = useState<StockSummary | undefined>(undefined);
+  const [stockLoaded, setStockLoaded] = useState(false);
+  const loadStock = async () => {
+    try {
+      const res = await fetch('/api/materials/rolls');
+      if (!res.ok) return;
+      const body = await res.json();
+      const key = materialKey(vinylType || filmLabel);
+      setStock((body.summaries || []).find((x: StockSummary) => x.kind === 'film' && materialKey(x.materialName) === key));
+    } catch { /* the plan still works without a stock count */ } finally {
+      setStockLoaded(true);
+    }
+  };
+  useEffect(() => { if (open && !stockLoaded) loadStock(); },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one fetch when the card first opens
+    [open, stockLoaded]);
+
+  // Roll width comes from the plan's own config — that IS the roll being cut.
+  const neededFt = film && film.rollSqft > 0 ? linearFeetForSqft(film.rollSqft, config.widthIn) : null;
+  const verdict = film && film.rollSqft > 0 ? stockVerdict(neededFt, stock) : null;
 
   const loadFromQuote = async () => {
     if (!wrapQuoteId || busy) return;
@@ -230,12 +253,35 @@ export default function GraphicsRollPlan({ jobId, jobQuantity, vinylType, vinylC
       );
       if (error) { setMsg({ kind: 'err', text: `Material log failed: ${error.message}` }); return; }
 
+      // Draw the film off the shelf. The job's consumption is a fact
+      // whether or not the count agrees, so a shortfall is reported, never
+      // an error that loses the log we just wrote.
+      let drawNote = '';
+      if (neededFt != null && neededFt > 0) {
+        try {
+          const res = await fetch('/api/materials/rolls/draw', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ materialName: vinylType || filmLabel, kind: 'film', quantity: neededFt, graphicsJobId: jobId }),
+          });
+          const d = await res.json();
+          if (res.ok && d.rollsTouched > 0) {
+            drawNote = ` Drew ${d.drawn} ft off ${d.rollsTouched} roll${d.rollsTouched !== 1 ? 's' : ''}`
+              + (d.shortfall > 0 ? ` — ${d.shortfall} ft short, so the shelf count is now zero for this film.` : '.');
+          } else if (res.ok && d.shortfall > 0) {
+            drawNote = ` No stock on file for this film, so nothing was drawn down.`;
+          }
+        } catch { /* stock is advisory; the material log already landed */ }
+        loadStock();
+      }
+
       const { total, unpriced } = summarizeLines(lines);
       const what = lines.map(l => l.category).join(' + ');
       setMsg({
         kind: 'ok',
         text: `Logged ${lines.length} line${lines.length !== 1 ? 's' : ''} (${what}) — ${num1(film.rollSqft)} ft² of roll, ${num1(film.graphicSqft)} ft² printed — at $${total.toFixed(2)}`
           + (unpriced > 0 ? `, with ${unpriced} line${unpriced !== 1 ? 's' : ''} unpriced (set a rate on the film in Wrap Quote → Pricing).` : `.`)
+          + drawNote
           + ' Refresh the materials card to see it.',
       });
     } finally {
@@ -253,6 +299,20 @@ export default function GraphicsRollPlan({ jobId, jobQuantity, vinylType, vinylC
           <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
             {num1(film.rollSqft)} ft² of roll · {film.placedCount}/{nestPieces.length} pieces placed
           </span>
+        )}
+        {verdict && (
+          <span
+            title="Stock on hand for this film — a run longer than the longest single roll has to be split"
+            style={{
+              fontSize: '10.5px', fontWeight: 700, padding: '2px 8px', borderRadius: '999px',
+              background: verdict.tone === 'short' ? 'rgba(239,68,68,0.12)'
+                : verdict.tone === 'warn' ? 'rgba(245,158,11,0.12)'
+                : verdict.tone === 'ok' ? 'rgba(34,197,94,0.12)' : 'var(--subtle-bg)',
+              color: verdict.tone === 'short' ? '#ef4444'
+                : verdict.tone === 'warn' ? '#f59e0b'
+                : verdict.tone === 'ok' ? '#22c55e' : 'var(--text-muted)',
+            }}
+          >{verdict.text}</span>
         )}
         <span style={{ flex: 1 }} />
         <button onClick={() => setOpen(o => !o)}
