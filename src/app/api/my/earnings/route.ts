@@ -65,7 +65,9 @@ export async function GET(req: NextRequest) {
     kind: p.kind,
     label: p.kind === 'payroll_period'
       ? `Pay period ${p.period_start || '?'} – ${p.period_end || '?'}`
-      : (p.cni_job_id && payoutJobLabels.get(p.cni_job_id)) || 'CNI job payout',
+      : p.kind === 'cni_period'
+        ? `CNI pay period ${p.period_start || '?'} – ${p.period_end || '?'}`
+        : (p.cni_job_id && payoutJobLabels.get(p.cni_job_id)) || 'CNI job payout',
     amount: hideFieldAmounts && p.kind === 'payroll_period'
       ? null
       : p.total_amount != null ? Number(p.total_amount) : null,

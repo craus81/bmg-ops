@@ -157,8 +157,8 @@ export async function GET(req: NextRequest) {
       payouts.map(p => [
         p.paid_at?.slice(0, 10),
         p.profile_id ? names.get(p.profile_id) || p.profile_id : '',
-        p.kind === 'payroll_period' ? 'Payroll period' : 'CNI job',
-        p.kind === 'payroll_period'
+        p.kind === 'payroll_period' ? 'Payroll period' : p.kind === 'cni_period' ? 'CNI pay period' : 'CNI job',
+        p.kind === 'payroll_period' || p.kind === 'cni_period'
           ? `${p.period_start || ''} – ${p.period_end || ''}`
           : (p.cni_job_id && jobLabels.get(p.cni_job_id)) || '',
         money(p.total_amount), p.status, p.netsuite_bill_id,
