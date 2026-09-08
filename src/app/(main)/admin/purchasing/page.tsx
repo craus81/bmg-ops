@@ -69,6 +69,18 @@ export default function PurchasingQueuePage() {
   const [reqNotice, setReqNotice] = useState<string | null>(null);
   const flashedRef = useRef(false);
 
+  // R5-11: vendor reality chips for the group headers — "Meyer: avg 8d
+  // late vs promise · 2 ETA slips" — so the scorecard is in front of the
+  // buyer at the moment of ordering. Keyed by lowercased vendor name;
+  // missing key = no history yet, no chip.
+  const [vendorChips, setVendorChips] = useState<Record<string, string>>({});
+  useEffect(() => {
+    fetch('/api/reports/vendors?chips=1&days=90')
+      .then(r => r.ok ? r.json() : null)
+      .then(body => { if (body?.chips) setVendorChips(body.chips); })
+      .catch(() => { /* chips are garnish — the queue works without them */ });
+  }, []);
+
   // 17B: per-group NetSuite vendor selection + PO creation.
   const [vendorSel, setVendorSel] = useState<Record<string, { id: string; name: string }>>({});
   const [pickerOpen, setPickerOpen] = useState<string | null>(null);
@@ -295,6 +307,13 @@ export default function PurchasingQueuePage() {
             <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', borderBottom: `1px solid ${theme.border}`, background: unassigned ? 'rgba(251,191,36,0.06)' : 'var(--subtle-bg)' }}>
               <div style={{ fontSize: '13px', fontWeight: 800, color: unassigned ? '#f59e0b' : 'var(--text-primary)' }}>{vendor}</div>
               <div style={{ fontSize: '11px', color: theme.textMuted }}>{rows.length} part{rows.length !== 1 ? 's' : ''}</div>
+              {!unassigned && vendorChips[vendor.toLowerCase()] && (
+                <button onClick={() => router.push('/admin/reports/vendors')}
+                  title="Last 90 days — open the vendor scorecard"
+                  style={{ fontSize: '10px', fontWeight: 700, color: '#f59e0b', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: '7px', padding: '2px 8px', cursor: 'pointer' }}>
+                  {vendorChips[vendor.toLowerCase()]}
+                </button>
+              )}
               {isAdmin && (
                 <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                   {gv && pickerOpen !== vendor && (

@@ -43,6 +43,12 @@ const REPORTS: ReportLink[] = [
     source: 'FleetSuite',
   },
   {
+    title: 'Vendor Scorecards',
+    blurb: 'Per-vendor reality: actual lead times from receipts, promises kept vs ETA slips, short lines, spend, and price drift — with each vendor’s recent POs and receipt history. Early numbers are thin until promise/receipt history accrues.',
+    href: '/admin/reports/vendors',
+    source: 'FleetSuite',
+  },
+  {
     title: 'Quoted Margin',
     blurb: 'The margin we OFFERED, frozen at each estimate send — by rep, customer, and month, distribution vs the floor, and every below-floor send with its typed reason. The leading indicator vehicle-margin confirms months later.',
     href: '/admin/reports/quoted-margin',
