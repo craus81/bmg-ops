@@ -6,6 +6,7 @@ import { rolesOf, canActOnCniJob } from '@/lib/cni-access';
 import { getOpenCniShift, getFieldRate } from '@/lib/pay-credits';
 import { FIELD_ROLES, memberViews, cniRoster, fieldRoster, shopRoster } from '@/lib/shifts';
 import { getOpenShopShift, getShopLaborForCheckins } from '@/lib/shop-labor';
+import { loadBurn } from '@/lib/labor-burn';
 
 export const dynamic = 'force-dynamic';
 
@@ -79,6 +80,10 @@ export async function GET(req: NextRequest) {
       // Hours only — the blended COST rate is admin-side job costing and
       // never returned here.
       loggedHours: labor?.hours ?? 0,
+      // Labor burn meter (R6-12): hours logged against hours SOLD. Hours and
+      // a percentage, still no cost rate. Null sold hours means the chip
+      // says "no sold hours on file" rather than showing a 0% budget.
+      burn: await loadBurn(service, q.data.checkinId),
     });
   }
 

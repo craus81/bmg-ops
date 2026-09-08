@@ -8,6 +8,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 const VehicleCheckIn = lazy(() => import('@/components/VehicleCheckIn'));
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { apiFetch } from '@/lib/api-client';
 import { storage, resolveStoredFileUrl } from '@/lib/storage';
 import { fetchAllRows } from '@/lib/fetch-all';
 import StatusBadge from '@/components/StatusBadge';
@@ -108,6 +109,10 @@ export default function TrackingPage() {
   const [updateSuccess, setUpdateSuccess] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [showArchived, setShowArchived] = useState(false);
+  // Labor burn badges (R6-12): hours logged vs hours SOLD per vehicle.
+  // Vehicles with no sold hours are absent from the map and get no badge —
+  // a grey "unknown" chip on every card would be noise, not information.
+  const [burns, setBurns] = useState<Record<string, { pct: number; tone: 'ok' | 'warn' | 'over'; label: string }>>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [archivingId, setArchivingId] = useState<string | null>(null);
   // All NetSuite sales orders linked to each check-in (keyed by checkin id).
@@ -321,6 +326,7 @@ export default function TrackingPage() {
     loadVehicles();
     loadArchivedCount();
     loadProfiles();
+    loadLaborBurn();
 
     // Handle Dropbox OAuth redirect
     const dbxParam = searchParams.get('dropbox');
@@ -452,6 +458,17 @@ export default function TrackingPage() {
   // outside the paged window, and counting it would skip a DB row on the
   // next page. Appends also dedupe by id for when that row pages back in.
   const fetchedCountRef = useRef(0);
+  /** Labor burn badges (R6-12). Best-effort: a failure leaves the map empty
+   *  and the cards simply carry no badge, rather than blocking the board. */
+  const loadLaborBurn = async () => {
+    try {
+      const res = await apiFetch('/api/vehicle-tracking/labor-burn');
+      if (!res.ok) return;
+      const json = await res.json();
+      setBurns(json.burns || {});
+    } catch { /* no badges this load */ }
+  };
+
   const loadVehicles = async (append = false) => {
     if (append) setLoadingMore(true); else setLoading(true);
     const offset = append ? fetchedCountRef.current : 0;
@@ -1631,10 +1648,24 @@ export default function TrackingPage() {
                         const risk = backRisk(vehicle);
                         const days = IN_SHOP_STATUSES.includes(vehicle.status) ? vStageDays(vehicle) : 0;
                         const showStage = days >= 3;
-                        if (!risk && !showStage) return null;
+                        // Labor burn: only badge a vehicle at or past 80% of
+                        // its sold hours. Under that it's just noise, and a
+                        // vehicle with no sold hours never reaches the map.
+                        const burn = burns[vehicle.id];
+                        const showBurn = burn && burn.tone !== 'ok';
+                        if (!risk && !showStage && !showBurn) return null;
                         const stageColor = days >= 6 ? '#ef4444' : '#fbbf24';
+                        const burnColor = burn?.tone === 'over' ? '#ef4444' : '#f59e0b';
                         return (
                           <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap' }}>
+                            {showBurn && (
+                              <span
+                                title={`${burn.label} — ${burn.tone === 'over' ? 'past the hours that were sold' : 'approaching the hours that were sold'}`}
+                                style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: `${burnColor}18`, border: `1px solid ${burnColor}44`, color: burnColor }}
+                              >
+                                {burn.tone === 'over' ? '🔥' : '⚡'} labor {burn.pct}%
+                              </span>
+                            )}
                             {risk && (
                               <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: `${risk.color}18`, border: `1px solid ${risk.color}44`, color: risk.color }}>
                                 ⚠ {risk.label}
