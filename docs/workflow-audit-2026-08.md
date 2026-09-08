@@ -2306,5 +2306,40 @@ shop week planner with capacity and drag-to-reschedule, and tokenized
 pickup/drop-off booking with the ready-for-pickup queue. Per-item ship
 notes live in that document's Tier 2 blocks. The single open act is the
 owner's ten-minute NetSuite RESTlet redeploy
-(`docs/pnl-restlet-deploy.md`), which turns the P&L view live. Tiers 3
-and 4 remain unstarted by decision, not omission.
+(`docs/pnl-restlet-deploy.md`), which turns the P&L view live.
+
+**Postscript, Round 6 (2026-09-08).** Tier 3 opened the same day, on the
+owner's word — five items called out by name with notes attached, and the
+rest authorized behind them. Twenty items shipped as PRs #866–#881
+(migrations 282–293): the materials chain with real ink and premask cost,
+material stock and low-stock auto-requests, Dialpad screen-pop and call
+logging, the pack & ship checklist with photo evidence, smart invite
+matching, print-room timers, the seven-item purchasing set, and the
+seven-item floor set. Per-item ship notes live in the Tier 3 blocks of
+`docs/feature-audit-2026-09.md`.
+
+Two of the owner's five questions were answered by research rather than
+code, and both answers were no. **Epson Edge Dashboard exposes no usable
+API** — nothing public, PORT's Production Monitor partner-gated, SNMP
+LAN-only against a Vercel-hosted app — so ink is priced as a per-media
+$/ft² rate with a shop default, and `/api/materials/import` is the seam a
+job-log export or an on-prem agent lands in later. And **the app holds no
+geographic data at all**, so rather than fabricate ZIP centroids and
+produce confidently wrong mileage, invite matching ranks on service
+areas, ZIP3 proximity, capability and the scorecard, and switches to real
+miles the moment a centroid file is loaded.
+
+Three problems surfaced that no audit had listed: a live data-loss bug in
+the offline scan sync (a failed scan was deleted along with the ones that
+succeeded), a helper that could not be unit tested because its module
+built a Supabase client at import, and a long-open PR whose feature could
+never have merged because it queried columns the shipped schema never
+had. All three are fixed. Finding them is the argument for building
+adjacent items together rather than one at a time.
+
+Open and owner-side: the NetSuite RESTlet redeploy, a ZIP centroid
+dataset, the Dialpad-versus-RingCentral decision, and whether the
+condition-report acknowledgment should say more than "this record is
+accurate" — deliberately not widened into a liability waiver without
+counsel. Remaining Tier 3 batches: CNI (5), sales (7), portal (4),
+reports and finance (6), platform (13).
