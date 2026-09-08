@@ -24,6 +24,8 @@ import RecentActivity from '@/components/RecentActivity';
 import type { GraphicsJobStatus } from '@/lib/types';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { customerRequiresPo, loadBillableCustomers } from '@/lib/billable-customers';
+import { summarizeDealForecast, daysPast, type DealForecast, type ForecastDeal } from '@/lib/deal-forecast';
+import { deepLinks } from '@/lib/deep-links';
 
 // Stage buckets over graphics statuses (mirrors the pipeline on /graphics).
 const RECEIVED: GraphicsJobStatus[] = ['received', 'designing', 'revision'];
@@ -69,6 +71,8 @@ interface DashData {
     topCustomers: { name: string; ytd: number; nsId: string | null }[];
     openQuotes: { count: number; value: number };
     estimatesWeek: number;
+    forecast: DealForecast;
+    today: string;
   };
 }
 
@@ -231,9 +235,11 @@ export default function OpsDashboard() {
       supabase.from('notifications').select('id, title, body, url, created_at')
         .eq('user_id', user?.id || '').is('read_at', null)
         .order('created_at', { ascending: false }).limit(50),
-      // Sales — paginated: the pipeline $ total must count every opportunity
+      // Sales — paginated: the pipeline $ total must count every opportunity.
+      // The extra columns feed the closing forecast (R5-8) from the SAME rows
+      // the stage totals use, so strip and pipeline can't disagree.
       fetchAllRows<any>((from, to) => supabase.from('prospect_opportunities')
-        .select('stage, value')
+        .select('id, prospect_id, title, stage, value, expected_close_date, prospects(company_name)')
         .order('id')
         .range(from, to)),
       supabase.from('customers').select('netsuite_id, company_name, ytd_spend').eq('active', true).gt('ytd_spend', 0).order('ytd_spend', { ascending: false }).limit(4),
@@ -361,6 +367,22 @@ export default function OpsDashboard() {
       return { stage, label, count: inStage.length, value: inStage.reduce((s: number, o: any) => s + (o.value || 0), 0) };
     });
     const wonValue = opps.filter((o: any) => o.stage === 'won').reduce((s: number, o: any) => s + (o.value || 0), 0);
+    // Closing forecast (R5-8): open deals bucketed by expected close, on the
+    // shop's Chicago calendar day.
+    const chiToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date());
+    const forecastDeals: ForecastDeal[] = opps
+      .filter((o: any) => OPP_STAGES.some(s => s.stage === o.stage))
+      .map((o: any) => ({
+        id: o.id,
+        prospectId: o.prospect_id,
+        title: o.title || 'Untitled deal',
+        stage: o.stage,
+        value: Number(o.value) || 0,
+        expectedClose: o.expected_close_date,
+        customer: o.prospects?.company_name || '—',
+        createdBy: null,
+      }));
+    const forecast = summarizeDealForecast(forecastDeals, chiToday);
     const quotes = rows(quotesRes);
     const openEstimates = rows(openEstRes);
     const openQuoteCount = quotes.length + openEstimates.length;
@@ -557,6 +579,8 @@ export default function OpsDashboard() {
         topCustomers: rows(custRes).map((c: any) => ({ name: c.company_name, ytd: Number(c.ytd_spend) || 0, nsId: c.netsuite_id ? String(c.netsuite_id) : null })),
         openQuotes: { count: openQuoteCount, value: openQuoteValue },
         estimatesWeek: count(estRes),
+        forecast,
+        today: chiToday,
       },
     });
     setLoading(false);
@@ -863,6 +887,38 @@ export default function OpsDashboard() {
               style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: '12px', marginTop: '8px', padding: 0, background: 'none', border: 'none', cursor: 'pointer' }}>
               <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Won (all time)</span>
               <span style={{ fontWeight: 800, color: 'var(--success)', fontVariantNumeric: 'tabular-nums' }}>{fmtK(d.sales.wonValue)} <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>›</span></span>
+            </button>
+          )}
+        </div>
+        <div style={{ padding: '12px 16px', borderRight: '1px solid var(--border)' }}>
+          <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: '8px' }}>Closing forecast</div>
+          {([
+            { key: 'overdue', label: 'Overdue', col: d.sales.forecast.overdue, tone: '#ef4444' },
+            { key: 'thisMonth', label: 'This month', col: d.sales.forecast.thisMonth, tone: 'var(--text-primary)' },
+            { key: 'nextMonth', label: 'Next month', col: d.sales.forecast.nextMonth, tone: 'var(--text-primary)' },
+          ] as const).filter(b => b.key !== 'overdue' || b.col.count > 0).map(b => (
+            <div key={b.key} style={{ marginBottom: '8px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontVariantNumeric: 'tabular-nums' }}>
+                <span style={{ color: b.key === 'overdue' ? '#ef4444' : 'var(--text-secondary)', fontWeight: 700 }}>{b.label} ({b.col.count})</span>
+                <span style={{ fontWeight: 800, color: b.tone }}>{fmtK(b.col.value)}</span>
+              </div>
+              {b.col.deals.slice(0, 2).map(deal => (
+                <button key={deal.id} onClick={() => router.push(deepLinks.opportunity(deal.prospectId, deal.id))}
+                  title={`Open ${deal.title} on ${deal.customer}'s record`}
+                  style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', width: '100%', padding: '1px 0 1px 8px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px' }}>
+                  <span style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }}>{deal.customer !== '—' ? deal.customer : deal.title}</span>
+                  <span style={{ color: b.key === 'overdue' ? '#ef4444' : 'var(--text-muted)', fontWeight: 700, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+                    {b.key === 'overdue' && deal.expectedClose ? `${daysPast(deal.expectedClose, d.sales.today)}d late` : fmtK(deal.value)} ›
+                  </span>
+                </button>
+              ))}
+            </div>
+          ))}
+          {d.sales.forecast.undated.count > 0 && (
+            <button onClick={() => router.push('/admin/prospects')}
+              title="Open deals with no expected close date — the forecast can't see them"
+              style={{ display: 'block', width: '100%', fontSize: '10px', color: 'var(--text-muted)', padding: 0, background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
+              {d.sales.forecast.undated.count} open deal{d.sales.forecast.undated.count !== 1 ? 's' : ''} with no close date ›
             </button>
           )}
         </div>
