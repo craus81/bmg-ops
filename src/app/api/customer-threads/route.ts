@@ -16,8 +16,10 @@ const CreateThreadSchema = z
     phone: z.string().max(40).optional(),
     name: z.string().max(120).optional(),
     customerId: z.string().uuid().optional().nullable(),
-    contextEntityType: z.enum(['fleet_checkin', 'purchase_order', 'graphics_job', 'estimate', 'general']).optional(),
+    contextEntityType: z.enum(['fleet_checkin', 'purchase_order', 'graphics_job', 'estimate', 'general', 'invoice']).optional(),
     contextEntityId: z.string().uuid().optional().nullable(),
+    /** Text reference for non-UUID contexts (invoice tranid — migration 278). */
+    contextRef: z.string().max(60).optional().nullable(),
     subject: z.string().max(300).optional().nullable(),
   })
   .refine((d) => !!(d.contactId || d.phone), {
@@ -43,7 +45,7 @@ export async function GET(req: NextRequest) {
   let query = supabase
     .from('customer_threads')
     .select(`
-      id, external_contact_id, customer_id, context_entity_type, context_entity_id,
+      id, external_contact_id, customer_id, context_entity_type, context_entity_id, context_ref,
       status, assigned_to, subject, last_message_at, last_inbound_at,
       unread_count, created_at, updated_at,
       contact:external_contacts!customer_threads_external_contact_id_fkey(id,name,phone,email,is_unknown,is_primary,title),
@@ -94,7 +96,7 @@ export async function POST(req: NextRequest) {
   const parsed = await validateBody(req, CreateThreadSchema);
   if (parsed.error) return parsed.error;
   const body = parsed.data;
-  let { contactId, phone, customerId, contextEntityType, contextEntityId, subject } = body;
+  let { contactId, phone, customerId, contextEntityType, contextEntityId, contextRef, subject } = body;
 
   // Resolve or create contact by phone if contactId not provided
   if (!contactId && phone) {
@@ -130,6 +132,7 @@ export async function POST(req: NextRequest) {
     .eq('status', 'open')
     .eq('context_entity_type', finalContext);
   if (contextEntityId) threadQuery = threadQuery.eq('context_entity_id', contextEntityId);
+  else if (contextRef) threadQuery = threadQuery.eq('context_ref', contextRef);
   else threadQuery = threadQuery.is('context_entity_id', null);
   const { data: existing } = await threadQuery.limit(1).maybeSingle();
   if (existing) {
@@ -143,6 +146,7 @@ export async function POST(req: NextRequest) {
       customer_id: customerId || null,
       context_entity_type: finalContext,
       context_entity_id: contextEntityId || null,
+      context_ref: contextRef || null,
       subject: subject || null,
       created_by: auth.user.id,
     })
