@@ -356,6 +356,13 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // Actual-consumption import (R6-1): graphics production owns the
   // printer's own numbers, so they can reconcile without an admin.
   'src/app/api/materials/import/route.ts': role(),
+  // Material stock (R6-2): the people who need to know whether a job can
+  // print are the people standing at the printer, so reads and receiving
+  // are staff-wide; only the reorder POINT (which makes the nightly sweep
+  // spend money) is admin.
+  'src/app/api/materials/rolls/route.ts': staff(),
+  'src/app/api/materials/rolls/draw/route.ts': staff(),
+  'src/app/api/materials/stock-settings/route.ts': { kind: 'admin', contains: ['requireAdmin(', 'requireStaff('] },
   'src/app/api/search/route.ts': staff(),
   'src/app/api/shifts/end/route.ts': authScoped('ends the caller\'s own shift'),
   'src/app/api/shifts/members/route.ts': authScoped('crew presence for the shift flow; techs + installers'),
