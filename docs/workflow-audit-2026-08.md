@@ -2292,3 +2292,19 @@ auto-replenishment sweep, and a three-way match gate on vendor bills —
 plus the deliberate retirement of the in-app punch clock (#838; the
 payroll app owns attendance). Per-item ship notes live in that
 document's Tier 1 blocks.
+
+**Postscript — Round 5 (2026-09-08).** The audit's entire Tier 2 followed
+Tier 1 out the door in one wave, PRs #847–#864: capture-first migrations
+the first hours (A/R paid_at + snapshots, vendor ETA events, opportunity
+stage capture, quoted-margin freeze at send) so history accrued while the
+reads were built, then the P&L RESTlet modes + runbook, the days-to-pay
+band, ONE unified Monday owner's brief (the CEO digest absorbed rather
+than duplicated), the closing-this-month forecast, win/loss analytics,
+the quoted-margin ledger, vendor and installer scorecards, the installer
+payout autopilot, the portal billing tab, the operations-pulse band, the
+shop week planner with capacity and drag-to-reschedule, and tokenized
+pickup/drop-off booking with the ready-for-pickup queue. Per-item ship
+notes live in that document's Tier 2 blocks. The single open act is the
+owner's ten-minute NetSuite RESTlet redeploy
+(`docs/pnl-restlet-deploy.md`), which turns the P&L view live. Tiers 3
+and 4 remain unstarted by decision, not omission.
