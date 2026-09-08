@@ -35,6 +35,7 @@ import { canonicalPartFromCache } from '@/lib/parts-cache';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
 import GraphicsMaterialsCard from '@/components/GraphicsMaterialsCard';
 import GraphicsRollPlan from '@/components/GraphicsRollPlan';
+import GraphicsPackChecklist from '@/components/GraphicsPackChecklist';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { DropZone } from '@/components/DropZone';
 import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
@@ -1565,6 +1566,10 @@ export default function GraphicsJobRecordPage() {
         wrapQuoteId={(job as any).wrap_quote_id ?? null}
         nesting={(job as any).nesting ?? null}
       />
+
+      {/* ── Pack & ship bench (R6-4): per-line pack/verify by two people,
+          with a photo per line as the evidence for "a piece was missing". ── */}
+      <GraphicsPackChecklist jobId={job.id} jobNumber={job.job_number ?? null} />
 
       {/* ── Material usage log — feeds the Graphics Costs report ── */}
       <div style={card}>
