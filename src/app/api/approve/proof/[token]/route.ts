@@ -8,6 +8,7 @@ import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { r2Get, r2PresignGet, r2Upload } from '@/lib/r2';
 import { validateBody, z } from '@/lib/validate';
+import { closeProofRound } from '@/lib/proof-rounds';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,6 +25,19 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+/** The open round, so the approval page can say "Revision 2 —
+ *  addressing: <what they asked for last time>". Best-effort: a job with
+ *  no round row (sent before migration 292) simply shows no banner. */
+async function loadOpenRound(jobId: string) {
+  const { data } = await supabase
+    .from('graphics_proof_rounds')
+    .select('round_number, addressing')
+    .eq('job_id', jobId)
+    .eq('outcome', 'pending')
+    .maybeSingle();
+  return data || null;
+}
 
 async function loadJobByToken(token: string) {
   const { data: job, error } = await supabase
@@ -103,7 +117,15 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
     is_pdf: isPdf(f),
   })));
 
-  return NextResponse.json({ status: 'ready', job: publicJob(job), files: fileEntries });
+  const round = await loadOpenRound(job.id);
+  return NextResponse.json({
+    status: 'ready',
+    job: publicJob(job),
+    files: fileEntries,
+    // Null for proofs sent before rounds existed — the page just omits
+    // the banner rather than inventing a round number.
+    round: round ? { number: round.round_number, addressing: round.addressing } : null,
+  });
 }
 
 /**
@@ -149,6 +171,10 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
         updated_at: new Date().toISOString(),
       })
       .eq('id', job.id);
+
+    // R6-10: close the open round with the reason, so the NEXT send can
+    // carry "addressing: <this>" and the job's round count is real.
+    await closeProofRound(supabase, job.id, 'rejected', reason);
 
     await supabase.from('graphics_status_history').insert({
       job_id: job.id,
@@ -225,6 +251,8 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
       updated_at: approvedAt,
     })
     .eq('id', job.id);
+
+  await closeProofRound(supabase, job.id, 'approved');
 
   await supabase.from('graphics_status_history').insert({
     job_id: job.id,

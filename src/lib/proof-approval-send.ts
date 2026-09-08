@@ -14,6 +14,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { generateToken } from './magic-link-approval';
+import { openProofRound } from '@/lib/proof-rounds';
 import { sendEmail, buildNotificationEmail } from './resend';
 import { getEmailSignature } from './email-signature';
 import { deepLinks } from './deep-links';
@@ -220,6 +221,15 @@ export async function sendProofApproval(
   }
   const { error: updErr } = await service.from('graphics_jobs').update(patch).eq('id', job.id);
   if (updErr) return { ok: false, status: 500, error: updErr.message };
+
+  // R6-10: a fresh send opens a revision round carrying what the LAST
+  // rejection asked for. This is the line above that used to lose it —
+  // clearing customer_rejection_reason wiped the only record of what the
+  // designer had been told to fix. A reminder re-mints the token for the
+  // same proof and the same ask, so it stays inside the open round.
+  if (!reminder) {
+    await openProofRound(service, job.id, { proofFileId, sentBy: opts.actorId ?? null });
+  }
 
   const dispatch: Record<string, any> = { email: null, sms: null };
 

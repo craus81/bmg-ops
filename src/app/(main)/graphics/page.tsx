@@ -24,6 +24,7 @@ import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
+import { roundChip, summarizeRounds } from '@/lib/proof-rounds';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import GraphicsInvoiceReviewModal from '@/components/GraphicsInvoiceReviewModal';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
@@ -164,6 +165,8 @@ export default function GraphicsPage() {
   // What the R6-10 prefill found, said out loud — a prefix guess is
   // never presented as a catalog fact.
   const [prefillNote, setPrefillNote] = useState<string | null>(null);
+  // R6-10: proof rounds per job, for the board's round chip.
+  const [proofRounds, setProofRounds] = useState<Record<string, any[]>>({});
   const [linkSearch, setLinkSearch] = useState('');
   const [createForm, setCreateForm] = useState({
     job_category: '' as GraphicsJobCategory | '',
@@ -466,6 +469,21 @@ export default function GraphicsPage() {
     if (jobsErr) { setLoading(false); return; }
     setJobs(jobsData);
     setLoading(false);
+
+    // R6-10 round counts for the board chip. Best-effort and after the
+    // board is already painted: a missing count costs a chip, never the
+    // board itself.
+    try {
+      const rounds = await fetchAllRows<any>((from, to) => supabase
+        .from('graphics_proof_rounds')
+        .select('job_id, round_number, outcome, addressing, rejection_reason')
+        .order('job_id').order('round_number').range(from, to));
+      if (!rounds.error) {
+        const byJob: Record<string, any[]> = {};
+        for (const r of rounds.data) (byJob[r.job_id] ||= []).push(r);
+        setProofRounds(byJob);
+      }
+    } catch { /* chips are decoration */ }
 
     // Time-in-stage: latest real status TRANSITION per job (note rows write
     // from_status === to_status and must not reset the clock). Best-effort —
@@ -1255,6 +1273,19 @@ export default function GraphicsPage() {
                           >⏱ proof {waitDays}d</span>
                         );
                       }
+                    }
+                    // R6-10: how many proofs this job has taken. No chip on
+                    // a first proof — every job has one of those; the chip
+                    // exists to make a job on its third round visible.
+                    const rc = roundChip(summarizeRounds(proofRounds[job.id] || []));
+                    if (rc) {
+                      flags.push(
+                        <span
+                          key="rounds"
+                          title={`${rc.text.slice(1)} proofs sent to the customer`}
+                          style={flagChip(rc.tone === 'bad' ? '#ef4444' : rc.tone === 'warn' ? '#fbbf24' : '#94a3b8')}
+                        >🔁 {rc.text}</span>
+                      );
                     }
                     if (job.netsuite_invoice_number) {
                       flags.push(
