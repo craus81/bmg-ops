@@ -69,10 +69,25 @@ export default function ReceivingPage() {
   const [linesByPo, setLinesByPo] = useState<Map<string, LineRow[]>>(new Map());
   const [localReceipts, setLocalReceipts] = useState<ReceiptRow[]>([]);
   const [manualRows, setManualRows] = useState<ReceiptRow[]>([]);
+  // R6-7: open dock discrepancies — short, damaged, wrong item — with an
+  // explicit way to close each one.
+  const [discrepancies, setDiscrepancies] = useState<any[]>([]);
+  const [discBusy, setDiscBusy] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [inputs, setInputs] = useState<Record<string, string>>({});
+  // R6-7: per-line dock flags, chosen at the moment the problem is visible.
+  // Keyed the same way the quantity inputs are, so a flag rides along with
+  // the receive it belongs to.
+  const [flags, setFlags] = useState<Record<string, { kind: 'short' | 'damaged' | 'wrong_item'; note: string }>>({});
+  const toggleFlag = (key: string, kind: 'short' | 'damaged' | 'wrong_item') =>
+    setFlags(prev => {
+      const next = { ...prev };
+      if (next[key]?.kind === kind) delete next[key];
+      else next[key] = { kind, note: next[key]?.note || '' };
+      return next;
+    });
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [busyPo, setBusyPo] = useState<string | null>(null);
   const [busyReceipt, setBusyReceipt] = useState<string | null>(null);
@@ -113,6 +128,10 @@ export default function ReceivingPage() {
       setPos(receivable);
       setLinesByPo(byPo);
       setManualRows(manualRes?.receipts || []);
+      try {
+        const dRes = await fetch('/api/receiving/exceptions').then(r => r.json());
+        setDiscrepancies(dRes?.exceptions || []);
+      } catch { /* the queue is additive; receiving still works without it */ }
 
       // Local receipt chips (recent window is plenty — display only).
       const { data: recent } = await supabase
@@ -152,7 +171,16 @@ export default function ReceivingPage() {
     const asks = lines
       .map(l => ({ l, qty: parseFloat(inputs[`${po.id}:${l.line_id}`] || '') }))
       .filter(({ qty }) => Number.isFinite(qty) && qty > 0)
-      .map(({ l, qty }) => ({ lineId: l.line_id, itemNumber: l.item_number, itemNetsuiteId: l.item_netsuite_id, quantity: qty }));
+      .map(({ l, qty }) => ({
+        lineId: l.line_id,
+        itemNumber: l.item_number,
+        itemNetsuiteId: l.item_netsuite_id,
+        quantity: qty,
+        // R6-7: the dock flag rides along with the receive it describes.
+        exception: flags[`${po.id}:${l.line_id}`]
+          ? { kind: flags[`${po.id}:${l.line_id}`].kind, quantity: qty, note: flags[`${po.id}:${l.line_id}`].note || null }
+          : undefined,
+      }));
     if (asks.length === 0) return;
     const ok = await dialog.confirm(
       `Receive ${asks.length} line${asks.length !== 1 ? 's' : ''} against PO ${po.tranid || ''}? An item receipt will be posted to NetSuite.`,
@@ -171,6 +199,13 @@ export default function ReceivingPage() {
         ? { tone: 'green', text: `✓ Item receipt ${body.receiptNumber || body.receiptId || ''} posted to NetSuite for PO ${po.tranid || ''}.` }
         : { tone: 'amber', text: `Recorded here, but the NetSuite item receipt could not be posted (${body.nsError || 'unknown error'}). It's on the manual worklist below — key it into NetSuite, then mark it done.` });
       setInputs(prev => {
+        const next = { ...prev };
+        for (const l of lines) delete next[`${po.id}:${l.line_id}`];
+        return next;
+      });
+      // Clear the dock flags too — they've landed on the queue, and a
+      // leftover flag would re-file the same claim on the next receive.
+      setFlags(prev => {
         const next = { ...prev };
         for (const l of lines) delete next[`${po.id}:${l.line_id}`];
         return next;
@@ -215,6 +250,21 @@ export default function ReceivingPage() {
     return { posted, manual };
   };
 
+  const resolveDiscrepancy = async (id: string, resolution: string) => {
+    setDiscBusy(id);
+    try {
+      const res = await fetch('/api/receiving/exceptions', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, resolution }),
+      });
+      if (!res.ok) {
+        await dialog.alert(`Could not close it: ${(await res.json())?.error || 'unknown error'}`);
+        return;
+      }
+      await load();
+    } finally { setDiscBusy(null); }
+  };
+
   return (
     <div style={{ maxWidth: '1000px', margin: '0 auto', padding: '20px 16px 60px' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', marginBottom: '4px' }}>
@@ -236,6 +286,45 @@ export default function ReceivingPage() {
           <div style={{ flex: 1, fontSize: '12px', color: 'var(--text-body)' }}>{banner.text}</div>
           <button onClick={() => setBanner(null)} title="Dismiss"
             style={{ background: 'none', border: 'none', color: theme.textMuted, cursor: 'pointer', fontSize: '13px', padding: 0 }}>✕</button>
+        </div>
+      )}
+
+      {discrepancies.length > 0 && (
+        <div style={{ background: 'var(--card)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: '12px', padding: '12px 14px', marginBottom: '14px' }}>
+          <div style={{ fontSize: '13px', fontWeight: 800, color: '#ef4444', marginBottom: '2px' }}>
+            Discrepancies to chase ({discrepancies.length})
+          </div>
+          <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '9px' }}>
+            Flagged at the dock. Closing one asks how it ended — a credit, a replacement, or written off —
+            so a claim can&apos;t quietly disappear.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
+            {discrepancies.map((d: any) => {
+              const days = Math.max(0, Math.floor((Date.now() - Date.parse(d.createdAt)) / 86400000));
+              const tone = days >= 14 ? '#ef4444' : days >= 7 ? '#f59e0b' : theme.textMuted;
+              return (
+                <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '9px', flexWrap: 'wrap', background: 'var(--subtle-bg)', borderRadius: '9px', padding: '8px 11px' }}>
+                  <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', background: 'rgba(239,68,68,0.12)', color: '#ef4444', textTransform: 'uppercase' }}>
+                    {String(d.kind).replace('_', ' ')}
+                  </span>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{d.itemNumber}</span>
+                  {d.quantity != null && <span style={{ fontSize: '11px', color: theme.textSecondary }}>×{d.quantity}</span>}
+                  <span style={{ fontSize: '11px', color: theme.textMuted }}>
+                    {d.vendorName || 'Unknown vendor'}{d.poTranid ? ` · PO ${d.poTranid}` : ''}
+                  </span>
+                  <span style={{ fontSize: '10px', fontWeight: 700, color: tone }}>{days}d old</span>
+                  <span style={{ flex: 1 }} />
+                  {([['vendor_credit', 'Credit'], ['replacement_po', 'Replacing'], ['written_off', 'Write off']] as const).map(([res, label]) => (
+                    <button key={res} onClick={() => resolveDiscrepancy(d.id, res)} disabled={discBusy === d.id}
+                      style={{
+                        fontSize: '10px', fontWeight: 700, padding: '4px 9px', borderRadius: '6px', cursor: 'pointer',
+                        background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-body)',
+                      }}>{label}</button>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -330,6 +419,26 @@ export default function ReceivingPage() {
                                   onChange={e => setInputs(prev => ({ ...prev, [key]: e.target.value }))}
                                   style={{ width: '72px', padding: '5px 8px', borderRadius: '7px', fontSize: '12px', textAlign: 'right', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-body)' }} />
                               ) : <span style={{ fontSize: '10px', color: '#4ade80', fontWeight: 700 }}>complete</span>}
+                              {remaining > 0 && (
+                                <div style={{ display: 'flex', gap: '3px', justifyContent: 'flex-end', marginTop: '5px' }}>
+                                  {([['short', 'Short'], ['damaged', 'Damaged'], ['wrong_item', 'Wrong']] as const).map(([kind, label]) => {
+                                    const on = flags[key]?.kind === kind;
+                                    return (
+                                      <button
+                                        key={kind}
+                                        onClick={() => toggleFlag(key, kind)}
+                                        title={`Flag this line as ${label.toLowerCase()} — it lands on the discrepancies queue when you receive`}
+                                        style={{
+                                          fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '5px', cursor: 'pointer',
+                                          background: on ? 'rgba(239,68,68,0.14)' : 'transparent',
+                                          border: `1px solid ${on ? 'rgba(239,68,68,0.45)' : theme.border}`,
+                                          color: on ? '#ef4444' : theme.textMuted,
+                                        }}
+                                      >{label}</button>
+                                    );
+                                  })}
+                                </div>
+                              )}
                             </td>
                           </tr>
                         );

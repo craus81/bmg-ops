@@ -298,6 +298,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/parts/transactions/route.ts': staff(),
   'src/app/api/pay-rates/route.ts': { kind: 'staff', contains: ['requireStaff(', 'requireAdmin('] },
   'src/app/api/po-receipts/route.ts': feature('parts_ordering'),
+  'src/app/api/receiving/exceptions/route.ts': feature('parts_ordering'),
   'src/app/api/pos/audit-invoices/route.ts': admin(),
   'src/app/api/pos/backfill-customers/route.ts': admin(),
   'src/app/api/pos/backfill-pdfs/route.ts': admin(),
