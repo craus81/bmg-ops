@@ -17,6 +17,10 @@ import { MAX_ATTACHMENT_BYTES } from '@/lib/email-attachments';
 import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
 import { estimatePdfFilename } from '@/lib/estimate-pdf';
 import { validateBody, z } from '@/lib/validate';
+import { computeQuotedMargin, getMarginFloorPct } from '@/lib/quoted-margin';
+import { getShopLaborRate } from '@/lib/shop-labor';
+import { logAudit } from '@/lib/audit';
+import { notifyMany, getSuperAdminIds } from '@/lib/notify';
 
 // R3-22: proof images inlined in the approval email are presigned at the
 // 7-day SigV4 maximum — the actionable window. Beyond it the attached PDF
@@ -50,6 +54,11 @@ const SendForApprovalSchema = z.object({
   // Preview: render exactly what would be sent (recipient, subject, HTML
   // body) WITHOUT minting a token, sending, or marking the estimate sent.
   preview: z.boolean().optional().default(false),
+  // R5-3: required (typed, non-empty) when the quoted parts margin is
+  // below the floor — recorded on the estimate, audit-logged, and the
+  // owners are notified. Absent on a below-floor send → 409 with the
+  // numbers so the client can prompt.
+  floorReason: z.string().trim().max(500).optional(),
   // Per-job proof picks from the compose screen — which graphics_job_files
   // of each LINKED graphics job ride on this estimate's customer surfaces.
   // The full desired state: a linked job absent from the list (or with an
@@ -246,6 +255,49 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ preview: true, to: emailList.join(', ') || null, subject, html, attachments: [pdfFilename] });
   }
 
+  // ── Quoted-margin freeze + floor gate (R5-3, migration 275) ──
+  // The builder computes this live and throws it away; freeze it here, at
+  // the one real send path, BEFORE any attachment/PDF work is spent. The
+  // formula mirrors the builder's Parts Margin strip exactly (costs from
+  // netsuite_parts by part_id; uncosted lines excluded, never 100%);
+  // labor is costed separately at the blended shop rate when one is set.
+  const partIds = [...new Set((rawLineItems || []).map((l: any) => l.part_id).filter(Boolean))] as string[];
+  const costByPart = new Map<string, { purchase_price: number | null; avg_install_cost: number | null }>();
+  for (let i = 0; i < partIds.length; i += 200) {
+    const { data: parts } = await supabase
+      .from('netsuite_parts')
+      .select('id, purchase_price, avg_install_cost')
+      .in('id', partIds.slice(i, i + 200));
+    for (const p of parts || []) costByPart.set(p.id, { purchase_price: p.purchase_price, avg_install_cost: p.avg_install_cost });
+  }
+  const effectiveLaborHours = Number(estimate.labor_hours_override ?? estimate.labor_hours) || 0;
+  const [laborCostRate, floorPct] = await Promise.all([
+    getShopLaborRate(supabase),
+    getMarginFloorPct(supabase),
+  ]);
+  const quotedMargin = computeQuotedMargin(
+    (rawLineItems || []).map((l: any) => ({
+      item_number: l.item_number ?? null,
+      quantity: Number(l.quantity) || 0,
+      unit_price: Number(l.unit_price) || 0,
+      purchase_price: l.part_id ? (costByPart.get(l.part_id)?.purchase_price ?? null) : null,
+      avg_install_cost: l.part_id ? (costByPart.get(l.part_id)?.avg_install_cost ?? null) : null,
+    })),
+    effectiveLaborHours,
+    laborCostRate,
+  );
+  const belowFloor = quotedMargin.marginPct != null && quotedMargin.marginPct < floorPct;
+  const floorReason = (body.floorReason || '').trim();
+  if (belowFloor && !floorReason) {
+    return NextResponse.json({
+      error: `This quote's parts margin is ${quotedMargin.marginPct}%, below the ${floorPct}% floor. Give a reason to send anyway — it's recorded and the owner is notified.`,
+      belowFloor: true,
+      marginPct: quotedMargin.marginPct,
+      floorPct,
+      canOverride: true,
+    }, { status: 409 });
+  }
+
   // Attachments are assembled BEFORE the token is minted or the estimate is
   // stamped sent (docs/customer-email-standard.md): a storage failure must
   // fail the whole send, not leave a rotated link on a record that already
@@ -309,11 +361,52 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       } : {}),
       customer_rejected_at: null,
       customer_rejection_reason: null,
+      // Frozen quoted-margin snapshot (R5-3): header-level so the line
+      // save path's delete+reinsert can't wipe it; a re-send overwrites —
+      // the snapshot always describes the version the customer last got.
+      quoted_cost_total: quotedMargin.costTotal,
+      quoted_margin_pct: quotedMargin.marginPct,
+      quoted_below_floor: belowFloor,
+      quoted_floor_pct: floorPct,
+      quoted_labor_cost: quotedMargin.laborCost,
+      quoted_margin_at: new Date().toISOString(),
+      below_floor_reason: belowFloor ? floorReason : null,
+      quoted_margin_detail: quotedMargin.lines,
       updated_at: new Date().toISOString(),
     })
     .eq('id', estimate.id);
   if (updErr) {
     return NextResponse.json({ error: 'Failed to mint token: ' + updErr.message }, { status: 500 });
+  }
+
+  // Below-floor governance (R5-3): the send is now committed — record who
+  // sent under the floor and tell the owners. Reads land in the weekly
+  // exceptions digest via the audit action.
+  if (belowFloor) {
+    await logAudit(supabase, {
+      actorId: auth.user.id,
+      table: 'estimates',
+      recordId: estimate.id,
+      action: 'estimate_below_floor_sent',
+      detail: {
+        estimate_number: estimate.estimate_number,
+        marginPct: quotedMargin.marginPct,
+        floorPct,
+        grandTotal: estimate.grand_total,
+        reason: floorReason,
+        uncostedLines: quotedMargin.uncostedCount,
+      },
+    });
+    getSuperAdminIds(auth.user.id).then(async ids => {
+      if (ids.length === 0) return;
+      await notifyMany(ids, {
+        type: 'below_floor_send',
+        title: `⚠ Estimate #${estimate.estimate_number} sent at ${quotedMargin.marginPct}% margin (floor ${floorPct}%)`,
+        body: `${estimate.customer_name || 'Customer'} — $${Number(estimate.grand_total || 0).toLocaleString()} quote sent below the margin floor. Reason: ${floorReason}`.slice(0, 900),
+        url: deepLinks.estimate(estimate.id),
+        channels: ['in_app', 'push'],
+      });
+    }).catch(err => console.error('below-floor notify failed:', err));
   }
 
   // A resend-after-rejection reopens the estimate (status back to 'sent'

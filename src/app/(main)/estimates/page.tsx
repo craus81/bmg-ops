@@ -2032,21 +2032,40 @@ export default function EstimatesPage() {
   const confirmSendApproval = async (fields: EmailComposeFields): Promise<{ ok: boolean }> => {
     if (!editingId) return { ok: false };
     let data: any;
+    // Below-floor sends 409 once with the numbers; a typed reason retries
+    // the same send (recorded on the estimate + audit log, owner notified).
+    let floorReason: string | undefined;
     try {
-      const res = await fetch(`/api/estimates/${editingId}/send-for-approval`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          emails: fields.emails,
-          bccSelf: fields.bccSelf, cc: fields.cc,
-          message: fields.message || undefined,
-          proofSelections: approvalProofSelectionPayload(),
-          attachmentFileIds: fields.attachmentIds,
-        }),
-      });
-      data = await res.json();
-      if (!res.ok) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const res = await fetch(`/api/estimates/${editingId}/send-for-approval`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            emails: fields.emails,
+            bccSelf: fields.bccSelf, cc: fields.cc,
+            message: fields.message || undefined,
+            proofSelections: approvalProofSelectionPayload(),
+            attachmentFileIds: fields.attachmentIds,
+            ...(floorReason ? { floorReason } : {}),
+          }),
+        });
+        data = await res.json();
+        if (res.ok) break;
+        if (res.status === 409 && data.belowFloor && attempt === 0) {
+          const reason = await dialog.prompt(
+            `This quote's parts margin is ${data.marginPct}% — below the ${data.floorPct}% floor.\n\nType the reason to send anyway. It goes on the estimate and the owner is notified.`,
+            '',
+            { title: 'Below margin floor', confirmLabel: 'Send anyway', placeholder: 'Reason (required)' },
+          );
+          if (reason === null || !reason.trim()) return { ok: false };
+          floorReason = reason.trim();
+          continue;
+        }
         await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
+        return { ok: false };
+      }
+      if (!data || data.error) {
+        await dialog.alert('Send failed: ' + (data?.error || 'Unknown error'));
         return { ok: false };
       }
     } catch {
