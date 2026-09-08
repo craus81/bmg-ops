@@ -14,7 +14,9 @@
  */
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { apiFetch } from '@/lib/api-client';
+import { deepLinks } from '@/lib/deep-links';
 import { useAuth } from '@/components/AuthProvider';
 import FinancialsDrilldown, { AGE_META, DrillTarget } from './FinancialsDrilldown';
 
@@ -192,6 +194,7 @@ function HeaderLink({ label, onClick }: { label: string; onClick: () => void }) 
 
 export default function FinancialsDashboard() {
   const { isAdmin, isSales } = useAuth();
+  const router = useRouter();
   const [data, setData] = useState<FinancialsData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [drill, setDrill] = useState<DrillTarget | null>(null);
@@ -608,6 +611,9 @@ export default function FinancialsDashboard() {
                 : 'Graphics history unavailable'} />
             <Tile swatch={(exec.operations.neverInvoiced || 0) > 0 ? 'var(--error)' : 'var(--success)'} label="Never invoiced"
               value={exec.operations.neverInvoiced != null ? String(exec.operations.neverInvoiced) : '—'}
+              onClick={(exec.operations.neverInvoiced || 0) > 0
+                ? () => router.push(deepLinks.neverInvoicedQueue())
+                : undefined}
               sub={(exec.operations.neverInvoiced || 0) > 0
                 ? <span style={{ color: 'var(--error)', fontWeight: 700 }}>done vehicles with no invoice anywhere · 180d</span>
                 : 'Every completed vehicle has an invoice'} />

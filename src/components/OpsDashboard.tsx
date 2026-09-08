@@ -487,9 +487,9 @@ export default function OpsDashboard() {
     });
     const neverInvoiced = neverInvoicedRes.status === 'fulfilled' ? (neverInvoicedRes.value as number) || 0 : 0;
     if (neverInvoiced > 0) queue.push({
-      key: 'never-invoiced', count: neverInvoiced, tone: 'err', path: '/tracking',
+      key: 'never-invoiced', count: neverInvoiced, tone: 'err', path: deepLinks.neverInvoicedQueue(),
       title: 'Completed vehicles never invoiced',
-      detail: 'Done or shipped in the last 180 days with no invoice recorded — check Archived too',
+      detail: 'Done or shipped in the last 180 days with no invoice recorded — the queue says what each one needs',
     });
     const quietLeads = count(quietLeadsRes);
     if (quietLeads > 0) queue.push({
