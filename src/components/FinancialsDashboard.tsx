@@ -60,6 +60,10 @@ interface ExecSummary {
     inShop?: number;
     completeNotShipped?: number;
     turnaround?: { avgDays: number; completions: number } | null;
+    dwell?: { stages: { stage: string; medianDays: number; samples: number }[]; slowest: { stage: string; medianDays: number; samples: number } | null; completions: number } | null;
+    graphics?: { shippedPerWeek: number; shipped28d: number; proofMedianDays: number | null; proofSamples: number } | null;
+    neverInvoiced?: number | null;
+    leadingMargin?: { pct: number; day: string } | null;
   };
   sparklines: Record<string, { day: string; value: number | null }[]>;
 }
@@ -591,6 +595,27 @@ export default function FinancialsDashboard() {
               sub={exec.operations.turnaround && exec.operations.turnaround.completions > 0
                 ? <>received → complete · {exec.operations.turnaround.completions} vehicles, 30d</>
                 : 'No completions in the last 30 days'} />
+            {/* R5-15: the band's flow tiles — dwell, graphics, leaks, leading margin. */}
+            <Tile swatch="var(--warning)" label="Slowest stage"
+              value={exec.operations.dwell?.slowest ? `${exec.operations.dwell.slowest.medianDays}d` : '—'}
+              sub={exec.operations.dwell?.slowest
+                ? <>{exec.operations.dwell.slowest.stage.replace(/_/g, ' ')} median · {exec.operations.dwell.slowest.samples} vehicles, 30d</>
+                : 'Needs 3+ completions through a stage (30d)'} />
+            <Tile swatch="var(--navy, #4d8ba6)" label="Graphics / week"
+              value={exec.operations.graphics ? String(exec.operations.graphics.shippedPerWeek) : '—'}
+              sub={exec.operations.graphics
+                ? <>shipped, 4-week avg{exec.operations.graphics.proofMedianDays != null && <> · proofs approved in ~{exec.operations.graphics.proofMedianDays}d</>}</>
+                : 'Graphics history unavailable'} />
+            <Tile swatch={(exec.operations.neverInvoiced || 0) > 0 ? 'var(--error)' : 'var(--success)'} label="Never invoiced"
+              value={exec.operations.neverInvoiced != null ? String(exec.operations.neverInvoiced) : '—'}
+              sub={(exec.operations.neverInvoiced || 0) > 0
+                ? <span style={{ color: 'var(--error)', fontWeight: 700 }}>done vehicles with no invoice anywhere · 180d</span>
+                : 'Every completed vehicle has an invoice'} />
+            <Tile swatch="var(--success)" label="Quoted margin (30d)"
+              value={exec.operations.leadingMargin ? `${exec.operations.leadingMargin.pct}%` : '—'}
+              sub={exec.operations.leadingMargin
+                ? <>leading — frozen at send, value-weighted<Sparkline points={exec.sparklines?.quoted_margin_pct_30d} /></>
+                : 'Accrues as estimates send with costed lines'} />
           </div>
         </div>
       )}

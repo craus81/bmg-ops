@@ -5,6 +5,7 @@ import { loadRevenuePeriods } from '@/lib/revenue-summary';
 import { loadOpenQuotes, loadPipeline, loadShopCounts, chicagoDay } from '@/lib/exec-metrics';
 import { loadOrderBook } from '@/lib/order-book';
 import { loadQuoteFacts, summarizeQuoteFacts } from '@/lib/sales-facts';
+import { loadStageDwell, loadGraphicsPulse, loadNeverInvoicedCount, loadLeadingMargin } from '@/lib/ops-pulse';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -64,7 +65,7 @@ async function loadTurnaround(): Promise<{ avgDays: number; completions: number 
   };
 }
 
-const SPARK_METRICS = ['cash', 'ar_total', 'open_quotes_value', 'so_order_book_value', 'so_unbilled_value', 'revenue_mtd'];
+const SPARK_METRICS = ['cash', 'ar_total', 'open_quotes_value', 'so_order_book_value', 'so_unbilled_value', 'revenue_mtd', 'quoted_margin_pct_30d'];
 
 export async function GET(req: NextRequest) {
   const auth = await requireFinancials(req);
@@ -102,12 +103,20 @@ export async function GET(req: NextRequest) {
     (async () => { try { return await loadRevenuePeriods(); } catch (e: any) { return { error: errMeta(e) }; } })(),
     (async () => {
       try {
-        const [{ totals }, counts, turnaround] = await Promise.all([
+        // R5-15 completes the band: stage dwell, graphics throughput,
+        // never-invoiced leak, and the CACHED leading-margin snapshot —
+        // each loader nulls itself on failure (Supabase-only, no inline
+        // SuiteQL per the audit doc's caching rule).
+        const [{ totals }, counts, turnaround, dwell, graphics, neverInvoiced, leadingMargin] = await Promise.all([
           loadOrderBook(service),
           loadShopCounts(service),
           loadTurnaround(),
+          loadStageDwell(service),
+          loadGraphicsPulse(service),
+          loadNeverInvoicedCount(service),
+          loadLeadingMargin(service),
         ]);
-        return { orderBook: totals, ...counts, turnaround };
+        return { orderBook: totals, ...counts, turnaround, dwell, graphics, neverInvoiced, leadingMargin };
       } catch (e: any) { return { error: errMeta(e) }; }
     })(),
     (async () => {
