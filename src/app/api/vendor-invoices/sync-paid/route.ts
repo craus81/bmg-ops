@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireRole } from '@/lib/api-auth';
-import { syncVendorBillPayments } from '@/lib/vendor-bill-sync';
+import { syncVendorBillPayments, syncPayoutBillPayments } from '@/lib/vendor-bill-sync';
 
 export const dynamic = 'force-dynamic';
 // SuiteQL round-trips for a large billed backlog take a while.
@@ -26,7 +26,16 @@ export async function POST(req: NextRequest) {
 
   try {
     const result = await syncVendorBillPayments(service);
-    return NextResponse.json({ success: true, ...result });
+    // Installer payouts share the sweep (R5-13a) — the button checks both.
+    const payouts = await syncPayoutBillPayments(service);
+    return NextResponse.json({
+      success: true,
+      ...result,
+      checked: result.checked + payouts.checked,
+      paid: result.paid + payouts.paid,
+      errors: [...result.errors, ...payouts.errors],
+      payouts,
+    });
   } catch (e: any) {
     return NextResponse.json({ error: e.message || 'NetSuite payment check failed' }, { status: 502 });
   }

@@ -15,7 +15,7 @@ import { fetchAllRows } from '@/lib/fetch-all';
  * for this type), deep-linked to their earnings page. Non-fatal.
  */
 async function notifyPayoutInstaller(
-  payout: { profile_id: string; cni_job_id: string | null; total_amount: number | null },
+  payout: { profile_id: string; cni_job_id: string | null; total_amount: number | null; period_start?: string | null; period_end?: string | null },
   toStatus: 'approved' | 'billed' | 'paid',
 ) {
   try {
@@ -24,6 +24,8 @@ async function notifyPayoutInstaller(
       const { data: job } = await service
         .from('cni_jobs').select('job_number').eq('id', payout.cni_job_id).maybeSingle();
       if (job?.job_number) jobRef = ` for ${job.job_number}`;
+    } else if (payout.period_start) {
+      jobRef = ` for the ${payout.period_start} – ${payout.period_end || '?'} pay period`;
     }
     const money = payout.total_amount != null ? ` ($${Number(payout.total_amount).toFixed(2)})` : '';
     const copy = {
@@ -94,6 +96,34 @@ async function jobCredits(cniJobId: string): Promise<{ data: JobCredit[]; error:
   return { data: all, error: null };
 }
 
+/** Per-job totals for a cni_period payout's linked credits (memo breakdown). */
+async function periodJobBreakdown(payoutId: string): Promise<{ jobNumber: string; total: number }[]> {
+  const { data: credits } = await fetchAllRows<{ amount: number | null; cni_job_vin_id: string | null }>((from, to) => service
+    .from('install_credits')
+    .select('amount, cni_job_vin_id')
+    .eq('payout_id', payoutId)
+    .order('id').range(from, to));
+  const vinIds = [...new Set((credits || []).map(c => c.cni_job_vin_id).filter(Boolean))] as string[];
+  const jobByVin = new Map<string, string>();
+  for (let i = 0; i < vinIds.length; i += 200) {
+    const { data } = await service.from('cni_job_vins').select('id, job_id').in('id', vinIds.slice(i, i + 200));
+    for (const v of data || []) jobByVin.set(v.id, v.job_id);
+  }
+  const jobIds = [...new Set([...jobByVin.values()])];
+  const numberByJob = new Map<string, string>();
+  for (let i = 0; i < jobIds.length; i += 200) {
+    const { data } = await service.from('cni_jobs').select('id, job_number').in('id', jobIds.slice(i, i + 200));
+    for (const j of data || []) numberByJob.set(j.id, j.job_number || j.id.slice(0, 8));
+  }
+  const totals = new Map<string, number>();
+  for (const c of credits || []) {
+    const jobId = c.cni_job_vin_id ? jobByVin.get(c.cni_job_vin_id) : undefined;
+    const label = (jobId && numberByJob.get(jobId)) || 'other';
+    totals.set(label, (totals.get(label) || 0) + (c.amount != null ? Number(c.amount) : 0));
+  }
+  return [...totals.entries()].map(([jobNumber, total]) => ({ jobNumber, total })).sort((a, b) => b.total - a.total);
+}
+
 async function nameAndVendorMaps(profileIds: string[]) {
   const names = new Map<string, string>();
   const vendors = new Map<string, string | null>();
@@ -107,7 +137,85 @@ async function nameAndVendorMaps(profileIds: string[]) {
   return { names, vendors };
 }
 
-const GetSchema = z.object({ cniJobId: z.string().uuid() });
+const GetSchema = z.union([
+  z.object({ cniJobId: z.string().uuid() }),
+  z.object({ view: z.literal('periods') }),
+]);
+
+/**
+ * The pay-period console's data (R5-13b/c): cni_period payouts, an aging
+ * strip over every unpaid payout stage, and per-installer unlinked CNI
+ * credit totals (what a batch would pick up).
+ */
+async function periodsView() {
+  const [payoutsRes, unpaidRes, pendingRes] = await Promise.all([
+    service
+      .from('payouts')
+      .select('id, profile_id, period_start, period_end, total_amount, status, netsuite_bill_id, created_at, approved_at, billed_at, paid_at')
+      .eq('kind', 'cni_period')
+      .order('created_at', { ascending: false })
+      .limit(100),
+    fetchAllRows<any>((from, to) => service
+      .from('payouts')
+      .select('status, created_at, approved_at, billed_at')
+      .in('status', ['draft', 'approved', 'billed'])
+      .order('id').range(from, to)),
+    fetchAllRows<any>((from, to) => service
+      .from('install_credits')
+      .select('profile_id, amount, created_at')
+      .is('payout_id', null)
+      .is('voided_at', null)
+      .not('cni_job_vin_id', 'is', null)
+      .order('created_at').order('id').range(from, to)),
+  ]);
+
+  // Aging per stage: count + days since the oldest entered that stage.
+  const now = Date.now();
+  const aging: Record<string, { count: number; oldestDays: number }> = {};
+  for (const p of unpaidRes.data || []) {
+    const anchor = p.status === 'billed' ? (p.billed_at || p.created_at)
+      : p.status === 'approved' ? (p.approved_at || p.created_at)
+      : p.created_at;
+    const days = Math.floor((now - new Date(anchor).getTime()) / 86_400_000);
+    const entry = aging[p.status] || { count: 0, oldestDays: 0 };
+    entry.count++;
+    if (days > entry.oldestDays) entry.oldestDays = days;
+    aging[p.status] = entry;
+  }
+
+  const pending = new Map<string, { credits: number; total: number; unpriced: number; oldest: string }>();
+  for (const c of pendingRes.data || []) {
+    const t = pending.get(c.profile_id) || { credits: 0, total: 0, unpriced: 0, oldest: c.created_at };
+    t.credits++;
+    if (c.amount != null) t.total += Number(c.amount);
+    else t.unpriced++;
+    if (c.created_at < t.oldest) t.oldest = c.created_at;
+    pending.set(c.profile_id, t);
+  }
+
+  const profileIds = [...new Set([
+    ...(payoutsRes.data || []).map((p: any) => p.profile_id),
+    ...pending.keys(),
+  ])] as string[];
+  const { names, vendors } = await nameAndVendorMaps(profileIds);
+
+  return NextResponse.json({
+    payouts: (payoutsRes.data || []).map((p: any) => ({
+      ...p,
+      total_amount: p.total_amount != null ? Number(p.total_amount) : null,
+      profile_name: names.get(p.profile_id) || 'Unknown',
+      netsuite_vendor_id: vendors.get(p.profile_id) || null,
+    })),
+    aging,
+    pending: [...pending.entries()].map(([profile_id, t]) => ({
+      profile_id,
+      profile_name: names.get(profile_id) || 'Unknown',
+      netsuite_vendor_id: vendors.get(profile_id) || null,
+      ...t,
+      total: Math.round(t.total * 100) / 100,
+    })).sort((a, b) => b.total - a.total),
+  });
+}
 
 /**
  * Payout state for one individual-mode CNI job: existing payouts (with their
@@ -120,6 +228,8 @@ export async function GET(req: NextRequest) {
 
   const q = validateSearchParams(req, GetSchema);
   if (q.error) return q.error;
+
+  if ('view' in q.data) return periodsView();
 
   const { data: credits, error: creditsErr } = await jobCredits(q.data.cniJobId);
   if (creditsErr) {
@@ -170,6 +280,12 @@ export async function GET(req: NextRequest) {
 
 const PostSchema = z.union([
   z.object({ action: z.literal('generate'), cniJobId: z.string().uuid() }),
+  z.object({
+    action: z.literal('generate_period'),
+    profileId: z.string().uuid(),
+    periodStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    periodEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  }),
   z.object({ action: z.literal('approve'), payoutId: z.string().uuid() }),
   z.object({ action: z.literal('create_bill'), payoutId: z.string().uuid(), location: z.enum(BILL_LOCATIONS) }),
   z.object({ action: z.literal('record_bill'), payoutId: z.string().uuid(), netsuiteBillId: z.string().trim().min(1).max(64) }),
@@ -261,10 +377,75 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, created });
   }
 
+  if (body.action === 'generate_period') {
+    // R5-13b: one installer's unlinked CNI credits across ALL jobs in the
+    // period become ONE payout (kind cni_period) → ONE vendor bill, instead
+    // of one bill per job. Field credits (source 'field') stay with the
+    // biweekly payroll flow — only CNI-VIN credits batch here.
+    const endNext = new Date(new Date(body.periodEnd + 'T00:00:00Z').getTime() + 86_400_000).toISOString().slice(0, 10);
+    if (!(body.periodStart < endNext)) {
+      return NextResponse.json({ error: 'Period end must be on or after period start' }, { status: 400 });
+    }
+    const { data: credits, error: credErr } = await fetchAllRows<JobCredit & { cni_job_vin_id: string }>((from, to) => service
+      .from('install_credits')
+      .select('id, profile_id, vin, amount, share_weight, crew_size, payout_id, created_at, cni_job_vin_id')
+      .eq('profile_id', body.profileId)
+      .is('payout_id', null)
+      .is('voided_at', null)
+      .not('cni_job_vin_id', 'is', null)
+      .gte('created_at', body.periodStart)
+      .lt('created_at', endNext)
+      .order('created_at').order('id')
+      .range(from, to));
+    if (credErr) {
+      // Never batch from a partial read — missing credits pay people short.
+      return NextResponse.json({ error: 'Failed to load credits: ' + credErr.message }, { status: 500 });
+    }
+    if (!credits || credits.length === 0) {
+      return NextResponse.json({ error: 'No unassigned CNI credits for this installer in that period' }, { status: 400 });
+    }
+    const unpriced = credits.filter(c => c.amount == null);
+    if (unpriced.length > 0) {
+      return NextResponse.json({ error: `${unpriced.length} credit${unpriced.length === 1 ? ' has' : 's have'} no amount — fix pay/splits on their jobs first` }, { status: 400 });
+    }
+    const total = Math.round(credits.reduce((s, c) => s + Number(c.amount), 0) * 100) / 100;
+
+    const { data: payoutRow, error: insErr } = await service
+      .from('payouts')
+      .insert({
+        profile_id: body.profileId,
+        kind: 'cni_period',
+        period_start: body.periodStart,
+        period_end: body.periodEnd,
+        total_amount: total,
+        status: 'draft',
+      })
+      .select('id')
+      .single();
+    if (insErr || !payoutRow) {
+      return NextResponse.json({ error: 'Failed to create payout: ' + (insErr?.message || 'unknown') }, { status: 500 });
+    }
+    const { error: linkErr } = await service
+      .from('install_credits')
+      .update({ payout_id: payoutRow.id })
+      .in('id', credits.map(c => c.id));
+    if (linkErr) {
+      return NextResponse.json({ error: 'Payout created but linking credits failed: ' + linkErr.message }, { status: 500 });
+    }
+    await logAudit(service, {
+      actorId: auth.user.id,
+      table: 'payouts',
+      recordId: payoutRow.id,
+      action: 'generate_period',
+      detail: { profile_id: body.profileId, period_start: body.periodStart, period_end: body.periodEnd, total, credits_linked: credits.length },
+    });
+    return NextResponse.json({ success: true, payoutId: payoutRow.id, total, credits: credits.length });
+  }
+
   // Single-payout transitions.
   const { data: payout } = await service
     .from('payouts')
-    .select('id, status, kind, profile_id, cni_job_id, total_amount')
+    .select('id, status, kind, profile_id, cni_job_id, period_start, period_end, total_amount')
     .eq('id', body.payoutId)
     .single();
   if (!payout) return NextResponse.json({ error: 'Payout not found' }, { status: 404 });
@@ -301,15 +482,26 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: `Could not find the "${body.location}" location in NetSuite` }, { status: 400 });
       }
 
-      // A memo that ties the bill back to the job for reconciliation.
-      const [{ data: job }, { data: prof }] = await Promise.all([
-        service.from('cni_jobs').select('job_number, title').eq('id', payout.cni_job_id).maybeSingle(),
-        service.from('profiles').select('full_name').eq('id', payout.profile_id).maybeSingle(),
-      ]);
-      const memo = `Installer pay — ${prof?.full_name || 'installer'}${job?.job_number ? ` — ${job.job_number}` : ''}`;
-      // Reference No. (tranId) — required by NetSuite when bills aren't
-      // auto-numbered. Unique per vendor: job number + a short payout id.
-      const referenceNo = `${job?.job_number ? job.job_number + '-' : 'CNI-'}${payout.id.slice(0, 8)}`;
+      // A memo that ties the bill back to the job(s) for reconciliation.
+      const { data: prof } = await service
+        .from('profiles').select('full_name').eq('id', payout.profile_id).maybeSingle();
+      let memo: string;
+      let referenceNo: string;
+      if (payout.kind === 'cni_period') {
+        // Pay-period batch (R5-13b): ONE bill, per-job breakdown in the
+        // memo — never multi-line bills (the create helper posts one line).
+        const perJob = await periodJobBreakdown(payout.id);
+        const breakdown = perJob.map(j => `${j.jobNumber}: $${j.total.toFixed(2)}`).join(' · ');
+        memo = `Installer pay period ${payout.period_start} – ${payout.period_end} — ${prof?.full_name || 'installer'}${breakdown ? ` (${breakdown})` : ''}`.slice(0, 400);
+        referenceNo = `PP-${payout.id.slice(0, 8)}`;
+      } else {
+        const { data: job } = await service
+          .from('cni_jobs').select('job_number, title').eq('id', payout.cni_job_id).maybeSingle();
+        memo = `Installer pay — ${prof?.full_name || 'installer'}${job?.job_number ? ` — ${job.job_number}` : ''}`;
+        // Reference No. (tranId) — required by NetSuite when bills aren't
+        // auto-numbered. Unique per vendor: job number + a short payout id.
+        referenceNo = `${job?.job_number ? job.job_number + '-' : 'CNI-'}${payout.id.slice(0, 8)}`;
+      }
 
       const bill = await createVendorBill({
         vendorId, accountId: SUBCONTRACTOR_ACCT_ID, amount,

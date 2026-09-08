@@ -22,7 +22,7 @@ interface EarningRow {
 
 interface PayoutRow {
   id: string;
-  kind: 'cni_job' | 'payroll_period';
+  kind: 'cni_job' | 'payroll_period' | 'cni_period';
   label: string;
   amount: number | null;
   status: string; // draft | approved | billed | paid

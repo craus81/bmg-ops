@@ -7,7 +7,7 @@ import { verifyPoInvoiceQuantities } from '@/lib/po-invoice-verify';
 import { syncVendorPos } from '@/lib/vendor-po-sync';
 import { syncSalesOrders } from '@/lib/sales-order-sync';
 import { syncInventoryQuantities } from '@/lib/inventory-sync';
-import { syncVendorBillPayments } from '@/lib/vendor-bill-sync';
+import { syncVendorBillPayments, syncPayoutBillPayments } from '@/lib/vendor-bill-sync';
 import { syncArInvoicePayments } from '@/lib/ar-payment-sync';
 import { closeConvertedEstimates } from '@/lib/estimate-close-sync';
 import { recordHeartbeat } from '@/lib/system-health';
@@ -419,6 +419,17 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     console.error('[cron] Vendor bill payment sweep error:', err.message);
     results.vendorBills = { error: err.message };
+  }
+
+  // Installer payouts ride the same sweep (R5-13a): individual-mode payouts
+  // store the same netsuite_bill_id but used to stop at 'billed' until a
+  // human remembered Mark Paid — same lookup, same guarded transition, and
+  // the installer's "was I paid?" answers itself on /earnings.
+  try {
+    results.payoutBills = await syncPayoutBillPayments(supabase);
+  } catch (err: any) {
+    console.error('[cron] Payout bill payment sweep error:', err.message);
+    results.payoutBills = { error: err.message };
   }
 
   // ═══════════ 3e. AR (CUSTOMER) PAYMENT SWEEP ═══════════

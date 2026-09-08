@@ -198,6 +198,7 @@ export default function CniDashboardPage() {
         {navPill('Companies', '/admin/cni/companies', 'Installer companies')}
         {navPill('Vendor IDs', '/admin/cni/vendor-ids', 'NetSuite payout IDs')}
         {navPill('Pay Rates', '/admin/pay-rates', 'Per-vehicle pay')}
+        {navPill('Payouts', '/admin/cni/payouts', 'Pay-period batches + aging')}
         {navPill('Payroll', '/admin/payroll', 'Field install pay')}
         {navPill('Installer Portal ↗', '/installer', 'See the installer view')}
       </div>
