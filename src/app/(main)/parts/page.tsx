@@ -12,6 +12,7 @@ import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 import { DropZone } from '@/components/DropZone';
 import PartCatalogBrowser from '@/components/PartCatalogBrowser';
 import CatalogHealthPanel from '@/components/CatalogHealthPanel';
+import InstalledPhotosGrid from '@/components/InstalledPhotosGrid';
 import PartTransactionsModal from '@/components/PartTransactionsModal';
 import PartPosModal from '@/components/PartPosModal';
 import { loadBillableCustomers, type BillableCustomer } from '@/lib/billable-customers';
@@ -1288,6 +1289,10 @@ export default function PartsPage() {
 
                     {/* Catalog photo + marketing description — stocked by the
                         vendor-asset import / visual catalog; part of the record. */}
+                    {/* R6-10: the part actually installed on real vehicles
+                        (the unshipped half of PR #463). */}
+                    <InstalledPhotosGrid partNumber={part.item_number} />
+
                     {(part.image_path || part.marketing_description) && (
                       <div style={{ display: 'flex', gap: '10px', marginTop: '12px', alignItems: 'flex-start' }}>
                         {part.image_path && (
