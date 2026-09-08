@@ -137,6 +137,28 @@ export async function applyEmailToPo(
 
   await service.from('netsuite_vendor_pos').update(updates).eq('id', po.id);
 
+  // Append-only promise history (R5-2, migration 273): eta_date above is
+  // overwritten in place, so this row is the only durable record that the
+  // vendor once said a different date. Every ETA writer must add its row
+  // here — this is the codebase's single ETA chokepoint today. Capture
+  // must never break the scan: failures only warn.
+  if (etaChanged) {
+    try {
+      const { error: evErr } = await service.from('po_eta_events').insert({
+        po_id: po.id,
+        po_tranid: po.tranid || null,
+        vendor_name: po.vendor_name || null,
+        eta_date: eta,
+        previous_eta: po.eta_date || null,
+        source: 'email',
+        detail: (sourceLabel || '').slice(0, 200) || null,
+      });
+      if (evErr) console.warn('po_eta_events insert failed:', evErr.message);
+    } catch (e: any) {
+      console.warn('po_eta_events insert failed:', e?.message || e);
+    }
+  }
+
   // Upfit projects linked to this PO get the ETA (and a timeline note so
   // the change is attributable). Join-table links (migration 267) govern
   // when a project has any; the scalar first-PO match covers only projects
