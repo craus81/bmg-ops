@@ -302,6 +302,45 @@ export async function GET(req: NextRequest) {
     const laborByCheckin = await getShopLaborForCheckins(supabase, allIds);
     const shopLaborRate = await getShopLaborRate(supabase);
 
+    // ── Quoted margin (R5-10): the frozen-at-send snapshot (migration 275)
+    // for whichever estimate this vehicle links back to — directly
+    // (estimates.fleet_checkin_id) or through its sales order
+    // (estimates.netsuite_so_id). Several linked estimates → the LATEST
+    // frozen send wins (each send supersedes the offer before it). Quoted %
+    // is the parts margin at send; the report's margin is all-in — the
+    // variance is directional, labeled as such on the page. ──
+    const quotedByCheckin = new Map<string, { pct: number | null; number: string; at: string }>();
+    const noteQuoted = (checkinId: string | undefined, e: any) => {
+      if (!checkinId) return;
+      const existing = quotedByCheckin.get(checkinId);
+      if (existing && existing.at >= e.quoted_margin_at) return;
+      quotedByCheckin.set(checkinId, {
+        pct: e.quoted_margin_pct != null ? num(e.quoted_margin_pct) : null,
+        number: e.estimate_number || '—',
+        at: e.quoted_margin_at,
+      });
+    };
+    try {
+      for (const ids of chunk(allIds, 100)) {
+        const { data } = await supabase
+          .from('estimates')
+          .select('fleet_checkin_id, estimate_number, quoted_margin_pct, quoted_margin_at')
+          .not('quoted_margin_at', 'is', null)
+          .in('fleet_checkin_id', ids);
+        for (const e of data || []) noteQuoted(e.fleet_checkin_id, e);
+      }
+      for (const ids of chunk(soIds, 100)) {
+        const { data } = await supabase
+          .from('estimates')
+          .select('netsuite_so_id, estimate_number, quoted_margin_pct, quoted_margin_at')
+          .not('quoted_margin_at', 'is', null)
+          .in('netsuite_so_id', ids);
+        for (const e of data || []) noteQuoted(soToCheckin.get(String(e.netsuite_so_id)), e);
+      }
+    } catch (err: any) {
+      meta.quotedMarginError = String(err?.message || err).slice(0, 200);
+    }
+
     // ── Assemble. ──
     const vehicles = checkins.map(c => {
       const invoiceNumbers = invoiceNumbersByCheckin.get(c.id) || [];
@@ -316,6 +355,9 @@ export async function GET(req: NextRequest) {
       const labor = laborInfo?.cost ?? (laborHours > 0 ? null : 0);
       const label = [c.vehicle_year, c.vehicle_make, c.vehicle_model].filter(Boolean).join(' ')
         || (c.vin ? `VIN …${String(c.vin).slice(-8)}` : 'Vehicle');
+      const margin = Math.round((revenue - partsPo - (stock?.cost || 0) - installer - (labor || 0)) * 100) / 100;
+      const quoted = quotedByCheckin.get(c.id);
+      const actualMarginPct = revenue > 0 ? Math.round((margin / revenue) * 1000) / 10 : null;
       return {
         checkinId: c.id,
         vin: c.vin || null,
@@ -333,7 +375,13 @@ export async function GET(req: NextRequest) {
         labor: labor as number | null,
         laborHours,
         laborApproxHours: laborInfo?.approxHours || 0,
-        margin: Math.round((revenue - partsPo - (stock?.cost || 0) - installer - (labor || 0)) * 100) / 100,
+        margin,
+        quotedMarginPct: quoted?.pct ?? null,
+        quotedEstimate: quoted?.number ?? null,
+        actualMarginPct,
+        marginVariancePct: quoted?.pct != null && actualMarginPct != null
+          ? Math.round((actualMarginPct - quoted.pct) * 10) / 10
+          : null,
       };
     }).sort((a, b) => (b.dateInvoiced || '').localeCompare(a.dateInvoiced || ''));
 

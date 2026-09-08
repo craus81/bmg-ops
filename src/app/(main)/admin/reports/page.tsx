@@ -43,6 +43,12 @@ const REPORTS: ReportLink[] = [
     source: 'FleetSuite',
   },
   {
+    title: 'Quoted Margin',
+    blurb: 'The margin we OFFERED, frozen at each estimate send — by rep, customer, and month, distribution vs the floor, and every below-floor send with its typed reason. The leading indicator vehicle-margin confirms months later.',
+    href: '/admin/reports/quoted-margin',
+    source: 'FleetSuite',
+  },
+  {
     title: 'Installer Cost vs Invoiced',
     blurb: 'What we paid CNI installers per VIN (from recorded vendor invoices) vs. estimated customer billing, rolled up by location, installer, and part number.',
     href: '/admin/reports/installer-costs',
