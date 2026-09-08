@@ -29,6 +29,9 @@ export interface BookingSettings {
   /** How far out the grid extends. */
   horizonDays: number;
   blockedDates: string[]; // YYYY-MM-DD
+  /** Days after completion before the first automated pickup reminder;
+   *  escalation to the sales rep fires at 2× this. */
+  nudgeDays: number;
 }
 
 export const DEFAULT_BOOKING_SETTINGS: BookingSettings = {
@@ -41,6 +44,7 @@ export const DEFAULT_BOOKING_SETTINGS: BookingSettings = {
   leadDays: 1,
   horizonDays: 21,
   blockedDates: [],
+  nudgeDays: 3,
 };
 
 /** Clamp arbitrary stored JSON into a safe settings shape — the page and
@@ -68,6 +72,7 @@ export function sanitizeBookingSettings(raw: any): BookingSettings {
     blockedDates: Array.isArray(raw.blockedDates)
       ? raw.blockedDates.filter((s: any) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)).slice(0, 100)
       : [],
+    nudgeDays: int(raw.nudgeDays, 1, 30, d.nudgeDays),
   };
 }
 

@@ -210,7 +210,7 @@ export default function OpsDashboard() {
       scansTodayRes, scansWeekRes, msgRes, unreadRes,
       oppsRes, custRes, quotesRes, openEstRes, estRes, unpricedRes,
       apSubmittedRes, sentEstRes, sentWrapRes, staleProofRes, healthRes, atRiskRes,
-      neverInvoicedRes, quietLeadsRes,
+      neverInvoicedRes, quietLeadsRes, readyPickupRes,
     ] = await Promise.allSettled([
       // KPI 1 — NetSuite invoiced totals (authoritative revenue)
       fetch('/api/reports/invoiced-summary').then(r => r.json()),
@@ -368,6 +368,12 @@ export default function OpsDashboard() {
         .eq('status', 'active')
         .neq('record_type', 'vendor')
         .lt('updated_at', new Date(Date.now() - 30 * 86_400_000).toISOString()),
+      // Ready for pickup with NO booked slot (R5-17): complete vehicles
+      // auto-archive never touches — someone should be chasing each one.
+      supabase.from('fleet_checkins').select('*', { count: 'exact', head: true })
+        .eq('status', 'complete')
+        .is('archived_at', null)
+        .is('pickup_scheduled_date', null),
     ]);
 
     const val = <T,>(r: PromiseSettledResult<T>): T | null => (r.status === 'fulfilled' ? r.value : null);
@@ -490,6 +496,12 @@ export default function OpsDashboard() {
       key: 'quiet-leads', count: quietLeads, tone: 'blue', path: '/admin/prospects',
       title: 'Quiet leads worth a nurture touch',
       detail: 'Active records untouched for 30+ days — touch, park as Nurture, or mark Lost',
+    });
+    const readyPickup = count(readyPickupRes);
+    if (readyPickup > 0) queue.push({
+      key: 'ready-pickup', count: readyPickup, tone: 'warn', path: '/tracking',
+      title: 'Ready for pickup, no booking yet',
+      detail: 'Complete vehicles in the lot — the nudge cron mails the booking link; call the stragglers',
     });
     const cniPhotos = count(cniPhotosRes);
     if (cniPhotos > 0) queue.push({

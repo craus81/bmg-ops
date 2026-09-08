@@ -83,6 +83,10 @@
     {
       "path": "/api/cron/deal-forecast-check",
       "schedule": "0 12 * * 5"
+    },
+    {
+      "path": "/api/cron/pickup-nudges",
+      "schedule": "20 14 * * *"
     }
   ],
   "headers": [
