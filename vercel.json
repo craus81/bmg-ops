@@ -75,6 +75,10 @@
     {
       "path": "/api/cron/reorder-check",
       "schedule": "45 4 * * *"
+    },
+    {
+      "path": "/api/cron/owner-brief",
+      "schedule": "45 12 * * 1"
     }
   ],
   "headers": [

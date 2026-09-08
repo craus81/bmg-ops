@@ -655,6 +655,9 @@ export interface NotificationPreferences {
   /** Opt-out (migration 254, default true): email on every @mention. Optional
    *  because rows written before the column existed read it as undefined. */
   email_mentions?: boolean;
+  /** Opt-out (migration 276, default true): the Monday owner's brief. Only
+   *  super_admin/executive accounts are ever targeted by the cron. */
+  notify_weekly_brief?: boolean;
 }
 
 // ═══════════ MESSAGING ═══════════

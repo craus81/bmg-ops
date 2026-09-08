@@ -42,6 +42,49 @@ export function revenuePeriodBounds(today: string): {
   return { monthStart, lastMonthStart, lastMonthSameDay, quarterStart, yearStart, trailing12Start, chartStart };
 }
 
+export interface WeeklyRevenue {
+  thisWeek: number;
+  lastWeek: number;
+  sameWeekLastYear: number;
+}
+
+/**
+ * Netted revenue for the week ending at `endExclusive` (YYYY-MM-DD, the
+ * Monday after the week — [end-7, end)), plus the week before it and the
+ * same calendar week a year earlier ([end-371, end-364): 52 whole weeks
+ * back, so weekday mix matches). Same CustInvc−CustCred non-tax-line
+ * semantics as loadRevenuePeriods above — the owner's brief (R5-7) must
+ * agree with the CEO view's month numbers, just cut at week grain.
+ */
+export async function loadWeeklyRevenue(endExclusive: string): Promise<WeeklyRevenue> {
+  const shift = (day: string, delta: number) => {
+    const [y, m, d] = day.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10);
+  };
+  const thisStart = shift(endExclusive, -7);
+  const prevStart = shift(endExclusive, -14);
+  const yoyStart = shift(endExclusive, -371);
+  const yoyEnd = shift(endExclusive, -364);
+
+  const between = (from: string, toExclusive: string) =>
+    `CASE WHEN t.trandate >= TO_DATE('${from}', 'YYYY-MM-DD') AND t.trandate < TO_DATE('${toExclusive}', 'YYYY-MM-DD') THEN -tl.netamount ELSE 0 END`;
+
+  const result = await suiteqlQuery(`
+    SELECT
+      SUM(${between(thisStart, endExclusive)}) AS this_week,
+      SUM(${between(prevStart, thisStart)}) AS last_week,
+      SUM(${between(yoyStart, yoyEnd)}) AS yoy_week
+    FROM transaction t
+    INNER JOIN transactionline tl ON tl.transaction = t.id
+    WHERE t.type IN ('CustInvc', 'CustCred')
+      AND tl.mainline = 'F' AND tl.taxline = 'F'
+      AND ((t.trandate >= TO_DATE('${prevStart}', 'YYYY-MM-DD') AND t.trandate < TO_DATE('${endExclusive}', 'YYYY-MM-DD'))
+        OR (t.trandate >= TO_DATE('${yoyStart}', 'YYYY-MM-DD') AND t.trandate < TO_DATE('${yoyEnd}', 'YYYY-MM-DD')))`);
+  const row = result?.items?.[0] || {};
+  const num = (v: unknown) => Math.round((parseFloat(String(v ?? 0)) || 0) * 100) / 100;
+  return { thisWeek: num(row.this_week), lastWeek: num(row.last_week), sameWeekLastYear: num(row.yoy_week) };
+}
+
 export async function loadRevenuePeriods(): Promise<RevenuePeriods> {
   const b = revenuePeriodBounds(chicagoDay());
   const base = `
