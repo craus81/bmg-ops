@@ -16,6 +16,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { theme } from '@/lib/theme';
+import GuideTemplatePicker from '@/components/GuideTemplatePicker';
 import { defaultGuideSections, type GuidePage, type InstallGuide } from '@/lib/install-guide';
 
 export default function InstallGuidesPage() {
@@ -30,6 +31,7 @@ export default function InstallGuidesPage() {
   const [guides, setGuides] = useState<InstallGuide[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -38,6 +40,9 @@ export default function InstallGuidesPage() {
       const { data, error: err } = await supabase
         .from('install_guides')
         .select('*')
+        // R6-10: templates are guides too, but they are not JOBS — they
+        // belong in the picker, not mixed into the work list.
+        .or('is_template.is.null,is_template.eq.false')
         .order('updated_at', { ascending: false })
         .limit(200);
       if (err) setError(err.message);
@@ -109,6 +114,17 @@ export default function InstallGuidesPage() {
             Dimensioned placement guides for CNI installers — built from 1:20 scale templates
           </div>
         </div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+        <button
+          onClick={() => setShowTemplates(true)}
+          style={{
+            padding: '8px 14px', borderRadius: '10px', background: 'transparent',
+            color: 'var(--text-body)', fontWeight: 700, fontSize: '12px',
+            border: '1px solid var(--border)', cursor: 'pointer',
+          }}
+        >
+          From template
+        </button>
         <button
           onClick={createGuide}
           disabled={creating}
@@ -120,7 +136,15 @@ export default function InstallGuidesPage() {
         >
           {creating ? 'Creating…' : '+ New Guide'}
         </button>
+        </div>
       </div>
+
+      {showTemplates && (
+        <GuideTemplatePicker
+          onClose={() => setShowTemplates(false)}
+          onCreated={(guideId) => router.push(`/graphics/install-guides/${guideId}`)}
+        />
+      )}
 
       {error && (
         <div style={{

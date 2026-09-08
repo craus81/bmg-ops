@@ -19,6 +19,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { theme } from '@/lib/theme';
+import { parseVehicleDesc } from '@/lib/guide-templates';
 import { fetchCompanyLetterhead, type CompanyLetterhead } from '@/lib/company-profile';
 import {
   DIM_COLOR,
@@ -118,6 +119,7 @@ export default function InstallGuideEditorPage() {
   const [draft, setDraft] = useState<{ p1: Pt; p2: Pt } | null>(null);
   const [uploading, setUploading] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [savingTemplate, setSavingTemplate] = useState(false);
   const [exportingProof, setExportingProof] = useState(false);
   const [proofMode, setProofMode] = useState<ProofMode>('replace');
   const [sendOpen, setSendOpen] = useState(false);
@@ -721,6 +723,41 @@ export default function InstallGuideEditorPage() {
     updatePage(activePage.id, pg => ({ ...pg, px_per_in: pxPerRealInchFromDpi(dpi, parseGuideScale(guide.scale)), px_source: 'manual' }));
   };
 
+  // ---- R6-10: save this guide as a reusable model template ----
+  const saveAsTemplate = async () => {
+    const parsed = parseVehicleDesc(guide?.vehicle_desc);
+    const suggested = [parsed.make, parsed.model].filter(Boolean).join(' ')
+      || guide?.title || 'Model template';
+    const name = await dialog.prompt(
+      'Name this template so somebody recognises it later — the vehicle it fits, '
+      + 'not the customer it came from.\n\nIts calibration, dimensions and sections are copied; '
+      + 'the customer and any job links are deliberately left behind.',
+      suggested,
+      { title: 'Save as template', confirmLabel: 'Save template' },
+    );
+    if (!name || !name.trim()) return;
+
+    setSavingTemplate(true);
+    try {
+      const res = await fetch('/api/install-guides/templates', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'save_as_template', guideId, name: name.trim(),
+          year: parsed.year, make: parsed.make, model: parsed.model,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      await dialog.alert(
+        `Saved as "${body.name}". It will be offered on new guides for this vehicle.`,
+        { title: 'Template saved' },
+      );
+    } catch (e: any) {
+      await dialog.alert(e?.message || 'Could not save the template.', { title: 'Save failed' });
+    }
+    setSavingTemplate(false);
+  };
+
   // ---- Export ----
   // Shared checks + generation for downloads, CNI-job attach, and email.
   const confirmUncalibrated = async (): Promise<boolean> => {
@@ -1006,6 +1043,21 @@ export default function InstallGuideEditorPage() {
               </button>
             </div>
           )}
+          {/* R6-10: the calibration and standard dimension set are the
+              expensive part of a guide. Keep them for the next job on the
+              same model instead of redoing them by hand. */}
+          <button
+            onClick={saveAsTemplate}
+            disabled={savingTemplate}
+            title="Keep this guide's calibration, dimensions and sections as a reusable model template"
+            style={{
+              padding: '8px 14px', borderRadius: '10px', background: 'transparent',
+              color: 'var(--text-body)', fontWeight: 700, fontSize: '12px',
+              border: '1px solid var(--border)', cursor: savingTemplate ? 'wait' : 'pointer',
+            }}
+          >
+            {savingTemplate ? 'Saving…' : 'Save as template'}
+          </button>
           <button
             onClick={exportPdf}
             disabled={exporting}
