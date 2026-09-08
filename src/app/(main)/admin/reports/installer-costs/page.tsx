@@ -28,6 +28,10 @@ interface ReportData {
   range: { start: string; end: string };
   lines: ReportLine[];
   perVendor: Rollup[];
+  /** Measured crew hours per installer company (R6-12), keyed by UPPER-CASED
+   *  company name. Matched by name, so a company that never matched is
+   *  simply absent — the By-Installer table shows "—", not a zero rate. */
+  crewHours?: { byCompany: Record<string, { hours: number; approximateHours: number }>; unmatchedJobs: string[] };
   perLocation: Rollup[];
   perPart: Rollup[];
   perPO: Rollup[];
@@ -98,14 +102,19 @@ export default function InstallerCostsReportPage() {
     );
   };
 
-  const rollupTable = (title: string, rows: Rollup[]) => (
+  /** $/crew hour — the payout-rate sanity check (R6-12). Null (rendered
+   *  "—") whenever the company's hours are unknown or zero: a blank is
+   *  honest, an infinite rate is not. */
+  const crewFor = (vendor: string) => data?.crewHours?.byCompany[vendor.toUpperCase()] || null;
+
+  const rollupTable = (title: string, rows: Rollup[], withCrew = false) => (
     <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '12px', flex: 1, minWidth: '280px' }}>
       <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px' }}>{title}</div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
           <thead>
             <tr>
-              {['', 'VINs', 'Paid', 'Est. Invoiced', 'Est. Margin'].map(h => (
+              {['', 'VINs', 'Paid', 'Est. Invoiced', 'Est. Margin', ...(withCrew ? ['Crew hrs', '$/hr'] : [])].map(h => (
                 <th key={h} style={{ textAlign: h ? 'right' : 'left', padding: '4px 6px', fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>{h}</th>
               ))}
             </tr>
@@ -118,6 +127,22 @@ export default function InstallerCostsReportPage() {
                 <td style={{ padding: '4px 6px', textAlign: 'right', color: '#f472b6', fontWeight: 700 }}>{fmtMoney(r.paid)}</td>
                 <td style={{ padding: '4px 6px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmtMoney(r.invoiced)}</td>
                 <td style={{ padding: '4px 6px', textAlign: 'right', fontWeight: 700, color: r.margin >= 0 ? '#22c55e' : '#ef4444' }}>{fmtMoney(r.margin)}</td>
+                {withCrew && (() => {
+                  const crew = crewFor(r.key);
+                  return (
+                    <>
+                      <td style={{ padding: '4px 6px', textAlign: 'right', color: 'var(--text-secondary)' }}>
+                        {crew ? crew.hours : '—'}
+                        {crew && crew.approximateHours > 0 && (
+                          <span title={`${crew.approximateHours}h from timers nobody stopped`} style={{ color: '#f59e0b' }}> *</span>
+                        )}
+                      </td>
+                      <td style={{ padding: '4px 6px', textAlign: 'right', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                        {crew && crew.hours > 0 ? fmtMoney(r.paid / crew.hours) : '—'}
+                      </td>
+                    </>
+                  );
+                })()}
               </tr>
             ))}
           </tbody>
@@ -205,8 +230,19 @@ export default function InstallerCostsReportPage() {
           {/* Rollups */}
           <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
             {rollupTable('By Location', data.perLocation)}
-            {rollupTable('By Installer', data.perVendor)}
+            {rollupTable('By Installer', data.perVendor, true)}
           </div>
+          {data.crewHours && (
+            <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '-8px', marginBottom: '14px' }}>
+              Crew hours come from job timers and are matched to installers by company NAME, so a renamed company
+              shows &ldquo;&mdash;&rdquo; rather than a wrong rate. A <span style={{ color: '#f59e0b' }}>*</span> marks
+              hours that include timers nobody stopped (the nightly sweep capped them), so that rate is approximate.
+              {data.crewHours.unmatchedJobs.length > 0 && (
+                <> {data.crewHours.unmatchedJobs.length} job{data.crewHours.unmatchedJobs.length === 1 ? '' : 's'} with
+                logged hours had no company assigned, so those hours are in no row here.</>
+              )}
+            </div>
+          )}
           <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
             {rollupTable('By Part Number', data.perPart)}
             {rollupTable('By PO', data.perPO || [])}

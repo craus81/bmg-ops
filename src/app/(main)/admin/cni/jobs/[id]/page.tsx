@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { apiFetch } from '@/lib/api-client';
 import PartPicker, { type PickedPart } from '@/components/PartPicker';
 import { loadCompaniesWithCounts } from '@/lib/cni-companies';
 import JobAttachments from '@/components/JobAttachments';
@@ -412,6 +413,13 @@ export default function CniJobDetailPage() {
   // (vendor_invoices) — the legacy per-job invoice columns are read-only
   // history now.
   const [budgetExceeded, setBudgetExceeded] = useState(false);
+  // Crew hours vs estimate (R6-12). Null until loaded, and absent entirely
+  // when no timer has run on this job — a chip claiming 0h would read as
+  // "nobody worked", not "nobody timed it".
+  const [productivity, setProductivity] = useState<{
+    totalHours: number; autoClosedHours: number; estimatedHours: number | null;
+    variancePct: number | null; vehiclesPerCrewHour: number | null;
+  } | null>(null);
   const [billing, setBilling] = useState<{
     completedVins: number; totalVins: number; coveredApproved: number; coveredAny: number;
     invoices: { id: string; invoice_number: string | null; vendor_name: string; status: string; total_amount: number | null; vinsCovered: number }[];
@@ -442,8 +450,20 @@ export default function CniJobDetailPage() {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!hasFeature('cni_admin')) { router.push('/home'); return; }
     loadJob();
+    loadProductivity();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, isAdmin, jobId]);
+
+  /** Crew hours vs estimate (R6-12). Best-effort: a failure leaves the chip
+   *  off rather than blocking the console. */
+  const loadProductivity = async () => {
+    try {
+      const res = await apiFetch(`/api/reports/crew-utilization?jobId=${jobId}`);
+      if (!res.ok) return;
+      const json = await res.json();
+      setProductivity(json.job || null);
+    } catch { /* no chip this load */ }
+  };
 
   const saveDeviceCapture = async (on: boolean) => {
     if (!job) return;
@@ -1227,6 +1247,37 @@ export default function CniJobDetailPage() {
             <div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Est. Hours</div>
               <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>{job.estimated_hours}h</div>
+            </div>
+          )}
+          {/* Actual crew hours vs estimate (R6-12), sitting next to budget
+              and pay-per-vehicle where the money decisions get made. */}
+          {productivity && productivity.totalHours > 0 && (
+            <div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Crew Hours</div>
+              <div style={{
+                fontSize: '14px', fontWeight: 700,
+                color: productivity.variancePct == null ? 'var(--text-primary)'
+                  : productivity.variancePct > 15 ? 'var(--error)'
+                  : productivity.variancePct < -15 ? 'var(--success)' : 'var(--text-primary)',
+              }}>
+                {productivity.totalHours}h
+                {productivity.variancePct != null && (
+                  <span style={{ fontSize: '12px', fontWeight: 700 }}>
+                    {' '}({productivity.variancePct > 0 ? '+' : ''}{productivity.variancePct}%)
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
+                {productivity.variancePct == null
+                  ? 'no estimate to compare'
+                  : `vs ${productivity.estimatedHours}h estimated`}
+                {productivity.vehiclesPerCrewHour != null && ` · ${productivity.vehiclesPerCrewHour} veh/hr`}
+              </div>
+              {productivity.autoClosedHours > 0 && (
+                <div style={{ fontSize: '10.5px', color: 'var(--warning, #f59e0b)' }}>
+                  {productivity.autoClosedHours}h approximate — timer not stopped
+                </div>
+              )}
             </div>
           )}
         </div>
