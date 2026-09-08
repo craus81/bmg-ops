@@ -29,6 +29,11 @@ interface VehicleRow {
   laborHours: number;
   laborApproxHours: number;
   margin: number;
+  /** Frozen parts margin at the last send of the vehicle's linked estimate (R5-10). */
+  quotedMarginPct: number | null;
+  quotedEstimate: string | null;
+  actualMarginPct: number | null;
+  marginVariancePct: number | null;
 }
 interface Report {
   range: { start: string; end: string };
@@ -73,11 +78,12 @@ export default function VehicleMarginPage() {
     if (!report) return;
     downloadCsv(
       `vehicle-margin-${report.range.start}-to-${report.range.end}.csv`,
-      ['Vehicle', 'VIN', 'Customer', 'SO', 'Invoices', 'Invoiced', 'Revenue', 'Parts (PO)', 'POs', 'Parts (stock est.)', 'Installer', 'Labor Hours', 'Labor', 'Margin'],
+      ['Vehicle', 'VIN', 'Customer', 'SO', 'Invoices', 'Invoiced', 'Revenue', 'Parts (PO)', 'POs', 'Parts (stock est.)', 'Installer', 'Labor Hours', 'Labor', 'Margin', 'Quoted %', 'Actual %', 'Variance'],
       report.vehicles.map(v => [
         v.label, v.vin || '', v.customer || '', v.soNumber || '', v.invoiceNumbers.join(' '),
         v.dateInvoiced || '', v.revenue, v.partsPo, v.partsPoNumbers.join(' '), v.partsStock, v.installer,
         v.laborHours, v.labor ?? '', v.margin,
+        v.quotedMarginPct ?? '', v.actualMarginPct ?? '', v.marginVariancePct ?? '',
       ]),
     );
   };
@@ -140,7 +146,7 @@ export default function VehicleMarginPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
               <thead>
                 <tr style={{ textAlign: 'left', color: 'var(--text-muted)', fontSize: '11px' }}>
-                  {['Vehicle', 'Customer', 'Invoices', 'Invoiced', 'Revenue', 'Parts (PO)', 'Parts (stock est.)', 'Installer', 'Labor', 'Margin'].map(h => (
+                  {['Vehicle', 'Customer', 'Invoices', 'Invoiced', 'Revenue', 'Parts (PO)', 'Parts (stock est.)', 'Installer', 'Labor', 'Margin', 'Quoted → actual'].map(h => (
                     <th key={h} style={{ padding: '10px 12px', fontWeight: 700, whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
@@ -170,10 +176,25 @@ export default function VehicleMarginPage() {
                         : '—'}
                     </td>
                     <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 800, color: v.margin >= 0 ? '#22c55e' : '#ef4444' }}>{fmtMoney(v.margin)}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right', whiteSpace: 'nowrap' }}
+                        title={v.quotedMarginPct != null
+                          ? `Quoted ${v.quotedMarginPct}% is the frozen PARTS margin at the last send of ${v.quotedEstimate}; actual is the all-in job margin — directional comparison`
+                          : 'No linked estimate with a frozen margin snapshot'}>
+                      {v.quotedMarginPct != null ? (
+                        <>
+                          {v.quotedMarginPct}% → {v.actualMarginPct != null ? `${v.actualMarginPct}%` : '—'}
+                          {v.marginVariancePct != null && (
+                            <span style={{ marginLeft: '5px', fontWeight: 800, color: v.marginVariancePct >= 0 ? '#22c55e' : '#ef4444' }}>
+                              {v.marginVariancePct >= 0 ? '+' : ''}{v.marginVariancePct}
+                            </span>
+                          )}
+                        </>
+                      ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                    </td>
                   </tr>
                 ))}
                 {report.vehicles.length === 0 && (
-                  <tr><td colSpan={10} style={{ padding: '14px', color: 'var(--text-muted)', textAlign: 'center' }}>No vehicles were invoiced in this range.</td></tr>
+                  <tr><td colSpan={11} style={{ padding: '14px', color: 'var(--text-muted)', textAlign: 'center' }}>No vehicles were invoiced in this range.</td></tr>
                 )}
               </tbody>
             </table>

@@ -322,6 +322,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/reports/sales-by-customer-detail/route.ts': staff(),
   'src/app/api/reports/on-time/route.ts': role(),
   'src/app/api/reports/order-book/route.ts': role(),
+  'src/app/api/reports/quoted-margin/route.ts': role(),
   'src/app/api/reports/vehicle-margin/route.ts': role(),
   'src/app/api/reports/sales-performance/route.ts': role(),
   'src/app/api/scan-worksheet/route.ts': authScoped('installer scan worksheet; external installer accounts are the intended callers'),

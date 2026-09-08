@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from './fetch-all';
 import { fetchOpenArInvoices, computeArAging, fetchAccountGroups, fetchOpenVendorBills } from './financials-data';
 import { loadOrderBook } from './order-book';
+import { weightedMarginPct } from './quoted-margin-report';
 
 export { unbilledLineValue } from './order-book';
 
@@ -192,6 +193,37 @@ async function collectRevenueMtd(out: ExecMetric[]): Promise<void> {
   }
 }
 
+async function collectQuotedMargin(service: SupabaseClient, out: ExecMetric[]): Promise<void> {
+  // Leading gross-margin indicator (R5-10): value-weighted frozen parts
+  // margin of estimates SENT in the trailing 30 days (migration 275
+  // snapshots). Null with a reason until sends accrue — a 0 would chart
+  // "we quoted at cost", which is a lie.
+  try {
+    const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
+    const { data, error } = await fetchAllRows<any>((from, to) => service
+      .from('estimates')
+      .select('grand_total, quoted_margin_pct')
+      .gte('quoted_margin_at', since)
+      .order('quoted_margin_at').order('id')
+      .range(from, to));
+    if (error) throw new Error(error.message);
+    const rows = (data || []).map((e: any) => ({
+      marginPct: e.quoted_margin_pct != null ? Number(e.quoted_margin_pct) : null,
+      total: Number(e.grand_total) || 0,
+    }));
+    const pct = weightedMarginPct(rows);
+    out.push({
+      metric: 'quoted_margin_pct_30d',
+      value: pct,
+      meta: pct == null
+        ? { reason: 'no frozen sends with costed lines in the last 30 days', quotes: rows.length }
+        : { quotes: rows.length },
+    });
+  } catch (e: any) {
+    out.push({ metric: 'quoted_margin_pct_30d', value: null, meta: { error: String(e?.message || e).slice(0, 300) } });
+  }
+}
+
 /** Compute every snapshot metric; never throws — failures land as null-valued metrics. */
 export async function collectExecMetrics(service: SupabaseClient): Promise<ExecMetric[]> {
   const out: ExecMetric[] = [];
@@ -201,6 +233,7 @@ export async function collectExecMetrics(service: SupabaseClient): Promise<ExecM
     collectOrderBook(service, out),
     collectShop(service, out),
     collectRevenueMtd(out),
+    collectQuotedMargin(service, out),
   ]);
   return out;
 }
