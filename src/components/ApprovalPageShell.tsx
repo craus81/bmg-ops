@@ -65,6 +65,10 @@ export interface ApprovalShellProps {
   canAccept?: (data: any) => boolean;
   /** The document body the customer reviews. */
   renderDocument: (data: any) => React.ReactNode;
+  /** Optional follow-up action on the accepted screen (R5-17: "Schedule
+   *  your drop-off" — the token page is the natural next step after an
+   *  approval). Receives the magic-link token from the URL. */
+  acceptedCta?: (token: string, data: any) => { url: string; label: string; note?: string } | null;
 }
 
 export default function ApprovalPageShell({
@@ -77,6 +81,7 @@ export default function ApprovalPageShell({
   acceptedAt,
   canAccept,
   renderDocument,
+  acceptedCta,
 }: ApprovalShellProps) {
   const params = useParams<{ token: string }>();
   const searchParams = useSearchParams();
@@ -168,6 +173,7 @@ export default function ApprovalPageShell({
           title={status === 'submitted_accepted' ? (copy?.acceptedTitle || 'Thank you — work authorized') : 'Already approved'}
           docLabel={docLabel(data)}
           timestamp={acceptedAt(data)}
+          cta={acceptedCta ? acceptedCta(token, data) : null}
         />
       </ApprovalFrame>
     );
@@ -251,8 +257,9 @@ export default function ApprovalPageShell({
 }
 
 /** The already-decided / just-submitted screens. */
-function Decided({ tone, title, docLabel, timestamp }: {
+function Decided({ tone, title, docLabel, timestamp, cta }: {
   tone: 'accepted' | 'rejected'; title: string; docLabel: string | null; timestamp: string | null;
+  cta?: { url: string; label: string; note?: string } | null;
 }) {
   const accepted = tone === 'accepted';
   return (
@@ -269,6 +276,15 @@ function Decided({ tone, title, docLabel, timestamp }: {
       {timestamp && (
         <div style={{ fontSize: '12px', color: '#64748b', marginTop: '10px' }}>
           {new Date(timestamp).toLocaleString()}
+        </div>
+      )}
+      {accepted && cta && (
+        <div style={{ marginTop: '18px' }}>
+          <a href={cta.url} style={{
+            display: 'inline-block', padding: '12px 22px', borderRadius: '10px',
+            background: '#1d4ed8', color: '#fff', fontSize: '14px', fontWeight: 800, textDecoration: 'none',
+          }}>{cta.label}</a>
+          {cta.note && <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '8px' }}>{cta.note}</div>}
         </div>
       )}
       <Footer />
