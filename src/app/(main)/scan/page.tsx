@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { queuePhoto, photosForScan, deletePhoto, allQueuedPhotos, countByScan, waitingNote } from '@/lib/offline-photos';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { useAuth, useRequireFeature } from '@/components/AuthProvider';
@@ -104,6 +105,23 @@ export default function ScanPage() {
 
   const uploadScanPhoto = async (file: File) => {
     if (photoTargets.length === 0) return;
+
+    // R6-10: offline, the scan itself is only a local row — there is no
+    // scan_log id to hang a photo off yet. Queue the file in IndexedDB
+    // (NOT localStorage: one 3 MB photo would fill the ~5 MB quota and
+    // start breaking the scan queue's own writes) and upload it after the
+    // scan syncs and the server hands back a real id.
+    if (isOffline) {
+      try {
+        for (const target of photoTargets) await queuePhoto(target, file);
+        setPhotoCount(c => c + 1);
+        await refreshQueuedPhotoCounts();
+      } catch (e: any) {
+        setScanError(`Could not hold that photo for later: ${e?.message || 'unknown error'}`);
+      }
+      return;
+    }
+
     setPhotoUploading(true);
     try {
       const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
@@ -137,6 +155,14 @@ export default function ScanPage() {
   // Offline
   const [isOffline, setIsOffline] = useState(false);
   const [pendingOfflineScans, setPendingOfflineScans] = useState<any[]>([]);
+  // R6-10: how many photos are waiting per queued offline scan.
+  const [queuedPhotoCounts, setQueuedPhotoCounts] = useState<Record<string, number>>({});
+
+  const refreshQueuedPhotoCounts = useCallback(async () => {
+    try {
+      setQueuedPhotoCounts(countByScan(await allQueuedPhotos()));
+    } catch { /* the chip is informational */ }
+  }, []);
 
   // Crew shift (pay splits): scans carry a shift_id so each vehicle's pay
   // splits across whoever's tagged in. Solo scanning gets an implicit
@@ -163,6 +189,8 @@ export default function ScanPage() {
     loadParts();
     loadLocations();
     loadBillableCustomers(supabase).then(setBillableCustomers);
+    // R6-10: photos held on-device from a previous offline session.
+    refreshQueuedPhotoCounts();
 
     const handleOffline = () => setIsOffline(true);
     const handleOnline = () => { setIsOffline(false); syncOfflineScans(); };
@@ -669,6 +697,34 @@ export default function ScanPage() {
     return true;
   };
 
+  /**
+   * Upload the photos held for one queued scan, now that the server has
+   * given it a real id. A photo that fails to upload STAYS in IndexedDB:
+   * it is somebody's evidence of a finished install, and silently
+   * dropping it would be worse than retrying on the next sync.
+   */
+  const uploadQueuedPhotosFor = async (
+    localScanId: string, scanLogId: string, headers: Record<string, string>,
+  ) => {
+    let queued: Awaited<ReturnType<typeof photosForScan>> = [];
+    try { queued = await photosForScan(localScanId); } catch { return; }
+    for (const photo of queued) {
+      try {
+        const ext = (photo.contentType.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
+        const path = `scans/${scanLogId}/${Date.now()}-${photo.id.slice(0, 8)}.${ext}`;
+        const { error: upErr } = await storage.from('photos')
+          .upload(path, photo.blob, { contentType: photo.contentType });
+        if (upErr) continue;
+        const res = await fetch('/api/scans/photos', {
+          method: 'POST', headers,
+          body: JSON.stringify({ scanIds: [scanLogId], storagePath: path, contentType: photo.contentType }),
+        });
+        if (!res.ok) continue;
+        await deletePhoto(photo.id);
+      } catch { /* keep it for the next sync */ }
+    }
+  };
+
   const syncOfflineScans = async () => {
     try {
       const cached = localStorage.getItem('offline_scans');
@@ -677,12 +733,28 @@ export default function ScanPage() {
       if (offlineScans.length === 0) return;
       const { data: { session } } = await supabase.auth.getSession();
       const headers = { 'Content-Type': 'application/json', ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) };
+      // R6-10: the response was previously discarded. It carries the real
+      // scan_log id, which is the only thing a queued photo can be
+      // attached to — scan first, then its photos, in that order.
+      const syncedIds: string[] = [];
       for (const scan of offlineScans) {
         const { id, scanned_at, ...rest } = scan;
-        await fetch('/api/scans/log', { method: 'POST', headers, body: JSON.stringify(rest) }).catch(() => {});
+        try {
+          const res = await fetch('/api/scans/log', { method: 'POST', headers, body: JSON.stringify(rest) });
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok || !json.scanLogId) continue;   // leave it queued to retry
+          syncedIds.push(id);
+          await uploadQueuedPhotosFor(id, json.scanLogId, headers);
+        } catch { /* stays queued */ }
       }
-      localStorage.removeItem('offline_scans');
-      setPendingOfflineScans([]);
+
+      // Only drop the scans that actually landed; a failed one keeps its
+      // place in the queue rather than vanishing with its photos.
+      const remaining = offlineScans.filter((s: any) => !syncedIds.includes(s.id));
+      if (remaining.length === 0) localStorage.removeItem('offline_scans');
+      else localStorage.setItem('offline_scans', JSON.stringify(remaining));
+      setPendingOfflineScans(remaining);
+      await refreshQueuedPhotoCounts();
       loadTodayScans();
     } catch {}
   };
@@ -728,6 +800,8 @@ export default function ScanPage() {
   const rfidInMulti = selectedParts.length > 1
     && selectedParts.some(p => isVerizonRfidPart(p.item_number));
 
+  const totalQueuedPhotos = Object.values(queuedPhotoCounts).reduce((n, c) => n + c, 0);
+
   const partLabel = selectedParts.length > 0
     ? selectedParts.map(p => p.item_number).join(' / ')
     : customJob || '';
@@ -745,6 +819,26 @@ export default function ScanPage() {
         }}>
           Offline — scans will sync when back online
           {pendingOfflineScans.length > 0 && ` (${pendingOfflineScans.length} pending)`}
+          {/* R6-10: photos are held on-device too. Say so, per scan —
+              somebody who shot ten pictures needs to know they survived. */}
+          {totalQueuedPhotos > 0 && (
+            <div style={{ fontWeight: 500, fontSize: '11px', marginTop: '3px' }}>
+              {waitingNote(totalQueuedPhotos)} — they upload with their scan.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Still waiting after coming back online: the scan synced but its
+          photos didn't. They stay on-device and retry rather than being
+          dropped — a photo of a finished install is somebody's evidence. */}
+      {!isOffline && totalQueuedPhotos > 0 && (
+        <div style={{
+          padding: '8px 12px', borderRadius: '8px', marginBottom: '12px',
+          background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)',
+          color: '#60a5fa', fontSize: '12px', fontWeight: 700, textAlign: 'center',
+        }}>
+          {waitingNote(totalQueuedPhotos)} to upload — retrying on the next sync.
         </div>
       )}
 
