@@ -12,10 +12,14 @@
  * - SMS_PROVIDER selects the active adapter. Values: 'ringcentral' |
  *   'twilio'. Default 'twilio' since it has working credentials plumbing.
  *   RingCentral lights up once T1.5's operational track completes.
+ *   'dialpad' is the third adapter (R6-3): Dialpad also carries the call
+ *   events behind caller-ID screen-pop, so picking it here and picking it
+ *   for telephony are the same decision.
  */
 
 import * as twilioAdapter from './twilio';
 import * as ringcentralAdapter from './ringcentral';
+import * as dialpadAdapter from './dialpad';
 
 export type SmsAttachment = {
   url: string;
@@ -41,7 +45,7 @@ export type InboundMessage = {
 };
 
 export interface SmsProvider {
-  name: 'twilio' | 'ringcentral';
+  name: 'twilio' | 'ringcentral' | 'dialpad';
   sendSMS(to: string, body: string): Promise<SendSmsResult>;
   sendMMS(to: string, body: string, attachments: SmsAttachment[]): Promise<SendSmsResult>;
   verifyWebhookSignature(url: string, params: Record<string, string>, headers: Record<string, string>): boolean;
@@ -56,6 +60,7 @@ function isEnabled(): boolean {
 function active(): SmsProvider {
   const choice = (process.env.SMS_PROVIDER || 'twilio').toLowerCase();
   if (choice === 'ringcentral') return ringcentralAdapter as SmsProvider;
+  if (choice === 'dialpad') return dialpadAdapter as unknown as SmsProvider;
   return twilioAdapter as SmsProvider;
 }
 
