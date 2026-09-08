@@ -26,12 +26,29 @@
  *    `amount` is the transaction total as searches report it (payments are
  *    typically negative — the app displays magnitudes).
  *
+ * 3) Income statement totals (P&L unlock, R5-5): posting-transaction sums
+ *    for a date range, grouped per account (the app buckets by account
+ *    type and its configured payroll group):
+ *      ?action=incomeStatement&from=YYYY-MM-DD&to=YYYY-MM-DD[&groupBy=class|department]
+ *    → { success: true, mode: 'incomeStatement', from, to, groupBy,
+ *        rows: [ { accountId, accountName, accountType, segment, amount }, ... ] }
+ *    `amount` is the raw search SUM — income accounts usually come back
+ *    credit-normal (negative); the app detects orientation and normalizes.
+ *
+ * 4) Collections (company-wide customer payments + deposits) for a range:
+ *      ?action=collections&from=YYYY-MM-DD&to=YYYY-MM-DD[&limit=200]
+ *    → { success: true, mode: 'collections', from, to, total, count,
+ *        collections: [ { id, tranid, date, customer, amount }, ... ] }
+ *    total/count cover the WHOLE range even when the list is capped.
+ *
  * Setup in NetSuite (same as the item / PDF RESTlets):
  *   1. Upload this file to the File Cabinet (e.g. SuiteScripts/bmg-financials-restlet.js)
  *   2. Create a Script record: Type = RESTlet, Entry Points: GET = get
  *   3. Deploy with a role that can view the chart of accounts / financials
  *      (payment history additionally needs Transactions > Customer Payment
- *      and Credit Memo view), and note the External URL
+ *      and Credit Memo view; incomeStatement/collections additionally need
+ *      Transactions > Find Transaction plus view on the posting transaction
+ *      types — see docs/pnl-restlet-deploy.md), and note the External URL
  *   4. Set NETSUITE_FINANCIALS_RESTLET_URL in your env to that URL
  *   NOTE: after editing this file, re-upload it over the existing File
  *   Cabinet copy — the deployment picks up the new code automatically.
@@ -113,10 +130,124 @@ define(['N/search'], function (search) {
     return { success: true, transactions: out };
   }
 
+  // Search date filters take the account's date format — normalize the ISO
+  // params the app sends to MM/DD/YYYY deterministically.
+  function usDate(iso) {
+    var p = String(iso || '').split('-');
+    return p.length === 3 ? p[1] + '/' + p[2] + '/' + p[0] : '';
+  }
+  function validRange(context) {
+    var from = context && context.from ? String(context.from) : '';
+    var to = context && context.to ? String(context.to) : '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return null;
+    return { from: from, to: to };
+  }
+
+  function incomeStatement(context) {
+    var range = validRange(context);
+    if (!range) return { success: false, error: 'from/to (YYYY-MM-DD) required' };
+    var groupBy = (context.groupBy === 'class' || context.groupBy === 'department') ? context.groupBy : null;
+
+    var columns = [
+      search.createColumn({ name: 'account', summary: search.Summary.GROUP }),
+      search.createColumn({ name: 'type', join: 'account', summary: search.Summary.GROUP }),
+      search.createColumn({ name: 'amount', summary: search.Summary.SUM }),
+    ];
+    if (groupBy) {
+      columns.push(search.createColumn({ name: groupBy, summary: search.Summary.GROUP }));
+    }
+
+    var s = search.create({
+      type: search.Type.TRANSACTION,
+      filters: [
+        ['posting', 'is', 'T'], 'AND',
+        ['trandate', 'within', usDate(range.from), usDate(range.to)], 'AND',
+        ['accounttype', 'anyof', 'Income', 'COGS', 'Expense', 'OthIncome', 'OthExpense'],
+      ],
+      columns: columns,
+    });
+
+    var rows = [];
+    s.run().each(function (r) {
+      rows.push({
+        accountId: r.getValue({ name: 'account', summary: search.Summary.GROUP }),
+        accountName: r.getText({ name: 'account', summary: search.Summary.GROUP }),
+        accountType: r.getValue({ name: 'type', join: 'account', summary: search.Summary.GROUP }),
+        segment: groupBy ? (r.getText({ name: groupBy, summary: search.Summary.GROUP }) || null) : null,
+        amount: parseFloat(r.getValue({ name: 'amount', summary: search.Summary.SUM }) || '0'),
+      });
+      // Grouped per account (x segment) — a CoA-sized result. Guardrail only.
+      return rows.length < 900;
+    });
+
+    return { success: true, mode: 'incomeStatement', from: range.from, to: range.to, groupBy: groupBy, rows: rows };
+  }
+
+  function collections(context) {
+    var range = validRange(context);
+    if (!range) return { success: false, error: 'from/to (YYYY-MM-DD) required' };
+    var limit = parseInt(context.limit, 10);
+    if (!limit || limit < 1 || limit > 200) limit = 200;
+
+    var filters = [
+      ['type', 'anyof', 'CustPymt', 'CustDep'], 'AND',
+      ['trandate', 'within', usDate(range.from), usDate(range.to)], 'AND',
+      ['mainline', 'is', 'T'],
+    ];
+
+    // Whole-range total/count from a summary search, so a capped list can't
+    // understate the period.
+    var total = 0;
+    var count = 0;
+    search.create({
+      type: search.Type.TRANSACTION,
+      filters: filters,
+      columns: [
+        search.createColumn({ name: 'total', summary: search.Summary.SUM }),
+        search.createColumn({ name: 'internalid', summary: search.Summary.COUNT }),
+      ],
+    }).run().each(function (r) {
+      total = parseFloat(r.getValue({ name: 'total', summary: search.Summary.SUM }) || '0');
+      count = parseInt(r.getValue({ name: 'internalid', summary: search.Summary.COUNT }), 10) || 0;
+      return false;
+    });
+
+    var out = [];
+    var results = search.create({
+      type: search.Type.TRANSACTION,
+      filters: filters,
+      columns: [
+        'internalid',
+        'tranid',
+        search.createColumn({ name: 'trandate', sort: search.Sort.DESC }),
+        'entity',
+        'total',
+      ],
+    }).run().getRange({ start: 0, end: limit });
+    for (var i = 0; i < results.length; i++) {
+      var row = results[i];
+      out.push({
+        id: row.getValue({ name: 'internalid' }),
+        tranid: row.getValue({ name: 'tranid' }),
+        date: row.getValue({ name: 'trandate' }),
+        customer: row.getText({ name: 'entity' }) || null,
+        amount: parseFloat(row.getValue({ name: 'total' }) || '0'),
+      });
+    }
+
+    return { success: true, mode: 'collections', from: range.from, to: range.to, total: total, count: count, collections: out };
+  }
+
   function get(context) {
     try {
       if (context && context.action === 'customerPayments') {
         return customerPayments(context);
+      }
+      if (context && context.action === 'incomeStatement') {
+        return incomeStatement(context);
+      }
+      if (context && context.action === 'collections') {
+        return collections(context);
       }
       return accountBalances(context);
     } catch (e) {

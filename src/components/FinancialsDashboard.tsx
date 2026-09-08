@@ -168,6 +168,22 @@ export default function FinancialsDashboard() {
   // CEO bands load independently — the Money hero never waits on them and
   // a band-side failure degrades to that band's own error note.
   const [exec, setExec] = useState<ExecSummary | null>(null);
+  // P&L band (R5-5): GL-true GM%/NP%/payroll from the financials RESTlet's
+  // incomeStatement mode. Null until fetched; per-period errors carry the
+  // redeploy/grant hint (docs/pnl-restlet-deploy.md).
+  const [pnl, setPnl] = useState<{
+    periods: {
+      label: string; from: string; to: string; directional: boolean;
+      pnl: {
+        income: number; cogs: number; expense: number; payroll: number;
+        grossMargin: number; grossMarginPct: number | null;
+        netProfit: number; netProfitPct: number | null; laborPct: number | null;
+      } | null;
+      collections: { total: number; count: number } | null;
+      error: string | null;
+    }[];
+    payrollConfigured: boolean;
+  } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -188,6 +204,13 @@ export default function FinancialsDashboard() {
         const body = await res.json();
         if (alive && res.ok) setExec(body);
       } catch { /* bands stay hidden */ }
+    })();
+    (async () => {
+      try {
+        const res = await apiFetch('/api/reports/financials/pnl');
+        const body = await res.json();
+        if (alive && res.ok) setPnl(body);
+      } catch { /* band stays hidden */ }
     })();
     return () => { alive = false; };
   }, []);
@@ -375,6 +398,51 @@ export default function FinancialsDashboard() {
           <span style={{ color: 'var(--warning)', fontWeight: 700 }}>Revenue band unavailable.</span> NetSuite said: <code>{exec.revenue.error}</code>
         </div>
       )}
+
+      {/* ── P&L band (R5-5) — GL-true numbers from the financials RESTlet's
+             incomeStatement/collections modes. Closed months reliable, the
+             current month directional (hard labeling requirement). ── */}
+      {(() => {
+        const closed = pnl?.periods?.find(p => !p.directional && p.pnl) || null;
+        const mtd = pnl?.periods?.find(p => p.label === 'Month to date') || null;
+        const ytd = pnl?.periods?.find(p => p.label === 'Year to date') || null;
+        const firstError = pnl?.periods?.find(p => p.error)?.error || null;
+        if (!pnl) return null;
+        if (!closed && firstError) {
+          return (
+            <div style={{ ...card, padding: '11px 14px', fontSize: '12px', color: 'var(--text-secondary)', borderColor: 'color-mix(in srgb, var(--warning) 35%, var(--border))' }}>
+              <span style={{ color: 'var(--warning)', fontWeight: 700 }}>P&amp;L unavailable.</span>{' '}
+              NetSuite said: <code style={{ color: 'var(--text-primary)' }}>{firstError}</code>
+              {/RESTlet|permission/i.test(firstError) && <>{' '}— re-upload <code>scripts/netsuite-financials-restlet.js</code> and grant the RESTlet role transaction search per <code>docs/pnl-restlet-deploy.md</code>.</>}
+            </div>
+          );
+        }
+        if (!closed?.pnl) return null;
+        const c = closed.pnl;
+        const m = mtd?.pnl || null;
+        return (
+          <div>
+            <div style={{ ...eyebrow, margin: '2px 2px 10px' }}>Profit &amp; loss — {closed.label.toLowerCase()} (closed), from the NetSuite GL</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', marginBottom: '8px' }}>
+              <Tile swatch="var(--navy, #4d8ba6)" label="Revenue (GL)" value={usd(c.income)}
+                sub={<>{m ? `${usd(m.income)} MTD (directional)` : 'MTD unavailable'}</>} />
+              <Tile swatch="var(--success)" label="Gross margin" value={c.grossMarginPct == null ? '—' : `${c.grossMarginPct}%`}
+                sub={<>{usd(c.grossMargin)}{m?.grossMarginPct != null && <> · {m.grossMarginPct}% MTD</>}</>} />
+              <Tile swatch={c.netProfitPct != null && c.netProfitPct < 0 ? 'var(--error)' : 'var(--success)'} label="Net profit" value={c.netProfitPct == null ? '—' : `${c.netProfitPct}%`}
+                sub={<>{usd(c.netProfit)}{m?.netProfitPct != null && <> · {m.netProfitPct}% MTD</>}</>} />
+              <Tile swatch="var(--navy, #4d8ba6)" label="Payroll" value={pnl.payrollConfigured ? usd(c.payroll) : '—'}
+                sub={pnl.payrollConfigured
+                  ? <>{c.laborPct != null ? `${c.laborPct}% of revenue` : 'Labor %'}</>
+                  : <span style={hint}>Set NETSUITE_PAYROLL_ACCOUNT_IDS</span>} />
+              <Tile swatch="var(--navy, #4d8ba6)" label="Collections" value={closed.collections ? usd(closed.collections.total) : '—'}
+                sub={<>{closed.collections ? `${closed.collections.count} payments` : 'Unavailable'}{mtd?.collections && <> · {usd(mtd.collections.total)} MTD</>}</>} />
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '0 2px' }}>
+              Closed months are reliable; month-to-date{ytd?.pnl ? ` and YTD (${ytd.pnl.netProfitPct != null ? `${ytd.pnl.netProfitPct}% net` : 'net —'})` : ''} are directional until the books close. Net profit is only as complete as what posts to the GL (payroll journals included).
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Sales band (R4-4) — same math as the Sales Performance report
              (shared sales-facts lib), trailing 90 days. ── */}
