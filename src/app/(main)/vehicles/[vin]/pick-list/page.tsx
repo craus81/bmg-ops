@@ -12,6 +12,7 @@ import PhotoSession from '@/components/PhotoSession';
 import { PartLabel } from '@/components/PartLabel';
 import { openOrCreateVehicleThread } from '@/lib/customer-thread';
 import { deepLinks } from '@/lib/deep-links';
+import { hoursNote, summarizeTaskHours } from '@/lib/so-line-tasks';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 
@@ -73,6 +74,14 @@ interface Task {
   sort_order: number;
   completed_at: string | null;
   completed_by_name: string | null;
+  /** R6-10: 'so_line' rows are generated from the sales order's own lines
+   *  and carry the part. Older rows predate the column and read null. */
+  source: string | null;
+  item_number: string | null;
+  quantity: number | null;
+  /** NULL = the part's labor was never priced. Not zero. */
+  expected_hours: number | null;
+  image_path: string | null;
 }
 
 interface Photo {
@@ -214,7 +223,7 @@ export default function VehiclePickListPage() {
     const [taskRes, photoRes] = await Promise.all([
       supabase
         .from('job_tasks')
-        .select('id, label, completed, required, sort_order, completed_at, completed_by_name')
+        .select('id, label, completed, required, sort_order, completed_at, completed_by_name, source, item_number, quantity, expected_hours, image_path')
         .eq('job_type', 'fleet_checkin')
         .eq('job_id', v.id)
         .order('sort_order'),
@@ -504,6 +513,14 @@ export default function VehiclePickListPage() {
   const isComplete = vehicle.status === 'complete' || vehicle.status === 'shipped';
 
   const requiredTasksRemaining = tasks.filter(t => t.required && !t.completed).length;
+  // SO-line tasks are their own section; the QC summary keeps counting
+  // every task, since a picked part is still progress on the job.
+  const partsTasks = tasks.filter(t => t.source === 'so_line');
+  const partsHoursNote = hoursNote(summarizeTaskHours(partsTasks.map(t => ({
+    itemNumber: t.item_number || '', label: t.label, quantity: Number(t.quantity ?? 1),
+    expectedHours: t.expected_hours === null || t.expected_hours === undefined ? null : Number(t.expected_hours),
+    imagePath: t.image_path, inCatalog: true,
+  }))));
   const allRequiredDone = requiredTasksRemaining === 0;
   const hasCompletionPhoto = completionPhotos.length > 0;
   const readyToComplete = allRequiredDone && hasCompletionPhoto;
@@ -710,6 +727,70 @@ export default function VehiclePickListPage() {
         }}>
           ✓ {vehicle.status === 'shipped' ? 'Delivered' : 'Install complete'}
           {vehicle.qc_completed_at && ` · ${new Date(vehicle.qc_completed_at).toLocaleString()}`}
+        </div>
+      )}
+
+      {/* R6-10: the parts this order actually calls for. The QC checklist
+          below says how to work and what to verify; this says WHAT to
+          install, generated from the linked sales order's own lines. */}
+      {partsTasks.length > 0 && (
+        <div style={{
+          background: 'var(--card)', border: '1px solid var(--border)',
+          borderRadius: '14px', padding: '14px', marginBottom: '16px',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px', marginBottom: '10px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
+              Parts on this order
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              {partsTasks.filter(t => t.completed).length}/{partsTasks.length} picked
+              {partsHoursNote && ` · ${partsHoursNote}`}
+            </div>
+          </div>
+          {partsTasks.map(task => (
+            <div
+              key={task.id}
+              onClick={() => toggleTask(task)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '10px',
+                padding: '8px', borderRadius: '10px', cursor: 'pointer',
+                background: task.completed ? 'rgba(74,222,128,0.07)' : 'transparent',
+                opacity: task.completed ? 0.65 : 1, marginBottom: '4px',
+              }}
+            >
+              <input
+                type="checkbox" checked={task.completed} readOnly
+                style={{ width: '18px', height: '18px', flexShrink: 0, pointerEvents: 'none' }}
+              />
+              {task.image_path ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={storage.from('photos').getPublicUrl(task.image_path).data.publicUrl}
+                  alt="" width={38} height={38}
+                  style={{ width: '38px', height: '38px', objectFit: 'cover', borderRadius: '7px', flexShrink: 0, background: 'var(--subtle-bg)' }}
+                />
+              ) : (
+                <div style={{
+                  width: '38px', height: '38px', borderRadius: '7px', flexShrink: 0,
+                  background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
+                }} />
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{
+                  fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)',
+                  textDecoration: task.completed ? 'line-through' : 'none',
+                }}>
+                  {task.label}
+                </div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  {/* NULL hours means unpriced, which is not zero — say so
+                      rather than printing a confident 0h. */}
+                  {task.expected_hours === null ? 'Labor not priced' : `${task.expected_hours}h`}
+                  {task.completed && task.completed_by_name && ` · ${task.completed_by_name}`}
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 

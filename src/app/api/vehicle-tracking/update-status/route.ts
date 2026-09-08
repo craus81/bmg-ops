@@ -3,6 +3,7 @@ import { requireStaff, isAdminRole } from '@/lib/api-auth';
 import { notify, notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { loadChecklistTemplate, buildTaskRows } from '@/lib/install-checklist';
+import { appendSoLineTasks } from '@/lib/so-line-tasks';
 import { closeShopShiftsForCheckin } from '@/lib/shop-labor';
 import { logAudit } from '@/lib/audit';
 import { createClient as createServiceClient } from '@supabase/supabase-js';
@@ -261,6 +262,11 @@ async function instantiateChecklist(vehicleId: string, hasGraphics: boolean) {
     if (rows.length > 0) {
       await serviceSupabase.from('job_tasks').insert(rows);
     }
+
+    // R6-10: the template says how to work safely and what to verify. It
+    // cannot say what to INSTALL — that's whatever the customer bought.
+    // Append one task per stockable line on the linked sales order.
+    await appendSoLineTasks(serviceSupabase, vehicleId, rows.length);
   } catch (err) {
     console.error('instantiateChecklist error:', err);
   }
