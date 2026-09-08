@@ -23,6 +23,20 @@
 
 /** Physical-part prefix. */
 export const PART_PREFIX = '02';
+
+/**
+ * Graphics lines are the part numbers starting 02 or RM.
+ *
+ * Lives here rather than beside the PO-import notifier because it is the
+ * same part-number convention this file exists to encode, and because the
+ * notifier reaches a Supabase client at module scope — importing it from
+ * a pure caller drags that in and the caller can no longer be unit
+ * tested. One rule, one home: po-import-notify re-exports it for its
+ * existing callers.
+ */
+export function isGraphicsPartNumber(partNumber: string | null | undefined): boolean {
+  return /^(02|RM)/i.test(String(partNumber || '').trim());
+}
 /** Installation-charge prefix. */
 export const INSTALL_PREFIX = '06';
 
