@@ -95,6 +95,63 @@ const OPP_STAGES: { stage: string; label: string }[] = [
   { stage: 'negotiating', label: 'Negotiating' },
 ];
 
+/**
+ * Two-week shop load strip (R5-16): one tiny bar per day, sold hours vs
+ * crew capacity, linking to the Shop Week planner. Self-contained fetch so
+ * the dashboard's main load isn't held up; renders nothing until data (or
+ * quietly never, on error). Tone math mirrors src/lib/shop-week.ts —
+ * duplicated because that lib is server-only (it pulls exec-metrics →
+ * netsuite into any client bundle that imports it).
+ */
+function ShopLoadStrip({ onOpen }: { onOpen: () => void }) {
+  const [days, setDays] = useState<{ day: string; demandHours: number; totalUnits: number; knownHours: number; capacityHours: number | null }[] | null>(null);
+  const [capacityConfigured, setCapacityConfigured] = useState(true);
+  useEffect(() => {
+    fetch('/api/shop-week?days=14')
+      .then(r => (r.ok ? r.json() : null))
+      .then(w => { if (w?.days) { setDays(w.days); setCapacityConfigured(!!w.capacityConfigured); } })
+      .catch(() => {});
+  }, []);
+  if (!days) return null;
+
+  const barFor = (d: { demandHours: number; capacityHours: number | null }) => {
+    if (d.capacityHours == null || d.capacityHours <= 0 || d.demandHours === 0) return { color: 'var(--border)', h: d.demandHours > 0 ? 40 : 8 };
+    const pct = Math.round((d.demandHours / d.capacityHours) * 100);
+    const color = pct < 85 ? '#22c55e' : pct <= 110 ? '#f59e0b' : '#ef4444';
+    return { color, h: Math.max(10, Math.min(pct, 100)) };
+  };
+  const anyUnpriced = days.some(d => d.totalUnits > d.knownHours);
+
+  return (
+    <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px 8px' }}>
+        <h2 style={{ margin: 0, fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>Shop load · 2 weeks</h2>
+        <button onClick={onOpen} style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer', padding: 0 }}>Planner →</button>
+      </div>
+      <button onClick={onOpen} style={{ display: 'block', width: '100%', background: 'transparent', border: 'none', cursor: 'pointer', padding: '0 16px 10px', textAlign: 'left' }}>
+        <div style={{ display: 'flex', gap: '3px', alignItems: 'flex-end', height: '44px' }}>
+          {days.map(d => {
+            const { color, h } = barFor(d);
+            const dt = new Date(d.day + 'T12:00:00');
+            return (
+              <div
+                key={d.day}
+                title={`${dt.toLocaleDateString([], { weekday: 'short', month: 'numeric', day: 'numeric' })} — ${d.demandHours}h sold${d.capacityHours != null ? ` / ${d.capacityHours}h` : ''}${d.totalUnits > d.knownHours ? ` (+${d.totalUnits - d.knownHours} unpriced)` : ''}`}
+                style={{ flex: 1, height: `${h}%`, minHeight: '3px', borderRadius: '2px 2px 0 0', background: color, opacity: [0, 6].includes(dt.getDay()) ? 0.55 : 1 }}
+              />
+            );
+          })}
+        </div>
+        <div style={{ fontSize: '9.5px', color: 'var(--text-muted)', marginTop: '5px' }}>
+          {!capacityConfigured
+            ? 'Sold hours per day — set crew capacity in Settings for load colors'
+            : anyUnpriced ? 'Priced sold hours vs crew capacity — some vehicles have no estimate yet' : 'Sold hours vs crew capacity'}
+        </div>
+      </button>
+    </div>
+  );
+}
+
 export default function OpsDashboard() {
   const router = useRouter();
   const { user, isAdmin, hasFeature } = useAuth();
@@ -109,6 +166,7 @@ export default function OpsDashboard() {
     if (path.startsWith('/tracking')) return hasFeature('in_shop') || hasFeature('fleet_checkin');
     if (path.startsWith('/admin/scans')) return hasFeature('reports');
     if (path.startsWith('/admin/schedule')) return hasFeature('schedule');
+    if (path.startsWith('/admin/shop-week')) return hasFeature('schedule');
     if (path.startsWith('/admin/cni')) return hasFeature('cni_admin');
     if (path.startsWith('/upfit')) return hasFeature('upfit_projects');
     return true;
@@ -1009,6 +1067,7 @@ export default function OpsDashboard() {
           {d.schedule.map(schedRow)}
         </div>
       </div>
+      {canOpen('/admin/shop-week') && <ShopLoadStrip onOpen={() => go('/admin/shop-week')} />}
       <div style={card}>
         <div style={cardHead}><h2 style={headTitle}>Right now</h2></div>
         <div style={{ display: 'flex', gap: '10px', padding: '12px 16px', borderTop: '1px solid var(--border)' }}>

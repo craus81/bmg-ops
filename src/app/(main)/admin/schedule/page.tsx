@@ -469,11 +469,18 @@ export default function SchedulePage() {
           <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)' }}>Schedule</div>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{events.length} event{events.length !== 1 ? 's' : ''} this {view}</div>
         </div>
-        <button onClick={() => setShowCreate(true)} style={{
-          padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-          background: 'var(--tab-active-bg)', border: '1px solid var(--tab-active-border)',
-          color: 'var(--tab-active-color)', cursor: 'pointer',
-        }}>+ Event</button>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <button onClick={() => router.push('/admin/shop-week')} title="Shop Week planner — drag arrivals and upfits across days against crew capacity" style={{
+            padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+            background: 'transparent', border: '1px solid var(--border)',
+            color: '#60a5fa', cursor: 'pointer',
+          }}>Shop Week →</button>
+          <button onClick={() => setShowCreate(true)} style={{
+            padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+            background: 'var(--tab-active-bg)', border: '1px solid var(--tab-active-border)',
+            color: 'var(--tab-active-color)', cursor: 'pointer',
+          }}>+ Event</button>
+        </div>
       </div>
 
       {/* View toggle + navigation */}

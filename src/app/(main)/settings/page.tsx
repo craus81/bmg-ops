@@ -139,6 +139,63 @@ export default function SettingsPage() {
     }
   };
 
+  // Shop crew capacity (R5-16, migration 279) — crew × shift hours is the
+  // week planner's daily denominator. Super-admin write, same posture as
+  // the cost rate above.
+  const [crewSize, setCrewSize] = useState('');
+  const [shiftHours, setShiftHours] = useState('');
+  const [capBusy, setCapBusy] = useState(false);
+  const [capSaved, setCapSaved] = useState(false);
+  const [capError, setCapError] = useState('');
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    (async () => {
+      try {
+        const res = await apiFetch('/api/admin/shop-capacity');
+        const data = await res.json();
+        if (res.ok) {
+          setCrewSize(data.crewSize != null ? String(data.crewSize) : '');
+          setShiftHours(data.shiftHours != null ? String(data.shiftHours) : '');
+        }
+      } catch { /* the card still renders; saving surfaces errors */ }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per admin session
+  }, [isSuperAdmin]);
+
+  const handleSaveCapacity = async () => {
+    setCapBusy(true);
+    setCapError('');
+    try {
+      const crewTrim = crewSize.trim();
+      const shiftTrim = shiftHours.trim();
+      if ((crewTrim === '') !== (shiftTrim === '')) {
+        setCapError('Set both crew size and shift hours, or clear both.');
+        return;
+      }
+      const crew = crewTrim === '' ? null : parseInt(crewTrim, 10);
+      const shift = shiftTrim === '' ? null : parseFloat(shiftTrim);
+      if ((crew != null && (!Number.isFinite(crew) || crew < 0)) || (shift != null && (!Number.isFinite(shift) || shift < 0))) {
+        setCapError('Enter whole people and hours per day, or leave both blank to clear.');
+        return;
+      }
+      const res = await apiFetch('/api/admin/shop-capacity', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ crewSize: crew, shiftHours: shift }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setCapError(data?.error || 'Could not save capacity.'); return; }
+      setCrewSize(data.crewSize != null ? String(data.crewSize) : '');
+      setShiftHours(data.shiftHours != null ? String(data.shiftHours) : '');
+      setCapSaved(true);
+      setTimeout(() => setCapSaved(false), 2500);
+    } catch (e: any) {
+      setCapError(e?.message || 'Could not save capacity.');
+    } finally {
+      setCapBusy(false);
+    }
+  };
+
   const handleSaveTax = async () => {
     setTaxSaving(true);
     setTaxError('');
@@ -671,6 +728,64 @@ export default function SettingsPage() {
             </div>
             {shopRateError && (
               <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{shopRateError}</div>
+            )}
+          </div>
+
+          <div style={sectionStyle}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>Shop Crew Capacity</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
+              Installers on the floor on a normal day × hours each works. The Shop Week planner colors
+              each day&apos;s load bar against crew × shift hours; one-off days (holiday, short crew) can be
+              overridden per day from the planner API. Leave both blank and the planner shows demand
+              hours without judging them.
+            </div>
+            <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <div>
+                <div style={labelStyle}>Crew size</div>
+                <input
+                  type="number"
+                  step={1}
+                  min={0}
+                  max={200}
+                  value={crewSize}
+                  onChange={e => setCrewSize(e.target.value)}
+                  placeholder="e.g. 5"
+                  style={{ ...inputStyle, width: '100px' }}
+                />
+              </div>
+              <div>
+                <div style={labelStyle}>Shift hours / day</div>
+                <input
+                  type="number"
+                  step={0.5}
+                  min={0}
+                  max={24}
+                  value={shiftHours}
+                  onChange={e => setShiftHours(e.target.value)}
+                  placeholder="e.g. 8"
+                  style={{ ...inputStyle, width: '100px' }}
+                />
+              </div>
+              <button
+                onClick={handleSaveCapacity}
+                disabled={capBusy}
+                style={{
+                  padding: '8px 16px', borderRadius: '8px', border: 'none',
+                  background: capSaved ? '#22c55e' : '#3b82f6', color: '#fff',
+                  fontSize: '12px', fontWeight: 800,
+                  cursor: capBusy ? 'default' : 'pointer', opacity: capBusy ? 0.5 : 1,
+                }}
+              >
+                {capBusy ? 'Saving...' : capSaved ? 'Saved!' : 'Save Capacity'}
+              </button>
+              {crewSize.trim() !== '' && shiftHours.trim() !== '' && Number.isFinite(parseFloat(crewSize)) && Number.isFinite(parseFloat(shiftHours)) && (
+                <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-label)', paddingBottom: '9px' }}>
+                  = {Math.round(parseInt(crewSize, 10) * parseFloat(shiftHours) * 10) / 10}h/day
+                </div>
+              )}
+            </div>
+            {capError && (
+              <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{capError}</div>
             )}
           </div>
         </>
