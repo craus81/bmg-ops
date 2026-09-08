@@ -10,13 +10,14 @@
 
 import { notifyMany, getSuperAdminIds } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
+import { isGraphicsPartNumber } from '@/lib/po-install-parts';
 
 export const PO_IMPORTED_NOTIFICATION_TYPE = 'po_imported';
 
-/** Graphics lines are the part numbers starting 02 or RM (same rule graphics flagging uses). */
-export function isGraphicsPartNumber(partNumber: string | null | undefined): boolean {
-  return /^(02|RM)/i.test(String(partNumber || '').trim());
-}
+/** The 02/RM graphics rule now lives in po-install-parts (a pure leaf, so
+ *  callers that must stay unit-testable can import it without pulling in
+ *  this file's Supabase client). Re-exported here for existing callers. */
+export { isGraphicsPartNumber };
 
 export function countGraphicsLines(lines: { part_number?: string | null }[]): number {
   return (lines || []).filter((l) => isGraphicsPartNumber(l?.part_number)).length;

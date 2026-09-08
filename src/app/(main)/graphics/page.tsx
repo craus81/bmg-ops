@@ -31,7 +31,7 @@ import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import MentionsInbox from '@/components/MentionsInbox';
 import { DropZone } from '@/components/DropZone';
 import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
-import { buildGraphicsJobPrefillFromPo, attachPartFilesToGraphicsJob } from '@/lib/graphics-job-from-po';
+import { buildGraphicsJobPrefillFromPo, attachPartFilesToGraphicsJob, buildGfxJobTitle } from '@/lib/graphics-job-from-po';
 import { INSTALL_LOCATIONS, SHOP_INSTALL_LOCATION } from '@/lib/shop-inbound';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
 import { fetchAllRows } from '@/lib/fetch-all';
@@ -161,6 +161,9 @@ export default function GraphicsPage() {
   const [awaitingGraphics, setAwaitingGraphics] = useState<any[]>([]);
   // Awaiting-queue entry being linked to an EXISTING job (vs + Create).
   const [linkAwaiting, setLinkAwaiting] = useState<any | null>(null);
+  // What the R6-10 prefill found, said out loud — a prefix guess is
+  // never presented as a catalog fact.
+  const [prefillNote, setPrefillNote] = useState<string | null>(null);
   const [linkSearch, setLinkSearch] = useState('');
   const [createForm, setCreateForm] = useState({
     job_category: '' as GraphicsJobCategory | '',
@@ -381,6 +384,41 @@ export default function GraphicsPage() {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
   useEffect(() => { loadAwaitingGraphics(); }, []);
+
+  /**
+   * R6-10 smart create: fill the wizard from the queued vehicle's sales
+   * order — part chips, quantity, title, and the keyword signal as the
+   * description. Never blocks or clears the form on failure; the note
+   * says what happened and the person types the rest.
+   */
+  const loadAwaitingPrefill = async (checkinId: string) => {
+    setPrefillNote('Reading the sales order…');
+    try {
+      const res = await fetch(`/api/graphics/awaiting-prefill?checkinId=${encodeURIComponent(checkinId)}`);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      const p = body.prefill;
+      setPrefillNote(body.note || null);
+      if (!p || p.partNumbers.length === 0) return;
+      setCreateForm(f => ({
+        ...f,
+        part_numbers: p.partNumbers,
+        part_number: p.partNumbers[0] || f.part_number,
+        quantity: p.quantity || 1,
+        // Only seed a description the person hasn't already typed into.
+        content: f.content || p.content || '',
+        title: f.title || buildGfxJobTitle({
+          customer: f.customer,
+          poNumber: body.soNumber,
+          partNumber: p.partNumbers.join(', '),
+          description: p.matched[0]?.description || null,
+          location: '',
+        }),
+      }));
+    } catch (e: any) {
+      setPrefillNote(`Could not read the sales order (${e?.message || 'unknown error'}) — fill the job in by hand.`);
+    }
+  };
 
   // Dismiss a queue entry when no graphics job is actually needed. Clearing
   // needs_graphics (rather than tracking a separate "dismissed" state) also
@@ -939,6 +977,11 @@ export default function GraphicsPage() {
                     setCreateForm(f => ({ ...f, customer: ci.customer_name || '', po_number: ci.sales_order_number || f.po_number }));
                     setCustomerSearch(ci.customer_name || '');
                     setPrefillCheckinId(ci.id);
+                    // R6-10: pull the sales order's graphic lines in behind
+                    // the wizard. The form opens immediately either way —
+                    // a prefill that can't run is a wizard filled in by
+                    // hand, which is exactly today's behaviour.
+                    loadAwaitingPrefill(ci.id);
                   }}
                   style={{
                     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -1402,9 +1445,23 @@ export default function GraphicsPage() {
       {/* ═══════════ CREATE JOB MODAL ═══════════ */}
       {showCreate && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', padding: '0' }}
-          onClick={(e) => { if (e.target === e.currentTarget) { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); } }}
+          onClick={(e) => { if (e.target === e.currentTarget) { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillNote(null); } }}
         >
           <div style={{ background: 'var(--card)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px 14px 0 0', padding: '18px', paddingBottom: 'calc(18px + env(safe-area-inset-bottom, 0px))', maxWidth: '500px', width: '100%', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+
+            {/* R6-10: what the sales-order prefill found, and on what
+                evidence. A part-number-prefix guess must never read as a
+                catalog fact, so the counts are split out by signal. */}
+            {prefillNote && (
+              <div style={{
+                padding: '9px 11px', borderRadius: '9px', marginBottom: '12px',
+                fontSize: '11.5px', lineHeight: 1.45,
+                background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.28)',
+                color: 'var(--text-body)',
+              }}>
+                {prefillNote}
+              </div>
+            )}
 
             {/* ─── STEP 1: Choose Job Type ─── */}
             {createStep === 'category' && (
@@ -1442,7 +1499,7 @@ export default function GraphicsPage() {
                 </div>
 
                 <button
-                  onClick={() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); }}
+                  onClick={() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillNote(null); }}
                   style={{ width: '100%', padding: '10px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
                 >
                   Cancel
@@ -1763,7 +1820,7 @@ export default function GraphicsPage() {
                     {creating ? 'Creating...' : !createForm.title.trim() ? 'Enter a title to continue' : `Create ${GRAPHICS_CATEGORY_LABELS[createForm.job_category as GraphicsJobCategory]} Job`}
                   </button>
                   <button
-                    onClick={() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); }}
+                    onClick={() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillNote(null); }}
                     style={{ width: '100%', padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
                   >
                     Cancel
