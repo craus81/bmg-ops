@@ -15,6 +15,12 @@ import {
   reconcilePlacements,
   splitForRoll,
 } from '@/lib/roll-nesting';
+import {
+  buildMaterialLines,
+  matchSubstrate,
+  summarizeLines,
+  type CatalogFilm,
+} from '@/lib/material-costing';
 
 /**
  * The production Roll Plan (§7.4 floor build): the wrap-quote nesting
@@ -153,40 +159,85 @@ export default function GraphicsRollPlan({ jobId, jobQuantity, vinylType, vinylC
     }
   };
 
+  /**
+   * Write the plan's real consumable set into the job's material log
+   * (R6-1). Film and laminate bill on roll area — the waste is bought
+   * either way; premask and ink bill on the printed graphic area only.
+   * Rates come from the film catalog, then the shop defaults, then the
+   * legacy last-logged price book; a line with no rate anywhere is logged
+   * with a null cost so the job shows what it burned rather than "free".
+   */
   const logMaterial = async () => {
     if (busy || !film || film.rollSqft <= 0) return;
     setBusy(true);
     setMsg(null);
     try {
-      // Rate hint: the shop's own last logged $/ft² for this material —
-      // the same price book the materials card shows.
-      let cost: number | null = null;
-      const { data: last } = await supabase
-        .from('graphics_job_materials')
-        .select('cost, quantity_sqft')
-        .eq('material_name', filmLabel)
-        .gt('cost', 0)
-        .gt('quantity_sqft', 0)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (last?.cost && last?.quantity_sqft) {
-        cost = Math.round((Number(last.cost) / Number(last.quantity_sqft)) * film.rollSqft * 100) / 100;
+      const [{ data: catalog }, { data: settings }] = await Promise.all([
+        supabase.from('wrap_substrates')
+          .select('id, name, cost_per_sqft, laminate_name, laminate_cost_per_sqft, premask_name, premask_cost_per_sqft, ink_cost_per_sqft')
+          .eq('is_active', true),
+        supabase.from('quote_settings')
+          .select('default_ink_cost_per_sqft, default_premask_cost_per_sqft').eq('id', 1).maybeSingle(),
+      ]);
+      const substrate = matchSubstrate(vinylType || filmLabel, (catalog || []) as any[]) as CatalogFilm | null;
+
+      // Legacy price book, consulted only when the catalog can't price it.
+      let lastLoggedFilmRate: number | null = null;
+      if (!substrate?.cost_per_sqft) {
+        const { data: last } = await supabase
+          .from('graphics_job_materials')
+          .select('cost, quantity_sqft')
+          .eq('material_name', filmLabel)
+          .gt('cost', 0)
+          .gt('quantity_sqft', 0)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (last?.cost && last?.quantity_sqft) {
+          lastLoggedFilmRate = Number(last.cost) / Number(last.quantity_sqft);
+        }
       }
+
       const usedLenIn = film.rolls.reduce((s, r) => s + r.usedLengthIn, 0);
-      const { error } = await supabase.from('graphics_job_materials').insert({
-        graphics_job_id: jobId,
-        material_name: filmLabel,
-        category: 'vinyl',
-        quantity_sqft: num1(film.rollSqft),
-        linear_feet: num1(usedLenIn / 12),
-        cost,
-        notes: `Roll plan: ${film.placedCount} piece${film.placedCount !== 1 ? 's' : ''} on ${film.rolls.length} roll${film.rolls.length !== 1 ? 's' : ''} × ${config.widthIn}"${usage.unplaced.length > 0 ? ` (${usage.unplaced.length} unplaced — not counted)` : ''}`,
-        logged_by: user?.id || null,
+      const lines = buildMaterialLines({
+        filmLabel,
+        rollSqft: film.rollSqft,
+        graphicSqft: film.graphicSqft,
+        linearFeet: usedLenIn / 12,
+        substrate,
+        defaults: {
+          inkCostPerSqft: settings?.default_ink_cost_per_sqft != null ? Number(settings.default_ink_cost_per_sqft) : null,
+          premaskCostPerSqft: settings?.default_premask_cost_per_sqft != null ? Number(settings.default_premask_cost_per_sqft) : null,
+        },
+        lastLoggedFilmRate,
       });
-      setMsg(error
-        ? { kind: 'err', text: `Material log failed: ${error.message}` }
-        : { kind: 'ok', text: `Logged ${num1(film.rollSqft)} ft² of ${filmLabel}${cost != null ? ` at ~$${cost.toFixed(2)}` : ' (no rate on file — set the cost on the material log)'}. Refresh the materials card to see it.` });
+
+      const planNote = `Roll plan: ${film.placedCount} piece${film.placedCount !== 1 ? 's' : ''} on ${film.rolls.length} roll${film.rolls.length !== 1 ? 's' : ''} × ${config.widthIn}"${usage.unplaced.length > 0 ? ` (${usage.unplaced.length} unplaced — not counted)` : ''}`;
+      const { error } = await supabase.from('graphics_job_materials').insert(
+        lines.map(l => ({
+          graphics_job_id: jobId,
+          material_name: l.materialName,
+          category: l.category,
+          substrate_id: l.substrateId,
+          quantity_sqft: l.quantitySqft,
+          linear_feet: l.linearFeet,
+          rate_per_sqft: l.ratePerSqft,
+          cost_source: l.costSource,
+          cost: l.cost,
+          notes: planNote,
+          logged_by: user?.id || null,
+        })),
+      );
+      if (error) { setMsg({ kind: 'err', text: `Material log failed: ${error.message}` }); return; }
+
+      const { total, unpriced } = summarizeLines(lines);
+      const what = lines.map(l => l.category).join(' + ');
+      setMsg({
+        kind: 'ok',
+        text: `Logged ${lines.length} line${lines.length !== 1 ? 's' : ''} (${what}) — ${num1(film.rollSqft)} ft² of roll, ${num1(film.graphicSqft)} ft² printed — at $${total.toFixed(2)}`
+          + (unpriced > 0 ? `, with ${unpriced} line${unpriced !== 1 ? 's' : ''} unpriced (set a rate on the film in Wrap Quote → Pricing).` : `.`)
+          + ' Refresh the materials card to see it.',
+      });
     } finally {
       setBusy(false);
     }
@@ -232,7 +283,7 @@ export default function GraphicsRollPlan({ jobId, jobQuantity, vinylType, vinylC
               Save plan
             </button>
             <button onClick={logMaterial} disabled={busy || !film || film.rollSqft <= 0}
-              title="Write the computed roll usage into this job's material log (sqft, linear ft, cost from the last logged rate)"
+              title="Write the computed usage into this job's material log — film and laminate on roll area, premask and ink on printed area, priced from the film catalog"
               style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(249,115,22,0.1)', border: '1px solid rgba(249,115,22,0.35)', color: '#f97316' }}>
               Log material from plan
             </button>
