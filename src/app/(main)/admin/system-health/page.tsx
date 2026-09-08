@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { apiFetch } from '@/lib/api-client';
 
 interface HealthCheck {
   syncType: string;
@@ -25,6 +26,10 @@ interface EmailLogRow {
   delivery_detail: string | null;
   delivery_updated_at: string | null;
   created_at: string;
+  // m294: a bounce stays a bounce until someone fixes the contact / re-sends.
+  // Unresolved money-email bounces block the month-end close.
+  resolved_at?: string | null;
+  resolution_note?: string | null;
 }
 
 const EMAIL_KIND_LABELS: Record<string, string> = {
@@ -63,10 +68,15 @@ const fmtAge = (min: number | null) => {
 export default function SystemHealthPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isAdmin, hasFeature, loading: authLoading } = useAuth();
+  const { isAdmin, hasRole, hasFeature, loading: authLoading } = useAuth();
 
   const [checks, setChecks] = useState<HealthCheck[]>([]);
   const [emails, setEmails] = useState<EmailLogRow[]>([]);
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  // The resolve action lives on the month-close route, which admits
+  // admins + executives. A per-user system_health override doesn't, so the
+  // button only appears for people it would actually let through.
+  const canResolve = isAdmin || hasRole('executive');
   const [emailProblemsOnly, setEmailProblemsOnly] = useState(false);
   const [writeProbe, setWriteProbe] = useState<{ ok: boolean; error?: string } | null>(null);
   const [cronSecretConfigured, setCronSecretConfigured] = useState(true);
@@ -94,6 +104,32 @@ export default function SystemHealthPage() {
     }
     setLoading(false);
   }, []);
+
+  /** Mark a delivery failure handled (m294). The month-end close gate on
+   *  bounced invoice/statement emails reads this stamp, so "we fixed the
+   *  address" has somewhere to be recorded instead of a bounce staying
+   *  outstanding forever. */
+  const resolveEmail = async (e: EmailLogRow) => {
+    const note = window.prompt(
+      `Mark this ${e.delivery_status} email resolved?\n\nWhat was done (optional — e.g. "new address on file, re-sent"):`,
+    );
+    if (note === null) return;
+    setResolvingId(e.id);
+    try {
+      const res = await apiFetch('/api/reports/month-close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'resolve_email', emailLogId: e.id, note }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not save');
+      setEmails(prev => prev.map(row => row.id === e.id
+        ? { ...row, resolved_at: new Date().toISOString(), resolution_note: note || null }
+        : row));
+    } catch (err: any) {
+      setError(err.message || 'Could not save');
+    }
+    setResolvingId(null);
+  };
 
   // ?email=<log id> (deepLinks.emailDelivery — bounce-alert fallback CTA):
   // scroll to and flash that row in the Email delivery section.
@@ -187,7 +223,10 @@ export default function SystemHealthPage() {
           sends alert their sender on bounce; this section is where the
           AUTOMATED sends' failures surface (nobody gets paged for those). */}
       {!loading && !error && (() => {
-        const badCount = emails.filter(e => BAD_EMAIL_STATES.includes(e.delivery_status)).length;
+        // A resolved bounce is no longer "to fix" — it stays in the log with
+        // its stamp, but it stops being counted against the shop.
+        const isOpenProblem = (e: EmailLogRow) => BAD_EMAIL_STATES.includes(e.delivery_status) && !e.resolved_at;
+        const badCount = emails.filter(isOpenProblem).length;
         const shown = emailProblemsOnly ? emails.filter(e => BAD_EMAIL_STATES.includes(e.delivery_status)) : emails;
         return (
           <div style={{ marginTop: '22px' }}>
@@ -206,7 +245,7 @@ export default function SystemHealthPage() {
               }}>{emailProblemsOnly ? '✓ Problems only' : 'Problems only'}</button>
             </div>
             <div style={{ fontSize: '12px', fontWeight: 700, color: badCount === 0 ? '#22c55e' : '#ef4444', marginBottom: '10px' }}>
-              {badCount === 0 ? '✓ No delivery problems in the last 100 sends' : `⚠ ${badCount} of the last ${emails.length} sends did not reach the recipient`}
+              {badCount === 0 ? '✓ No unresolved delivery problems in the last 100 sends' : `⚠ ${badCount} of the last ${emails.length} sends did not reach the recipient and are not marked resolved`}
             </div>
             {shown.length === 0 ? (
               <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '10px' }}>
@@ -234,8 +273,20 @@ export default function SystemHealthPage() {
                         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           to {(e.recipients || []).join(', ') || '—'}
                           {bad && e.delivery_detail && <span style={{ color: s.color }}> · {e.delivery_detail}</span>}
+                          {e.resolved_at && (
+                            <span style={{ color: '#22c55e', fontWeight: 700 }}>
+                              {' '}· resolved {new Date(e.resolved_at).toLocaleDateString()}
+                              {e.resolution_note ? ` — ${e.resolution_note}` : ''}
+                            </span>
+                          )}
                         </div>
                       </div>
+                      {bad && !e.resolved_at && canResolve && (
+                        <button onClick={() => resolveEmail(e)} disabled={resolvingId === e.id} title="Mark this delivery failure handled — the contact is fixed or the mail was re-sent" style={{
+                          padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                          background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', whiteSpace: 'nowrap',
+                        }}>{resolvingId === e.id ? 'Saving…' : 'Mark resolved'}</button>
+                      )}
                       {e.context_url && (
                         <button onClick={() => router.push(e.context_url!)} title="Open the record this email is about" style={{
                           padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',

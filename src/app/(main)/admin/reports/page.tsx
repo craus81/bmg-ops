@@ -31,6 +31,12 @@ const REPORTS: ReportLink[] = [
     source: 'FleetSuite',
   },
   {
+    title: 'Month-End Close',
+    blurb: 'One page per accounting month: is everything finished in the month billed, is the AP/payout pipeline drained, did a money email bounce and never get fixed, and have the NetSuite-side checks been signed off. A check the app could not run says \u201cnot checked\u201d \u2014 never \u201cclear.\u201d',
+    href: '/admin/reports/month-close',
+    source: 'FleetSuite',
+  },
+  {
     title: 'Never-Invoiced Recovery',
     blurb: 'Every completed or shipped vehicle with no invoice anywhere \u2014 oldest first, bucketed by what each needs: a linked sales order to bill, an estimate someone has to convert, or no paperwork at all. The queue behind the dashboard tile.',
     href: '/admin/reports/never-invoiced',
