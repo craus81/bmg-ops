@@ -38,6 +38,14 @@ const ReceiveSchema = z.object({
     itemNumber: z.string().trim().min(1).max(80),
     itemNetsuiteId: z.string().max(40).optional().nullable(),
     quantity: z.number().positive().max(100000),
+    // R6-7: what was WRONG with this line, flagged at the dock — the only
+    // moment anyone can actually see it.
+    exception: z.object({
+      kind: z.enum(['short', 'damaged', 'wrong_item']),
+      quantity: z.number().min(0).max(100000).optional().nullable(),
+      note: z.string().max(500).optional().nullable(),
+      photoPath: z.string().max(500).optional().nullable(),
+    }).optional().nullable(),
   })).min(1).max(100),
   note: z.string().max(1000).optional().nullable(),
 });
@@ -220,13 +228,37 @@ export async function POST(req: NextRequest) {
       received_at: now,
     };
   });
-  const { error: insertErr } = await supabase.from('po_receipts').insert(rows);
+  const { data: insertedReceipts, error: insertErr } = await supabase
+    .from('po_receipts').insert(rows).select('id, item_number');
   if (insertErr) {
     // The NetSuite receipt (if posted) exists regardless — say so instead
     // of inviting a retry that would double-receive.
     return NextResponse.json({
       error: `${posted ? `Item receipt ${receiptNumber || receiptId} posted to NetSuite, but the` : 'The'} local receipt record failed: ${insertErr.message}`,
     }, { status: 500 });
+  }
+
+  // ── R6-7: structured dock exceptions ────────────────────────────────
+  // Short / damaged / wrong-item flags become their own rows so open
+  // vendor claims are a list somebody can work, not a sentence buried in a
+  // receipt note. Never fatal: the goods arrived either way, and losing a
+  // posted receipt over a failed flag would be the worse trade.
+  const flagged = body.lines.filter(l => l.exception);
+  if (flagged.length > 0) {
+    const receiptByItem = new Map((insertedReceipts || []).map((r: any) => [r.item_number, r.id]));
+    const { error: exErr } = await supabase.from('po_receipt_exceptions').insert(
+      flagged.map(l => ({
+        receipt_id: receiptByItem.get(l.itemNumber) || null,
+        po_id: po.id,
+        item_number: l.itemNumber,
+        kind: l.exception!.kind,
+        quantity: l.exception!.quantity ?? null,
+        note: l.exception!.note?.trim() || null,
+        photo_path: l.exception!.photoPath || null,
+        flagged_by: auth.user.id,
+      })),
+    );
+    if (exErr) console.error('dock exception insert failed:', exErr.message);
   }
 
   // Posted receipts bump the mirror now so readiness and the receiving page

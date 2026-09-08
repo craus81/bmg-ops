@@ -11,6 +11,7 @@ import { syncVendorBillPayments, syncPayoutBillPayments } from '@/lib/vendor-bil
 import { syncArInvoicePayments } from '@/lib/ar-payment-sync';
 import { closeConvertedEstimates } from '@/lib/estimate-close-sync';
 import { recordHeartbeat } from '@/lib/system-health';
+import { syncVendors } from '@/lib/vendor-master';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -403,6 +404,16 @@ export async function GET(req: NextRequest) {
   // catalog snapshot (and everything reading on-hand/available from it)
   // gets a light quantities-only refresh here.
   try {
+  // R6-7: vendor master. Names are free text everywhere else, so one
+  // canonical list is what lets reports stop treating "Grimco",
+  // "GRIMCO" and "Grimco Inc" as three vendors. Guarded: a vendor-sync
+  // failure must not cost the syncs that already ran.
+  try {
+    results.vendors = await syncVendors(supabase);
+  } catch (err: any) {
+    results.vendors = { error: err.message };
+  }
+
     results.inventory = await syncInventoryQuantities(supabase);
   } catch (err: any) {
     console.error('[cron] Inventory sweep error:', err.message);
