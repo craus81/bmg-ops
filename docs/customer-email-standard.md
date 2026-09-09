@@ -85,6 +85,44 @@ on every send, not just estimates.
 | PO receipt confirmation (`src/lib/po-confirmation.ts`) | Exempt — automated | Sent automatically once a customer PO's lines are imported (Gmail import or PDF upload, both paths in `/api/gmail/import-po`), once per PO. To the **Buyer Information** email extracted from the PO PDF (`purchase_orders.buyer_email`, migration 256), else the person who emailed the PO in (`gmail_po_imports.from_email`); skipped with a reason when neither exists. **Never** the customer's billing emails and never an accounts-payable mailbox (`isApMailbox`) — `prospects.billing_emails` is the *invoice* list, and using it as the fallback sent PO 35050306's acknowledgement to Masterack's AP desk instead of the buyer. Staff correct the buyer and send/re-send from the PO page (`Edit buyer` / `Send again` → `/api/pos/send-confirmation`); an address typed there is honoured verbatim, AP or not. Lists the PO's lines, quantities, requested dates and total, and attaches the PO PDF from `po_files` as the transaction copy. Logged as kind `po_confirmation`; the PO record shows buyer + "Confirmation sent". Owner decision 2026-09-03: automatic, not a compose screen. |
 | Invites (CNI/admin), reminder crons, digests, notify-pickup | Exempt | Automated/transactional — nobody is composing. Reply-To falls back to `RESEND_REPLY_TO_EMAIL`. |
 
+## The From address must stay deliverable
+
+`RESEND_FROM_EMAIL` is **`fleetsuite@bmgfleet.com`** in production — the
+From on every outbound email, composed and automated alike. It is a Google
+Workspace **alias on cgeorge@bmgfleet.com** (no separate mailbox, no
+license), and it has to stay a real, deliverable address.
+
+Reply-To protects only the customer who hits plain Reply. Anyone who hits
+**Reply All** puts the From address in their To, and several flows
+explicitly invite a reply — the PO confirmation body ends "Questions or
+changes? Reply to this email and it comes straight to us."
+
+It was not deliverable until 2026-09-09. Before the alias existed, Google
+rejected every reply to it:
+
+```
+Final-Recipient: rfc822; fleetsuite@bmgfleet.com
+Status: 5.1.3
+Diagnostic-Code: smtp; The email account that you tried to reach does not exist.
+```
+
+Those bounces landed *inside live customer threads* (a JB Poindexter buyer
+chasing a PO), and any reply addressed only to the From was lost silently —
+nobody here ever knew, because a reply we never receive produces no
+`email_log` row and no bounce alert. Delivery tracking below covers the mail
+we send, not the mail we fail to receive.
+
+So:
+
+- Never point `RESEND_FROM_EMAIL` at an address with nothing behind it
+  (mailbox, alias, or group). "Send-only, nobody reads it" is not a
+  configuration — it is a dead reply path.
+- Changing the From address means creating the new address in Workspace
+  **first**, confirming an external test email actually lands, and only then
+  flipping the env var. Not the other way round.
+- Reply-To is the second line of defence, not the first. Callers pass the
+  sending user's email; `RESEND_REPLY_TO_EMAIL` is the automated fallback.
+
 ## Delivery tracking (all flows, automatic)
 
 Every email — composed or automated — is logged to `email_log` by the

@@ -6,10 +6,15 @@ import { resolveCustomerLinkage } from './customer-linkage';
 const apiKey = process.env.RESEND_API_KEY;
 const fromEmail = process.env.RESEND_FROM_EMAIL || 'notifications@bmgfleet.com';
 const fromName = process.env.RESEND_FROM_NAME || 'BMG Fleet';
-// The from address is send-only — no mailbox exists behind it, so a customer
-// hitting Reply bounces unless the email carries a Reply-To pointing at a
-// real address. Callers pass the sending user's email where one exists;
-// RESEND_REPLY_TO_EMAIL is the fallback for automated sends (crons, digests).
+// The from address must be REAL and deliverable — it is
+// fleetsuite@bmgfleet.com in production, a Workspace alias with no separate
+// mailbox behind it. It was send-only until 2026-09-09, and customer replies
+// to it hard-bounced (5.1.3 "address does not exist") inside live PO threads
+// while the email body invited them to reply. Never point RESEND_FROM_EMAIL
+// at an address nothing receives — see docs/customer-email-standard.md.
+// Reply-To is the second line of defence (it only catches a plain Reply; a
+// Reply All still hits the From): callers pass the sending user's email where
+// one exists, and RESEND_REPLY_TO_EMAIL is the fallback for automated sends.
 const defaultReplyTo = process.env.RESEND_REPLY_TO_EMAIL || '';
 
 const resend = apiKey ? new Resend(apiKey) : null;
