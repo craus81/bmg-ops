@@ -9,6 +9,13 @@ moves.
 screen properly, which screens get it first, and what it costs. The same work
 covers iPad and desktop — none of it is Duo-specific.
 
+> **Deferred 2026-09-10 — read `docs/future-features.md` §F1 first.** The
+> decision, the trigger conditions, and a **revised screen priority** live
+> there. The per-screen order in §6 below is ops-ordered; the actual use case
+> is demoing to prospects, which reorders it and drops `parts` and `scan`
+> entirely. §F1 also records the `upfit-designer` finding, which isn't in this
+> doc at all and is the best foldable surface in the app.
+
 ---
 
 ## 1. What we actually know
