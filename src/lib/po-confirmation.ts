@@ -186,17 +186,20 @@ export async function sendPoConfirmation(
     if (error || !po) return { sent: false, reason: error?.message || 'PO not found' };
     if (po.confirmation_sent_at && !opts.force) return { sent: false, reason: 'already confirmed' };
 
+    // In the customer's own line order (migration 291). `id` is a UUID, so
+    // the old .order('id') listed the PO's lines in an arbitrary order.
     const { data: lines } = await supabase
       .from('po_line_items')
       .select('*')
       .eq('po_id', poId)
+      .order('line_no', { ascending: true, nullsFirst: false })
       .order('id');
     const poLines: PoLine[] = (lines || []).map((l: any) => ({
       part_number: l.part_number ?? null,
       description: l.description ?? null,
       quantity: l.quantity ?? null,
       unit_price: l.unit_price ?? null,
-      delivery_date: l.delivery_date ?? l.requested_delivery_date ?? null,
+      delivery_date: l.delivery_date ?? null,
     }));
     if (poLines.length === 0) return { sent: false, reason: 'no lines imported yet' };
 
