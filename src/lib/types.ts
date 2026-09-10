@@ -100,6 +100,10 @@ export interface POLineItem {
   quantity: number;
   installed: number;
   unit_price: number;
+  /** Requested delivery date for this line, off the PO PDF (migration 291). */
+  delivery_date?: string | null;
+  /** The PO's printed line number, else the line's position (migration 291). */
+  line_no?: number | null;
 }
 
 export interface PoLocation {

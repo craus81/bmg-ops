@@ -12,6 +12,7 @@ import { recomputePoFulfillment } from '@/lib/scan-match';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { notifyPoImported, countGraphicsLines } from '@/lib/po-import-notify';
 import { sendPoConfirmation } from '@/lib/po-confirmation';
+import { buyerName, buyerEmail, lineNo } from '@/lib/po-extraction';
 import { applyInstallPartRule } from '@/lib/po-install-parts';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 
@@ -313,29 +314,48 @@ async function callAnthropicWithRetry(body: any, apiKey: string, maxRetries = 3)
   throw new Error('Max retries exceeded for Anthropic API');
 }
 
-// Buyer Information from the PDF (migration 256). Tolerant of the model
-// returning a nested object or a bare string, and of a stray label.
-const buyerName = (x: any): string | null => {
-  const v = x?.buyer_name ?? x?.buyer?.name ?? null;
-  const s = v == null ? '' : String(v).replace(/^name:\s*/i, '').trim();
-  return s ? s.slice(0, 200) : null;
-};
-const buyerEmail = (x: any): string | null => {
-  const v = x?.buyer_email ?? x?.buyer?.email ?? null;
-  const s = v == null ? '' : String(v).replace(/^email:\s*/i, '').trim().toLowerCase();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s.slice(0, 254) : null;
-};
-
 const PO_EXTRACTION_PROMPT = `You are extracting purchase order data from a PDF document. This is typically a Masterack or similar fleet equipment purchase order sent to BMG Fleet Installation.
 
 CRITICAL: You MUST extract every single line item from the table. Each line item row has: a line number (like 1.000, 2.000), a part number, a description, quantity, unit of measure (EA/PC), and a unit price. Some POs have many line items across multiple pages — extract ALL of them.
+
+NEVER DROP A LINE BECAUSE ITS TEXT IS AWKWARD TO QUOTE. Descriptions on these
+POs routinely contain double quotes and apostrophes, sometimes unbalanced,
+because they name the words printed on a decal:
+  DECAL "KEY BOX MASTER SET        SWITCH LABEL 'STROBE LIGHT'
+Escape every double quote inside a JSON string as \" and emit the line like
+any other. Omitting a line to keep the JSON valid is the WORST possible
+outcome — it silently understates the customer's order and the total we
+confirm back to them. A real PO lost its first line exactly this way.
+
+COUNT THE LINES BEFORE YOU RETURN. Count the rows that start with a line
+number (1.000, 2.000, 3.000 …) across ALL pages, then confirm the "lines"
+array you are about to emit has exactly that many entries. If it has fewer,
+you dropped a row — go back and add it.
 
 LOOK FOR THESE SPECIFIC ELEMENTS:
 - PURCHASE ORDER NUMBER: Usually at top right, labeled "PURCHASE ORDER NUMBER" followed by a number like 35045953
 - ORDERED DATE: Format like MM/DD/YY or MM/DD/YYYY
 - REQUESTED DELIVERY DATE: A header-level date the buyer needs the order delivered by. On Masterack POs it is labeled exactly "REQUESTED DELIVERY DATE". If that header field is not present, use the earliest delivery date across the line items.
 - SHIP TO / DELIVER TO: The address block showing the DESTINATION where items should be delivered. IMPORTANT: POs have multiple address blocks — there is usually a "Supplier" or "Vendor" address (this is BMG Fleet Installation's address — IGNORE IT) and a "Ship To" or "Deliver To" address (this is the actual destination — USE THIS ONE). Never use BMG Fleet Installation's own address as the ship_to. The ship_to should be the customer's facility or job site, like a Masterack plant, dealership, or fleet location.
-- BUYER INFORMATION: A block labeled "Buyer Information" with the buyer's Name and Email (and sometimes Phone). This is the person at the customer who sent the PO — we email them a receipt confirmation. Put the name in buyer_name and the email address in buyer_email; null if the block is absent.
+- BUYER INFORMATION: A block labeled "Buyer Information" in the page-1 header, holding the buyer's Name and Email (and sometimes Phone and Fax). This is the person at the customer who sent the PO — we email them a receipt confirmation. Put the name in buyer_name and the email address in buyer_email; null if the block is absent.
+
+THE BUYER'S EMAIL HAS DECOYS — TAKE IT ONLY FROM THE BUYER INFORMATION BLOCK:
+The header is laid out in several columns, so the "Email:" line of the Buyer
+Information block often sits SEVERAL LINES BELOW its "Name:" line, with the
+Vendor and Ship To columns interleaved between them. Read down the Buyer
+Information column to find it — do not conclude the block has no email just
+because the address is not on the line after the name.
+These addresses appear on the same PO and are NEVER buyer_email:
+- The "INVOICE TO:" line in the page footer. That is the customer's ACCOUNTS
+  PAYABLE mailbox (e.g. MSRAccountsPayable@masterack.com). AP did not place
+  the order and cannot answer a question about it. Taking this address is the
+  most common mistake on this field — it once sent a customer's PO receipt to
+  their AP department instead of the buyer.
+- Any address inside the shipping instructions or terms text (carrier and
+  logistics contacts such as pickups@eshipping.biz).
+- Any BMG Fleet Installation address — that is us, not the customer.
+If the Buyer Information block genuinely has no email, return buyer_email
+null. Null is correct and safe; a wrong address is not.
 - LINE ITEMS TABLE: Each row starts with a line number (1.000, 2.000, etc.) followed by columns of data
 
 COLUMN IDENTIFICATION — THIS IS CRITICAL:
@@ -417,9 +437,11 @@ RULES:
 - supplier_part: BMG's supplier part number, often shown on the line below the main item row. If not present, copy part_number.
 - drawing_number: The "Drawing Number & Revision" value from the far-right column, or null if the PO has no such column. Extract it into this field so it can never be confused with the part number. Never reuse it as part_number or supplier_part.
 - Before returning, re-check every line twice: (1) its part_number came from the column LEFT of the description, not the drawing column on the right — if part_number and drawing_number came out identical you read the same column twice and must re-read the row; (2) if the description mentions install, part_number and supplier_part start with 06, not 02.
+- line_no: That row's printed line number ("1.000"). We store it to show the lines back to the customer in the same order their PO lists them, so give every line the number the document gives it.
+- description: The part description exactly as printed, punctuation included. Keep quotes and apostrophes (escaped as JSON requires) rather than stripping them or skipping the line.
 - quantity: Integer only
 - unit_price: Decimal number, no $ sign (e.g., 45.00)
-- delivery_date: The requested delivery date for that line, if shown
+- delivery_date: That row's own requested delivery date, from the "Requested Delivery Date" column on the far right. Each line can have a different one; extract each line's own, not the first line's for all of them.
 - If the PO has items across multiple pages, include ALL pages
 - customer: The buyer/company name from the header — usually "Masterack" for Masterack POs, or "Reading Equipment and Distribution" (Reading Truck) for Reading POs. The two run separate PO systems even though the work happens in the same buildings, so never guess one from the other`;
 
@@ -589,7 +611,7 @@ export async function POST(req: NextRequest) {
 
         const catalogItems = await loadCatalogItems(supabase);
 
-        const lineInserts = extractedLines.map((l: any) => {
+        const lineInserts = extractedLines.map((l: any, i: number) => {
           const partNum = l.supplier_part || l.part_number;
           const catalogMatch = catalogItems.find((c: any) =>
             c.part_number.toUpperCase() === (partNum || '').toUpperCase() ||
@@ -602,6 +624,10 @@ export async function POST(req: NextRequest) {
             description: l.description || null,
             quantity: parseInt(l.quantity) || 0,
             unit_price: parseFloat(l.unit_price) || 0,
+            // Migration 291 — the confirmation's "Requested" column and the
+            // order the customer sees. Extracted all along, never stored.
+            delivery_date: normalizeDate(l.delivery_date),
+            line_no: lineNo(l, i),
           };
         });
 
@@ -675,7 +701,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Failed to create PO', details: poError?.message }, { status: 500 });
       }
 
-      const lineInserts = extractedLines.map((l: any) => {
+      const lineInserts = extractedLines.map((l: any, i: number) => {
         const partNum = l.supplier_part || l.part_number;
         const catalogMatch = catalogItems.find((c: any) =>
           c.part_number.toUpperCase() === (partNum || '').toUpperCase() ||
@@ -688,6 +714,10 @@ export async function POST(req: NextRequest) {
           description: l.description || null,
           quantity: parseInt(l.quantity) || 0,
           unit_price: parseFloat(l.unit_price) || 0,
+          // Migration 291 — the confirmation's "Requested" column and the
+          // order the customer sees. Extracted all along, never stored.
+          delivery_date: normalizeDate(l.delivery_date),
+          line_no: lineNo(l, i),
         };
       });
 
@@ -1114,7 +1144,7 @@ export async function POST(req: NextRequest) {
       const catalogItems = await loadCatalogItems(supabase);
 
       // Insert new line items
-      const lineInserts = extractedLines.map((l: any) => {
+      const lineInserts = extractedLines.map((l: any, i: number) => {
         const partNum = l.supplier_part || l.part_number;
         const catalogMatch = catalogItems.find((c: any) =>
           c.part_number.toUpperCase() === (partNum || '').toUpperCase() ||
@@ -1127,6 +1157,10 @@ export async function POST(req: NextRequest) {
           description: l.description || null,
           quantity: parseInt(l.quantity) || 0,
           unit_price: parseFloat(l.unit_price) || 0,
+          // Migration 291 — the confirmation's "Requested" column and the
+          // order the customer sees. Extracted all along, never stored.
+          delivery_date: normalizeDate(l.delivery_date),
+          line_no: lineNo(l, i),
         };
       });
 
@@ -1250,7 +1284,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Failed to create PO', details: poError?.message }, { status: 500 });
       }
 
-      const lineInserts = extractedLines.map((l: any) => {
+      const lineInserts = extractedLines.map((l: any, i: number) => {
         const partNum = l.supplier_part || l.part_number;
         const catalogMatch = catalogItems.find((c: any) =>
           c.part_number.toUpperCase() === (partNum || '').toUpperCase() ||
@@ -1263,6 +1297,10 @@ export async function POST(req: NextRequest) {
           description: l.description || null,
           quantity: parseInt(l.quantity) || 0,
           unit_price: parseFloat(l.unit_price) || 0,
+          // Migration 291 — the confirmation's "Requested" column and the
+          // order the customer sees. Extracted all along, never stored.
+          delivery_date: normalizeDate(l.delivery_date),
+          line_no: lineNo(l, i),
         };
       });
 
