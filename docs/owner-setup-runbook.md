@@ -15,11 +15,12 @@ doing them.
 > the complete list of what each feature *requires*, compiled from the code.
 > Skip any line you know is already done.
 >
-> The app can't tell you either, yet: **Integration Checkup** (a Connections
-> tab on System Health that probes every RESTlet, env var and token on
-> demand) is Tier 3 in the audit and hasn't been built. If you want this
-> runbook to stop being a document and start being a page, that's the one to
-> ask for.
+> **The app can now tell you, though.** Open **System Health → Connections**
+> (`/admin/system-health`). It probes NetSuite auth, all three RESTlets,
+> connected apps, every environment variable and the migration state live,
+> and lists exactly what is unset with what each thing breaks. It defaults
+> to "Needs attention", so it opens on the short list. Treat that page as
+> the status report and this document as the procedures behind it.
 
 ---
 
@@ -61,6 +62,12 @@ Until this is done the Financials tab says "P&L unavailable" and names the
 doc, rather than guessing. P&L metric snapshots only start accruing after
 the redeploy verifies — and like all snapshot history, **that can't be
 backfilled**, so every week costs a week of trend data.
+
+**Confirm it took.** Open System Health → Connections and look at the
+Financials RESTlet row. Each script now reports its own version, so the row
+reads "Deployed and current" only when NetSuite is genuinely running the code
+this app expects. A re-upload that silently didn't take shows as "running
+code older than this app expects" instead of looking fine.
 
 ### 1b. Grant the RESTlet's role transaction search
 

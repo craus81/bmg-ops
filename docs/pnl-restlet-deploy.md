@@ -13,6 +13,12 @@ can't read the `account` table or payment records — see the header of
 `scripts/netsuite-financials-restlet.js`), which is why the RESTlet exists
 and why this needs a human in NetSuite rather than a deploy.
 
+> **Verifying afterwards.** System Health → Connections shows each RESTlet's
+> deployed version against the version this app expects. That row is the
+> check that the re-upload below actually took — it reads "Deployed and
+> current" only on a genuine match, and calls out a deployment too old to
+> report a version at all.
+
 ## 1. Re-upload the script
 
 1. In NetSuite: **Documents → Files → File Cabinet**, find the existing

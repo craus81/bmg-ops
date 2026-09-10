@@ -406,6 +406,10 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/storage/presign/route.ts': authScoped('write presigns pass the tiered storage-guard ACL first', 'checkStoragePath'),
   'src/app/api/storage/route.ts': authScoped('every bucket/path goes through the tiered storage-guard ACL', 'checkStoragePath'),
   'src/app/api/system-health/route.ts': cron('requireAdmin('),
+  // Narrower than its sibling above on purpose: a map of which
+  // integrations are unconfigured is a map of where the app is soft, so
+  // it stays with the owner-level feature rather than all admins.
+  'src/app/api/system-health/connections/route.ts': feature('system_health'),
   'src/app/api/upfit-projects/allocations/route.ts': staff(),
   'src/app/api/upfit-projects/link-po/route.ts': staff(),
   'src/app/api/upfit-projects/notes/route.ts': staff(),

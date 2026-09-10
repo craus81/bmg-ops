@@ -58,6 +58,14 @@
  */
 define(['N/search'], function (search) {
 
+  // Bump on every functional edit to this file. The app's Integration
+  // Checkup (Connections tab on System Health) compares this against the
+  // version it expects and reports a stale deployment, so a re-upload that
+  // silently didn't take is visible instead of being discovered months
+  // later by a wrong number. src/lib/restlet-versions.ts holds the expected
+  // value and a test fails the build when the two drift apart.
+  var SCRIPT_VERSION = '2026-09-10.1';
+
   function accountBalances(context) {
     var raw = context && context.accounts ? String(context.accounts) : '';
     var ids = raw
@@ -240,6 +248,9 @@ define(['N/search'], function (search) {
 
   function get(context) {
     try {
+      if (context && context.action === 'ping') {
+        return { success: true, mode: 'ping', version: SCRIPT_VERSION };
+      }
       if (context && context.action === 'customerPayments') {
         return customerPayments(context);
       }
