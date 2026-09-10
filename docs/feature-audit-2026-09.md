@@ -27,6 +27,11 @@ be backfilled and should land in week one — the nightly `metric_snapshots`
 table, `paid_at` stamping on the A/R sweep, and vendor ETA/receipt event
 history. Every week they wait is trend history lost forever.
 
+> **Owner setup.** Every external action these rounds left open — NetSuite
+> RESTlet redeploy and role grants, Vercel env vars, and the features that
+> shipped deliberately empty and need seeding — is collected as one ordered
+> checklist in `docs/owner-setup-runbook.md`.
+
 ## Tier 1 — do these first
 
 Highest leverage per effort, anchored on the stated CEO-dashboard priority and capture-before-reporting sequencing. metric-snapshots leads because history cannot be backfilled — every week of delay is trend data lost forever; executive-bands is the CEO view's visible first win (M, mostly rendering, one role-guard fix). order-book-unbilled-revenue (value 5, 3 lenses) is both a top ask and the feeder for CEO Phase 3. exceptions-overrides-digest is effectively S per its own risk note, riding existing audit/cron/email machinery. promised-back-guardian and three-way-match are value-5, 3-lens, M-effort wins. punch-clock-timesheets carries the highest convergence in the whole set (5 lenses) and unblocks crew-utilization and payroll reporting downstream. reorder-points-replenishment is value 5 with 4 lenses; scan-type classification is its only real design work. Eight M-or-smaller items that light up the dashboard's data spine plus the three most-demanded operational wins.
