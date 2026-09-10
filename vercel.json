@@ -65,6 +65,10 @@
       "schedule": "20 15 * * *"
     },
     {
+      "path": "/api/cron/cni-sweep",
+      "schedule": "40 13 * * *"
+    },
+    {
       "path": "/api/cron/weekly-customer-digest",
       "schedule": "0 14 * * 1"
     },

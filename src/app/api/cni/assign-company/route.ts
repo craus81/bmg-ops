@@ -5,6 +5,8 @@ import { validateBody, z } from '@/lib/validate';
 import { getCompanyInstallerIds } from '@/lib/cni-access';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
+import { companyCompliance } from '@/lib/cni-compliance';
+import { logAudit } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,6 +18,9 @@ const supabase = createClient(
 const Schema = z.object({
   jobId: z.string().uuid(),
   companyId: z.string().uuid(),
+  /** Acknowledgment that the company is not eligible for work, with the
+   *  reason. Required to assign past the compliance gate (R6-8). */
+  overrideReason: z.string().trim().min(1).max(500).optional(),
 });
 
 /**
@@ -33,7 +38,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
-  const { jobId, companyId } = parsed.data;
+  const { jobId, companyId, overrideReason } = parsed.data;
 
   const { data: job } = await supabase
     .from('cni_jobs')
@@ -41,6 +46,39 @@ export async function POST(req: NextRequest) {
     .eq('id', jobId)
     .single();
   if (!job) return NextResponse.json({ error: 'Job not found' }, { status: 404 });
+
+  // Compliance gate (R6-8). It WARNS rather than hard-blocks: a hard block
+  // on a dataset nobody has audited would stop the business on day one, and
+  // a workaround nobody can log is worse than an exception everybody can
+  // see. So a first call without a reason is refused with the specifics,
+  // and a second call carrying one proceeds and is recorded as an override.
+  const compliance = await companyCompliance(supabase, companyId);
+  if (compliance && !compliance.eligible) {
+    if (!overrideReason) {
+      return NextResponse.json({
+        error: `${compliance.name} is not eligible for work`,
+        complianceBlock: {
+          name: compliance.name,
+          state: compliance.state,
+          blocking: compliance.blocking,
+          details: compliance.requirements.filter(r => !r.met).map(r => r.detail).filter(Boolean),
+        },
+      }, { status: 409 });
+    }
+    await logAudit(supabase, {
+      actorId: auth.user.id,
+      table: 'cni_jobs',
+      recordId: jobId,
+      action: 'cni_assign_noncompliant',
+      detail: {
+        company: compliance.name,
+        state: compliance.state,
+        blocking: compliance.blocking,
+        insuranceExpiry: compliance.insuranceExpiry,
+        reason: overrideReason,
+      },
+    });
+  }
 
   const newStatus = job.status === 'awaiting_assignment' || job.status === 'bidding_open'
     ? 'assigned_awaiting_scheduling'

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { apiFetch } from '@/lib/api-client';
 import PartPicker, { type PickedPart } from '@/components/PartPicker';
 import { loadCompaniesWithCounts } from '@/lib/cni-companies';
@@ -399,6 +400,10 @@ export default function CniJobDetailPage() {
   // R6-5: ranked matches for the invite picker. Falls back to the plain
   // list when ranking is unavailable, so the modal never goes blank.
   const [matches, setMatches] = useState<any[] | null>(null);
+  // Compliance per company (R6-8), keyed by company id. Rides alongside the
+  // ranking rather than inside it: a non-compliant company can still be the
+  // closest and most capable, and folding that into a score hides both facts.
+  const [compliance, setCompliance] = useState<Record<string, { eligible: boolean; state: string; blocking: string[] }>>({});
   const [matchMeta, setMatchMeta] = useState<{ distanceAvailable: boolean; serviceType: string | null } | null>(null);
   const [bidCount, setBidCount] = useState(0);
 
@@ -412,6 +417,7 @@ export default function CniJobDetailPage() {
   // Phase 4: closure. Company-mode billing coverage from the AP flow
   // (vendor_invoices) — the legacy per-job invoice columns are read-only
   // history now.
+  const dialog = useDialog();
   const [budgetExceeded, setBudgetExceeded] = useState(false);
   // Crew hours vs estimate (R6-12). Null until loaded, and absent entirely
   // when no timer has run on this job — a chip claiming 0h would read as
@@ -717,18 +723,36 @@ export default function CniJobDetailPage() {
     setShowAssign(true);
   };
 
-  const assignCompany = async (companyId: string) => {
+  const assignCompany = async (companyId: string, overrideReason?: string) => {
     if (!job || updating) return;
     setUpdating(true);
     try {
       const res = await fetch('/api/cni/assign-company', {
         method: 'POST', headers: await authHeaders(),
-        body: JSON.stringify({ jobId: job.id, companyId }),
+        body: JSON.stringify({ jobId: job.id, companyId, ...(overrideReason ? { overrideReason } : {}) }),
       });
       if (res.ok) {
         setShowAssign(false);
         await loadJob();
+        return;
       }
+      // Compliance gate (R6-8): the server refuses the first call and hands
+      // back exactly what is wrong. It warns rather than hard-blocks — but
+      // going ahead needs a written reason, and it is logged as an override.
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 409 && body.complianceBlock) {
+        const b = body.complianceBlock;
+        const reason = window.prompt(
+          `${b.name} is not eligible for work.\n\n`
+          + (b.details || []).map((d: string) => `• ${d}`).join('\n')
+          + '\n\nAssigning anyway is recorded as an override. Why are you going ahead?',
+        );
+        if (!reason || !reason.trim()) return;
+        setUpdating(false);
+        await assignCompany(companyId, reason.trim());
+        return;
+      }
+      await dialog.alert(body.error || 'Could not assign the company');
     } finally {
       setUpdating(false);
     }
@@ -839,6 +863,7 @@ export default function CniJobDetailPage() {
         setMatches(body.matches || []);
         setMatchMeta({ distanceAvailable: !!body.distanceAvailable, serviceType: body.job?.serviceType || null });
         if (Array.isArray(body.invitedIds)) setInvitedIds(body.invitedIds);
+        setCompliance(body.compliance || {});
       }
     } catch { /* the unranked list still works */ }
   };
@@ -2031,6 +2056,14 @@ export default function CniJobDetailPage() {
                           >Invite</button>
                         )}
                       </div>
+                      {compliance[m.companyId] && !compliance[m.companyId].eligible && (
+                        <div
+                          title={compliance[m.companyId].blocking.join(' · ')}
+                          style={{ fontSize: '11px', fontWeight: 700, color: '#ef4444', marginTop: '5px' }}
+                        >
+                          ⚠ Not eligible for work — {compliance[m.companyId].blocking.join(', ').toLowerCase()}
+                        </div>
+                      )}
                       <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '6px' }}>
                         {(m.chips || []).map((chip: any, i: number) => (
                           <span key={i} style={{

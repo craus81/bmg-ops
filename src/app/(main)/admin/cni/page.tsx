@@ -196,6 +196,7 @@ export default function CniDashboardPage() {
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '14px' }}>
         {navPill('Installers', '/admin/cni/installers', `${installerCount} registered`)}
         {navPill('Companies', '/admin/cni/companies', 'Installer companies')}
+        {navPill('Compliance', '/admin/cni/compliance', 'Who is eligible for work')}
         {navPill('Vendor IDs', '/admin/cni/vendor-ids', 'NetSuite payout IDs')}
         {navPill('Pay Rates', '/admin/pay-rates', 'Per-vehicle pay')}
         {navPill('Payouts', '/admin/cni/payouts', 'Pay-period batches + aging')}
