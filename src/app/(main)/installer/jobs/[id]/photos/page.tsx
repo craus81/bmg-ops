@@ -92,6 +92,10 @@ export default function InstallerPhotoUploadPage() {
   };
 
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
+  // Advisory pre-screen results worth showing (R6-8). A 'pass' is silence
+  // and so is 'not_screened' — telling an installer "we didn't check it" is
+  // not news, and a green tick on an unchecked photo would be a lie.
+  const [prescreenFlags, setPrescreenFlags] = useState<{ type: string; verdict: string; notes: string }[]>([]);
 
   const authHeaders = async () => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -105,6 +109,8 @@ export default function InstallerPhotoUploadPage() {
     if (!user || !job || files.length === 0) return;
     setUploading(true);
     setUploadProgress({ done: 0, total: files.length });
+    setPrescreenFlags([]);
+    const flags: { type: string; verdict: string; notes: string }[] = [];
 
     try {
       for (let i = 0; i < files.length; i++) {
@@ -121,7 +127,7 @@ export default function InstallerPhotoUploadPage() {
         const result = await res.json();
 
         if (result.success) {
-          await fetch('/api/cni/job-photos', {
+          const meta = await fetch('/api/cni/job-photos', {
             method: 'POST', headers: await authHeaders(),
             body: JSON.stringify({
               jobId: job.id,
@@ -130,10 +136,23 @@ export default function InstallerPhotoUploadPage() {
               photoType: selectedType,
             }),
           });
+          // Pre-screen feedback (R6-8) — the point of checking at upload is
+          // that the crew is still standing at the vehicle. Only 'retake' and
+          // 'unsure' are worth saying; 'pass' and 'not_screened' are silence,
+          // because "we didn't check it" is not news to an installer.
+          try {
+            const body = await meta.json();
+            const v = body?.prescreen?.verdict;
+            if (v === 'retake' || v === 'unsure') {
+              flags.push({ type: selectedType, verdict: v, notes: body.prescreen.notes || '' });
+            }
+          } catch { /* the upload stands regardless */ }
         }
 
         setUploadProgress({ done: i + 1, total: files.length });
       }
+
+      setPrescreenFlags(flags);
 
       // Once every required angle is on file, flag the VIN submitted. The route
       // re-verifies the required set server-side and notifies BMG to review.
@@ -309,6 +328,39 @@ export default function InstallerPhotoUploadPage() {
               Choose
             </button>
           </div>
+
+          {/* Pre-screen feedback (R6-8) — advisory, and it says so. BMG still
+              reviews every photo; this is a chance to fix one while you are
+              still standing at the vehicle. */}
+          {prescreenFlags.length > 0 && (
+            <div style={{
+              marginTop: '10px', padding: '11px 13px', borderRadius: '10px',
+              background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.4)',
+            }}>
+              <div style={{ fontSize: '12.5px', fontWeight: 800, color: '#f59e0b', marginBottom: '5px' }}>
+                {prescreenFlags.some(f => f.verdict === 'retake')
+                  ? 'Worth retaking before you leave'
+                  : 'Worth a second look'}
+              </div>
+              <ul style={{ margin: 0, paddingLeft: '17px', fontSize: '12px', color: 'var(--text-primary)' }}>
+                {prescreenFlags.map((f, i) => (
+                  <li key={i} style={{ marginBottom: '2px' }}>
+                    <strong>{TYPE_LABELS[f.type] || f.type}:</strong> {f.notes}
+                  </li>
+                ))}
+              </ul>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '5px' }}>
+                This is an automatic check and it can be wrong — the photos are uploaded either way, and BMG reviews them.
+              </div>
+              <button
+                onClick={() => setPrescreenFlags([])}
+                style={{
+                  marginTop: '7px', padding: '5px 11px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                  background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)',
+                }}
+              >Dismiss</button>
+            </div>
+          )}
           <PhotoSession
             open={photoSession}
             title={`${TYPE_LABELS[selectedType] || selectedType} photos`}
