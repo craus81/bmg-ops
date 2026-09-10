@@ -13,6 +13,7 @@ import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { deepLinks } from '@/lib/deep-links';
+import { scheduledDays, dayLabel } from '@/lib/cni-schedule-days';
 import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
 
 interface CalendarEvent {
@@ -29,6 +30,9 @@ interface CalendarEvent {
   cardId?: string;
   noteCount?: number;
   fileCount?: number;
+  /** Draws as an outline rather than a filled block: this date is a
+   *  reference point (a deadline), not time booked on it. */
+  marker?: boolean;
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -62,7 +66,7 @@ const TYPE_LABELS: Record<string, string> = {
 export default function SchedulePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, isAdmin, isSales, profile } = useAuth();
+  const { user, isAdmin, isSales, profile, hasFeature } = useAuth();
   useRequireFeature('schedule');
   const dialog = useDialog();
   const supabase = createClient();
@@ -189,21 +193,62 @@ export default function SchedulePage() {
       }));
     }
 
-    // 3. CNI job deadlines
-    if (isAdmin || profile?.role === 'installer') {
-      let cniQuery = supabase
+    // 3. CNI installs — the CONFIRMED schedule is the event; the deadline is
+    //    a secondary marker (R6-8). Until now this lane drew the deadline and
+    //    nothing else, so the days a crew is actually on site — the one thing
+    //    a schedule board exists to show — never appeared.
+    //
+    //    Three things were wrong here. The audience test read
+    //    `profile?.role === 'installer'`, but installers do not hold the
+    //    `schedule` feature and are bounced off this page, while a delegated
+    //    CNI coordinator (cni_admin without admin) was excluded from the very
+    //    lane they run — and the lane links into /admin/cni, which is what
+    //    cni_admin gates, so that feature is the honest audience. The
+    //    non-admin scope then filtered on `installer_id`, a column cni_jobs
+    //    does not have (it is assigned_installer_id), so that path could only
+    //    ever return nothing. And the status exclusion named "completed" and
+    //    "cancelled", neither of which exists in the CNI status vocabulary,
+    //    so closed jobs were never actually excluded.
+    if (hasFeature('cni_admin')) {
+      const { data: cni } = await supabase
         .from('cni_jobs')
-        .select('id, job_number, title, customer_name, deadline, status')
-        .not('status', 'in', '("completed","cancelled")')
-        .gte('deadline', startDate)
-        .lte('deadline', endDate);
-      if (!isAdmin) cniQuery = cniQuery.eq('installer_id', user?.id);
-      const { data: cni } = await cniQuery;
-      (cni || []).forEach((c: any) => allEvents.push({
-        id: `cni-${c.id}`, title: c.title || c.job_number, subtitle: c.customer_name,
-        date: c.deadline.split('T')[0], type: 'cni', color: TYPE_COLORS.cni,
-        status: c.status, linkTo: `/admin/cni/jobs/${c.id}`,
-      }));
+        .select('id, job_number, title, customer_name, deadline, status, confirmed_schedule_start, confirmed_schedule_end')
+        .not('status', 'in', '("completed_pending_review","approved_closed")')
+        // On the board when the confirmed range overlaps the window, when it
+        // starts inside it (which is also the null-end case), or when the
+        // deadline lands in it.
+        .or([
+          `and(confirmed_schedule_start.lte.${endDate},confirmed_schedule_end.gte.${startDate})`,
+          `and(confirmed_schedule_start.gte.${startDate},confirmed_schedule_start.lte.${endDate})`,
+          `and(deadline.gte.${startDate},deadline.lte.${endDate})`,
+        ].join(','));
+      (cni || []).forEach((c: any) => {
+        const label = c.title || c.job_number || 'CNI job';
+        const days = scheduledDays(c.confirmed_schedule_start, c.confirmed_schedule_end, startDate, endDate);
+        for (const day of days) {
+          allEvents.push({
+            id: `cni-${c.id}-${day.date}`, title: label,
+            subtitle: [c.customer_name, dayLabel(day)].filter(Boolean).join(' · '),
+            date: day.date, type: 'cni', color: TYPE_COLORS.cni,
+            status: c.status, linkTo: deepLinks.cniJob(c.id),
+          });
+        }
+        // Secondary: the deadline draws only when it is not already one of
+        // the booked days, so a job running on schedule appears once. A
+        // deadline sitting apart from the booked days is the case worth
+        // seeing — that is a job scheduled past what was promised.
+        const deadline = c.deadline ? String(c.deadline).split('T')[0] : null;
+        if (deadline && deadline >= startDate && deadline <= endDate && !days.some(d => d.date === deadline)) {
+          allEvents.push({
+            id: `cni-${c.id}-due`,
+            // An unscheduled job says so: a bare "Due" next to real booked
+            // days would read as though the work were planned.
+            title: c.confirmed_schedule_start ? `Due: ${label}` : `Due (not scheduled): ${label}`,
+            subtitle: c.customer_name, date: deadline, type: 'cni', color: TYPE_COLORS.cni,
+            status: c.status, linkTo: deepLinks.cniJob(c.id), marker: true,
+          });
+        }
+      });
     }
 
     // 4. Prospect reminders
@@ -564,7 +609,11 @@ export default function SchedulePage() {
                     {dayEvents.map(ev => (
                       <div key={ev.id} onClick={() => ev.cardId ? openCard(ev.cardId) : ev.linkTo && router.push(ev.linkTo)} style={{
                         padding: '6px 8px', borderRadius: '6px', cursor: (ev.cardId || ev.linkTo) ? 'pointer' : 'default',
-                        background: `${ev.color}10`, borderLeft: `3px solid ${ev.color}`,
+                        // A marker (a CNI deadline) is drawn as an outline:
+                        // it is a date to know about, not time booked on it,
+                        // and a filled block would read as scheduled work.
+                        background: ev.marker ? 'transparent' : `${ev.color}10`,
+                        borderLeft: `3px ${ev.marker ? 'dashed' : 'solid'} ${ev.color}`,
                       }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>{ev.title}</span>
@@ -608,7 +657,9 @@ export default function SchedulePage() {
                   {dayEvents.slice(0, 3).map(ev => (
                     <div key={ev.id} onClick={() => ev.cardId ? openCard(ev.cardId) : ev.linkTo && router.push(ev.linkTo)} style={{
                       padding: '1px 3px', borderRadius: '3px', marginBottom: '1px', cursor: (ev.cardId || ev.linkTo) ? 'pointer' : 'default',
-                      background: `${ev.color}18`, fontSize: '8px', fontWeight: 700, color: ev.color,
+                      background: ev.marker ? 'transparent' : `${ev.color}18`,
+                      border: ev.marker ? `1px dashed ${ev.color}66` : undefined,
+                      fontSize: '8px', fontWeight: 700, color: ev.color,
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>{((ev.noteCount || 0) > 0 || (ev.fileCount || 0) > 0) ? '• ' : ''}{ev.title}</div>
                   ))}
