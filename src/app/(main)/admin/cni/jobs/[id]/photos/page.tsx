@@ -27,6 +27,11 @@ interface Photo {
   review_notes: string | null;
   uploaded_at: string;
   uploaded_by: string;
+  // Advisory pre-screen (R6-8). Never gates review_status — it is shown so a
+  // reviewer knows what the automatic check thought, including that it did
+  // not run ('not_screened', which is NOT a pass).
+  prescreen_verdict?: string | null;
+  prescreen_notes?: string | null;
 }
 
 export default function PhotoReviewPage() {
@@ -247,6 +252,17 @@ export default function PhotoReviewPage() {
                   <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                     {new Date(photo.uploaded_at).toLocaleString()}
                   </div>
+                  {photo.prescreen_verdict && photo.prescreen_verdict !== 'pass' && (
+                    <div style={{
+                      fontSize: '11px', marginTop: '2px', fontWeight: 600,
+                      color: photo.prescreen_verdict === 'retake' ? 'var(--error)'
+                        : photo.prescreen_verdict === 'unsure' ? 'var(--warning, #f59e0b)'
+                        : 'var(--text-muted)',
+                    }}>
+                      {photo.prescreen_verdict === 'not_screened' ? 'Not auto-checked' : 'Auto-check flagged'}
+                      {photo.prescreen_notes ? `: ${photo.prescreen_notes}` : ''}
+                    </div>
+                  )}
                 </div>
                 <span style={{
                   fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px',
