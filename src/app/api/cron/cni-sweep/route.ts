@@ -6,6 +6,8 @@ import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { getCompanyInstallerIds } from '@/lib/cni-access';
 import { sweepCompliance } from '@/lib/cni-compliance';
+import { sweepInviteSla } from '@/lib/invite-sla';
+import { suggestNextCompany } from '@/lib/cni-next-company';
 import { cniStaffIds } from '@/lib/cni-staff';
 
 export const dynamic = 'force-dynamic';
@@ -21,6 +23,7 @@ export const maxDuration = 60;
  * one's failure is contained, so a broken pass never silences the others.
  *
  * Pass 1 — compliance: warn about insurance running out, one rung at a time.
+ * Pass 2 — invite SLA: re-ping unanswered invites once, alert on no takers.
  */
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -59,6 +62,30 @@ export async function GET(req: NextRequest) {
     failed++;
     passes.compliance = { error: String(e?.message || e).slice(0, 300) };
     console.error('cni-sweep compliance pass failed:', e);
+  }
+
+  try {
+    passes.inviteSla = await sweepInviteSla(supabase, {
+      notify: async (userIds, payload) => {
+        await notifyMany(userIds, {
+          type: payload.type,
+          title: payload.title,
+          body: payload.body,
+          url: payload.url,
+          channels: ['in_app', 'push', 'email'],
+          ...(payload.force ? { forceChannels: true } : {}),
+        });
+      },
+      companyInstallers: (companyId) => getCompanyInstallerIds(supabase, companyId),
+      staffIds: () => cniStaffIds(supabase),
+      installerJobUrl: (jobId) => deepLinks.installerAvailableJob(jobId),
+      adminJobUrl: (jobId) => deepLinks.cniJob(jobId),
+      suggestNext: (jobId, alreadyInvited) => suggestNextCompany(supabase, jobId, alreadyInvited),
+    });
+  } catch (e: any) {
+    failed++;
+    passes.inviteSla = { error: String(e?.message || e).slice(0, 300) };
+    console.error('cni-sweep invite SLA pass failed:', e);
   }
 
   const syncStateWrite = await recordHeartbeat(supabase, 'cni_sweep', { passes, failed });
