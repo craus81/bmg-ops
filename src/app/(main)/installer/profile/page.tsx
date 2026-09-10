@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import PhoneInput from '@/components/PhoneInput';
 import { storage, storageDownloadUrl } from '@/lib/storage';
+import { apiFetch } from '@/lib/api-client';
 
 // Compliance docs are saved through /api/cni/my-docs so the server can
 // notify admins the moment the full set is on file.
@@ -57,6 +58,15 @@ export default function InstallerProfilePage() {
   const [equipmentCapabilities, setEquipmentCapabilities] = useState<string[]>([]);
   const [availabilityStatus, setAvailabilityStatus] = useState('available');
   const [availabilityNotes, setAvailabilityNotes] = useState('');
+
+  // Calendar subscription (R6-8). Self-serve: the link is minted on demand
+  // rather than on page load, so opening this page never creates a standing
+  // credential for a company nobody asked to subscribe.
+  const [calUrl, setCalUrl] = useState<string | null>(null);
+  const [calWebcal, setCalWebcal] = useState<string | null>(null);
+  const [calBusy, setCalBusy] = useState(false);
+  const [calMsg, setCalMsg] = useState<string | null>(null);
+  const [calCopied, setCalCopied] = useState(false);
 
   // Compliance documents
   const [docPaths, setDocPaths] = useState<Record<DocColumn, string | null>>({
@@ -175,6 +185,40 @@ export default function InstallerProfilePage() {
 
   const toggleItem = (list: string[], setList: (v: string[]) => void, item: string) => {
     setList(list.includes(item) ? list.filter(i => i !== item) : [...list, item]);
+  };
+
+  // ── Calendar subscription (R6-8) ──────────────────────────────────────
+  const showCalendarLink = async () => {
+    if (calBusy) return;
+    setCalBusy(true);
+    setCalMsg(null);
+    try {
+      const res = await apiFetch('/api/cni/my-schedule-link', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setCalMsg(data.error || 'Could not get your calendar link.');
+      } else {
+        setCalUrl(data.url);
+        setCalWebcal(data.webcalUrl);
+      }
+    } catch (e: any) {
+      setCalMsg(e.message || 'Could not get your calendar link.');
+    } finally {
+      setCalBusy(false);
+    }
+  };
+
+  const copyCalendarLink = async () => {
+    if (!calUrl) return;
+    try {
+      await navigator.clipboard.writeText(calUrl);
+      setCalCopied(true);
+      setTimeout(() => setCalCopied(false), 2500);
+    } catch {
+      // Blocked outside a secure context / in some in-app browsers. The URL
+      // is selectable above either way — say so rather than doing nothing.
+      setCalMsg('Copy was blocked by the browser — select the link above and copy it manually.');
+    }
   };
 
   const handleSave = async () => {
@@ -452,6 +496,68 @@ export default function InstallerProfilePage() {
             );
           })}
         </div>
+      </div>
+
+      {/* Calendar subscription — the company's confirmed installs, in their own calendar app */}
+      <div style={sectionStyle}>
+        <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '6px' }}>
+          Add BMG Jobs to Your Calendar
+        </div>
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px', lineHeight: 1.5 }}>
+          Subscribe once and every confirmed BMG install shows up in your own calendar — site address, site
+          contact and a link to the job — updating on its own as dates change. Work with no agreed install
+          date appears on its deadline, marked as unscheduled. The link is shared by everyone at your
+          company, so treat it like a password.
+        </div>
+
+        {calMsg && (
+          <div style={{
+            padding: '10px 14px', borderRadius: '8px', marginBottom: '12px', fontSize: '12px', fontWeight: 600,
+            background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)',
+          }}>
+            {calMsg}
+          </div>
+        )}
+
+        {!calUrl ? (
+          <button
+            onClick={showCalendarLink}
+            disabled={calBusy}
+            style={{
+              padding: '12px 18px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+              background: calBusy ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+            }}
+          >
+            {calBusy ? 'Working…' : 'Show my calendar link'}
+          </button>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                readOnly
+                value={calUrl}
+                onFocus={e => e.currentTarget.select()}
+                style={{ ...inputStyle, flex: '1 1 260px', width: 'auto', fontSize: '12px', fontFamily: 'monospace' }}
+              />
+              <button
+                onClick={copyCalendarLink}
+                style={{ padding: '12px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, background: 'var(--card)', color: 'var(--text-body)', border: '1px solid var(--border)' }}
+              >
+                {calCopied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+            {calWebcal && (
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px', lineHeight: 1.6 }}>
+                {/* webcal:// hands the URL to the calendar app as a live
+                    subscription; opening the https link in a browser just
+                    downloads a snapshot that never updates again. */}
+                <a href={calWebcal} style={{ color: 'var(--orange)', fontWeight: 700 }}>Tap here to subscribe</a>
+                {' '}if your phone or computer has a calendar app. In Google Calendar, use
+                &ldquo;Other calendars → From URL&rdquo; and paste the address above.
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       {/* Save */}
