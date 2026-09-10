@@ -418,7 +418,17 @@ export default function CniJobDetailPage() {
   // (vendor_invoices) — the legacy per-job invoice columns are read-only
   // history now.
   const dialog = useDialog();
-  const [budgetExceeded, setBudgetExceeded] = useState(false);
+  // Job P&L (R6-8). Replaces a `budgetExceeded` flag that was declared and
+  // never set — a budget warning that could never fire.
+  const [pnl, setPnl] = useState<{
+    budget: number | null; payoutMode: string;
+    vinsTotal: number; vinsCompleted: number;
+    revenue: { amount: number; vinsCounted: number; vinsMissing: number };
+    installerCost: { approved: number; pending: number; unpricedCredits: number };
+    marginBeforeMaterials: number | null; marginPct: number | null;
+    perVehicle: { revenue: number | null; installerCost: number | null; margin: number | null };
+    budgetPct: number | null; overBudget: boolean; caveats: string[];
+  } | null>(null);
   // Crew hours vs estimate (R6-12). Null until loaded, and absent entirely
   // when no timer has run on this job — a chip claiming 0h would read as
   // "nobody worked", not "nobody timed it".
@@ -457,8 +467,19 @@ export default function CniJobDetailPage() {
     if (!hasFeature('cni_admin')) { router.push('/home'); return; }
     loadJob();
     loadProductivity();
+    loadPnl();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, isAdmin, jobId]);
+
+  /** Job P&L (R6-8). Best-effort: a failure leaves the card off rather than
+   *  blocking the console. */
+  const loadPnl = async () => {
+    try {
+      const res = await apiFetch(`/api/cni/job-pnl?jobId=${jobId}`);
+      if (!res.ok) return;
+      setPnl(await res.json());
+    } catch { /* no card this load */ }
+  };
 
   /** Crew hours vs estimate (R6-12). Best-effort: a failure leaves the chip
    *  off rather than blocking the console. */
@@ -1186,6 +1207,59 @@ export default function CniJobDetailPage() {
           )}
         </div>
       )}
+
+      {/* Job P&L (R6-8) — revenue against installer cost, per job and per
+          vehicle, with everything the numbers cannot see stated underneath.
+          Hidden entirely until there is something to say: a card of dashes
+          on a job with no completions is noise. */}
+      {pnl && (pnl.revenue.vinsCounted > 0 || pnl.installerCost.approved > 0 || pnl.budget != null) && (() => {
+        const money = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        const cell = (label: string, value: string, sub: string | null, color?: string) => (
+          <div style={{ minWidth: '120px' }}>
+            <div style={{ fontSize: '10.5px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px' }}>{label}</div>
+            <div style={{ fontSize: '17px', fontWeight: 800, color: color || 'var(--text-primary)', marginTop: '1px' }}>{value}</div>
+            {sub && <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>{sub}</div>}
+          </div>
+        );
+        return (
+          <div style={{
+            padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
+            background: 'var(--card)',
+            border: `1px solid ${pnl.overBudget ? 'var(--error)' : 'var(--border)'}`,
+          }}>
+            <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '9px' }}>
+              Job P&amp;L
+              <span style={{ fontWeight: 500, textTransform: 'none', letterSpacing: 0, marginLeft: '7px' }}>
+                before materials · {pnl.vinsCompleted} of {pnl.vinsTotal} vehicles done
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '18px', flexWrap: 'wrap' }}>
+              {cell('Revenue',
+                pnl.revenue.vinsCounted > 0 ? money(pnl.revenue.amount) : '—',
+                pnl.revenue.vinsMissing > 0
+                  ? `${pnl.revenue.vinsCounted} of ${pnl.vinsCompleted} vehicles billed`
+                  : (pnl.perVehicle.revenue != null ? `${money(pnl.perVehicle.revenue)} per vehicle` : 'nothing billed yet'))}
+              {cell('Installer cost',
+                money(pnl.installerCost.approved),
+                pnl.perVehicle.installerCost != null ? `${money(pnl.perVehicle.installerCost)} per vehicle` : null)}
+              {cell('Margin',
+                pnl.marginBeforeMaterials == null ? '—' : money(pnl.marginBeforeMaterials),
+                pnl.marginPct != null ? `${pnl.marginPct}% before materials` : 'no revenue on file yet',
+                pnl.marginBeforeMaterials == null ? undefined
+                  : pnl.marginBeforeMaterials >= 0 ? 'var(--success)' : 'var(--error)')}
+              {pnl.budget != null && cell('Budget',
+                `${pnl.budgetPct ?? 0}%`,
+                `${money(pnl.installerCost.approved)} of ${money(pnl.budget)}`,
+                pnl.overBudget ? 'var(--error)' : undefined)}
+            </div>
+            {pnl.caveats.length > 0 && (
+              <ul style={{ margin: '9px 0 0', paddingLeft: '17px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                {pnl.caveats.map((c, i) => <li key={i} style={{ marginBottom: '1px' }}>{c}</li>)}
+              </ul>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Job Info */}
       <div style={{

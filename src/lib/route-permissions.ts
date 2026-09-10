@@ -133,6 +133,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cni/bid/route.ts': authScoped('external installer / coordinator flow; requireStaff would wrongly reject the installer side, so membership is checked in-route against the CNI job'),
   'src/app/api/cni/compliance/route.ts': feature('cni_admin'),
   'src/app/api/cni/invite-sla/route.ts': feature('cni_admin'),
+  'src/app/api/cni/job-pnl/route.ts': feature('cni_admin'),
   'src/app/api/cni/complete-job/route.ts': authScoped('external installer / coordinator flow; requireStaff would wrongly reject the installer side, so membership is checked in-route against the CNI job'),
   'src/app/api/cni/complete-vin/route.ts': authScoped('external installer / coordinator flow; requireStaff would wrongly reject the installer side, so membership is checked in-route against the CNI job'),
   'src/app/api/cni/create-vendor/route.ts': admin(),
