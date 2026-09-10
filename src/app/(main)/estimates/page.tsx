@@ -3122,7 +3122,7 @@ export default function EstimatesPage() {
               )}
             </div>
             {checkinPickerOpen && (
-              <div style={{ position: 'absolute', top: '100%', left: 0, zIndex: 60, marginTop: '4px', width: 'min(520px, 92vw)', background: 'var(--card)', border: '1px solid var(--border-strong)', borderRadius: '10px', boxShadow: '0 8px 24px rgba(0,0,0,0.25)', padding: '10px' }}>
+              <div style={{ position: 'absolute', top: '100%', left: 0, zIndex: 60, marginTop: '4px', width: 'min(520px, calc(92vw / var(--ts)))', background: 'var(--card)', border: '1px solid var(--border-strong)', borderRadius: '10px', boxShadow: '0 8px 24px rgba(0,0,0,0.25)', padding: '10px' }}>
                 <input
                   autoFocus
                   value={checkinSearch}

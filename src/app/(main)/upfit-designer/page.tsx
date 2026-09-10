@@ -1008,7 +1008,7 @@ export default function UpfitDesignerPage() {
 
       <div style={{ display: 'flex', gap: '10px', alignItems: 'stretch', flexWrap: 'wrap' }}>
         {/* Scene */}
-        <div style={{ position: 'relative', flex: '1 1 480px', minWidth: '300px', height: 'calc(100vh - 300px)', minHeight: '420px', borderRadius: '14px', overflow: 'hidden', border: '1px solid var(--border)', background: '#171b22' }}>
+        <div style={{ position: 'relative', flex: '1 1 480px', minWidth: '300px', height: 'calc(100vh / var(--ts) - 300px)', minHeight: '420px', borderRadius: '14px', overflow: 'hidden', border: '1px solid var(--border)', background: '#171b22' }}>
           {interiorGeom ? (
             <UpfitSceneLazy
               key={sceneKey}
@@ -1055,7 +1055,7 @@ export default function UpfitDesignerPage() {
 
         {/* Parts list panel */}
         <div style={{ flex: '0 1 300px', minWidth: '260px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <div style={{ ...card, flex: 1, overflowY: 'auto', maxHeight: 'calc(100vh - 300px)' }}>
+          <div style={{ ...card, flex: 1, overflowY: 'auto', maxHeight: 'calc(100vh / var(--ts) - 300px)' }}>
             <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-muted)', marginBottom: '8px' }}>
               Parts on this design
             </div>
