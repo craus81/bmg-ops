@@ -156,6 +156,13 @@ export const deepLinks = {
   /** Customer PO-status portal — the shared link on a customer record
    *  (customers.portal_token, migration 260). Public page, no login. */
   customerPoPortal: (token: string) => `/portal/${encodeURIComponent(token)}`,
+  /** The installer's own profile page — documents, insurance expiry, and the
+   *  agreements. The destination for every compliance warning: entering a new
+   *  expiry here clears the flag on its own. */
+  installerProfile: () => '/installer/profile',
+  /** Installer compliance panel: every company and installer with their
+   *  computed eligibility, worst first. */
+  cniCompliance: () => '/admin/cni/compliance',
   /** The installer's own earnings/payout history — the destination for CNI
    *  payout-status notifications (there is no per-payout page). */
   earnings: () => '/earnings',

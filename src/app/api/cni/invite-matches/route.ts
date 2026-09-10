@@ -6,6 +6,7 @@ import { loadCniScorecards } from '@/lib/cni-scorecards';
 import {
   rankCompanies, zip5, type CompanyForMatch, type Coord, type JobForMatch,
 } from '@/lib/invite-matching';
+import { loadComplianceOverview } from '@/lib/cni-compliance';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -55,11 +56,14 @@ export async function GET(req: NextRequest) {
       requiredEquipment: [],
     };
 
-    const [{ data: companies }, { data: members }, scorecards, { data: invites }] = await Promise.all([
+    const [{ data: companies }, { data: members }, scorecards, { data: invites }, compliance] = await Promise.all([
       service.from('companies').select('id, name').order('name'),
       service.from('profiles').select('id, company_id').not('company_id', 'is', null),
       loadCniScorecards(service).catch(() => ({ companies: {} as Record<string, any> })),
       service.from('cni_job_invites').select('company_id').eq('job_id', q.data.jobId),
+      // Compliance (R6-8) — surfaced on the picker so a coordinator sees
+      // the paperwork problem BEFORE inviting, not at assignment time.
+      loadComplianceOverview(service).catch(() => null),
     ]);
 
     const userIds = (members || []).map((m: any) => m.id);
@@ -120,9 +124,20 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Eligibility rides ALONGSIDE the ranking, never inside it: a
+    // non-compliant company can still be the closest and most capable, and
+    // burying that in a score would hide both facts. The picker shows the
+    // rank AND the paperwork flag, and the gate lives on assignment.
+    const complianceByCompany: Record<string, { eligible: boolean; state: string; blocking: string[] }> = {};
+    for (const c of compliance?.companies || []) {
+      complianceByCompany[c.subjectId] = { eligible: c.eligible, state: c.state, blocking: c.blocking };
+    }
+
     return NextResponse.json({
       matches: rankCompanies(forMatch, jobForMatch, { job: jobCoord, byCompanyId }),
       invitedIds: (invites || []).map((i: any) => i.company_id).filter(Boolean),
+      compliance: complianceByCompany,
+      complianceAvailable: compliance != null,
       job: { zip: jobForMatch.zip, state: jobForMatch.state, serviceType: jobForMatch.serviceType },
       // So the UI can say WHY there is no mileage rather than looking broken.
       distanceAvailable: jobCoord != null && Object.keys(byCompanyId).length > 0,
