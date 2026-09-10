@@ -89,6 +89,10 @@ export async function POST(req: NextRequest) {
     assigned_at: new Date().toISOString(),
     status: newStatus,
     updated_by: auth.user.id,
+    // Clear the invite-SLA alert stamp (m297): this job found someone. If it
+    // ever goes back out to bid, the sweep is free to alert on it again —
+    // a stale stamp would silence the second search.
+    invite_sla_alerted_at: null,
   }).eq('id', jobId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
