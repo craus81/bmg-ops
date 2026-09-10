@@ -22,7 +22,20 @@
  */
 define(['N/render', 'N/record'], function (render, record) {
 
+  // Bump on every functional edit — see the note in
+  // scripts/netsuite-financials-restlet.js. Expected value lives in
+  // src/lib/restlet-versions.ts and is asserted by a test.
+  var SCRIPT_VERSION = '2026-09-10.1';
+
   function onGet(requestParams) {
+    requestParams = requestParams || {};
+    // Deployment probe for the Integration Checkup. Answered before the
+    // missing-parameter branch below, so a ping is never mistaken for a
+    // malformed PDF request.
+    if (requestParams.action === 'ping') {
+      return { success: true, mode: 'ping', version: SCRIPT_VERSION };
+    }
+
     var salesOrderId = requestParams.salesOrderId;
     var invoiceId = requestParams.invoiceId;
     var estimateId = requestParams.estimateId;

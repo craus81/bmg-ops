@@ -11,6 +11,10 @@ const nextConfig = {
     },
     outputFileTracingIncludes: {
       '/api/admin/sync-help-docs': ['./docs/help/**/*'],
+      // The Integration Checkup compares schema_migrations against the
+      // migrations the repo actually ships, so the .sql filenames have to
+      // travel with the serverless bundle. Only the names are read.
+      '/api/system-health/connections': ['./migrations/*.sql'],
     },
   },
 };

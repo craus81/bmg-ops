@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
+import ConnectionsPanel from '@/components/ConnectionsPanel';
 
 interface HealthCheck {
   syncType: string;
@@ -85,6 +86,9 @@ export default function SystemHealthPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [flashedEmailId, setFlashedEmailId] = useState<string | null>(null);
+  // The Connections tab probes NetSuite and the three RESTlets live, so it
+  // mounts (and therefore fetches) only when someone selects it.
+  const [tab, setTab] = useState<'jobs' | 'connections'>('jobs');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -161,17 +165,33 @@ export default function SystemHealthPage() {
         <div>
           <div style={{ fontSize: '20px', fontWeight: 800 }}>System Health</div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            Background jobs and syncs. A watcher runs every 30 minutes and pushes an alert to admins when anything here goes stale or errors.
-            {externalPingConfigured && (
+            Background jobs and syncs, and whether every outside connection the app depends on is actually configured.
+            {tab === 'jobs' && externalPingConfigured && (
               <span style={{ color: '#22c55e', fontWeight: 600 }}> External dead-man&apos;s switch armed — if the scheduler itself dies, the outside monitor emails admins.</span>
             )}
           </div>
         </div>
-        <button onClick={load} disabled={loading} style={{ padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-          {loading ? 'Checking…' : '↻ Refresh'}
-        </button>
+        {tab === 'jobs' && (
+          <button onClick={load} disabled={loading} style={{ padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+            {loading ? 'Checking…' : '↻ Refresh'}
+          </button>
+        )}
       </div>
 
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '14px', flexWrap: 'wrap' }}>
+        {([['jobs', 'Jobs & email'], ['connections', 'Connections']] as const).map(([key, label]) => (
+          <button key={key} onClick={() => setTab(key)} style={{
+            padding: '7px 14px', borderRadius: '999px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+            background: tab === key ? 'rgba(96,165,250,0.12)' : 'var(--card)',
+            border: `1px solid ${tab === key ? 'rgba(96,165,250,0.45)' : 'var(--border)'}`,
+            color: tab === key ? '#60a5fa' : 'var(--text-muted)',
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {tab === 'connections' && <ConnectionsPanel />}
+
+      {tab === 'jobs' && (<>
       {writeProbe && !writeProbe.ok && (
         <div style={{ padding: '10px 14px', borderRadius: '8px', marginBottom: '12px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', fontSize: '12px', fontWeight: 600 }}>
           Heartbeat writes to the database are failing — the jobs may be running fine, but every &quot;last run&quot; below is frozen at its last landed write, so the statuses can&apos;t be trusted until this is fixed. Error: {writeProbe.error || 'unknown'}
@@ -304,6 +324,7 @@ export default function SystemHealthPage() {
           </div>
         );
       })()}
+      </>)}
     </div>
   );
 }
