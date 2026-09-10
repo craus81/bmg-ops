@@ -8,6 +8,7 @@ import { getCompanyInstallerIds } from '@/lib/cni-access';
 import { sweepCompliance } from '@/lib/cni-compliance';
 import { sweepInviteSla } from '@/lib/invite-sla';
 import { suggestNextCompany } from '@/lib/cni-next-company';
+import { sweepBudgetCrossings } from '@/lib/cni-pnl';
 import { cniStaffIds } from '@/lib/cni-staff';
 
 export const dynamic = 'force-dynamic';
@@ -24,6 +25,7 @@ export const maxDuration = 60;
  *
  * Pass 1 — compliance: warn about insurance running out, one rung at a time.
  * Pass 2 — invite SLA: re-ping unanswered invites once, alert on no takers.
+ * Pass 3 — budget: tell the coordinator when a job's cost crosses its budget.
  */
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -86,6 +88,26 @@ export async function GET(req: NextRequest) {
     failed++;
     passes.inviteSla = { error: String(e?.message || e).slice(0, 300) };
     console.error('cni-sweep invite SLA pass failed:', e);
+  }
+
+  try {
+    passes.budget = await sweepBudgetCrossings(supabase, {
+      notify: async (userIds, payload) => {
+        await notifyMany(userIds, {
+          type: payload.type,
+          title: payload.title,
+          body: payload.body,
+          url: payload.url,
+          channels: ['in_app', 'push', 'email'],
+        });
+      },
+      staffIds: () => cniStaffIds(supabase),
+      adminJobUrl: (jobId) => deepLinks.cniJob(jobId),
+    });
+  } catch (e: any) {
+    failed++;
+    passes.budget = { error: String(e?.message || e).slice(0, 300) };
+    console.error('cni-sweep budget pass failed:', e);
   }
 
   const syncStateWrite = await recordHeartbeat(supabase, 'cni_sweep', { passes, failed });
