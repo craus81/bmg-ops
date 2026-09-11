@@ -16,6 +16,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { deepLinks } from '@/lib/deep-links';
 import { flashNote } from '@/lib/focus-note';
+import { expiryLabel, type ExpiryState } from '@/lib/quote-expiry';
 
 interface FollowUpNote {
   id: string;
@@ -45,6 +46,9 @@ interface QuoteItem {
   lastFollowupAt: string | null;
   followups: FollowUpNote[];
   nextReminderAt: string | null;
+  /** When the customer's approval link stops working (R6-9). */
+  expiresAt: string | null;
+  expiryState: ExpiryState;
 }
 
 type Group = 'working' | 'sent' | 'won' | 'lost';
@@ -85,6 +89,14 @@ const quietDaysOf = (i: QuoteItem): number => {
   return ref ? Math.floor((Date.now() - ref) / 86_400_000) : 0;
 };
 const quietColor = (d: number) => d >= 14 ? '#ef4444' : d >= 5 ? '#fbbf24' : 'var(--text-muted)';
+
+// Only the two states worth interrupting a scan for. 'active' is the normal
+// case and 'no_link' means nothing was ever sent for approval — a chip for
+// either would be noise on every row.
+const EXPIRY_CHIP: Partial<Record<ExpiryState, { color: string; title: string }>> = {
+  expiring: { color: '#fb923c', title: 'The customer\u2019s approval link is about to stop working' },
+  expired: { color: '#ef4444', title: 'The approval link has expired — the customer can no longer accept. Re-send to give them a live link.' },
+};
 
 export default function QuotesPage() {
   const router = useRouter();
@@ -307,6 +319,11 @@ export default function QuotesPage() {
                     {(group === 'all' || !isSent) && (
                       <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '5px', background: `${chip.color}22`, color: chip.color }}>
                         {chip.label}
+                      </span>
+                    )}
+                    {isSent && EXPIRY_CHIP[item.expiryState] && (
+                      <span title={EXPIRY_CHIP[item.expiryState]!.title} style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '5px', background: `${EXPIRY_CHIP[item.expiryState]!.color}22`, color: EXPIRY_CHIP[item.expiryState]!.color }}>
+                        {expiryLabel(item.expiresAt)}
                       </span>
                     )}
                     {item.nextReminderAt && (

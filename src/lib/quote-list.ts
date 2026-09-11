@@ -14,6 +14,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from './fetch-all';
 import { estimateHeadlineNumber, estimateAltNumber } from './estimate-number';
+import { expiryState, type ExpiryState } from './quote-expiry';
 
 export type QuoteListStatus = 'working' | 'sent' | 'won' | 'lost' | 'all';
 
@@ -52,6 +53,13 @@ export interface QuoteListItem {
   followups: QuoteFollowUpNote[];
   /** Earliest pending (undelivered, future-or-today) reminder date, if any. */
   nextReminderAt: string | null;
+  /** When the customer's approval link stops working (R6-9). The TOKEN
+   *  expiry is the quote's expiry — it is the date in their email and the
+   *  moment Accept stops working. The token itself is never exposed here:
+   *  it is a credential, stripped from every estimate GET for that reason. */
+  expiresAt: string | null;
+  /** no_link when nothing was ever sent for approval — never 'expired'. */
+  expiryState: ExpiryState;
 }
 
 // The "working" group is everything not yet in front of the customer:
@@ -78,14 +86,14 @@ export async function loadQuoteListItems(
   const estQuery = () => {
     let q = service
       .from('estimates')
-      .select('id, estimate_number, netsuite_estimate_number, title, customer_name, grand_total, status, created_by, created_at, sent_for_approval_at, updated_at, last_followup_at, customer_approved_at');
+      .select('id, estimate_number, netsuite_estimate_number, title, customer_name, grand_total, status, created_by, created_at, sent_for_approval_at, updated_at, last_followup_at, customer_approved_at, approval_token_expires_at');
     if (status !== 'all') q = q.in('status', EST_STATUSES[status]);
     return q.order('created_at', { ascending: false }).order('id');
   };
   const wrapQuery = () => {
     let q = service
       .from('wrap_quotes')
-      .select('id, quote_number, vehicle_description, customer, total, status, created_by, created_at, sent_at, last_followup_at, accepted_at, rejected_at')
+      .select('id, quote_number, vehicle_description, customer, total, status, created_by, created_at, sent_at, last_followup_at, accepted_at, rejected_at, approval_token_expires_at')
       .is('archived_at', null);
     if (status !== 'all') q = q.in('status', WRAP_STATUSES[status]);
     return q.order('created_at', { ascending: false }).order('id');
@@ -118,6 +126,8 @@ export async function loadQuoteListItems(
       lastFollowupAt: e.last_followup_at,
       followups: [] as QuoteFollowUpNote[],
       nextReminderAt: null,
+      expiresAt: e.approval_token_expires_at || null,
+      expiryState: expiryState(e.approval_token_expires_at),
     })),
     ...(wrapRes.data || []).map((w: any) => ({
       type: 'wrap' as const,
@@ -136,6 +146,8 @@ export async function loadQuoteListItems(
       lastFollowupAt: w.last_followup_at,
       followups: [] as QuoteFollowUpNote[],
       nextReminderAt: null,
+      expiresAt: w.approval_token_expires_at || null,
+      expiryState: expiryState(w.approval_token_expires_at),
     })),
   ];
 
