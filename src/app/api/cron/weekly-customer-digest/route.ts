@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { sendEmail, buildCustomerDigestEmail } from '@/lib/resend';
 import { resolveCustomerContact } from '@/lib/customer-notify';
+import { mayReceive } from '@/lib/notification-prefs';
 import { recordHeartbeat } from '@/lib/system-health';
 import { fetchAllRows } from '@/lib/fetch-all';
 
@@ -123,10 +124,11 @@ export async function GET(req: NextRequest) {
     for (const [customerName, b] of byCustomer) {
       if (b.active.length + b.completed.length + b.shipped.length + b.invoiced.length === 0) { skippedEmpty++; continue; }
 
-      const { customer, email } = await resolveCustomerContact(service, customerName);
+      const { customer, email, contactPrefs } = await resolveCustomerContact(service, customerName);
       if (!customer || !email) { skippedNoEmail++; continue; }
-      // Opt-IN since migration 171: only subscribed customers get the digest.
-      if (customer.weekly_digest !== true) { skippedOptOut++; continue; }
+      // Opt-IN since migration 171, and since migration 306 the resolved
+      // contact's own choice overrides the company one in either direction.
+      if (!mayReceive('weekly_digest', customer, contactPrefs)) { skippedOptOut++; continue; }
 
       const html = buildCustomerDigestEmail(customerName, [
         {

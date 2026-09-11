@@ -502,6 +502,123 @@ function ActionCenter({ actions, token }: { actions: PortalAction[]; token: stri
   );
 }
 
+interface PrefRow { key: string; label: string; description: string; state: string; on: boolean }
+interface PrefContact { id: string; name: string | null; maskedEmail: string; isPrimary: boolean; prefs: PrefRow[] }
+interface PrefState { company: { name: string | null; settings: { key: string; label: string; description: string; on: boolean }[] }; contacts: PrefContact[] }
+
+/**
+ * Email preferences (R6-11) — what each person at this company has agreed
+ * to receive, changeable here.
+ *
+ * Addresses arrive MASKED from the server and are never editable: this
+ * page can be forwarded, so it has to be useful to someone who recognises
+ * their own mailbox and useless as a contact directory to anyone else.
+ *
+ * Three states per row, not two. "Following your company setting" is real
+ * and is what a contact who has never touched this page is in — showing it
+ * as a plain off (or on) would claim a decision nobody made.
+ */
+function PreferencesSection({ token }: { token: string }) {
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState<PrefState | null>(null);
+  const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || status !== 'idle') return;
+    setStatus('loading');
+    (async () => {
+      try {
+        const res = await fetch(`/api/portal/${encodeURIComponent(token)}/preferences`);
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) { setStatus('error'); setError(json.error || ''); return; }
+        setState(json); setStatus('ready');
+      } catch (e: any) { setStatus('error'); setError(e?.message || ''); }
+    })();
+  }, [open, status, token]);
+
+  const set = async (contactId: string, key: string, value: boolean | null) => {
+    const mark = `${contactId}-${key}`;
+    setBusy(mark); setError(null);
+    try {
+      const res = await fetch(`/api/portal/${encodeURIComponent(token)}/preferences`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactId, key, value }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(json.error || 'Could not save that — try again shortly.'); return; }
+      // The server returns the whole recomputed state, so the page can
+      // never drift from what was actually stored.
+      setState(json);
+    } catch (e: any) {
+      setError(e?.message || 'Could not save that — try again shortly.');
+    } finally { setBusy(null); }
+  };
+
+  const pill = (active: boolean): React.CSSProperties => ({
+    padding: '5px 11px', borderRadius: '999px', fontSize: '11px', fontWeight: 800, cursor: 'pointer',
+    border: `1px solid ${active ? '#2563eb' : '#d1d5db'}`,
+    background: active ? '#2563eb' : '#fff',
+    color: active ? '#fff' : '#6b7280',
+  });
+
+  return (
+    <section style={{ marginBottom: '22px' }}>
+      <button type="button" onClick={() => setOpen(o => !o)}
+        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '13px', fontWeight: 800, color: '#374151' }}>
+        {open ? '▾' : '▸'} Email preferences
+      </button>
+      {open && (
+        <div style={{ ...card, marginTop: '8px' }}>
+          {status === 'loading' && <div style={muted}>Loading…</div>}
+          {status === 'error' && <div style={muted}>We couldn&apos;t load your preferences{error ? ` (${error})` : ''} — try again in a moment.</div>}
+          {status === 'ready' && state && (
+            <>
+              <div style={{ ...muted, marginBottom: '12px', lineHeight: 1.5 }}>
+                These control the automatic emails we send. Turning something off here never affects
+                an email a person at BMG sends you directly.
+              </div>
+              {state.contacts.length === 0 && (
+                <div style={muted}>We don&apos;t have any email contacts on file for your company yet.</div>
+              )}
+              {state.contacts.map(c => (
+                <div key={c.id} style={{ borderTop: '1px solid #f1f5f9', paddingTop: '10px', marginTop: '10px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700 }}>
+                    {c.name || 'Contact'}{c.isPrimary ? <span style={{ ...muted, fontWeight: 600 }}> · main contact</span> : null}
+                  </div>
+                  <div style={{ ...muted, marginBottom: '8px' }}>{c.maskedEmail}</div>
+                  {c.prefs.map(pref => (
+                    <div key={pref.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', padding: '6px 0' }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: '12px', fontWeight: 600 }}>{pref.label}</div>
+                        <div style={muted}>
+                          {pref.description}
+                          {(pref.state === 'inherit_on' || pref.state === 'inherit_off') && (
+                            <> · following your company setting ({pref.on ? 'on' : 'off'})</>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px', opacity: busy === `${c.id}-${pref.key}` ? 0.5 : 1 }}>
+                        <button type="button" disabled={!!busy} onClick={() => set(c.id, pref.key, true)} style={pill(pref.state === 'on')}>On</button>
+                        <button type="button" disabled={!!busy} onClick={() => set(c.id, pref.key, false)} style={pill(pref.state === 'off')}>Off</button>
+                        <button type="button" disabled={!!busy} onClick={() => set(c.id, pref.key, null)}
+                          style={pill(pref.state === 'inherit_on' || pref.state === 'inherit_off')}>Company default</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ))}
+              {error && <div style={{ ...muted, color: '#b91c1c', marginTop: '10px' }}>{error}</div>}
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function PoPortalPage() {
   const params = useParams<{ token: string }>();
   const token = params?.token || '';
@@ -661,6 +778,8 @@ export default function PoPortalPage() {
             </div>
           </section>
         )}
+
+        <PreferencesSection token={token} />
 
         <div style={{ ...muted, textAlign: 'center', marginTop: '30px' }}>
           Questions about an order? Reply to any of our emails or contact your BMG representative.<br />
