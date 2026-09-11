@@ -331,6 +331,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/prospects/contacts/route.ts': staff(),
   'src/app/api/prospects/email/route.ts': staff(),
   'src/app/api/prospects/files/route.ts': staff(),
+  'src/app/api/prospects/segment-email/route.ts': role(),
   'src/app/api/prospects/push-to-netsuite/route.ts': staff(),
   'src/app/api/prospects/route.ts': { kind: 'staff', contains: ['requireStaff(', 'requireAdmin('] },
   'src/app/api/prospects/scan-card/route.ts': staff(),

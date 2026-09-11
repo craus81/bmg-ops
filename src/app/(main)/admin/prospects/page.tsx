@@ -30,6 +30,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
+import { apiFetch } from '@/lib/api-client';
 import { DropZone } from '@/components/DropZone';
 import PhoneInput from '@/components/PhoneInput';
 import { downloadXlsx } from '@/lib/xlsx-export';
@@ -39,6 +40,8 @@ import { SortableTh, useTableSort, type SortState } from '@/components/ui/Sortab
 import NumberInput from '@/components/NumberInput';
 import { LEAD_SOURCES, OPP_TYPES } from '@/lib/lead-sources';
 import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
+import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
+import { SKIP_LABEL, type SkippedRecipient } from '@/lib/segment-blast';
 
 interface Prospect {
   id: string;
@@ -121,6 +124,16 @@ export default function ProspectsPage() {
   const [spendTierFilter, setSpendTierFilter] = useState<SpendTier>('all');
   const [openQuoteFilter, setOpenQuoteFilter] = useState<boolean>(false);
   const [emailCampaignFilter, setEmailCampaignFilter] = useState<boolean>(false);
+
+  // Segment email blast (R6-9). The compose screen owns To/Cc/Bcc-me and the
+  // preview; the subject lives here because it is flow-specific and rides in
+  // through the modal's `intro` slot.
+  const [blastOpen, setBlastOpen] = useState(false);
+  const [blastSubject, setBlastSubject] = useState('');
+  const [blastAudience, setBlastAudience] = useState<{
+    sendableCount: number; skipped: SkippedRecipient[]; overCap: boolean;
+    maxRecipients: number; sampleCompany: string | null;
+  } | null>(null);
   const [openQuoteCustomers, setOpenQuoteCustomers] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
 
@@ -635,6 +648,63 @@ export default function ProspectsPage() {
     added: p => p.created_at,
   }, { key: 'company', dir: 'asc' });
 
+  // ── Segment email blast (R6-9) ────────────────────────────────────────
+  const blastIds = () => sorted.map(p => p.id);
+
+  const fetchBlastPreview = async (fields: EmailComposeFields) => {
+    try {
+      const res = await apiFetch('/api/prospects/segment-email', {
+        method: 'POST',
+        body: JSON.stringify({
+          ids: blastIds(),
+          subject: blastSubject.trim() || '(no subject yet)',
+          message: fields.message || '(no message yet)',
+          emails: fields.emails.length > 0 ? fields.emails : undefined,
+          preview: true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) return { error: data.error || 'Preview failed' };
+      setBlastAudience(data.audience || null);
+      return { preview: data.preview };
+    } catch (e: any) {
+      return { error: e.message || 'Preview failed' };
+    }
+  };
+
+  const sendBlast = async (fields: EmailComposeFields) => {
+    if (!blastSubject.trim()) {
+      await dialog.alert('Give the email a subject before sending.');
+      return { ok: false };
+    }
+    const res = await apiFetch('/api/prospects/segment-email', {
+      method: 'POST',
+      body: JSON.stringify({
+        ids: blastIds(),
+        subject: blastSubject.trim(),
+        message: fields.message,
+        emails: fields.emails.length > 0 ? fields.emails : undefined,
+        cc: fields.cc,
+        bccSelf: fields.bccSelf,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      await dialog.alert(data.error || 'The send did not go through.');
+      return { ok: false };
+    }
+    // Named failures, not a count: "3 failed" with no addresses leaves
+    // nobody able to follow up on the three.
+    const failedLine = (data.failed || []).length > 0
+      ? `\n\nThese did NOT send: ${(data.failed as { company: string; email: string }[]).map(f => `${f.company} (${f.email})`).join(', ')}`
+      : '';
+    await dialog.alert(`Sent ${data.sent} individual email${data.sent === 1 ? '' : 's'}.${failedLine}`);
+    setBlastSubject('');
+    setBlastAudience(null);
+    return { ok: true };
+  };
+
+
   // Dashboard deep links (?sort=ytd_spend for Top customers, etc.) map onto
   // the header-sort state so the ▲/▼ indicators agree with the link.
   useEffect(() => {
@@ -991,6 +1061,22 @@ export default function ProspectsPage() {
         <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
           {sorted.length} of {crmTab === 'vendors' ? vendorCount : customerCount} {(crmTab === 'vendors' ? vendorCount : customerCount) === 1 ? 'record' : 'records'}
         </div>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        {crmTab !== 'vendors' && (
+          <button
+            onClick={() => { setBlastAudience(null); setBlastOpen(true); }}
+            disabled={sorted.length === 0}
+            title="Compose once and send an individually-addressed copy to every opted-in record in this filtered list"
+            style={{
+              padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+              cursor: sorted.length === 0 ? 'default' : 'pointer',
+              background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.3)', color: '#a78bfa',
+              opacity: sorted.length === 0 ? 0.5 : 1,
+            }}
+          >
+            ✉️ Email this segment
+          </button>
+        )}
         <button
           onClick={exportToExcel}
           disabled={exporting || sorted.length === 0}
@@ -1000,6 +1086,7 @@ export default function ProspectsPage() {
             opacity: exporting || sorted.length === 0 ? 0.5 : 1,
           }}
         >{exporting ? 'Exporting…' : 'Export to Excel'}</button>
+        </div>
       </div>
 
       {/* Customer/vendor table — every row opens the record */}
@@ -1087,6 +1174,70 @@ export default function ProspectsPage() {
         );
       })()}
       </>
+      )}
+
+      {/* Segment blast — the standard compose screen (docs/customer-email-standard.md),
+          with the audience rules rendered above the usual fields. */}
+      {blastOpen && (
+        <EmailComposeModal
+          title={`Email this segment — ${sorted.length} record${sorted.length === 1 ? '' : 's'} in view`}
+          sendLabel="Send individually"
+          messagePlaceholder="Write it once. Use {{company}}, {{contact_first_name}} or {{contact_name}} and each copy is filled in…"
+          previewKey={blastSubject}
+          intro={(
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <label style={{ display: 'block' }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-label)', display: 'block', marginBottom: '4px' }}>
+                  Subject (merge fields work here too)
+                </span>
+                <input
+                  value={blastSubject}
+                  onChange={e => setBlastSubject(e.target.value)}
+                  placeholder="A quick update from BMG Fleet"
+                  style={{ width: '100%', padding: '9px 12px', borderRadius: '9px', fontSize: '13px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }}
+                />
+              </label>
+
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                Each recipient gets their <b>own</b> email — nobody sees anyone else&rsquo;s address.
+                {blastAudience?.sampleCompany && (
+                  <> The preview below is <b>{blastAudience.sampleCompany}</b>&rsquo;s copy.</>
+                )}
+              </div>
+
+              {blastAudience && (
+                <div style={{ fontSize: '11px', lineHeight: 1.6 }}>
+                  <div style={{ fontWeight: 700, color: 'var(--text-secondary)' }}>
+                    {blastAudience.sendableCount} of {sorted.length} will be emailed
+                  </div>
+                  {blastAudience.overCap && (
+                    <div style={{ color: 'var(--error)', fontWeight: 700 }}>
+                      That is more than one send can handle ({blastAudience.maxRecipients}). Narrow the filter and send in batches.
+                    </div>
+                  )}
+                  {blastAudience.skipped.length > 0 && (
+                    <details>
+                      <summary style={{ cursor: 'pointer', color: 'var(--text-muted)' }}>
+                        {blastAudience.skipped.length} skipped — why
+                      </summary>
+                      <div style={{ marginTop: '6px', maxHeight: '160px', overflowY: 'auto', color: 'var(--text-muted)' }}>
+                        {blastAudience.skipped.map(sk => (
+                          <div key={`${sk.id}-${sk.reason}`}>
+                            <b style={{ color: 'var(--text-secondary)' }}>{sk.companyName}</b> — {SKIP_LABEL[sk.reason]}
+                            {sk.detail ? ` (${sk.detail})` : ''}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          fetchPreview={fetchBlastPreview}
+          onSend={sendBlast}
+          onClose={() => { setBlastOpen(false); setBlastAudience(null); }}
+        />
       )}
     </div>
   );
