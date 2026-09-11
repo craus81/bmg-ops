@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { logAudit } from '@/lib/audit';
 import { validateBody, z } from '@/lib/validate';
-import { computeTotals } from '@/lib/estimate-totals';
+import { computeTotals, normalizeVehicleCount } from '@/lib/estimate-totals';
 import { getSalesTaxRate } from '@/lib/sales-tax';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 
@@ -44,6 +44,8 @@ const UpsertEstimateSchema = z.object({
   // rate is a company setting only a super admin can change (see below).
   tax_rate: z.union([z.number(), z.string()]).optional(),
   tax_exempt: z.boolean().optional(),
+  /** Identical vehicles this line set covers (R6-9, migration 304). */
+  vehicle_count: z.union([z.number(), z.string()]).optional().nullable(),
   labor_rate: z.union([z.number(), z.string()]).optional(),
   labor_hours_override: z.union([z.number(), z.string()]).optional().nullable(),
   line_items: z.array(LineItemSchema).max(500).optional(),
@@ -208,7 +210,7 @@ export async function POST(req: NextRequest) {
     id, // if present, update existing
     customer_id, prospect_id, customer_name, customer_netsuite_id,
     title, notes, status,
-    tax_exempt,
+    tax_exempt, vehicle_count,
     labor_rate, labor_hours_override,
     line_items, // array of line item objects
     created_by,
@@ -252,7 +254,8 @@ export async function POST(req: NextRequest) {
     // Matched on part_id first (exact), then the normalized item number for
     // lines typed or imported without one. No match = unknown = taxable.
     const taxableByLine = await resolveLineTaxability(supabase, lines);
-    const totals = computeTotals(taxableByLine, effectiveTaxRate, !!tax_exempt, effectiveLaborRate, override);
+    const units = normalizeVehicleCount(vehicle_count);
+    const totals = computeTotals(taxableByLine, effectiveTaxRate, !!tax_exempt, effectiveLaborRate, override, units);
 
     if (id) {
       // ── Revision lock ─────────────────────────────────────────────────
@@ -352,6 +355,7 @@ export async function POST(req: NextRequest) {
           tax_rate: effectiveTaxRate,
           tax_exempt: !!tax_exempt,
           labor_rate: effectiveLaborRate,
+          vehicle_count: units,
           labor_hours: totals.labor_hours,
           labor_hours_override: override,
           subtotal: totals.subtotal,
@@ -463,6 +467,7 @@ export async function POST(req: NextRequest) {
           tax_rate: effectiveTaxRate,
           tax_exempt: !!tax_exempt,
           labor_rate: effectiveLaborRate,
+          vehicle_count: units,
           labor_hours: totals.labor_hours,
           labor_hours_override: override,
           subtotal: totals.subtotal,

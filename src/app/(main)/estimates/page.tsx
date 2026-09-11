@@ -21,7 +21,7 @@ import { apiErrorMessage } from '@/lib/api-error-message';
 import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
-import { roundCentsHalfEven } from '@/lib/estimate-totals';
+import { roundCentsHalfEven, normalizeVehicleCount, perVehicleAmount } from '@/lib/estimate-totals';
 import { FALLBACK_SALES_TAX_RATE, pctToRate, rateToPct } from '@/lib/sales-tax';
 import NumberInput from '@/components/NumberInput';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
@@ -142,6 +142,8 @@ interface Estimate {
   status: string;
   tax_rate: number;
   tax_exempt: boolean;
+  /** Identical vehicles this line set covers (R6-9, migration 304). */
+  vehicle_count?: number | null;
   labor_rate: number;
   labor_hours: number;
   labor_hours_override: number | null;
@@ -315,6 +317,8 @@ export default function EstimatesPage() {
   // re-creating themselves on every settings load.
   const companyTaxRateRef = useRef(DEFAULT_TAX_RATE);
   const [taxExempt, setTaxExempt] = useState(false);
+  /** Identical vehicles this line set covers (R6-9). 1 = an ordinary estimate. */
+  const [vehicleCount, setVehicleCount] = useState(1);
   const [laborRate, setLaborRate] = useState(DEFAULT_LABOR_RATE);
   const [laborOverride, setLaborOverride] = useState<number | null>(null);
   const [lines, setLines] = useState<LineItem[]>([]);
@@ -823,7 +827,7 @@ export default function EstimatesPage() {
   // save retires it. See src/lib/estimate-draft.ts.
   const draftFields = {
     editingId, title, notes, customerId, prospectId, customerName, customerNsId,
-    taxRate, taxExempt, laborRate, laborOverride, lines,
+    taxRate, taxExempt, vehicleCount, laborRate, laborOverride, lines,
     vin, unitNumber, vehiclePlatformId, vehicleOther, vehicleOtherMode,
     vehicleYear, vehicleWheelbase, vehicleRoof, vehicleCab, vehicleBed,
     installInstructions, onSiteContactName, onSiteContactPhone,
@@ -900,6 +904,7 @@ export default function EstimatesPage() {
     setProspectId(f.prospectId ?? null);
     setTaxRate(typeof f.taxRate === 'number' ? f.taxRate : companyTaxRateRef.current);
     setTaxExempt(!!f.taxExempt);
+    setVehicleCount(normalizeVehicleCount((f as any).vehicleCount));
     setLaborRate(typeof f.laborRate === 'number' ? f.laborRate : DEFAULT_LABOR_RATE);
     setLaborOverride(typeof f.laborOverride === 'number' ? f.laborOverride : null);
     setLines(Array.isArray(f.lines)
@@ -1207,8 +1212,14 @@ export default function EstimatesPage() {
   const unmatchedLines = lines.filter(l => !l.netsuite_item_id);
 
   // ── Computed totals ──
-  const subtotal = lines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
-  const autoLaborHours = lines.reduce((s, l) => s + ((l.labor_hours ?? 0) * l.quantity), 0);
+  // Fleet multi-unit (R6-9): the count multiplies LINE QUANTITIES, never the
+  // finished totals — mirroring computeTotals on the server, which is what
+  // actually gets stored. Multiplying totals would break the per-line tax
+  // rounding that keeps the quote and the NetSuite invoice penny-identical.
+  const units = normalizeVehicleCount(vehicleCount);
+  const fleetQty = (l: LineItem) => l.quantity * units;
+  const subtotal = lines.reduce((s, l) => s + fleetQty(l) * l.unit_price, 0);
+  const autoLaborHours = lines.reduce((s, l) => s + ((l.labor_hours ?? 0) * fleetQty(l)), 0);
   // Lines built from parts whose labor was never set (NULL, migration 258):
   // they sum as zero, which is exactly the silent under-quote to flag.
   const laborUnsetCount = lines.filter(l => !l.is_custom && l.labor_hours == null).length;
@@ -1220,19 +1231,20 @@ export default function EstimatesPage() {
   // excludes, so an unmatched or un-synced item is still taxed.
   const isLineTaxable = (l: LineItem) =>
     !nonTaxableItems.has(String(l.item_number || '').trim().toUpperCase());
-  const taxableAmount = lines.reduce((s, l) => (isLineTaxable(l) ? s + l.quantity * l.unit_price : s), 0);
+  const taxableAmount = lines.reduce((s, l) => (isLineTaxable(l) ? s + fleetQty(l) * l.unit_price : s), 0);
   // Per line, each rounded to cents, ties to the even cent — the same math
   // computeTotals runs server-side, which is the same math NetSuite books.
   // Taxing `taxableAmount` in one go drifts a cent or two off the invoice.
   const taxAmount = taxExempt
     ? 0
     : lines.reduce((s, l) => (isLineTaxable(l)
-      ? s + roundCentsHalfEven(l.quantity * l.unit_price * taxRate)
+      ? s + roundCentsHalfEven(fleetQty(l) * l.unit_price * taxRate)
       : s), 0);
   // Compare at the precision the rate is displayed and stored at — a float
   // round-trip through the database is not a "different rate".
   const atCompanyRate = Math.abs(rateToPct(taxRate) - rateToPct(companyTaxRate)) < 0.005;
   const grandTotal = subtotal + laborTotal + taxAmount;
+  const perVehicle = perVehicleAmount(grandTotal, units);
 
   // Refresh the non-taxable set whenever the line-up of items changes. Keyed
   // on the sorted item numbers, so re-ordering or a quantity edit doesn't
@@ -1270,8 +1282,12 @@ export default function EstimatesPage() {
   const lineMarginPct = (l: LineItem): number | null =>
     lineHasCost(l) && l.unit_price > 0 ? ((l.unit_price - lineTrueCost(l)) / l.unit_price) * 100 : null;
   const costedLines = lines.filter(lineHasCost);
-  const trueCostTotal = costedLines.reduce((s, l) => s + l.quantity * lineTrueCost(l), 0);
-  const costedRevenue = costedLines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
+  // Fleet multi-unit (R6-9): the margin strip reports the WHOLE job, matching
+  // the Total beside it. The percentage is unchanged either way — scaling both
+  // sides cannot move a ratio — but per-vehicle dollars under a fleet total
+  // would read as the job's margin and be off by the vehicle count.
+  const trueCostTotal = costedLines.reduce((s, l) => s + fleetQty(l) * lineTrueCost(l), 0);
+  const costedRevenue = costedLines.reduce((s, l) => s + fleetQty(l) * l.unit_price, 0);
   const marginDollars = costedRevenue - trueCostTotal;
   const marginPct = costedRevenue > 0 ? (marginDollars / costedRevenue) * 100 : null;
   const uncostedCount = lines.length - costedLines.length;
@@ -1296,6 +1312,7 @@ export default function EstimatesPage() {
         title, notes, status,
         tax_rate: taxRate,
         tax_exempt: taxExempt,
+        vehicle_count: units,
         labor_rate: laborRate,
         labor_hours_override: laborOverride,
         install_instructions: installInstructions,
@@ -2237,6 +2254,7 @@ export default function EstimatesPage() {
     setProspectId(est.prospect_id ?? null);
     setTaxRate(est.tax_rate || companyTaxRateRef.current);
     setTaxExempt(est.tax_exempt);
+    setVehicleCount(normalizeVehicleCount(est.vehicle_count));
     setLaborRate(est.labor_rate || DEFAULT_LABOR_RATE);
     setLaborOverride(est.labor_hours_override);
     setVin(est.vin || '');
@@ -2515,6 +2533,7 @@ export default function EstimatesPage() {
     setProspectId(null);
     setTaxRate(companyTaxRateRef.current);
     setTaxExempt(false);
+    setVehicleCount(1);
     setLaborRate(DEFAULT_LABOR_RATE);
     setLaborOverride(null);
     setLines([]);
@@ -3877,8 +3896,27 @@ export default function EstimatesPage() {
                 setLaborOverride(v === '' ? null : parseFloat(v) || 0);
               }}
               placeholder={autoLaborHours.toFixed(1)}
-  
+              title="Hours for the WHOLE job, not per vehicle — the same figure that reaches the sales order and the labor-burn meter."
               step={0.1}
+            />
+          </div>
+          <div>
+            {/* Fleet multi-unit (R6-9). The count multiplies line quantities,
+                so the lines below stay one vehicle's build. */}
+            <div style={labelStyle}>Vehicles</div>
+            <input
+              type="number"
+              style={inputStyle}
+              value={vehicleCount}
+              min={1}
+              step={1}
+              title="How many identical vehicles this line set covers. Build the lines once for a single vehicle; quantities, labor and totals multiply."
+              onChange={e => {
+                const v = e.target.value;
+                // Empty while typing is 1, never 0 — a zero would silently
+                // zero out the whole estimate.
+                setVehicleCount(v === '' ? 1 : normalizeVehicleCount(v));
+              }}
             />
           </div>
         </div>
@@ -4010,11 +4048,20 @@ export default function EstimatesPage() {
               <span>{fmt(0)}</span>
             </div>
           )}
+          {perVehicle && (
+            <div
+              title="Derived from the total. Build the lines once for a single vehicle; the count multiplies quantities, labor and tax."
+              style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}
+            >
+              <span>Per vehicle (× {units})</span>
+              <span>{perVehicle.exact ? '' : '≈ '}{fmt(perVehicle.amount)}</span>
+            </div>
+          )}
           <div style={{
             display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: 800,
             color: 'var(--text-body)', borderTop: '1px solid var(--border)', paddingTop: '8px', marginTop: '4px',
           }}>
-            <span>Total</span>
+            <span>Total{units > 1 ? ` (${units} vehicles)` : ''}</span>
             <span>{fmt(grandTotal)}</span>
           </div>
         </div>

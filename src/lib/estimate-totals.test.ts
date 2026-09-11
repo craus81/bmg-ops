@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeTotals, roundCentsHalfEven } from './estimate-totals';
+import { computeTotals, roundCentsHalfEven, normalizeVehicleCount } from './estimate-totals';
 
 // Characterization tests: these lock in the production behavior of the
 // estimate money math. If one of these fails, pricing changed — make sure
@@ -199,5 +199,82 @@ describe('roundCentsHalfEven', () => {
     expect(roundCentsHalfEven(14.52465)).toBe(14.52);
     expect(roundCentsHalfEven(47.379615)).toBe(47.38);
     expect(roundCentsHalfEven(0)).toBe(0);
+  });
+});
+
+// ── Fleet multi-unit (R6-9, migration 304) ────────────────────────────────
+describe('vehicle count', () => {
+  const line = (over = {}) => ({ quantity: 2, unit_price: 100, labor_hours: 1.5, ...over });
+
+  it('an absent count changes NOTHING — every estimate ever written is count 1', () => {
+    const lines = [line(), line({ quantity: 1, unit_price: 49.99 })];
+    const before = computeTotals(lines, 0.0795, false, 85, null);
+    const explicit = computeTotals(lines, 0.0795, false, 85, null, 1);
+    expect(explicit).toEqual(before);
+  });
+
+  it('multiplies line quantities, so the subtotal scales exactly', () => {
+    const t = computeTotals([line()], 0, true, 85, null, 12);
+    // 2 units × $100 × 12 vehicles
+    expect(t.subtotal).toBe(2400);
+  });
+
+  it('multiplies auto labor hours the same way', () => {
+    const t = computeTotals([line()], 0, true, 85, null, 12);
+    // 1.5h per unit × 2 units × 12 vehicles
+    expect(t.labor_hours).toBe(36);
+    expect(t.labor_total).toBe(36 * 85);
+  });
+
+  it('treats a labor override as the JOB total, not a per-vehicle figure', () => {
+    // The field already meant "hours for this job" and still does — every
+    // downstream reader (SO push, labor burn, quoted margin) depends on it.
+    const t = computeTotals([line()], 0, true, 85, 10, 12);
+    expect(t.labor_total).toBe(850);
+  });
+
+  it('taxes the FLEET quantity per line, not the single-vehicle tax times N', () => {
+    // The distinction this whole design turns on. One line, qty 1 @ $697.50,
+    // 7.95%: single-vehicle tax rounds to $55.45 (55.45125), so ×4 would be
+    // $221.80 — while NetSuite bills 4 units as one line and books
+    // round(221.805) = $221.80 too. Either way the ANSWER must come from the
+    // fleet amount, which is what is asserted here.
+    const t = computeTotals([{ quantity: 1, unit_price: 697.5, labor_hours: 0 }], 0.0795, false, 85, null, 4);
+    expect(t.tax_amount).toBe(roundCentsHalfEven(697.5 * 4 * 0.0795));
+    expect(t.subtotal).toBe(2790);
+  });
+
+  it('keeps a non-taxable line out of the tax base however many vehicles there are', () => {
+    const t = computeTotals(
+      [{ quantity: 1, unit_price: 500, labor_hours: 0, taxable: false }],
+      0.0795, false, 85, null, 10,
+    );
+    expect(t.tax_amount).toBe(0);
+    expect(t.subtotal).toBe(5000);
+  });
+
+  it('honours tax exemption at any count', () => {
+    expect(computeTotals([line()], 0.0795, true, 85, null, 7).tax_amount).toBe(0);
+  });
+});
+
+describe('normalizeVehicleCount', () => {
+  it('keeps a real count', () => {
+    expect(normalizeVehicleCount(12)).toBe(12);
+    expect(normalizeVehicleCount('12')).toBe(12);
+  });
+
+  it('floors a fractional count — there is no half a van', () => {
+    expect(normalizeVehicleCount(2.9)).toBe(2);
+  });
+
+  it('falls back to 1 for anything that is not a count, never 0', () => {
+    // A zero would silently zero out an entire estimate.
+    expect(normalizeVehicleCount(0)).toBe(1);
+    expect(normalizeVehicleCount(-5)).toBe(1);
+    expect(normalizeVehicleCount(null)).toBe(1);
+    expect(normalizeVehicleCount(undefined)).toBe(1);
+    expect(normalizeVehicleCount('many')).toBe(1);
+    expect(normalizeVehicleCount(NaN)).toBe(1);
   });
 });

@@ -48,7 +48,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   try {
     const { data: estimate } = await supabase
       .from('estimates')
-      .select('id, estimate_number, status, netsuite_so_id, tax_rate, tax_exempt, labor_rate, labor_hours_override')
+      .select('id, estimate_number, status, netsuite_so_id, tax_rate, tax_exempt, labor_rate, labor_hours_override, vehicle_count')
       .eq('id', params.id)
       .maybeSingle();
     if (!estimate) return NextResponse.json({ error: 'Estimate not found' }, { status: 404 });
@@ -108,6 +108,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       estimate.labor_hours_override !== null && estimate.labor_hours_override !== undefined
         ? parseFloat(String(estimate.labor_hours_override))
         : null,
+      // Without the count, adding a line to a 12-vehicle estimate would
+      // recompute its totals at one vehicle and quietly divide it by 12.
+      (estimate as any).vehicle_count,
     );
     await supabase.from('estimates').update({
       labor_hours: totals.labor_hours,

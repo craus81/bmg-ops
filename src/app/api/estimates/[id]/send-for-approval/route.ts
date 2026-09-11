@@ -18,6 +18,7 @@ import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
 import { estimatePdfFilename } from '@/lib/estimate-pdf';
 import { validateBody, z } from '@/lib/validate';
 import { computeQuotedMargin, getMarginFloorPct } from '@/lib/quoted-margin';
+import { normalizeVehicleCount } from '@/lib/estimate-totals';
 import { getShopLaborRate } from '@/lib/shop-labor';
 import { logAudit } from '@/lib/audit';
 import { notifyMany, getSuperAdminIds } from '@/lib/notify';
@@ -275,10 +276,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     getShopLaborRate(supabase),
     getMarginFloorPct(supabase),
   ]);
+  // Fleet multi-unit (R6-9): the frozen margin describes the WHOLE job, like
+  // the total the customer signs. The percentage is unchanged either way, so
+  // the floor gate behaves identically — but the stored cost and revenue
+  // figures feed the Quoted Margin report, and per-vehicle dollars there
+  // would be the job's margin divided by the vehicle count.
+  const marginUnits = normalizeVehicleCount((estimate as any).vehicle_count);
   const quotedMargin = computeQuotedMargin(
     (rawLineItems || []).map((l: any) => ({
       item_number: l.item_number ?? null,
-      quantity: Number(l.quantity) || 0,
+      quantity: (Number(l.quantity) || 0) * marginUnits,
       unit_price: Number(l.unit_price) || 0,
       purchase_price: l.part_id ? (costByPart.get(l.part_id)?.purchase_price ?? null) : null,
       avg_install_cost: l.part_id ? (costByPart.get(l.part_id)?.avg_install_cost ?? null) : null,
