@@ -22,6 +22,7 @@ import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
 import { roundCentsHalfEven, normalizeVehicleCount, perVehicleAmount } from '@/lib/estimate-totals';
+import { deltaLabel, type EstimateDiff } from '@/lib/estimate-diff';
 import { FALLBACK_SALES_TAX_RATE, pctToRate, rateToPct } from '@/lib/sales-tax';
 import NumberInput from '@/components/NumberInput';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
@@ -319,6 +320,9 @@ export default function EstimatesPage() {
   const [taxExempt, setTaxExempt] = useState(false);
   /** Identical vehicles this line set covers (R6-9). 1 = an ordinary estimate. */
   const [vehicleCount, setVehicleCount] = useState(1);
+  // Counter-offer workbench (R6-9): what this revision changed against the
+  // document it supersedes. Derived server-side on open, never stored.
+  const [revisionDiff, setRevisionDiff] = useState<{ diff: EstimateDiff | null; original: { estimateNumber: string; rejectionReason: string | null } | null } | null>(null);
   const [laborRate, setLaborRate] = useState(DEFAULT_LABOR_RATE);
   const [laborOverride, setLaborOverride] = useState<number | null>(null);
   const [lines, setLines] = useState<LineItem[]>([]);
@@ -2255,6 +2259,15 @@ export default function EstimatesPage() {
     setTaxRate(est.tax_rate || companyTaxRateRef.current);
     setTaxExempt(est.tax_exempt);
     setVehicleCount(normalizeVehicleCount(est.vehicle_count));
+    // Best-effort: a comparison that will not load is not a reason to fail
+    // opening the estimate.
+    setRevisionDiff(null);
+    if (est.supersedes_estimate_id) {
+      fetch(`/api/estimates/${est.id}/revision-diff`)
+        .then(r => r.json())
+        .then(d => setRevisionDiff(d?.diff ? { diff: d.diff, original: d.original || null } : null))
+        .catch(() => {});
+    }
     setLaborRate(est.labor_rate || DEFAULT_LABOR_RATE);
     setLaborOverride(est.labor_hours_override);
     setVin(est.vin || '');
@@ -2534,6 +2547,7 @@ export default function EstimatesPage() {
     setTaxRate(companyTaxRateRef.current);
     setTaxExempt(false);
     setVehicleCount(1);
+    setRevisionDiff(null);
     setLaborRate(DEFAULT_LABOR_RATE);
     setLaborOverride(null);
     setLines([]);
@@ -4293,6 +4307,78 @@ export default function EstimatesPage() {
           );
         })()}
 
+        {/* Counter-offer workbench (R6-9): what this revision changed against
+            the document it supersedes. Derived live on the server, so it is
+            always against the two documents as they stand right now. */}
+        {revisionDiff?.diff && (() => {
+          const d = revisionDiff.diff!;
+          const kindColor: Record<string, string> = {
+            changed: '#fbbf24', added: '#22c55e', removed: '#ef4444', unchanged: 'var(--text-muted)',
+          };
+          const moved = d.lines.filter(l => l.kind !== 'unchanged');
+          return (
+            <div style={{
+              padding: '12px 14px', borderRadius: '12px',
+              background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.25)',
+            }}>
+              <div style={{ fontSize: '11px', fontWeight: 800, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                Changes vs {revisionDiff.original?.estimateNumber || 'the original'}
+              </div>
+
+              {revisionDiff.original?.rejectionReason && (
+                <div style={{ fontSize: '11px', color: 'var(--text-body)', marginBottom: '8px', fontStyle: 'italic', lineHeight: 1.5 }}>
+                  &ldquo;{revisionDiff.original.rejectionReason}&rdquo;
+                  <span style={{ fontStyle: 'normal', color: 'var(--text-muted)' }}> — what the customer said when they declined</span>
+                </div>
+              )}
+
+              {d.identical ? (
+                <div style={{ fontSize: '12px', color: '#fbbf24', fontWeight: 700 }}>
+                  Nothing has changed yet — this is still a copy of the original.
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '6px' }}>
+                    Total {deltaLabel(d.grandTotal, { money: true })}
+                    <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>
+                      {' '}({fmt(d.grandTotal.before)} → {fmt(d.grandTotal.after)})
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                    Labor {deltaLabel(d.laborHours)} hrs · {d.counts.changed} changed · {d.counts.added} added · {d.counts.removed} removed
+                    {d.vehicleCount.change !== 0 && <> · vehicles {d.vehicleCount.before} → {d.vehicleCount.after}</>}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', maxHeight: '220px', overflowY: 'auto' }}>
+                    {moved.map((l, i) => (
+                      <div key={`${l.key}-${i}`} style={{ fontSize: '11px', color: 'var(--text-body)' }}>
+                        <span style={{ fontWeight: 800, color: kindColor[l.kind], textTransform: 'uppercase', fontSize: '9px' }}>
+                          {l.kind}
+                        </span>{' '}
+                        <b>{l.itemNumber || l.description || 'Line'}</b>
+                        {l.kind === 'changed' && l.before && l.after && (
+                          <span style={{ color: 'var(--text-muted)' }}>
+                            {' '}— {l.before.quantity} × {fmt(l.before.unitPrice)} → {l.after.quantity} × {fmt(l.after.unitPrice)}
+                          </span>
+                        )}
+                        {l.kind === 'removed' && l.before && (
+                          <span style={{ color: 'var(--text-muted)' }}> — was {l.before.quantity} × {fmt(l.before.unitPrice)}</span>
+                        )}
+                        {l.kind === 'added' && l.after && (
+                          <span style={{ color: 'var(--text-muted)' }}> — {l.after.quantity} × {fmt(l.after.unitPrice)}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '8px', lineHeight: 1.5 }}>
+                Lines are matched on part number, or on description when there is none. A pairing this cannot
+                make confidently is shown as an add and a remove rather than as a change.
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Approval provenance / rejection record (Stage 3): the customer's
             decision and its when/how, previously invisible in-app. */}
         {editingId && (() => {
@@ -4458,13 +4544,19 @@ export default function EstimatesPage() {
         {editingId && (() => {
           const est = estimates.find(e => e.id === editingId);
           const locked = !!(est && ((est as any).customer_approved || est.status === 'accepted' || est.netsuite_so_id));
+          // A declined estimate counters rather than copies (R6-9): the copy
+          // supersedes it, keeps the PO and check-in link, and carries the
+          // customer's stated reason onto its notes.
+          const declined = !!(est && ((est as any).customer_rejected_at || est.status === 'rejected'));
           return (
             <button
               onClick={duplicateEstimate}
               disabled={duplicating || saving}
-              title={locked
-                ? 'Copies everything into a new draft marked as a revision of this one. This signed original stays untouched.'
-                : 'Saves, then copies this estimate into a new draft (approval and NetSuite state are not copied).'}
+              title={declined
+                ? 'Opens a counter-offer: a new draft superseding this declined estimate, carrying the customer\u2019s reason and a side-by-side of everything you change.'
+                : locked
+                  ? 'Copies everything into a new draft marked as a revision of this one. This signed original stays untouched.'
+                  : 'Saves, then copies this estimate into a new draft (approval and NetSuite state are not copied).'}
               style={{
                 width: '100%', padding: '10px', borderRadius: '10px',
                 background: duplicating ? 'var(--subtle-bg)' : 'rgba(96,165,250,0.08)',
@@ -4473,7 +4565,7 @@ export default function EstimatesPage() {
                 opacity: duplicating || saving ? 0.5 : 1,
               }}
             >
-              {duplicating ? 'Duplicating…' : locked ? 'Duplicate as New Revision' : 'Duplicate Estimate'}
+              {duplicating ? 'Duplicating…' : declined ? '↔ Revise & Counter' : locked ? 'Duplicate as New Revision' : 'Duplicate Estimate'}
             </button>
           );
         })()}

@@ -209,6 +209,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/estimates/[id]/add-lines/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/add-wrap-quote/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/approval-preview/route.ts': feature('estimates'),
+  'src/app/api/estimates/[id]/revision-diff/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/duplicate/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/email-pdf/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/files/route.ts': feature('estimates'),
