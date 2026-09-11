@@ -29,6 +29,11 @@ export interface Profile {
   requested_role?: string;
   company_id?: string;
   deactivated?: boolean;
+  /** For customer-role logins: the NetSuite customer this account belongs
+   *  to (migration 157). One link scopes their whole portal — purchase
+   *  orders, estimates, approvals, billing and vehicles all resolve from
+   *  it — so an unset value means the login sees nothing. */
+  customer_netsuite_id?: string | null;
 }
 
 export interface CatalogItem {
