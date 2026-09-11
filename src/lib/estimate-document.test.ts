@@ -234,3 +234,50 @@ describe('estimateContextMemo', () => {
     })).toBe('Install: Roof rack first · On-site: Pat 555-0100\nFleetSuite Estimate #EST-1');
   });
 });
+
+// ── Fleet multi-unit (R6-9, migration 304) ────────────────────────────────
+describe('renderEstimateDocument fleet quoting', () => {
+  const est = (over = {}) => ({
+    estimate_number: 'EST-FLEET', customer_name: 'Acme Fleet',
+    subtotal: 48000, grand_total: 64056, labor_total: 0, tax_amount: 0,
+    ...over,
+  });
+  const lines = [{ item_number: 'RACK-1', description: 'Roof rack', quantity: 2, unit_price: 100 }];
+
+  it('renders a single-vehicle estimate exactly as before', () => {
+    const html = renderEstimateDocument(est({ subtotal: 200, grand_total: 200 }), lines);
+    expect(html).not.toContain('Per vehicle');
+    // Bare quantity, no multiplier.
+    expect(html).not.toMatch(/2 &times; /);
+  });
+
+  it('shows the quantity as per-vehicle × vehicles', () => {
+    const html = renderEstimateDocument(est({ vehicle_count: 12 }), lines);
+    expect(html).toContain('2 &times; 12');
+  });
+
+  it('bills the line at the FLEET amount, so the column adds up to the subtotal', () => {
+    // 2 × $100 × 12 = $2,400 — not $200 under a $48,000 subtotal, which is a
+    // column a customer can see does not add up.
+    const html = renderEstimateDocument(est({ vehicle_count: 12 }), lines);
+    expect(html).toContain('$2400.00');
+  });
+
+  it('states the per-vehicle figure beside the total', () => {
+    const html = renderEstimateDocument(est({ vehicle_count: 12 }), lines);
+    expect(html).toContain('Per vehicle (&times; 12)');
+    expect(html).toContain('$5338.00');
+  });
+
+  it('marks the per-vehicle figure approximate when it does not divide evenly', () => {
+    // $100.01 over 3 vehicles is $33.336… — printing a flat $33.34 invites a
+    // customer to multiply it back and find a penny missing.
+    const html = renderEstimateDocument(est({ vehicle_count: 3, grand_total: 100.01 }), lines);
+    expect(html).toContain('&asymp;');
+  });
+
+  it('does not mark it approximate when it divides exactly', () => {
+    const html = renderEstimateDocument(est({ vehicle_count: 12 }), lines);
+    expect(html).not.toContain('&asymp;');
+  });
+});

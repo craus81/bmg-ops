@@ -15,6 +15,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { vehicleDescription } from './estimate-document';
+import { normalizeVehicleCount, perVehicleAmount } from './estimate-totals';
 
 export interface EstimatePdfImage {
   dataUrl: string;
@@ -66,6 +67,10 @@ const LINK_LABEL = 'View product';
 
 export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
   const { estimate: est, lines, company, logo, graphics } = data;
+  // Fleet multi-unit (R6-9, migration 304). 1 on every ordinary estimate,
+  // which leaves this PDF byte-identical to what it produced before.
+  const units = normalizeVehicleCount((est as any).vehicle_count);
+  const perVehicle = perVehicleAmount(est.grand_total, (est as any).vehicle_count);
   const doc = new jsPDF({ unit: 'pt', format: 'letter' });
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
@@ -146,8 +151,12 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
     return parts.join('\n');
   };
   const bodyRows = lines.map(l => {
-    const lineTotal = Number(l.line_total ?? (Number(l.unit_price) || 0) * (Number(l.quantity) || 0)) || 0;
-    const cells = [itemCell(l), String(l.quantity ?? ''), money(l.unit_price), money(lineTotal)];
+    // Fleet estimates (R6-9): quantities are per vehicle, line totals cover
+    // the whole order — same rule as the HTML document, so the PDF and the
+    // approval page can never disagree about what a line costs.
+    const lineTotal = (Number(l.line_total ?? (Number(l.unit_price) || 0) * (Number(l.quantity) || 0)) || 0) * units;
+    const qtyCell = units > 1 ? `${l.quantity ?? ''} x ${units}` : String(l.quantity ?? '');
+    const cells = [itemCell(l), qtyCell, money(l.unit_price), money(lineTotal)];
     if (hasPhotos) cells.unshift('');
     return cells;
   });
@@ -217,6 +226,9 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
     totals.push([`Tax (${(Number(est.tax_rate) * 100).toFixed(2)}%)`, money(est.tax_amount), false]);
   }
   if (est.tax_exempt) totals.push(['Tax', 'Exempt', false]);
+  if (perVehicle) {
+    totals.push([`Per vehicle (x ${units})`, `${perVehicle.exact ? '' : '~ '}${money(perVehicle.amount)}`, false]);
+  }
   totals.push(['Total', money(est.grand_total), true]);
 
   ensureRoom(totals.length * 15 + 10);

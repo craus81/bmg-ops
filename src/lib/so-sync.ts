@@ -15,6 +15,7 @@ import { createHash } from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQuery } from './netsuite';
 import { resolveLaborItem } from './labor-item';
+import { normalizeVehicleCount } from './estimate-totals';
 
 export interface SoLineItem { itemId: string; quantity: number; rate: number; description?: string }
 
@@ -50,12 +51,18 @@ export async function findCustomItemId(): Promise<string | null> {
  * lines are skipped (they total $0 on the signed document). A missing
  * labor item is REPORTED (laborSkipped), never a silent no-op: NetSuite
  * has no free-text line, so the labor money would simply vanish.
+ *
+ * A fleet estimate (vehicle_count > 1, migration 304) pushes qty × count on
+ * every line — the same multiplication computeTotals used for the figure the
+ * customer signed, so the sales order bills exactly what was quoted. Labor
+ * needs no multiplication: labor_hours is already the job total.
  */
 export async function buildSoLineItems(
   supabase: SupabaseClient,
-  estimate: { labor_hours?: unknown; labor_hours_override?: unknown; labor_rate?: unknown },
+  estimate: { labor_hours?: unknown; labor_hours_override?: unknown; labor_rate?: unknown; vehicle_count?: unknown },
   lines: any[],
 ): Promise<SoLineBuild> {
+  const units = normalizeVehicleCount(estimate.vehicle_count);
   const sorted = [...(lines || [])].sort((a: any, b: any) => (a.sort_order || 0) - (b.sort_order || 0));
   const soLineItems: SoLineItem[] = [];
   const customLineDescriptions: string[] = [];
@@ -70,7 +77,7 @@ export async function buildSoLineItems(
         || undefined;
       soLineItems.push({
         itemId: String(li.netsuite_item_id),
-        quantity: parseFloat(li.quantity),
+        quantity: parseFloat(li.quantity) * units,
         rate: parseFloat(li.unit_price) || 0,
         description: lineDesc,
       });
@@ -87,7 +94,7 @@ export async function buildSoLineItems(
     const fullDesc = li.notes ? `${label} (${li.notes})` : label;
     soLineItems.push({
       itemId: customItemId,
-      quantity: parseFloat(li.quantity),
+      quantity: parseFloat(li.quantity) * units,
       rate: parseFloat(li.unit_price) || 0,
       description: fullDesc,
     });
@@ -124,12 +131,18 @@ export async function buildSoLineItems(
  * carries (customer PO, else the estimate number) and the VIN. Descriptions
  * and totals are excluded — a description touch or a tax-rate change on
  * our side doesn't alter what NetSuite has to bill lines for.
+ *
+ * The vehicle count joins the contract ONLY when it is above 1. It changes
+ * what NetSuite must bill, so raising it has to mark the SO out of date —
+ * but folding a `1` into the body would change the hash of every estimate
+ * ever pushed and light up "out of date" across the whole book on deploy.
  */
 export function soContentHash(
-  estimate: { labor_hours?: unknown; labor_hours_override?: unknown; labor_rate?: unknown; po_number?: unknown; estimate_number?: unknown; vin?: unknown },
+  estimate: { labor_hours?: unknown; labor_hours_override?: unknown; labor_rate?: unknown; po_number?: unknown; estimate_number?: unknown; vin?: unknown; vehicle_count?: unknown },
   lines: Array<{ item_number?: unknown; quantity?: unknown; unit_price?: unknown; sort_order?: unknown }>,
 ): string {
   const money = (v: unknown) => +(parseFloat(String(v ?? 0)) || 0).toFixed(2);
+  const units = normalizeVehicleCount(estimate.vehicle_count);
   const body = {
     lines: [...lines]
       .filter(l => (parseFloat(String(l.quantity ?? 0)) || 0) > 0)
@@ -138,6 +151,7 @@ export function soContentHash(
     labor: [money(estimate.labor_hours_override ?? estimate.labor_hours), money(estimate.labor_rate || 85)],
     ref: String(estimate.po_number ?? '').trim() || String(estimate.estimate_number ?? ''),
     vin: String(estimate.vin ?? '').trim().toUpperCase(),
+    ...(units > 1 ? { vehicles: units } : {}),
   };
   return createHash('sha256').update(JSON.stringify(body)).digest('hex');
 }

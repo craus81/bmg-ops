@@ -17,6 +17,7 @@
  */
 
 import type { EmailSignature } from './email-signature';
+import { normalizeVehicleCount, perVehicleAmount } from './estimate-totals';
 import {
   escHtml,
   renderQuoteDocument,
@@ -128,8 +129,15 @@ export interface EstimateDocumentOptions {
  * (`.order('sort_order').order('id')`).
  */
 export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDocumentOptions = {}): string {
+  // Fleet multi-unit (R6-9, migration 304). 1 for every ordinary estimate,
+  // which leaves this document byte-identical to what it rendered before.
+  const units = normalizeVehicleCount(est.vehicle_count);
+  const perVehicle = perVehicleAmount(est.grand_total, est.vehicle_count);
   const rows: QuoteDocRow[] = lines.map((l: any) => {
-    const lineTotal = Number(l.line_total ?? (Number(l.unit_price) || 0) * (Number(l.quantity) || 0)) || 0;
+    // Fleet estimates (R6-9): quantities are per vehicle, line totals are
+    // for the whole order. Showing per-vehicle line totals under a fleet
+    // subtotal gives the customer a column that visibly does not add up.
+    const lineTotal = (Number(l.line_total ?? (Number(l.unit_price) || 0) * (Number(l.quantity) || 0)) || 0) * units;
     const label = escHtml(l.item_number || l.description || 'Item');
     const sub = l.description && l.description !== l.item_number
       ? `<div style="font-size:12px;color:#6b7280;">${escHtml(l.description)}</div>` : '';
@@ -147,7 +155,10 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
           <td style="vertical-align:top;">${itemText}</td>
         </tr></table>`
       : itemText;
-    return { itemHtml, qtyHtml: escHtml(l.quantity), rateHtml: money(l.unit_price), totalHtml: money(lineTotal) };
+    const qtyHtml = units > 1
+      ? `${escHtml(l.quantity)} &times; ${units}`
+      : escHtml(l.quantity);
+    return { itemHtml, qtyHtml, rateHtml: money(l.unit_price), totalHtml: money(lineTotal) };
   });
 
   const laborHours = est.labor_hours_override ?? est.labor_hours;
@@ -160,6 +171,12 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
     totals.push({ labelHtml: `Tax (${(Number(est.tax_rate) * 100).toFixed(2)}%)`, valueHtml: money(est.tax_amount) });
   }
   if (est.tax_exempt) totals.push({ labelHtml: 'Tax', valueHtml: 'Exempt' });
+  if (perVehicle) {
+    totals.push({
+      labelHtml: `Per vehicle (&times; ${units})`,
+      valueHtml: `${perVehicle.exact ? '' : '&asymp; '}${money(perVehicle.amount)}`,
+    });
+  }
   totals.push({ labelHtml: 'Total', valueHtml: money(est.grand_total), bold: true });
 
   const identityLinesHtml: string[] = [];
