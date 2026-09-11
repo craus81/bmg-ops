@@ -493,9 +493,9 @@ export default function OpsDashboard() {
     });
     const quietLeads = count(quietLeadsRes);
     if (quietLeads > 0) queue.push({
-      key: 'quiet-leads', count: quietLeads, tone: 'blue', path: '/admin/prospects',
+      key: 'quiet-leads', count: quietLeads, tone: 'blue', path: deepLinks.quietLeads(),
       title: 'Quiet leads worth a nurture touch',
-      detail: 'Active records untouched for 30+ days — touch, park as Nurture, or mark Lost',
+      detail: 'Active records untouched for 30+ days — the triage queue does all three from the row',
     });
     const readyPickup = count(readyPickupRes);
     if (readyPickup > 0) queue.push({
