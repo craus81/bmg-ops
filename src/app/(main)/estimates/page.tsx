@@ -23,6 +23,7 @@ import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
 import { roundCentsHalfEven, normalizeVehicleCount, perVehicleAmount } from '@/lib/estimate-totals';
 import { deltaLabel, type EstimateDiff } from '@/lib/estimate-diff';
+import { type DraftLine } from '@/lib/paste-to-estimate';
 import { FALLBACK_SALES_TAX_RATE, pctToRate, rateToPct } from '@/lib/sales-tax';
 import NumberInput from '@/components/NumberInput';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
@@ -322,6 +323,20 @@ export default function EstimatesPage() {
   const [vehicleCount, setVehicleCount] = useState(1);
   // Counter-offer workbench (R6-9): what this revision changed against the
   // document it supersedes. Derived server-side on open, never stored.
+  // Paste-to-estimate (R6-9). The grid is a PROPOSAL — nothing reaches the
+  // line list until the rep accepts it here.
+  const [draftOpen, setDraftOpen] = useState(false);
+  const [draftText, setDraftText] = useState('');
+  const [draftBusy, setDraftBusy] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [draftResult, setDraftResult] = useState<{
+    vehicleCount: number | null;
+    lines: DraftLine[];
+    summary: { total: number; exact: number; suggested: number; unmatched: number; missingQuantity: number; missingPrice: number };
+    truncated: { found: number; shown: number } | null;
+  } | null>(null);
+  const [draftPicked, setDraftPicked] = useState<Set<number>>(new Set());
+
   const [revisionDiff, setRevisionDiff] = useState<{ diff: EstimateDiff | null; original: { estimateNumber: string; rejectionReason: string | null } | null } | null>(null);
   const [laborRate, setLaborRate] = useState(DEFAULT_LABOR_RATE);
   const [laborOverride, setLaborOverride] = useState<number | null>(null);
@@ -1094,6 +1109,73 @@ export default function EstimatesPage() {
     setPartSearch('');
     setPartResults([]);
     partSearchRef.current?.focus();
+  };
+
+  // ── Paste-to-estimate (R6-9) ──────────────────────────────────────────
+  const runDraft = async () => {
+    if (draftBusy || draftText.trim().length < 10) return;
+    setDraftBusy(true);
+    setDraftError(null);
+    setDraftResult(null);
+    try {
+      const res = await fetch('/api/estimates/draft-from-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: draftText }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setDraftError(data.error || 'Could not draft from that text'); return; }
+      setDraftResult(data);
+      // Pre-ticked: only what was matched with confidence. A weak suggestion
+      // and an unmatched request both need a decision, so neither arrives
+      // already accepted.
+      setDraftPicked(new Set(
+        (data.lines as DraftLine[])
+          .map((l, i) => (l.confidence === 'exact' || l.confidence === 'strong' ? i : -1))
+          .filter(i => i >= 0),
+      ));
+    } catch (e: any) {
+      setDraftError(e?.message || 'Network error');
+    } finally {
+      setDraftBusy(false);
+    }
+  };
+
+  const acceptDraft = () => {
+    if (!draftResult) return;
+    const additions: LineItem[] = [];
+    draftResult.lines.forEach((l, i) => {
+      if (!draftPicked.has(i)) return;
+      const p = l.part;
+      additions.push({
+        key: genKey(),
+        part_id: p?.id || null,
+        netsuite_item_id: p?.netsuite_id || null,
+        item_number: p?.item_number || '',
+        description: p?.display_name || p?.description || l.request.description,
+        // An unstated quantity lands as 1 HERE, where the rep is looking at
+        // the line and can change it — not silently inside the extraction.
+        quantity: l.request.quantity ?? 1,
+        // Never the model's number: the catalog price, or 0 for a line the
+        // rep has to price, which the builder already flags as a custom line.
+        unit_price: l.unitPrice ?? 0,
+        labor_hours: l.laborHours ?? null,
+        is_custom: !p,
+        notes: p ? undefined : `From the request: "${l.request.raw}"`,
+        purchase_price: (p as any)?.purchase_price ?? null,
+        avg_install_cost: (p as any)?.avg_install_cost ?? null,
+      });
+    });
+    if (additions.length > 0) setLines(prev => [...prev, ...additions]);
+    // The vehicle count is the customer's own statement, so it fills the
+    // header field — visibly, where the rep can correct it.
+    if (draftResult.vehicleCount && draftResult.vehicleCount > 1) {
+      setVehicleCount(normalizeVehicleCount(draftResult.vehicleCount));
+    }
+    setDraftOpen(false);
+    setDraftText('');
+    setDraftResult(null);
+    setDraftPicked(new Set());
   };
 
   // ── Packages (N4-B): explode a kit template into ordinary lines ──
@@ -3366,6 +3448,14 @@ export default function EstimatesPage() {
             </button>
             <button
               type="button"
+              onClick={() => { setDraftError(null); setDraftResult(null); setDraftOpen(true); }}
+              title="Paste an RFQ email and get a reviewable grid of candidate lines. Nothing is added until you accept it."
+              style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.3)', background: 'rgba(167,139,250,0.08)', color: '#a78bfa', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              Draft from Text
+            </button>
+            <button
+              type="button"
               onClick={addGraphics}
               disabled={saving}
               title="Save this estimate and price vehicle graphics in the wrap-quote builder — the result comes back as lines on this estimate"
@@ -4306,6 +4396,143 @@ export default function EstimatesPage() {
             </div>
           );
         })()}
+
+        {/* Paste-to-estimate review grid (R6-9). Every row is a PROPOSAL:
+            nothing reaches the line list until it is ticked and accepted. */}
+        {draftOpen && (
+          <div
+            onClick={() => !draftBusy && setDraftOpen(false)}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', zIndex: 70 }}
+          >
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '16px', width: '100%', maxWidth: '720px', maxHeight: 'calc(88vh / var(--ts))', overflowY: 'auto' }}
+            >
+              <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                Draft from text
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px', lineHeight: 1.5 }}>
+                Paste the customer&rsquo;s request. Prices always come from the catalog, never from the reading —
+                anything without a catalog match stays a custom line for you to price.
+              </div>
+
+              <textarea
+                value={draftText}
+                onChange={e => setDraftText(e.target.value)}
+                rows={6}
+                placeholder="Paste the RFQ email or message here…"
+                style={{ ...inputStyle, width: '100%', resize: 'vertical', fontFamily: 'inherit' }}
+              />
+
+              <div style={{ display: 'flex', gap: '8px', marginTop: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={runDraft}
+                  disabled={draftBusy || draftText.trim().length < 10}
+                  style={{
+                    padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 800, border: 'none',
+                    background: draftBusy || draftText.trim().length < 10 ? 'var(--text-muted)' : 'var(--orange)',
+                    color: '#fff', cursor: draftBusy ? 'default' : 'pointer',
+                  }}
+                >
+                  {draftBusy ? 'Reading…' : 'Read it'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDraftOpen(false)}
+                  style={{ padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--card)', color: 'var(--text-body)', border: '1px solid var(--border)', cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+              </div>
+
+              {draftError && (
+                <div style={{ marginTop: '10px', padding: '10px 12px', borderRadius: '8px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px' }}>
+                  {draftError}
+                </div>
+              )}
+
+              {draftResult && (
+                <div style={{ marginTop: '12px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '2px' }}>
+                    {draftResult.summary.total} request{draftResult.summary.total === 1 ? '' : 's'} read
+                    {draftResult.vehicleCount && draftResult.vehicleCount > 1 && <> · {draftResult.vehicleCount} vehicles</>}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px', lineHeight: 1.6 }}>
+                    {draftResult.summary.exact} matched · {draftResult.summary.suggested} suggested · {draftResult.summary.unmatched} with no catalog match
+                    {draftResult.summary.missingQuantity > 0 && <> · {draftResult.summary.missingQuantity} did not state a quantity</>}
+                    {draftResult.summary.missingPrice > 0 && <> · {draftResult.summary.missingPrice} matched a part with no catalog price</>}
+                    {draftResult.truncated && (
+                      <div style={{ color: 'var(--error)', fontWeight: 700 }}>
+                        Only the first {draftResult.truncated.shown} of {draftResult.truncated.found} requests are shown — add the rest by hand.
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    {draftResult.lines.map((l, i) => {
+                      const tone = l.confidence === 'exact' ? '#22c55e'
+                        : l.confidence === 'strong' ? '#4ade80'
+                        : l.confidence === 'weak' ? '#fbbf24' : '#94a3b8';
+                      return (
+                        <label
+                          key={`${l.request.raw}-${i}`}
+                          style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border)', cursor: 'pointer' }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={draftPicked.has(i)}
+                            onChange={() => {
+                              const next = new Set(draftPicked);
+                              if (next.has(i)) next.delete(i); else next.add(i);
+                              setDraftPicked(next);
+                            }}
+                            style={{ marginTop: '2px' }}
+                          />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                              {l.part ? `${l.part.item_number} — ${l.part.display_name || l.part.description || ''}` : l.request.description}
+                              <span style={{ marginLeft: '6px', fontSize: '9px', fontWeight: 800, color: tone, textTransform: 'uppercase' }}>
+                                {l.confidence === 'none' ? 'custom line' : l.confidence}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px', lineHeight: 1.5 }}>
+                              They wrote: &ldquo;{l.request.raw}&rdquo; · {l.signal}
+                            </div>
+                            <div style={{ fontSize: '10px', marginTop: '2px' }}>
+                              <span style={{ color: l.request.quantity == null ? '#fbbf24' : 'var(--text-muted)' }}>
+                                {l.request.quantity == null ? 'no quantity stated — lands as 1' : `qty ${l.request.quantity}`}
+                              </span>
+                              {' · '}
+                              <span style={{ color: l.unitPrice == null ? '#fbbf24' : 'var(--text-muted)' }}>
+                                {l.unitPrice == null
+                                  ? (l.part ? 'no catalog price — you price it' : 'you price it')
+                                  : `${fmt(l.unitPrice)} from the catalog`}
+                              </span>
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={acceptDraft}
+                    disabled={draftPicked.size === 0}
+                    style={{
+                      marginTop: '10px', width: '100%', padding: '10px', borderRadius: '10px', border: 'none',
+                      background: draftPicked.size === 0 ? 'var(--text-muted)' : 'var(--orange)',
+                      color: '#fff', fontSize: '13px', fontWeight: 800, cursor: draftPicked.size === 0 ? 'default' : 'pointer',
+                    }}
+                  >
+                    Add {draftPicked.size} line{draftPicked.size === 1 ? '' : 's'} to the estimate
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Counter-offer workbench (R6-9): what this revision changed against
             the document it supersedes. Derived live on the server, so it is
