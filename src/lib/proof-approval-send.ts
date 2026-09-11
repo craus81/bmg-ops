@@ -52,6 +52,15 @@ export interface SendProofOptions {
   expiryDays?: number;
   /** Reminder mode: keep original send stamps, email only, reminder copy. */
   reminder?: boolean;
+  /** Relink mode (R6-11): the CUSTOMER asked for their expired link back.
+   *  Patches and emails exactly like a reminder — same pinned proof file,
+   *  same open revision round — with two differences that matter:
+   *  approval_reminder_count is NOT bumped (that counter means "times we
+   *  chased them" and caps the reminder cron at 3; answering a request is
+   *  not a chase), and the notify_status_emails opt-out does not apply
+   *  (that flag governs UNSOLICITED automatic sends, and this was asked
+   *  for). Callers still never pass a requester-supplied address. */
+  relink?: boolean;
   /** Render the exact email (to/subject/html) without minting or sending. */
   preview?: boolean;
 }
@@ -76,7 +85,10 @@ export async function sendProofApproval(
   opts: SendProofOptions = {},
 ): Promise<SendProofResult> {
   const expiryDays = opts.expiryDays ?? 30;
-  const reminder = !!opts.reminder;
+  const relink = !!opts.relink;
+  // Relink shares every reminder behaviour except the counter and the
+  // opt-out gate, both handled where they are read.
+  const reminder = !!opts.reminder || relink;
   const previewOnly = !!opts.preview;
   const message = opts.message?.trim() || undefined;
 
@@ -138,7 +150,7 @@ export async function sendProofApproval(
     // Automatic reminders are opt-in per customer (migration 171): the
     // original staff-clicked send always goes out, but the cron's quiet-
     // period nudges only reach customers subscribed to automatic emails.
-    if (reminder && customer && customer.notify_status_emails !== true) {
+    if (reminder && !relink && customer && customer.notify_status_emails !== true) {
       return { ok: false, skipped: true, status: 200, error: 'Customer not subscribed to automatic reminders' };
     }
     if (customer) {
@@ -206,7 +218,10 @@ export async function sendProofApproval(
   };
   if (reminder) {
     patch.approval_reminder_sent_at = now;
-    patch.approval_reminder_count = (job.approval_reminder_count || 0) + 1;
+    // A customer-requested relink re-mints and re-sends, but it is not one
+    // of OUR three automatic chases — bumping this would both eat a chase
+    // and make the escalation message overstate what we actually sent.
+    if (!relink) patch.approval_reminder_count = (job.approval_reminder_count || 0) + 1;
   } else {
     patch.approval_proof_file_id = proofFileId;
     patch.sent_for_approval_at = now;
