@@ -25,6 +25,7 @@ import { validateBody, z } from '@/lib/validate';
 import { renderEstimateDocument, escHtml } from '@/lib/estimate-document';
 import { publicEstimate, publicLines, publicProofs, loadApprovalLines } from '@/lib/estimate-approval-view';
 import { r2GetBytes, r2Upload } from '@/lib/r2';
+import { recordQuoteView } from '@/lib/quote-view-recorder';
 
 export const dynamic = 'force-dynamic';
 
@@ -90,6 +91,22 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
   // proofs from linked graphics jobs: accepting this page approves them.
   const { summaries: graphics } = await loadEstimateGraphics(supabase, estimate.id);
   const proofs = await loadEstimateProofs(supabase, estimate.id, undefined);
+
+  // Open tracking (R6-9). Recorded only on a page the customer can actually
+  // read — an expired or already-decided link is not a look at the quote.
+  // Awaited rather than fired and forgotten: a serverless response can end
+  // before a dangling promise runs, and a view that silently vanishes is
+  // worse than a few tens of milliseconds on a page that already makes four
+  // other round trips.
+  await recordQuoteView(supabase, {
+    type: 'estimate',
+    id: estimate.id,
+    req,
+    sentAt: estimate.sent_for_approval_at || null,
+    repIds: [estimate.sent_for_approval_by, estimate.created_by],
+    label: `Estimate #${estimate.estimate_number}${estimate.title ? ` — ${estimate.title}` : ''}`,
+    customerName: estimate.customer_name || null,
+  });
 
   return NextResponse.json({
     status: 'ready',

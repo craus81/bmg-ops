@@ -8,6 +8,7 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import { sendEstimateApprovalReminder, type EstimateReminderRow } from '@/lib/estimate-approval-reminder';
 import { dueWarning, dueExpiredNotice, daysUntilExpiry, expiryDateText } from '@/lib/quote-expiry';
 import { sendQuoteExpiryWarning } from '@/lib/quote-expiry-email';
+import { summarizeViews, neverOpenedDue, type ViewSummary } from '@/lib/quote-views';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -138,11 +139,11 @@ export async function GET(req: NextRequest) {
     const [estRes, wrapRes] = await Promise.all([
       fetchAllRows<any>((from, to) =>
         service.from('estimates')
-          .select('id, estimate_number, title, customer_name, customer_id, customer_netsuite_id, grand_total, created_by, sent_for_approval_at, sent_for_approval_by, updated_at, last_followup_at, followup_nudged_at, approval_email_to, approval_token, approval_token_expires_at, approval_reminder_sent_at, approval_reminder_count, approval_escalated_at, expiry_warned_for, expiry_notified_for')
+          .select('id, estimate_number, title, customer_name, customer_id, customer_netsuite_id, grand_total, created_by, sent_for_approval_at, sent_for_approval_by, updated_at, last_followup_at, followup_nudged_at, approval_email_to, approval_email_status, never_opened_notified_at, approval_token, approval_token_expires_at, approval_reminder_sent_at, approval_reminder_count, approval_escalated_at, expiry_warned_for, expiry_notified_for')
           .eq('status', 'sent').order('id').range(from, to)),
       fetchAllRows<any>((from, to) =>
         service.from('wrap_quotes')
-          .select('id, quote_number, vehicle_description, customer, customer_id, total, created_by, sent_at, sent_to, last_followup_at, followup_nudged_at, approval_token, approval_token_expires_at, expiry_warned_for, expiry_notified_for')
+          .select('id, quote_number, vehicle_description, customer, customer_id, total, created_by, sent_at, sent_to, last_followup_at, followup_nudged_at, never_opened_notified_at, approval_token, approval_token_expires_at, expiry_warned_for, expiry_notified_for')
           .eq('status', 'sent').is('archived_at', null).order('id').range(from, to)),
     ]);
 
@@ -347,6 +348,96 @@ export async function GET(req: NextRequest) {
       expiryWarnFailures.push(`pass failed: ${e?.message || e}`);
     }
 
+    // ── Never-opened nudge (R6-9) ─────────────────────────────────────────
+    // Three days out with nobody having opened the approval link is a
+    // different problem from a quiet customer: the address may be wrong. The
+    // rep is told once, with the address it went to and the delivery status,
+    // so they can check it.
+    //
+    // The customer reminder is NOT suppressed. "Never opened" is inferred —
+    // link scanners are filtered out by a heuristic, and a customer who read
+    // the PDF attachment without clicking through looks identical to one who
+    // never saw it. Withholding a real email on that inference would cost
+    // more than the extra send.
+    let neverOpened = 0;
+    try {
+      const sentIds = [
+        ...(estRes.data || []).map((e: any) => e.id),
+        ...(wrapRes.data || []).map((w: any) => w.id),
+      ];
+      if (sentIds.length > 0) {
+        // When view tracking started. A quote sent before it cannot be judged
+        // — we were not watching — so no marker means no alerts at all.
+        const { data: settings } = await service
+          .from('quote_settings').select('view_tracking_started_at').eq('id', 1).maybeSingle();
+        const trackingStartedAt = (settings as any)?.view_tracking_started_at || null;
+
+        const byQuote = new Map<string, any[]>();
+        // Chunked: `.in()` rides in the URL, and a shop with hundreds of sent
+        // quotes would build a query string long enough to be rejected.
+        for (let i = 0; i < sentIds.length; i += 200) {
+          const slice = sentIds.slice(i, i + 200);
+          const { data: viewRows } = await fetchAllRows<any>((from, to) =>
+            service.from('quote_views')
+              .select('quote_type, quote_id, viewed_at, viewer_kind')
+              .in('quote_id', slice)
+              .order('viewed_at', { ascending: false })
+              .order('id')
+              .range(from, to));
+          for (const v of viewRows || []) {
+            const k = `${v.quote_type}-${v.quote_id}`;
+            const arr = byQuote.get(k) || [];
+            arr.push(v);
+            byQuote.set(k, arr);
+          }
+        }
+        const summaryFor = (type: string, id: string): ViewSummary =>
+          summarizeViews(byQuote.get(`${type}-${id}`) || []);
+
+        for (const e of estRes.data || []) {
+          if (deferred.has(`estimates:${e.id}`)) continue;
+          if (!neverOpenedDue(e.sent_for_approval_at, summaryFor('estimate', e.id), e.never_opened_notified_at, now, trackingStartedAt)) continue;
+          const targets = [...new Set([e.sent_for_approval_by, e.created_by].filter(Boolean))] as string[];
+          const sentToLine = (e.approval_email_to || []).filter(Boolean).join(', ');
+          await notifyMany(targets.length > 0 ? targets : await adminIds(), {
+            type: 'quote_followup',
+            title: `Never opened — ${e.estimate_number}`,
+            body: `Nobody has opened the approval link for ${e.estimate_number}`
+              + `${e.customer_name ? ` (${e.customer_name})` : ''} since it was sent.`
+              + `${sentToLine ? ` It went to ${sentToLine}` : ' No recipient address is on record'}`
+              + `${e.approval_email_status ? ` — delivery status: ${e.approval_email_status}.` : '.'}`
+              + ' Worth checking the address is right, or reaching out another way.',
+            url: deepLinks.quoteFollowUps('estimate', e.id),
+            channels: ['in_app', 'push'],
+          });
+          await service.from('estimates').update({ never_opened_notified_at: new Date().toISOString() }).eq('id', e.id);
+          neverOpened++;
+        }
+
+        for (const w of wrapRes.data || []) {
+          if (deferred.has(`wrap_quotes:${w.id}`)) continue;
+          if (!neverOpenedDue(w.sent_at, summaryFor('wrap', w.id), w.never_opened_notified_at, now, trackingStartedAt)) continue;
+          const customerName = (w.customer as any)?.name || null;
+          await notifyMany(w.created_by ? [w.created_by] : await adminIds(), {
+            type: 'quote_followup',
+            title: `Never opened — ${w.quote_number}`,
+            body: `Nobody has opened the approval link for ${w.quote_number}`
+              + `${customerName ? ` (${customerName})` : ''} since it was sent.`
+              + `${w.sent_to ? ` It went to ${w.sent_to}.` : ' No recipient address is on record.'}`
+              + ' Worth checking the address is right, or reaching out another way.',
+            url: deepLinks.quoteFollowUps('wrap', w.id),
+            channels: ['in_app', 'push'],
+          });
+          await service.from('wrap_quotes').update({ never_opened_notified_at: new Date().toISOString() }).eq('id', w.id);
+          neverOpened++;
+        }
+      }
+    } catch (e: any) {
+      // Contained, like the expiry pass: view tracking is the newest thing
+      // in this cron and must not be able to cost it the older jobs.
+      console.warn('never-opened pass failed:', e?.message || e);
+    }
+
     // ── Customer-facing reminders + internal escalation (Stage 3) ─────────
     // Same cadence as the proof cron: quiet 3+ days → automatic reminder
     // email to the original approval recipients (capped at 3); waiting 7+
@@ -402,10 +493,10 @@ export async function GET(req: NextRequest) {
     }
 
     const syncStateWrite = await recordHeartbeat(
-      service, 'quote_followup_check', { status: 'ok', quiet: quiet.length, notified, reminded, customerReminded, escalated, expiryWarned, expiryNotified, reminderFailures: reminderFailures.slice(0, 10), expiryWarnFailures: expiryWarnFailures.slice(0, 10) },
+      service, 'quote_followup_check', { status: 'ok', quiet: quiet.length, notified, reminded, customerReminded, escalated, expiryWarned, expiryNotified, neverOpened, reminderFailures: reminderFailures.slice(0, 10), expiryWarnFailures: expiryWarnFailures.slice(0, 10) },
     );
 
-    return NextResponse.json({ status: 'ok', quiet: quiet.length, notified, reminded, customerReminded, escalated, expiryWarned, expiryNotified, reminderFailures, expiryWarnFailures, syncStateWrite });
+    return NextResponse.json({ status: 'ok', quiet: quiet.length, notified, reminded, customerReminded, escalated, expiryWarned, expiryNotified, neverOpened, reminderFailures, expiryWarnFailures, syncStateWrite });
   } catch (e: any) {
     console.error('quote-followup-check failed:', e);
     await recordHeartbeat(service, 'quote_followup_check', { error: e.message || 'quote follow-up check failed' }); // never throws; failure already logged
