@@ -421,8 +421,31 @@ function BillingRowGroup({ inv, token, asking, askText, setAskText, onToggleAsk,
  * lands on "this link has expired" is a worse lie than no button. (The
  * fresh-link request fills that gap — R6-11 item 2.)
  */
-function ActionCenter({ actions }: { actions: PortalAction[] }) {
+function ActionCenter({ actions, token }: { actions: PortalAction[]; token: string }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Record<string, string>>({});
   if (actions.length === 0) return null;
+
+  const requestFresh = async (a: PortalAction) => {
+    const key = `${a.kind}-${a.id}`;
+    setBusy(key);
+    try {
+      const res = await fetch(`/api/portal/${encodeURIComponent(token)}/fresh-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: a.kind, id: a.id }),
+      });
+      const json = await res.json().catch(() => ({}));
+      // The server's message is the only text shown — it is written to be
+      // true for every outcome, including the ones that sent nothing.
+      setNotice(n => ({ ...n, [key]: json.message || 'We could not issue a new link just now — please try again shortly.' }));
+    } catch {
+      setNotice(n => ({ ...n, [key]: 'We could not reach the server — please try again shortly.' }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const waiting = actions.filter(a => a.state === 'awaiting').length;
   const expired = actions.length - waiting;
   return (
@@ -456,8 +479,20 @@ function ActionCenter({ actions }: { actions: PortalAction[] }) {
                   style={{ padding: '7px 14px', borderRadius: '8px', background: '#2563eb', color: '#fff', fontSize: '12px', fontWeight: 800, textDecoration: 'none', whiteSpace: 'nowrap' }}>
                   {a.actionLabel}
                 </a>
+              ) : notice[`${a.kind}-${a.id}`] ? (
+                <span style={{ ...muted, maxWidth: '320px', textAlign: 'right' }}>{notice[`${a.kind}-${a.id}`]}</span>
               ) : (
-                <span style={chip('#9ca3af')}>Link expired</span>
+                <>
+                  <span style={chip('#9ca3af')}>Link expired</span>
+                  {/* No link is shown here, ever: the new one is emailed to
+                      the address already on file, which is the channel the
+                      approval token's security rests on. This page can be
+                      forwarded — its own footer asks that it isn't. */}
+                  <button type="button" disabled={busy === `${a.kind}-${a.id}`} onClick={() => requestFresh(a)}
+                    style={{ padding: '7px 14px', borderRadius: '8px', background: '#fff', border: '1px solid #2563eb', color: '#2563eb', fontSize: '12px', fontWeight: 800, cursor: busy ? 'default' : 'pointer', whiteSpace: 'nowrap', opacity: busy === `${a.kind}-${a.id}` ? 0.6 : 1 }}>
+                    {busy === `${a.kind}-${a.id}` ? 'Sending…' : 'Email me a fresh link'}
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -540,7 +575,7 @@ export default function PoPortalPage() {
           <div style={muted}>Updated {fmtDateTime(data.generatedAt)} · <button type="button" onClick={() => window.location.reload()} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 700, cursor: 'pointer', padding: 0, fontSize: '12px' }}>Refresh</button></div>
         </div>
 
-        <ActionCenter actions={data.actions || []} />
+        <ActionCenter actions={data.actions || []} token={token} />
 
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '14px' }}>
           {tile('Open', data.summary.open, '#1a2b36')}
