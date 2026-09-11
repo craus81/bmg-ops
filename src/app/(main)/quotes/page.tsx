@@ -17,6 +17,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { deepLinks } from '@/lib/deep-links';
 import { flashNote } from '@/lib/focus-note';
 import { expiryLabel, type ExpiryState } from '@/lib/quote-expiry';
+import { viewLabel, type ViewSummary } from '@/lib/quote-views';
 
 interface FollowUpNote {
   id: string;
@@ -49,6 +50,12 @@ interface QuoteItem {
   /** When the customer's approval link stops working (R6-9). */
   expiresAt: string | null;
   expiryState: ExpiryState;
+  /** Approval-page opens (R6-9) — people only; machine fetches are counted
+   *  apart and never shown as customer interest. */
+  views: ViewSummary;
+  /** False = this quote was sent before open-tracking existed, so zero
+   *  views means unknown, not "nobody looked". */
+  viewsTracked: boolean;
 }
 
 type Group = 'working' | 'sent' | 'won' | 'lost';
@@ -319,6 +326,16 @@ export default function QuotesPage() {
                     {(group === 'all' || !isSent) && (
                       <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '5px', background: `${chip.color}22`, color: chip.color }}>
                         {chip.label}
+                      </span>
+                    )}
+                    {isSent && item.views.humanCount > 0 && (
+                      <span title={`${item.views.machineCount > 0 ? `${item.views.machineCount} more fetch${item.views.machineCount === 1 ? '' : 'es'} looked like a link scanner and are not counted. ` : ''}Opens are counted from the approval page itself.`} style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '5px', background: 'rgba(56,189,248,0.14)', color: '#38bdf8' }}>
+                        👀 {viewLabel(item.views)}
+                      </span>
+                    )}
+                    {isSent && item.viewsTracked && item.views.humanCount === 0 && item.sentAt && (
+                      <span title="Nobody has opened the approval link yet. Machine fetches from link scanners do not count — worth checking the address if this persists." style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '5px', background: 'rgba(148,163,184,0.14)', color: '#94a3b8' }}>
+                        never opened
                       </span>
                     )}
                     {isSent && EXPIRY_CHIP[item.expiryState] && (
