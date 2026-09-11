@@ -156,6 +156,14 @@ export const deepLinks = {
   /** Customer PO-status portal — the shared link on a customer record
    *  (customers.portal_token, migration 260). Public page, no login. */
   customerPoPortal: (token: string) => `/portal/${encodeURIComponent(token)}`,
+  /** The three tokenized approval pages. Public, no login: the token IS
+   *  the credential, so these strings are only ever built server-side and
+   *  handed straight to the audience the link was minted for — an emailed
+   *  customer, or that same customer's own portal page. Never log one,
+   *  never return one to staff (stripApprovalSecrets exists for that). */
+  approveEstimate: (token: string) => `/approve/estimate/${encodeURIComponent(token)}`,
+  approveQuote: (token: string) => `/approve/quote/${encodeURIComponent(token)}`,
+  approveProof: (token: string) => `/approve/proof/${encodeURIComponent(token)}`,
   /** The installer's own profile page — documents, insurance expiry, and the
    *  agreements. The destination for every compliance warning: entering a new
    *  expiry here clears the flag on its own. */

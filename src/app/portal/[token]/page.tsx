@@ -16,6 +16,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import type { PortalData, PortalPo } from '@/lib/po-portal';
+import type { PortalAction } from '@/lib/portal-actions';
 
 type PageStatus = 'loading' | 'ready' | 'invalid' | 'error';
 
@@ -411,6 +412,61 @@ function BillingRowGroup({ inv, token, asking, askText, setAskText, onToggleAsk,
   );
 }
 
+/**
+ * Action Center (R6-11) — every approval still waiting on this customer,
+ * pinned above everything else so three scattered asks read as one list.
+ *
+ * A live row gets the real Review & Approve button. A dead one gets no
+ * button at all: the link genuinely does not work, and a button that
+ * lands on "this link has expired" is a worse lie than no button. (The
+ * fresh-link request fills that gap — R6-11 item 2.)
+ */
+function ActionCenter({ actions }: { actions: PortalAction[] }) {
+  if (actions.length === 0) return null;
+  const waiting = actions.filter(a => a.state === 'awaiting').length;
+  const expired = actions.length - waiting;
+  return (
+    <section style={{ ...card, borderColor: '#fbbf24', borderWidth: '2px', background: '#fffbeb', marginBottom: '14px', padding: '14px 16px' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
+        <div style={{ fontSize: '14px', fontWeight: 900, color: '#92400e' }}>Action needed</div>
+        <div style={{ ...muted, color: '#92400e' }}>
+          {waiting > 0 && <>{waiting} waiting on your approval</>}
+          {waiting > 0 && expired > 0 && <> · </>}
+          {expired > 0 && <>{expired} with an expired link</>}
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {actions.map(a => (
+          <div key={`${a.kind}-${a.id}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', background: '#fff', border: '1px solid #fde68a', borderRadius: '10px', padding: '10px 12px' }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: '13px', fontWeight: 700 }}>
+                {a.ref}
+                {a.title ? <span style={{ fontWeight: 500, color: '#374151' }}> — {a.title}</span> : null}
+              </div>
+              <div style={{ ...muted, display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <span>{a.kindLabel}</span>
+                {a.sentAt && <span>Sent {fmtDate(a.sentAt)}</span>}
+                {a.remindedAt && <span>Reminded {fmtDate(a.remindedAt)}</span>}
+                {a.total != null && <span>{usd(a.total)}</span>}
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              {a.state === 'awaiting' && a.approveUrl ? (
+                <a href={a.approveUrl} target="_blank" rel="noopener noreferrer"
+                  style={{ padding: '7px 14px', borderRadius: '8px', background: '#2563eb', color: '#fff', fontSize: '12px', fontWeight: 800, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                  {a.actionLabel}
+                </a>
+              ) : (
+                <span style={chip('#9ca3af')}>Link expired</span>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default function PoPortalPage() {
   const params = useParams<{ token: string }>();
   const token = params?.token || '';
@@ -483,6 +539,8 @@ export default function PoPortalPage() {
           </div>
           <div style={muted}>Updated {fmtDateTime(data.generatedAt)} · <button type="button" onClick={() => window.location.reload()} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 700, cursor: 'pointer', padding: 0, fontSize: '12px' }}>Refresh</button></div>
         </div>
+
+        <ActionCenter actions={data.actions || []} />
 
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '14px' }}>
           {tile('Open', data.summary.open, '#1a2b36')}
