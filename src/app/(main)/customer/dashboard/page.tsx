@@ -6,10 +6,18 @@
  * the retired scanned_vehicles table and hand-maintained per-vehicle
  * assignments. Shows every vehicle in the shop with plain-language status,
  * finished work with completion photos, and graphics orders with tracking.
+ *
+ * Parity (R6-11): a login now sees everything the shared-link portal shows
+ * — the Action Center, purchase orders and estimates — on top of the
+ * vehicles and photos only the login has. It used to see strictly less
+ * than a forwarded link, which is backwards: this is the channel where we
+ * actually know who is reading.
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/components/AuthProvider';
+import type { PortalData as PoPortalData } from '@/lib/po-portal';
+import type { PortalAction } from '@/lib/portal-actions';
 
 interface PortalVehicle {
   id: string;
@@ -41,6 +49,55 @@ interface PortalData {
   companyName?: string;
   vehicles: { active: PortalVehicle[]; recent: PortalVehicle[]; history: PortalVehicle[] };
   graphics: { active: PortalGraphics[]; recent: PortalGraphics[] };
+  /** Purchase orders, estimates and outstanding approvals — the shared-link
+   *  portal's payload. null means the load FAILED, which the page says out
+   *  loud rather than rendering an empty list that reads as "you have none". */
+  portal?: PoPortalData | null;
+}
+
+const usd = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+
+/** Outstanding approvals, pinned (R6-11). Same data as the shared-link
+ *  portal's strip; themed for the app rather than fixed-light. A lapsed
+ *  link carries no button here either — the fresh-link request lives on
+ *  the tokenized page, and a logged-in customer has their rep a click
+ *  away, so the honest thing is to say the link expired and why. */
+function ActionStrip({ actions }: { actions: PortalAction[] }) {
+  if (actions.length === 0) return null;
+  const waiting = actions.filter(a => a.state === 'awaiting').length;
+  return (
+    <div style={{
+      background: 'var(--warning-bg)', border: '1px solid var(--warning-border)',
+      borderRadius: '14px', padding: '14px 16px', marginBottom: '10px',
+    }}>
+      <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--warning)', marginBottom: '8px' }}>
+        Action needed{waiting > 0 ? ` — ${waiting} waiting on your approval` : ''}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {actions.map(a => (
+          <div key={`${a.kind}-${a.id}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                {a.ref}{a.title ? <span style={{ fontWeight: 500, color: 'var(--text-muted)' }}> — {a.title}</span> : null}
+              </div>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                {a.kindLabel}{a.sentAt ? ` · sent ${fmtDate(a.sentAt)}` : ''}{a.total != null ? ` · ${usd(a.total)}` : ''}
+              </div>
+            </div>
+            {a.state === 'awaiting' && a.approveUrl ? (
+              <a href={a.approveUrl} target="_blank" rel="noreferrer" style={{ fontSize: '11px', fontWeight: 800, padding: '6px 12px', borderRadius: '8px', background: 'var(--accent)', color: '#fff', textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                {a.actionLabel}
+              </a>
+            ) : (
+              <span style={{ fontSize: '10px', fontWeight: 700, padding: '4px 10px', borderRadius: '7px', background: 'var(--subtle-bg)', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                Link expired — ask your rep
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 /** Billing card (R5-14): balance + aging + open invoices from the same
@@ -208,7 +265,71 @@ export default function CustomerDashboardPage() {
         ))}
       </div>
 
+      <ActionStrip actions={data.portal?.actions || []} />
+
       <BillingCard />
+
+      {/* Purchase orders and estimates (R6-11 parity) — the shared-link
+          portal's own sections, id-scoped through buildPoPortalData. */}
+      {data.portal === null && (
+        <div style={{ ...card, background: 'var(--subtle-bg)' }}>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            We couldn&apos;t load your purchase orders and estimates just now — refresh in a moment.
+            This is a display problem on our side, not a change to your orders.
+          </div>
+        </div>
+      )}
+
+      {(data.portal?.pos || []).filter(p => p.status === 'open').length > 0 && (
+        <>
+          <div style={sectionLabel}>Open Purchase Orders ({data.portal!.pos.filter(p => p.status === 'open').length})</div>
+          {data.portal!.pos.filter(p => p.status === 'open').map(po => (
+            <div key={po.id} style={card}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: '160px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>PO {po.poNumber}</div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                    {po.orderedDate ? `Ordered ${fmtDate(po.orderedDate)}` : `Received ${fmtDate(po.receivedAt)}`}
+                    {po.requestedDeliveryDate ? ` · wanted by ${fmtDate(po.requestedDeliveryDate)}` : ''}
+                  </div>
+                </div>
+                <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '7px', background: `${po.stage.color}1a`, border: `1px solid ${po.stage.color}44`, color: po.stage.color }}>
+                  {po.stage.label}
+                </span>
+              </div>
+              {po.ordered > 0 && (
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                  {po.installed} of {po.ordered} installed
+                  {po.stage.detail ? ` · ${po.stage.detail}` : ''}
+                </div>
+              )}
+            </div>
+          ))}
+        </>
+      )}
+
+      {(data.portal?.estimates || []).length > 0 && (
+        <>
+          <div style={sectionLabel}>Your Estimates ({data.portal!.estimates.length})</div>
+          {data.portal!.estimates.map((e, i) => (
+            <div key={`${e.number || 'est'}-${i}`} style={card}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: '160px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    {e.number || 'Estimate'}{e.title ? <span style={{ fontWeight: 500, color: 'var(--text-muted)' }}> — {e.title}</span> : null}
+                  </div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                    Sent {fmtDate(e.sentAt)}{e.total != null ? ` · ${usd(e.total)}` : ''}
+                  </div>
+                </div>
+                <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '7px', background: `${e.color}1a`, border: `1px solid ${e.color}44`, color: e.color }}>
+                  {e.stateLabel}
+                </span>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
 
       {/* Active vehicles */}
       <div style={sectionLabel}>In Our Shop ({vehicles.active.length})</div>

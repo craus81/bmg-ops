@@ -8,6 +8,7 @@ import { useDialog } from '@/components/DialogProvider';
 import type { Profile, AppRole } from '@/lib/types';
 import { FEATURES, ROLE_DEFAULT_FEATURES, resolveFeatures, type FeatureKey } from '@/lib/features';
 import AdminUserSettings from '@/components/AdminUserSettings';
+import CustomerPicker from '@/components/CustomerPicker';
 
 interface Company {
   id: string;
@@ -53,6 +54,14 @@ export default function UsersPage() {
   const [pendingCompanies, setPendingCompanies] = useState<Record<string, string>>({});
   const [newCompanyName, setNewCompanyName] = useState('');
   const [showNewCompany, setShowNewCompany] = useState<string | null>(null);
+
+  // Customer-login linking (R6-11). /api/admin/link-customer has existed
+  // since migration 157 with NO caller anywhere in the app, so a customer
+  // login could not actually be linked to its NetSuite customer — and the
+  // portal scopes on exactly that field, which is why the customer
+  // dashboard's "Account not linked yet" state was the only one reachable.
+  const [linking, setLinking] = useState(false);
+  const [linkPick, setLinkPick] = useState<{ name: string; netsuiteId: string | null }>({ name: '', netsuiteId: null });
 
   // Create user form
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -367,6 +376,7 @@ export default function UsersPage() {
 
   const openEditModal = async (user: Profile & { company_id?: string; company_name?: string }) => {
     setEditUser(user);
+    setLinkPick({ name: '', netsuiteId: user.customer_netsuite_id || null });
     setEditForm({
       fullName: user.full_name || '',
       email: user.email || '',
@@ -381,6 +391,33 @@ export default function UsersPage() {
     const map: Record<string, boolean> = {};
     (overrides || []).forEach((o: any) => { map[o.feature] = o.granted; });
     setFeatureOverrides(map);
+  };
+
+  /** Link (or unlink) a customer login to its NetSuite customer through
+   *  the audited admin route — never a direct profiles write, so the change
+   *  lands in the audit log like every other identity change. */
+  const handleLinkCustomer = async (netsuiteId: string | null) => {
+    if (!editUser) return;
+    setLinking(true);
+    try {
+      const res = await fetch('/api/admin/link-customer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: editUser.id, customerNetsuiteId: netsuiteId }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        await dialog.alert(json.error || 'Could not update the link.');
+        return;
+      }
+      setEditUser(u => (u ? { ...u, customer_netsuite_id: netsuiteId } : u));
+      setUsers(list => list.map(u => (u.id === editUser.id ? { ...u, customer_netsuite_id: netsuiteId } : u)));
+      setLinkPick({ name: netsuiteId ? (json.companyName || '') : '', netsuiteId });
+    } catch (e: any) {
+      await dialog.alert(e?.message || 'Could not update the link.');
+    } finally {
+      setLinking(false);
+    }
   };
 
   const handleSaveEdit = async () => {
@@ -1054,7 +1091,7 @@ export default function UsersPage() {
                   background: 'rgba(16,185,129,0.05)', border: '1px solid rgba(16,185,129,0.15)',
                   fontSize: '11px', color: '#34d399', lineHeight: 1.5,
                 }}>
-                  Customer users get a dedicated dashboard showing only their assigned jobs. You can assign jobs after creating the user.
+                  Customer users get a dashboard scoped to their own company. After creating the account, open Edit and link it to their NetSuite customer — until you do, the login sees nothing.
                 </div>
               )}
 
@@ -1193,6 +1230,50 @@ export default function UsersPage() {
                       * = overridden from role default
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Customer login → NetSuite customer (R6-11). One link scopes
+                  the whole portal: their purchase orders, estimates,
+                  approvals, billing and vehicles all resolve from it.
+                  Saved on its own, not via Save Changes — it writes through
+                  an audited admin route, not the profiles table directly. */}
+              {getUserRoles(editUser).includes('customer') && (
+                <div style={{ padding: '12px', borderRadius: '10px', background: 'rgba(16,185,129,0.05)', border: '1px solid rgba(16,185,129,0.15)' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 800, color: '#34d399', marginBottom: '6px' }}>Linked company</div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px', lineHeight: 1.5 }}>
+                    {editUser.customer_netsuite_id
+                      ? `Linked to NetSuite customer ${editUser.customer_netsuite_id}. Everything in their portal is scoped by this.`
+                      : 'Not linked yet — this login sees nothing until it is. Pick their company below.'}
+                  </div>
+                  <CustomerPicker
+                    value={linkPick.name}
+                    netsuiteId={linkPick.netsuiteId}
+                    onChange={({ customer, customerNetsuiteId }) => setLinkPick({ name: customer, netsuiteId: customerNetsuiteId })}
+                  />
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                    <button
+                      onClick={() => handleLinkCustomer(linkPick.netsuiteId)}
+                      disabled={linking || !linkPick.netsuiteId || linkPick.netsuiteId === editUser.customer_netsuite_id}
+                      style={{
+                        flex: 1, padding: '9px', borderRadius: '8px', background: '#34d399', color: '#06281d',
+                        fontWeight: 800, fontSize: '12px', border: 'none',
+                        cursor: linking || !linkPick.netsuiteId ? 'default' : 'pointer',
+                        opacity: linking || !linkPick.netsuiteId || linkPick.netsuiteId === editUser.customer_netsuite_id ? 0.5 : 1,
+                      }}
+                    >
+                      {linking ? 'Linking…' : editUser.customer_netsuite_id ? 'Change link' : 'Link this login'}
+                    </button>
+                    {editUser.customer_netsuite_id && (
+                      <button
+                        onClick={() => handleLinkCustomer(null)}
+                        disabled={linking}
+                        style={{ padding: '9px 14px', borderRadius: '8px', background: 'transparent', color: 'var(--text-muted)', fontWeight: 700, fontSize: '12px', border: '1px solid var(--border)', cursor: linking ? 'default' : 'pointer' }}
+                      >
+                        Unlink
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
 

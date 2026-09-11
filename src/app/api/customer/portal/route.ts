@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth, isAdminRole } from '@/lib/api-auth';
+import { buildPoPortalData } from '@/lib/po-portal';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,9 +44,25 @@ const vehicleView = (v: any) => ({
 /**
  * GET /api/customer/portal — everything a customer's login should see,
  * scoped automatically by profiles.customer_netsuite_id → their synced
- * customers row → name-matched vehicles and graphics orders. Service-role
- * on the server keeps RLS closed; the scoping happens right here. Admins
- * can pass ?customerId=<netsuite_id> to preview any customer's portal.
+ * customers row. Service-role on the server keeps RLS closed; the scoping
+ * happens right here. Admins can pass ?customerId=<netsuite_id> to preview
+ * any customer's portal.
+ *
+ * PARITY (R6-11): the login now also gets everything the shared-link portal
+ * shows — purchase orders, estimates and the Action Center — from the same
+ * buildPoPortalData builder, whose own comment always said it was written
+ * for this. A login used to see strictly LESS than a forwarded link, which
+ * is backwards: the login is the identified channel.
+ *
+ * SCOPING (R6-11): vehicles and graphics orders are keyed on ids first —
+ * fleet_checkins.customer_id (migration 220) and
+ * graphics_jobs.customer_netsuite_id (migration 072). The exact-name match
+ * is kept ONLY for rows that carry no id at all, so legacy records still
+ * appear while a row explicitly owned by a different customer can never
+ * be pulled in by a shared company name (migration 52's duplicate-name
+ * report is the evidence that happens). Everything with money or a
+ * signature on it — POs, estimates, approvals — is id-only via
+ * buildPoPortalData.
  */
 export async function GET(req: NextRequest) {
   const auth = await requireAuth(req);
@@ -76,7 +93,7 @@ export async function GET(req: NextRequest) {
 
   const { data: customer } = await service
     .from('customers')
-    .select('netsuite_id, company_name, entity_id')
+    .select('id, netsuite_id, company_name, entity_id')
     .eq('netsuite_id', customerNetsuiteId)
     .maybeSingle();
   if (!customer) {
@@ -84,23 +101,56 @@ export async function GET(req: NextRequest) {
   }
 
   const monthAgo = new Date(Date.now() - 30 * 86_400_000).toISOString();
-  const [vehiclesRes, graphicsRes] = await Promise.all([
+  const VEHICLE_COLS = 'id, vin, vehicle_year, vehicle_make, vehicle_model, status, customer_name, customer_id, created_at, updated_at, qc_completed_at';
+  const GRAPHICS_COLS = 'id, title, job_number, status, customer, customer_netsuite_id, tracking_number, carrier, scheduled_install_date, created_at, updated_at';
+  const [vehiclesById, vehiclesByName, graphicsById, graphicsByName, portal] = await Promise.all([
+    // Id-keyed: the authoritative set.
     service
-      .from('fleet_checkins')
-      .select('id, vin, vehicle_year, vehicle_make, vehicle_model, status, customer_name, created_at, updated_at, qc_completed_at')
+      .from('fleet_checkins').select(VEHICLE_COLS)
+      .eq('customer_id', customer.id)
+      .order('updated_at', { ascending: false }).limit(500),
+    // Name-matched, but ONLY where the row claims no owner of its own. An
+    // exact name match on a row already assigned to someone else is the
+    // cross-customer leak this replaces; on an unkeyed legacy row it is
+    // the only link there is, and dropping it would silently shrink what
+    // a customer has been seeing.
+    service
+      .from('fleet_checkins').select(VEHICLE_COLS)
+      .is('customer_id', null)
       .ilike('customer_name', customer.company_name)
-      .order('updated_at', { ascending: false })
-      .limit(500),
+      .order('updated_at', { ascending: false }).limit(500),
     service
-      .from('graphics_jobs')
-      .select('id, title, job_number, status, customer, tracking_number, carrier, scheduled_install_date, created_at, updated_at')
+      .from('graphics_jobs').select(GRAPHICS_COLS)
+      .eq('customer_netsuite_id', customer.netsuite_id)
+      .neq('status', 'cancelled')
+      .order('updated_at', { ascending: false }).limit(200),
+    service
+      .from('graphics_jobs').select(GRAPHICS_COLS)
+      .is('customer_netsuite_id', null)
       .ilike('customer', customer.company_name)
       .neq('status', 'cancelled')
-      .order('updated_at', { ascending: false })
-      .limit(200),
+      .order('updated_at', { ascending: false }).limit(200),
+    // Purchase orders, estimates and the Action Center — the same builder
+    // the shared-link portal uses, id-scoped throughout.
+    buildPoPortalData(service, { id: customer.id, netsuite_id: customer.netsuite_id, company_name: customer.company_name })
+      .catch(err => { console.error('customer portal PO data failed:', err); return null; }),
   ]);
 
-  const vehicles = (vehiclesRes.data || []).map(vehicleView);
+  /** Id rows win; a name row only joins when nothing already claims that id. */
+  const mergeById = <T extends { id: string }>(primary: T[] | null, secondary: T[] | null): T[] => {
+    const seen = new Set<string>();
+    const out: T[] = [];
+    for (const row of [...(primary || []), ...(secondary || [])]) {
+      const key = String(row.id);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(row);
+    }
+    return out;
+  };
+  const graphicsRes = { data: mergeById(graphicsById.data as any[], graphicsByName.data as any[]) };
+
+  const vehicles = mergeById(vehiclesById.data as any[], vehiclesByName.data as any[]).map(vehicleView);
   const active = vehicles.filter(v => ['received', 'in_progress', 'stuck_parts', 'stuck_graphics'].includes(v.status));
   const done = vehicles.filter(v => ['complete', 'shipped'].includes(v.status));
   const recent = done.filter(v => (v.completedAt || v.updatedAt) >= monthAgo);
@@ -153,5 +203,9 @@ export async function GET(req: NextRequest) {
     companyName: customer.company_name,
     vehicles: { active, recent, history },
     graphics: { active: graphicsActive, recent: graphicsRecent },
+    // null when the PO builder failed — the page says "we couldn't load
+    // this right now" rather than rendering an empty list, which would
+    // read as "you have no purchase orders".
+    portal,
   });
 }
