@@ -9,6 +9,14 @@
  * graphics shipped, and automatic proof reminders; "Weekly digest" is the
  * Monday summary. On-demand sends (staff clicks Send and confirms the
  * address) are unaffected by these switches.
+ *
+ * These are the COMPANY-level settings. Since migration 306 each contact
+ * can also override them for themselves from the customer portal's Email
+ * preferences section, and that override wins in either direction — so a
+ * company switched on here can still have one person who has opted out.
+ * Estimate approval reminders are the third preference and live only at
+ * the per-contact layer plus customers.notify_estimate_reminders; they
+ * default ON because they were unconditional before 306.
  */
 
 import { useState, useEffect } from 'react';

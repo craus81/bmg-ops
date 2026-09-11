@@ -17,6 +17,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { sendEmailDetailed } from './resend';
 import { deepLinks } from './deep-links';
+import { filterRecipients, indexContactsByEmail } from './notification-prefs';
 
 type Service = SupabaseClient<any, any, any>;
 
@@ -37,9 +38,40 @@ export interface EstimateReminderRow {
 
 export interface ReminderResult { ok: boolean; skipped?: boolean; error?: string }
 
+/**
+ * The subset of `addressed` that still wants estimate reminders. With no
+ * customers row to consult we keep every address: an unresolved customer
+ * is not evidence of an opt-out, and dropping recipients on missing data
+ * would silence people who never asked to be.
+ */
+async function allowedReminderRecipients(
+  service: Service,
+  customerId: string | null,
+  addressed: string[],
+): Promise<string[]> {
+  if (!customerId) return addressed;
+  const { data: customer } = await service
+    .from('customers')
+    .select('notify_estimate_reminders')
+    .eq('id', customerId)
+    .maybeSingle();
+  const { data: contacts } = await service
+    .from('external_contacts')
+    .select('email, notify_estimate_reminders')
+    .eq('customer_id', customerId);
+  return filterRecipients('estimate_reminders', addressed, customer, indexContactsByEmail(contacts || []));
+}
+
 export async function sendEstimateApprovalReminder(service: Service, est: EstimateReminderRow): Promise<ReminderResult> {
-  const emails = (est.approval_email_to || []).filter(Boolean);
-  if (emails.length === 0) return { ok: false, skipped: true, error: 'no email on file' };
+  const addressed = (est.approval_email_to || []).filter(Boolean);
+  if (addressed.length === 0) return { ok: false, skipped: true, error: 'no email on file' };
+  // Preferences (migration 306). These reminders used to be unconditional —
+  // the only automatic customer email with no opt-out anywhere — so the
+  // company flag defaults TRUE and only an explicit no stops one. An
+  // individual's opt-out removes that ADDRESS, not the whole send: nobody
+  // gets to unsubscribe a colleague.
+  const emails = await allowedReminderRecipients(service, est.customer_id, addressed);
+  if (emails.length === 0) return { ok: false, skipped: true, error: 'all recipients opted out of estimate reminders' };
   if (!est.approval_token) return { ok: false, skipped: true, error: 'no live approval link' };
   if (!est.approval_token_expires_at || new Date(est.approval_token_expires_at).getTime() < Date.now()) {
     return { ok: false, skipped: true, error: 'approval link expired' };

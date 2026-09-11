@@ -12,6 +12,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { sendEmailDetailed } from './resend';
 import { sendSMS } from './sms-provider';
+import { mayReceive, type ContactPrefs } from './notification-prefs';
 
 type Service = SupabaseClient<any, any, any>;
 
@@ -43,28 +44,34 @@ export interface CustomerNotifyResult {
 
 /** The synced customers row + primary contact for a free-text company name. */
 export async function resolveCustomerContact(service: Service, customerName: string): Promise<{
-  customer: { id: string; email: string | null; phone: string | null; notify_status_emails?: boolean | null; weekly_digest?: boolean | null } | null;
+  customer: { id: string; email: string | null; phone: string | null; notify_status_emails?: boolean | null; weekly_digest?: boolean | null; notify_estimate_reminders?: boolean | null } | null;
   contactId: string | null;
   email: string | null;
   phone: string | null;
+  /** The resolved primary contact's own preference overrides (migration
+   *  306), so a caller can ask whether THIS person wants THIS email rather
+   *  than only what the company agreed to. */
+  contactPrefs: ContactPrefs | null;
 }> {
   const { data: customer } = await service
     .from('customers')
-    .select('id, email, phone, notify_status_emails, weekly_digest')
+    .select('id, email, phone, notify_status_emails, weekly_digest, notify_estimate_reminders')
     .ilike('company_name', customerName)
     .maybeSingle();
-  if (!customer) return { customer: null, contactId: null, email: null, phone: null };
+  if (!customer) return { customer: null, contactId: null, email: null, phone: null, contactPrefs: null };
 
   let contactId: string | null = null;
   let email: string | null = null;
   let phone: string | null = null;
+  let contactPrefs: ContactPrefs | null = null;
   const { data: primary } = await service
     .from('external_contacts')
-    .select('id, email, phone')
+    .select('id, email, phone, notify_status_emails, weekly_digest, notify_estimate_reminders')
     .eq('customer_id', customer.id)
     .eq('is_primary', true)
     .maybeSingle();
   if (primary) {
+    contactPrefs = primary as ContactPrefs;
     contactId = primary.id;
     email = primary.email || customer.email || null;
     phone = primary.phone || customer.phone || null;
@@ -84,7 +91,7 @@ export async function resolveCustomerContact(service: Service, customerName: str
     email = customer.email || null;
     phone = customer.phone || null;
   }
-  return { customer, contactId, email, phone };
+  return { customer, contactId, email, phone, contactPrefs };
 }
 
 async function findOrCreateThread(
@@ -129,7 +136,9 @@ export async function notifyCustomerByName(
   const email = input.overrideEmail || resolved.email;
   const phone = resolved.phone;
   if (!customer) return { ...none, skipped: 'no_customer' };
-  if ((input.respectOptOut ?? true) && customer.notify_status_emails !== true) {
+  // Company gate AND the resolved person's own override (migration 306):
+  // an opt-out belongs to whoever set it, at whichever layer.
+  if ((input.respectOptOut ?? true) && !mayReceive('status_emails', customer, resolved.contactPrefs)) {
     return { ...none, skipped: 'opted_out' };
   }
   if (!email && !phone) return { ...none, skipped: 'no_channel' };

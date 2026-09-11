@@ -15,6 +15,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { sendEmailDetailed } from './resend';
 import { deepLinks } from './deep-links';
 import { expiryDateText, daysUntilExpiry } from './quote-expiry';
+import { filterRecipients, indexContactsByEmail } from './notification-prefs';
 
 export interface ExpiringQuote {
   kind: 'estimate' | 'wrap';
@@ -36,12 +37,33 @@ export interface ExpiryEmailResult { ok: boolean; skipped?: boolean; error?: str
 const escapeHtml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+/** Recipients who still want estimate reminders. No customers row to
+ *  consult → keep everyone; missing data is not an opt-out. */
+async function allowedRecipients(
+  service: SupabaseClient,
+  customerId: string | null,
+  addressed: string[],
+): Promise<string[]> {
+  if (!customerId) return addressed;
+  const { data: customer } = await service
+    .from('customers').select('notify_estimate_reminders').eq('id', customerId).maybeSingle();
+  const { data: contacts } = await service
+    .from('external_contacts').select('email, notify_estimate_reminders').eq('customer_id', customerId);
+  return filterRecipients('estimate_reminders', addressed, customer, indexContactsByEmail(contacts || []));
+}
+
 export async function sendQuoteExpiryWarning(
   service: SupabaseClient,
   q: ExpiringQuote,
 ): Promise<ExpiryEmailResult> {
-  const emails = (q.emails || []).map(e => String(e).trim()).filter(Boolean);
-  if (emails.length === 0) return { ok: false, skipped: true, error: 'no email on file' };
+  const addressed = (q.emails || []).map(e => String(e).trim()).filter(Boolean);
+  if (addressed.length === 0) return { ok: false, skipped: true, error: 'no email on file' };
+  // Same preference as the approval reminder (migration 306): an expiry
+  // warning IS a reminder about an estimate awaiting approval, so a
+  // customer who turned those off must not keep receiving these — that
+  // would make the toggle a half-truth.
+  const emails = await allowedRecipients(service, q.customerId || null, addressed);
+  if (emails.length === 0) return { ok: false, skipped: true, error: 'all recipients opted out of estimate reminders' };
   if (!q.token) return { ok: false, skipped: true, error: 'no live approval link' };
   const days = daysUntilExpiry(q.expiresAt);
   // Belt and braces: the sweep already checks this, but a warning that says
