@@ -17,9 +17,18 @@ import { scanLifecycle } from '@/lib/scan-state';
 import { customerRequiresPo, loadBillableCustomers, matchesBillableCustomer, DEFAULT_BILLABLE_CUSTOMERS, type BillableCustomer } from '@/lib/billable-customers';
 import { decodeVinsBatch } from '@/lib/vin-decoder';
 import { storage, storageDownloadUrl } from '@/lib/storage';
+import PhotoLightbox, { type LightboxPhoto } from '@/components/PhotoLightbox';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { type EmailedInfo, fetchEmailedByNumber, isBadDelivery } from '@/lib/invoice-emails';
 import { InvoiceEmailedBadge } from '@/components/InvoiceEmailedBadge';
+
+/** One completion photo (K8, migration 190) attached to a scan. */
+interface ScanPhoto {
+  id: string;
+  storage_path: string;
+  created_at: string | null;
+  taken_by: string | null;
+}
 
 interface ScanLog {
   id: string;
@@ -81,8 +90,10 @@ export default function AdminScansPage() {
   // Customer-level PO waiver: invoice-first customers (billable_customers.
   // requires_po = FALSE, e.g. Reading Truck) skip Waiting for PO entirely.
   const [billableCustomers, setBillableCustomers] = useState<BillableCustomer[]>(DEFAULT_BILLABLE_CUSTOMERS);
-  // scan_log_id → completion-photo storage paths (K8), loaded after the list.
-  const [photosByScanId, setPhotosByScanId] = useState<Record<string, string[]>>({});
+  // scan_log_id → completion photos (K8), loaded after the list.
+  const [photosByScanId, setPhotosByScanId] = useState<Record<string, ScanPhoto[]>>({});
+  // Which scan's photos are open in the lightbox, and at which one.
+  const [photoViewer, setPhotoViewer] = useState<{ scanId: string; idx: number } | null>(null);
   // scan_log_id → CNI job number, for the source column/filter (a scan is "CNI"
   // when a cni_job_vins row points at it). See docs/cni-redesign.md §3.4.
   const [cniByScanId, setCniByScanId] = useState<Record<string, string>>({});
@@ -330,14 +341,19 @@ export default function AdminScansPage() {
     // and loaded after the list renders so the log itself never waits on it.
     try {
       const allIds = [...(scansRes.data || []), ...(archivedRes.data || [])].map((s: any) => s.id);
-      const photoMap: Record<string, string[]> = {};
+      const photoMap: Record<string, ScanPhoto[]> = {};
       for (let i = 0; i < allIds.length; i += 200) {
         const { data: photoRows } = await supabase
           .from('scan_photos')
-          .select('scan_log_id, storage_path')
+          .select('id, scan_log_id, storage_path, created_at, taken_by')
+          // Oldest first so the viewer pages through in the order they were
+          // shot, and so the chip's first photo is stable between loads.
+          .order('created_at')
           .in('scan_log_id', allIds.slice(i, i + 200));
         for (const p of photoRows || []) {
-          (photoMap[p.scan_log_id] || (photoMap[p.scan_log_id] = [])).push(p.storage_path);
+          (photoMap[p.scan_log_id] || (photoMap[p.scan_log_id] = [])).push({
+            id: p.id, storage_path: p.storage_path, created_at: p.created_at, taken_by: p.taken_by,
+          });
         }
       }
       setPhotosByScanId(photoMap);
@@ -2413,16 +2429,17 @@ export default function AdminScansPage() {
                                     </span>
                                   )}
                                   {(photosByScanId[scan.id]?.length ?? 0) > 0 && (
-                                    <a
-                                      href={storageDownloadUrl('photos', photosByScanId[scan.id][0], `${scan.vin}-completion.${photosByScanId[scan.id][0].split('.').pop() || 'jpg'}`)}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
+                                    <button
+                                      type="button"
+                                      // Opens ALL of this scan's photos in the
+                                      // lightbox. This was an <a> to photo #1,
+                                      // so a 3-photo scan showed one and hid two.
+                                      onClick={e => { e.stopPropagation(); setPhotoViewer({ scanId: scan.id, idx: 0 }); }}
                                       title={`${photosByScanId[scan.id].length} completion photo${photosByScanId[scan.id].length !== 1 ? 's' : ''} — click to view`}
-                                      onClick={e => e.stopPropagation()}
-                                      style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e', textDecoration: 'none' }}
+                                      style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e', border: 'none', cursor: 'pointer' }}
                                     >
                                       {photosByScanId[scan.id].length} photo{photosByScanId[scan.id].length !== 1 ? 's' : ''}
-                                    </a>
+                                    </button>
                                   )}
                                   {scan.install_cost != null && (
                                     <span title={scan.installer_name ? `Paid to ${scan.installer_name}` : 'Installer cost'} style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(244,114,182,0.12)', color: '#f472b6' }}>
@@ -2624,6 +2641,36 @@ export default function AdminScansPage() {
           }}
         />
       )}
+
+      {/* Completion photos (K8) for one scan — every photo on the row, not
+          just the first. Built from the open scan so paging stays inside
+          that scan's set. */}
+      {photoViewer && (() => {
+        const scan = [...scans, ...archivedScans].find(s => s.id === photoViewer.scanId);
+        const rows = photosByScanId[photoViewer.scanId] || [];
+        if (rows.length === 0) return null;
+        const shots: LightboxPhoto[] = rows.map((p, i) => {
+          const ext = p.storage_path.split('.').pop() || 'jpg';
+          const name = `${scan?.vin || 'scan'}-completion-${i + 1}.${ext}`;
+          return {
+            id: p.id,
+            url: storageDownloadUrl('photos', p.storage_path, name),
+            title: scan ? `${scan.vin}${scan.part_number ? ` · ${scan.part_number}` : ''}` : 'Completion photo',
+            subtitle: [
+              p.created_at ? new Date(p.created_at).toLocaleString() : null,
+              p.taken_by ? profiles[p.taken_by] : null,
+            ].filter(Boolean).join(' · ') || null,
+          };
+        });
+        return (
+          <PhotoLightbox
+            photos={shots}
+            index={photoViewer.idx}
+            onClose={() => setPhotoViewer(null)}
+            onIndex={i => setPhotoViewer(v => (v ? { ...v, idx: i } : v))}
+          />
+        );
+      })()}
     </div>
   );
 }
