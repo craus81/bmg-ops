@@ -105,6 +105,9 @@ export const deepLinks = {
    *  submitted" alert has to land. `cniJob` drops the reader on the job and
    *  makes them hunt for the tile holding the thing they were told about. */
   cniJobPhotos: (jobId: string) => `/admin/cni/jobs/${jobId}/photos`,
+  /** The vehicle record for one VIN — what was installed outside the shop,
+   *  where, for whom, and every photo of it. */
+  vehicleRecord: (vin: string) => `/vehicles/${encodeURIComponent(vin.trim().toUpperCase())}`,
   /** Installer photos across every job, optionally narrowed to one
    *  installer or company (the gallery reads both off the query string). */
   cniPhotos: (filter?: { installerId?: string | null; companyId?: string | null }) => {

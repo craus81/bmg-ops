@@ -14,6 +14,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import PhotoLightbox, { type LightboxPhoto } from '@/components/PhotoLightbox';
+import { deepLinks } from '@/lib/deep-links';
 
 const TYPE_LABELS: Record<string, string> = {
   front: 'Front',
@@ -271,7 +272,13 @@ function PhotoGallery() {
                 </button>
                 <div style={{ padding: '8px 10px' }}>
                   <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {p.vin ? `…${p.vin.slice(-6)}` : 'Job photo'} · {TYPE_LABELS[p.photoType] || p.photoType}
+                    {p.vin ? (
+                      <a
+                        href={deepLinks.vehicleRecord(p.vin)}
+                        title="Open this vehicle's record"
+                        style={{ color: 'var(--text-primary)', textDecoration: 'underline', textDecorationStyle: 'dotted' }}
+                      >…{p.vin.slice(-6)}</a>
+                    ) : 'Job photo'} · {TYPE_LABELS[p.photoType] || p.photoType}
                   </div>
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {[p.companyName || p.uploadedByName, new Date(p.uploadedAt).toLocaleDateString()].filter(Boolean).join(' · ')}
