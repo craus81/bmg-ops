@@ -478,6 +478,20 @@ auto-advance-on-empty.
   (individual) path — company invites/bids (migration 111) fully supersede the
   per-installer ones (036). `assigned_installer_id` stays read-only for
   historical jobs.
+- **The vehicle record** (`/vehicles/<vin>`, owner decision 2026-09-12): a
+  vehicle an installer completes in a customer's yard never gets a
+  `fleet_checkins` row, so it had no record and its photos were reachable
+  only by knowing which job to open. The record reads the install spine that
+  already exists — `complete-vin` writes a `scan_logs` row carrying VIN,
+  install location, billable customer, part and device ids — and hangs both
+  photo sets off it through FKs (`scan_photos.scan_log_id`,
+  `cni_job_vins.scan_log_id`, `cni_job_photos.vin_id`). Shop visits are NOT
+  merged in: they keep their own screens and the record links across, so
+  T1.4's check-in-scoped timeline stays check-in-scoped. Merging CNI photos
+  INTO that timeline was considered and dropped — it would only ever have
+  covered bridge-created vehicles, which is the minority, and the record
+  answers the same question for all of them.
+
 - **Photo review is gone** (owner decision 2026-09-12, migration 307): photos
   are documentation of what was installed, not work to approve. The admin
   screen is a gallery, no verdict is written, and the "photo first-pass rate"

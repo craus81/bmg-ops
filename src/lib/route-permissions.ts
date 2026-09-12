@@ -434,6 +434,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/vehicle-tracking/invoice/route.ts': admin(),
   'src/app/api/vehicle-tracking/turnaround-suggest/route.ts': staff(),
   'src/app/api/vehicle-tracking/update-status/route.ts': staff(),
+  'src/app/api/vehicles/[vin]/installs/route.ts': staff(),
   'src/app/api/vehicles/[vin]/photos/route.ts': staff(),
   'src/app/api/vehicles/archive/route.ts': admin(),
   'src/app/api/vehicles/delete/route.ts': admin(),

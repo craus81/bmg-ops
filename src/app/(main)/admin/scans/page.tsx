@@ -18,6 +18,7 @@ import { customerRequiresPo, loadBillableCustomers, matchesBillableCustomer, DEF
 import { decodeVinsBatch } from '@/lib/vin-decoder';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 import PhotoLightbox, { type LightboxPhoto } from '@/components/PhotoLightbox';
+import { deepLinks } from '@/lib/deep-links';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { type EmailedInfo, fetchEmailedByNumber, isBadDelivery } from '@/lib/invoice-emails';
 import { InvoiceEmailedBadge } from '@/components/InvoiceEmailedBadge';
@@ -2071,7 +2072,12 @@ export default function AdminScansPage() {
                       {[scan.vehicle_year, scan.vehicle_make, scan.vehicle_model].filter(Boolean).join(' ') || 'Unknown'}
                       {scan.billable_customer && <span style={{ fontWeight: 600, color: '#a78bfa', marginLeft: '6px' }}>{scan.billable_customer}</span>}
                     </div>
-                    <div style={{ fontSize: '9px', fontFamily: 'monospace', color: 'var(--text-muted)' }}>{scan.vin}</div>
+                    <a
+                      href={deepLinks.vehicleRecord(scan.vin)}
+                      onClick={e => e.stopPropagation()}
+                      title="Open this vehicle's record"
+                      style={{ fontSize: '9px', fontFamily: 'monospace', color: 'var(--text-muted)', textDecoration: 'underline', textDecorationStyle: 'dotted' }}
+                    >{scan.vin}</a>
                     {(scan.part_number || scan.location_name) && (
                       <div style={{ fontSize: '9px', color: 'var(--text-secondary)', marginTop: '1px' }}>
                         {scan.part_number && (
@@ -2391,7 +2397,12 @@ export default function AdminScansPage() {
                                   <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>
                                     {[scan.vehicle_year, scan.vehicle_make, scan.vehicle_model].filter(Boolean).join(' ') || 'Unknown'}
                                   </div>
-                                  <div style={{ fontSize: '9px', fontFamily: 'monospace', color: 'var(--text-muted)' }}>{scan.vin}</div>
+                                  <a
+                                    href={deepLinks.vehicleRecord(scan.vin)}
+                                    onClick={e => e.stopPropagation()}
+                                    title="Open this vehicle's record"
+                                    style={{ fontSize: '9px', fontFamily: 'monospace', color: 'var(--text-muted)', textDecoration: 'underline', textDecorationStyle: 'dotted' }}
+                                  >{scan.vin}</a>
                                   {scan.part_number && (
                                     <div style={{ fontSize: '9px', color: 'var(--text-secondary)', marginTop: '1px' }}>
                                       <PartLabel
