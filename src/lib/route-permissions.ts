@@ -202,6 +202,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/customer-threads/[id]/messages/route.ts': staff(),
   'src/app/api/customer-threads/[id]/route.ts': staff(),
   'src/app/api/customer-threads/route.ts': staff(),
+  'src/app/api/customers/brief/route.ts': staff(),
   'src/app/api/customers/portal-link/route.ts': staff(),
   'src/app/api/customer/billing/route.ts': authScoped('logged-in customer billing card; scoped by the caller\'s own profiles.customer_netsuite_id, with the same admin preview path as customer/portal', 'customer_netsuite_id'),
   'src/app/api/customer/portal/route.ts': authScoped('customer-facing portal; scoped by the caller\'s profiles.customer_netsuite_id, with an admin preview path', 'customer_netsuite_id'),

@@ -401,6 +401,17 @@ export default function AiChat() {
     const text = input.trim();
     if (!text || sending) return;
 
+    // What the user is looking at when they ask, so "what's the status
+    // here?" is answerable (R6-13). Captured from the live URL at the top of
+    // send — not from a hook — for two reasons: a query-only change
+    // (/tracking?vehicle=…) doesn't re-run usePathname, and useSearchParams
+    // would drag a Suspense requirement into the root layout. Captured HERE
+    // rather than read later so a navigation mid-request can't attach a new
+    // page to a question asked about the old one.
+    const page = typeof window !== 'undefined'
+      ? { path: window.location.pathname, search: window.location.search }
+      : undefined;
+
     setInput('');
     const userMsg: ChatMessage = { role: 'user', content: text };
     const loadingMsg: ChatMessage = { role: 'assistant', content: '', loading: true };
@@ -421,7 +432,9 @@ export default function AiChat() {
         headers: { 'Content-Type': 'application/json' },
         // Role is resolved server-side from the session; sending it from the
         // client was the access bypass (a client could claim any role).
-        body: JSON.stringify({ messages: history }),
+        // `page` is the raw route only, for the same reason: the server
+        // decides what (if anything) that URL points at — see page-context.ts.
+        body: JSON.stringify({ messages: history, page }),
       });
 
       const data = await res.json();

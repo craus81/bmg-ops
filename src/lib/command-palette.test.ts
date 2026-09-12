@@ -49,27 +49,40 @@ describe('canOpenKind', () => {
 describe('quickActionsFor', () => {
   const prospect = { id: '11111111-1111-1111-1111-111111111111', company_name: 'Acme', email: 'ap@acme.test' };
 
-  it('offers log call / new estimate / email on a real CRM record', () => {
+  it('offers log call / brief / new estimate / email on a real CRM record', () => {
     const keys = quickActionsFor('customers', prospect, withFeatures('prospects', 'estimates')).map(a => a.key);
-    expect(keys).toEqual(['log_call', 'new_estimate', 'email']);
+    expect(keys).toEqual(['log_call', 'brief', 'new_estimate', 'email']);
   });
 
   it('never offers a prospects-keyed action on an ns- mirror row', () => {
     // /api/prospects/log-call validates a uuid, and there is no prospects row
-    // to start an estimate against — both could only fail.
-    const mirror = { id: 'ns-48210', company_name: 'Acme', email: 'ap@acme.test' };
+    // to start an estimate against — both could only fail. The brief route
+    // takes a NetSuite id too, so it survives when the row carries one.
+    const mirror = { id: 'ns-48210', netsuite_id: '48210', company_name: 'Acme', email: 'ap@acme.test' };
     const keys = quickActionsFor('customers', mirror, withFeatures('prospects', 'estimates')).map(a => a.key);
-    expect(keys).toEqual(['email']);
+    expect(keys).toEqual(['brief', 'email']);
+  });
+
+  it('drops the brief on a mirror row with no NetSuite id to look up', () => {
+    const orphan = { id: 'ns-', company_name: 'Acme' };
+    expect(quickActionsFor('customers', orphan, withFeatures('prospects', 'estimates'))).toEqual([]);
   });
 
   it('drops Email when the row carries no address', () => {
     const keys = quickActionsFor('customers', { ...prospect, email: '   ' }, withFeatures('prospects', 'estimates')).map(a => a.key);
-    expect(keys).toEqual(['log_call', 'new_estimate']);
+    expect(keys).toEqual(['log_call', 'brief', 'new_estimate']);
   });
 
   it('drops New estimate for a viewer without the estimates feature', () => {
     const keys = quickActionsFor('customers', prospect, withFeatures('prospects')).map(a => a.key);
-    expect(keys).toEqual(['log_call', 'email']);
+    expect(keys).toEqual(['log_call', 'brief', 'email']);
+  });
+
+  it('offers no CRM actions at all to a viewer without the prospects feature', () => {
+    // Log call is the exception — its route is staff() and the sheet never
+    // navigates — so the palette keeps it and drops the rest.
+    expect(quickActionsFor('customers', prospect, withFeatures('estimates')).map(a => a.key))
+      .toEqual(['log_call', 'new_estimate']);
   });
 
   it('addresses the compose screen to the row’s email', () => {

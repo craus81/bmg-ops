@@ -116,7 +116,9 @@ export type QuickAction =
   /** Opens the record's PDF in a new tab (an API route, not a page). */
   | { key: string; label: string; title: string; kind: 'external'; url: string }
   /** Opens the log-call sheet over the palette — no navigation. */
-  | { key: string; label: string; title: string; kind: 'log_call' };
+  | { key: string; label: string; title: string; kind: 'log_call' }
+  /** Opens the pre-call brief over the palette — no navigation. */
+  | { key: string; label: string; title: string; kind: 'brief' };
 
 /**
  * The actions a result grows, by type.
@@ -145,6 +147,17 @@ export function quickActionsFor(group: string, item: any, a: PaletteAccess): Qui
         out.push({
           key: 'log_call', label: 'Log call', kind: 'log_call',
           title: 'Log a call against this record without leaving the search',
+        });
+      }
+      // The rundown works for a mirror row too — the brief route takes
+      // either a CRM id or a NetSuite internal id — but it reads A/R,
+      // estimates and shop status, so it is for the people who work the
+      // account. (The route resolves financial access again server-side;
+      // this only decides whether the button is worth offering.)
+      if ((pid || item.netsuite_id) && a.hasFeature('prospects')) {
+        out.push({
+          key: 'brief', label: 'Brief me', kind: 'brief',
+          title: 'Pre-call rundown: open estimates, A/R, vehicles in the shop, email delivery, open threads',
         });
       }
       if (pid && a.hasFeature('estimates')) {

@@ -9,6 +9,7 @@ import {
   quickActionsFor, buildRecent, pushRecent, readRecents, clearRecents, visibleRecents,
   type QuickAction, type RecentRecord, type PaletteAccess,
 } from '@/lib/command-palette';
+import BriefMeSheet, { type BriefTarget } from '@/components/BriefMeSheet';
 
 interface UniversalSearchProps {
   open: boolean;
@@ -340,11 +341,27 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
     router.push(path);
   }, [onClose, router]);
 
+  // Pre-call rundown, over the search — the caller-ID hit and the brief on
+  // the same screen is the whole point (R6-13).
+  const [briefFor, setBriefFor] = useState<BriefTarget | null>(null);
+
   // Run one quick action. Links close the palette first (the destination is a
   // page); PDFs are API routes, so they open in their own tab and leave the
-  // palette where it was; the log-call sheet never navigates at all.
+  // palette where it was; the log-call and brief sheets never navigate.
   const runAction = useCallback((a: QuickAction, item: any) => {
     if (a.kind === 'log_call') { openLogCall(item); return; }
+    if (a.kind === 'brief') {
+      // The customers group folds in NetSuite-mirror rows under an
+      // `ns-<internalId>` pseudo id; the brief route takes either key, so
+      // hand it whichever this row actually has.
+      const isMirror = String(item.id || '').startsWith('ns-');
+      setBriefFor({
+        prospectId: isMirror ? null : (item.id || null),
+        netsuiteId: item.netsuite_id ? String(item.netsuite_id) : null,
+        name: item.company_name || null,
+      });
+      return;
+    }
     if (a.kind === 'external') { window.open(a.url, '_blank', 'noopener,noreferrer'); return; }
     onClose();
     router.push(a.url);
@@ -682,6 +699,8 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
           </div>
         </div>
       )}
+
+      {briefFor && <BriefMeSheet target={briefFor} onClose={() => setBriefFor(null)} />}
 
     </div>
   );

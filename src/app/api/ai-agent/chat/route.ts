@@ -10,6 +10,7 @@ import {
 import { validateBody, z } from '@/lib/validate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { getSalesTaxRate } from '@/lib/sales-tax';
+import { describePage, pageContextBlock } from '@/lib/page-context';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,6 +24,18 @@ const Schema = z.object({
     )
     .min(1)
     .max(100),
+  /**
+   * What the user is looking at (R6-13). Path + query string ONLY — the
+   * client never gets to say what the record IS. describePage re-derives
+   * that here from a closed rule table, so the prompt can't be steered by
+   * a crafted URL, and the pointer grants no access the caller lacks.
+   */
+  page: z
+    .object({
+      path: z.string().max(512).optional(),
+      search: z.string().max(1024).optional(),
+    })
+    .optional(),
   // NOTE: no `userRole` here on purpose. The role is resolved SERVER-side
   // from the caller's profile (see POST). This endpoint used to trust a
   // `userRole` in the body, which let anyone reach NetSuite GL balances by
@@ -1055,6 +1068,9 @@ export async function POST(req: NextRequest) {
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
   const messages = parsed.data.messages as Message[];
+  // Re-derived server-side from the raw path — never taken as the client
+  // describes it. Null for any route the rule table doesn't know.
+  const pageCtx = describePage(parsed.data.page?.path, parsed.data.page?.search);
 
   // Role comes from the authenticated profile, never the request body.
   const roles = rolesOf(auth.profile);
@@ -1117,6 +1133,12 @@ export async function POST(req: NextRequest) {
     if (!canSeeFinancials) {
       systemPrompt += '\n\nACCESS RESTRICTION: Financial data is restricted to leadership. Do NOT try to read GL accounts or balances, customer/vendor A/R or A/P, credit limits, or payment/bill/journal transactions, nor pay, payout, or audit tables — those queries are blocked. Offer operational data (jobs, parts, vehicles, schedules, customers by name) instead.';
     }
+
+    // What's on screen (R6-13). Last, AFTER every access restriction, so a
+    // pointer can never read as permission to look at something the blocks
+    // above just refused — and it is only ever a pointer: the model still
+    // has to query the record through the same guarded executor.
+    systemPrompt += pageContextBlock(pageCtx);
 
     const claudeMessages: any[] = messages.map(m => ({ role: m.role, content: m.content }));
 
