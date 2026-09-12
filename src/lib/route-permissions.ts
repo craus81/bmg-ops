@@ -181,6 +181,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cron/deal-forecast-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/exceptions-digest/route.ts': cron('requireAdmin('),
   'src/app/api/cron/heartbeat-sentinel/route.ts': cron('requireAdmin('),
+  'src/app/api/cron/so-matchmaker/route.ts': cron('requireAdmin('),
   'src/app/api/cron/health-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/netsuite-sync/route.ts': cron('requireAdmin('),
   'src/app/api/cron/owner-brief/route.ts': cron('requireAdmin('),
@@ -423,6 +424,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/storage/presign/route.ts': authScoped('write presigns pass the tiered storage-guard ACL first', 'checkStoragePath'),
   'src/app/api/storage/route.ts': authScoped('every bucket/path goes through the tiered storage-guard ACL', 'checkStoragePath'),
   'src/app/api/system-health/route.ts': cron('requireAdmin('),
+  'src/app/api/so-matches/route.ts': staff(),
   // Narrower than its sibling above on purpose: a map of which
   // integrations are unconfigured is a map of where the app is soft, so
   // it stays with the owner-level feature rather than all admins.

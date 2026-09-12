@@ -61,6 +61,7 @@ export default function MorePage() {
         { title: 'Upfit Designer', sub: 'Design a van upfit in 3D & turn it into an estimate', path: '/upfit-designer', show: F('upfit_configurator') },
         { title: 'Wrap Quotes', sub: 'Measure a vehicle template by hand & email the quote', path: '/admin/wrap-quote', show: isAdmin || isSales || isGraphicsProduction },
         { title: 'Quotes', sub: 'Every estimate & wrap quote in one list — search, chase, mark won or lost', path: '/quotes', show: isAdmin || isSales },
+        { title: 'Unmatched Sales Orders', sub: 'Orders raised in NetSuite that never found their estimate — scored guesses to accept or reject', path: '/admin/so-matches', show: isAdmin || isSales },
         { title: 'Reports', sub: 'Sales by customer detail & other custom reports', path: '/admin/reports', show: F('reports') },
         { title: 'Invoicing', sub: 'Create & email NetSuite invoices from graphics jobs and scans', path: '/invoices', show: isAdmin || isSales },
       ],
