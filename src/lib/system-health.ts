@@ -54,6 +54,7 @@ export const HEALTH_MONITORS: HealthMonitor[] = [
   { syncType: 'deal_forecast_check', label: 'Weekly deal-forecast sweep', intervalMinutes: 10080 },
   { syncType: 'pickup_nudges', label: 'Ready-for-pickup nudge sweep', intervalMinutes: 1440 },
   { syncType: 'heartbeat_sentinel', label: 'Daily business-pulse sentinel', intervalMinutes: 1440 },
+  { syncType: 'so_matchmaker', label: 'Nightly orphan sales-order matchmaker', intervalMinutes: 1440 },
 ];
 
 /** A run is stale once it's overdue by more than a full interval (2× spacing), plus grace for slow runs. */
