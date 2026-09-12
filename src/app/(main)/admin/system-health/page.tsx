@@ -16,6 +16,81 @@ interface HealthCheck {
   problem: string | null;
 }
 
+type RunHistoryState =
+  | { state: 'loading' }
+  | { state: 'error'; message: string }
+  | {
+      state: 'ready';
+      runs: { finishedAt: string; durationMs: number | null; outcome: 'ok' | 'error'; records: number | null; error: string | null }[];
+      errorStreak: number;
+      medianDurationMs: number | null;
+      runsWithoutDuration: number;
+      runsWithoutRecords: number;
+      note: string;
+    };
+
+/**
+ * The last 30 runs of one job (R6-13). Two things it refuses to imply: a
+ * run with no duration renders as "—", never as an instant one, and the
+ * panel repeats that only runs which finished reporting are here — a short
+ * history is not proof the job has been idle.
+ */
+function RunHistoryPanel({ history }: { history: RunHistoryState | undefined }) {
+  const muted: React.CSSProperties = { fontSize: '11px', color: 'var(--text-muted)' };
+  if (!history || history.state === 'loading') {
+    return <div style={{ ...muted, marginTop: '10px' }}>Loading run history…</div>;
+  }
+  if (history.state === 'error') {
+    return <div style={{ ...muted, marginTop: '10px' }}>Could not load run history: {history.message}</div>;
+  }
+  if (history.runs.length === 0) {
+    return (
+      <div style={{ ...muted, marginTop: '10px' }}>
+        No recorded runs yet. The flight recorder only sees runs from when it was switched on.
+      </div>
+    );
+  }
+
+  const max = Math.max(...history.runs.map(r => r.durationMs ?? 0), 1);
+  return (
+    <div style={{ marginTop: '10px', borderTop: '1px solid var(--border)', paddingTop: '10px' }}>
+      <div style={{ ...muted, marginBottom: '6px' }}>
+        {history.errorStreak > 0 && (
+          <span style={{ color: '#ef4444', fontWeight: 800 }}>
+            {history.errorStreak} failure{history.errorStreak === 1 ? '' : 's'} in a row ·{' '}
+          </span>
+        )}
+        Median {history.medianDurationMs == null ? 'unknown' : `${Math.round(history.medianDurationMs / 1000)}s`} over{' '}
+        {history.runs.length} run{history.runs.length === 1 ? '' : 's'}
+        {history.runsWithoutDuration > 0 && ` · ${history.runsWithoutDuration} reported no duration`}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '38px', marginBottom: '6px' }}>
+        {[...history.runs].reverse().map((r, i) => (
+          <div
+            key={i}
+            title={`${new Date(r.finishedAt).toLocaleString()} · ${r.outcome}${r.durationMs == null ? ' · duration unknown' : ` · ${Math.round(r.durationMs / 1000)}s`}${r.records == null ? ' · records not reported' : ` · ${r.records} records`}${r.error ? ` · ${r.error}` : ''}`}
+            style={{
+              flex: 1,
+              minWidth: '3px',
+              // A run with no duration gets a flat marker, not a zero bar —
+              // "we don't know" must not look like "instant".
+              height: r.durationMs == null ? '3px' : `${Math.max(3, (r.durationMs / max) * 38)}px`,
+              background: r.outcome === 'error' ? '#ef4444' : r.durationMs == null ? 'var(--border)' : '#22c55e',
+              borderRadius: '2px',
+            }}
+          />
+        ))}
+      </div>
+      <div style={{ ...muted, fontSize: '10px', lineHeight: 1.5 }}>{history.note}</div>
+      {history.runs.filter(r => r.error).slice(0, 3).map((r, i) => (
+        <div key={i} style={{ fontSize: '10px', color: '#ef4444', marginTop: '3px' }}>
+          {new Date(r.finishedAt).toLocaleString()} — {r.error}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 interface EmailLogRow {
   id: string;
   kind: string;
@@ -72,6 +147,26 @@ export default function SystemHealthPage() {
   const { isAdmin, hasRole, hasFeature, loading: authLoading } = useAuth();
 
   const [checks, setChecks] = useState<HealthCheck[]>([]);
+  // Flight recorder (R6-13): last 30 runs per job, fetched on expand.
+  const [openRuns, setOpenRuns] = useState<string | null>(null);
+  const [runs, setRuns] = useState<Record<string, RunHistoryState>>({});
+
+  const toggleRuns = useCallback(async (syncType: string) => {
+    setOpenRuns(prev => (prev === syncType ? null : syncType));
+    setRuns(prev => (prev[syncType] ? prev : { ...prev, [syncType]: { state: 'loading' } }));
+    if (runs[syncType]) return;   // already fetched; expanding again is free
+    try {
+      const res = await apiFetch(`/api/system-health/runs?job=${encodeURIComponent(syncType)}`);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRuns(prev => ({ ...prev, [syncType]: { state: 'error', message: json.error || 'request failed' } }));
+        return;
+      }
+      setRuns(prev => ({ ...prev, [syncType]: { state: 'ready', ...json } }));
+    } catch (e: any) {
+      setRuns(prev => ({ ...prev, [syncType]: { state: 'error', message: e?.message || 'request failed' } }));
+    }
+  }, [runs]);
   const [emails, setEmails] = useState<EmailLogRow[]>([]);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   // The resolve action lives on the month-close route, which admits
@@ -223,17 +318,29 @@ export default function SystemHealthPage() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
         {checks.map(c => {
           const s = STATUS_STYLE[c.status];
+          const open = openRuns === c.syncType;
           return (
-            <div key={c.syncType} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 14px', borderRadius: '10px', background: 'var(--card)', border: `1px solid ${c.status === 'ok' ? 'var(--border)' : s.color + '44'}` }}>
-              <span style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '6px', background: s.bg, color: s.color, whiteSpace: 'nowrap' }}>{s.label}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{c.label}</div>
-                {c.problem && <div style={{ fontSize: '11px', color: s.color, marginTop: '2px' }}>{c.problem}</div>}
+            <div key={c.syncType} style={{ padding: '12px 14px', borderRadius: '10px', background: 'var(--card)', border: `1px solid ${c.status === 'ok' ? 'var(--border)' : s.color + '44'}` }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '6px', background: s.bg, color: s.color, whiteSpace: 'nowrap' }}>{s.label}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{c.label}</div>
+                  {c.problem && <div style={{ fontSize: '11px', color: s.color, marginTop: '2px' }}>{c.problem}</div>}
+                </div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  Last run {fmtAge(c.ageMinutes)}<br />
+                  every {c.intervalMinutes >= 60 ? `${c.intervalMinutes / 60}h` : `${c.intervalMinutes} min`}
+                </div>
+                {/* Flight recorder (R6-13) — the run history behind this row. */}
+                <button
+                  type="button"
+                  onClick={() => toggleRuns(c.syncType)}
+                  style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '11px', fontWeight: 800, cursor: 'pointer', padding: '2px 4px', whiteSpace: 'nowrap' }}
+                >
+                  {open ? '▾ Runs' : '▸ Runs'}
+                </button>
               </div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                Last run {fmtAge(c.ageMinutes)}<br />
-                every {c.intervalMinutes >= 60 ? `${c.intervalMinutes / 60}h` : `${c.intervalMinutes} min`}
-              </div>
+              {open && <RunHistoryPanel history={runs[c.syncType]} />}
             </div>
           );
         })}
