@@ -667,6 +667,10 @@ export interface NotificationPreferences {
   /** Opt-out (migration 276, default true): the Monday owner's brief. Only
    *  super_admin/executive accounts are ever targeted by the cron. */
   notify_weekly_brief?: boolean;
+  /** Per-notification-type channel choice (migration 307). Keys are types
+   *  from src/lib/notification-registry.ts; an absent key follows the
+   *  account-wide switches, an empty array means send nothing of that type. */
+  type_channels?: Record<string, ('in_app' | 'push' | 'email')[]> | null;
 }
 
 // ═══════════ MESSAGING ═══════════
