@@ -42,7 +42,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 // List filters: real statuses plus the tile/attention pseudo-filters.
-type Filter = 'active' | 'all' | 'overdue' | 'needs_photos' | string;
+type Filter = 'active' | 'all' | 'overdue' | string;
 
 export default function CniDashboardPage() {
   const router = useRouter();
@@ -50,8 +50,6 @@ export default function CniDashboardPage() {
   const supabase = createClient();
   const [jobs, setJobs] = useState<CniJobSummary[]>([]);
   const [installerCount, setInstallerCount] = useState(0);
-  const [photoJobIds, setPhotoJobIds] = useState<Set<string>>(new Set());
-  const [pendingPhotos, setPendingPhotos] = useState(0);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<Filter>('active');
   // When on, group the job list by assigned installer (A–Z); unassigned last.
@@ -98,16 +96,9 @@ export default function CniDashboardPage() {
       .or('role.eq.installer,roles.cs.{installer}');
     setInstallerCount(count || 0);
 
-    // Pending photo reviews — exact count via head query (row fetches cap at
-    // 1000 and would under-report a backlog), plus the job ids so the
-    // attention line can filter the list to exactly the jobs with photos
-    // waiting.
-    const [{ count: photoCount }, { data: photoRows }] = await Promise.all([
-      supabase.from('cni_job_photos').select('*', { count: 'exact', head: true }).eq('review_status', 'pending'),
-      supabase.from('cni_job_photos').select('job_id').eq('review_status', 'pending').limit(5000),
-    ]);
-    setPendingPhotos(photoCount || 0);
-    setPhotoJobIds(new Set((photoRows || []).map((p: any) => p.job_id).filter(Boolean)));
+    // (The "photos awaiting review" queue that used to load here is gone —
+    // migration 307 retired the photo approve/deny review, so an uploaded
+    // photo is documentation on the job, never a work item for a coordinator.)
 
     setLoading(false);
   };
@@ -119,7 +110,6 @@ export default function CniDashboardPage() {
     if (statusFilter === 'active') return j.status !== 'approved_closed';
     if (statusFilter === 'all') return true;
     if (statusFilter === 'overdue') return isOverdue(j);
-    if (statusFilter === 'needs_photos') return photoJobIds.has(j.id);
     return j.status === statusFilter;
   });
 
@@ -234,7 +224,7 @@ export default function CniDashboardPage() {
       </div>
 
       {/* Pending actions — every line is a link to the work itself */}
-      {(pendingPhotos > 0 || needsReview > 0 || biddingJobs > 0) && (
+      {(needsReview > 0 || biddingJobs > 0) && (
         <div style={{
           padding: '10px 12px', borderRadius: '12px', marginBottom: '14px',
           background: 'color-mix(in srgb, var(--warning) 6%, var(--card))',
@@ -242,12 +232,6 @@ export default function CniDashboardPage() {
         }}>
           <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--warning)', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '4px' }}>Needs your attention</div>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {pendingPhotos > 0 && (
-              <button onClick={() => setStatusFilter('needs_photos')} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 2px', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
-                <span style={{ fontSize: '13px', color: 'var(--text-primary)' }}><strong>{pendingPhotos}</strong> photo{pendingPhotos !== 1 ? 's' : ''} awaiting review</span>
-                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--warning)' }}>Show jobs →</span>
-              </button>
-            )}
             {needsReview > 0 && (
               <button onClick={() => setStatusFilter('completed_pending_review')} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 2px', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
                 <span style={{ fontSize: '13px', color: 'var(--text-primary)' }}><strong>{needsReview}</strong> job{needsReview !== 1 ? 's' : ''} pending completion review</span>
@@ -304,9 +288,9 @@ export default function CniDashboardPage() {
       </div>
 
       {/* Pseudo-filter banner so it's obvious the list is narrowed */}
-      {(statusFilter === 'overdue' || statusFilter === 'needs_photos') && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', fontSize: '12px', fontWeight: 700, color: statusFilter === 'overdue' ? 'var(--error)' : 'var(--warning)' }}>
-          {statusFilter === 'overdue' ? `Showing ${filteredJobs.length} overdue job${filteredJobs.length !== 1 ? 's' : ''}` : `Showing ${filteredJobs.length} job${filteredJobs.length !== 1 ? 's' : ''} with photos awaiting review`}
+      {statusFilter === 'overdue' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', fontSize: '12px', fontWeight: 700, color: 'var(--error)' }}>
+          {`Showing ${filteredJobs.length} overdue job${filteredJobs.length !== 1 ? 's' : ''}`}
           <button onClick={() => setStatusFilter('active')} style={{ padding: '2px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}>✕ Clear</button>
         </div>
       )}
@@ -367,7 +351,6 @@ export default function CniDashboardPage() {
                         due {new Date(job.deadline).toLocaleDateString([], { month: 'short', day: 'numeric' })}
                       </span>
                     )}
-                    {photoJobIds.has(job.id) && <span style={{ color: 'var(--warning)', fontWeight: 700 }}>Photos to review</span>}
                   </div>
                 </button>
               </div>

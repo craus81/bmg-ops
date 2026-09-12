@@ -33,8 +33,6 @@ interface Photo {
   vin_id: string | null;
   storage_path: string;
   photo_type: string;
-  review_status: string;
-  review_notes: string | null;
   uploaded_at: string;
 }
 
@@ -385,8 +383,8 @@ export default function InstallerPhotoUploadPage() {
                 background: 'var(--input-bg)', border: '1px solid var(--border)',
               }}>
                 {/* Thumbnail (R3-2: the installer side rendered no images at
-                    all — a denied "reshoot this" verdict pointed at a photo
-                    they couldn't see). Same key-splitting as the review page. */}
+                    all, so they couldn't see what they'd already sent). Same
+                    key-splitting as the admin gallery. */}
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={photoUrl(p.storage_path)}
@@ -402,35 +400,13 @@ export default function InstallerPhotoUploadPage() {
                     {new Date(p.uploaded_at).toLocaleString()}
                   </div>
                 </div>
-                <span style={{
-                  fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px',
-                  background: p.review_status === 'approved' ? 'var(--success-bg)'
-                    : p.review_status === 'denied' ? 'var(--error-bg)'
-                    : p.review_status === 'conditionally_approved' ? 'var(--warning-bg)'
-                    : 'var(--subtle-bg)',
-                  color: p.review_status === 'approved' ? 'var(--success)'
-                    : p.review_status === 'denied' ? 'var(--error)'
-                    : p.review_status === 'conditionally_approved' ? 'var(--warning)'
-                    : 'var(--text-muted)',
-                }}>
-                  {p.review_status === 'approved' ? '✓ Approved'
-                    : p.review_status === 'denied' ? '✕ Denied'
-                    : p.review_status === 'conditionally_approved' ? '⚠ Conditional'
-                    : 'Pending'}
-                </span>
+                {/* No verdict badge: migration 307 retired the photo
+                    approve/deny review. A photo that uploaded is on file,
+                    full stop — the only feedback an installer gets is the
+                    pre-screen at upload, while they can still act on it. */}
               </div>
             ))}
           </div>
-          {currentVinPhotos.some(p => p.review_status === 'denied' && p.review_notes) && (
-            <div style={{ marginTop: '10px', padding: '10px', borderRadius: '8px', background: 'var(--error-bg)', border: '1px solid var(--error-border)' }}>
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--error)', marginBottom: '4px' }}>Review Notes</div>
-              {currentVinPhotos.filter(p => p.review_status === 'denied' && p.review_notes).map(p => (
-                <div key={p.id} style={{ fontSize: '12px', color: 'var(--error)', marginBottom: '4px' }}>
-                  {TYPE_LABELS[p.photo_type]}: {p.review_notes}
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
 

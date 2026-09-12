@@ -204,7 +204,7 @@ export default function OpsDashboard() {
 
     const [
       invoicedRes, gfxRes, scansRes, partsRes, poRes,
-      importsRes, unpaidRes, usersRes, cniPhotosRes,
+      importsRes, unpaidRes, usersRes,
       shopRes, cniRes,
       schedGfxRes, schedUpfitRes, schedCniRes, schedEventsRes,
       scansTodayRes, scansWeekRes, msgRes, unreadRes,
@@ -245,7 +245,6 @@ export default function OpsDashboard() {
       supabase.from('gmail_po_imports').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
       supabase.from('fleet_checkins').select('*', { count: 'exact', head: true }).not('invoice_number', 'is', null).eq('is_paid', false),
       supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
-      supabase.from('cni_job_photos').select('*', { count: 'exact', head: true }).eq('review_status', 'pending'),
       // Lanes — paginated so the shop lane counts stay exact as history grows
       fetchAllRows<any>((from, to) => supabase.from('fleet_checkins')
         .select('id, status')
@@ -502,11 +501,6 @@ export default function OpsDashboard() {
       key: 'ready-pickup', count: readyPickup, tone: 'warn', path: '/tracking',
       title: 'Ready for pickup, no booking yet',
       detail: 'Complete vehicles in the lot — the nudge cron mails the booking link; call the stragglers',
-    });
-    const cniPhotos = count(cniPhotosRes);
-    if (cniPhotos > 0) queue.push({
-      key: 'cniphotos', count: cniPhotos, tone: 'blue', path: '/admin/cni',
-      title: 'CNI photos to review', detail: 'Network installer submissions',
     });
     const pendingUsers = count(usersRes);
     if (pendingUsers > 0 && hasFeature('user_management')) queue.push({

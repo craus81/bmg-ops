@@ -437,7 +437,7 @@ pre-loaded-list assumptions and *finishing* the company migration, not a rebuild
 | 3 | **Schedule** | `scheduling…` → `scheduled_confirmed` | Admin proposes a datetime (`scheduled_start_at`, migration 113); company confirms/declines; admin may confirm on their behalf. |
 | 4 | **In progress** | `in_progress` | Admin "Start Work". Installer **starts a shift, picks the part** (defaults to the job's if set), held persistent; **scans VINs** (each → `scan_logs` + credits + `cni_job_vins`), like field. Crew tagged on the shift. |
 | 5 | **Complete** | `completed_pending_review` | **Installer-driven** "End Shift / Mark Job Complete" — *not* auto-on-empty (see fix). Optional **target quantity** gives a countdown. |
-| 6 | **Review & close** | `approved_closed` | Admin reviews per-VIN photos → approves → closes → unlocks payout. Billing (Scan Log → invoice) runs independently. |
+| 6 | **Review & close** | `approved_closed` | Admin closes the job once every VIN is complete, photos are on file, the install checklist is done and the payout/AP invoice is settled → unlocks payout. Photos are documentation, NOT a gate to pass: the approve/deny review was retired (migration 307). Billing (Scan Log → invoice) runs independently. |
 
 > **Resolved 2026-08:** company-mode billing is now exclusively the
 > vendor_invoices AP flow — the legacy per-job invoice upload/approve flow is
@@ -478,7 +478,11 @@ auto-advance-on-empty.
   (individual) path — company invites/bids (migration 111) fully supersede the
   per-installer ones (036). `assigned_installer_id` stays read-only for
   historical jobs.
-- **Photo review stays**, but the **required photo set becomes configurable per
+- **Photo review is gone** (owner decision 2026-09-12, migration 307): photos
+  are documentation of what was installed, not work to approve. The admin
+  screen is a gallery, no verdict is written, and the "photo first-pass rate"
+  that scored installers off denials is removed from the scorecards. What
+  remains open is that the **required photo set should become configurable per
   job** — an RFID/device-capture job needs different evidence than a full wrap,
   and forcing 5 fixed angles on every job is friction. (Today's required types
   are hard-coded, migration 038.)

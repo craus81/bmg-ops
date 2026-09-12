@@ -53,7 +53,7 @@ export default function BidReviewPage() {
   const [tab, setTab] = useState<'interested' | 'declined'>('interested');
   // R5-12: computed 90-day scorecards so accept decisions run on real
   // history, not the hand-typed dropdowns (which stay as override notes).
-  interface Card { jobsCompleted: number; onTimeRate: number | null; photoFirstPassRate: number | null; medianResponseHours: number | null; declineRate: number | null; vehiclesCompleted: number; prev: { jobsCompleted: number; onTimeRate: number | null } }
+  interface Card { jobsCompleted: number; onTimeRate: number | null; medianResponseHours: number | null; declineRate: number | null; vehiclesCompleted: number; prev: { jobsCompleted: number; onTimeRate: number | null } }
   const [scorecards, setScorecards] = useState<{ companies: Record<string, Card>; installers: Record<string, Card> }>({ companies: {}, installers: {} });
   useEffect(() => {
     if (authLoading || !hasFeature('cni_admin')) return;
@@ -70,7 +70,6 @@ export default function BidReviewPage() {
     if (card.jobsCompleted > 0) parts.push(`${card.jobsCompleted} job${card.jobsCompleted !== 1 ? 's' : ''}`);
     if (card.vehiclesCompleted > 0) parts.push(`${card.vehiclesCompleted} veh`);
     if (card.onTimeRate != null) parts.push(`${card.onTimeRate}% on time`);
-    if (card.photoFirstPassRate != null) parts.push(`${card.photoFirstPassRate}% photo first-pass`);
     if (card.medianResponseHours != null) parts.push(`~${card.medianResponseHours}h response`);
     if (parts.length === 0) return null;
     const trend = card.prev.jobsCompleted > 0 || card.jobsCompleted > 0
