@@ -6,27 +6,27 @@
     },
     {
       "path": "/api/gmail/auto-import",
-      "schedule": "*/20 * * * *"
+      "schedule": "5,25,45 * * * *"
     },
     {
       "path": "/api/cron/netsuite-sync",
-      "schedule": "0 */2 * * *"
+      "schedule": "52 */2 * * *"
     },
     {
       "path": "/api/cron/parts-email-scan",
-      "schedule": "0 * * * *"
+      "schedule": "22 * * * *"
     },
     {
       "path": "/api/cron/parts-sync",
-      "schedule": "30 * * * *"
+      "schedule": "37 * * * *"
     },
     {
       "path": "/api/cron/health-check",
-      "schedule": "*/30 * * * *"
+      "schedule": "12,42 * * * *"
     },
     {
       "path": "/api/cron/calendar-pull",
-      "schedule": "*/15 * * * *"
+      "schedule": "2,17,32,47 * * * *"
     },
     {
       "path": "/api/cron/at-risk-check",
@@ -42,7 +42,7 @@
     },
     {
       "path": "/api/cron/proof-reminder-check",
-      "schedule": "45 13 * * *"
+      "schedule": "50 13 * * *"
     },
     {
       "path": "/api/cron/stuck-vehicle-check",
@@ -54,7 +54,7 @@
     },
     {
       "path": "/api/cron/auto-archive-shipped",
-      "schedule": "45 14 * * *"
+      "schedule": "50 14 * * *"
     },
     {
       "path": "/api/cron/shop-shift-sweep",
@@ -82,11 +82,11 @@
     },
     {
       "path": "/api/cron/reorder-check",
-      "schedule": "45 4 * * *"
+      "schedule": "55 4 * * *"
     },
     {
       "path": "/api/cron/owner-brief",
-      "schedule": "45 12 * * 1"
+      "schedule": "55 12 * * 1"
     },
     {
       "path": "/api/cron/deal-forecast-check",
