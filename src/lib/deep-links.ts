@@ -101,6 +101,10 @@ export const deepLinks = {
   atRiskCustomer: (customerId: string) => `/admin/reports/at-risk?id=${customerId}`,
   /** Dedicated CNI job record page (admin side). */
   cniJob: (jobId: string) => `/admin/cni/jobs/${jobId}`,
+  /** The job's installer photo gallery (admin side) — where a "photos
+   *  submitted" alert has to land. `cniJob` drops the reader on the job and
+   *  makes them hunt for the tile holding the thing they were told about. */
+  cniJobPhotos: (jobId: string) => `/admin/cni/jobs/${jobId}/photos`,
   /** Dedicated CNI installer record page (optionally flashing an internal note). */
   cniInstaller: (userId: string, noteId?: string | null) =>
     `/admin/cni/installers/${userId}${noteId ? `?note=${noteId}` : ''}`,

@@ -4,11 +4,13 @@
  *
  * FOUR RULES THIS FILE EXISTS TO ENFORCE:
  *
- *  1. IT NEVER DENIES A PHOTO. The verdict lives in its own columns and
- *     never touches review_status. A model wrong about a legitimate
- *     night-shift photo would send a crew back out for nothing; a model
- *     that waved a bad one through would launder itself as a human
- *     approval. It advises, a reviewer decides.
+ *  1. IT NEVER DENIES A PHOTO. The verdict lives in its own prescreen_*
+ *     columns and decides nothing. A model wrong about a legitimate
+ *     night-shift photo would send a crew back out for nothing. It advises
+ *     the installer at upload, while they are still at the vehicle and can
+ *     act on it — and that is now the ONLY read of a photo the system
+ *     makes: migration 307 retired the human approve/deny review outright,
+ *     which is exactly why this one must not grow into its replacement.
  *  2. A FAILED CHECK IS `not_screened`, NEVER `pass`. No API key, a
  *     timeout, an unreadable image — all of those mean the photo was not
  *     checked, and saying "pass" would be a claim nobody made.

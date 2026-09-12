@@ -26,8 +26,12 @@ const Schema = z.object({
  * Mark a VIN's photos submitted (photos_submitted=true) once all required
  * angles are on file. Previously a direct browser write to cni_job_vins under
  * RLS; routed here so the requirement is verified server-side (not just trusted
- * from the client), and so BMG gets a "photos ready to review" notification.
+ * from the client), and so BMG is told the photos landed.
  * Idempotent — the flip and the notification fire only on the false→true edge.
+ *
+ * The flag means the required angles EXIST, nothing more. Migration 307
+ * retired the approve/deny review, so there is no verdict to wait for and
+ * no such thing as a VIN whose photos were rejected.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
@@ -76,31 +80,29 @@ export async function POST(req: NextRequest) {
     .from('cni_job_vins').update({ photos_submitted: true }).eq('id', vinId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Tell the coordinators there are photos to review — but only when this
-  // submission lands on an empty review queue (R3-4). A crew works a job's
-  // VINs one at a time, and pinging every coordinator per VIN made a 30-VIN
-  // job 30 pushes + 30 emails each; while other VINs on the job already sit
-  // submitted-but-unapproved, the reviewers have been told and the job page
-  // shows the live count. `.not(is true)` so never-reviewed NULLs count as
-  // outstanding too.
+  // Tell the coordinators photos landed — but only for the FIRST VIN of the
+  // job (R3-4). A crew works a job's VINs one at a time, and pinging every
+  // coordinator per VIN made a 30-VIN job 30 pushes + 30 emails each; once
+  // they know the job has started producing photos, the job page shows the
+  // live count. This is news, not a work item: with the review retired
+  // (migration 307) nobody has to act on it.
   try {
-    const { data: outstanding } = await supabase
+    const { data: alreadyTold } = await supabase
       .from('cni_job_vins')
       .select('id')
       .eq('job_id', jobId)
       .eq('photos_submitted', true)
-      .not('photos_approved', 'is', true)
       .neq('id', vinId)
       .limit(1);
-    if ((outstanding || []).length === 0) {
+    if ((alreadyTold || []).length === 0) {
       const staff = await getCniStaffIds(supabase, auth.user.id);
       if (staff.length > 0) {
         const who = profile?.full_name || 'An installer';
         await notifyMany(staff, {
           type: 'cni_photos_ready',
-          title: `Photos ready: ${job.job_number}`,
-          body: `${who} submitted completion photos for VIN …${(vin.vin || '').slice(-6)} on "${job.title}". Review and approve.`,
-          url: deepLinks.cniJob(jobId),
+          title: `Photos submitted: ${job.job_number}`,
+          body: `${who} submitted completion photos for VIN …${(vin.vin || '').slice(-6)} on "${job.title}". View them on the job.`,
+          url: deepLinks.cniJobPhotos(jobId),
           channels: ['in_app', 'push', 'email'],
         });
       }

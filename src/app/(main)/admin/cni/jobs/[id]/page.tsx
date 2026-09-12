@@ -85,7 +85,6 @@ interface CniVin {
   status: string;
   completed_at: string | null;
   photos_submitted: boolean;
-  photos_approved: boolean;
   serial_number: string | null;
   imei: string | null;
   iccid: string | null;
@@ -408,7 +407,7 @@ export default function CniJobDetailPage() {
   const [bidCount, setBidCount] = useState(0);
 
   // Phase 3: photos + messages
-  const [photoStats, setPhotoStats] = useState({ total: 0, pending: 0, approved: 0, denied: 0 });
+  const [photoStats, setPhotoStats] = useState({ total: 0 });
   const [unreadMsgCount, setUnreadMsgCount] = useState(0);
 
   // Bridge provenance back-link (graphics job or check-in this came from).
@@ -603,31 +602,16 @@ export default function CniJobDetailPage() {
       .eq('job_id', jobId);
     setInvitedIds((inviteData || []).map((i: any) => i.company_id).filter(Boolean));
 
-    // Load photo stats over the EFFECTIVE set: the newest photo per
-    // (vin, type). R3-2: counting every row ever uploaded meant one denied
-    // photo failed the closure checklist forever — even after an approved
-    // reshoot replaced it — permanently blocking the payout. A superseded
-    // photo no longer counts; the reviewer page and the route's
-    // photos_approved recompute use the same rule.
-    const { data: photoData } = await supabase
+    // How many photos this job has. A plain count now that migration 307
+    // retired the approve/deny review — the old effective-set arithmetic
+    // (newest photo per vin+type) existed only to keep a superseded denial
+    // from failing the closure checklist forever, and there are no verdicts
+    // left to supersede. This count matches what the gallery shows.
+    const { count: photoCount } = await supabase
       .from('cni_job_photos')
-      .select('vin_id, photo_type, review_status, uploaded_at')
-      .eq('job_id', jobId)
-      .order('uploaded_at', { ascending: false });
-    if (photoData) {
-      const newestByKey = new Map<string, string>();
-      for (const p of photoData as any[]) {
-        const key = `${p.vin_id || 'general'}::${p.photo_type || 'other'}`;
-        if (!newestByKey.has(key)) newestByKey.set(key, p.review_status);
-      }
-      const effective = [...newestByKey.values()];
-      setPhotoStats({
-        total: effective.length,
-        pending: effective.filter(s => s === 'pending').length,
-        approved: effective.filter(s => s === 'approved').length,
-        denied: effective.filter(s => s === 'denied').length,
-      });
-    }
+      .select('*', { count: 'exact', head: true })
+      .eq('job_id', jobId);
+    setPhotoStats({ total: photoCount || 0 });
 
     // Load unread message count
     if (user) {
@@ -1608,21 +1592,13 @@ export default function CniJobDetailPage() {
             onClick={() => router.push(`/admin/cni/jobs/${job.id}/photos`)}
             style={{
               flex: 1, padding: '14px', borderRadius: '12px', textAlign: 'center',
-              background: photoStats.pending > 0
-                ? 'color-mix(in srgb, var(--warning) 8%, var(--card))'
-                : 'var(--card)',
-              border: photoStats.pending > 0 ? '1px solid var(--warning)' : '1px solid var(--border)',
+              background: 'var(--card)', border: '1px solid var(--border)',
             }}
           >
             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px' }}>Photos</div>
             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
               Photos {photoStats.total > 0 ? `(${photoStats.total})` : ''}
             </div>
-            {photoStats.pending > 0 && (
-              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--warning)' }}>
-                {photoStats.pending} pending review
-              </div>
-            )}
           </button>
           <button
             onClick={() => router.push(`/admin/cni/jobs/${job.id}/messages`)}
@@ -1959,7 +1935,13 @@ export default function CniJobDetailPage() {
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>CLOSURE CHECKLIST</div>
           {(() => {
             const allVinsComplete = vins.length > 0 && vins.every(v => v.status === 'completed');
-            const allPhotosApproved = photoStats.total > 0 && photoStats.denied === 0 && photoStats.pending === 0;
+            // Migration 307 retired the photo review, so this gate is now
+            // "the job produced documentation", not "someone blessed it".
+            // The old condition was total > 0 AND nothing pending/denied;
+            // dropping the verdict halves leaves exactly total > 0, which is
+            // what it always meant to protect — nobody closes a job with no
+            // photos at all.
+            const photosOnFile = photoStats.total > 0;
             // Individual payout mode has no job invoice — the pay gate is
             // instead "every credit is on an approved-or-beyond payout".
             const individual = job.payout_mode === 'individual';
@@ -1983,7 +1965,7 @@ export default function CniJobDetailPage() {
             // when the job has none, so older jobs stay closable.
             const requiredTasks = jobTasks.filter(t => t.required);
             const tasksDone = requiredTasks.every(t => t.completed);
-            const canClose = allVinsComplete && allPhotosApproved && invoiceApproved && tasksDone;
+            const canClose = allVinsComplete && photosOnFile && invoiceApproved && tasksDone;
 
             return (
               <>
@@ -1996,8 +1978,8 @@ export default function CniJobDetailPage() {
                       {tasksDone ? '✓' : '✕'} Install checklist done ({requiredTasks.filter(t => t.completed).length}/{requiredTasks.length} required)
                     </div>
                   )}
-                  <div style={{ fontSize: '13px', color: allPhotosApproved ? 'var(--success)' : 'var(--error)' }}>
-                    {allPhotosApproved ? '✓' : '✕'} All photos approved ({photoStats.approved}/{photoStats.total})
+                  <div style={{ fontSize: '13px', color: photosOnFile ? 'var(--success)' : 'var(--error)' }}>
+                    {photosOnFile ? '✓' : '✕'} Photos on file ({photoStats.total})
                   </div>
                   <div style={{ fontSize: '13px', color: invoiceApproved ? 'var(--success)' : 'var(--error)' }}>
                     {individual

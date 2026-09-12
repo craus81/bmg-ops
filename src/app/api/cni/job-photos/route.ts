@@ -31,9 +31,13 @@ const Schema = z.object({
 /**
  * Record one uploaded completion photo. Previously a direct browser insert into
  * cni_job_photos, where RLS checked only uploaded_by + job assignment — so a
- * crafted insert could set review_status='approved' and self-approve. Routed
- * here so uploaded_by is the caller and review_status is forced to 'pending'.
- * The binary itself still uploads via /api/storage; this stores the metadata row.
+ * crafted insert could forge its own fields. Routed here so uploaded_by is
+ * always the caller. The binary itself still uploads via /api/storage; this
+ * stores the metadata row.
+ *
+ * There is no verdict on the row any more (migration 307 retired the photo
+ * approve/deny review) — the photo is documentation, and the only automatic
+ * commentary is the advisory pre-screen below, which the installer sees.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
@@ -75,16 +79,17 @@ export async function POST(req: NextRequest) {
       storage_path: storagePath,
       photo_type: photoType,
       uploaded_by: auth.user.id,
-      review_status: 'pending',
     })
     .select('id')
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   // Pre-screen (R6-8) — an advisory vision check while the crew is still on
-  // site. It writes ONLY its own columns: review_status stays 'pending' and a
-  // human reviewer still decides. A failure here never fails the upload, and
-  // never records a pass it did not earn.
+  // site, and since migration 307 the only automatic read of a photo there
+  // is. It writes ONLY its own prescreen_* columns and decides nothing: the
+  // installer gets told to retake a blurry shot while they can still take
+  // it. A failure here never fails the upload, and never records a pass it
+  // did not earn.
   const prescreen = await prescreenUploadedPhoto(supabase, {
     photoId: inserted?.id || null,
     storagePath,
