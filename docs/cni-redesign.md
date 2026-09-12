@@ -437,7 +437,7 @@ pre-loaded-list assumptions and *finishing* the company migration, not a rebuild
 | 3 | **Schedule** | `scheduling…` → `scheduled_confirmed` | Admin proposes a datetime (`scheduled_start_at`, migration 113); company confirms/declines; admin may confirm on their behalf. |
 | 4 | **In progress** | `in_progress` | Admin "Start Work". Installer **starts a shift, picks the part** (defaults to the job's if set), held persistent; **scans VINs** (each → `scan_logs` + credits + `cni_job_vins`), like field. Crew tagged on the shift. |
 | 5 | **Complete** | `completed_pending_review` | **Installer-driven** "End Shift / Mark Job Complete" — *not* auto-on-empty (see fix). Optional **target quantity** gives a countdown. |
-| 6 | **Review & close** | `approved_closed` | Admin closes the job once every VIN is complete, photos are on file, the install checklist is done and the payout/AP invoice is settled → unlocks payout. Photos are documentation, NOT a gate to pass: the approve/deny review was retired (migration 307). Billing (Scan Log → invoice) runs independently. |
+| 6 | **Review & close** | `approved_closed` | Admin closes the job once every VIN is complete, the install checklist is done and the payout/AP invoice is settled → unlocks payout. Photos do NOT gate closure (owner decision 2026-09-12): they are documentation of what was installed, not a requirement to satisfy — the approve/deny review went in migration 307 and the residual "at least one photo on file" check went with it. Billing (Scan Log → invoice) runs independently. |
 
 > **Resolved 2026-08:** company-mode billing is now exclusively the
 > vendor_invoices AP flow — the legacy per-job invoice upload/approve flow is
