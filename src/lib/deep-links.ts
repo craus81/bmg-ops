@@ -122,6 +122,14 @@ export const deepLinks = {
     `/admin/cni/installers/${userId}${noteId ? `?note=${noteId}` : ''}`,
   /** Dedicated prospect / customer record page. */
   prospect: (prospectId: string) => `/admin/prospects/${prospectId}`,
+  /** The same record page with the standard customer compose screen already
+   *  open, optionally pre-addressed. Every customer email goes through that
+   *  screen (docs/customer-email-standard.md) — this is the link for surfaces
+   *  that offer "email this customer" without owning a compose modal of their
+   *  own (the command palette's quick action). Works for `ns-<id>` mirror ids
+   *  too, since the page resolves those before it renders. */
+  prospectCompose: (prospectId: string, to?: string | null) =>
+    `/admin/prospects/${prospectId}?compose=1${to ? `&to=${encodeURIComponent(to)}` : ''}`,
   /** One deal on the prospect record — ?opp= scroll-flashes that
    *  opportunity card (R5-8 slippage nudges land on the exact deal). */
   opportunity: (prospectId: string, opportunityId: string) =>

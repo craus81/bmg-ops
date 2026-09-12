@@ -7,6 +7,9 @@ import { theme } from '@/lib/theme';
 import UniversalSearch from '@/components/UniversalSearch';
 import { useFocusTrap } from '@/lib/use-focus-trap';
 import { useMentions, mentionUrl } from '@/lib/use-mentions';
+import { isPaletteChord, shortcutLabel } from '@/lib/command-palette';
+import { INTERNAL_STAFF_ROLES } from '@/lib/features';
+import { Search as SearchIcon } from 'lucide-react';
 
 interface HeaderProps {
   activePartNumber?: string;
@@ -25,7 +28,7 @@ interface Notification {
 }
 
 export default function Header({ activePartNumber, activeEndCustomer }: HeaderProps) {
-  const { user, profile, isAdmin, isActualAdmin, viewAsRole, setViewAsRole, hasFeature, signOut } = useAuth();
+  const { user, profile, isAdmin, isActualAdmin, viewAsRole, setViewAsRole, hasFeature, hasRole, signOut } = useAuth();
   const router = useRouter();
   const [showMenu, setShowMenu] = useState(false);
   const [showSwitchModal, setShowSwitchModal] = useState(false);
@@ -53,8 +56,37 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
   const [loadingNotifs, setLoadingNotifs] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
 
-  // Search
+  // Search / command palette.
+  // /api/search is requireStaff — a customer, executive or external CNI
+  // installer account gets a 403 that the overlay swallows into "No results
+  // found", which reads as the app having lost their records. So none of the
+  // three search affordances (header button, ⌘K, phone launcher) render for
+  // an account the API will refuse.
+  const canSearch = INTERNAL_STAFF_ROLES.some(r => hasRole(r));
   const [showSearch, setShowSearch] = useState(false);
+  // Resolved on the client only — navigator doesn't exist during SSR, and
+  // rendering "Ctrl K" then swapping to "⌘K" would be a hydration mismatch.
+  const [chordLabel, setChordLabel] = useState('');
+  useEffect(() => {
+    setChordLabel(shortcutLabel(navigator.platform || navigator.userAgent));
+  }, []);
+
+  // Cmd+K / Ctrl+K opens the palette from anywhere in the app (R6-13) — the
+  // header's Search button is often scrolled off, and on a long board it was
+  // faster to reload the page than to reach it. Re-pressing the chord while
+  // the palette is already open is a no-op rather than a state reset, so a
+  // double-tap doesn't wipe what you just typed.
+  useEffect(() => {
+    if (!canSearch) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!isPaletteChord(e)) return;
+      if (showSearch) return;
+      e.preventDefault();
+      setShowSearch(true);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [showSearch, canSearch]);
 
   // Messaging unread count
   const [unreadMessages, setUnreadMessages] = useState(0);
@@ -405,8 +437,10 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
           {/* Universal Search */}
+          {canSearch && (
           <button
             onClick={() => setShowSearch(true)}
+            title={chordLabel ? `Search (${chordLabel})` : 'Search'}
             style={{
               background: 'transparent',
               border: '1px solid transparent', borderRadius: '8px',
@@ -414,10 +448,21 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
               color: 'rgba(255,255,255,0.7)',
               cursor: 'pointer', transition: 'all 0.15s',
               lineHeight: 1,
+              display: 'flex', alignItems: 'center', gap: '5px',
             }}
           >
             Search
+            {/* Only on a device that has the keys. The class hides it on
+                touch-first screens, where the chord can't be typed. */}
+            {chordLabel && (
+              <span className="palette-kbd-hint" style={{
+                border: '1px solid rgba(255,255,255,0.25)', borderRadius: '4px',
+                padding: '1px 4px', fontSize: '9px', fontWeight: 700,
+                color: 'rgba(255,255,255,0.55)', lineHeight: 1.4, whiteSpace: 'nowrap',
+              }}>{chordLabel}</span>
+            )}
           </button>
+          )}
 
           {/* Chat / Messages — hidden for roles without the feature (customer,
               executive): /messages bounces them, so the button is a dead click. */}
@@ -800,6 +845,30 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
           </div>
         </div>
       </header>
+      {/* Thumb affordance (R6-13). On a phone the header's Search button is
+          a two-handed reach and ⌘K needs a keyboard, so search gets a
+          bottom-left launcher above the nav bar — the opposite corner from
+          the AI chat bubble's default spot. Hidden on pointer-fine screens,
+          which have both the button and the chord. */}
+      {canSearch && (
+      <button
+        className="palette-fab"
+        onClick={() => setShowSearch(true)}
+        aria-label="Search"
+        style={{
+          position: 'fixed', zIndex: 90,
+          left: 'calc(12px + env(safe-area-inset-left, 0px))',
+          bottom: 'calc(76px + env(safe-area-inset-bottom, 0px))',
+          width: '50px', height: '50px', borderRadius: '50%',
+          alignItems: 'center', justifyContent: 'center',
+          background: 'var(--card)', border: '1px solid var(--border)',
+          boxShadow: '0 4px 14px rgba(0,0,0,0.28)',
+          color: 'var(--text-body)', fontSize: '20px', cursor: 'pointer',
+        }}
+      >
+        <SearchIcon size={22} strokeWidth={2} />
+      </button>
+      )}
       <UniversalSearch open={showSearch} onClose={() => setShowSearch(false)} />
     </>
   );
