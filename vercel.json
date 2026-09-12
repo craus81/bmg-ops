@@ -98,11 +98,11 @@
     },
     {
       "path": "/api/cron/heartbeat-sentinel",
-      "schedule": "0 16 * * *"
+      "schedule": "10 16 * * *"
     },
     {
       "path": "/api/cron/so-matchmaker",
-      "schedule": "45 8 * * *"
+      "schedule": "8 8 * * *"
     }
   ],
   "headers": [
