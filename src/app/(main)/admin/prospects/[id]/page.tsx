@@ -36,6 +36,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
+import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import PhoneInput from '@/components/PhoneInput';
 import { exportProspectPDF } from '@/lib/prospect-pdf';
 import { deepLinks } from '@/lib/deep-links';
@@ -347,6 +348,12 @@ export default function CustomerRecordPage() {
   const [bulkDownloading, setBulkDownloading] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<string | null>(null);
   const [bulkError, setBulkError] = useState<string | null>(null);
+
+  // Email invoices from the transactions list — the shared screen the
+  // Invoicing hub, PO record and graphics pages use. The same list that can
+  // zip a customer's invoices can now send them, which is what the customer
+  // asking for copies actually wanted.
+  const [emailInvoiceTarget, setEmailInvoiceTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
 
   // Statement data — this customer's open invoices with true open balances,
   // prefetched so the print click stays synchronous (popup blockers).
@@ -1480,6 +1487,15 @@ export default function CustomerRecordPage() {
   // Only NetSuite documents have a PDF to zip — quotes that never left
   // FleetSuite, and payments/credits, are skipped by the bulk download.
   const zippableTxns = (list: Txn[]) => list.filter(t => t.nsId && t.nsPdfType);
+  // Only invoices can be emailed to the customer, and only ones carrying a
+  // number: the email screen keys the PDF lookup, the already-sent check and
+  // the invoice_emails log on the invoice NUMBER. Sales orders, estimates
+  // and payments in the same list have their own flows.
+  const emailableTxns = (list: Txn[]) => list.filter(t => t.kind === 'invoice' && !!t.number);
+  const asEmailable = (t: Txn): EmailableInvoice => ({
+    invoiceId: t.nsId || undefined,
+    invoiceNumber: t.number,
+  });
   const toggleDocSelected = (t: Txn) => {
     setSelectedDocKeys(prev => {
       const next = new Set(prev);
@@ -1863,6 +1879,9 @@ export default function CustomerRecordPage() {
   const zippableShown = zippableTxns(sortedTxns);
   const selectedShown = zippableShown.filter(t => selectedDocKeys.has(t.key)).length;
   const allDocsSelected = zippableShown.length > 0 && selectedShown === zippableShown.length;
+  // Invoices inside the current selection — a selection may mix in sales
+  // orders and estimates, which the email screen has nothing to do with.
+  const selectedInvoiceTxns = emailableTxns(txns).filter(t => selectedDocKeys.has(t.key));
   const openBalance = stInvoices ? stInvoices.reduce((s, i) => s + i.unpaid, 0) : null;
 
   // Which CRM contact currently wears the star: the primary lives on
@@ -2778,6 +2797,20 @@ export default function CustomerRecordPage() {
                       {bulkDownloading ? (bulkProgress || 'Preparing…') : `Download ${selectedDocKeys.size} PDF${selectedDocKeys.size === 1 ? '' : 's'} as ZIP`}
                     </button>
                   )}
+                  {/* Send the invoices in the selection. Only invoices — a
+                      selection can mix in sales orders and estimates, and the
+                      count says so rather than silently emailing fewer. */}
+                  {selectedInvoiceTxns.length > 0 && (
+                    <button
+                      onClick={() => setEmailInvoiceTarget({ customerName: name, invoices: selectedInvoiceTxns.map(asEmailable) })}
+                      title={selectedInvoiceTxns.length === selectedDocKeys.size
+                        ? `Email ${selectedInvoiceTxns.length === 1 ? 'this invoice' : `these ${selectedInvoiceTxns.length} invoices`} to ${name}`
+                        : `Email the ${selectedInvoiceTxns.length} invoice${selectedInvoiceTxns.length === 1 ? '' : 's'} in this selection — sales orders and estimates aren't emailed from here`}
+                      style={{ ...btnSm, padding: '4px 10px', color: '#34d399' }}
+                    >
+                      ✉ Email {selectedInvoiceTxns.length} invoice{selectedInvoiceTxns.length === 1 ? '' : 's'}
+                    </button>
+                  )}
                   {bulkError && <span style={{ fontSize: '11px', color: 'var(--error)' }}>{bulkError}</span>}
                 </div>
               )}
@@ -2845,6 +2878,17 @@ export default function CustomerRecordPage() {
                             {t.nsId && t.nsPdfType && (
                               <button onClick={() => viewPdf(t)} disabled={pdfBusy === t.key} title="Open NetSuite's PDF — the document of record" style={{ ...btnSm, padding: '4px 10px', opacity: pdfBusy === t.key ? 0.6 : 1 }}>
                                 {pdfBusy === t.key ? '…' : 'NetSuite PDF'}
+                              </button>
+                            )}
+                            {/* Email just this invoice — same screen as the
+                                selection action above, scoped to one row. */}
+                            {t.kind === 'invoice' && t.number && (
+                              <button
+                                onClick={() => setEmailInvoiceTarget({ customerName: name, invoices: [asEmailable(t)] })}
+                                title={`Email invoice #${t.number} to ${name}`}
+                                style={{ ...btnSm, padding: '4px 10px', color: '#34d399' }}
+                              >
+                                ✉
                               </button>
                             )}
                             {t.origin?.pdfUrl && (
@@ -2989,6 +3033,16 @@ export default function CustomerRecordPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Invoice email — the shared screen, opened from the transactions
+          list (one row, or the invoices in the selection). */}
+      {emailInvoiceTarget && (
+        <EmailInvoicesModal
+          customerName={emailInvoiceTarget.customerName}
+          invoices={emailInvoiceTarget.invoices}
+          onClose={() => setEmailInvoiceTarget(null)}
+        />
       )}
 
       {/* Statement email — standard compose screen. Recipients prefill from
