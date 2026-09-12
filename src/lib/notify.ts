@@ -3,6 +3,7 @@ import { sendSMS } from '@/lib/twilio';
 import { sendEmail, buildNotificationEmail } from '@/lib/resend';
 import { apnsConfigured, sendApnsNotification } from '@/lib/apns';
 import webpush from 'web-push';
+import { channelsForType, isRegistered } from './notification-registry';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -188,65 +189,27 @@ async function getPreferredChannels(userId: string, type: string): Promise<Notif
     .eq('user_id', userId)
     .maybeSingle();
 
-  const channels: NotifyChannel[] = [];
-
   if (type === 'message') {
-    // For direct messages, use the messaging-specific preferences
-    // In-app is always on for messages (they appear in the chat)
-    channels.push('in_app');
-    if (prefs?.email_messages) {
-      channels.push('email');
-    }
+    // Direct messages keep their own switch: in-app is unconditional (they
+    // appear in the chat either way) and email is opt-in.
+    const channels: NotifyChannel[] = ['in_app'];
+    if (prefs?.email_messages) channels.push('email');
     return channels;
   }
 
-  // For all other notification types (graphics, PO, etc.); the
-  // ALWAYS_ALL_CHANNELS types (module scope, exported) skip the per-user
-  // preference gate entirely.
-  if (!prefs) {
-    // Default: in-app + push + email for high-signal events, in-app + push for others
-    const defaults: NotifyChannel[] = ALWAYS_ALL_CHANNELS.has(type) ? ['in_app', 'push', 'email'] : ['in_app', 'push'];
-    return defaults;
+  // Everything else resolves through the registry (R6-13). What this
+  // replaced was a substring match — type.includes('new'),
+  // type.includes('ready') — which governed three of the ~64 types the app
+  // sends, silenced cni_photos_ready from a graphics toggle, and let the
+  // rest fall through to "allowed" while Settings implied otherwise.
+  if (!isRegistered(type)) {
+    // Fail OPEN, and loudly: dropping an alert nobody catalogued is worse
+    // than sending it, and notification-registry.test.ts fails the build
+    // when a dispatched type is missing, so this should be unreachable.
+    console.warn(`notify: type '${type}' is not in the notification registry — defaulting to in-app + push`);
+    return ['in_app', 'push'];
   }
-
-  if (ALWAYS_ALL_CHANNELS.has(type)) {
-    return ['in_app', 'email', 'push'];
-  }
-
-  // Check if this type of notification is enabled
-  const typeEnabled = isTypeEnabled(prefs, type);
-  if (!typeEnabled) return [];
-
-  if (prefs.notify_in_app) channels.push('in_app');
-  if (prefs.notify_email) channels.push('email');
-  // Push notifications are sent whenever in-app is enabled (separate devices get browser push)
-  if (prefs.notify_in_app) channels.push('push');
-
-  return channels;
-}
-
-/**
- * Check if a specific notification type is enabled in user preferences
- */
-function isTypeEnabled(prefs: any, type: string): boolean {
-  if (type.includes('new') || type.includes('flagged')) return prefs.notify_new_job !== false;
-  if (type.includes('status')) {
-    if (!prefs.notify_status_change) return false;
-    // Check custom status filter if set
-    if (prefs.custom_statuses && prefs.custom_statuses.length > 0) {
-      // This would need the actual status to check — for now allow all if status_change is on
-      return true;
-    }
-    return true;
-  }
-  // graphics_ready_for_install is dispatched only to a pre-targeted user set
-  // (assigned installers, admins, explicit opt-ins). Skip the per-user type
-  // gate here — channel preferences (in_app/email/push) still apply below.
-  if (type === 'graphics_ready_for_install') return true;
-  if (type.includes('ready')) return prefs.notify_ready !== false;
-  if (type.includes('shipped')) return prefs.notify_shipped !== false;
-  // Default: allow
-  return true;
+  return channelsForType(type, prefs) as NotifyChannel[];
 }
 
 // ═══════════ CHANNEL IMPLEMENTATIONS ═══════════

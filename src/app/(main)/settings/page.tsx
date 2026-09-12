@@ -8,6 +8,7 @@ import PhoneInput from '@/components/PhoneInput';
 import TextSizeToggle from '@/components/TextSizeToggle';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_ORDER, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import type { GraphicsJobStatus, NotificationPreferences } from '@/lib/types';
+import NotificationMatrix from '@/components/NotificationMatrix';
 import { isPushSupported, getPushPermission, getExistingSubscription, subscribeToPush, unsubscribeFromPush } from '@/lib/push-client';
 import { FALLBACK_SALES_TAX_RATE_PCT } from '@/lib/sales-tax';
 import { apiFetch } from '@/lib/api-client';
@@ -497,6 +498,7 @@ export default function SettingsPage() {
         email_messages: false,
         email_mentions: true,
         notify_weekly_brief: true,
+        type_channels: {},
       });
     }
     setLoading(false);
@@ -525,6 +527,7 @@ export default function SettingsPage() {
       sms_messages_mode: prefs.sms_messages_mode,
       email_messages: prefs.email_messages,
       email_mentions: prefs.email_mentions ?? true,
+      type_channels: prefs.type_channels ?? {},
       notify_weekly_brief: prefs.notify_weekly_brief ?? true,
       updated_at: new Date().toISOString(),
     };
@@ -1067,35 +1070,30 @@ export default function SettingsPage() {
 
       <div style={{ fontSize: '16px', fontWeight: 800, marginBottom: '10px', marginTop: '20px' }}>Notifications</div>
 
-      {/* Graphics Job Notifications */}
+      {/* Which alerts reach you, and how (R6-13). Built from the type
+          registry, so this list can never be shorter than what the app
+          actually sends. */}
       <div style={sectionStyle}>
-        <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '10px' }}>Graphics Job Alerts</div>
+        <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '10px' }}>Which alerts reach you</div>
+        <NotificationMatrix
+          overrides={prefs.type_channels}
+          accountInApp={prefs.notify_in_app}
+          accountEmail={prefs.notify_email}
+          onChange={next => setPrefs({ ...prefs, type_channels: next })}
+        />
+      </div>
+
+      {/* Audience opt-ins: these decide whether you are TARGETED at all,
+          which is a different question from which channels you hear it on
+          — so they stay their own switches rather than joining the matrix
+          above, where a tick would wrongly imply it subscribes you. */}
+      <div style={sectionStyle}>
+        <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>Alerts you can opt into</div>
+        <div style={{ fontSize: '10px', color: 'var(--text-label)', marginBottom: '10px', lineHeight: 1.5 }}>
+          These add you to an audience you are not in by default. The matrix above then decides how they reach you.
+        </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-            <input type="checkbox" checked={prefs.notify_new_job} onChange={e => setPrefs({ ...prefs, notify_new_job: e.target.checked })} />
-            <div>
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>New Job Created</div>
-              <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>Get notified when a new graphics job is created or flagged from a PO</div>
-            </div>
-          </label>
-
-          <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-            <input type="checkbox" checked={prefs.notify_status_change} onChange={e => setPrefs({ ...prefs, notify_status_change: e.target.checked })} />
-            <div>
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>Status Changes</div>
-              <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>Get notified when any job status changes</div>
-            </div>
-          </label>
-
-          <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-            <input type="checkbox" checked={prefs.notify_ready} onChange={e => setPrefs({ ...prefs, notify_ready: e.target.checked })} />
-            <div>
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>Ready to Install</div>
-              <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>Get notified when a job is marked ready to install</div>
-            </div>
-          </label>
-
           <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
             <input
               type="checkbox"
@@ -1105,14 +1103,6 @@ export default function SettingsPage() {
             <div>
               <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>Install-Ready Alerts (all vehicles)</div>
               <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>Notify me when any vehicle becomes ready to install, even if not assigned to me. Assigned installers and admins always get these.</div>
-            </div>
-          </label>
-
-          <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-            <input type="checkbox" checked={prefs.notify_shipped} onChange={e => setPrefs({ ...prefs, notify_shipped: e.target.checked })} />
-            <div>
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>Shipped</div>
-              <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>Get notified when a job is shipped with tracking info</div>
             </div>
           </label>
 
