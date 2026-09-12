@@ -135,6 +135,32 @@ export async function promoteManualTwins(
   return promoted;
 }
 
+/**
+ * Resolve the sales price a sync run writes for a part.
+ *
+ * FleetSuite is the pricing authority: when the two systems disagree about a
+ * price, FleetSuite's number is the current one, so a sync run NEVER
+ * overwrites a price this catalog already carries. NetSuite's price only
+ * FILLS a part that has none here — a brand-new item, or one nobody has
+ * priced in FleetSuite yet.
+ *
+ * This reverses the original policy (migration 117, "NetSuite price wins"),
+ * which also carried a destructive edge: an item with no price-level-1 row in
+ * NetSuite resolved to 0, so `pricingMap[id] || 0` wrote 0 over a good
+ * FleetSuite price on every hourly run. It matches how labor_hours, vendor
+ * and catalog_override already behave in the same upsert — what FleetSuite
+ * knows survives the sync.
+ *
+ * Both sync paths call this (the manual full rebuild in
+ * `/api/parts/sync` and the hourly incremental cron below), so the two
+ * cannot drift the way the labor-item lookups did.
+ */
+export function resolveSalesPrice(localPrice: unknown, netsuitePrice: unknown): number {
+  const local = Number(localPrice) || 0;
+  if (local > 0) return local;
+  return Number(netsuitePrice) || 0;
+}
+
 export interface PartsIncrementalResult {
   modified: number;
   upserted: number;
@@ -279,18 +305,26 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
   // idea for vendors assigned by the vendor-asset import: NetSuite's
   // item-record vendor wins when it exists, but a locally assigned vendor
   // survives while NetSuite's field is blank (which it almost always is).
+  // Sales prices ride along in the same read — FleetSuite's price wins over
+  // NetSuite's (see resolveSalesPrice).
   const catalogOverrides: Record<string, 'upfit' | 'graphics'> = {};
   const localVendors: Record<string, string> = {};
+  const localPrices: Record<string, number> = {};
   for (const ids of chunk(activeIds, 200)) {
-    const { data: rows } = await service
+    const { data: rows, error: localErr } = await service
       .from('netsuite_parts')
-      .select('netsuite_id, catalog_override, vendor')
+      .select('netsuite_id, catalog_override, vendor, sales_price')
       .in('netsuite_id', ids);
+    // Fail the run rather than upsert with an incomplete picture: a missed
+    // row here reads as "FleetSuite has no price" and lets NetSuite's number
+    // (or 0) overwrite a good one.
+    if (localErr) throw new Error(`Failed to read existing catalog rows: ${localErr.message}`);
     for (const r of rows || []) {
       if (r.netsuite_id && (r.catalog_override === 'upfit' || r.catalog_override === 'graphics')) {
         catalogOverrides[String(r.netsuite_id)] = r.catalog_override;
       }
       if (r.netsuite_id && r.vendor) localVendors[String(r.netsuite_id)] = r.vendor;
+      if (r.netsuite_id) localPrices[String(r.netsuite_id)] = Number(r.sales_price) || 0;
     }
   }
 
@@ -315,7 +349,8 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
         description: item.description || item.display_name || '',
         item_type: item.itemtype || '',
         catalog: catalogOverrides[nsId] || determineCatalog(itemNumber, className),
-        sales_price: pricingMap[nsId] || 0,
+        // FleetSuite's price wins; NetSuite's only fills a part with none.
+        sales_price: resolveSalesPrice(localPrices[nsId], pricingMap[nsId]),
         purchase_price: parseFloat(item.purchase_price || '0') || 0,
         ...(qty ? { quantity_on_hand: qty.onHand, quantity_available: qty.available } : {}),
         // Labor hours only when NetSuite actually carries a value (custitem1).

@@ -89,6 +89,9 @@ type EditableField =
 const NETSUITE_FIELDS: EditableField[] = ['item_number', 'display_name', 'sales_price', 'purchase_price'];
 const TEXT_FIELDS: EditableField[] = ['item_number', 'display_name', 'vehicle_type', 'graphic_package', 'customer', 'product_url'];
 
+// Banner text that should read as a problem rather than a success.
+const isProblemMessage = (msg: string) => /fail|error|⚠/i.test(msg);
+
 // A real NetSuite-synced part has a numeric internal id, not a local placeholder.
 const isRealNsPart = (p: { netsuite_id: string | null }) => !!p.netsuite_id && !/^(LOCAL-|bmg-)/i.test(p.netsuite_id);
 // Pick the best survivor when merging duplicates: prefer a real NetSuite row,
@@ -495,9 +498,11 @@ export default function PartsPage() {
 
   // Save an edited part field. NetSuite-backed fields (number, name, prices) go
   // through /api/parts/[id], which writes the change back to NetSuite before
-  // mirroring it locally. Graphics metadata (vehicle type, package, brand, proof
-  // pages) is local-only — the sync never touches it — so it updates the row
-  // directly.
+  // mirroring it locally — and, when that write-back doesn't land, still saves
+  // the sales price here (FleetSuite is the pricing authority; the sync no
+  // longer overwrites it) while refusing the fields the sync would revert.
+  // Graphics metadata (vehicle type, package, brand, proof pages) is local-only
+  // — the sync never touches it — so it updates the row directly.
   const savePartField = async (partId: string) => {
     if (!editField) return;
     const { field } = editField;
@@ -528,6 +533,19 @@ export default function PartsPage() {
         if (!res.ok) {
           setFieldError(body.error || `Save failed (${res.status})`);
           return;
+        }
+        // The server drops a field NetSuite refused when the next parts sync
+        // would revert it anyway (everything but the price) — so it reports
+        // what actually saved. Don't mirror a field that didn't.
+        if (Array.isArray(body.saved) && !body.saved.includes(field)) {
+          setFieldError(body.netsuiteWarning || 'NetSuite refused the change — nothing was saved.');
+          return;
+        }
+        // Saved here but never reached NetSuite: legitimate for a price
+        // (FleetSuite's price is what the app bills from), worth flagging.
+        if (body.netsuiteWarning) {
+          setSyncMessage(`⚠ ${body.netsuiteWarning}`);
+          setTimeout(() => setSyncMessage(''), 12000);
         }
         // On a rename, the server also carries old part-number strings (scans, PO
         // lines, estimates, …) over to the new number — confirm how many moved.
@@ -847,16 +865,14 @@ export default function PartsPage() {
         )}
       </div>
 
-      {/* Sync message */}
+      {/* Sync message. A message flagged with ⚠ (e.g. a price that saved here
+          but never reached NetSuite) reads as a problem, same as a failure. */}
       {syncMessage && (
         <div style={{
           padding: '8px 12px', borderRadius: '8px', marginBottom: '10px',
-          background: syncMessage.includes('fail') || syncMessage.includes('error')
-            ? 'var(--error-bg)' : 'rgba(16,185,129,0.1)',
-          border: `1px solid ${syncMessage.includes('fail') || syncMessage.includes('error')
-            ? 'var(--error-border)' : 'rgba(16,185,129,0.2)'}`,
-          color: syncMessage.includes('fail') || syncMessage.includes('error')
-            ? 'var(--error)' : '#34d399',
+          background: isProblemMessage(syncMessage) ? 'var(--error-bg)' : 'rgba(16,185,129,0.1)',
+          border: `1px solid ${isProblemMessage(syncMessage) ? 'var(--error-border)' : 'rgba(16,185,129,0.2)'}`,
+          color: isProblemMessage(syncMessage) ? 'var(--error)' : '#34d399',
           fontSize: '12px', fontWeight: 600,
         }}>
           {syncMessage}

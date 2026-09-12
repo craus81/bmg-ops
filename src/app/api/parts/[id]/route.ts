@@ -85,15 +85,27 @@ const NS_FIELD: Record<string, string[]> = {
   description: ['salesdescription', 'purchasedescription'],
 };
 
+// Columns whose local value now SURVIVES the parts sync, so an edit to them
+// sticks in FleetSuite even when the write-back to NetSuite doesn't land.
+// sales_price is the only one: FleetSuite is the pricing authority and the
+// sync fills sales_price only where this catalog has none (resolveSalesPrice
+// in src/lib/parts-sync.ts). Every other column here is rewritten from
+// NetSuite on the next run, so a local-only edit to those would silently
+// revert — they stay all-or-nothing, exactly as before.
+const SYNC_DURABLE = new Set(['sales_price']);
+
 // A real NetSuite-synced part has a numeric internal id, not a local placeholder
 // (manual parts have a NULL id; create-item mirrors use a `bmg-`/`LOCAL-` stub).
 // Only real parts get written back to NetSuite; local ones just update locally.
 const isRealNetsuiteId = (id: string | null) => !!id && !/^(LOCAL-|bmg-)/i.test(id);
 
-// Edit a catalog part. For real NetSuite-synced parts the server writes the
-// change back to NetSuite first (the source of truth — otherwise the next parts
-// sync would revert a local-only edit), then mirrors the value locally so the
-// UI updates immediately. Manual/local parts update locally only.
+// Edit a catalog part. For real NetSuite-synced parts the server still writes
+// the change back to NetSuite first, then mirrors it locally so the UI updates
+// immediately. When NetSuite rejects or silently ignores a field, what happens
+// next depends on whether the sync would undo a local-only edit: the price
+// saves anyway (FleetSuite wins on price) with a warning, while fields the
+// sync rewrites from NetSuite are dropped rather than saved to revert later.
+// Manual/local parts update locally only.
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
@@ -136,6 +148,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       }
     }
 
+    // What actually gets written locally. Fields NetSuite refused and the sync
+    // would revert are dropped from it below.
+    const applied: Record<string, any> = { ...patch };
+    let netsuiteWarning: string | null = null;
+
     if (isRealNetsuiteId(part.netsuite_id)) {
       const res = await updateItemFields(part.netsuite_id!, {
         itemNumber: patch.item_number,
@@ -144,35 +161,50 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         salesPrice: patch.sales_price,
         purchasePrice: patch.purchase_price,
       });
-      if (!res.success) {
-        // Keep the local row untouched if NetSuite rejected the change, so the
-        // two stay in lockstep (a local edit the next sync would revert is worse
-        // than no edit). The error is surfaced to the user.
-        return NextResponse.json(
-          { error: `NetSuite update failed: ${res.error}` },
-          { status: 502 },
-        );
-      }
-      // Confirm every requested field actually landed in NetSuite. An older
-      // RESTlet deployment silently ignores fields it doesn't know — without
-      // this check we'd mirror a value the next sync would overwrite.
-      const set = res.fieldsSet || [];
-      const missing = Object.keys(patch).filter(
+
+      // Which requested fields did NOT reach NetSuite — because the call
+      // failed outright, or because an older RESTlet deployment silently
+      // ignored a field it doesn't know (it echoes what it wrote in
+      // `fieldsSet`, so a field missing from that list never landed).
+      const set = res.success ? res.fieldsSet || [] : [];
+      const notInNetsuite = Object.keys(patch).filter(
         (col) => !(NS_FIELD[col] || []).some((f) => set.includes(f)),
       );
-      if (missing.length > 0) {
-        return NextResponse.json(
-          {
-            error: `NetSuite did not apply: ${missing.join(', ')}. The item RESTlet may need to be re-deployed (see scripts/netsuite-item-restlet.js).`,
-          },
-          { status: 502 },
-        );
+
+      if (notInNetsuite.length > 0) {
+        const reason = res.success
+          ? `NetSuite did not apply the change. The item RESTlet may need to be re-deployed (see scripts/netsuite-item-restlet.js).`
+          : `NetSuite update failed: ${res.error}`;
+
+        // Fields the sync rewrites from NetSuite: saving them locally would
+        // just mean a silent revert on the next run, so don't save them.
+        const dropped = notInNetsuite.filter((col) => !SYNC_DURABLE.has(col));
+        for (const col of dropped) delete applied[col];
+
+        // Nothing left worth saving — this is the old all-or-nothing 502.
+        if (Object.keys(applied).length === 0) {
+          return NextResponse.json({ error: `${reason} Nothing was saved.` }, { status: 502 });
+        }
+
+        // The price (and anything else the sync leaves alone) saves anyway:
+        // FleetSuite is the authority on price, so the local value stands
+        // until someone gets it into NetSuite.
+        const kept = notInNetsuite.filter((col) => SYNC_DURABLE.has(col));
+        netsuiteWarning = [
+          reason,
+          kept.length > 0
+            ? `Saved in FleetSuite (${kept.join(', ')}) — FleetSuite's price is what estimates, quotes and invoices use, so billing is unaffected. NetSuite still shows the old value.`
+            : null,
+          dropped.length > 0
+            ? `NOT saved: ${dropped.join(', ')} — the next parts sync would overwrite a local-only change to those.`
+            : null,
+        ].filter(Boolean).join(' ');
       }
     }
 
     const { error } = await supabase
       .from('netsuite_parts')
-      .update({ ...patch, updated_at: new Date().toISOString() })
+      .update({ ...applied, updated_at: new Date().toISOString() })
       .eq('id', partId);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -181,9 +213,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     // a sweep failure must not fail the rename, so swallow and just log.
     let sweptReferences = 0;
     const oldNumber = part.item_number as string | null;
-    if (patch.item_number && oldNumber && patch.item_number !== oldNumber) {
+    if (applied.item_number && oldNumber && applied.item_number !== oldNumber) {
       try {
-        sweptReferences = await sweepPartNumberReferences(supabase, oldNumber, patch.item_number);
+        sweptReferences = await sweepPartNumberReferences(supabase, oldNumber, applied.item_number);
       } catch (e: any) {
         console.error('[part-rename] reference sweep failed:', e?.message || e);
       }
@@ -196,16 +228,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       action: 'update',
       detail: {
         item_number: part.item_number,
-        before: Object.fromEntries(Object.keys(patch).map(k => [k, (part as any)[k] ?? null])),
-        after: patch,
+        before: Object.fromEntries(Object.keys(applied).map(k => [k, (part as any)[k] ?? null])),
+        after: applied,
         syncedToNetsuite: isRealNetsuiteId(part.netsuite_id),
+        ...(netsuiteWarning ? { netsuiteWarning } : {}),
       },
     });
 
     return NextResponse.json({
       success: true,
-      ...patch,
-      syncedToNetsuite: isRealNetsuiteId(part.netsuite_id),
+      ...applied,
+      // Which of the requested fields actually saved — the client only mirrors
+      // these into its row, so a dropped field doesn't linger on screen.
+      saved: Object.keys(applied),
+      syncedToNetsuite: isRealNetsuiteId(part.netsuite_id) && !netsuiteWarning,
+      ...(netsuiteWarning ? { netsuiteWarning } : {}),
       sweptReferences,
     });
   } catch (err: any) {
