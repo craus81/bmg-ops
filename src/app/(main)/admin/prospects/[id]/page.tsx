@@ -50,6 +50,7 @@ import type { OpenArInvoice, AgingBucketKey, StatementInvoice, StatementScope } 
 import { fetchAllRows } from '@/lib/fetch-all';
 import { samePerson } from '@/lib/primary-contact';
 import NumberInput from '@/components/NumberInput';
+import BriefMeSheet from '@/components/BriefMeSheet';
 
 interface Prospect {
   id: string;
@@ -1614,6 +1615,9 @@ export default function CustomerRecordPage() {
     try { await navigator.clipboard.writeText(text); await dialog.alert('Link copied.'); }
     catch { await dialog.alert(text); }
   };
+  // Pre-call rundown (R6-13).
+  const [briefOpen, setBriefOpen] = useState(false);
+
   const portalAction = async (action: 'create' | 'regenerate' | 'revoke') => {
     if (!customer) return;
     if (action === 'revoke' && !(await dialog.confirm('Revoke the portal link? Anyone holding it will see "no longer active".', { destructive: true, confirmLabel: 'Revoke' }))) return;
@@ -2002,6 +2006,15 @@ export default function CustomerRecordPage() {
         )}
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}>
           {phone && <a href={`tel:${phone}`} style={btnSm}>{phone}</a>}
+          {/* Brief me (R6-13) — sits next to the phone number on purpose:
+              the rundown is for the thirty seconds before the call. */}
+          {!isVendor && (prospect?.id || customer?.netsuite_id) && (
+            <button
+              onClick={() => setBriefOpen(true)}
+              title="One-page rundown before you call: open estimates, A/R, vehicles in the shop, whether our emails are arriving, open threads and the last activities"
+              style={btnSm}
+            >Brief me</button>
+          )}
           {email && (
             <button onClick={() => openCompose(email)}
               title="Email this record from FleetSuite — sends from the company address with replies to your inbox, and lands on the activity history"
@@ -3175,6 +3188,17 @@ export default function CustomerRecordPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {briefOpen && (
+        <BriefMeSheet
+          target={{
+            prospectId: prospect?.id || null,
+            netsuiteId: customer?.netsuite_id ? String(customer.netsuite_id) : null,
+            name: prospect?.company_name || customer?.company_name || null,
+          }}
+          onClose={() => setBriefOpen(false)}
+        />
       )}
 
       <style>{`@media (max-width:760px){ .rec-cols{ grid-template-columns:1fr !important; } }`}</style>
