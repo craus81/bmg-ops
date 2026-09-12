@@ -119,6 +119,10 @@ export async function POST(req: NextRequest) {
     category: d.category,
     content: d.content,
     tags: d.tags,
+    // The guide's stable identity (migration 312). Titles come from an H1
+    // and change under you; the repo path is what the Help Center's "?"
+    // deep links point at.
+    source_path: d.source_path,
     uploaded_by: auth.user.id,
   }));
   const ins = await supabase.from('knowledge_docs').insert(rows).select('id, title');
