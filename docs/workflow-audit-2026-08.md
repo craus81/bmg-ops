@@ -2343,3 +2343,72 @@ condition-report acknowledgment should say more than "this record is
 accurate" — deliberately not widened into a liability waiver without
 counsel. Remaining Tier 3 batches: CNI (5), sales (7), portal (4),
 reports and finance (6), platform (13).
+
+**Postscript, Round 6 closed (2026-09-12).** The remaining five batches
+shipped — CNI, sales, portal, reports and finance, and platform — as
+PRs #882–#936 (migrations 294–312). **All 55 Tier 3 items are now
+annotated as shipped in `docs/feature-audit-2026-09.md`**, which remains
+the per-item record; this note is only what the last five batches
+changed about the shape of the app.
+
+Four things they added that the app did not have in any form:
+
+* **A single truth about notifications.** A typed registry of all 64
+  types replaced a substring matcher over toggle names, and the matcher
+  is deleted. It was telling three lies at once — a "Shipped" toggle
+  that governed nothing, a graphics toggle silencing a CNI alert, and
+  roughly fifty types with no toggle at all. A test now walks every
+  `notify` call site and fails on a type nobody catalogued, so the
+  registry cannot fall behind the code again.
+* **A record of what the crons actually did.** Every run's start,
+  duration and record count, and a daily sentinel that alarms on
+  same-weekday baselines rather than a flat average — a shop that is
+  quiet on Sundays would have tripped a flat average every weekend, and
+  an alarm that fires every weekend is one nobody reads by month two.
+* **A way back to a record.** Cmd+K from anywhere, the last ten things
+  you opened, per-type quick actions, and a "?" that opens the guide for
+  the screen you are on. The guides were already written and already
+  loaded into the database; there was simply nowhere to read them.
+* **A pre-call brief.** One call gathers estimates, A/R, shop status,
+  email deliverability, threads and activity for a customer, and the
+  model compresses it into ten lines you can read before the phone
+  connects.
+
+The recurring design problem across all five batches was the same one,
+and it is worth stating because it will come up again: **an unreadable
+number must never render as zero.** A brief that says "A/R: $0" when
+NetSuite timed out, a badge showing 0 because its count blew up, a close
+gate that passes because its query failed, a heartbeat with a duration of
+0ms because nobody measured it — each is a lie the reader has no way to
+catch, and each one is the number they are about to act on. So every
+section, gate, queue and metric added in this round carries its own
+status, an `unknown` is rendered as unavailable in words, and a failure
+says which query failed.
+
+Three claims we declined to make, for the same reason. **Click-through on
+notifications is not reported**, because nothing records a notification
+click and relabelling "read" as "clicked" would be an invented number on
+the one page whose job is deciding which alerts to switch off. **CNI job
+margin is labelled "before materials"** and carries a standing caveat,
+because materials are not costed per CNI job anywhere in this app.
+And **the orphan sales-order matchmaker suggests, it never links** — a
+wrong automatic link misattributes revenue and nothing downstream would
+ever surface it, so a person accepts and the accept is audited.
+
+Live bugs found while building, none of them on any audit list: the
+universal search's Log-call button could only ever fail on NetSuite-mirror
+rows; the header's Search button rendered for accounts the search API
+403s, turning "forbidden" into "no results found"; `/api/admin/link-customer`
+had had no caller since migration 157, so no customer login could actually
+be linked and the portal's "account not linked" state was the only one
+reachable; `estimates` and `fleet_checkins` had no row-diff trigger despite
+"Estimates" already appearing in the audit page's filter; and the AI's
+knowledge search sorted its results without filtering, so documents that
+scored zero relevance were handed to the model as context.
+
+Open and owner-side, unchanged from above and still not engineering: the
+NetSuite RESTlet redeploy, a ZIP centroid dataset, the
+Dialpad-versus-RingCentral decision, the condition-report acknowledgment
+wording, a payroll pay-date anchor for the cash outlook, and whether to
+cost materials per CNI job. Tier 4 remains blocked on owner decisions by
+definition.
