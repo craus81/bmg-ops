@@ -47,6 +47,17 @@ export const FEATURES = {
 
 export type FeatureKey = keyof typeof FEATURES;
 
+// Roles that belong to internal BMG staff. Excludes 'customer' accounts,
+// external CNI 'installer' accounts, and 'executive' — the same set
+// requireStaff() gates the company-wide routes on, and the DB's
+// is_internal_staff() allowlist (migration 224). It lives here rather than in
+// api-auth.ts so CLIENT components can ask the same question without pulling
+// server-only code into the bundle: a surface whose API is staff-only (the
+// universal search) must not render for an account the API will 403.
+export const INTERNAL_STAFF_ROLES: string[] = [
+  'admin', 'super_admin', 'sales', 'graphics_production', 'shop_tech', 'field_tech', 'finance',
+];
+
 // Owner-level pages: super admins only by default. Regular admins don't see
 // these, but can be granted individual ones via per-user feature overrides.
 // `financials` is here so the executive P&L view (A/R, A/P, cash) is walled

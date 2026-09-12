@@ -13,6 +13,7 @@ import { createContext, useContext, useState, useCallback, ReactNode } from 'rea
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { deepLinks } from '@/lib/deep-links';
+import { buildRecent, pushRecent } from '@/lib/command-palette';
 import { estimateHeadlineNumber, estimateAltNumber } from '@/lib/estimate-number';
 
 export type PopoutType =
@@ -361,7 +362,15 @@ export function PopoutProvider({ children }: { children: ReactNode }) {
             {!state.loading && state.item && (
               <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
                 <button
-                  onClick={() => { const p = pathFor(state.type, state.item); close(); router.push(p); }}
+                  onClick={() => {
+                    const p = pathFor(state.type, state.item);
+                    // Feeds the command palette's recents strip (R6-13), so
+                    // records opened from a list or card show up there too and
+                    // not only the ones found through search.
+                    pushRecent(buildRecent(state.type, state.item, p));
+                    close();
+                    router.push(p);
+                  }}
                   style={{ width: '100%', padding: '12px', borderRadius: '10px', background: '#60a5fa', color: '#fff', fontSize: '13px', fontWeight: 800, border: 'none', cursor: 'pointer' }}
                 >
                   Open full page →

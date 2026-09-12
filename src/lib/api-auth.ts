@@ -9,7 +9,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { resolveFeatures, isAdminRole, type FeatureKey } from '@/lib/features';
+import { resolveFeatures, isAdminRole, INTERNAL_STAFF_ROLES, type FeatureKey } from '@/lib/features';
 
 // Server-side call sites read admin authority through api-auth; the predicate
 // itself lives in features.ts (client-safe) so AuthProvider shares it.
@@ -84,12 +84,13 @@ function extractAccessToken(req: NextRequest): string | null {
   return null;
 }
 
-// Roles that belong to internal BMG staff. Excludes 'customer' accounts and
-// external CNI 'installer' accounts, which must never see company-wide data.
-// Mirrors the DB's is_internal_staff() allowlist (migration 224) — which has
-// included super_admin all along; the app-side list omitting it was the
-// inconsistency the super_admin ⊇ admin decision (2026-09-07) closed.
-const INTERNAL_STAFF_ROLES = ['admin', 'super_admin', 'sales', 'graphics_production', 'shop_tech', 'field_tech', 'finance'];
+// Roles that belong to internal BMG staff — one list, defined in features.ts
+// so client components gate on exactly what requireStaff() enforces. Excludes
+// 'customer' accounts and external CNI 'installer' accounts, which must never
+// see company-wide data. Mirrors the DB's is_internal_staff() allowlist
+// (migration 224) — which has included super_admin all along; the app-side
+// list omitting it was the inconsistency the super_admin ⊇ admin decision
+// (2026-09-07) closed.
 
 function profileRoles(profile: any): string[] {
   return profile?.roles?.length > 0 ? profile.roles : [profile?.role];
