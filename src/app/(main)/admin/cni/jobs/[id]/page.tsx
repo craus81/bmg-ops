@@ -1935,13 +1935,14 @@ export default function CniJobDetailPage() {
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>CLOSURE CHECKLIST</div>
           {(() => {
             const allVinsComplete = vins.length > 0 && vins.every(v => v.status === 'completed');
-            // Migration 307 retired the photo review, so this gate is now
-            // "the job produced documentation", not "someone blessed it".
-            // The old condition was total > 0 AND nothing pending/denied;
-            // dropping the verdict halves leaves exactly total > 0, which is
-            // what it always meant to protect — nobody closes a job with no
-            // photos at all.
-            const photosOnFile = photoStats.total > 0;
+            // Photos do NOT gate closure (owner decision 2026-09-12). The old
+            // checklist required "all photos approved"; when migration 307
+            // retired the review that was reduced to "at least one photo on
+            // file", and this removes the rest of it. Photos are
+            // documentation of what was installed — a job whose vehicles are
+            // done, tasks are done and money is settled is closable whether
+            // or not anyone pointed a camera at it. The Photos tile above
+            // still shows the count for anyone who wants to look.
             // Individual payout mode has no job invoice — the pay gate is
             // instead "every credit is on an approved-or-beyond payout".
             const individual = job.payout_mode === 'individual';
@@ -1965,7 +1966,7 @@ export default function CniJobDetailPage() {
             // when the job has none, so older jobs stay closable.
             const requiredTasks = jobTasks.filter(t => t.required);
             const tasksDone = requiredTasks.every(t => t.completed);
-            const canClose = allVinsComplete && photosOnFile && invoiceApproved && tasksDone;
+            const canClose = allVinsComplete && invoiceApproved && tasksDone;
 
             return (
               <>
@@ -1978,9 +1979,6 @@ export default function CniJobDetailPage() {
                       {tasksDone ? '✓' : '✕'} Install checklist done ({requiredTasks.filter(t => t.completed).length}/{requiredTasks.length} required)
                     </div>
                   )}
-                  <div style={{ fontSize: '13px', color: photosOnFile ? 'var(--success)' : 'var(--error)' }}>
-                    {photosOnFile ? '✓' : '✕'} Photos on file ({photoStats.total})
-                  </div>
                   <div style={{ fontSize: '13px', color: invoiceApproved ? 'var(--success)' : 'var(--error)' }}>
                     {individual
                       ? `${invoiceApproved ? '✓' : '✕'} Employee payouts ${invoiceApproved ? 'approved' : 'pending'}`
