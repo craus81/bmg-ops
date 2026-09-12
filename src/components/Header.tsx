@@ -10,6 +10,7 @@ import { useMentions, mentionUrl } from '@/lib/use-mentions';
 import { isPaletteChord, shortcutLabel } from '@/lib/command-palette';
 import { INTERNAL_STAFF_ROLES } from '@/lib/features';
 import { Search as SearchIcon } from 'lucide-react';
+import HelpButton from '@/components/HelpButton';
 
 interface HeaderProps {
   activePartNumber?: string;
@@ -436,6 +437,12 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
+          {/* Guide for whatever screen you're on (R6-13). Mounted once here
+              rather than on each page: it resolves the guide from the route
+              and renders nothing when this screen has none, or when the
+              viewer can't read the library. */}
+          <HelpButton tone="header" />
+
           {/* Universal Search */}
           {canSearch && (
           <button

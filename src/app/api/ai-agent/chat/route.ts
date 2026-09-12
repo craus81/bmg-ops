@@ -11,6 +11,7 @@ import { validateBody, z } from '@/lib/validate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { getSalesTaxRate } from '@/lib/sales-tax';
 import { describePage, pageContextBlock } from '@/lib/page-context';
+import { rankDocs } from '@/lib/text-search';
 
 export const dynamic = 'force-dynamic';
 
@@ -612,26 +613,13 @@ async function executeQuery(q: QuerySpec): Promise<any> {
 
     if (error) throw new Error(`Knowledge search failed: ${error.message}`);
 
-    // Score results by relevance (full phrase match > partial term match)
-    const scored = (data || []).map(d => {
-      let score = 0;
-      const titleLow = (d.title || '').toLowerCase();
-      const contentLow = (d.content || '').toLowerCase();
-      const phraseLow = fullPhrase.toLowerCase();
-
-      if (titleLow.includes(phraseLow)) score += 10;
-      if (contentLow.includes(phraseLow)) score += 5;
-      for (const term of searchTerms) {
-        if (titleLow.includes(term.toLowerCase())) score += 3;
-        if (contentLow.includes(term.toLowerCase())) score += 1;
-        if ((d.tags || []).some((t: string) => t.toLowerCase().includes(term.toLowerCase()))) score += 4;
-      }
-      return { ...d, _score: score };
-    });
-
-    // Sort by relevance score, take top results
-    scored.sort((a, b) => b._score - a._score);
-    const topResults = scored.slice(0, 5);
+    // Score by relevance (full phrase beats scattered terms, a title hit
+    // beats a body hit). The scorer lives in text-search.ts so the in-app
+    // Help Center ranks by exactly these rules rather than a second copy
+    // that drifts (R6-13). Unlike the old inline version this DROPS
+    // zero-score rows: the .or() above matches on any single ≥3-char term,
+    // so a doc could reach this list and score nothing.
+    const topResults = rankDocs(data || [], fullPhrase, 5);
 
     // Return generous content (up to 4000 chars per doc) so AI has enough context
     const items = topResults.map(d => ({
