@@ -318,16 +318,51 @@ async function notifyCompletion(vehicle: any, actorName: string, actorEmail: str
   const emailBody = vehicle.customer_portal_token
     ? `The install for your ${vehicleLabel} (VIN ending ${vehicle.vin?.slice(-8)}) is complete. Book a pickup time online — or reply to this email if another arrangement works better.`
     : `The install for your ${vehicleLabel} (VIN ending ${vehicle.vin?.slice(-8)}) is complete. Please contact us to arrange pickup.`;
-  await notifyCustomerByName(serviceSupabase, vehicle.customer_name, {
+  // R6-13: a "How did we do?" block rides along, but only when it is
+  // reasonable to ask — see src/lib/review-request.ts for the four reasons
+  // not to. The decision is made BEFORE the send and the suppression stamp
+  // is written after, so a failed email cannot silence six months of asks.
+  const review = await maybeReviewBlock(vehicle.customer_name);
+  const result = await notifyCustomerByName(serviceSupabase, vehicle.customer_name, {
     contextEntityType: 'fleet_checkin',
     contextEntityId: vehicle.id,
     threadSubject: `${vehicleLabel} ready for pickup`,
     emailSubject: `[BMG Fleet] Your vehicle is ready — ${vehicleLabel}`,
-    emailHtml: buildNotificationEmail(`Your vehicle is ready — ${vehicleLabel}`, emailBody, bookUrl, vehicle.customer_portal_token ? 'Book your pickup time' : 'View order status'),
+    emailHtml: buildNotificationEmail(`Your vehicle is ready — ${vehicleLabel}`, emailBody, bookUrl, vehicle.customer_portal_token ? 'Book your pickup time' : 'View order status')
+      + (review?.html || ''),
     messageBody: emailBody,
     smsBody: `[BMG Fleet] Your ${vehicleLabel} is ready for pickup. Book a time: ${bookUrl}`,
     replyTo: actorEmail,
   });
+  if (review && result?.emailed) {
+    const { stampReviewAsk } = await import('@/lib/review-request');
+    await stampReviewAsk(serviceSupabase, review.customerId);
+  }
+}
+
+/**
+ * The review block for this customer, or null when we should not ask.
+ * Resolves the customers row by name the same way notifyCustomerByName
+ * does, so the two agree on who is being emailed.
+ */
+async function maybeReviewBlock(customerName: string): Promise<{ html: string; customerId: string } | null> {
+  try {
+    const { data: customer } = await serviceSupabase
+      .from('customers')
+      .select('id')
+      .ilike('company_name', customerName)
+      .maybeSingle();
+    if (!customer?.id) return null;
+    const { decideReviewAsk, reviewBlockHtml } = await import('@/lib/review-request');
+    const decision = await decideReviewAsk(serviceSupabase, customer.id);
+    if (!decision.ask || !decision.url) return null;
+    return { html: reviewBlockHtml(decision.url), customerId: customer.id };
+  } catch (e: any) {
+    // Any failure here means we do NOT ask. Skipping an ask costs nothing;
+    // asking an unhappy customer for a public review costs a star.
+    console.error('review-request decision failed:', e?.message);
+    return null;
+  }
 }
 
 /** Customer email when their vehicle leaves the shop. */
@@ -343,13 +378,19 @@ async function notifyShipped(vehicle: any, actorEmail: string | null) {
   // email previously had no button at all.
   const portalUrl = `${appUrl}${deepLinks.customerPortal()}`;
   const emailBody = `Your ${vehicleLabel} (VIN ending ${vehicle.vin?.slice(-8)}) has left our facility. Reply to this email with any questions.`;
-  await notifyCustomerByName(serviceSupabase, vehicle.customer_name, {
+  const review = await maybeReviewBlock(vehicle.customer_name);
+  const result = await notifyCustomerByName(serviceSupabase, vehicle.customer_name, {
     contextEntityType: 'fleet_checkin',
     contextEntityId: vehicle.id,
     threadSubject: `${vehicleLabel} shipped`,
     emailSubject: `[BMG Fleet] Your vehicle has shipped — ${vehicleLabel}`,
-    emailHtml: buildNotificationEmail(`On its way — ${vehicleLabel}`, emailBody, portalUrl, 'View order status'),
+    emailHtml: buildNotificationEmail(`On its way — ${vehicleLabel}`, emailBody, portalUrl, 'View order status')
+      + (review?.html || ''),
     messageBody: emailBody,
     replyTo: actorEmail,
   });
+  if (review && result?.emailed) {
+    const { stampReviewAsk } = await import('@/lib/review-request');
+    await stampReviewAsk(serviceSupabase, review.customerId);
+  }
 }
