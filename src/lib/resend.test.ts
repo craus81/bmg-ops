@@ -255,3 +255,44 @@ describe('qpProofHtml', () => {
     expect(qpProofHtml(armored)).toBe(armored);
   });
 });
+
+// The invoice email's heading names the customer. Entry points that email an
+// invoice from a record with no customer on it (a vehicle checked in without
+// one, say) pass an empty name — the heading must not go out reading
+// "Invoices for " with a dangling preposition.
+describe('buildInvoiceEmail heading', () => {
+  async function loadBuildInvoiceEmail() {
+    vi.resetModules();
+    const mod = await import('./resend');
+    return mod.buildInvoiceEmail;
+  }
+
+  it('names the customer when there is one', async () => {
+    const build = await loadBuildInvoiceEmail();
+    expect(build('Masterack', ['1001'], [])).toContain('Invoice for Masterack');
+  });
+
+  it('drops the "for" clause entirely when the name is empty or blank', async () => {
+    const build = await loadBuildInvoiceEmail();
+    for (const blank of ['', '   ']) {
+      const html = build(blank, ['1001'], []);
+      // The heading still says "Invoice" — it just ends there.
+      expect(html).toMatch(/Invoice\s*<\/div>/);
+      expect(html).not.toMatch(/Invoices?\s+for\s*</);
+      expect(html).not.toContain('for  ');
+    }
+  });
+
+  it('pluralizes the heading with the invoice count', async () => {
+    const build = await loadBuildInvoiceEmail();
+    expect(build('Masterack', ['1001', '1002'], [])).toContain('Invoices for Masterack');
+    expect(build('', ['1001', '1002'], [])).toMatch(/Invoices\s*</);
+  });
+
+  it('escapes a customer name carrying HTML', async () => {
+    const build = await loadBuildInvoiceEmail();
+    const html = build('Ben & Jerry <script>', ['1001'], []);
+    expect(html).toContain('Ben &amp; Jerry &lt;script&gt;');
+    expect(html).not.toContain('for Ben & Jerry <script>');
+  });
+});

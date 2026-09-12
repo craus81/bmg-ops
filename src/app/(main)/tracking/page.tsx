@@ -20,6 +20,7 @@ import { deepLinks } from '@/lib/deep-links';
 import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto, GraphicsJob, GraphicsInstallStatus, CheckinSalesOrder } from '@/lib/types';
 import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS, GRAPHICS_STATUS_LABELS, GRAPHICS_INSTALL_PIPELINE, GRAPHICS_INSTALL_LABELS, GRAPHICS_INSTALL_COLORS, IN_SHOP_STATUSES } from '@/lib/types';
 import NetSuitePdf from '@/components/NetSuitePdf';
+import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import { openNetSuiteInvoicePdfByNumber } from '@/lib/netsuite-pdf-client';
 import ProofThumbnail from '@/components/ProofThumbnail';
 import CompletionModal from '@/components/CompletionModal';
@@ -125,6 +126,9 @@ export default function TrackingPage() {
   // undefined = not looked up yet; [] = looked up, nothing billed.
   const [soInvoices, setSoInvoices] = useState<Record<string, { id: string; tranid: string }[]>>({});
   const soInvoiceFetchRef = useRef<Set<string>>(new Set());
+  // Emailing one of those invoices — the shared screen, same as the
+  // completion modal's ✉ once an SO is billed.
+  const [emailInvoiceTarget, setEmailInvoiceTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
   const [vehicleAssignments, setVehicleAssignments] = useState<Record<string, string[]>>({});
   const [assignmentSaving, setAssignmentSaving] = useState(false);
   // Per-vehicle generation counter for assignment loads. Bumped by saves so
@@ -2550,13 +2554,32 @@ export default function TrackingPage() {
                                           ✓ SO #{so.sales_order_number || so.netsuite_sales_order_id} invoiced
                                         </div>
                                         {invoices.map(inv => (
-                                          <NetSuitePdf
-                                            key={inv.id}
-                                            type="invoice"
-                                            recordId={inv.id}
-                                            recordNumber={inv.tranid}
-                                            label="Invoice"
-                                          />
+                                          <div key={inv.id}>
+                                            <NetSuitePdf
+                                              type="invoice"
+                                              recordId={inv.id}
+                                              recordNumber={inv.tranid}
+                                              label="Invoice"
+                                            />
+                                            {/* Send this invoice without
+                                                leaving the vehicle — the same
+                                                screen the completion modal
+                                                opens once an SO is billed. */}
+                                            <button
+                                              onClick={() => setEmailInvoiceTarget({
+                                                customerName: vehicle.customer_name || '',
+                                                invoices: [{ invoiceId: inv.id, invoiceNumber: inv.tranid }],
+                                              })}
+                                              title={`Email invoice #${inv.tranid}${vehicle.customer_name ? ` to ${vehicle.customer_name}` : ''}`}
+                                              style={{
+                                                marginTop: '4px', padding: '4px 10px', fontSize: '10px', fontWeight: 700,
+                                                background: 'transparent', border: '1px solid var(--success)', borderRadius: '6px',
+                                                color: 'var(--success)', cursor: 'pointer',
+                                              }}
+                                            >
+                                              ✉ Email invoice
+                                            </button>
+                                          </div>
                                         ))}
                                       </>
                                     ) : (
@@ -3364,6 +3387,15 @@ export default function TrackingPage() {
         onShot={(file) => { if (photoSessionVehicle) return handlePhotoFiles(photoSessionVehicle, [file]); }}
         onClose={() => setPhotoSessionVehicle(null)}
       />
+
+      {/* Email an invoice shown on a vehicle record (shared component). */}
+      {emailInvoiceTarget && (
+        <EmailInvoicesModal
+          customerName={emailInvoiceTarget.customerName}
+          invoices={emailInvoiceTarget.invoices}
+          onClose={() => setEmailInvoiceTarget(null)}
+        />
+      )}
 
       {completionModalVehicleId && (() => {
         const v = vehicles.find(x => x.id === completionModalVehicleId);

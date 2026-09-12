@@ -444,7 +444,7 @@ export function buildInvoiceEmail(customerName: string, invoiceNumbers: string[]
       </div>
       <div style="padding:24px;">
         <div style="font-size:16px;font-weight:800;color:#f5f8fc;margin-bottom:12px;">
-          ${invoiceNumbers.length === 1 ? 'Invoice' : 'Invoices'} for ${escapeHtml(customerName)}
+          ${invoiceNumbers.length === 1 ? 'Invoice' : 'Invoices'}${customerName.trim() ? ` for ${escapeHtml(customerName.trim())}` : ''}
         </div>
         <div style="font-size:14px;color:#8899aa;line-height:1.6;margin-bottom:16px;">
           ${bodyHtml}

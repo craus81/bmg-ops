@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import JSZip from 'jszip';
 import { useAuth } from '@/components/AuthProvider';
+import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import { theme } from '@/lib/theme';
 
 const STATUS_OPTIONS = [
@@ -71,6 +72,11 @@ export default function BulkInvoiceDownloadPage() {
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  // Email the same invoices this page can zip, through the shared screen the
+  // Invoicing hub and PO record use — pulling copies down only to attach them
+  // to an email by hand was the long way round.
+  const [emailTarget, setEmailTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
 
   // Filters: invoice status + trandate range (YYYY-MM-DD)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('open');
@@ -243,7 +249,7 @@ export default function BulkInvoiceDownloadPage() {
         Download Invoices
       </h1>
       <div style={{ fontSize: '13px', color: theme.textMuted, marginBottom: '20px' }}>
-        Pick a customer, filter by status and date, and download the invoice PDFs from NetSuite as one ZIP.
+        Pick a customer, filter by status and date, then download the invoice PDFs from NetSuite as one ZIP — or email them straight to the customer.
       </div>
 
       {/* Customer search */}
@@ -414,25 +420,68 @@ export default function BulkInvoiceDownloadPage() {
                       <div style={{ fontWeight: 700, color: theme.textPrimary }}>
                         ${(inv.total || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                       </div>
+                      {/* Email just this one. preventDefault stops the click
+                          from reaching the wrapping label and toggling the
+                          row's checkbox on the way past. */}
+                      <button
+                        onClick={e => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (!customer) return;
+                          setEmailTarget({
+                            customerName: customer.company_name,
+                            invoices: [{ invoiceId: inv.id, invoiceNumber: inv.tranid }],
+                          });
+                        }}
+                        title={`Email invoice #${inv.tranid} to ${customer?.company_name ?? 'this customer'}`}
+                        style={{
+                          flexShrink: 0, padding: '3px 8px', borderRadius: '6px',
+                          fontSize: '11px', fontWeight: 700, background: 'transparent',
+                          border: `1px solid ${theme.success}`, color: theme.success, cursor: 'pointer',
+                        }}
+                      >
+                        ✉
+                      </button>
                     </label>
                   );
                 })}
               </div>
 
-              <button
-                onClick={downloadZip}
-                disabled={downloading || selectedIds.size === 0}
-                style={{
-                  width: '100%', padding: '14px', borderRadius: '12px',
-                  background: theme.success, color: '#fff', fontWeight: 800,
-                  fontSize: '14px', border: 'none', cursor: 'pointer',
-                  opacity: (downloading || selectedIds.size === 0) ? 0.6 : 1,
-                }}
-              >
-                {downloading
-                  ? (downloadProgress || 'Preparing…')
-                  : `Download ${selectedIds.size} invoice${selectedIds.size === 1 ? '' : 's'} as ZIP`}
-              </button>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  onClick={downloadZip}
+                  disabled={downloading || selectedIds.size === 0}
+                  style={{
+                    flex: '1 1 220px', padding: '14px', borderRadius: '12px',
+                    background: theme.success, color: '#fff', fontWeight: 800,
+                    fontSize: '14px', border: 'none', cursor: 'pointer',
+                    opacity: (downloading || selectedIds.size === 0) ? 0.6 : 1,
+                  }}
+                >
+                  {downloading
+                    ? (downloadProgress || 'Preparing…')
+                    : `Download ${selectedIds.size} invoice${selectedIds.size === 1 ? '' : 's'} as ZIP`}
+                </button>
+                {/* Send the same selection instead of downloading it. The
+                    email screen lists the invoices with their own include
+                    checkboxes and unchecks any already emailed. */}
+                <button
+                  onClick={() => customer && setEmailTarget({
+                    customerName: customer.company_name,
+                    invoices: selectedInvoices.map(inv => ({ invoiceId: inv.id, invoiceNumber: inv.tranid })),
+                  })}
+                  disabled={downloading || selectedIds.size === 0}
+                  title={selectedIds.size === 0 ? 'Select the invoices to email' : `Email ${selectedIds.size} invoice${selectedIds.size === 1 ? '' : 's'} to ${customer?.company_name ?? 'this customer'}`}
+                  style={{
+                    flex: '1 1 220px', padding: '14px', borderRadius: '12px',
+                    background: 'transparent', color: theme.success, fontWeight: 800,
+                    fontSize: '14px', border: `1px solid ${theme.success}`, cursor: 'pointer',
+                    opacity: (downloading || selectedIds.size === 0) ? 0.6 : 1,
+                  }}
+                >
+                  ✉ Email {selectedIds.size} invoice{selectedIds.size === 1 ? '' : 's'}
+                </button>
+              </div>
 
               {downloadError && (
                 <div style={{
@@ -444,6 +493,16 @@ export default function BulkInvoiceDownloadPage() {
             </>
           )}
         </div>
+      )}
+
+      {/* Email invoices — the shared screen, opened from the selection or a
+          single row above. */}
+      {emailTarget && (
+        <EmailInvoicesModal
+          customerName={emailTarget.customerName}
+          invoices={emailTarget.invoices}
+          onClose={() => setEmailTarget(null)}
+        />
       )}
     </div>
   );
