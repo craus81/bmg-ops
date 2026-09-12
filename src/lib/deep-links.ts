@@ -105,6 +105,15 @@ export const deepLinks = {
    *  submitted" alert has to land. `cniJob` drops the reader on the job and
    *  makes them hunt for the tile holding the thing they were told about. */
   cniJobPhotos: (jobId: string) => `/admin/cni/jobs/${jobId}/photos`,
+  /** Installer photos across every job, optionally narrowed to one
+   *  installer or company (the gallery reads both off the query string). */
+  cniPhotos: (filter?: { installerId?: string | null; companyId?: string | null }) => {
+    const params = new URLSearchParams();
+    if (filter?.installerId) params.set('installer', filter.installerId);
+    if (filter?.companyId) params.set('company', filter.companyId);
+    const qs = params.toString();
+    return `/admin/cni/photos${qs ? `?${qs}` : ''}`;
+  },
   /** Dedicated CNI installer record page (optionally flashing an internal note). */
   cniInstaller: (userId: string, noteId?: string | null) =>
     `/admin/cni/installers/${userId}${noteId ? `?note=${noteId}` : ''}`,
