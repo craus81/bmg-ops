@@ -6,6 +6,7 @@ import { usePopout } from '@/components/Popout';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
+import HistoryButton from '@/components/HistoryButton';
 import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
 import PartCatalogBrowser, { type BrowsePart, type KitWithMembers } from '@/components/PartCatalogBrowser';
@@ -4796,6 +4797,14 @@ export default function EstimatesPage() {
             </button>
           );
         })()}
+
+        {/* R6-13: who changed what on this estimate. Only for a saved one —
+            an unsaved draft has no audit rows to show. */}
+        {editingId && (
+          <div style={{ marginTop: '8px' }}>
+            <HistoryButton table="estimates" recordId={editingId} />
+          </div>
+        )}
 
         {/* Delete — only for saved estimates */}
         {editingId && isAdmin && (

@@ -210,6 +210,12 @@ export const deepLinks = {
   installerAvailableJob: (jobId: string) => `/installer/available/${jobId}`,
   /** System health dashboard (checks are keyed by sync type, not record ids). */
   systemHealth: () => '/admin/system-health',
+  /** The audit log pre-filtered to ONE record (R6-13) — the destination for
+   *  the History control on estimate, check-in, graphics, upfit and CNI
+   *  pages. `table` must be the real table name, since that is what
+   *  audit_log.table_name stores. */
+  recordHistory: (table: string, recordId: string) =>
+    `/admin/audit?table=${encodeURIComponent(table)}&record=${encodeURIComponent(recordId)}`,
   /** System health's Email delivery section — flashes one email_log row.
    *  The bounce-alert fallback when a send has no record context_url. */
   emailDelivery: (logId?: string | null) =>
