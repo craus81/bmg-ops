@@ -7,7 +7,8 @@
  * ship-to, dates, status), NetSuite sales order creation, invoicing open
  * quantities, print / CSV export, line items (edit / add / delete, per-line
  * graphics jobs and add-to-catalog), invoices with the billing check
- * verdict, PDF attachments, and @mention notes.
+ * verdict (each emailable to the customer through the shared
+ * EmailInvoicesModal), PDF attachments, and @mention notes.
  *
  * Route: /admin/pos/<uuid>
  */
@@ -297,7 +298,9 @@ export default function PoRecordPage() {
   const [invoiceOpenQtys, setInvoiceOpenQtys] = useState<Record<string, number>>({});
   const [creatingOpenInvoice, setCreatingOpenInvoice] = useState(false);
   // Fresh invoice → straight into the shared email screen (same modal the
-  // Invoicing hub and Scans page use).
+  // Invoicing hub and Scans page use). The Invoices list below opens the same
+  // screen for invoices linked earlier, so a PO's invoices can be sent (or
+  // re-sent) without going hunting for them on another page.
   const [emailTarget, setEmailTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
 
   // ── Per-line catalog state (ported from the PO list) ─────────────────────
@@ -982,6 +985,20 @@ export default function PoRecordPage() {
       ? [{ netsuite_invoice_id: po.netsuite_invoice_id, netsuite_invoice_number: po.netsuite_invoice_number || null, created_at: null, total_qty: null, line_count: null, memo: null }]
       : [];
   const billedUnits = invoiceList.reduce((s, inv) => s + (inv.total_qty || 0), 0);
+
+  // Invoices this PO can email. The email screen keys everything — the PDF
+  // lookup, the already-sent check, the invoice_emails log — on the invoice
+  // NUMBER, so a row carrying only a NetSuite internal id (linked before the
+  // number came back) has nothing to send and is left out rather than opening
+  // a screen that can't attach anything.
+  const emailableInvoices: EmailableInvoice[] = invoiceList
+    .filter(inv => !!inv.netsuite_invoice_number)
+    .map(inv => ({
+      invoiceId: inv.netsuite_invoice_id ? String(inv.netsuite_invoice_id) : undefined,
+      invoiceNumber: inv.netsuite_invoice_number!,
+      po: po.po_number,
+    }));
+
   const checkStatus = po.invoice_check_status;
   const check = po.invoice_check;
   const sortedLines = [...po.line_items].sort((a, b) => a.part_number.localeCompare(b.part_number, undefined, { numeric: true }) || a.id.localeCompare(b.id));
@@ -1436,14 +1453,29 @@ export default function PoRecordPage() {
       <div style={card}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px' }}>
           <div style={eyebrow}>Invoices ({invoiceList.length})</div>
-          <button
-            onClick={recheckBilling}
-            disabled={rechecking}
-            title="Re-pull this PO's invoices from NetSuite and re-run the billing check — use after fixing an invoice in NetSuite"
-            style={{ ...btnSm, color: '#34d399', opacity: rechecking ? 0.6 : 1 }}
-          >
-            {rechecking ? 'Rechecking…' : '↻ Recheck billing'}
-          </button>
+          <span style={{ display: 'inline-flex', gap: '8px', alignItems: 'center' }}>
+            {/* Email every invoice on this PO in one send. The screen lists
+                them with their own include checkboxes (and unchecks any
+                already emailed), so narrowing happens there rather than in a
+                second selection UI here. */}
+            {emailableInvoices.length > 0 && (
+              <button
+                onClick={() => setEmailTarget({ customerName: po.customer, invoices: emailableInvoices })}
+                title={`Email ${emailableInvoices.length === 1 ? 'this invoice' : `these ${emailableInvoices.length} invoices`} to ${po.customer}`}
+                style={{ ...btnSm, color: '#34d399' }}
+              >
+                ✉ Email invoice{emailableInvoices.length !== 1 ? 's' : ''}
+              </button>
+            )}
+            <button
+              onClick={recheckBilling}
+              disabled={rechecking}
+              title="Re-pull this PO's invoices from NetSuite and re-run the billing check — use after fixing an invoice in NetSuite"
+              style={{ ...btnSm, color: '#34d399', opacity: rechecking ? 0.6 : 1 }}
+            >
+              {rechecking ? 'Rechecking…' : '↻ Recheck billing'}
+            </button>
+          </span>
         </div>
         {invoiceList.length === 0 ? (
           po.status === 'complete' && checkStatus === 'no_invoices' ? (
@@ -1512,6 +1544,24 @@ export default function PoRecordPage() {
                   >
                     PDF
                   </button>
+                  {/* Send just this one — same screen as the header action,
+                      scoped to a single invoice. */}
+                  {inv.netsuite_invoice_number && (
+                    <button
+                      onClick={() => setEmailTarget({
+                        customerName: po.customer,
+                        invoices: [{
+                          invoiceId: inv.netsuite_invoice_id ? String(inv.netsuite_invoice_id) : undefined,
+                          invoiceNumber: inv.netsuite_invoice_number!,
+                          po: po.po_number,
+                        }],
+                      })}
+                      title={`Email invoice #${inv.netsuite_invoice_number} to ${po.customer}`}
+                      style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(52,211,153,0.12)', border: '1px solid rgba(52,211,153,0.35)', color: '#34d399', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                    >
+                      ✉
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -1761,7 +1811,8 @@ export default function PoRecordPage() {
         );
       })()}
 
-      {/* Email the freshly created invoice (shared component) */}
+      {/* Email invoices (shared component) — a freshly created one, or any
+          already linked to this PO from the Invoices list above. */}
       {emailTarget && (
         <EmailInvoicesModal
           customerName={emailTarget.customerName}
