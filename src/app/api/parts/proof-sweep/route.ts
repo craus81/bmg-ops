@@ -6,7 +6,7 @@ import { r2Upload } from '@/lib/r2';
 import { fetchAllRows } from '@/lib/fetch-all';
 import {
   getGmailClient, getMessage, getAttachment, getProofAttachments,
-  proofContentType, getHeader,
+  proofContentType, getHeader, isGoogleTokenError,
 } from '@/lib/google';
 
 export const dynamic = 'force-dynamic';
@@ -237,7 +237,7 @@ export async function POST(req: NextRequest) {
             }
           }
         } catch (err: any) {
-          if (err.message === 'NO_GOOGLE_TOKEN') throw err;
+          if (isGoogleTokenError(err)) throw err;
           r.error = err?.message || 'sweep failed';
         }
         results.push(r);
