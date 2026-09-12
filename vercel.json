@@ -95,6 +95,10 @@
     {
       "path": "/api/cron/pickup-nudges",
       "schedule": "20 14 * * *"
+    },
+    {
+      "path": "/api/cron/heartbeat-sentinel",
+      "schedule": "0 16 * * *"
     }
   ],
   "headers": [

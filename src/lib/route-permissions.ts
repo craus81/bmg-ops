@@ -178,6 +178,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cron/calendar-pull/route.ts': cron('requireAdmin('),
   'src/app/api/cron/deal-forecast-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/exceptions-digest/route.ts': cron('requireAdmin('),
+  'src/app/api/cron/heartbeat-sentinel/route.ts': cron('requireAdmin('),
   'src/app/api/cron/health-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/netsuite-sync/route.ts': cron('requireAdmin('),
   'src/app/api/cron/owner-brief/route.ts': cron('requireAdmin('),
@@ -421,6 +422,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // Narrower than its sibling above on purpose: a map of which
   // integrations are unconfigured is a map of where the app is soft, so
   // it stays with the owner-level feature rather than all admins.
+  'src/app/api/system-health/runs/route.ts': staff(),
   'src/app/api/system-health/connections/route.ts': feature('system_health'),
   'src/app/api/upfit-projects/allocations/route.ts': staff(),
   'src/app/api/upfit-projects/link-po/route.ts': staff(),

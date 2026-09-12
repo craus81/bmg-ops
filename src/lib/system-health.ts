@@ -53,6 +53,7 @@ export const HEALTH_MONITORS: HealthMonitor[] = [
   { syncType: 'owner_brief', label: "Monday owner's brief", intervalMinutes: 10080 },
   { syncType: 'deal_forecast_check', label: 'Weekly deal-forecast sweep', intervalMinutes: 10080 },
   { syncType: 'pickup_nudges', label: 'Ready-for-pickup nudge sweep', intervalMinutes: 1440 },
+  { syncType: 'heartbeat_sentinel', label: 'Daily business-pulse sentinel', intervalMinutes: 1440 },
 ];
 
 /** A run is stale once it's overdue by more than a full interval (2× spacing), plus grace for slow runs. */
@@ -87,7 +88,16 @@ export async function recordHeartbeat(
   service: SupabaseClient,
   syncType: string,
   lastResult: unknown,
-  opts?: { touchLastSyncedAt?: boolean; lastSyncedAt?: string },
+  opts?: {
+    touchLastSyncedAt?: boolean;
+    lastSyncedAt?: string;
+    /** When the run began, for the flight recorder's duration. Omitted =
+     *  duration unknown, which is stored as NULL rather than 0. */
+    startedAt?: number | string | Date;
+    /** How many records this run processed. Omitted = unknown, stored as
+     *  NULL — never 0, which would claim the run found nothing to do. */
+    records?: number | null;
+  },
 ): Promise<HeartbeatResult> {
   const wroteAt = new Date().toISOString();
   try {
@@ -124,11 +134,66 @@ export async function recordHeartbeat(
       console.error(`[heartbeat] ${syncType} phantom write:`, msg);
       return { ok: false, error: msg };
     }
+    await appendRun(service, syncType, lastResult, wroteAt, opts);
     return { ok: true };
   } catch (err: any) {
     console.error(`[heartbeat] ${syncType} failed:`, err?.message);
     return { ok: false, error: err?.message || 'unknown sync_state write failure' };
   }
+}
+
+/**
+ * Flight recorder (R6-13, migration 308): one cron_runs row per run that
+ * reached here.
+ *
+ * NEVER throws and never changes the heartbeat's verdict. A recorder that
+ * could fail a background job would be strictly worse than no recorder —
+ * this is diagnostics riding along, not part of the job's contract.
+ */
+async function appendRun(
+  service: SupabaseClient,
+  syncType: string,
+  lastResult: unknown,
+  finishedAt: string,
+  opts?: { startedAt?: number | string | Date; records?: number | null },
+): Promise<void> {
+  try {
+    const startMs = opts?.startedAt === undefined ? null : new Date(opts.startedAt as any).getTime();
+    const duration = startMs != null && Number.isFinite(startMs)
+      ? Math.max(0, new Date(finishedAt).getTime() - startMs)
+      : null;
+    const error = errorOf(lastResult);
+    const records = opts?.records === undefined ? recordsOf(lastResult) : opts.records;
+    await service.from('cron_runs').insert({
+      sync_type: syncType,
+      started_at: startMs != null && Number.isFinite(startMs) ? new Date(startMs).toISOString() : null,
+      finished_at: finishedAt,
+      duration_ms: duration,
+      outcome: error ? 'error' : 'ok',
+      records: records ?? null,
+      error: error ? String(error).slice(0, 1000) : null,
+    });
+  } catch (err: any) {
+    console.error(`[flight-recorder] ${syncType} append failed:`, err?.message);
+  }
+}
+
+/**
+ * A record count from the job's own result blob, when it reported one.
+ *
+ * Only a small set of well-known keys is read, and only numbers. Guessing
+ * from any numeric field would put an unrelated figure (a duration, an id)
+ * on a chart labelled "records", so an unrecognised shape returns null and
+ * the row says unknown.
+ */
+export function recordsOf(lastResult: unknown): number | null {
+  if (!lastResult || typeof lastResult !== 'object') return null;
+  const r = lastResult as Record<string, unknown>;
+  for (const key of ['records', 'processed', 'count', 'synced', 'sent', 'imported', 'updated']) {
+    const v = r[key];
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+  }
+  return null;
 }
 
 const errorOf = (lastResult: any): string | null => {
@@ -182,4 +247,76 @@ export async function evaluateSystemHealth(service: SupabaseClient): Promise<Hea
   const bySyncType = new Map<string, SyncStateRow>((rows || []).map(r => [r.sync_type, r]));
   const now = Date.now();
   return HEALTH_MONITORS.map(m => evaluateHealthRow(m, bySyncType.get(m.syncType), now));
+}
+
+// ═══════════ FLIGHT RECORDER READS (R6-13) ═══════════
+
+export interface CronRun {
+  finishedAt: string;
+  startedAt: string | null;
+  /** null = the caller passed no start time. Unknown, not instant. */
+  durationMs: number | null;
+  outcome: 'ok' | 'error';
+  /** null = the run reported no countable output. Unknown, not zero. */
+  records: number | null;
+  error: string | null;
+}
+
+export interface RunHistory {
+  syncType: string;
+  runs: CronRun[];
+  /** Consecutive errors ending at the most recent run — 0 when the last
+   *  run was fine, however many failures sit behind it. */
+  errorStreak: number;
+  /** Median duration over the runs that reported one; null when none did. */
+  medianDurationMs: number | null;
+  /** How many of the returned runs could not report a duration, so a chart
+   *  with gaps is explained rather than silently short. */
+  runsWithoutDuration: number;
+  runsWithoutRecords: number;
+}
+
+export function summarizeRuns(syncType: string, runs: CronRun[]): RunHistory {
+  let streak = 0;
+  for (const r of runs) {
+    if (r.outcome !== 'error') break;
+    streak += 1;
+  }
+  const durations = runs.map(r => r.durationMs).filter((d): d is number => d != null).sort((a, b) => a - b);
+  const median = durations.length === 0
+    ? null
+    : durations.length % 2 === 1
+      ? durations[(durations.length - 1) / 2]
+      : (durations[durations.length / 2 - 1] + durations[durations.length / 2]) / 2;
+  return {
+    syncType,
+    runs,
+    errorStreak: streak,
+    medianDurationMs: median,
+    runsWithoutDuration: runs.filter(r => r.durationMs == null).length,
+    runsWithoutRecords: runs.filter(r => r.records == null).length,
+  };
+}
+
+/** The last `limit` runs for one job, newest first. */
+export async function loadRunHistory(
+  service: SupabaseClient,
+  syncType: string,
+  limit = 30,
+): Promise<RunHistory> {
+  const { data } = await service
+    .from('cron_runs')
+    .select('started_at, finished_at, duration_ms, outcome, records, error')
+    .eq('sync_type', syncType)
+    .order('finished_at', { ascending: false })
+    .limit(limit);
+  const runs: CronRun[] = (data || []).map((r: any) => ({
+    finishedAt: r.finished_at,
+    startedAt: r.started_at || null,
+    durationMs: r.duration_ms == null ? null : Number(r.duration_ms),
+    outcome: r.outcome === 'error' ? 'error' : 'ok',
+    records: r.records == null ? null : Number(r.records),
+    error: r.error || null,
+  }));
+  return summarizeRuns(syncType, runs);
 }
