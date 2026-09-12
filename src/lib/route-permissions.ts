@@ -98,6 +98,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/shop-capacity/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   'src/app/api/admin/payouts/route.ts': admin(),
   'src/app/api/admin/payroll/route.ts': admin(),
+  'src/app/api/admin/review-link/route.ts': admin(),
   'src/app/api/admin/resend-invite/route.ts': admin(),
   // Reading the company sales tax rate is staff-wide (both quote builders
   // show it); changing it is super-admin only, matching the DB trigger in
