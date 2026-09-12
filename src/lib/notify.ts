@@ -330,6 +330,29 @@ async function sendViaPush(payload: NotifyPayload): Promise<boolean> {
   }
 }
 
+/**
+ * Unread in-app notifications for one user, or null when the count failed.
+ * Null keeps the badge key off the push rather than clearing the user's
+ * badge with a zero we did not actually measure.
+ */
+async function unreadCountFor(userId: string): Promise<number | null> {
+  try {
+    const { count, error } = await supabase
+      .from('notifications')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .is('read_at', null);
+    if (error) return null;
+    // The in-app insert for THIS notification runs in parallel with the
+    // push, so the badge can trail the list by one for a moment. Adding a
+    // speculative +1 would over-count whenever the insert had already
+    // landed; the next notification corrects it either way.
+    return count ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** APNs delivery to the native iOS/iPadOS app's registered devices. */
 async function sendViaApns(payload: NotifyPayload): Promise<boolean> {
   if (!apnsConfigured()) return false;
@@ -340,6 +363,14 @@ async function sendViaApns(payload: NotifyPayload): Promise<boolean> {
       .eq('user_id', payload.userId);
     if (!tokens?.length) return false;
 
+    // App-icon badge (R6-13): the recipient's UNREAD in-app count, which is
+    // exact and is what an iOS badge conventionally means. Deliberately not
+    // the attention-queue total — that is role-dependent and would need a
+    // per-recipient computation on every push. A failed count leaves the
+    // key off entirely, because sending 0 would CLEAR the user's badge on
+    // the strength of a query that errored.
+    const badge = await unreadCountFor(payload.userId);
+
     let sent = false;
     const staleIds: string[] = [];
     await Promise.allSettled(
@@ -348,6 +379,7 @@ async function sendViaApns(payload: NotifyPayload): Promise<boolean> {
           title: payload.title,
           body: payload.body,
           url: payload.url || undefined,
+          ...(badge == null ? {} : { badge }),
         });
         if (result === 'sent') sent = true;
         if (result === 'stale') staleIds.push(t.id);

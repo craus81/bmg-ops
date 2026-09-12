@@ -5,43 +5,44 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useTheme } from '@/components/ThemeProvider';
 import TextSizeToggle from '@/components/TextSizeToggle';
-import { createClient } from '@/lib/supabase-browser';
+import { apiFetch } from '@/lib/api-client';
 
 export default function MorePage() {
   const router = useRouter();
   const { isAdmin, isSales, isGraphicsProduction, hasRole, hasFeature, profile, signOut } = useAuth();
   const { mode, setMode, resolvedTheme } = useTheme();
-  const supabase = createClient();
-  const [pendingUserCount, setPendingUserCount] = useState(0);
-  // R3-20: pending-count badges for the Purchasing/Receiving rows — the
-  // queues were invisible until someone happened to open the page.
-  const [pendingRequestCount, setPendingRequestCount] = useState(0);
-  const [manualReceiptCount, setManualReceiptCount] = useState(0);
+  // R3-20 gave the Purchasing/Receiving rows count badges; R6-13 moved
+  // every count behind one role-filtered endpoint so no two surfaces can
+  // report a different number for the same queue.
+  const [counts, setCounts] = useState<Record<string, number | null>>({});
+  const [unknownQueues, setUnknownQueues] = useState<string[]>([]);
+  /** A queue that could not be counted renders NO badge — never a 0. */
+  const badgeFor = (key: string): number | undefined => {
+    const n = counts[key];
+    return typeof n === 'number' && n > 0 ? n : undefined;
+  };
 
+  // R6-13: one request instead of three browser queries. /api/badges
+  // computes every attention queue the caller can act on, role-filtered
+  // server-side and cached about a minute, so this page, the tab badge and
+  // the app icon can never disagree about a number.
+  //
+  // A count that FAILED comes back null, not 0, and is left off the row
+  // entirely — a "0" badge would say "nothing needs you" on the strength of
+  // a query that errored.
   useEffect(() => {
-    const load = async () => {
-      if (hasFeature('user_management')) {
-        const { count: userCount } = await supabase
-          .from('profiles')
-          .select('*', { count: 'exact', head: true })
-          .eq('status', 'pending');
-        setPendingUserCount(userCount || 0);
-      }
-      if (hasFeature('parts_ordering')) {
-        const [{ count: reqCount }, { count: manualCount }] = await Promise.all([
-          supabase.from('purchase_requests')
-            .select('*', { count: 'exact', head: true })
-            .eq('status', 'pending'),
-          supabase.from('po_receipts')
-            .select('*', { count: 'exact', head: true })
-            .eq('ns_status', 'manual_needed'),
-        ]);
-        setPendingRequestCount(reqCount || 0);
-        setManualReceiptCount(manualCount || 0);
-      }
-    };
-    load();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch('/api/badges');
+        if (!res.ok) return;
+        const json = await res.json();
+        if (cancelled) return;
+        setCounts(json.counts || {});
+        setUnknownQueues(json.unknown || []);
+      } catch { /* a badge that can't load simply doesn't render */ }
+    })();
+    return () => { cancelled = true; };
   }, [profile]);
 
   const F = hasFeature; // shorthand
@@ -78,8 +79,8 @@ export default function MorePage() {
       items: [
         { title: 'Purchase Orders', sub: 'Manage POs', path: '/admin/pos', show: F('purchase_orders') },
         { title: 'Scan Log', sub: 'Review scans, match POs, export & invoice', path: '/admin/scans', show: F('reports') },
-        { title: 'Purchasing', sub: pendingRequestCount > 0 ? `${pendingRequestCount} request${pendingRequestCount !== 1 ? 's' : ''} waiting to be ordered` : 'Requested parts waiting to be ordered, grouped by vendor', path: '/admin/purchasing', show: F('parts_ordering'), badge: pendingRequestCount > 0 ? pendingRequestCount : undefined },
-        { title: 'Receiving', sub: manualReceiptCount > 0 ? `${manualReceiptCount} receipt${manualReceiptCount !== 1 ? 's' : ''} still need NetSuite entry by hand` : 'Check arriving parts in against vendor POs', path: '/admin/receiving', show: F('parts_ordering'), badge: manualReceiptCount > 0 ? manualReceiptCount : undefined },
+        { title: 'Purchasing', sub: badgeFor('purchase_requests') ? `${badgeFor('purchase_requests')} request${badgeFor('purchase_requests') !== 1 ? 's' : ''} waiting to be ordered` : 'Requested parts waiting to be ordered, grouped by vendor', path: '/admin/purchasing', show: F('parts_ordering'), badge: badgeFor('purchase_requests') },
+        { title: 'Receiving', sub: badgeFor('manual_receipts') ? `${badgeFor('manual_receipts')} receipt${badgeFor('manual_receipts') !== 1 ? 's' : ''} still need NetSuite entry by hand` : 'Check arriving parts in against vendor POs', path: '/admin/receiving', show: F('parts_ordering'), badge: badgeFor('manual_receipts') },
         { title: 'Parts Catalog', sub: 'Upfit & graphic parts from NetSuite', path: '/parts', show: F('parts_catalog') },
         { title: 'Inventory', sub: 'On hand · allocated to jobs · free · on order, at a glance', path: '/admin/inventory', show: F('parts_catalog') },
         { title: 'Part Tagging Rules', sub: 'Auto-categorize parts by vendor & name instead of one dropdown at a time', path: '/admin/part-category-rules', show: F('part_admin') },
@@ -104,7 +105,7 @@ export default function MorePage() {
     {
       header: 'Admin',
       items: [
-        { title: 'User Management', sub: pendingUserCount > 0 ? `${pendingUserCount} pending approval` : 'Manage team access', path: '/admin/users', show: F('user_management'), badge: pendingUserCount > 0 ? pendingUserCount : undefined },
+        { title: 'User Management', sub: badgeFor('pending_users') ? `${badgeFor('pending_users')} pending approval` : 'Manage team access', path: '/admin/users', show: F('user_management'), badge: badgeFor('pending_users') },
         { title: 'Customer Notifications', sub: 'Who gets automatic emails — everything else is on-demand', path: '/admin/customer-notifications', show: F('customers') },
         { title: 'Bulk Upload', sub: 'Import templates & proofs from ZIP', path: '/admin/bulk-upload', show: F('bulk_upload') },
         { title: 'Audit Log', sub: 'Who changed what — money edits, payouts, rates & invoices', path: '/admin/audit', show: F('audit_log') },
@@ -124,6 +125,13 @@ export default function MorePage() {
 
   return (
     <div>
+      {/* A queue we could not count shows no badge, so say why rather than
+          letting its absence read as "nothing waiting". */}
+      {unknownQueues.length > 0 && (
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '10px', padding: '8px 12px', marginBottom: '12px' }}>
+          {unknownQueues.length} queue{unknownQueues.length === 1 ? '' : 's'} could not be counted just now — those rows show no badge, which is not the same as empty.
+        </div>
+      )}
       {groups.map(group => {
         const items = group.items.filter(i => i.show);
         if (items.length === 0) return null;

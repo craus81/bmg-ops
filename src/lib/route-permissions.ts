@@ -108,6 +108,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/user-settings/route.ts': superAdmin(),
   'src/app/api/ai-agent/chat/route.ts': authScoped('the caller\'s role is resolved server-side and per-role capability checks decide which data sources each query may touch', 'rolesOf'),
   'src/app/api/approve/condition/[token]/route.ts': token('customer acknowledgment of the vehicle condition report via the emailed magic link; the token is the credential and expiry is enforced', '\'condition_token\''),
+  'src/app/api/badges/route.ts': authScoped('attention-queue counts for the caller only: the queues computed are exactly the ones their own resolved features and admin flag allow, so a customer login gets an empty set rather than a 403', 'resolveFeatures('),
   'src/app/api/approve/estimate/[token]/route.ts': token('customer approval via the emailed magic link; the token is the credential and expiry is enforced', '\'approval_token\''),
   'src/app/api/approve/proof/[token]/route.ts': token('customer proof approval via the emailed magic link; token + expiry enforced', '\'approval_token\''),
   'src/app/api/cni/schedule/[token]/route.ts': token('installer install-calendar subscription; the token is the credential, reads are rate-limited and the feed carries only the jobs already assigned to that company', '\'schedule_token\''),
