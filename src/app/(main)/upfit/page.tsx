@@ -9,6 +9,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { DropZone } from '@/components/DropZone';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { theme } from '@/lib/theme';
+import HistoryButton from '@/components/HistoryButton';
 import { deepLinks } from '@/lib/deep-links';
 import { flashNote } from '@/lib/focus-note';
 import { fetchAllRows } from '@/lib/fetch-all';
@@ -844,6 +845,8 @@ export default function UpfitProjectsPage() {
             {selected.customer_name && <div style={{ fontSize: '12px', color: theme.textSecondary }}>{selected.customer_name}</div>}
           </div>
           <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', background: `${st.color}20`, color: st.color, border: `1px solid ${st.color}40` }}>{st.label}</span>
+          {/* R6-13: who changed what on this project. */}
+          <HistoryButton table="upfit_projects" recordId={selected.id} compact />
         </div>
 
         {/* Status pipeline */}

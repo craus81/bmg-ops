@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import HistoryButton from '@/components/HistoryButton';
 import { useDialog } from '@/components/DialogProvider';
 import { apiFetch } from '@/lib/api-client';
 import PartPicker, { type PickedPart } from '@/components/PartPicker';
@@ -935,6 +936,8 @@ export default function CniJobDetailPage() {
             </div>
           )}
         </div>
+        {/* R6-13: who changed what on this job. */}
+        <HistoryButton table="cni_jobs" recordId={job.id} compact />
       </div>
 
       {/* Status Badge */}
