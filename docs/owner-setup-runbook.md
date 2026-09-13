@@ -306,7 +306,10 @@ needs to own the monthly pass or the page is a dashboard nobody signs.
 
 These are Tier 4 in the audit: **blocked on a decision or a provisioning
 step, not on engineering.** Several jump straight to Tier 2 the day you
-decide.
+decide. The table below is the decision itself; the engineering side of
+each — what the build has to respect once you have decided — is in the
+per-item `*Blocked on:*` notes in `docs/feature-audit-2026-09.md` under
+Tier 4. Keep the two in step.
 
 | Decision | What it unblocks | Note |
 |---|---|---|
@@ -332,7 +335,7 @@ first stop when something feels stale.
 Migrations need nothing at all. `migrations/` auto-applies on every
 production deploy (`node scripts/migrate.mjs --deploy && next build`), in
 filename order, inside transactions, failing the deploy if one fails. 270
-through 295 are live. **Do not run them in the Supabase SQL editor** — to
+through 312 are live (Round 6 added 282-312). **Do not run them in the Supabase SQL editor** — to
 confirm one landed, check the production build log for `applied <file>.sql`.
 
 ---
