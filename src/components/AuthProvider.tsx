@@ -197,8 +197,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const features = resolveFeatures(userRoles, viewAsRole ? [] : featureOverrides);
   const hasFeature = (feature: FeatureKey) => features.has(feature);
 
+  // UNKNOWN roles are exposed as "still resolving", because that is what the
+  // whole app already knows how to wait for. Only 17 pages use
+  // useRequireFeature; 79 more roll their own `if (authLoading) return;`
+  // before deciding to bounce. Folding profileError into `loading` holds all
+  // of them on one line — otherwise a dropped connection still redirected the
+  // other 79 to /home, which is the bug this change exists to remove. The
+  // banner above says why the page is waiting and offers Retry; success
+  // clears profileError and every gate evaluates normally.
+  const authResolving = loading || profileError;
+
   return (
-    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isGraphicsProduction, isSales, isCustomer, isInstaller, isFieldTech, isShopTech, hasRole, hasFeature, loading, signOut, viewAsRole, setViewAsRole, isActualAdmin, profileError, retryProfile }}>
+    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isGraphicsProduction, isSales, isCustomer, isInstaller, isFieldTech, isShopTech, hasRole, hasFeature, loading: authResolving, signOut, viewAsRole, setViewAsRole, isActualAdmin, profileError, retryProfile }}>
       {profileError && (
         <div role="alert" style={{
           position: 'sticky', top: 0, zIndex: 60, padding: '9px 14px',
@@ -232,13 +242,12 @@ export const useAuth = () => useContext(AuthContext);
  * for pages that also want to hold render until the check passes.
  */
 export function useRequireFeature(feature: FeatureKey) {
-  const { hasFeature, loading, profileError } = useAuth();
+  const { hasFeature, loading } = useAuth();
   const router = useRouter();
-  // UNKNOWN roles must not read as DENIED. When the profile read failed we
-  // have no answer, so the gate holds the page in its loading state (the
-  // provider's banner explains why and offers Retry) rather than bouncing to
-  // /home — a silent redirect is indistinguishable from losing your access.
-  const undecided = loading || profileError;
+  // `loading` already folds in profileError (see AuthProvider): UNKNOWN roles
+  // must never read as DENIED, so the gate holds rather than redirecting on
+  // an answer it never got.
+  const undecided = loading;
   const allowed = !undecided && hasFeature(feature);
   useEffect(() => {
     if (!undecided && !hasFeature(feature)) router.push('/home');
