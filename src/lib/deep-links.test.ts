@@ -85,3 +85,16 @@ describe('allowedPdfSrc', () => {
     expect(allowedPdfSrc('', ORIGIN)).toBe(null);
   });
 });
+
+// R7-4: the Usage tab is the landing for anything about client errors /
+// slow routes / abandoned forms; the builder must carry the filter so a
+// click lands on the row, not the tab.
+describe('deepLinks.systemHealthUsage', () => {
+  it('opens the usage tab with optional filters', () => {
+    expect(deepLinks.systemHealthUsage()).toBe('/admin/system-health?tab=usage');
+    expect(deepLinks.systemHealthUsage({ kind: 'error', page: '/vehicles/:vin' }))
+      .toBe('/admin/system-health?tab=usage&kind=error&page=%2Fvehicles%2F%3Avin');
+    expect(deepLinks.systemHealthUsage({ form: 'vehicle_checkin', days: 30 }))
+      .toBe('/admin/system-health?tab=usage&form=vehicle_checkin&days=30');
+  });
+});

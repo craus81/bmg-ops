@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
   if (compliance && !compliance.eligible) {
     if (!overrideReason) {
       return NextResponse.json({
-        error: `${compliance.name} is not eligible for work`,
+        error: `"${compliance.name}" is not eligible for work`,
         complianceBlock: {
           name: compliance.name,
           state: compliance.state,

@@ -175,6 +175,13 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/credit-application/submit/route.ts': pub('the public credit-application form; honeypot + fake bot success, service-role insert only, and the review side is feature-gated'),
   'src/app/api/credit-applications/[id]/route.ts': feature('credit_applications'),
   'src/app/api/credit-applications/route.ts': feature('credit_applications'),
+  // Usage-telemetry beacon (R7-4): the public booking/credit-application
+  // pages have no session, so identity is optional and taken from the
+  // cookie/bearer when present (role only — user_id is never stored);
+  // per-user-or-IP and per-session checkRateLimit, 16 KB / 25-event caps.
+  'src/app/api/client-events/route.ts': { kind: 'public', contains: ['checkRateLimit('], why: 'usage beacon from public booking and credit-application pages that have no session; identity is optional and resolved server-side only for rate limiting and role, anonymous and unverifiable-token batches are restricted to those two pages, and every batch is ip-gated before any auth lookup then user+session rate limited via checkRateLimit' },
+  'src/app/api/admin/client-events/route.ts': feature('system_health'),
+  'src/app/api/cron/client-events-purge/route.ts': cron('requireAdmin('),
   'src/app/api/cron/at-risk-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/auto-archive-shipped/route.ts': cron('requireAdmin('),
   'src/app/api/cron/calendar-pull/route.ts': cron('requireAdmin('),

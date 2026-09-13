@@ -13,6 +13,7 @@ import { locationBillingOverride } from '@/lib/scan-billing';
 import { loadBillableCustomers, findBillableCustomer, matchesBillableCustomer, type BillableCustomer } from '@/lib/billable-customers';
 import { isVerizonRfidPart } from '@/lib/rfid';
 import NumberInput from '@/components/NumberInput';
+import { useFormTelemetry } from '@/lib/use-form-telemetry';
 
 interface Part {
   id: string;
@@ -51,6 +52,9 @@ export default function ScanPage() {
   const { user, isAdmin } = useAuth();
   useRequireFeature('scan');
   const supabase = createClient();
+  // Usage telemetry (R7-4): keystrokes are NOT the start signal here
+  // (installers retype constantly) — a camera detect or a submitted VIN is.
+  const formTel = useFormTelemetry('scan_vin');
 
   // Step state
   const [step, setStep] = useState<'customer' | 'part' | 'location' | 'scan'>('customer');
@@ -539,6 +543,7 @@ export default function ScanPage() {
   // optional unit number. This pauses the scanner (camera stays on) until the
   // scan is logged or discarded.
   const handleCameraScan = (scannedVin: string) => {
+    formTel.markStarted();
     setScanError('');
     setScanSuccess('');
     setUnitNumber('');
@@ -555,6 +560,7 @@ export default function ScanPage() {
   };
 
   const discardPendingScan = () => {
+    formTel.markAbandoned('close');
     setPendingScan(null);
     setUnitNumber('');
     setScanError('');
@@ -637,6 +643,7 @@ export default function ScanPage() {
       };
       const result = await postScanRecord(record);
       if (!result.ok) return { ok: false, error: result.error, parts: partsToScan.length, offline: isOffline, createdIds: [] };
+      formTel.markSubmitted();
       if (result.id) createdIds.push(result.id);
       entry = {
         id: result.id || crypto.randomUUID(),
@@ -671,6 +678,7 @@ export default function ScanPage() {
 
   const handleScan = async () => {
     const v = vin.trim().toUpperCase();
+    formTel.markStarted();
     const ok = await processVin(v, unitNumber);
     if (ok) setUnitNumber('');
   };
@@ -810,7 +818,7 @@ export default function ScanPage() {
     : null;
 
   return (
-    <div>
+    <div data-form="scan_vin" data-form-manual="true">
       {isOffline && (
         <div style={{
           padding: '8px 12px', borderRadius: '8px', marginBottom: '12px',

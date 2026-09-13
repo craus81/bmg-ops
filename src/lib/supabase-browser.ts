@@ -30,6 +30,12 @@ const cookieStorage = {
 export function createClient(): any {
   if (client) return client;
   client = createSupabaseClient(supabaseUrl, supabaseAnonKey, {
+    // Resolve fetch per call, not at client creation: supabase-js binds
+    // `fetch` once, and this singleton is created during AuthProvider's
+    // first render — before the usage-telemetry wrapper (src/lib/
+    // usage-telemetry.ts) replaces window.fetch. Looking it up on every
+    // call is what lets slow / failed Supabase REST reads be recorded.
+    global: { fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) },
     auth: {
       persistSession: true,
       autoRefreshToken: true,

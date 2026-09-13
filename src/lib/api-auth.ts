@@ -84,6 +84,17 @@ function extractAccessToken(req: NextRequest): string | null {
   return null;
 }
 
+/**
+ * The session token a request carries (Authorization bearer, then the
+ * Supabase auth cookie / chunked cookies), or null. Exposed for routes
+ * where identity is OPTIONAL — the usage-telemetry beacon resolves a role
+ * from it when present and treats absence as anonymous, without any of the
+ * requireX helpers' 401s. No behaviour change to the guards.
+ */
+export function getAccessToken(req: NextRequest): string | null {
+  return extractAccessToken(req);
+}
+
 // Roles that belong to internal BMG staff — one list, defined in features.ts
 // so client components gate on exactly what requireStaff() enforces. Excludes
 // 'customer' accounts and external CNI 'installer' accounts, which must never

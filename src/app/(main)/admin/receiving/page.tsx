@@ -21,6 +21,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { isOpenPoStatus } from '@/lib/incoming-parts';
 import { theme } from '@/lib/theme';
+import { useFormTelemetry } from '@/lib/use-form-telemetry';
 
 interface PoRow {
   id: string;
@@ -60,6 +61,8 @@ const fmtDate = (d: string | null) =>
   d ? new Date(`${d.slice(0, 10)}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' }) : null;
 
 export default function ReceivingPage() {
+  // Usage telemetry (R7-4): no cancel path here, so abandons are navigate/pagehide only.
+  const formTel = useFormTelemetry('po_receive');
   useRequireFeature('parts_ordering');
   const searchParams = useSearchParams();
   const dialog = useDialog();
@@ -195,6 +198,7 @@ export default function ReceivingPage() {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      formTel.markSubmitted();
       setBanner(body.nsStatus === 'posted'
         ? { tone: 'green', text: `✓ Item receipt ${body.receiptNumber || body.receiptId || ''} posted to NetSuite for PO ${po.tranid || ''}.` }
         : { tone: 'amber', text: `Recorded here, but the NetSuite item receipt could not be posted (${body.nsError || 'unknown error'}). It's on the manual worklist below — key it into NetSuite, then mark it done.` });
@@ -266,7 +270,7 @@ export default function ReceivingPage() {
   };
 
   return (
-    <div style={{ maxWidth: '1000px', margin: '0 auto', padding: '20px 16px 60px' }}>
+    <div data-form="po_receive" style={{ maxWidth: '1000px', margin: '0 auto', padding: '20px 16px 60px' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', marginBottom: '4px' }}>
         <h1 style={{ fontSize: '22px', fontWeight: 800, margin: 0, color: 'var(--text-primary)' }}>Receiving</h1>
         {pos.length > 0 && (

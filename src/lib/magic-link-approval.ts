@@ -68,22 +68,38 @@ export function getRequestUserAgent(req: NextRequest | Request): string {
  * Rate-limit a given IP + action. Returns true when allowed, false when
  * the caller should respond 429. Records the attempt on each call so the
  * window rolls naturally.
+ *
+ * `windowMs` (default: the 1-hour approval window) is the rolling window
+ * the attempts are counted over — the usage-telemetry beacon route passes
+ * 60_000 for a per-minute bucket. Existing callers are unaffected.
  */
-export async function checkRateLimit(ip: string, action: string, maxAttempts: number = RATE_LIMIT_MAX_ATTEMPTS): Promise<boolean> {
+export async function checkRateLimit(
+  ip: string,
+  action: string,
+  maxAttempts: number = RATE_LIMIT_MAX_ATTEMPTS,
+  windowMs: number = RATE_LIMIT_WINDOW_MS,
+): Promise<boolean> {
   // No forwarding header used to mean NO limit at all — a fail-open a
   // direct-to-origin client could sit in forever (Round 3, §7.2.5). Real
   // traffic on Vercel always carries x-forwarded-for; whatever doesn't
   // shares one bucket and gets rate-limited together.
   if (!ip || ip === 'unknown') ip = 'no-ip';
   const supabase = getServiceClient();
-  const cutoff = new Date(Date.now() - RATE_LIMIT_WINDOW_MS).toISOString();
+  const cutoff = new Date(Date.now() - windowMs).toISOString();
 
-  const { count } = await supabase
+  const { count, error } = await supabase
     .from('approval_rate_limits')
     .select('id', { count: 'exact', head: true })
     .eq('ip_address', ip)
     .eq('action', action)
     .gt('attempted_at', cutoff);
+  // A count that errored reads as "0 attempts" and the request is allowed.
+  // That is deliberate, and it is not an "unlimited writes" hole: every
+  // write this gate protects lands in the same database that just failed
+  // to count, so it fails too. Throwing here instead turned the public
+  // booking/approval routes into bare 500s with a stack trace whenever
+  // Supabase blinked (seen in the degraded-mode check). Loud, not silent.
+  if (error) console.error(`[rate-limit] approval_rate_limits count failed (allowing '${action}'): ${error.message}`);
 
   const attempts = count || 0;
   if (attempts >= maxAttempts) return false;

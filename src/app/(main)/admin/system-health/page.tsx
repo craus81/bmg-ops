@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 import ConnectionsPanel from '@/components/ConnectionsPanel';
+import UsagePanel from '@/components/UsagePanel';
 
 interface HealthCheck {
   syncType: string;
@@ -183,7 +184,13 @@ export default function SystemHealthPage() {
   const [flashedEmailId, setFlashedEmailId] = useState<string | null>(null);
   // The Connections tab probes NetSuite and the three RESTlets live, so it
   // mounts (and therefore fetches) only when someone selects it.
-  const [tab, setTab] = useState<'jobs' | 'connections'>('jobs');
+  // ?tab= (deepLinks.systemHealthUsage) lands on the Usage tab directly;
+  // anything else, or nothing, is the Jobs tab as before.
+  type Tab = 'jobs' | 'connections' | 'usage';
+  const [tab, setTab] = useState<Tab>(() => {
+    const t = searchParams.get('tab');
+    return t === 'usage' || t === 'connections' ? t : 'jobs';
+  });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -274,7 +281,7 @@ export default function SystemHealthPage() {
       </div>
 
       <div style={{ display: 'flex', gap: '6px', marginBottom: '14px', flexWrap: 'wrap' }}>
-        {([['jobs', 'Jobs & email'], ['connections', 'Connections']] as const).map(([key, label]) => (
+        {([['jobs', 'Jobs & email'], ['connections', 'Connections'], ['usage', 'Usage & errors']] as const).map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)} style={{
             padding: '7px 14px', borderRadius: '999px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
             background: tab === key ? 'rgba(96,165,250,0.12)' : 'var(--card)',
@@ -285,6 +292,7 @@ export default function SystemHealthPage() {
       </div>
 
       {tab === 'connections' && <ConnectionsPanel />}
+      {tab === 'usage' && <UsagePanel />}
 
       {tab === 'jobs' && (<>
       {writeProbe && !writeProbe.ok && (

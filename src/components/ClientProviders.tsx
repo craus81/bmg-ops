@@ -12,6 +12,7 @@ import BottomNav from '@/components/BottomNav';
 import AiChat from '@/components/AiChat';
 import DeepLinkHandler from '@/components/DeepLinkHandler';
 import NativePushHandler from '@/components/NativePushHandler';
+import UsageTelemetry from '@/components/UsageTelemetry';
 
 function PendingScreen() {
   const { signOut } = useAuth();
@@ -116,6 +117,7 @@ export default function ClientProviders({ children }: { children: React.ReactNod
             <DialogProvider>
               <DeepLinkHandler />
               <NativePushHandler />
+              <UsageTelemetry />
               <AppShell>{children}</AppShell>
             </DialogProvider>
           </PopoutProvider>
