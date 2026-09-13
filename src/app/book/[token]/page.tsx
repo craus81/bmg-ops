@@ -10,6 +10,8 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'next/navigation';
+import UsageTelemetry from '@/components/UsageTelemetry';
+import { useFormTelemetry } from '@/lib/use-form-telemetry';
 
 interface DaySlots { day: string; times: string[] }
 interface BookingView {
@@ -32,6 +34,9 @@ const fmtDay = (day: string, opts: Intl.DateTimeFormatOptions = { weekday: 'shor
 export default function BookingPage() {
   const params = useParams<{ token: string }>();
   const token = params?.token || '';
+  // Usage telemetry (R7-4): anonymous rows keyed to /book/:token — the
+  // token itself never leaves the browser as typed (templated client-side).
+  const formTel = useFormTelemetry('booking');
 
   const [view, setView] = useState<BookingView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +85,8 @@ export default function BookingPage() {
         if (res.status === 409) await load(); // slot taken → refresh the grid
         return;
       }
+      // A cancel is a completed submission too, not an abandon.
+      formTel.markSubmitted();
       setDone(cancel ? 'cancelled' : 'booked');
       setChanging(false);
       await load();
@@ -94,7 +101,8 @@ export default function BookingPage() {
   const heading = view?.kind === 'pickup' ? 'Book your pickup' : 'Schedule your drop-off';
 
   const frame = (children: React.ReactNode) => (
-    <div style={{ minHeight: 'calc(100vh / var(--ts))', background: '#f1f5f9', padding: '20px 16px' }}>
+    <div data-form="booking" style={{ minHeight: 'calc(100vh / var(--ts))', background: '#f1f5f9', padding: '20px 16px' }}>
+      <UsageTelemetry />
       <div style={{ maxWidth: '560px', margin: '0 auto', background: '#fff', borderRadius: '14px', padding: '22px', border: '1px solid #e2e8f0', color: '#0f172a' }}>
         {children}
         <div style={{ textAlign: 'center', marginTop: '24px', paddingTop: '16px', borderTop: '1px solid #e2e8f0', fontSize: '11px', color: '#94a3b8' }}>
@@ -160,7 +168,7 @@ export default function BookingPage() {
           <div style={{ fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>Pick a day</div>
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '14px' }}>
             {(view.slots || []).map(d => (
-              <button key={d.day} onClick={() => { setPickDay(d.day); setPickTime(null); }} style={{
+              <button key={d.day} onClick={() => { formTel.markStarted(); setPickDay(d.day); setPickTime(null); }} style={{
                 padding: '8px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
                 background: pickDay === d.day ? '#1d4ed8' : '#f8fafc',
                 color: pickDay === d.day ? '#fff' : '#334155',
@@ -177,7 +185,7 @@ export default function BookingPage() {
               <div style={{ fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>Pick a time</div>
               <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '14px' }}>
                 {(view.slots || []).find(d => d.day === pickDay)?.times.map(t => (
-                  <button key={t} onClick={() => setPickTime(t)} style={{
+                  <button key={t} onClick={() => { formTel.markStarted(); setPickTime(t); }} style={{
                     padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
                     background: pickTime === t ? '#1d4ed8' : '#f8fafc',
                     color: pickTime === t ? '#fff' : '#334155',

@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import PhoneInput from '@/components/PhoneInput';
+import { useFormTelemetry } from '@/lib/use-form-telemetry';
 
 const TERMS_OPTIONS = [
   { value: 'net_15', label: 'Net 15' },
@@ -38,6 +39,8 @@ export default function CreditApplicationPage() {
   // Honeypot — hidden from humans; bots that fill it get a silent no-op
   // server-side.
   const [website, setWebsite] = useState('');
+  // Usage telemetry (R7-4): started/abandoned counts only — no field is ever read.
+  const formTel = useFormTelemetry('credit_application');
 
   const u = (field: string, value: string) => setForm(prev => ({ ...prev, [field]: value }));
 
@@ -70,6 +73,7 @@ export default function CreditApplicationPage() {
       return;
     }
 
+    formTel.markSubmitted();
     setSubmitted(true);
     setSubmitting(false);
   };
@@ -90,7 +94,7 @@ export default function CreditApplicationPage() {
 
   return (
     <div style={{ minHeight: 'calc(100vh / var(--ts))', background: '#f4f5f7', padding: '20px' }}>
-      <form onSubmit={handleSubmit} style={{ maxWidth: '680px', margin: '0 auto' }}>
+      <form onSubmit={handleSubmit} data-form="credit_application" style={{ maxWidth: '680px', margin: '0 auto' }}>
         {/* Honeypot — off-screen, not display:none (some bots skip hidden
             inputs), tabIndex -1 + aria-hidden so humans never reach it. */}
         <div style={{ position: 'absolute', left: '-9999px', top: 'auto', width: '1px', height: '1px', overflow: 'hidden' }} aria-hidden="true">

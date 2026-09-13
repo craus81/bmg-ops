@@ -42,6 +42,7 @@ import { LEAD_SOURCES, OPP_TYPES } from '@/lib/lead-sources';
 import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { SKIP_LABEL, type SkippedRecipient } from '@/lib/segment-blast';
+import { useFormTelemetry } from '@/lib/use-form-telemetry';
 
 interface Prospect {
   id: string;
@@ -163,6 +164,8 @@ export default function ProspectsPage() {
   // record_type 'vendor' = supplier/partner rep: same record, no NetSuite push.
   const emptyForm = { company_name: '', contact_name: '', title: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1, record_type: 'customer', lead_source: '' };
   const [showCreate, setShowCreate] = useState(false);
+  // Usage telemetry (R7-4): Cancel flips active → a started attempt is an abandon.
+  const formTel = useFormTelemetry('prospect_create', { active: showCreate });
   const [form, setForm] = useState(emptyForm);
   // Create the NetSuite customer in the same click (owner decision
   // 2026-09-02, restoring the pre-lead-tier default). Unticking it keeps a
@@ -451,7 +454,7 @@ export default function ProspectsPage() {
         });
         body = await res.json().catch(() => ({}));
       }
-      if (res.ok && body.prospect?.id) data = body.prospect;
+      if (res.ok && body.prospect?.id) { data = body.prospect; formTel.markSubmitted(); }
       else throw new Error(body?.error || `HTTP ${res.status}`);
     } catch (e: any) {
       setSaving(false);
@@ -804,7 +807,7 @@ export default function ProspectsPage() {
 
       {/* Create form */}
       {showCreate && (
-        <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '14px', marginBottom: '14px' }}>
+        <div data-form="prospect_create" style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '14px', marginBottom: '14px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
             <div style={{ gridColumn: '1 / -1', display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
               {([['customer', 'Customer'], ['vendor', 'Vendor']] as const).map(([k, label]) => (

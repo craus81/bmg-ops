@@ -11,12 +11,15 @@ import { loadCompaniesWithCounts, type CompanyOption } from '@/lib/cni-companies
 import { loadBillableCustomers, type BillableCustomer } from '@/lib/billable-customers';
 import { uploadJobFiles } from '@/lib/job-files';
 import { isVerizonRfidPart } from '@/lib/rfid';
+import { useFormTelemetry } from '@/lib/use-form-telemetry';
 
 export default function CreateCniJobPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isAdmin, user, hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
+  // Usage telemetry (R7-4): router.back() unmounts → exit 'close'.
+  const formTel = useFormTelemetry('cni_job_new');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [companies, setCompanies] = useState<CompanyOption[]>([]);
@@ -301,6 +304,10 @@ export default function CreateCniJobPage() {
         })));
       }
 
+      // The job row exists from here on — attachments and assignment are
+      // best-effort extras, so this is the point the attempt is submitted.
+      if (job) formTel.markSubmitted();
+
       // Upload attachments under the new job's id, then save the list.
       if (jobFiles.length > 0 && job) {
         const { uploaded } = await uploadJobFiles(job.id, jobFiles);
@@ -355,7 +362,7 @@ export default function CreateCniJobPage() {
   };
 
   return (
-    <div>
+    <div data-form="cni_job_new">
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
         <button onClick={() => router.back()} style={{ fontSize: '20px', color: 'var(--text-muted)' }}>←</button>

@@ -218,6 +218,18 @@ export const deepLinks = {
   installerAvailableJob: (jobId: string) => `/installer/available/${jobId}`,
   /** System health dashboard (checks are keyed by sync type, not record ids). */
   systemHealth: () => '/admin/system-health',
+  /** System health's Usage tab (R7-4 browser telemetry), optionally
+   *  pre-filtered to one event kind / templated page / form id and window.
+   *  The tab reads these params, applies the filter and flashes the row.
+   *  Any future alert about client errors must pass this as its url. */
+  systemHealthUsage: (opts?: { kind?: string | null; page?: string | null; form?: string | null; days?: 7 | 30 }) => {
+    const params = new URLSearchParams({ tab: 'usage' });
+    if (opts?.kind) params.set('kind', opts.kind);
+    if (opts?.page) params.set('page', opts.page);
+    if (opts?.form) params.set('form', opts.form);
+    if (opts?.days) params.set('days', String(opts.days));
+    return `/admin/system-health?${params.toString()}`;
+  },
   /** The audit log pre-filtered to ONE record (R6-13) — the destination for
    *  the History control on estimate, check-in, graphics, upfit and CNI
    *  pages. `table` must be the real table name, since that is what

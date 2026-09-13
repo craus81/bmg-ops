@@ -29,6 +29,7 @@ import { FALLBACK_SALES_TAX_RATE, pctToRate, rateToPct } from '@/lib/sales-tax';
 import NumberInput from '@/components/NumberInput';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
 import { estimateHeadlineNumber, estimateAltNumber, estimateNumberMatches } from '@/lib/estimate-number';
+import { useFormTelemetry } from '@/lib/use-form-telemetry';
 
 interface Part {
   id: string;
@@ -282,6 +283,9 @@ export default function EstimatesPage() {
   const supabase = createClient();
 
   const [view, setView] = useState<ViewMode>('list');
+  // Usage telemetry (R7-4): a started builder attempt that returns to the
+  // list unsaved is an abandon; the localStorage draft mechanism is separate.
+  const formTel = useFormTelemetry('estimate_builder', { active: view === 'builder' });
   const [estimates, setEstimates] = useState<Estimate[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -1505,6 +1509,7 @@ export default function EstimatesPage() {
         // ('new' on a first save, which then re-keys under the real id).
         clearEstimateDraft(editingId);
         if (savedId !== editingId) clearEstimateDraft(savedId);
+        formTel.markSubmitted();
         setDraftSession(s => s + 1);
         if (!editingId || revisionJumped) setEditingId(savedId);
         // On a revision jump the saved notes carry the provenance line —
@@ -2987,7 +2992,7 @@ export default function EstimatesPage() {
   const isPushed = editingId && estimates.find(e => e.id === editingId)?.netsuite_estimate_id;
 
   return (
-    <div>
+    <div data-form="estimate_builder">
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
         <button
