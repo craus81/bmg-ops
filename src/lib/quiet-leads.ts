@@ -124,36 +124,54 @@ export async function loadQuietLeads(
   // id: thirty days of CRM activity is a small read, where pulling every
   // activity ever logged for every active lead is not (a busy lead carries
   // years of rows, and those are exactly the leads this queue does not want).
+  //
+  // Only a HUMAN touch counts, hence `auto = false`. Migration 268 added
+  // that column to mark rows the app logged for itself, and `logAuto` writes
+  // entries like "Added contact: Jane" and "Added to NetSuite as customer
+  // #4821" — real events, but nobody spoke to the customer. Counting them is
+  // how a lead nobody has called drops off this queue the morning after a
+  // sync writes to the record, which is the same failure as the
+  // `prospects.updated_at` tile this queue replaced.
   const touchedRecently = new Set<string>();
-  const { data: recent } = await fetchAllRows<{ prospect_id: string }>((from, to) =>
+  const { data: recent, error: recentErr } = await fetchAllRows<{ prospect_id: string }>((from, to) =>
     service
       .from('prospect_activities')
       .select('prospect_id')
+      .eq('auto', false)
       .gte('created_at', cutoffIso)
       .order('id')
       .range(from, to),
   );
-  for (const a of recent || []) touchedRecently.add(a.prospect_id);
+  // A failed read must not read as "nobody has been touched" — that silently
+  // fills the queue with leads someone spoke to yesterday. Fail loudly; the
+  // route turns this into a 500 the page can show.
+  if (recentErr) throw new Error(`Could not read recent activity: ${recentErr.message}`);
+  for (const a of recent) touchedRecently.add(a.prospect_id);
 
   const candidates = prospects.filter((p: any) => !touchedRecently.has(p.id));
   if (candidates.length === 0) return [];
 
-  // Pass 2 — the last touch for the quiet ones only, so the row can say what
-  // it was and when. Newest-first; first seen per lead wins.
+  // Pass 2 — the last human touch for the quiet ones only, so the row can say
+  // what it was and when. Newest-first; first seen per lead wins.
   const latest = new Map<string, ActivityRow>();
   const ids = candidates.map((p: any) => p.id);
   for (let i = 0; i < ids.length; i += 200) {
     const slice = ids.slice(i, i + 200);
-    const { data: acts } = await fetchAllRows<ActivityRow>((from, to) =>
+    const { data: acts, error: actsErr } = await fetchAllRows<ActivityRow>((from, to) =>
       service
         .from('prospect_activities')
         .select('prospect_id, summary, created_at')
         .in('prospect_id', slice)
+        .eq('auto', false)
         .order('created_at', { ascending: false })
         .order('id')
         .range(from, to),
     );
-    for (const a of acts || []) {
+    // Same reason as pass 1, and one more: `touchLabel` quotes this row's
+    // summary back to the user as "Last touch: …", so an app event here
+    // would put words in a person's mouth.
+    if (actsErr) throw new Error(`Could not read lead activity: ${actsErr.message}`);
+    for (const a of acts) {
       if (!latest.has(a.prospect_id)) latest.set(a.prospect_id, a);
     }
   }
