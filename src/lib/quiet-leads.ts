@@ -53,6 +53,14 @@ export interface ActivityRow {
  * The most recent real touch, and what dated it. Activities win; the record's
  * own timestamps are a fallback that says so rather than passing itself off
  * as contact.
+ *
+ * With no logged contact, the fallback is when the lead ARRIVED, not when the
+ * record was last edited (owner decision 2026-09-13). A lead nobody has ever
+ * called has been quiet since the day it came in, and dating it from an edit
+ * let a corrected phone number or a NetSuite sync hide a 400-day-old lead
+ * behind a one-day clock. `updated_at` survives only as a last resort for a
+ * row with no creation date at all — both columns are nullable (migration
+ * 046) — and it still labels itself an edit rather than contact.
  */
 export function lastTouchOf(
   prospect: { updated_at?: string | null; created_at?: string | null },
@@ -61,8 +69,8 @@ export function lastTouchOf(
   if (latestActivity?.created_at) {
     return { at: latestActivity.created_at, source: 'activity', summary: latestActivity.summary || null };
   }
-  if (prospect.updated_at) return { at: prospect.updated_at, source: 'record_updated', summary: null };
   if (prospect.created_at) return { at: prospect.created_at, source: 'created', summary: null };
+  if (prospect.updated_at) return { at: prospect.updated_at, source: 'record_updated', summary: null };
   return { at: null, source: 'unknown', summary: null };
 }
 
@@ -78,7 +86,7 @@ export function touchLabel(touch: LastTouch): string {
   switch (touch.source) {
     case 'activity': return touch.summary ? `Last touch: ${touch.summary}` : 'Last logged touch';
     case 'record_updated': return 'No contact ever logged — dated from the last edit to the record';
-    case 'created': return 'No contact ever logged — dated from when the record was created';
+    case 'created': return 'No contact ever logged — quiet since the lead came in';
     default: return 'No date on record';
   }
 }
