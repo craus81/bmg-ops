@@ -97,11 +97,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setFeatureOverrides(overridesRes.data || []);
   };
 
-  /** Retry the profile read on demand — what the banner's Retry calls. */
+  /**
+   * Retry the profile read — the banner's button, the backoff timer, and
+   * the browser's `online` event all call this. One in-flight read at a
+   * time: a manual press landing on top of a scheduled retry must not fire
+   * two reads that race to set profileError against each other.
+   */
+  const retryInFlight = useRef(false);
   const retryProfile = async () => {
-    if (!user) return;
+    if (!user || retryInFlight.current) return;
+    retryInFlight.current = true;
     try { await loadProfileAndOverrides(user.id); } catch { /* profileError is already set */ }
+    finally { retryInFlight.current = false; }
   };
+
+  // Self-healing. A shop tablet whose wifi drops usually gets it back in
+  // under a minute, and nobody on the floor should have to know to press
+  // Retry. While the profile read is failing: retry on a backoff (2s, 4s …
+  // capped at 30s, forever — an outage can be long), and retry immediately
+  // the moment the browser reports the network is back. `retryAttempt`
+  // is state, not a ref, so the banner can say it is trying.
+  const [retryAttempt, setRetryAttempt] = useState(0);
+  useEffect(() => {
+    if (!profileError || !user) { setRetryAttempt(0); return; }
+    const delay = Math.min(2000 * 2 ** retryAttempt, 30_000);
+    const timer = setTimeout(async () => {
+      await retryProfile();
+      // Still failing after this attempt? Advance the backoff. (A success
+      // flips profileError false, which re-runs this effect and resets.)
+      if (mountedRef.current) setRetryAttempt(a => a + 1);
+    }, delay);
+    const onOnline = () => { setRetryAttempt(0); retryProfile(); };
+    window.addEventListener('online', onOnline);
+    return () => { clearTimeout(timer); window.removeEventListener('online', onOnline); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- retryProfile is stable enough per render; re-arm on error/attempt/user only
+  }, [profileError, retryAttempt, user]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -218,8 +248,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           <span>Couldn&rsquo;t load your permissions.</span>
           <span style={{ fontWeight: 500, flex: 1, minWidth: '200px' }}>
             You&rsquo;re still signed in — pages that need a role are on hold until this succeeds.
+            {' '}Retrying automatically{retryAttempt > 0 ? ` (attempt ${retryAttempt + 1})` : ''}&hellip;
           </span>
-          <button onClick={() => { retryProfile(); }} style={{
+          <button onClick={() => { setRetryAttempt(0); retryProfile(); }} style={{
             border: '1px solid rgba(0,0,0,.35)', borderRadius: '6px', padding: '4px 12px',
             fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'transparent', color: 'inherit',
           }}>Retry</button>
