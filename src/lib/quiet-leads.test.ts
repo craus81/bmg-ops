@@ -13,14 +13,19 @@ describe('lastTouchOf', () => {
     expect(t).toEqual({ at: ago(40), source: 'activity', summary: 'Called Dana' });
   });
 
-  it('falls back to the record edit and SAYS so — an edit is not contact', () => {
+  it('a never-contacted lead dates from ARRIVAL, not from a recent edit', () => {
+    // The whole point: someone fixed a typo 3 days ago on a lead that came in
+    // 200 days ago and has never been called. It is 200 days quiet.
     const t = lastTouchOf({ updated_at: ago(3), created_at: ago(200) }, null);
-    expect(t.source).toBe('record_updated');
-    expect(t.at).toBe(ago(3));
+    expect(t.source).toBe('created');
+    expect(t.at).toBe(ago(200));
+    expect(touchLabel(t)).toBe('No contact ever logged — quiet since the lead came in');
   });
 
-  it('falls back again to creation when the record was never edited', () => {
-    expect(lastTouchOf({ created_at: ago(90) }).source).toBe('created');
+  it('falls back to the record edit only when there is no arrival date at all', () => {
+    const t = lastTouchOf({ updated_at: ago(3) }, null);
+    expect(t.source).toBe('record_updated');
+    expect(t.at).toBe(ago(3));
   });
 
   it('is unknown rather than now when the record carries no dates at all', () => {
@@ -159,5 +164,31 @@ describe('loadQuietLeads — an app-logged row is not a touch', () => {
       estimates: [],
     }, 'prospect_activities');
     await expect(loadQuietLeads(svc, { now: NOW })).rejects.toThrow(/connection reset/);
+  });
+});
+
+describe('loadQuietLeads — a never-contacted lead cannot be hidden by an edit', () => {
+  it('surfaces a lead that came in long ago and was edited yesterday', () => {
+    // Before the arrival-date rule this lead read as 1 day quiet and never
+    // appeared, though nobody had ever spoken to them.
+    const svc = fakeService({
+      prospects: [lead('p1', { created_at: ago(400), updated_at: ago(1) })],
+      prospect_activities: [],
+      estimates: [],
+    });
+    return loadQuietLeads(svc, { now: NOW }).then(leads => {
+      expect(leads.map(l => l.id)).toEqual(['p1']);
+      expect(leads[0].daysQuiet).toBe(400);
+      expect(leads[0].lastTouch.source).toBe('created');
+    });
+  });
+
+  it('a genuinely new lead is not dragged in — it has not been quiet long enough', () => {
+    const svc = fakeService({
+      prospects: [lead('p1', { created_at: ago(5), updated_at: ago(5) })],
+      prospect_activities: [],
+      estimates: [],
+    });
+    return loadQuietLeads(svc, { now: NOW }).then(leads => expect(leads).toEqual([]));
   });
 });
