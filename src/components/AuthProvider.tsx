@@ -66,10 +66,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * on an answer it never got.
    */
   const loadProfileAndOverrides = async (userId: string) => {
-    const [profileRes, overridesRes] = await Promise.all([
-      supabase.from('profiles').select('*').eq('id', userId).maybeSingle(),
-      supabase.from('user_feature_overrides').select('feature, granted').eq('user_id', userId),
-    ]);
+    // Two shapes of failure, and BOTH have to land in profileError. A query
+    // that reaches PostgREST and is refused comes back as { error }; one that
+    // never reaches it at all (no network, DNS, TLS) REJECTS instead. Checking
+    // only the first left the second silent — the app sat on a spinner with no
+    // banner, which is how this fix first shipped half-done.
+    let profileRes: any, overridesRes: any;
+    try {
+      [profileRes, overridesRes] = await Promise.all([
+        supabase.from('profiles').select('*').eq('id', userId).maybeSingle(),
+        supabase.from('user_feature_overrides').select('feature, granted').eq('user_id', userId),
+      ]);
+    } catch (e: any) {
+      if (mountedRef.current) setProfileError(true);
+      throw e;
+    }
     if (!mountedRef.current) return;
     // maybeSingle() returns data:null with NO error for a genuinely missing
     // row — that case is a real "no profile", not a failure.
