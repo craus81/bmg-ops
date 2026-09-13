@@ -162,6 +162,10 @@ export default function CustomerDashboardPage() {
   const { user, profile } = useAuth();
   const [data, setData] = useState<PortalData | null>(null);
   const [loading, setLoading] = useState(true);
+  /** The portal read failed. NOT the same as "this login has no company" —
+   *  telling a customer their account isn't set up when we simply couldn't
+   *  reach the server sends them to the phone to fix nothing. */
+  const [loadFailed, setLoadFailed] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [lightbox, setLightbox] = useState<string | null>(null);
 
@@ -170,8 +174,9 @@ export default function CustomerDashboardPage() {
     try {
       const res = await fetch('/api/customer/portal');
       const body = await res.json();
-      if (res.ok) setData(body);
-    } catch { /* empty state covers it */ }
+      if (res.ok) { setData(body); setLoadFailed(false); }
+      else setLoadFailed(true);
+    } catch { setLoadFailed(true); }
     setLoading(false);
   }, []);
 
@@ -191,6 +196,26 @@ export default function CustomerDashboardPage() {
 
   if (loading) {
     return <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading your vehicles…</div>;
+  }
+
+  if (loadFailed) {
+    return (
+      <div>
+        <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>My Vehicles</div>
+        <div style={{ ...card, marginTop: '14px', background: 'var(--warning-bg)', border: '1px solid var(--warning-border)' }}>
+          <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--warning)' }}>Couldn&apos;t load your vehicles</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.5 }}>
+            Something went wrong reaching us — this isn&apos;t a problem with your account. Check your
+            connection and try again.
+          </div>
+          <button onClick={() => load()} style={{
+            marginTop: '10px', border: '1px solid var(--border)', borderRadius: '8px',
+            padding: '7px 14px', fontSize: '13px', fontWeight: 700, cursor: 'pointer',
+            background: 'var(--card)', color: 'var(--text-primary)',
+          }}>Try again</button>
+        </div>
+      </div>
+    );
   }
 
   if (!data?.linked) {
