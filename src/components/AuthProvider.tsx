@@ -27,17 +27,25 @@ interface AuthContextType {
   setViewAsRole: (role: string | null) => void;
   /** True if the actual user is admin (even when viewing as another role) */
   isActualAdmin: boolean;
+  /** The profile read failed, so roles are UNKNOWN — not absent. Nothing may
+   *  treat this as "no permissions": that is how a dropped connection used to
+   *  look identical to a revoked account. */
+  profileError: boolean;
+  retryProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
   user: null, profile: null, isAdmin: false, isProduction: false, isGraphicsProduction: false, isSales: false, isCustomer: false, isInstaller: false, isFieldTech: false, isShopTech: false, hasRole: () => false, hasFeature: () => false, loading: true, signOut: async () => {},
   viewAsRole: null, setViewAsRole: () => {}, isActualAdmin: false,
+  profileError: false, retryProfile: async () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [featureOverrides, setFeatureOverrides] = useState<{ feature: string; granted: boolean }[]>([]);
+  /** The profile read failed — roles are UNKNOWN, not absent. */
+  const [profileError, setProfileError] = useState(false);
   const [loading, setLoading] = useState(true);
   const mountedRef = useRef(true);
   // True once init() has finished its awaited profile load (or failed).
@@ -46,15 +54,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const initDoneRef = useRef(false);
   const supabase = createClient();
 
+  /**
+   * Load the row every role flag is derived from.
+   *
+   * A FAILED read here is not "this user has no roles" — but that is exactly
+   * how it used to land: the caller swallowed the error, `profile` stayed
+   * null, and every role-gated page then bounced the user to /home with no
+   * explanation. On a dropped connection the whole app silently behaved as
+   * though the person's access had been revoked. The failure is now recorded
+   * so the app can say "we couldn't load your permissions" instead of acting
+   * on an answer it never got.
+   */
   const loadProfileAndOverrides = async (userId: string) => {
-    const [profileRes, overridesRes] = await Promise.all([
-      supabase.from('profiles').select('*').eq('id', userId).maybeSingle(),
-      supabase.from('user_feature_overrides').select('feature, granted').eq('user_id', userId),
-    ]);
-    if (mountedRef.current) {
-      setProfile(profileRes.data);
-      setFeatureOverrides(overridesRes.data || []);
+    // Two shapes of failure, and BOTH have to land in profileError. A query
+    // that reaches PostgREST and is refused comes back as { error }; one that
+    // never reaches it at all (no network, DNS, TLS) REJECTS instead. Checking
+    // only the first left the second silent — the app sat on a spinner with no
+    // banner, which is how this fix first shipped half-done.
+    let profileRes: any, overridesRes: any;
+    try {
+      [profileRes, overridesRes] = await Promise.all([
+        supabase.from('profiles').select('*').eq('id', userId).maybeSingle(),
+        supabase.from('user_feature_overrides').select('feature, granted').eq('user_id', userId),
+      ]);
+    } catch (e: any) {
+      if (mountedRef.current) setProfileError(true);
+      throw e;
     }
+    if (!mountedRef.current) return;
+    // maybeSingle() returns data:null with NO error for a genuinely missing
+    // row — that case is a real "no profile", not a failure.
+    // Either read failing leaves the permission picture incomplete: without
+    // the overrides row a user who was individually granted a feature
+    // silently loses it, which looks exactly like the grant being revoked.
+    const failure = profileRes.error || overridesRes.error;
+    if (failure) {
+      setProfileError(true);
+      throw new Error(failure.message);
+    }
+    setProfileError(false);
+    setProfile(profileRes.data);
+    setFeatureOverrides(overridesRes.data || []);
+  };
+
+  /** Retry the profile read on demand — what the banner's Retry calls. */
+  const retryProfile = async () => {
+    if (!user) return;
+    try { await loadProfileAndOverrides(user.id); } catch { /* profileError is already set */ }
   };
 
   useEffect(() => {
@@ -151,8 +197,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const features = resolveFeatures(userRoles, viewAsRole ? [] : featureOverrides);
   const hasFeature = (feature: FeatureKey) => features.has(feature);
 
+  // UNKNOWN roles are exposed as "still resolving", because that is what the
+  // whole app already knows how to wait for. Only 17 pages use
+  // useRequireFeature; 79 more roll their own `if (authLoading) return;`
+  // before deciding to bounce. Folding profileError into `loading` holds all
+  // of them on one line — otherwise a dropped connection still redirected the
+  // other 79 to /home, which is the bug this change exists to remove. The
+  // banner above says why the page is waiting and offers Retry; success
+  // clears profileError and every gate evaluates normally.
+  const authResolving = loading || profileError;
+
   return (
-    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isGraphicsProduction, isSales, isCustomer, isInstaller, isFieldTech, isShopTech, hasRole, hasFeature, loading, signOut, viewAsRole, setViewAsRole, isActualAdmin }}>
+    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isGraphicsProduction, isSales, isCustomer, isInstaller, isFieldTech, isShopTech, hasRole, hasFeature, loading: authResolving, signOut, viewAsRole, setViewAsRole, isActualAdmin, profileError, retryProfile }}>
+      {profileError && (
+        <div role="alert" style={{
+          position: 'sticky', top: 0, zIndex: 60, padding: '9px 14px',
+          background: 'var(--warning)', color: '#1a1200', fontSize: '13px', fontWeight: 700,
+          display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap',
+        }}>
+          <span>Couldn&rsquo;t load your permissions.</span>
+          <span style={{ fontWeight: 500, flex: 1, minWidth: '200px' }}>
+            You&rsquo;re still signed in — pages that need a role are on hold until this succeeds.
+          </span>
+          <button onClick={() => { retryProfile(); }} style={{
+            border: '1px solid rgba(0,0,0,.35)', borderRadius: '6px', padding: '4px 12px',
+            fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'transparent', color: 'inherit',
+          }}>Retry</button>
+        </div>
+      )}
       {children}
     </AuthContext.Provider>
   );
@@ -172,10 +244,14 @@ export const useAuth = () => useContext(AuthContext);
 export function useRequireFeature(feature: FeatureKey) {
   const { hasFeature, loading } = useAuth();
   const router = useRouter();
-  const allowed = !loading && hasFeature(feature);
+  // `loading` already folds in profileError (see AuthProvider): UNKNOWN roles
+  // must never read as DENIED, so the gate holds rather than redirecting on
+  // an answer it never got.
+  const undecided = loading;
+  const allowed = !undecided && hasFeature(feature);
   useEffect(() => {
-    if (!loading && !hasFeature(feature)) router.push('/home');
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- gate on loading; hasFeature/router are stable within a resolved render
-  }, [loading, feature]);
-  return { loading, allowed };
+    if (!undecided && !hasFeature(feature)) router.push('/home');
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- gate on the undecided flag; hasFeature/router are stable within a resolved render
+  }, [undecided, feature]);
+  return { loading: undecided, allowed };
 }
