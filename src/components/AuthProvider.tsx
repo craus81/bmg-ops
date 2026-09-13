@@ -130,8 +130,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const onOnline = () => { setRetryAttempt(0); retryProfile(); };
     window.addEventListener('online', onOnline);
     return () => { clearTimeout(timer); window.removeEventListener('online', onOnline); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- retryProfile is stable enough per render; re-arm on error/attempt/user only
-  }, [profileError, retryAttempt, user]);
+  // Keyed on the user's id, not the object: setUser() hands out a fresh
+  // object on every auth event, and a new object here would clear and
+  // re-arm the timer before it ever fired.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- retryProfile is stable enough per render; re-arm on error/attempt/user-id only
+  }, [profileError, retryAttempt, user?.id]);
 
   useEffect(() => {
     mountedRef.current = true;
