@@ -18,6 +18,7 @@ import { RollNesting, RollFilmInfo } from '@/components/RollNesting';
 import NumberInput from '@/components/NumberInput';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
+import { summarizeAudits, applyCoverageNorm, type TemplateAudit, type AuditSummary } from '@/lib/calibration-audit';
 import { estimateHeadlineNumber } from '@/lib/estimate-number';
 import {
   DEFAULT_ROLL,
@@ -538,6 +539,11 @@ export default function WrapQuotePage() {
   const [tplUploading, setTplUploading] = useState(false);
   const [calibrating, setCalibrating] = useState(false);
   const [calibStatus, setCalibStatus] = useState('');
+  // Scale audit (read-only): re-derives every template's scale from its
+  // source files and compares it to what the estimator measures with today.
+  const [auditing, setAuditing] = useState(false);
+  const [auditStatus, setAuditStatus] = useState('');
+  const [audits, setAudits] = useState<TemplateAudit[] | null>(null);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
   useEffect(() => { loadAll(); }, []);
@@ -2197,6 +2203,58 @@ export default function WrapQuotePage() {
     }
   };
 
+  // Scale audit. Reads only — it never writes a px_per_in — because the
+  // question it answers ("can the library's square footages be trusted?")
+  // has to be settled before anybody changes a number. Loops the same
+  // cursor batches as auto-calibration, then scores the whole library at
+  // once: the templates a person calibrated by hand are the reference, and
+  // the gap between their coverage and everyone else's IS the scale error.
+  const runScaleAudit = async () => {
+    setAuditing(true);
+    setAuditStatus('Reading template source files…');
+    setAudits(null);
+    let cursor: string | null = null;
+    const all: TemplateAudit[] = [];
+    try {
+      do {
+        const res: Response = await apiFetch('/api/admin/calibration-audit', {
+          method: 'POST',
+          body: JSON.stringify({ cursor }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          setAuditStatus(`Failed: ${data.error || 'Unknown error'}`);
+          return;
+        }
+        all.push(...(data.audits as TemplateAudit[]));
+        cursor = data.nextCursor;
+        setAuditStatus(`Checked ${all.length} templates…`);
+      } while (cursor);
+      const firstPass = summarizeAudits(all);
+      setAudits(applyCoverageNorm(all, firstPass.referenceCoverage));
+      setAuditStatus(`Done — ${all.length} templates checked.`);
+    } catch (e: any) {
+      setAuditStatus(`Failed: ${e.message}`);
+    } finally {
+      setAuditing(false);
+    }
+  };
+
+  const auditSummary: AuditSummary | null = useMemo(
+    () => (audits ? summarizeAudits(audits) : null), [audits]);
+
+  // Worst first: the templates quoting furthest from reality are the ones
+  // worth a hand recalibration, and the rest is a long tail of "fine".
+  const auditProblems = useMemo(() => {
+    if (!audits) return [];
+    const rank: Record<string, number> = {
+      impossible: 0, 'suspect-cropped-preview': 1, 'suspect-scale': 2, unreadable: 3, uncalibrated: 4,
+    };
+    return audits
+      .filter(a => a.verdict in rank)
+      .sort((a, b) => (rank[a.verdict] - rank[b.verdict]) || (a.coverage ?? 1) - (b.coverage ?? 1));
+  }, [audits]);
+
   // ----- Shared styles -----
   const inputStyle: React.CSSProperties = { width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' };
   const labelStyle: React.CSSProperties = { fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' };
@@ -3563,6 +3621,107 @@ export default function WrapQuotePage() {
               </div>
             );
           })()}
+
+          <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
+            {sectionHead('Scale Audit')}
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '10px', lineHeight: 1.5 }}>
+              Every panel you draw is measured in preview pixels and divided by the template&apos;s scale, so a scale that&apos;s too small
+              makes each panel measure too long — and because quotes bill <b>area</b>, the error is squared: a 16% scale error prints
+              about 35% more square footage. This re-reads each template&apos;s vector file and preview and reports what it finds.
+              It doesn&apos;t change anything.
+            </div>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: auditSummary ? '12px' : 0 }}>
+              <button onClick={runScaleAudit} disabled={auditing} style={{ ...btnStyle('#fff', '#0ea5e9'), border: 'none' }}>
+                {auditing ? 'Checking…' : 'Run Scale Audit'}
+              </button>
+              {auditStatus && <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)' }}>{auditStatus}</span>}
+            </div>
+
+            {auditSummary && (
+              <>
+                {auditSummary.impliedAreaError != null ? (
+                  <div style={{
+                    background: auditSummary.impliedAreaError > 1.05 ? 'rgba(239,68,68,0.08)' : 'rgba(34,197,94,0.08)',
+                    border: `1px solid ${auditSummary.impliedAreaError > 1.05 ? 'rgba(239,68,68,0.35)' : 'rgba(34,197,94,0.35)'}`,
+                    borderRadius: '8px', padding: '10px', marginBottom: '12px', fontSize: '11px', lineHeight: 1.6,
+                  }}>
+                    <b style={{ fontSize: '13px' }}>
+                      Auto-calibrated templates measure {fmt(Math.abs(auditSummary.impliedLinearError! - 1) * 100)}%{' '}
+                      {auditSummary.impliedLinearError! > 1 ? 'long' : 'short'} — areas bill{' '}
+                      {fmt(Math.abs(auditSummary.impliedAreaError! - 1) * 100)}%{' '}
+                      {auditSummary.impliedAreaError! > 1 ? 'high' : 'low'}.
+                    </b>
+                    <div style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      On the {auditSummary.referenceCount} template{auditSummary.referenceCount !== 1 ? 's' : ''} somebody calibrated by hand,
+                      the vehicle covers {fmt(auditSummary.referenceCoverage! * 100)}% of its preview. On the {auditSummary.autoCount} auto-calibrated
+                      ones it covers {fmt(auditSummary.autoCoverage! * 100)}%. Same drawings, same vehicles — so that gap is the scale, not the metal.
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.35)', borderRadius: '8px', padding: '10px', marginBottom: '12px', fontSize: '11px', lineHeight: 1.6 }}>
+                    <b>Not enough hand-measured templates to score the library yet.</b>
+                    <div style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      This compares auto-calibrated templates against ones a person measured by hand, and there {auditSummary.referenceCount === 1 ? 'is only 1' : `are ${auditSummary.referenceCount}`} of those
+                      with a known vehicle length. Open two or three templates you quote often in the Estimator, hit <b>Recalibrate Scale</b>, drag a line
+                      along a dimension you can verify, and run this again — that gives it the yardstick it needs.
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '10px' }}>
+                  <span>{auditSummary.total} checked</span>
+                  {([
+                    ['impossible', 'scale provably wrong', '#ef4444'],
+                    ['suspect-cropped-preview', 'cropped-preview risk', '#f59e0b'],
+                    ['suspect-scale', 'off the hand-measured norm', '#f59e0b'],
+                    ['hand-calibrated', 'hand-measured', '#22c55e'],
+                    ['ok', 'matches its files', '#22c55e'],
+                    ['uncalibrated', 'no scale', 'var(--text-muted)'],
+                    ['unreadable', 'files unreadable', 'var(--text-muted)'],
+                  ] as [keyof typeof auditSummary.byVerdict, string, string][]).map(([k, label, color]) =>
+                    auditSummary.byVerdict[k] > 0 ? (
+                      <span key={k} style={{ color }}>{auditSummary.byVerdict[k]} {label}</span>
+                    ) : null)}
+                </div>
+
+                {auditProblems.length > 0 && (
+                  <div style={{ maxHeight: 'calc(45vh / var(--ts))', overflowY: 'auto', border: `1px solid ${theme.border}`, borderRadius: '8px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '10px' }}>
+                      <thead>
+                        <tr style={{ background: 'var(--input-bg)', position: 'sticky', top: 0 }}>
+                          {['Template', 'Scale (px/in)', 'Should be', 'Vehicle covers', 'What it means'].map(h => (
+                            <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px', whiteSpace: 'nowrap' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {auditProblems.slice(0, 200).map(a => (
+                          <tr key={a.id} style={{ borderTop: `1px solid ${theme.border}` }}>
+                            <td style={{ padding: '6px 8px', fontWeight: 700 }}>{a.label}</td>
+                            <td style={{ padding: '6px 8px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                              {a.storedPxPerIn == null ? '—' : fmt(a.storedPxPerIn)}
+                            </td>
+                            <td style={{ padding: '6px 8px', color: a.suggestedPxPerIn != null ? '#f59e0b' : 'var(--text-muted)', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                              {a.suggestedPxPerIn != null ? fmt(a.suggestedPxPerIn) : '—'}
+                            </td>
+                            <td style={{ padding: '6px 8px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                              {a.coverage == null ? 'length unknown' : `${fmt(a.coverage * 100)}%`}
+                            </td>
+                            <td style={{ padding: '6px 8px', color: 'var(--text-muted)', lineHeight: 1.5 }}>{a.note}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {auditProblems.length > 200 && (
+                      <div style={{ padding: '6px 8px', fontSize: '10px', color: 'var(--text-muted)' }}>
+                        Showing the 200 worst of {auditProblems.length}.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
 
           <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
             {sectionHead('Add Template')}

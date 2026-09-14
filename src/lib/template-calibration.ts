@@ -22,6 +22,26 @@ import { inflateSync, inflateRawSync } from 'zlib';
 export interface ArtboardSize { widthPt: number; heightPt: number }
 export interface PixelSize { width: number; height: number }
 
+/**
+ * Which box in the vector file the artboard measurement came from. This
+ * matters more than it looks: per the EPS spec a %%BoundingBox is the box
+ * around the MARKS on the page, while a PDF/AI /MediaBox is the PAGE
+ * itself — artwork plus whatever margin the artboard carries. So a preview
+ * rendered from trimmed artwork lines up with an EPS bounding box and does
+ * NOT line up with a MediaBox: same pixels divided by a larger real-world
+ * width gives a px_per_in that is too SMALL, which makes every panel drawn
+ * on that template measure too LONG, and its area too big by the square of
+ * the error. Audits read this to tell the two populations apart.
+ */
+export type ArtboardSource =
+  | 'eps-hires-bbox'
+  | 'eps-bbox'
+  | 'mediabox'
+  | 'mediabox-compressed'
+  | 'ai-private-bbox';
+
+export interface ArtboardMeasurement extends ArtboardSize { source: ArtboardSource }
+
 export interface CalibrationResult {
   pxPerIn: number | null;
   reason: 'ok' | 'ok-letterboxed' | 'no-artboard' | 'no-image-size' | 'degenerate';
@@ -48,7 +68,7 @@ export function parseScaleFactor(scale: string | null | undefined): number {
  * bounding-box comment in the file. AI files are PDF-compatible, so the
  * /MediaBox path covers them.
  */
-export function parseVectorArtboard(bytes: Uint8Array): ArtboardSize | null {
+export function parseVectorArtboardDetailed(bytes: Uint8Array): ArtboardMeasurement | null {
   let ps = bytes;
   // DOS EPS binary header: magic C5 D0 D3 C6, then LE offset + length of the
   // PostScript section.
@@ -62,29 +82,29 @@ export function parseVectorArtboard(bytes: Uint8Array): ArtboardSize | null {
 
   // EPS: prefer HiRes; "(atend)" instances parse as non-numeric and are
   // skipped, so the trailer values win.
-  for (const re of [
-    /%%HiResBoundingBox:\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)/g,
-    /%%BoundingBox:\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)/g,
-  ]) {
-    let last: ArtboardSize | null = null;
+  for (const [re, source] of [
+    [/%%HiResBoundingBox:\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)/g, 'eps-hires-bbox'],
+    [/%%BoundingBox:\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)/g, 'eps-bbox'],
+  ] as [RegExp, ArtboardSource][]) {
+    let last: ArtboardMeasurement | null = null;
     let m: RegExpExecArray | null;
     while ((m = re.exec(text)) !== null) {
       const [x0, y0, x1, y1] = [m[1], m[2], m[3], m[4]].map(parseFloat);
       const w = x1 - x0, h = y1 - y0;
-      if (w > 0 && h > 0) last = { widthPt: w, heightPt: h };
+      if (w > 0 && h > 0) last = { widthPt: w, heightPt: h, source };
     }
     if (last) return last;
   }
 
   // PDF / AI: first /MediaBox (page 1).
-  const fromMediaBox = (t: string): ArtboardSize | null => {
+  const fromMediaBox = (t: string, source: ArtboardSource): ArtboardMeasurement | null => {
     const mb = /\/MediaBox\s*\[\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*\]/.exec(t);
     if (!mb) return null;
     const [x0, y0, x1, y1] = [mb[1], mb[2], mb[3], mb[4]].map(parseFloat);
     const w = x1 - x0, h = y1 - y0;
-    return w > 0 && h > 0 ? { widthPt: w, heightPt: h } : null;
+    return w > 0 && h > 0 ? { widthPt: w, heightPt: h, source } : null;
   };
-  const plain = fromMediaBox(text);
+  const plain = fromMediaBox(text, 'mediabox');
   if (plain) return plain;
 
   // Modern .ai / PDF 1.5+ files often Flate-compress their object streams,
@@ -107,19 +127,25 @@ export function parseVectorArtboard(bytes: Uint8Array): ArtboardSize | null {
       }
       if (!inflated) continue;
       const inner = inflated.toString('latin1');
-      const viaMb = fromMediaBox(inner);
+      const viaMb = fromMediaBox(inner, 'mediabox-compressed');
       if (viaMb) return viaMb;
       // AI private data inside the stream carries EPS-style bounding boxes
       const bb = /%%(?:HiRes)?BoundingBox:\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)/.exec(inner);
       if (bb) {
         const [x0, y0, x1, y1] = [bb[1], bb[2], bb[3], bb[4]].map(parseFloat);
         const w = x1 - x0, h = y1 - y0;
-        if (w > 0 && h > 0) return { widthPt: w, heightPt: h };
+        if (w > 0 && h > 0) return { widthPt: w, heightPt: h, source: 'ai-private-bbox' };
       }
     }
   }
 
   return null;
+}
+
+/** Artboard size alone, for callers that don't care which box it came from. */
+export function parseVectorArtboard(bytes: Uint8Array): ArtboardSize | null {
+  const m = parseVectorArtboardDetailed(bytes);
+  return m ? { widthPt: m.widthPt, heightPt: m.heightPt } : null;
 }
 
 /** Pixel dimensions from PNG or JPEG bytes (header parse, no image decode). */
