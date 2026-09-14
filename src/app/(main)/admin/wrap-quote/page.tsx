@@ -19,6 +19,7 @@ import NumberInput from '@/components/NumberInput';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { summarizeAudits, applyCoverageNorm, type TemplateAudit, type AuditSummary } from '@/lib/calibration-audit';
+import { referenceDimensions, calibrationDelta, type PanelDimension } from '@/lib/wrap-reference';
 import { estimateHeadlineNumber } from '@/lib/estimate-number';
 import {
   DEFAULT_ROLL,
@@ -57,7 +58,12 @@ interface Template {
   template_code: string | null;
   template_image_path: string | null;
   px_per_in: number | null;
+  // What the wrap dimension sheet publishes for this vehicle — the
+  // yardstick the scale is calibrated against. See src/lib/wrap-reference.ts.
   overall_length_in: number | null;
+  overall_height_in: number | null;
+  wheelbase_in: number | null;
+  panel_data: PanelDimension[] | null;
   is_active: boolean | null;
 }
 
@@ -347,6 +353,7 @@ export default function WrapQuotePage() {
   // Calibration: after drawing the line, ask for its real length.
   const [calibLine, setCalibLine] = useState<{ lenPx: number } | null>(null);
   const [calibInches, setCalibInches] = useState('');
+  const [calibRefKey, setCalibRefKey] = useState('');
   // Freeform shape in progress: clicked vertices + the live cursor point
   // (image-pixel coords). Clicking the first vertex again closes the shape.
   const [polyDraft, setPolyDraft] = useState<{ x: number; y: number }[] | null>(null);
@@ -554,7 +561,7 @@ export default function WrapQuotePage() {
       // The template library can exceed PostgREST's silent 1000-row cap — a
       // bare select made everything past row 1000 unfindable in the pickers.
       fetchAllRows<Template>((from, to) =>
-        supabase.from('vehicle_templates').select('id, name, make, model, year, variant, scale, template_code, template_image_path, px_per_in, overall_length_in, is_active').not('template_image_path', 'is', null).order('make').order('model').order('id').range(from, to)),
+        supabase.from('vehicle_templates').select('id, name, make, model, year, variant, scale, template_code, template_image_path, px_per_in, overall_length_in, overall_height_in, wheelbase_in, panel_data, is_active').not('template_image_path', 'is', null).order('make').order('model').order('id').range(from, to)),
       supabase.from('wrap_substrates').select('*').order('name'),
       supabase.from('wrap_quote_settings').select('*').eq('id', 1).maybeSingle(),
       supabase.from('wrap_quotes').select('*').order('created_at', { ascending: false }).limit(200),
@@ -1097,7 +1104,8 @@ export default function WrapQuotePage() {
 
     if (tool === 'calibrate') {
       setCalibLine({ lenPx });
-      setCalibInches(template?.overall_length_in ? String(template.overall_length_in) : '');
+      setCalibInches('');
+      setCalibRefKey('');
       return;
     }
 
@@ -1145,6 +1153,13 @@ export default function WrapQuotePage() {
     }
   };
 
+  // What the wrap dimension sheet publishes for this vehicle, longest
+  // first — the calibration yardstick, in place of a typed guess.
+  const calibRefs = useMemo(() => referenceDimensions(template), [template]);
+  const calibPreview = useMemo(
+    () => (calibLine ? calibrationDelta(calibLine.lenPx, num(calibInches), template?.px_per_in) : null),
+    [calibLine, calibInches, template]);
+
   const saveCalibration = async () => {
     const inches = num(calibInches);
     if (!template || !calibLine || inches <= 0) return;
@@ -1153,6 +1168,7 @@ export default function WrapQuotePage() {
     setTemplates(prev => prev.map(t => t.id === template.id ? { ...t, px_per_in: ppi } : t));
     setCalibLine(null);
     setCalibInches('');
+    setCalibRefKey('');
     setTool('select');
   };
 
@@ -2684,11 +2700,65 @@ export default function WrapQuotePage() {
 
                 {calibLine && (
                   <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', marginBottom: '10px' }}>
-                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '4px' }}>How long is that line in real life?</div>
-                    <input type="number" value={calibInches} onChange={e => setCalibInches(e.target.value)} placeholder="inches" style={{ ...inputStyle, marginBottom: '4px' }} />
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '6px' }}>
+                      {calibRefs.length > 0 ? 'What did you just trace?' : 'How long is that line in real life?'}
+                    </div>
+
+                    {calibRefs.length > 0 ? (
+                      <>
+                        <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '6px', lineHeight: 1.5 }}>
+                          From this vehicle&apos;s wrap dimension sheet. Pick the one you traced — longest first, because a
+                          few pixels of sloppy tracing matter far less over a long line.
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+                          {calibRefs.map(r => (
+                            <button
+                              key={r.key}
+                              onClick={() => { setCalibRefKey(r.key); setCalibInches(String(r.inches)); }}
+                              style={{
+                                padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                                background: calibRefKey === r.key ? 'rgba(34,197,94,0.15)' : 'transparent',
+                                border: `1px solid ${calibRefKey === r.key ? '#22c55e' : theme.border}`,
+                                color: calibRefKey === r.key ? '#22c55e' : 'var(--text-secondary)',
+                              }}
+                            >
+                              {r.label} <span style={{ color: 'var(--text-muted)' }}>{r.inches}&quot;</span>
+                            </button>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '3px' }}>Or type it</div>
+                      </>
+                    ) : (
+                      <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '6px', lineHeight: 1.5 }}>
+                        No wrap dimension sheet data for this vehicle, so this one has to be measured. Trace a dimension you
+                        can verify and enter it.
+                      </div>
+                    )}
+
+                    <input
+                      type="number"
+                      value={calibInches}
+                      onChange={e => { setCalibInches(e.target.value); setCalibRefKey(''); }}
+                      placeholder="inches"
+                      style={{ ...inputStyle, marginBottom: '6px' }}
+                    />
+
+                    {calibPreview && calibPreview.areaRatio != null && Math.abs(calibPreview.areaRatio - 1) > 0.005 && (
+                      <div style={{
+                        fontSize: '10px', lineHeight: 1.5, marginBottom: '6px', padding: '6px', borderRadius: '6px',
+                        background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', color: 'var(--text-secondary)',
+                      }}>
+                        Saving this changes the scale from <b>{fmt(num(template.px_per_in))}</b> to <b>{fmt(calibPreview.pxPerIn)}</b> px/in.
+                        Panels on this template will measure{' '}
+                        <b>{fmt(Math.abs(calibPreview.linearRatio! - 1) * 100)}% {calibPreview.linearRatio! < 1 ? 'shorter' : 'longer'}</b>, so
+                        quoted area drops{calibPreview.areaRatio! > 1 ? ' — rises' : ''}{' '}
+                        <b>{fmt(Math.abs(calibPreview.areaRatio! - 1) * 100)}%</b>. Existing saved quotes keep their own numbers.
+                      </div>
+                    )}
+
                     <div style={{ display: 'flex', gap: '4px' }}>
-                      <button onClick={saveCalibration} style={btnStyle('#22c55e', 'rgba(34,197,94,0.1)')}>Save</button>
-                      <button onClick={() => { setCalibLine(null); setTool('select'); }} style={btnStyle('#94a3b8', 'transparent')}>Cancel</button>
+                      <button onClick={saveCalibration} disabled={num(calibInches) <= 0} style={btnStyle('#22c55e', 'rgba(34,197,94,0.1)')}>Save</button>
+                      <button onClick={() => { setCalibLine(null); setCalibInches(''); setCalibRefKey(''); setTool('select'); }} style={btnStyle('#94a3b8', 'transparent')}>Cancel</button>
                     </div>
                   </div>
                 )}
@@ -2761,7 +2831,11 @@ export default function WrapQuotePage() {
               <div>
                 {!template.px_per_in && !calibLine && (
                   <div style={{ padding: '10px 14px', borderRadius: '10px', marginBottom: '10px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)', fontSize: '11px', fontWeight: 700, color: '#fbbf24' }}>
-                    This template isn&apos;t calibrated yet. Click <b>Calibrate Scale</b>, drag a line along a dimension you know (e.g. the vehicle&apos;s overall length{template.overall_length_in ? ` — ${template.overall_length_in}"` : ''}), and enter its real length. You only do this once per template.
+                    This template isn&apos;t calibrated yet. Click <b>Calibrate Scale</b> and drag a line along{' '}
+                    {calibRefs.length > 0
+                      ? <>a dimension from this vehicle&apos;s wrap dimension sheet — its {calibRefs[0].label.toLowerCase()} is {calibRefs[0].inches}&quot; — then pick that dimension from the list.</>
+                      : <>a dimension you can verify, then enter its real length.</>}
+                    {' '}You only do this once per template.
                   </div>
                 )}
                 <div style={{ position: 'relative', background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '12px', overflow: 'hidden' }}>
@@ -3661,9 +3735,10 @@ export default function WrapQuotePage() {
                   <div style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.35)', borderRadius: '8px', padding: '10px', marginBottom: '12px', fontSize: '11px', lineHeight: 1.6 }}>
                     <b>Not enough hand-measured templates to score the library yet.</b>
                     <div style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
-                      This compares auto-calibrated templates against ones a person measured by hand, and there {auditSummary.referenceCount === 1 ? 'is only 1' : `are ${auditSummary.referenceCount}`} of those
-                      with a known vehicle length. Open two or three templates you quote often in the Estimator, hit <b>Recalibrate Scale</b>, drag a line
-                      along a dimension you can verify, and run this again — that gives it the yardstick it needs.
+                      This compares auto-calibrated templates against ones calibrated against a known dimension, and there {auditSummary.referenceCount === 1 ? 'is only 1' : `are ${auditSummary.referenceCount}`} of those
+                      with a known vehicle length. Open two or three templates you quote often in the Estimator, hit <b>Recalibrate Scale</b>, trace a panel
+                      the wrap dimension sheet publishes, and pick it from the list — you aren&apos;t measuring anything, just confirming which line you drew.
+                      Do that a few times and run this again.
                     </div>
                   </div>
                 )}
