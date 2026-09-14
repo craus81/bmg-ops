@@ -2003,6 +2003,40 @@ export async function findSubsidiary(name: string): Promise<{ id: string; name: 
 }
 
 /**
+ * The currency internal id to put on a vendor bill, or undefined to let
+ * NetSuite derive it.
+ *
+ * NetSuite validates a bill's currency against the VENDOR's currency list,
+ * not just the account's, so a constant can't work: id 1 (USD) is accepted
+ * for most installers and rejected as "Invalid Field Value 1 for the
+ * following field: currency" for a vendor whose record doesn't carry it.
+ * Read the vendor's own currency instead — the integration role CAN SuiteQL
+ * `vendor` (unlike `account`/`subsidiary`).
+ *
+ * Returns undefined when nothing resolves, which omits the field and leaves
+ * NetSuite to derive it exactly as it did before this lookup existed. A
+ * vendor with no usable currency then fails with "Please enter value(s) for:
+ * Currency" — the honest error, fixable only on the vendor record.
+ */
+async function resolveVendorCurrency(vendorId: string | number): Promise<string | undefined> {
+  const envId = process.env.NETSUITE_CURRENCY_ID;
+  if (envId) return envId.toString();
+
+  // Interpolated into SuiteQL, so only ever a bare number.
+  const id = vendorId.toString().trim();
+  if (!/^\d+$/.test(id)) return undefined;
+
+  try {
+    const result = await suiteqlQuery(`SELECT currency FROM vendor WHERE id = ${id}`);
+    const currency = result?.items?.[0]?.currency;
+    return currency ? currency.toString() : undefined;
+  } catch {
+    // Non-critical — fall through to letting NetSuite derive the currency.
+    return undefined;
+  }
+}
+
+/**
  * Create a Vendor Bill in NetSuite for an installer payout.
  * Uses the REST Record API: POST /services/rest/record/v1/vendorBill
  * Books a single expense line (the payout total) to the given GL account.
@@ -2027,13 +2061,13 @@ export async function createVendorBill(payload: {
   // doesn't auto-number bills, so always send one. Location is HEADER only
   // (one location per bill); a line-level location triggers a 500 unless
   // per-line locations are on, so keep the line minimal: account + amount.
-  // Currency does NOT reliably auto-derive: a vendor with no primary currency
-  // set fails the create with 400 "Please enter value(s) for: Currency", so
-  // send it explicitly. Every installer vendor bills in USD (internal id 1);
-  // NETSUITE_CURRENCY_ID overrides if that ever changes.
+  // Currency is sent only when we could read one off the vendor (or it was
+  // configured); never a guess — see resolveVendorCurrency.
+  const currencyId = await resolveVendorCurrency(payload.vendorId);
+
   const body: any = {
     entity: { id: payload.vendorId },
-    currency: { id: process.env.NETSUITE_CURRENCY_ID || '1' },
+    ...(currencyId ? { currency: { id: currencyId } } : {}),
     ...(payload.referenceNo ? { tranId: payload.referenceNo } : {}),
     ...(payload.subsidiaryId ? { subsidiary: { id: payload.subsidiaryId } } : {}),
     ...(payload.locationId ? { location: { id: payload.locationId } } : {}),
@@ -2063,9 +2097,17 @@ export async function createVendorBill(payload: {
     if (!response.ok) {
       const text = await response.text();
       console.error('NetSuite create vendor bill error:', text, '\nrequest body:', JSON.stringify(body));
+      // A currency complaint is always the vendor record, never the bill:
+      // NetSuite validates the currency against the vendor's own list, so
+      // neither retrying nor changing what we send here can fix it. Say so,
+      // because the raw message ("Please enter value(s) for: Currency")
+      // sends people looking in the wrong place.
+      const currencyHint = /currency/i.test(text)
+        ? ` — NetSuite won't accept a currency for vendor ${payload.vendorId}. Open that vendor in NetSuite and set its primary currency (Financial tab); the bill can't be created until the vendor record carries one.`
+        : '';
       // Include the exact body we sent so an opaque UNEXPECTED_ERROR can be
       // diagnosed against what NetSuite actually received.
-      return { success: false, error: `NetSuite error (${response.status}): ${text} | sent: ${JSON.stringify(body)}` };
+      return { success: false, error: `NetSuite error (${response.status}): ${text}${currencyHint} | sent: ${JSON.stringify(body)}` };
     }
 
     // The created record's id comes back in the Location header (and/or body).
