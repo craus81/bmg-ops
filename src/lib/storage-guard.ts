@@ -45,7 +45,14 @@ export const ALLOWED_STORAGE_PREFIXES = new Set<string>([
 ]);
 
 // Never reachable through the storage API, for any operation.
-const DENIED_STORAGE_PREFIXES = new Set<string>(['signed-documents']);
+//   signed-documents — the hashed E-SIGN approval snapshots (above).
+//   ledger           — the imported QuickBooks/NetSuite financial history
+//                      (migration 314). Staff reads pass for any prefix that
+//                      is NOT listed here, so leaving `ledger` off this list
+//                      would hand every approved account the whole document
+//                      store. Its bytes are served only by the record-scoped
+//                      GET /api/ledger/documents/[id] (finance/executive).
+const DENIED_STORAGE_PREFIXES = new Set<string>(['signed-documents', 'ledger']);
 
 // Top-level prefixes are lowercase kebab tokens (photos, graphics-proofs, …).
 const PREFIX_RE = /^[a-z0-9][a-z0-9-]{0,79}$/;

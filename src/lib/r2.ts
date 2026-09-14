@@ -308,7 +308,7 @@ export async function r2GetBytes(
 export async function r2Get(
   prefix: string,
   path: string,
-): Promise<{ success: boolean; body?: ReadableStream; contentType?: string; error?: string }> {
+): Promise<{ success: boolean; body?: ReadableStream; contentType?: string; contentLength?: number; error?: string }> {
   try {
     const config = getR2Config();
     const client = getR2Client();
@@ -323,6 +323,9 @@ export async function r2Get(
       success: true,
       body: result.Body as any,
       contentType: result.ContentType,
+      // R2's own byte count for the object. A streaming caller can pass it
+      // through as Content-Length so the browser shows real progress.
+      contentLength: typeof result.ContentLength === 'number' ? result.ContentLength : undefined,
     };
   } catch (err: any) {
     console.error('R2 get error:', err);

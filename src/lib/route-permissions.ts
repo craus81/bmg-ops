@@ -275,6 +275,11 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/jobs/assign/route.ts': staff(),
   'src/app/api/knowledge/reprocess/route.ts': admin(),
   'src/app/api/knowledge/upload/route.ts': admin(),
+  // The only way bytes leave the R2 `ledger` prefix (migration 314): that
+  // prefix is denied on the generic storage routes, so this record-scoped
+  // reader IS the wall. requireRole admits finance + executive (admins and
+  // super admins auto-pass) — the ledger reader tier.
+  'src/app/api/ledger/documents/[id]/route.ts': role(),
   'src/app/api/mentions/route.ts': staff(),
   'src/app/api/messages/send-sms/route.ts': authScoped('sender is forced to the authenticated caller and must be a participant of the conversation being notified', 'participant'),
   'src/app/api/messages/sms-webhook/route.ts': webhook('inbound SMS from the provider; the signature is verified and mismatches are rejected', 'verifyWebhookSignature'),
