@@ -130,7 +130,10 @@ describe('channelsForType', () => {
   });
 
   it('uses the type default for a user with no preferences row', () => {
-    expect(channelsForType('proof_stale', null)).toEqual(['in_app', 'push']);
+    // Two types with different defaults, so this can't pass by accident on
+    // a registry where everything happens to allow every channel.
+    expect(channelsForType('cni_payout', null)).toEqual(['in_app', 'push']);
+    expect(channelsForType('proof_stale', null)).toEqual(['in_app', 'push', 'email']);
   });
 
   it('FAILS OPEN for an unregistered type rather than silently dropping it', () => {

@@ -78,7 +78,7 @@ export interface NotificationTypeDef {
 
 export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   // ── Sales & quotes ────────────────────────────────────────────────────
-  { type: 'quote_followup', label: 'Quote needs a follow-up', description: 'A sent quote has gone quiet and is due a chase.', area: 'sales', defaultChannels: ['in_app', 'push'] },
+  { type: 'quote_followup', label: 'Quote needs a follow-up', description: 'A sent quote has gone quiet and is due a chase. Nothing goes to the customer automatically — this is the prompt to send it.', area: 'sales', defaultChannels: ['in_app', 'push', 'email'] },
   { type: 'prospect_reminder', label: 'Lead follow-up due', description: 'A reminder you set on a prospect has come round.', area: 'sales', defaultChannels: ['in_app', 'push'] },
   { type: 'deal_overdue', label: 'Deal past its close date', description: 'An opportunity is still open past when it was expected to close.', area: 'sales', defaultChannels: ['in_app', 'push'] },
   { type: 'pipeline_movement', label: 'Deal changed stage', description: 'An opportunity moved forward or back in the pipeline.', area: 'sales', defaultChannels: ['in_app'] },
@@ -99,13 +99,13 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'graphics_ready_for_install', label: 'Vehicle ready to install', description: 'Graphics are ready and the matched vehicle can be scheduled.', area: 'graphics', defaultChannels: ['in_app', 'push', 'email'], alwaysOn: 'Always sent on every channel — it releases work to the floor.', audience: 'Assigned installers, admins, and anyone who opted in with "Install-Ready Alerts".' },
   { type: 'proof_sent', label: 'Proof sent to the customer', description: 'An artwork proof went out for approval.', area: 'graphics', defaultChannels: ['in_app'] },
   { type: 'proof_approved', label: 'Proof approved', description: 'The customer signed off on the artwork.', area: 'graphics', defaultChannels: ['in_app', 'push'] },
-  { type: 'proof_stale', label: 'Proof waiting too long', description: 'A proof has sat unanswered long enough to block production.', area: 'graphics', defaultChannels: ['in_app', 'push'] },
+  { type: 'proof_stale', label: 'Proof waiting too long', description: 'A proof has sat unanswered long enough to block production. Nothing goes to the customer automatically — this is the prompt to resend it.', area: 'graphics', defaultChannels: ['in_app', 'push', 'email'] },
 
   // ── Shop floor & vehicles ─────────────────────────────────────────────
   { type: 'assignment', label: 'Assigned to you', description: 'A job or vehicle was assigned to you.', area: 'floor', defaultChannels: ['in_app', 'push', 'email'], alwaysOn: 'Always sent on every channel — it is work handed directly to you.' },
   { type: 'vehicle_arrived', label: 'Vehicle arrived', description: 'A vehicle was checked in at the shop.', area: 'floor', defaultChannels: ['in_app', 'push'] },
-  { type: 'vehicle_complete', label: 'Vehicle finished', description: 'A vehicle passed QC and is ready to go back.', area: 'floor', defaultChannels: ['in_app', 'push'] },
-  { type: 'booking', label: 'Drop-off or pickup booked', description: 'A customer booked a slot, or one changed.', area: 'floor', defaultChannels: ['in_app', 'push'] },
+  { type: 'vehicle_complete', label: 'Vehicle finished', description: 'A vehicle passed QC and is ready to go back. Also the prompt to email the customer — nothing goes to them automatically.', area: 'floor', defaultChannels: ['in_app', 'push', 'email'] },
+  { type: 'booking', label: 'Drop-off or pickup booked', description: 'A customer booked a slot, or one changed — and the prompt to remind a customer whose vehicle is waiting.', area: 'floor', defaultChannels: ['in_app', 'push', 'email'] },
   { type: 'shift_auto_closed', label: 'Shift closed automatically', description: 'A shift was left open and the nightly sweep closed it.', area: 'floor', defaultChannels: ['in_app'] },
   { type: 'labor_burn', label: 'Labor over the quoted hours', description: 'A job has burned past the hours it was quoted at.', area: 'floor', defaultChannels: ['in_app', 'push'] },
   { type: 'condition_acknowledged', label: 'Condition report acknowledged', description: 'The customer confirmed the vehicle condition at drop-off.', area: 'floor', defaultChannels: ['in_app'] },
@@ -151,6 +151,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'owner_brief', label: "Monday owner's brief", description: 'The weekly money-and-operations summary.', area: 'digests', defaultChannels: ['in_app', 'email'], audience: 'Super admins and executives only, minus anyone who opted out in Settings.' },
   { type: 'exceptions_digest', label: 'Weekly exceptions digest', description: 'Overrides, waivers and exceptions from the past week.', area: 'digests', defaultChannels: ['in_app', 'email'] },
   { type: 'promised_back_digest', label: 'Promised-back digest', description: 'Vehicles due back, and the ones already late.', area: 'digests', defaultChannels: ['in_app', 'push'] },
+  { type: 'customer_digest_ready', label: 'Customer updates ready to send', description: 'Subscribed customers have a week of vehicle activity worth a note. Nothing goes to them automatically — this is the prompt to send it.', area: 'digests', defaultChannels: ['in_app', 'email'], audience: 'Admins and super admins.' },
 
   // ── System & health ───────────────────────────────────────────────────
   { type: 'system_health', label: 'System health alert', description: 'A background job, integration or probe reported a problem.', area: 'system', defaultChannels: ['in_app', 'push', 'email'] },

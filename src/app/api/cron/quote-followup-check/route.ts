@@ -5,9 +5,7 @@ import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
 import { fetchAllRows } from '@/lib/fetch-all';
-import { sendEstimateApprovalReminder, type EstimateReminderRow } from '@/lib/estimate-approval-reminder';
 import { dueWarning, dueExpiredNotice, daysUntilExpiry, expiryDateText } from '@/lib/quote-expiry';
-import { sendQuoteExpiryWarning } from '@/lib/quote-expiry-email';
 import { summarizeViews, neverOpenedDue, type ViewSummary } from '@/lib/quote-views';
 
 export const dynamic = 'force-dynamic';
@@ -16,7 +14,12 @@ export const maxDuration = 60;
 const service = createServiceClient();
 
 // A sent quote is "quiet" once this many days pass with no follow-up logged.
-const QUIET_DAYS = 5;
+//
+// Three, not five, since the automatic customer reminders were removed
+// (owner decision 2026-09-14): this nudge is now the ONLY thing that
+// chases a silent quote, and it fires on the cadence those emails used to
+// — the rep hears about it on day 3 and sends the reminder themselves.
+const QUIET_DAYS = 3;
 
 interface QuietQuote {
   table: 'estimates' | 'wrap_quotes';
@@ -30,9 +33,19 @@ interface QuietQuote {
 
 /**
  * Daily rep nudge: sent quotes with no activity (no follow-up logged, no
- * answer) for 5+ days get their rep pinged — follow-up speed is the
+ * answer) for QUIET_DAYS+ get their rep pinged — follow-up speed is the
  * highest-leverage sales behavior there is. Re-nudges at most every
  * QUIET_DAYS, and a logged follow-up resets the clock.
+ *
+ * NOTHING IN THIS CRON EMAILS A CUSTOMER. It used to send two: the day
+ * 3/6/9 approval reminder and the pre-expiry warning. A customer reported
+ * being chased over and over (one cap of 3 per estimate, but they had
+ * several open at once), and the owner's call on 2026-09-14 was that every
+ * customer-facing send is a person's decision, not a schedule's. Every
+ * branch below now prompts a HUMAN — the rep who owns the quote, or the
+ * admins when it has no rep — and the send itself is one button press on
+ * the quote (✉ Follow Up → the standard compose screen). If you are adding
+ * a new branch here, it notifies staff; it does not email the customer.
  */
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get('authorization');
@@ -139,7 +152,7 @@ export async function GET(req: NextRequest) {
     const [estRes, wrapRes] = await Promise.all([
       fetchAllRows<any>((from, to) =>
         service.from('estimates')
-          .select('id, estimate_number, title, customer_name, customer_id, customer_netsuite_id, grand_total, created_by, sent_for_approval_at, sent_for_approval_by, updated_at, last_followup_at, followup_nudged_at, approval_email_to, approval_email_status, never_opened_notified_at, approval_token, approval_token_expires_at, approval_reminder_sent_at, approval_reminder_count, approval_escalated_at, expiry_warned_for, expiry_notified_for')
+          .select('id, estimate_number, title, customer_name, customer_id, customer_netsuite_id, grand_total, created_by, sent_for_approval_at, sent_for_approval_by, updated_at, last_followup_at, followup_nudged_at, approval_email_to, approval_email_status, never_opened_notified_at, approval_token, approval_token_expires_at, approval_escalated_at, expiry_warned_for, expiry_notified_for')
           .eq('status', 'sent').order('id').range(from, to)),
       fetchAllRows<any>((from, to) =>
         service.from('wrap_quotes')
@@ -197,11 +210,13 @@ export async function GET(req: NextRequest) {
         await notifyMany([repId], {
           type: 'quote_followup',
           title: `${quotes.length} quote${quotes.length !== 1 ? 's' : ''} need${quotes.length === 1 ? 's' : ''} a follow-up`,
-          body: lines.slice(0, 900),
+          // Nothing has gone to the customer — say so, and say what sends
+          // one, or this reads as an FYI about an email we already sent.
+          body: `${lines}\n\nNo reminder has been emailed to the customer. Open the quote and use ✉ Follow Up to send one.`.slice(0, 900),
           url: only
             ? deepLinks.quoteFollowUps(only.table === 'estimates' ? 'estimate' : 'wrap', only.id)
             : deepLinks.quoteFollowUps(),
-          channels: ['in_app', 'push'],
+          channels: ['in_app', 'push', 'email'],
         });
         notified++;
       }
@@ -219,13 +234,12 @@ export async function GET(req: NextRequest) {
     // approval routes already 410 past it). Until now nothing said so before
     // or after — a quote just quietly stopped being acceptable.
     //
-    // A rep deferral ("customer answers in September") suppresses the
-    // CUSTOMER email but never the rep's heads-up. The rep parked the
-    // customer, not themselves, and they are exactly who needs to know their
-    // parked quote is about to go dead so they can re-send with more room.
-    const warnedNow = new Set<string>();
+    // Nothing here emails the customer (owner decision 2026-09-14) — the
+    // rep is told their quote is about to go dead and sends the warning
+    // themselves from ✉ Follow Up. A rep deferral ("customer answers in
+    // September") no longer changes what sends, only what the alert says:
+    // they are exactly who needs to know their parked quote is expiring.
     let expiryWarned = 0;
-    const expiryWarnFailures: string[] = [];
     let expiryNotified = 0;
     try {
       const stamp = (table: 'estimates' | 'wrap_quotes', id: string, patch: Record<string, unknown>) =>
@@ -237,41 +251,20 @@ export async function GET(req: NextRequest) {
           const targets = [...new Set([e.sent_for_approval_by, e.created_by].filter(Boolean))] as string[];
           const days = daysUntilExpiry(e.approval_token_expires_at, now);
           const label = `Estimate #${e.estimate_number}${e.title ? ` — ${e.title}` : ''}`;
-          let sent = false;
-          if (!parked) {
-            const res = await sendQuoteExpiryWarning(service, {
-              kind: 'estimate', id: e.id, number: e.estimate_number, label,
-              customerName: e.customer_name || null,
-              total: Number(e.grand_total) || null,
-              token: e.approval_token, expiresAt: e.approval_token_expires_at,
-              emails: e.approval_email_to || [],
-              customerId: e.customer_id, netsuiteCustomerId: e.customer_netsuite_id,
-            });
-            sent = res.ok;
-            if (!res.ok && !res.skipped) expiryWarnFailures.push(`${e.estimate_number}: ${res.error}`);
-          }
           await notifyMany(targets.length > 0 ? targets : await adminIds(), {
             type: 'quote_followup',
             title: `Quote link expiring — ${e.estimate_number}`,
             body: `${label} can no longer be accepted after ${expiryDateText(e.approval_token_expires_at) || 'its expiry date'}`
               + ` (${days} day${days === 1 ? '' : 's'} left).`
-              + (parked
-                ? ' You parked this one, so the customer was NOT emailed — re-send if you want the link to outlive the pause.'
-                : sent ? ' The customer has been emailed a reminder with the live link.'
-                : ' The customer could NOT be emailed (no address on file or the send failed) — reach out directly.'),
+              + (parked ? ' You parked this one.' : '')
+              + ' The customer has NOT been emailed — open the quote and use ✉ Follow Up to send them the live link,'
+              + ' or re-send the quote to give them more room.',
             url: deepLinks.quoteFollowUps('estimate', e.id),
-            channels: ['in_app', 'push'],
+            channels: ['in_app', 'push', 'email'],
           });
           // Stamped against the expiry it fired for, so a re-send re-arms on
-          // its own. The reminder clock is reset too — this WAS the reminder
-          // today, and the generic chase must not follow it tomorrow — but
-          // the reminder COUNT is untouched: the last-chance warning is not
-          // one of the three polite chases.
-          await stamp('estimates', e.id, {
-            expiry_warned_for: e.approval_token_expires_at,
-            ...(sent ? { approval_reminder_sent_at: new Date().toISOString() } : {}),
-          });
-          if (sent) warnedNow.add(e.id);
+          // its own.
+          await stamp('estimates', e.id, { expiry_warned_for: e.approval_token_expires_at });
           expiryWarned++;
         } else if (dueExpiredNotice(e, now)) {
           // No customer email here on purpose: telling someone their link is
@@ -285,7 +278,7 @@ export async function GET(req: NextRequest) {
               + `${expiryDateText(e.approval_token_expires_at) ? ` on ${expiryDateText(e.approval_token_expires_at)}` : ''}.`
               + ' Re-send it to give them a live link again.',
             url: deepLinks.quoteFollowUps('estimate', e.id),
-            channels: ['in_app', 'push'],
+            channels: ['in_app', 'push', 'email'],
           });
           await stamp('estimates', e.id, { expiry_notified_for: e.approval_token_expires_at });
           expiryNotified++;
@@ -298,32 +291,16 @@ export async function GET(req: NextRequest) {
         const label = `Quote ${w.quote_number}${w.vehicle_description ? ` — ${w.vehicle_description}` : ''}`;
         if (dueWarning(w, now)) {
           const days = daysUntilExpiry(w.approval_token_expires_at, now);
-          let sent = false;
-          if (!parked) {
-            const res = await sendQuoteExpiryWarning(service, {
-              kind: 'wrap', id: w.id, number: w.quote_number, label,
-              customerName,
-              total: Number(w.total) || null,
-              token: w.approval_token, expiresAt: w.approval_token_expires_at,
-              // sent_to is the single address a wrap quote was sent to;
-              // the customer JSON's email is the fallback.
-              emails: [w.sent_to || (w.customer as any)?.email].filter(Boolean),
-              customerId: w.customer_id,
-            });
-            sent = res.ok;
-            if (!res.ok && !res.skipped) expiryWarnFailures.push(`${w.quote_number}: ${res.error}`);
-          }
           await notifyMany(w.created_by ? [w.created_by] : await adminIds(), {
             type: 'quote_followup',
             title: `Quote link expiring — ${w.quote_number}`,
             body: `${label} can no longer be accepted after ${expiryDateText(w.approval_token_expires_at) || 'its expiry date'}`
               + ` (${days} day${days === 1 ? '' : 's'} left).`
-              + (parked
-                ? ' You parked this one, so the customer was NOT emailed.'
-                : sent ? ' The customer has been emailed a reminder with the live link.'
-                : ' The customer could NOT be emailed (no address on file or the send failed) — reach out directly.'),
+              + (parked ? ' You parked this one.' : '')
+              + ' The customer has NOT been emailed — open the quote and use ✉ Follow Up to send them the live link,'
+              + ' or re-send the quote to give them more room.',
             url: deepLinks.quoteFollowUps('wrap', w.id),
-            channels: ['in_app', 'push'],
+            channels: ['in_app', 'push', 'email'],
           });
           await stamp('wrap_quotes', w.id, { expiry_warned_for: w.approval_token_expires_at });
           expiryWarned++;
@@ -335,7 +312,7 @@ export async function GET(req: NextRequest) {
               + `${expiryDateText(w.approval_token_expires_at) ? ` on ${expiryDateText(w.approval_token_expires_at)}` : ''}.`
               + ' Re-send it to give them a live link again.',
             url: deepLinks.quoteFollowUps('wrap', w.id),
-            channels: ['in_app', 'push'],
+            channels: ['in_app', 'push', 'email'],
           });
           await stamp('wrap_quotes', w.id, { expiry_notified_for: w.approval_token_expires_at });
           expiryNotified++;
@@ -345,7 +322,6 @@ export async function GET(req: NextRequest) {
       // Contained: an expiry problem must not cost the run its quiet nudges
       // and escalations, which is the job this cron had first.
       console.warn('quote expiry pass failed:', e?.message || e);
-      expiryWarnFailures.push(`pass failed: ${e?.message || e}`);
     }
 
     // ── Never-opened nudge (R6-9) ─────────────────────────────────────────
@@ -408,7 +384,7 @@ export async function GET(req: NextRequest) {
               + `${e.approval_email_status ? ` — delivery status: ${e.approval_email_status}.` : '.'}`
               + ' Worth checking the address is right, or reaching out another way.',
             url: deepLinks.quoteFollowUps('estimate', e.id),
-            channels: ['in_app', 'push'],
+            channels: ['in_app', 'push', 'email'],
           });
           await service.from('estimates').update({ never_opened_notified_at: new Date().toISOString() }).eq('id', e.id);
           neverOpened++;
@@ -426,7 +402,7 @@ export async function GET(req: NextRequest) {
               + `${w.sent_to ? ` It went to ${w.sent_to}.` : ' No recipient address is on record.'}`
               + ' Worth checking the address is right, or reaching out another way.',
             url: deepLinks.quoteFollowUps('wrap', w.id),
-            channels: ['in_app', 'push'],
+            channels: ['in_app', 'push', 'email'],
           });
           await service.from('wrap_quotes').update({ never_opened_notified_at: new Date().toISOString() }).eq('id', w.id);
           neverOpened++;
@@ -438,51 +414,37 @@ export async function GET(req: NextRequest) {
       console.warn('never-opened pass failed:', e?.message || e);
     }
 
-    // ── Customer-facing reminders + internal escalation (Stage 3) ─────────
-    // Same cadence as the proof cron: quiet 3+ days → automatic reminder
-    // email to the original approval recipients (capped at 3); waiting 7+
-    // days total → internal escalation, re-escalated at most weekly. A
-    // rep-set deferral ("customer answers in September") suppresses BOTH —
-    // pestering a customer the rep deliberately parked burns goodwill. A
-    // logged manual follow-up (last_followup_at) also resets the reminder
-    // clock so the customer isn't emailed the morning after a phone call.
-    const REMIND_AFTER_DAYS = 3;
-    const MAX_REMINDERS = 3;
+    // ── Internal escalation ───────────────────────────────────────────────
+    // This pass used to ALSO email the customer an approval reminder on day
+    // 3/6/9. It no longer emails anyone outside the company (owner decision
+    // 2026-09-14, after a customer reported being chased repeatedly): the
+    // quiet-day nudge above prompts the rep on the same day-3 cadence, and
+    // the rep sends the reminder from ✉ Follow Up. What is left here is the
+    // louder second alert for a quote that has been silent a full week — a
+    // nudge says "send a reminder", this says "pick up the phone".
+    //
+    // A rep-set deferral ("customer answers in September") still suppresses
+    // it: they already know, and told us when to look again.
     const ESCALATE_AFTER_DAYS = 7;
-    let customerReminded = 0;
     let escalated = 0;
-    const reminderFailures: string[] = [];
     for (const e of estRes.data || []) {
       if (!e.sent_for_approval_at) continue;
       if (deferred.has(`estimates:${e.id}`)) continue;
-      // Already emailed today, with a better message — the expiry warning
-      // IS the reminder. Two emails the same morning is how a customer
-      // learns to filter us.
-      if (warnedNow.has(e.id)) continue;
       const sentDays = (now - new Date(e.sent_for_approval_at).getTime()) / dayMs;
-
-      const lastTouch = Math.max(
-        new Date(e.sent_for_approval_at).getTime(),
-        e.approval_reminder_sent_at ? new Date(e.approval_reminder_sent_at).getTime() : 0,
-        e.last_followup_at ? new Date(e.last_followup_at).getTime() : 0,
-      );
-      const quietSinceTouch = (now - lastTouch) / dayMs;
-      if (quietSinceTouch >= REMIND_AFTER_DAYS && (e.approval_reminder_count || 0) < MAX_REMINDERS) {
-        const result = await sendEstimateApprovalReminder(service, e as EstimateReminderRow);
-        if (result.ok) customerReminded++;
-        else if (!result.skipped) reminderFailures.push(`${e.estimate_number}: ${result.error}`);
-      }
 
       const escalatedDays = e.approval_escalated_at ? (now - new Date(e.approval_escalated_at).getTime()) / dayMs : null;
       if (sentDays >= ESCALATE_AFTER_DAYS && (escalatedDays == null || escalatedDays >= ESCALATE_AFTER_DAYS)) {
         const targets = [...new Set([e.sent_for_approval_by, e.created_by].filter(Boolean))] as string[];
         if (targets.length > 0) {
+          const chased = e.last_followup_at
+            ? `last chased ${new Date(e.last_followup_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+            : 'never chased';
           await notifyMany(targets, {
             type: 'quote_followup',
             title: `Estimate stuck ${Math.floor(sentDays)}d — ${e.estimate_number}`,
-            body: `${e.customer_name || 'The customer'} hasn't answered ${e.estimate_number} in ${Math.floor(sentDays)} days (${e.approval_reminder_count || 0} automatic reminder${(e.approval_reminder_count || 0) !== 1 ? 's' : ''} sent). Worth a call.`,
+            body: `${e.customer_name || 'The customer'} hasn't answered ${e.estimate_number} in ${Math.floor(sentDays)} days (${chased}). Worth a call.`,
             url: deepLinks.quoteFollowUps('estimate', e.id),
-            channels: ['in_app', 'push'],
+            channels: ['in_app', 'push', 'email'],
           });
         }
         await service.from('estimates')
@@ -493,10 +455,10 @@ export async function GET(req: NextRequest) {
     }
 
     const syncStateWrite = await recordHeartbeat(
-      service, 'quote_followup_check', { status: 'ok', quiet: quiet.length, notified, reminded, customerReminded, escalated, expiryWarned, expiryNotified, neverOpened, reminderFailures: reminderFailures.slice(0, 10), expiryWarnFailures: expiryWarnFailures.slice(0, 10) },
+      service, 'quote_followup_check', { status: 'ok', quiet: quiet.length, notified, reminded, escalated, expiryWarned, expiryNotified, neverOpened },
     );
 
-    return NextResponse.json({ status: 'ok', quiet: quiet.length, notified, reminded, customerReminded, escalated, expiryWarned, expiryNotified, neverOpened, reminderFailures, expiryWarnFailures, syncStateWrite });
+    return NextResponse.json({ status: 'ok', quiet: quiet.length, notified, reminded, escalated, expiryWarned, expiryNotified, neverOpened, syncStateWrite });
   } catch (e: any) {
     console.error('quote-followup-check failed:', e);
     await recordHeartbeat(service, 'quote_followup_check', { error: e.message || 'quote follow-up check failed' }); // never throws; failure already logged

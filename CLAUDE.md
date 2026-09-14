@@ -140,6 +140,25 @@ they tell you to go back to auto-shipping.
   and pass the built url at the call site. This came from a field bug
   ("New for you" clicks going to the page, or nowhere).
 
+- **No customer email sends itself — a person picks, previews and sends
+  every one.** Owner decision 2026-09-14, after a customer reported being
+  chased repeatedly by the automatic estimate-approval reminders (capped
+  at 3 per estimate, but they had several open at once). Six automatic
+  sends were retired: estimate approval reminders, quote pre-expiry
+  warnings, proof reminders, the ready-for-pickup nudge, the "vehicle
+  ready"/"shipped" status emails, and the Monday customer digest. Their
+  crons and routes still run — they notify the rep (or the admins) and
+  every notification names the button that sends it: ✉ Follow Up on a
+  quote, "Resend approval link" on a proof, ✉ Email Customer on a vehicle
+  (`/api/vehicle-tracking/notify-customer`), ✉ Send update on
+  `/admin/customer-notifications`. **When you add a background job that
+  spots something a customer should hear about, notify staff — do not
+  send.** The only sends that still leave on their own answer a
+  customer's own action (booking confirmation, approval re-link) or a
+  vendor PO receipt. Customer subscriptions no longer gate a send: they
+  gate the prompt, and the compose screen warns the sender when the
+  customer opted out.
+
 - **Every customer/vendor email goes through the standard compose
   screen** — see `docs/customer-email-standard.md`. Any feature where
   staff email someone outside the company must open

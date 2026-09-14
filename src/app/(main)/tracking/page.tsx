@@ -26,6 +26,8 @@ import ProofThumbnail from '@/components/ProofThumbnail';
 import CompletionModal from '@/components/CompletionModal';
 import PhotoSession from '@/components/PhotoSession';
 import { useDialog } from '@/components/DialogProvider';
+import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
+import { VEHICLE_EMAIL_KINDS, VEHICLE_EMAIL_LABEL, type VehicleEmailKind } from '@/lib/vehicle-customer-email';
 import { DropZone } from '@/components/DropZone';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
@@ -160,6 +162,19 @@ export default function TrackingPage() {
 
   // Message Customer in-flight flag (per-vehicle so two clicks on different rows don't fight)
   const [messagingVehicleId, setMessagingVehicleId] = useState<string | null>(null);
+
+  // Email Customer (compose): the vehicle being emailed and which of the
+  // three vehicle emails it is. These three used to send themselves — the
+  // status route on complete/shipped, the pickup cron weekly — and now a
+  // person picks, previews and sends. Kind defaults from the vehicle's own
+  // status so the common case is one click and Send.
+  const [emailCustomerFor, setEmailCustomerFor] = useState<FleetCheckin | null>(null);
+  const [emailKind, setEmailKind] = useState<VehicleEmailKind>('ready');
+  // Whether this customer turned vehicle status updates off. Read from the
+  // preview and SHOWN, never enforced: the subscription governed the sends
+  // that used to fire on their own, and a person who opened this screen has
+  // a reason.
+  const [emailOptedOut, setEmailOptedOut] = useState(false);
 
   // Photos state
   const [vehiclePhotos, setVehiclePhotos] = useState<Record<string, (VehiclePhoto & { url?: string })[]>>({});
@@ -657,6 +672,62 @@ export default function TrackingPage() {
       await dialog.alert('Failed to open thread: ' + result.error);
     }
     setMessagingVehicleId(null);
+  };
+
+  /** Open the compose screen, defaulting to the email this vehicle's state
+   *  most likely calls for. */
+  const openEmailCustomer = (vehicle: FleetCheckin) => {
+    setEmailKind(vehicle.status === 'shipped' ? 'shipped' : 'ready');
+    setEmailOptedOut(false);
+    setEmailCustomerFor(vehicle);
+  };
+
+  const fetchVehicleEmailPreview = async (fields: EmailComposeFields) => {
+    if (!emailCustomerFor) return { error: 'No vehicle selected' };
+    try {
+      const res = await apiFetch('/api/vehicle-tracking/notify-customer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vehicleId: emailCustomerFor.id, kind: emailKind, preview: true,
+          emails: fields.emails, message: fields.message || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.preview) {
+        setEmailOptedOut(!!data.optedOut);
+        return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      }
+      return { error: data.error || 'Unknown error' };
+    } catch {
+      return { error: 'Network error — please try again.' };
+    }
+  };
+
+  const confirmSendVehicleEmail = async (fields: EmailComposeFields): Promise<{ ok: boolean }> => {
+    if (!emailCustomerFor) return { ok: false };
+    try {
+      const res = await apiFetch('/api/vehicle-tracking/notify-customer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vehicleId: emailCustomerFor.id, kind: emailKind,
+          emails: fields.emails, bccSelf: fields.bccSelf, cc: fields.cc,
+          message: fields.message || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
+        return { ok: false };
+      }
+      const to = (data.dispatch?.to || []).join(', ');
+      await dialog.alert(`Sent to ${to || 'the customer'}${data.dispatch?.smsSent ? ' (and by text)' : ''}.`);
+      return { ok: true };
+    } catch {
+      await dialog.alert('Network error — please try again.');
+      return { ok: false };
+    }
   };
 
   const loadPhotos = async (vehicleId: string) => {
@@ -1968,6 +2039,26 @@ export default function TrackingPage() {
                               }}
                             >
                               {messagingVehicleId === vehicle.id ? 'Opening…' : 'Message Customer'}
+                            </button>
+                          )}
+                          {vehicle.customer_name && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openEmailCustomer(vehicle);
+                              }}
+                              title="Send the customer a ready / shipped / pickup-reminder email"
+                              style={{
+                                flex: 1, padding: '12px', borderRadius: '10px',
+                                fontSize: '13px', fontWeight: 800, cursor: 'pointer',
+                                background: 'rgba(96,165,250,0.12)',
+                                border: '1px solid rgba(96,165,250,0.4)',
+                                color: '#60a5fa',
+                                transition: 'all 0.15s',
+                              }}
+                            >
+                              ✉ Email Customer
                             </button>
                           )}
                         </div>
@@ -3394,6 +3485,54 @@ export default function TrackingPage() {
           customerName={emailInvoiceTarget.customerName}
           invoices={emailInvoiceTarget.invoices}
           onClose={() => setEmailInvoiceTarget(null)}
+        />
+      )}
+
+      {/* Email Customer: the ready / shipped / pickup-reminder emails that
+          used to send themselves. The kind picker sits in the intro slot and
+          drives previewKey, so switching it re-renders the preview. */}
+      {emailCustomerFor && (
+        <EmailComposeModal
+          title={`Email Customer — ${[emailCustomerFor.vehicle_year, emailCustomerFor.vehicle_make, emailCustomerFor.vehicle_model].filter(Boolean).join(' ') || emailCustomerFor.vin}`}
+          sendLabel="Send Email"
+          previewKey={emailKind}
+          messagePlaceholder="Personal note — shown at the top of the email…"
+          intro={(
+            <div>
+              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '5px' }}>
+                Which update?
+              </div>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {VEHICLE_EMAIL_KINDS.map(k => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setEmailKind(k)}
+                    style={{
+                      padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                      background: emailKind === k ? 'rgba(96,165,250,0.15)' : 'var(--subtle-bg)',
+                      border: `1px solid ${emailKind === k ? 'rgba(96,165,250,0.5)' : 'var(--border)'}`,
+                      color: emailKind === k ? '#60a5fa' : 'var(--text-muted)',
+                    }}
+                  >
+                    {VEHICLE_EMAIL_LABEL[k]}
+                  </button>
+                ))}
+              </div>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.5 }}>
+                Nothing goes to customers automatically — this is the only way these emails send.
+                A text message rides along when a mobile number is on file.
+              </div>
+              {emailOptedOut && (
+                <div style={{ fontSize: '10px', color: '#f59e0b', marginTop: '6px', lineHeight: 1.5 }}>
+                  ⚠ This customer turned vehicle status updates off. Sending is still allowed — just make sure you have a reason.
+                </div>
+              )}
+            </div>
+          )}
+          fetchPreview={fetchVehicleEmailPreview}
+          onSend={confirmSendVehicleEmail}
+          onClose={() => setEmailCustomerFor(null)}
         />
       )}
 

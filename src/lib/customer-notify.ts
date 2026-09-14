@@ -31,6 +31,21 @@ export interface CustomerNotifyInput {
   /** Staff-edited recipient for this one send — replaces the resolved
    *  primary-contact email without touching the contact record. */
   overrideEmail?: string | null;
+  /** The compose screen's full To list. Wins over `overrideEmail` and the
+   *  resolved contact: a staff member who edited the recipients gets
+   *  exactly the recipients they typed. Empty/absent → the old behavior. */
+  overrideEmails?: string[] | null;
+  /** BMG teammates cc'd from the compose screen. */
+  cc?: string[] | null;
+  /** Bcc for this send — the sender's own address when they ticked Bcc me. */
+  bcc?: string[] | null;
+  /** email_log kind. Defaults to 'customer_notify' (the automated shape);
+   *  staff-composed flows pass their own so the log can tell them apart. */
+  emailKind?: string;
+  /** The staff user who composed this send — bounce alerts go to them. */
+  sentBy?: string | null;
+  /** Deep link to the record the email is about (deep-links.ts). */
+  contextUrl?: string | null;
   /** Reply-To for the email — the staff user who triggered the send.
    *  Omit for automated sends (falls back to RESEND_REPLY_TO_EMAIL). */
   replyTo?: string | null;
@@ -44,7 +59,7 @@ export interface CustomerNotifyResult {
 
 /** The synced customers row + primary contact for a free-text company name. */
 export async function resolveCustomerContact(service: Service, customerName: string): Promise<{
-  customer: { id: string; email: string | null; phone: string | null; notify_status_emails?: boolean | null; weekly_digest?: boolean | null; notify_estimate_reminders?: boolean | null } | null;
+  customer: { id: string; email: string | null; phone: string | null; notify_status_emails?: boolean | null; weekly_digest?: boolean | null } | null;
   contactId: string | null;
   email: string | null;
   phone: string | null;
@@ -55,7 +70,7 @@ export async function resolveCustomerContact(service: Service, customerName: str
 }> {
   const { data: customer } = await service
     .from('customers')
-    .select('id, email, phone, notify_status_emails, weekly_digest, notify_estimate_reminders')
+    .select('id, email, phone, notify_status_emails, weekly_digest')
     .ilike('company_name', customerName)
     .maybeSingle();
   if (!customer) return { customer: null, contactId: null, email: null, phone: null, contactPrefs: null };
@@ -66,7 +81,7 @@ export async function resolveCustomerContact(service: Service, customerName: str
   let contactPrefs: ContactPrefs | null = null;
   const { data: primary } = await service
     .from('external_contacts')
-    .select('id, email, phone, notify_status_emails, weekly_digest, notify_estimate_reminders')
+    .select('id, email, phone, notify_status_emails, weekly_digest')
     .eq('customer_id', customer.id)
     .eq('is_primary', true)
     .maybeSingle();
@@ -133,7 +148,14 @@ export async function notifyCustomerByName(
 
   const resolved = await resolveCustomerContact(service, customerName);
   const { customer, contactId } = resolved;
-  const email = input.overrideEmail || resolved.email;
+  const composed = (input.overrideEmails || []).map(e => String(e).trim()).filter(Boolean);
+  // One value feeds both the send and the "did anyone get this" checks, so
+  // a composed list and a resolved address can't disagree about who was
+  // emailed. `to` is empty exactly when there is nobody to email.
+  const to: string[] = composed.length > 0
+    ? composed
+    : [input.overrideEmail || resolved.email].filter(Boolean) as string[];
+  const email = to[0] || null;
   const phone = resolved.phone;
   if (!customer) return { ...none, skipped: 'no_customer' };
   // Company gate AND the resolved person's own override (migration 306):
@@ -149,8 +171,15 @@ export async function notifyCustomerByName(
   if (email) {
     try {
       const { ok, id: resendId } = await sendEmailDetailed(
-        email, input.emailSubject, input.emailHtml, undefined, undefined, input.replyTo || undefined, undefined,
-        { kind: 'customer_notify' },
+        to, input.emailSubject, input.emailHtml, undefined, undefined, input.replyTo || undefined,
+        (input.bcc || []).filter(Boolean),
+        {
+          kind: input.emailKind || 'customer_notify',
+          cc: (input.cc || []).filter(Boolean),
+          sentBy: input.sentBy || null,
+          contextUrl: input.contextUrl || null,
+          customerId: customer.id,
+        },
       );
       emailed = ok;
       if (threadId) {

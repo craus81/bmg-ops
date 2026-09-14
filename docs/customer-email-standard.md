@@ -8,6 +8,28 @@ the field: staff need to fix a stale contact, copy an AP inbox, keep a
 copy for themselves, and see what the customer will actually receive —
 on every send, not just estimates.
 
+**And the companion rule, owner decision 2026-09-14: NOTHING emails a
+customer on a schedule.** A customer reported being chased over and over
+by the automatic estimate-approval reminders (capped at 3 per estimate,
+but they had several open at once), and the call was that every
+customer-facing send is a person's decision. Six automatic sends were
+retired that day — estimate approval reminders, quote pre-expiry
+warnings, proof reminders, the ready-for-pickup nudge, the "ready" and
+"shipped" status emails, and the Monday customer digest. Each one's cron
+or route now notifies STAFF instead, and every notification names the
+button that sends it. When you add a background job that spots something
+a customer should hear about, notify the rep or the admins — do not
+send. The only sends that still leave on their own answer a customer's
+own action (booking confirmation, approval re-link) or a vendor PO
+receipt.
+
+Customer subscriptions (`customers.notify_status_emails`,
+`weekly_digest`, and the per-contact overrides in `external_contacts`)
+therefore no longer gate a send. They gate the PROMPT — the Monday sweep
+only offers subscribed customers — and they are SHOWN to whoever is
+about to press Send (the compose screen warns when a customer opted
+out). A staff member who has a reason can still send.
+
 ## Required controls (every compose screen)
 
 | Control | Behavior |
@@ -84,7 +106,9 @@ on every send, not just estimates.
 | PO-status portal link (`/admin/prospects/[id]` PO status link card → Send link) | `EmailComposeModal` | Same route/flow as the general email with `includePortalLink: true` (kind `po_portal_link`): the server resolves the customer, mints the shared portal link if none exists (`customers.portal_token`, migration 260 — never client-supplied) and appends its own "View your purchase order status" CTA to the public `/portal/<token>` page; the personal message is optional (a default intro renders when empty). The card also offers Copy / Regenerate / Revoke (`/api/customers/portal-link`). |
 | Customer threads (`customer-threads`) | Chat-style thread | Deliberately not a compose modal (it's a running conversation). Reply-To = sender is in place. Entry points: the inbox itself, Message Customer on the pick-list/tracking pages (vehicle context), and **Reply to customer** on a rejected estimate (`/api/estimates/[id]/rejection-thread` — opens the estimate-context thread seeded with the customer's change request). The staff rejection alert email also carries Reply-To = the customer's address, so a plain mail-client reply reaches them directly. |
 | PO receipt confirmation (`src/lib/po-confirmation.ts`) | Exempt — automated | Sent automatically once a customer PO's lines are imported (Gmail import or PDF upload, both paths in `/api/gmail/import-po`), once per PO. To the **Buyer Information** email extracted from the PO PDF (`purchase_orders.buyer_email`, migration 256), else the person who emailed the PO in (`gmail_po_imports.from_email`); skipped with a reason when neither exists. **Never** the customer's billing emails and never an accounts-payable mailbox (`isApMailbox`) — `prospects.billing_emails` is the *invoice* list, and using it as the fallback sent PO 35050306's acknowledgement to Masterack's AP desk instead of the buyer. Staff correct the buyer and send/re-send from the PO page (`Edit buyer` / `Send again` → `/api/pos/send-confirmation`); an address typed there is honoured verbatim, AP or not. Lists the PO's lines, quantities, requested dates and total, and attaches the PO PDF from `po_files` as the transaction copy. Logged as kind `po_confirmation`; the PO record shows buyer + "Confirmation sent". Owner decision 2026-09-03: automatic, not a compose screen. |
-| Invites (CNI/admin), reminder crons, digests, notify-pickup | Exempt | Automated/transactional — nobody is composing. Reply-To falls back to `RESEND_REPLY_TO_EMAIL`. |
+| Vehicle ready / shipped / pickup reminder (`/tracking` → ✉ Email Customer) | `EmailComposeModal` | Full standard + a kind picker in the intro slot (Ready for pickup / Shipped / Pickup reminder), which drives `previewKey` so switching re-renders the preview. One route for all three (`/api/vehicle-tracking/notify-customer`, kinds `vehicle_ready`/`vehicle_shipped`/`vehicle_pickup_reminder`, staff); content comes from the pure builder in `src/lib/vehicle-customer-email.ts` so preview and send cannot drift. Threads into `customer_threads`/`customer_messages` like every other customer touchpoint, and SMS rides along when a mobile is on file. The "How did we do?" review block (R6-13) rides on ready/shipped, stamped only after a successful send. A pickup reminder stamps `pickup_nudge_sent_at`/`_count`, which is what the pickup-nudges cron reads to decide when to prompt again. **Replaced three automatic sends** (the status route's two, and the weekly pickup nudge). |
+| Weekly customer update (`/admin/customer-notifications` → ✉ Send update) | `EmailComposeModal` | Full standard (no attachments — the email IS the summary). `/api/customers/digest/email`, kind `customer_digest`, admin. Builds that one customer's real week from `src/lib/customer-digest.ts` — the same builders the Monday cron counts with, so the prompt and the email describe the same week. Refuses to send a week it could not read, or an empty one. **Replaced the automatic Monday digest.** |
+| Invites (CNI/admin), PO receipt confirmation, booking confirmation, approval re-link | Exempt | Automated/transactional — nobody is composing, and each answers an action someone just took. Reply-To falls back to `RESEND_REPLY_TO_EMAIL`. Reminder crons and digests are NO LONGER in this row — see the rule at the top. |
 
 ## The From address must stay deliverable
 
