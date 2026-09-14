@@ -115,6 +115,7 @@ export const ENV_SPECS: EnvSpec[] = [
   { name: 'R2_BUCKET_NAME', group: 'storage', powers: 'Photo and attachment storage', whenMissing: 'fail' },
   { name: 'R2_PUBLIC_URL', group: 'storage', powers: 'Serving stored files back', whenMissing: 'warn' },
   { name: 'NEXT_PUBLIC_R2_PUBLIC_URL', group: 'storage', powers: 'Client-side file URLs', whenMissing: 'warn' },
+  { name: 'LEDGER_PDFS_ENABLED', group: 'storage', powers: 'Writing ledger PDFs/attachments to R2 — set to true ONLY after the R2 privacy flip is verified', whenMissing: 'off', docs: 'docs/r2-private-flip.md' },
 
   // --- Google ---
   { name: 'GOOGLE_CLIENT_ID', group: 'google', powers: 'Gmail auto-import and calendar OAuth', whenMissing: 'warn' },

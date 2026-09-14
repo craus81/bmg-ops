@@ -78,6 +78,13 @@ describe('touchesFinancialData — Supabase', () => {
     expect(touchesFinancialData('supabase', 'SELECT * FROM pay_splits')).toBe(true);
     expect(touchesFinancialData('supabase', 'SELECT * FROM audit_log ORDER BY created_at DESC')).toBe(true);
   });
+  // Migration 314: the imported QuickBooks/NetSuite ledger is company money,
+  // so it sits behind the same super_admin/executive gate as the GL data.
+  it('blocks the ledger tables', () => {
+    expect(touchesFinancialData('supabase', 'SELECT * FROM ledger_invoices')).toBe(true);
+    expect(touchesFinancialData('supabase', 'SELECT total FROM ledger_payments WHERE direction = $1')).toBe(true);
+    expect(touchesFinancialData('supabase', 'SELECT * FROM ledger_report_snapshots')).toBe(true);
+  });
   it('allows operational tables', () => {
     expect(touchesFinancialData('supabase', 'SELECT job_number, status FROM graphics_jobs')).toBe(false);
     expect(touchesFinancialData('supabase', 'SELECT estimate_number, grand_total FROM estimates')).toBe(false);
@@ -124,6 +131,12 @@ describe('touchesForbiddenData — secrets and forgery material, every role', ()
     'SELECT * FROM app_settings',
     'SELECT tax_id, bank_name FROM credit_applications',
     'SELECT * FROM credit_application',
+    // Migration 314 — the QuickBooks connection. Blocked for EVERY role,
+    // super_admin included: leadership may ask about the money, nobody may
+    // pull the OAuth tokens or the tenant's full realm id out of a chat box.
+    'SELECT * FROM quickbooks_tokens',
+    'SELECT state, user_id FROM quickbooks_oauth_states',
+    'SELECT realm_id, company_name FROM ledger_import_runs',
   ];
   for (const sql of blocked) {
     it(`blocks: ${sql.slice(0, 52)}`, () => {

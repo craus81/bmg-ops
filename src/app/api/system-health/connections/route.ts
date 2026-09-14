@@ -6,6 +6,7 @@ import { requireFeature } from '@/lib/api-auth';
 import { callRestlet, suiteqlQuery } from '@/lib/netsuite';
 import { resolveLaborItem } from '@/lib/labor-item';
 import { RESTLET_SPECS } from '@/lib/restlet-versions';
+import { ledgerPdfsEnabled } from '@/lib/ledger/pdf-gate';
 import {
   ENV_GROUPS, ENV_SPECS, checkEnv, classifyRestlet, compareMigrations, rollUp,
   type CheckGroup, type CheckRow, type RestletProbe,
@@ -186,6 +187,41 @@ export async function GET(req: NextRequest) {
   appRows.push(dropboxConfigured
     ? { key: 'dropbox', label: 'Dropbox', status: 'ok', detail: 'App credentials set' }
     : { key: 'dropbox', label: 'Dropbox', status: 'unknown', detail: 'Not configured', impact: 'Dropbox proof search and sync are off.' });
+
+  // The ledger PDF gate (migration 314 / R8-1). Off is the CORRECT state
+  // until the R2 privacy flip in docs/r2-private-flip.md is verified, so an
+  // unset gate is `unknown`, not a warning — but it must be visible, because
+  // "the importer stored no PDFs" and "the gate is still shut" look
+  // identical from the outside.
+  //
+  // Three states, not two: ledgerPdfsEnabled() fails closed for WRITES but
+  // hands back `readError` when the settings row could not be read, so an
+  // outage renders as "could not read the gate" rather than the flat fact
+  // "Off" (R7-1). attempt() catches the same failure one layer out.
+  const ledgerGate = await attempt(() => ledgerPdfsEnabled(service));
+  const gateReadFailed = ledgerGate.ok ? !!ledgerGate.value.readError : true;
+  if (gateReadFailed) {
+    appRows.push({
+      key: 'ledger_pdfs', label: 'Ledger PDF storage gate', status: 'unknown',
+      detail: ledgerGate.ok ? ledgerGate.value.reason : `Could not read the gate — ${ledgerGate.error}`,
+      impact: 'Whether imported documents are being stored cannot be confirmed from here.',
+      fix: 'Retry once Supabase is answering; the gate itself stays shut while it cannot be read.',
+      docs: 'docs/r2-private-flip.md',
+    });
+  } else {
+    appRows.push(ledgerGate.ok && ledgerGate.value.enabled
+      ? {
+          key: 'ledger_pdfs', label: 'Ledger PDF storage gate', status: 'ok',
+          detail: ledgerGate.value.reason,
+          docs: 'docs/r2-private-flip.md',
+        }
+      : {
+          key: 'ledger_pdfs', label: 'Ledger PDF storage gate', status: 'unknown',
+          detail: 'Off — ledger PDFs are not written until the R2 privacy flip is verified',
+          impact: 'Imported QuickBooks/NetSuite documents are catalogued but their bytes are not stored.',
+          docs: 'docs/r2-private-flip.md',
+        });
+  }
 
   const smsProvider = (process.env.SMS_PROVIDER || '').trim().toLowerCase();
   const dialpadReady = !!(process.env.DIALPAD_API_KEY && (process.env.DIALPAD_FROM_NUMBER || process.env.DIALPAD_USER_ID));

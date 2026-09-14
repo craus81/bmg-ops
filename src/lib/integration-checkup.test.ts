@@ -155,6 +155,22 @@ describe('the catalog itself', () => {
   });
 
   /**
+   * The ledger PDF gate is a deliberate OFF-by-default switch, not a
+   * misconfiguration: until the R2 privacy flip is verified, blank is the
+   * correct value. `off` keeps it out of the amber "Needs attention" filter
+   * and points at the runbook that says when to set it.
+   */
+  it('catalogs the ledger PDF gate as optional, pointing at the flip runbook', () => {
+    const gate = ENV_SPECS.find(s => s.name === 'LEDGER_PDFS_ENABLED');
+    expect(gate).toBeDefined();
+    expect(gate?.group).toBe('storage');
+    expect(gate?.whenMissing).toBe('off');
+    expect(gate?.docs).toBe('docs/r2-private-flip.md');
+    expect(checkEnv(gate!, undefined).status).toBe('unknown');
+    expect(checkEnv(gate!, undefined).fix).toBeUndefined();
+  });
+
+  /**
    * The rot guard. A checkup that quietly stops covering new integrations is
    * worse than no checkup, because it reports "all good" about a surface it
    * no longer looks at. Adding `process.env.NEW_THING` to src/ fails this

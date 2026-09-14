@@ -240,6 +240,13 @@ export const deepLinks = {
    *  The bounce-alert fallback when a send has no record context_url. */
   emailDelivery: (logId?: string | null) =>
     `/admin/system-health${logId ? `?email=${logId}` : ''}`,
+  /** Bytes of one imported ledger document (QuickBooks/NetSuite PDF or
+   *  attachment, migration 314). Same-origin and role-gated
+   *  (finance/executive) — `allowedPdfSrc` therefore accepts it, so feed it
+   *  to `pdfViewer` rather than opening the raw bytes in a bare tab. Add
+   *  `?download=1` for a save-as (a 5-minute presigned URL). Never a public
+   *  R2 URL: the `ledger` prefix is denied on the generic storage routes. */
+  ledgerDocument: (documentId: string) => `/api/ledger/documents/${documentId}`,
   /** In-app PDF viewer tab. Use this instead of linking a new tab straight at
    *  PDF bytes: a raw-PDF tab has no app chrome and no working Back button,
    *  so it strands whoever opened it (field bug: opening a PO PDF mid-import).

@@ -59,6 +59,12 @@ export const SUPABASE_FINANCIAL_PATTERNS: RegExp[] = [
   /\bpay_splits?\b/i,
   /\bpay_credits?\b/i,
   /\baudit_log\b/i,
+  // The imported QuickBooks / NetSuite ledger (migration 314) — invoices,
+  // payments, bills, journal entries, the chart of accounts and the stored
+  // report snapshots. One pattern covers every ledger_* table, present and
+  // future, so a table added in a later PR can't quietly land outside the
+  // gate. This is the same financials tier as the GL data above.
+  /\bledger_[a-z_]+\b/i,
 ];
 
 // Secrets and forgery material: blocked for EVERY role, including
@@ -92,6 +98,14 @@ export const ALWAYS_BLOCKED_PATTERNS: RegExp[] = [
   /\bnative_push_tokens?\b/i,
   /\bapp_settings\b/i,
   /\bcredit_applications?\b/i,
+  // QuickBooks Online (migration 314): quickbooks_tokens is the only place a
+  // live access/refresh token and the FULL realm id are stored, and
+  // quickbooks_oauth_states holds the single-use CSRF nonces. realm_id is
+  // named on its own because the company id identifies the tenant even
+  // without a token — every other table stores it masked.
+  /\bquickbooks_tokens?\b/i,
+  /\bquickbooks_oauth_states?\b/i,
+  /\brealm_id\b/i,
 ];
 
 /**

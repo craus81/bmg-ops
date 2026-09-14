@@ -58,6 +58,23 @@ describe('deepLinks.pdfViewer', () => {
   });
 });
 
+// Migration 314: imported ledger documents are served by an app route, not
+// from R2's public domain — so the viewer must accept the builder's output.
+describe('deepLinks.ledgerDocument', () => {
+  it('points at the record-scoped bytes route', () => {
+    expect(deepLinks.ledgerDocument('11111111-2222-3333-4444-555555555555'))
+      .toBe('/api/ledger/documents/11111111-2222-3333-4444-555555555555');
+  });
+
+  it('is a src the PDF viewer will frame', () => {
+    const src = deepLinks.ledgerDocument('11111111-2222-3333-4444-555555555555');
+    expect(allowedPdfSrc(src, 'https://ops.bmgfleet.com')).toBe(src);
+    const url = deepLinks.pdfViewer(src, { name: 'Invoice 1042.pdf' });
+    expect(new URLSearchParams(url.split('?')[1]).get('src')).toBe(src);
+    expect(allowedPdfSrc(url, 'https://ops.bmgfleet.com')).toBe(url);
+  });
+});
+
 describe('allowedPdfSrc', () => {
   const ORIGIN = 'https://ops.bmgfleet.com';
   const FILE_HOST = 'https://files.example.com';
