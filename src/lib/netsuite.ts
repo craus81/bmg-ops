@@ -2027,8 +2027,13 @@ export async function createVendorBill(payload: {
   // doesn't auto-number bills, so always send one. Location is HEADER only
   // (one location per bill); a line-level location triggers a 500 unless
   // per-line locations are on, so keep the line minimal: account + amount.
+  // Currency does NOT reliably auto-derive: a vendor with no primary currency
+  // set fails the create with 400 "Please enter value(s) for: Currency", so
+  // send it explicitly. Every installer vendor bills in USD (internal id 1);
+  // NETSUITE_CURRENCY_ID overrides if that ever changes.
   const body: any = {
     entity: { id: payload.vendorId },
+    currency: { id: process.env.NETSUITE_CURRENCY_ID || '1' },
     ...(payload.referenceNo ? { tranId: payload.referenceNo } : {}),
     ...(payload.subsidiaryId ? { subsidiary: { id: payload.subsidiaryId } } : {}),
     ...(payload.locationId ? { location: { id: payload.locationId } } : {}),

@@ -29,8 +29,19 @@ create fails (often as an opaque 500) if any is wrong:
 | `location` (header only) | one of Wentzville / Kansas City / O'Fallon / Social Circle | resolved by name via `findLocation`. Do **not** also set it on the expense line (that 500s unless per-line locations are enabled). |
 | expense line `account` | **Subcontractors** (#53000) = internal id **223** | |
 | expense line `amount` | payout total | |
+| `currency` | **USD** = internal id **1** | always sent; `NETSUITE_CURRENCY_ID` overrides. Does *not* auto-derive — see below. |
 
-Currency, exchange rate, and posting period auto-derive — we don't send them.
+Exchange rate and posting period auto-derive — we don't send those.
+
+**Currency does not auto-derive.** A vendor whose record has no primary
+currency set fails the create with a `400` and
+`"Please enter value(s) for: Currency"` — the same body that works for every
+other installer. So `createVendorBill` always sends `currency: { id: 1 }`
+(USD), overridable with `NETSUITE_CURRENCY_ID`. Don't drop it back to
+auto-derive because "it works for vendor X"; it works until the next vendor
+is created without a currency. If an installer ever needs to bill in a
+non-USD currency, this has to become a per-vendor lookup rather than a
+constant.
 
 ## The Vendor ID must be the **Internal ID**, not the **Entity ID**
 
