@@ -150,13 +150,20 @@ export async function suiteqlQueryAll(query: string, pageSize: number = 1000, op
 }
 
 /**
- * Call a NetSuite RESTlet
+ * Call a NetSuite RESTlet.
+ *
+ * `opts.timeoutMs` bounds the call with an AbortSignal. Without one a RESTlet
+ * that hangs holds the caller open until the platform kills the whole
+ * function — which for a budgeted background job (the ledger mirror's PDF
+ * phase) means losing the run's cursor to a single slow render. Interactive
+ * callers keep the previous behaviour by passing nothing.
  */
 export async function callRestlet(
   restletUrl: string,
   method: string = 'GET',
   params?: Record<string, string>,
-  jsonData?: any
+  jsonData?: any,
+  opts?: { timeoutMs?: number }
 ): Promise<any> {
   const config = getConfig();
   const { oauth, token } = createOAuth(config);
@@ -180,6 +187,7 @@ export async function callRestlet(
   const fetchOptions: RequestInit = {
     method: method.toUpperCase(),
     headers,
+    ...(opts?.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}),
   };
 
   if (method.toUpperCase() === 'POST' && jsonData) {
@@ -2833,13 +2841,21 @@ export async function getCollectionsFromRestlet(from: string, to: string): Promi
 
 /**
  * Fetch a transaction PDF from the NetSuite RESTlet.
- * Supports: salesOrder, invoice, estimate (matches the RESTlet's query
- * params — estimate requires the updated scripts/netsuite-pdf-restlet.js
- * to be redeployed in NetSuite).
+ *
+ * Supports: salesOrder, invoice, estimate, creditMemo (matches the RESTlet's
+ * query params). `estimate` and `creditMemo` each require the deployed
+ * scripts/netsuite-pdf-restlet.js to be new enough — an older File Cabinet
+ * copy answers with its missing-parameter error rather than a PDF, which is
+ * why the ledger mirror gates credit memos on the RESTlet version probe
+ * (docs/netsuite-ledger-grants.md) instead of just trying.
+ *
+ * `opts.timeoutMs` bounds the call; a large PDF render is the one RESTlet
+ * request that can genuinely sit for tens of seconds.
  */
 export async function getNetSuitePdf(
-  type: 'salesOrder' | 'invoice' | 'estimate',
-  recordId: string
+  type: 'salesOrder' | 'invoice' | 'estimate' | 'creditMemo',
+  recordId: string,
+  opts?: { timeoutMs?: number }
 ): Promise<{
   success: boolean;
   pdfBase64?: string;
@@ -2852,8 +2868,14 @@ export async function getNetSuitePdf(
   }
 
   try {
-    const paramKey = type === 'invoice' ? 'invoiceId' : type === 'estimate' ? 'estimateId' : 'salesOrderId';
-    const result = await callRestlet(restletUrl, 'GET', { [paramKey]: recordId });
+    const paramKey = type === 'invoice'
+      ? 'invoiceId'
+      : type === 'estimate'
+        ? 'estimateId'
+        : type === 'creditMemo'
+          ? 'creditMemoId'
+          : 'salesOrderId';
+    const result = await callRestlet(restletUrl, 'GET', { [paramKey]: recordId }, undefined, opts);
 
     if (result?.success && result?.pdfBase64) {
       let pdf64 = result.pdfBase64;
@@ -2865,7 +2887,13 @@ export async function getNetSuitePdf(
         pdf64 = Buffer.from(pdf64, 'base64').toString('utf-8');
       }
 
-      const prefix = type === 'invoice' ? 'Invoice' : type === 'estimate' ? 'Quote' : 'SalesOrder';
+      const prefix = type === 'invoice'
+        ? 'Invoice'
+        : type === 'estimate'
+          ? 'Quote'
+          : type === 'creditMemo'
+            ? 'CreditMemo'
+            : 'SalesOrder';
       return {
         success: true,
         pdfBase64: pdf64,

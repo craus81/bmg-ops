@@ -5,6 +5,10 @@
       "schedule": "57 9 * * *"
     },
     {
+      "path": "/api/cron/ledger-netsuite-mirror",
+      "schedule": "35 */2 * * *"
+    },
+    {
       "path": "/api/cron/metric-snapshots",
       "schedule": "30 4 * * *"
     },

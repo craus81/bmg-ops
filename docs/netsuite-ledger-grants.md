@@ -36,8 +36,16 @@ role" and picking the wrong one is the usual failure:
 
 1. **Credit memos** — confirm the integration role can already read Credit
    Memo headers and lines: System Health → Connections → *NetSuite ledger —
-   credit memos*. If it reads `query shape rejected`, that is an engineering
-   bug, not a grant: report it rather than granting anything.
+   credit memos*. That row says one of four things:
+   - `Header and line queries accepted in full` — nothing to do here.
+   - `Mirroring without balance` (or another named column) — the role reads
+     both types, but SuiteQL refused that one column. Working, just less
+     completely; the row's impact line says what stays empty.
+   - `The last run could not read invoice and credit-memo headers — …` — the
+     header query itself was rejected. Check the role still has
+     **Transactions → Invoice: View** and **Credit Memo: View**.
+   - `The last run never reached the header query` / `No run yet` — nothing
+     has been confirmed either way. Wait for the next 2-hourly run.
 2. **Customer payments** — on the SuiteQL integration role (Setup →
    Users/Roles → Manage Roles → the role from step 0) add:
    - **Transactions → Customer Payment: View**
@@ -45,6 +53,14 @@ role" and picking the wrong one is the usual failure:
 
    Save. The payments row flips from `not permitted` to `mirroring` on the
    next 2-hourly run — no redeploy, no code change.
+
+   This is also the only row that can read `query shape rejected`. That is
+   an engineering bug — the app asked SuiteQL for something it does not
+   understand — **not** a grant: report it rather than granting anything.
+   The row says so itself, and no permission change will clear it. The same
+   row reading *"Payments mirror, but what each one was applied to does
+   not"* means the payment grant IS in place and only the link-table query
+   failed — again a bug to report, not a permission to add.
 3. If a probe reports a permission error naming something else, the error
    text names the missing piece; grant that and let the next run re-probe.
 
@@ -71,8 +87,36 @@ System Health → Connections:
   expected value is `src/lib/restlet-versions.ts` (`pdf`), and
   `restlet-versions.test.ts` fails if the script and that value ever drift.
 - The ledger mirror job shows `ok` on its own schedule (System Health →
-  Jobs), and the *customer payments* row reads `mirroring`.
-- Credit-memo document rows leave `needs_restlet` on the next PDF pull.
+  Jobs — it runs at :35 on even hours). `partial: true` while a first pass
+  drains years of history is NORMAL, not a fault: the run saves a cursor and
+  the next one continues.
+- The *customer payments* row reads `mirroring via nexttransactionlinelink`
+  (or `previoustransactionlinelink` — either name is fine, the mirror probes
+  both).
+- In the job's last result, `repaired` counts payment applications that
+  found their invoice on this run. It falls to 0 once the window has
+  drained; a number that keeps climbing run after run means invoices are
+  still being mirrored behind their payments, which is what the newest-first
+  window does on purpose.
+- Credit-memo document rows leave `needs_restlet` on the next PDF pull —
+  provided the R2 privacy gate is open. Until it is, the job reports
+  `pdfs: { skipped: 'LEDGER_PDFS_ENABLED off — docs/r2-private-flip.md' }`
+  and stores no bytes at all, which is the correct state, not a failure.
+  `pdfs: { skipped: 'Could not read the PDF gate — …' }` is a different
+  thing: the gate's setting could not be read, so nothing was written and
+  nothing is known about whether the flip is done. Fix the read, don't
+  read it as "off".
+- `pdfs: { skipped: 'PDF RESTlet unreachable — …' }` is a third: the ping in
+  step 2 got no answer (script disabled, deployment mid-re-upload, a network
+  blip). The whole PDF phase is skipped for that run — no credit-memo row is
+  parked at `needs_restlet`, and no document spends one of its three
+  attempts — so nothing needs re-queueing once the RESTlet answers again.
+  Do NOT read it as "re-upload the script": the version is unknown, not old.
+- `tombstones: { problem: … }` in the last result means the sweep found
+  mirrored rows that NetSuite no longer returns but refused to soft-delete
+  any of them, because not one id in the whole sweep came back present —
+  which reads as a narrowed role rather than as deleted history. Nothing was
+  tombstoned; check the SuiteQL role's transaction access.
 
 ## Rollback
 

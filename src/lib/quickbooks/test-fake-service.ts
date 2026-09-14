@@ -23,6 +23,16 @@ export interface FakeService {
   tables: Record<string, any[]>;
   /** Tables whose reads should fail, to test the honest-failure paths. */
   failReadsOn: Set<string>;
+  /**
+   * Writes that should fail, as `'<table>'` or `'<table>:<op>'`.
+   *
+   * The per-op form is the point: `replaceChildren` DELETEs a parent's
+   * children and then INSERTs them, so "the delete landed and the insert did
+   * not" is a real production state (a statement timeout, a constraint, a
+   * PostgREST 5xx) and the only way to prove a caller does not stamp the
+   * parent as synced over it.
+   */
+  failWritesOn: Set<string>;
 }
 
 let idSeq = 0;
@@ -34,6 +44,64 @@ export function resetFakeIds(): void {
 }
 
 /**
+ * Split a PostgREST filter expression on its TOP-LEVEL commas, so a nested
+ * `and(a.eq.1,b.gt.2)` group survives as one term instead of being torn in
+ * half.
+ */
+function splitTerms(expr: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < expr.length; i++) {
+    const ch = expr[i];
+    if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+    else if (ch === ',' && depth === 0) { out.push(expr.slice(start, i)); start = i + 1; }
+  }
+  out.push(expr.slice(start));
+  return out.map(t => t.trim()).filter(Boolean);
+}
+
+/** One term of an `.or()` / nested `and()` expression. */
+function termMatches(row: any, term: string): boolean {
+  // Keyset pagination is written as `a.gt.X,and(a.eq.X,id.gt.Y)`, so a fake
+  // that ignored the group would resume from the wrong row — exactly the
+  // skipped-sibling bug the composite cursor exists to prevent.
+  if (term.startsWith('and(') && term.endsWith(')')) {
+    return splitTerms(term.slice(4, -1)).every(t => termMatches(row, t));
+  }
+  if (term.startsWith('or(') && term.endsWith(')')) {
+    return splitTerms(term.slice(3, -1)).some(t => termMatches(row, t));
+  }
+  const first = term.indexOf('.');
+  const second = term.indexOf('.', first + 1);
+  if (first < 0 || second < 0) return true;
+  const col = term.slice(0, first);
+  const op = term.slice(first + 1, second);
+  const raw = term.slice(second + 1);
+  const value = raw === 'null' ? null : raw;
+  switch (op) {
+    case 'is': return (row[col] ?? null) === value;
+    case 'eq': return String(row[col] ?? '') === raw;
+    case 'neq': return String(row[col] ?? '') !== raw;
+    case 'lt': return row[col] != null && cmp(row[col], value) < 0;
+    case 'lte': return row[col] != null && cmp(row[col], value) <= 0;
+    case 'gt': return row[col] != null && cmp(row[col], value) > 0;
+    case 'gte': return row[col] != null && cmp(row[col], value) >= 0;
+    // `roles.cs.{admin}` — array contains. Modelled because the System
+    // Health audience is selected with exactly this term, and treating it
+    // as "matches everything" would let a non-admin into the audience in
+    // a test that is supposed to prove they stay out.
+    case 'cs': {
+      const wanted = raw.replace(/^\{|\}$/g, '').split(',').map(x => x.trim()).filter(Boolean);
+      const have = Array.isArray(row[col]) ? row[col].map(String) : [];
+      return wanted.every(w => have.includes(w));
+    }
+    default: return true;
+  }
+}
+
+/**
  * PostgREST `.or('a.is.null,a.lt.X')`. Modelled for real rather than waved
  * through: the refresh LEASE is claimed with exactly this filter, and a fake
  * that ignored it would let both concurrent callers "win" — hiding the very
@@ -41,34 +109,7 @@ export function resetFakeIds(): void {
  * matches, so a permissive `.or()` (the profiles role filter) still behaves.
  */
 function orMatches(row: any, expr: string): boolean {
-  return expr.split(',').some(term => {
-    const first = term.indexOf('.');
-    const second = term.indexOf('.', first + 1);
-    if (first < 0 || second < 0) return true;
-    const col = term.slice(0, first);
-    const op = term.slice(first + 1, second);
-    const raw = term.slice(second + 1);
-    const value = raw === 'null' ? null : raw;
-    switch (op) {
-      case 'is': return (row[col] ?? null) === value;
-      case 'eq': return String(row[col] ?? '') === raw;
-      case 'neq': return String(row[col] ?? '') !== raw;
-      case 'lt': return row[col] != null && cmp(row[col], value) < 0;
-      case 'lte': return row[col] != null && cmp(row[col], value) <= 0;
-      case 'gt': return row[col] != null && cmp(row[col], value) > 0;
-      case 'gte': return row[col] != null && cmp(row[col], value) >= 0;
-      // `roles.cs.{admin}` — array contains. Modelled because the System
-      // Health audience is selected with exactly this term, and treating it
-      // as "matches everything" would let a non-admin into the audience in
-      // a test that is supposed to prove they stay out.
-      case 'cs': {
-        const wanted = raw.replace(/^\{|\}$/g, '').split(',').map(x => x.trim()).filter(Boolean);
-        const have = Array.isArray(row[col]) ? row[col].map(String) : [];
-        return wanted.every(w => have.includes(w));
-      }
-      default: return true;
-    }
-  });
+  return splitTerms(expr).some(term => termMatches(row, term));
 }
 
 const cmp = (a: any, b: any) => {
@@ -83,6 +124,7 @@ export function makeFakeService(seed: Record<string, any[]> = {}): FakeService {
   for (const [k, v] of Object.entries(seed)) tables[k] = v.map(r => ({ ...r }));
   const writes: FakeWrite[] = [];
   const failReadsOn = new Set<string>();
+  const failWritesOn = new Set<string>();
 
   const from = (table: string) => {
     tables[table] ||= [];
@@ -143,6 +185,12 @@ export function makeFakeService(seed: Record<string, any[]> = {}): FakeService {
       }
       if (pending) {
         const { op, rows } = pending;
+        if (failWritesOn.has(table) || failWritesOn.has(`${table}:${op}`)) {
+          // Recorded as an ATTEMPT — the caller tried — but nothing lands.
+          writes.push({ table, op, rows: rows.map(r => ({ ...r })), filters: filters.map(f => f[1]) as any });
+          pending = null;
+          return { data: null, error: { message: `write failed on ${table}` }, count: null };
+        }
         const touched: any[] = [];
         if (op === 'insert' || op === 'upsert') {
           for (const row of rows) {
@@ -222,7 +270,7 @@ export function makeFakeService(seed: Record<string, any[]> = {}): FakeService {
     return q;
   };
 
-  return { from, writes, tables, failReadsOn } as FakeService;
+  return { from, writes, tables, failReadsOn, failWritesOn } as FakeService;
 }
 
 /** Every write against one table, for "did this run touch it at all?" checks. */

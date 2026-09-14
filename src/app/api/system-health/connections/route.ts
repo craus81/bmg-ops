@@ -3,16 +3,18 @@ import { readdirSync } from 'fs';
 import { join } from 'path';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature } from '@/lib/api-auth';
-import { callRestlet, suiteqlQuery } from '@/lib/netsuite';
+import { suiteqlQuery } from '@/lib/netsuite';
 import { resolveLaborItem } from '@/lib/labor-item';
 import { RESTLET_SPECS } from '@/lib/restlet-versions';
+import { pingRestlet } from '@/lib/restlet-probe';
 import { ledgerPdfsEnabled } from '@/lib/ledger/pdf-gate';
+import { NS_MIRROR_SYNC_TYPE } from '@/lib/ledger/netsuite-mirror';
 import { QBO_DEFAULT_MINOR_VERSION, maskRealm, qboConfigured } from '@/lib/quickbooks/config';
 import { fetchCompanyInfo } from '@/lib/quickbooks/oauth';
 import { getAccessToken as getQboAccessToken } from '@/lib/quickbooks/tokens';
 import {
   ENV_GROUPS, ENV_SPECS, checkEnv, classifyRestlet, compareMigrations, rollUp,
-  type CheckGroup, type CheckRow, type RestletProbe,
+  type CheckGroup, type CheckRow,
 } from '@/lib/integration-checkup';
 
 export const dynamic = 'force-dynamic';
@@ -45,22 +47,6 @@ async function attempt<T>(fn: () => Promise<T>): Promise<{ ok: true; value: T } 
     return { ok: true, value: await fn() };
   } catch (e: any) {
     return { ok: false, error: e?.message ? String(e.message).slice(0, 300) : String(e).slice(0, 300) };
-  }
-}
-
-/** Ping one RESTlet. GET for financials/PDF, POST for the item RESTlet. */
-async function pingRestlet(key: string, url: string): Promise<RestletProbe> {
-  try {
-    const result = key === 'item'
-      ? await callRestlet(url, 'POST', undefined, { action: 'ping' })
-      : await callRestlet(url, 'GET', { action: 'ping' });
-    // A deployment older than the ping action still answers 200 — with
-    // whatever its real entry point does with an unknown action. No version
-    // field is the tell, and classifyRestlet treats it as stale, not OK.
-    const version = result && typeof result.version === 'string' ? result.version : null;
-    return { reachable: true, version };
-  } catch (e: any) {
-    return { reachable: false, error: e?.message ? String(e.message).slice(0, 200) : 'request failed' };
   }
 }
 
@@ -303,6 +289,150 @@ export async function GET(req: NextRequest) {
           impact: 'Imported QuickBooks/NetSuite documents are catalogued but their bytes are not stored.',
           docs: 'docs/r2-private-flip.md',
         });
+  }
+
+  // The NetSuite half of the ledger (R8-3). Both rows read the mirror's own
+  // heartbeat rather than probing NetSuite again: the job settles these
+  // facts every two hours and re-asking here would double the SuiteQL cost
+  // of opening this page to tell the reader the same thing.
+  const nsMirror = await attempt(async () => {
+    const { data, error } = await service
+      .from('sync_state')
+      .select('last_result')
+      .eq('sync_type', NS_MIRROR_SYNC_TYPE)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return (data?.last_result ?? null) as Record<string, any> | null;
+  });
+
+  if (!nsMirror.ok) {
+    for (const [key, label] of [
+      ['ledger_ns_credit_memos', 'NetSuite ledger — credit memos'],
+      ['ledger_ns_payments', 'NetSuite ledger — customer payments'],
+    ] as const) {
+      appRows.push({
+        key, label, status: 'unknown',
+        detail: `Could not read the mirror's last run — ${nsMirror.error}`,
+        impact: 'What the integration role can and cannot read cannot be confirmed from here.',
+        docs: 'docs/netsuite-ledger-grants.md',
+      });
+    }
+  } else if (!nsMirror.value) {
+    for (const [key, label] of [
+      ['ledger_ns_credit_memos', 'NetSuite ledger — credit memos'],
+      ['ledger_ns_payments', 'NetSuite ledger — customer payments'],
+    ] as const) {
+      appRows.push({
+        key, label, status: 'unknown',
+        detail: 'No run yet — the mirror reports this after its first run (every two hours, :35)',
+        docs: 'docs/netsuite-ledger-grants.md',
+      });
+    }
+  } else {
+    // Credit memos: the header query covers CustInvc AND CustCred, so the
+    // ladder having SETTLED — the run's own `columnsSettled`, never an empty
+    // `droppedColumns`, which a rejected run also publishes — means the role
+    // can read both. Dropped columns are the honest caveat on top of that: a
+    // mirror missing `balance` is working, just less completely.
+    const dropped: string[] = Array.isArray(nsMirror.value.droppedColumns) ? nsMirror.value.droppedColumns : [];
+    const nsRunError = typeof nsMirror.value.error === 'string' && nsMirror.value.error.trim()
+      ? nsMirror.value.error.trim().slice(0, 300)
+      : null;
+    if (nsMirror.value.columnsSettled !== true) {
+      // The last run never got an accepted header query back, so nothing
+      // here can confirm the role reads CustInvc/CustCred at all.
+      appRows.push({
+        key: 'ledger_ns_credit_memos', label: 'NetSuite ledger — credit memos',
+        status: nsRunError ? 'warn' : 'unknown',
+        detail: nsRunError
+          ? `The last run could not read invoice and credit-memo headers — ${nsRunError}`
+          : 'The last run never reached the header query — nothing confirmed yet',
+        impact: 'Nothing confirms the SuiteQL role can read credit memos; mirrored rows are as of the last run that could.',
+        ...(nsRunError
+          ? { fix: 'Confirm the SuiteQL integration role still has Transactions → Invoice: View and Credit Memo: View, then wait for the next 2-hourly run.' }
+          : {}),
+        docs: 'docs/netsuite-ledger-grants.md',
+      });
+    } else {
+      appRows.push(dropped.length === 0
+        ? {
+            key: 'ledger_ns_credit_memos', label: 'NetSuite ledger — credit memos', status: 'ok',
+            detail: 'Header and line queries accepted in full',
+            docs: 'docs/netsuite-ledger-grants.md',
+          }
+        : {
+            key: 'ledger_ns_credit_memos', label: 'NetSuite ledger — credit memos', status: 'warn',
+            detail: `Mirroring without ${dropped.join(', ')} — SuiteQL refused ${dropped.length > 1 ? 'those columns' : 'that column'}`,
+            impact: dropped.includes('balance')
+              ? 'Open balances are stored only as 0 (paid) or unknown, never guessed from the total.'
+              : 'Those fields stay empty on mirrored rows.',
+            docs: 'docs/netsuite-ledger-grants.md',
+          });
+    }
+
+    const payments = (nsMirror.value.capabilities?.payments ?? null) as
+      | { permitted?: boolean; linkTable?: string | null; reason?: string | null }
+      | null;
+    if (!payments) {
+      appRows.push({
+        key: 'ledger_ns_payments', label: 'NetSuite ledger — customer payments', status: 'unknown',
+        detail: 'The last run recorded no payments probe',
+        docs: 'docs/netsuite-ledger-grants.md',
+      });
+    } else if (payments.permitted && payments.linkTable) {
+      appRows.push({
+        key: 'ledger_ns_payments', label: 'NetSuite ledger — customer payments', status: 'ok',
+        detail: `Mirroring via ${payments.linkTable}`,
+        docs: 'docs/netsuite-ledger-grants.md',
+      });
+    } else if (/not probed/i.test(payments.reason || '')) {
+      // The absence of an answer, not a fault: the last run never reached
+      // the probe (its header query failed, or it ran out of budget).
+      appRows.push({
+        key: 'ledger_ns_payments', label: 'NetSuite ledger — customer payments', status: 'unknown',
+        detail: payments.reason || 'Not probed yet',
+        docs: 'docs/netsuite-ledger-grants.md',
+      });
+    } else if (payments.permitted) {
+      // The CustPymt probe SUCCEEDED and only the link tables answered 400:
+      // payments themselves ARE mirroring. Telling the owner to grant a
+      // permission they already hold, over an impact line claiming payments
+      // are missing, would be wrong on both halves.
+      appRows.push({
+        key: 'ledger_ns_payments', label: 'NetSuite ledger — customer payments', status: 'warn',
+        detail: payments.reason || 'Payments mirror; neither link table answered',
+        impact: 'Payments mirror, but what each one was applied to does not — invoices show no payments against them.',
+        fix: 'An engineering bug in the link-table query, not a missing grant: report the rejected query rather than changing permissions.',
+        docs: 'docs/netsuite-ledger-grants.md',
+      });
+    } else if (/query shape rejected/i.test(payments.reason || '')) {
+      // A 400 is the app asking SuiteQL for something it does not
+      // understand. The runbook says this verbatim: report it, grant nothing.
+      appRows.push({
+        key: 'ledger_ns_payments', label: 'NetSuite ledger — customer payments', status: 'warn',
+        detail: payments.reason || 'query shape rejected',
+        impact: 'Payments and what they were applied to are missing from the ledger; invoices still mirror.',
+        fix: 'An engineering bug, not a grant: report the rejected query — no NetSuite permission change will fix it.',
+        docs: 'docs/netsuite-ledger-grants.md',
+      });
+    } else if (/not permitted/i.test(payments.reason || '') || !payments.reason) {
+      appRows.push({
+        key: 'ledger_ns_payments', label: 'NetSuite ledger — customer payments', status: 'warn',
+        detail: payments.reason || 'not permitted — see docs/netsuite-ledger-grants.md',
+        impact: 'Payments and what they were applied to are missing from the ledger; invoices still mirror.',
+        fix: 'Grant the SuiteQL integration role Transactions → Customer Payment: View and Find Transaction: View.',
+        docs: 'docs/netsuite-ledger-grants.md',
+      });
+    } else {
+      // 'probe failed: …' — a 429, a 5xx or a network error. Unsettled, not
+      // a verdict: the next 2-hourly run asks again.
+      appRows.push({
+        key: 'ledger_ns_payments', label: 'NetSuite ledger — customer payments', status: 'unknown',
+        detail: payments.reason,
+        impact: 'Whether payments can be read is unsettled — the mirror re-probes on its next run (every two hours).',
+        docs: 'docs/netsuite-ledger-grants.md',
+      });
+    }
   }
 
   const smsProvider = (process.env.SMS_PROVIDER || '').trim().toLowerCase();
