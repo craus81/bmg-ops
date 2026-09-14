@@ -4,6 +4,7 @@ import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { evaluateSystemHealth, recordHeartbeat } from '@/lib/system-health';
+import { systemHealthAudience } from '@/lib/system-health-audience';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -74,22 +75,10 @@ export async function GET(req: NextRequest) {
     if (toAlert.length > 0) {
       // System Health is a super-admin page — alert the people who can open
       // it (plus anyone granted the feature individually).
-      const [{ data: admins }, { data: shOverrides }] = await Promise.all([
-        service
-          .from('profiles')
-          .select('id, roles')
-          .or('role.eq.admin,roles.cs.{admin}')
-          .eq('status', 'approved'),
-        service
-          .from('user_feature_overrides')
-          .select('user_id')
-          .eq('feature', 'system_health')
-          .eq('granted', true),
-      ]);
-      const granted = new Set((shOverrides || []).map((o: any) => o.user_id));
-      const adminIds = (admins || [])
-        .filter((a: any) => (a.roles || []).includes('super_admin') || granted.has(a.id))
-        .map((a: any) => a.id);
+      // The selection this route used to own inline now lives in
+      // src/lib/system-health-audience.ts — same rule, one implementation,
+      // shared with the ledger importer's finished/failed notifications.
+      const adminIds = await systemHealthAudience(service);
       if (adminIds.length > 0) {
         const lines = toAlert.map(c => `${c.label}: ${c.problem}`).join(' · ');
         await notifyMany(adminIds, {

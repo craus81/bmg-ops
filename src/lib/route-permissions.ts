@@ -80,6 +80,25 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // GL account every labor dollar posts to.
   'src/app/api/admin/labor-item/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   'src/app/api/admin/link-customer/route.ts': admin(),
+  // The QuickBooks ledger import (migration 314 / R8-2). Driven from OUTSIDE
+  // the app by scripts/import-quickbooks.mjs with CRON_SECRET, because the
+  // deployment is unreachable from a session container; the admin page drives
+  // the same route with a session for small runs.
+  'src/app/api/admin/ledger/import/route.ts': cron('requireAdmin('),
+  // The progress feed the ledger page polls, and the review queue's read
+  // half: the ledger reader tier (finance/executive; admins auto-pass). Run
+  // rows carry no secret — realm_id is stored already masked.
+  'src/app/api/admin/ledger/runs/route.ts': role(),
+  // Reading the queue is the ledger tier; attaching/ignoring/unlinking a
+  // customer is admin.
+  'src/app/api/admin/ledger/customer-links/route.ts': { kind: 'admin', contains: ['requireAdmin(', 'requireRole('] },
+  // Reading the PDF gate (with WHO stamped it) is admin; stamping it is
+  // super-admin — it is what lets a decade of financial PDFs reach R2.
+  'src/app/api/admin/ledger/settings/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
+  // Reading connection state is the ledger tier so a finance viewer sees the
+  // card; disconnecting revokes at Intuit, so it is the owner-level wall.
+  'src/app/api/admin/quickbooks/status/route.ts': role(),
+  'src/app/api/admin/quickbooks/disconnect/route.ts': superAdmin(),
   // ZIP centroids for invite distance ranking (R6-5): reference data an
   // admin loads once, never customer data.
   'src/app/api/admin/zip-centroids/route.ts': admin(),
@@ -126,6 +145,12 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // rate-limited both verbs, slot race settled by a partial unique index.
   'src/app/api/book/[token]/route.ts': token('customer pickup/drop-off booking via the completion-email or approval-page link; token resolved + state-gated before any write', 'resolveBookingToken('),
   'src/app/api/auth/google/callback/route.ts': staff(),
+  // /api/auth/* is public at the middleware, so BOTH QuickBooks routes call
+  // requireAdmin themselves: the callback writes the single shared
+  // quickbooks_tokens row, and an unauthenticated hit could point the whole
+  // ledger import at a company someone else controls.
+  'src/app/api/auth/quickbooks/route.ts': admin(),
+  'src/app/api/auth/quickbooks/callback/route.ts': admin(),
   'src/app/api/auth/google/route.ts': staff(),
   'src/app/api/auth/signup/route.ts': pub('account creation; new profiles land status=pending and every guard rejects them until an admin approves'),
   'src/app/api/calendar/sync-event/route.ts': staff(),
@@ -189,6 +214,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cron/exceptions-digest/route.ts': cron('requireAdmin('),
   'src/app/api/cron/heartbeat-sentinel/route.ts': cron('requireAdmin('),
   'src/app/api/cron/so-matchmaker/route.ts': cron('requireAdmin('),
+  'src/app/api/cron/ledger-qbo-sync/route.ts': cron('requireAdmin('),
   'src/app/api/cron/health-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/netsuite-sync/route.ts': cron('requireAdmin('),
   'src/app/api/cron/owner-brief/route.ts': cron('requireAdmin('),

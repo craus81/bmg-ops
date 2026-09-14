@@ -68,6 +68,7 @@ export const ENV_GROUPS: { key: string; label: string; blurb: string }[] = [
   { key: 'email', label: 'Email', blurb: 'Outbound mail and its delivery tracking.' },
   { key: 'storage', label: 'File storage', blurb: 'Photos, proofs, attachments and PDFs.' },
   { key: 'google', label: 'Google', blurb: 'Gmail auto-import and the shop calendar.' },
+  { key: 'quickbooks', label: 'QuickBooks Online', blurb: 'The historical ledger tenant: OAuth app keys and the connect handshake.' },
   { key: 'telephony', label: 'Phone & SMS', blurb: 'Text alerts, call logging and the caller-ID screen-pop.' },
   { key: 'push', label: 'Push notifications', blurb: 'Browser and native push.' },
   { key: 'ai', label: 'AI', blurb: 'PO and vendor-invoice extraction, voice notes, knowledge-base vision.' },
@@ -124,6 +125,18 @@ export const ENV_SPECS: EnvSpec[] = [
   { name: 'GOOGLE_CALENDAR_ID', group: 'google', powers: 'Which calendar the schedule syncs to', whenMissing: 'warn' },
   { name: 'GOOGLE_DWD_CLIENT_EMAIL', group: 'google', powers: 'Domain-wide delegation (service-account mailbox access)', whenMissing: 'off' },
   { name: 'GOOGLE_DWD_PRIVATE_KEY', group: 'google', powers: 'Domain-wide delegation (service-account mailbox access)', whenMissing: 'off' },
+
+  // --- QuickBooks Online ---
+  // whenMissing 'off', NOT 'warn' (the DROPBOX_APP_KEY precedent rather than
+  // GOOGLE_*): until the Intuit app exists, three amber "Check" rows would
+  // sit under QuickBooks Online on the default Needs-attention filter and
+  // contradict the Connected-apps row's deliberate `Off · Not configured`.
+  // The app row plus docs/quickbooks-connect.md carry the "connect me".
+  { name: 'QBO_CLIENT_ID', group: 'quickbooks', powers: 'The Intuit app identity for the QuickBooks history import', whenMissing: 'off', docs: 'docs/quickbooks-connect.md' },
+  { name: 'QBO_CLIENT_SECRET', group: 'quickbooks', powers: 'The Intuit app secret used on the token exchange', whenMissing: 'off', docs: 'docs/quickbooks-connect.md' },
+  { name: 'QBO_REDIRECT_URI', group: 'quickbooks', powers: 'The callback URL registered in the Intuit app — must match EXACTLY', whenMissing: 'off', docs: 'docs/quickbooks-connect.md' },
+  { name: 'QBO_ENVIRONMENT', group: 'quickbooks', powers: 'production or sandbox — a sandbox realm may only pair with a sandbox deployment', whenMissing: 'off', docs: 'docs/quickbooks-connect.md' },
+  { name: 'QBO_MINOR_VERSION', group: 'quickbooks', powers: 'Pins the QuickBooks API minor version (defaults to 73)', whenMissing: 'off', docs: 'docs/quickbooks-connect.md' },
 
   // --- Telephony ---
   { name: 'SMS_PROVIDER', group: 'telephony', powers: 'Which provider sends texts (twilio or dialpad)', whenMissing: 'warn' },

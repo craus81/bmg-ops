@@ -174,6 +174,49 @@ Add the **Time Clock** widget to your home dashboard, or go to
 
 ---
 
+## Import QuickBooks history
+
+The years of invoices, payments and reports that predate NetSuite live in
+QuickBooks. FleetSuite imports them into the same ledger tables every
+financial screen reads, so an old invoice opens beside a new one with a
+"QuickBooks" badge and nothing else different.
+
+**Nothing is written until you have seen the report.** The order matters and
+the app enforces it:
+
+1. **Connect.** Settings → Company → QuickBooks Online → Connect (admins).
+   If it comes back saying "company name unavailable", only the name lookup
+   failed — the connection is fine.
+2. **Dry run.** Ledger → Import → **Dry run**. It reads QuickBooks and writes
+   nothing. When it finishes you get: how many customers matched exactly, how
+   many matched after cleaning up a doubled name, how many are ambiguous, how
+   many did not match at all — plus the proposed cutover date (the day
+   NetSuite became the book of record) and a count of every record type.
+3. **Read it, then say so.** "I have read this report" is the gate: an import
+   is refused until a dry run has been marked read.
+4. **Confirm the cutover.** The date is prefilled from the dry run and can be
+   edited. QuickBooks records on or after it are kept and FLAGGED, never
+   dropped — they exist in both systems and the flag is how a report avoids
+   counting them twice. Correcting the date later re-flags; it never
+   re-imports.
+5. **Start the import.** Small companies can run it from this page. For a
+   full history use the script or Actions → ledger-import — see
+   docs/ledger-import.md. "Partial" is normal: the import runs in chunks and
+   picks up where it stopped.
+
+**The review queue.** Ledger → Review queue lists the QuickBooks customers
+that could not be matched confidently, each with its suggestions and how many
+invoices and payments are riding on the decision. When there are no
+suggestions — common in the **unmatched** bucket — use **Search customers…**
+on that row to find the right one by name. Attaching one backfills all
+of that history to the FleetSuite customer. A customer renamed in QuickBooks
+comes back to the queue; a decision you made by hand never does.
+
+**PDFs.** Documents are catalogued from the first import, but their actual
+files are NOT stored until the R2 privacy check in docs/r2-private-flip.md has
+been verified and stamped (Settings → Company). Until then the Ledger page
+says so rather than silently storing nothing.
+
 ## Set up a customer's default install context
 
 1. From any estimate, pick the customer.

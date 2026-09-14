@@ -43,12 +43,19 @@ gives you:
 - **The cutover window** — max QuickBooks TxnDate vs min NetSuite trandate in
   the sales-order/invoice mirror — or a plain warning that QuickBooks refused
   the date probe, in which case you supply the date yourself.
-- **The four customer buckets**: matched exactly / matched after cleanup /
-  ambiguous / unmatched. They always sum to the customer total.
+- **The customer buckets**: matched exactly / matched after cleanup /
+  ambiguous / unmatched, plus *already decided* — rows a human attached or
+  ignored in the review queue, which a re-run never re-grades. They always
+  sum to the customer total.
 - **Capabilities** the client probed (ordering, counts, CDC, per-type PDF
   support) and any warnings.
 
 No ledger row, no import event and no resume pointer is written by a dry run.
+
+A dry run is CHUNKED: keep looping `--mode dry-run --run <id>` until it
+answers `complete`. A run that stopped at its deadline covers only part of the
+customer list, so it cannot be marked read and cannot gate an import — both
+answer `That dry run has not finished — re-run it to completion first.`
 
 ## 2. Mark it read, then confirm the cutover
 
@@ -82,7 +89,10 @@ on.
 ## 4. Review queue
 
 Customers that didn't match cleanly land in the review queue on /admin/ledger:
-attach to an existing customer, ignore, or unlink. Every attach backfills that
+attach to an existing customer, ignore, or unlink. Rows in the **unmatched**
+bucket usually have no suggestions at all — that is what "unmatched" means —
+so each row also carries **Search customers…**, which looks the FleetSuite
+customer up by name and offers it as an Attach. Every attach backfills that
 customer's history immediately. A customer later renamed in QuickBooks comes
 back to the queue; a **manual** or **ignored** decision never does — no
 import overwrites a human call.
@@ -90,7 +100,7 @@ import overwrites a human call.
 ## 5. PDFs and attachments (needs §0)
 
 ```
-node scripts/import-quickbooks.mjs --phases pdfs,attachments_fetch --confirm <host>
+node scripts/import-quickbooks.mjs --mode import --phases pdfs,attachments_fetch --confirm <host>
 ```
 
 These phases are gate-free in the dry-run sense — they only finish document
@@ -101,7 +111,7 @@ in §0 must be open or every write returns
 ## 6. Reports
 
 ```
-node scripts/import-quickbooks.mjs --phases reports --dry-run-id <id> --confirm <host>
+node scripts/import-quickbooks.mjs --mode import --phases reports --dry-run-id <id> --confirm <host>
 ```
 
 Reports WRITE financial rows, so they carry the same dry-run/cutover gate as a
