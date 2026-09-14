@@ -240,6 +240,24 @@ export const deepLinks = {
    *  The bounce-alert fallback when a send has no record context_url. */
   emailDelivery: (logId?: string | null) =>
     `/admin/system-health${logId ? `?email=${logId}` : ''}`,
+  /** The ledger admin page (QuickBooks import + the customer review queue).
+   *  Params are emitted only when given, so the bare call is the clean page
+   *  URL: `run` opens one import run's progress feed, `tab` picks the pane,
+   *  and `qboAuth`/`reason` are what the OAuth callback redirects with. */
+  ledgerAdmin: (opts?: { run?: string | null; tab?: 'import' | 'review'; qboAuth?: 'success' | 'error'; reason?: string | null }) => {
+    const params = new URLSearchParams();
+    if (opts?.tab) params.set('tab', opts.tab);
+    if (opts?.run) params.set('run', opts.run);
+    if (opts?.qboAuth) params.set('qboAuth', opts.qboAuth);
+    if (opts?.reason) params.set('reason', opts.reason);
+    const q = params.toString();
+    return `/admin/ledger${q ? `?${q}` : ''}`;
+  },
+  /** The review queue, optionally scroll-flashing ONE ledger customer — the
+   *  landing for "this QuickBooks customer needs a match" (never the bare
+   *  list while a row id is in scope). */
+  ledgerCustomerReview: (ledgerCustomerId?: string | null) =>
+    `/admin/ledger?tab=review${ledgerCustomerId ? `&customer=${ledgerCustomerId}` : ''}`,
   /** Bytes of one imported ledger document (QuickBooks/NetSuite PDF or
    *  attachment, migration 314). Same-origin and role-gated
    *  (finance/executive) — `allowedPdfSrc` therefore accepts it, so feed it

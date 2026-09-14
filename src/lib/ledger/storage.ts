@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { r2Head, r2Upload } from '@/lib/r2';
+import { r2GetBytes, r2Head, r2Upload } from '@/lib/r2';
 import { ledgerPdfsEnabled } from './pdf-gate';
 
 /**
@@ -236,13 +236,26 @@ export function sha256Hex(buf: Buffer): string {
  * finishes inside its budget and one that never does. The returned `key` is
  * the full R2 key for logs; `publicUrl` is deliberately never returned or
  * persisted — r2Upload hands one back for every prefix, private or not.
+ *
+ * TWO RULES KEEP `sha256`/`size` HONEST, because callers stamp them onto
+ * `ledger_documents` as the description of what is in the bucket:
+ *
+ *  - `opts.replace` skips the existence short-circuit entirely and PUTs.
+ *    An edited QuickBooks document keeps its key (the file name is
+ *    `<Entity>_<DocNumber|Id>.pdf`, unchanged when only amounts moved), so
+ *    without this a re-fetch would leave the PRE-edit bytes in R2 while the
+ *    row swore they were the post-edit ones. Every re-fetch passes it.
+ *  - On the `existed: true` path the digest and size returned are the STORED
+ *    object's, read back — never the caller's fetched bytes. We did not
+ *    write those bytes, so we cannot vouch for them. If the read-back fails
+ *    we upload instead of guessing, and answer `existed: false`.
  */
 export async function putLedgerObject(
   service: SupabaseClient,
   path: string,
   bytes: Buffer,
   contentType: string,
-  opts?: { probe?: true },
+  opts?: { probe?: true; replace?: boolean },
 ): Promise<
   | { ok: true; key: string; sha256: string; size: number; existed: boolean }
   | { ok: false; error: string }
@@ -274,8 +287,22 @@ export async function putLedgerObject(
   const digest = sha256Hex(bytes);
   const size = bytes.byteLength;
 
-  if (await r2Head(LEDGER_R2_PREFIX, path)) {
-    return { ok: true, key, sha256: digest, size, existed: true };
+  if (!opts?.replace && (await r2Head(LEDGER_R2_PREFIX, path))) {
+    // Report what is ACTUALLY there, not what we happen to be holding: the
+    // caller writes this digest into a column that claims to describe the
+    // object. A read-back that fails leaves us unable to describe it, so we
+    // fall through and store our own bytes rather than assert someone
+    // else's.
+    const stored = await r2GetBytes(LEDGER_R2_PREFIX, path);
+    if (stored) {
+      return {
+        ok: true,
+        key,
+        sha256: sha256Hex(stored.bytes),
+        size: stored.bytes.byteLength,
+        existed: true,
+      };
+    }
   }
 
   const uploaded = await r2Upload(LEDGER_R2_PREFIX, path, bytes, contentType);

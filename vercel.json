@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/cron/ledger-qbo-sync",
+      "schedule": "57 9 * * *"
+    },
+    {
       "path": "/api/cron/metric-snapshots",
       "schedule": "30 4 * * *"
     },

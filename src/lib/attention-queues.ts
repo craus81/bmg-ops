@@ -108,6 +108,18 @@ export const ATTENTION_QUEUES: AttentionQueue[] = [
     count: (s) => loadNeverInvoicedCount(s),
   },
   {
+    key: 'ledger_unmatched_customers',
+    label: 'Ledger customers needing a match',
+    feature: 'ledger',
+    path: '/admin/ledger?tab=review',
+    // Ambiguous AND unmatched: both are rows a human has to decide on. A
+    // 'manual' or 'ignored' row has already been decided and never returns
+    // to the queue.
+    count: (s) => countRows(s, 'ledger_customers', q => q
+      .in('match_status', ['ambiguous', 'unmatched'])
+      .is('deleted_at', null)),
+  },
+  {
     key: 'email_problems',
     label: 'Bounced emails nobody has fixed',
     feature: 'system_health',

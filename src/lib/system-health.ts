@@ -56,6 +56,7 @@ export const HEALTH_MONITORS: HealthMonitor[] = [
   { syncType: 'heartbeat_sentinel', label: 'Daily business-pulse sentinel', intervalMinutes: 1440 },
   { syncType: 'so_matchmaker', label: 'Nightly orphan sales-order matchmaker', intervalMinutes: 1440 },
   { syncType: 'client_events_purge', label: 'Client events purge (30-day usage-telemetry retention)', intervalMinutes: 1440 },
+  { syncType: 'ledger_qbo_sync', label: 'QuickBooks ledger daily change sync', intervalMinutes: 1440 },
 ];
 
 /** A run is stale once it's overdue by more than a full interval (2× spacing), plus grace for slow runs. */

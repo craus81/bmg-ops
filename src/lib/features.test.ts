@@ -36,3 +36,23 @@ describe('resolveFeatures admin tiers', () => {
     for (const key of regular) expect(features.has(key as any)).toBe(true);
   });
 });
+
+describe('the ledger feature', () => {
+  it('is a default for finance and executive, and admins inherit it', () => {
+    expect(FEATURES.ledger).toBeTruthy();
+    expect(resolveFeatures(['finance'], []).has('ledger')).toBe(true);
+    expect(resolveFeatures(['executive'], []).has('ledger')).toBe(true);
+    expect(resolveFeatures(['admin'], []).has('ledger')).toBe(true);
+    expect(resolveFeatures(['super_admin'], []).has('ledger')).toBe(true);
+  });
+
+  it('is NOT super-admin-only — a finance viewer must be able to open the page', () => {
+    expect(SUPER_ADMIN_FEATURES).not.toContain('ledger');
+  });
+
+  it('is not handed to the shop-floor roles', () => {
+    for (const role of ['sales', 'shop_tech', 'field_tech', 'graphics_production', 'installer', 'customer']) {
+      expect(resolveFeatures([role], []).has('ledger'), role).toBe(false);
+    }
+  });
+});

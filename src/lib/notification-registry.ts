@@ -154,6 +154,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
 
   // ── System & health ───────────────────────────────────────────────────
   { type: 'system_health', label: 'System health alert', description: 'A background job, integration or probe reported a problem.', area: 'system', defaultChannels: ['in_app', 'push', 'email'] },
+  { type: 'ledger_import', label: 'Ledger import update', description: 'A QuickBooks/NetSuite history import finished, needs review, or failed.', area: 'system', defaultChannels: ['in_app', 'push'], audience: 'Super admins and anyone granted System Health.' },
   { type: 'access_request', label: 'Access request', description: 'Someone asked for an account or extra permissions.', area: 'system', defaultChannels: ['in_app', 'push'] },
 
   // ── Messages & mentions ───────────────────────────────────────────────

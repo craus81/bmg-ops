@@ -1,0 +1,110 @@
+# Drive the QuickBooks ledger import from Actions.
+#
+# The bulk pull is a long loop of short HTTP calls (the route does ≤ 240 s of
+# work per call and returns a cursor), so it needs a runner that can sit there
+# for hours — which is exactly what a session container cannot do and a laptop
+# should not have to. scripts/import-quickbooks.mjs is the same loop either
+# way; this workflow just gives it somewhere to run.
+#
+# Setup: the repository secret CRON_SECRET (same value as the Vercel env var)
+# and the repository variable APP_URL (the production host).
+#
+# Order, from docs/ledger-import.md: probe-r2 → dry-run → report-viewed →
+# confirm-cutover → import. A `needsDryRun` 412 is not a transient failure —
+# the script exits 2 and says what to run.
+
+name: ledger-import
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Import mode'
+        required: true
+        type: choice
+        default: status
+        options:
+          - status
+          - probe-r2
+          - dry-run
+          - report-viewed
+          - confirm-cutover
+          - import
+          - resume
+          - cancel
+      runId:
+        description: 'Run id (resume / cancel / report-viewed)'
+        required: false
+        type: string
+      dryRunId:
+        description: 'Dry-run id (import / confirm-cutover)'
+        required: false
+        type: string
+      date:
+        description: 'Cutover date YYYY-MM-DD (confirm-cutover)'
+        required: false
+        type: string
+      phases:
+        description: 'Comma-separated phase subset (import)'
+        required: false
+        type: string
+      budget:
+        description: 'Milliseconds of work per call (max 240000)'
+        required: false
+        default: '240000'
+        type: string
+      maxLoops:
+        description: 'Stop after this many chunks'
+        required: false
+        default: '500'
+        type: string
+
+# Two drivers on one run would just fight over the lease (the route answers
+# 409), so serialize — and never cancel one mid-chunk.
+concurrency:
+  group: ledger-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # NOTHING from `inputs` is interpolated into the script body. GitHub
+      # expands `${{ }}` before bash ever sees the text, so a free-form input
+      # containing `;` or a backtick would EXECUTE here — in a step that holds
+      # the production CRON_SECRET (the unauthenticated key to
+      # /api/admin/ledger/import and every /api/cron/* route). Every input
+      # therefore arrives as an environment variable and is referenced quoted,
+      # and the argument list is a bash ARRAY so no value is ever word-split.
+      - name: Run the importer
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          MODE: ${{ inputs.mode }}
+          RUN_ID: ${{ inputs.runId }}
+          DRY_RUN_ID: ${{ inputs.dryRunId }}
+          CUTOVER_DATE: ${{ inputs.date }}
+          PHASES: ${{ inputs.phases }}
+          BUDGET: ${{ inputs.budget }}
+          MAX_LOOPS: ${{ inputs.maxLoops }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL:-}" ]; then
+            echo "Set the repository variable APP_URL to the production host." >&2
+            exit 2
+          fi
+          HOST="$(node -e 'process.stdout.write(new URL(process.env.APP_URL).host)')"
+          # --confirm is the script's own "yes, this host on purpose" wall.
+          ARGS=(--mode "$MODE" --budget "$BUDGET" --max-loops "$MAX_LOOPS" --confirm "$HOST")
+          if [ -n "${RUN_ID:-}" ]; then ARGS+=(--run "$RUN_ID"); fi
+          if [ -n "${DRY_RUN_ID:-}" ]; then ARGS+=(--dry-run-id "$DRY_RUN_ID"); fi
+          if [ -n "${CUTOVER_DATE:-}" ]; then ARGS+=(--date "$CUTOVER_DATE"); fi
+          if [ -n "${PHASES:-}" ]; then ARGS+=(--phases "$PHASES"); fi
+          node scripts/import-quickbooks.mjs "${ARGS[@]}"

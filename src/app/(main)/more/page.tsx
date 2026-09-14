@@ -110,6 +110,7 @@ export default function MorePage() {
         { title: 'User Management', sub: badgeFor('pending_users') ? `${badgeFor('pending_users')} pending approval` : 'Manage team access', path: '/admin/users', show: F('user_management'), badge: badgeFor('pending_users') },
         { title: 'Customer Notifications', sub: 'Who gets automatic emails — everything else is on-demand', path: '/admin/customer-notifications', show: F('customers') },
         { title: 'Bulk Upload', sub: 'Import templates & proofs from ZIP', path: '/admin/bulk-upload', show: F('bulk_upload') },
+        { title: 'Ledger', sub: 'QuickBooks history import, customer matching & NetSuite mirror', path: '/admin/ledger', show: F('ledger'), badge: badgeFor('ledger_unmatched_customers') },
         { title: 'Audit Log', sub: 'Who changed what — money edits, payouts, rates & invoices', path: '/admin/audit', show: F('audit_log') },
         { title: 'System Health', sub: 'Background syncs & crons — with alerts when one dies', path: '/admin/system-health', show: F('system_health') },
         { title: 'AI Instructions', sub: 'Steer FleetSuite AI behavior — global rules, no deploy', path: '/admin/ai-instructions', show: F('ai_instructions') },

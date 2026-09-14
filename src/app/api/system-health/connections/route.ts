@@ -7,6 +7,9 @@ import { callRestlet, suiteqlQuery } from '@/lib/netsuite';
 import { resolveLaborItem } from '@/lib/labor-item';
 import { RESTLET_SPECS } from '@/lib/restlet-versions';
 import { ledgerPdfsEnabled } from '@/lib/ledger/pdf-gate';
+import { QBO_DEFAULT_MINOR_VERSION, maskRealm, qboConfigured } from '@/lib/quickbooks/config';
+import { fetchCompanyInfo } from '@/lib/quickbooks/oauth';
+import { getAccessToken as getQboAccessToken } from '@/lib/quickbooks/tokens';
 import {
   ENV_GROUPS, ENV_SPECS, checkEnv, classifyRestlet, compareMigrations, rollUp,
   type CheckGroup, type CheckRow, type RestletProbe,
@@ -182,6 +185,85 @@ export async function GET(req: NextRequest) {
       detail: `Connected — token stored ${new Date(googleToken.value.created_at).toLocaleDateString()}`,
     });
   }
+
+  // QuickBooks Online — the ledger's historical tenant (R8-2). Unconfigured
+  // is `unknown`, not a warning: the Intuit app may simply not exist yet, and
+  // an unprovisioned integration must never fill "Needs attention" (the
+  // Dropbox precedent). Once it IS configured, every state below is a real
+  // fault the owner can act on.
+  const qboRow = await attempt(async (): Promise<CheckRow> => {
+    if (!qboConfigured()) {
+      return {
+        key: 'quickbooks', label: 'QuickBooks Online', status: 'unknown',
+        detail: 'Not configured',
+        impact: 'QuickBooks history import is off.',
+        docs: 'docs/quickbooks-connect.md',
+      };
+    }
+    const { data, error } = await service
+      .from('quickbooks_tokens')
+      .select('realm_id, environment, company_name, refresh_expires_at, needs_reauth_at')
+      .eq('id', 1)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data) {
+      return {
+        key: 'quickbooks', label: 'QuickBooks Online', status: 'warn',
+        detail: 'Not connected',
+        impact: 'No QuickBooks history can be imported until an admin authorizes the app.',
+        fix: 'Connect QuickBooks from Settings → Company',
+        docs: 'docs/quickbooks-connect.md',
+      };
+    }
+    if (data.needs_reauth_at) {
+      return {
+        key: 'quickbooks', label: 'QuickBooks Online', status: 'fail',
+        detail: 'Reconnect QuickBooks (refresh token rejected)',
+        impact: 'The daily change sync and every import are stopped.',
+        fix: 'Settings → Company → QuickBooks Online → Reconnect',
+        docs: 'docs/quickbooks-connect.md',
+      };
+    }
+    // Refresh tokens die after 100 IDLE days. The daily sync renews from day
+    // one, so this only fires if that job has been dead for weeks — which is
+    // exactly when 14 days' notice matters.
+    const refreshExpiresAt = data.refresh_expires_at ? new Date(data.refresh_expires_at) : null;
+    if (refreshExpiresAt && refreshExpiresAt.getTime() - Date.now() < 14 * 86_400_000) {
+      return {
+        key: 'quickbooks', label: 'QuickBooks Online', status: 'warn',
+        detail: `Reconnect by ${refreshExpiresAt.toLocaleDateString()} — the refresh token is close to expiring`,
+        impact: 'Once it expires the connection stops until someone reauthorizes.',
+        fix: 'Settings → Company → QuickBooks Online → Reconnect',
+        docs: 'docs/quickbooks-connect.md',
+      };
+    }
+
+    const { token, conn } = await getQboAccessToken(service);
+    const probe = await fetchCompanyInfo(
+      token, conn.environment, conn.realmId, conn.minorVersion || QBO_DEFAULT_MINOR_VERSION, AbortSignal.timeout(8000),
+    );
+    const realm = maskRealm(conn.realmId);
+    if (!probe.ok && probe.status !== 401) {
+      return {
+        key: 'quickbooks', label: 'QuickBooks Online', status: 'warn',
+        detail: `Token valid; CompanyInfo probe failed — ${probe.reason}`,
+        impact: 'The connection works, but the company name cannot be confirmed from here.',
+        docs: 'docs/quickbooks-connect.md',
+      };
+    }
+    const name = (probe.ok ? probe.companyName : null) || data.company_name || 'company name unavailable';
+    return {
+      key: 'quickbooks', label: 'QuickBooks Online', status: 'ok',
+      detail: `Connected — ${name} (${conn.environment}, realm ${realm}) · access token refreshes ${new Date(conn.accessExpiresAt).toLocaleString()} · reconnect by ${refreshExpiresAt ? refreshExpiresAt.toLocaleDateString() : 'unknown'}`,
+      docs: 'docs/quickbooks-connect.md',
+    };
+  });
+  appRows.push(qboRow.ok ? qboRow.value : {
+    key: 'quickbooks', label: 'QuickBooks Online', status: 'unknown',
+    detail: `Could not check the connection — ${qboRow.error}`,
+    impact: 'Whether the QuickBooks history import can run cannot be confirmed from here.',
+    docs: 'docs/quickbooks-connect.md',
+  });
 
   const dropboxConfigured = !!(process.env.DROPBOX_APP_KEY && process.env.DROPBOX_APP_SECRET);
   appRows.push(dropboxConfigured

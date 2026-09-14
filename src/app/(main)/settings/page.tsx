@@ -13,6 +13,107 @@ import { isPushSupported, getPushPermission, getExistingSubscription, subscribeT
 import { FALLBACK_SALES_TAX_RATE_PCT } from '@/lib/sales-tax';
 import { apiFetch } from '@/lib/api-client';
 
+/**
+ * QuickBooks Online + the ledger PDF gate — the Company card's ledger row.
+ *
+ * Super-admin only, like everything else in that card: connecting decides
+ * which company a decade of financial history is imported from, and stamping
+ * the gate is what lets those documents' BYTES reach R2 at all
+ * (docs/r2-private-flip.md must be verified first — the stamp is a claim
+ * that it was, and it is audited).
+ */
+function QuickBooksCompanyCard({ sectionStyle }: { sectionStyle: React.CSSProperties }) {
+  const [status, setStatus] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    try {
+      const res = await apiFetch('/api/admin/quickbooks/status');
+      const body = await res.json();
+      if (!res.ok) { setError(body?.error || 'Could not read the connection.'); return; }
+      setStatus(body);
+      setError(null);
+    } catch (e: any) {
+      setError(e?.message || 'Could not reach the server.');
+    }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const disconnect = async () => {
+    if (!confirm('Disconnect QuickBooks? Imported rows stay; the app stops being able to read the company.')) return;
+    setBusy(true);
+    try {
+      await apiFetch('/api/admin/quickbooks/disconnect', { method: 'POST' });
+      await load();
+    } finally { setBusy(false); }
+  };
+
+  const enablePdfs = async () => {
+    if (!confirm('Confirm the R2 privacy flip has been VERIFIED (docs/r2-private-flip.md) — this lets the importer write financial PDFs.')) return;
+    setBusy(true);
+    try {
+      const res = await apiFetch('/api/admin/ledger/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ pdfsEnabled: true }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(body?.error || 'Could not stamp the gate.');
+      }
+      await load();
+    } finally { setBusy(false); }
+  };
+
+  const btn: React.CSSProperties = {
+    padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#3b82f6',
+    color: '#fff', fontSize: '12px', fontWeight: 800, cursor: busy ? 'default' : 'pointer',
+    opacity: busy ? 0.5 : 1, marginRight: '8px',
+  };
+
+  return (
+    <div style={sectionStyle}>
+      <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>QuickBooks Online</div>
+      <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
+        The historical ledger tenant. Connecting lets the importer read the company&apos;s books;
+        the import itself runs from the Ledger page. See docs/quickbooks-connect.md.
+      </div>
+      {error ? (
+        <div style={{ fontSize: '11px', color: '#ef4444', marginBottom: '8px' }}>Could not read the connection — {error}</div>
+      ) : !status ? (
+        <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '8px' }}>Loading…</div>
+      ) : !status.configured ? (
+        <div style={{ fontSize: '11px', marginBottom: '8px' }}>Not configured — set the QBO_* variables first.</div>
+      ) : !status.connected ? (
+        <div style={{ fontSize: '11px', marginBottom: '8px' }}>Not connected.</div>
+      ) : (
+        <div style={{ fontSize: '11px', marginBottom: '8px', lineHeight: 1.7 }}>
+          <div><strong>{status.companyName || 'company name unavailable'}</strong> ({status.environment}, realm {status.realmMasked})</div>
+          <div>Access token refreshes {status.accessExpiresAt ? new Date(status.accessExpiresAt).toLocaleString() : '—'}</div>
+          <div>Reconnect by {status.refreshExpiresAt ? new Date(status.refreshExpiresAt).toLocaleDateString() : '—'}</div>
+          {status.needsReauth && <div style={{ color: '#ef4444' }}>Needs reconnecting — {status.lastError}</div>}
+        </div>
+      )}
+      <a href="/api/auth/quickbooks" style={{ ...btn, display: 'inline-block', textDecoration: 'none' }}>
+        {status?.connected ? 'Reconnect' : 'Connect'}
+      </a>
+      {status?.connected && (
+        <button onClick={disconnect} disabled={busy} style={{ ...btn, background: '#ef4444' }}>Disconnect</button>
+      )}
+
+      <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', margin: '16px 0 4px' }}>Ledger PDF storage</div>
+      <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '8px' }}>
+        {status?.pdfGate?.reason || 'Loading…'}
+      </div>
+      {status && !status.pdfGate?.enabled && (
+        <button onClick={enablePdfs} disabled={busy} style={btn}>
+          R2 privacy flip verified — enable ledger PDFs
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const router = useRouter();
   const { user, profile, isAdmin, hasRole } = useAuth();
@@ -928,6 +1029,8 @@ export default function SettingsPage() {
               <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{capError}</div>
             )}
           </div>
+
+          <QuickBooksCompanyCard sectionStyle={sectionStyle} />
         </>
       )}
 

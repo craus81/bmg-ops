@@ -75,6 +75,33 @@ describe('deepLinks.ledgerDocument', () => {
   });
 });
 
+describe('deepLinks.ledgerAdmin', () => {
+  it('is the bare page with no options', () => {
+    expect(deepLinks.ledgerAdmin()).toBe('/admin/ledger');
+  });
+
+  it('emits ONLY the params it was given', () => {
+    expect(deepLinks.ledgerAdmin({ tab: 'review' })).toBe('/admin/ledger?tab=review');
+    expect(deepLinks.ledgerAdmin({ run: 'run-1' })).toBe('/admin/ledger?run=run-1');
+    expect(deepLinks.ledgerAdmin({ qboAuth: 'success' })).toBe('/admin/ledger?qboAuth=success');
+    expect(deepLinks.ledgerAdmin({ qboAuth: 'error', reason: 'state_mismatch' }))
+      .toBe('/admin/ledger?qboAuth=error&reason=state_mismatch');
+  });
+
+  it('drops a null run rather than emitting run=null', () => {
+    expect(deepLinks.ledgerAdmin({ run: null, tab: 'import' })).toBe('/admin/ledger?tab=import');
+  });
+});
+
+describe('deepLinks.ledgerCustomerReview', () => {
+  it('lands on the queue, and on ONE row when an id is in scope', () => {
+    // A notification about a specific customer must never link to the bare
+    // list while the row id is known.
+    expect(deepLinks.ledgerCustomerReview()).toBe('/admin/ledger?tab=review');
+    expect(deepLinks.ledgerCustomerReview('lc-1')).toBe('/admin/ledger?tab=review&customer=lc-1');
+  });
+});
+
 describe('allowedPdfSrc', () => {
   const ORIGIN = 'https://ops.bmgfleet.com';
   const FILE_HOST = 'https://files.example.com';

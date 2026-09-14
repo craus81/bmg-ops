@@ -43,6 +43,7 @@ export const FEATURES = {
   system_health: 'System Health',
   ai_instructions: 'AI Instructions',
   financials: 'Financials (Executive)',
+  ledger: 'Ledger (QuickBooks & NetSuite history)',
 } as const;
 
 export type FeatureKey = keyof typeof FEATURES;
@@ -111,14 +112,14 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
   // being paid — without admin's user management or data tools.
   finance: [
     'home', 'messages', 'reports', 'vendor_payments', 'customers',
-    'credit_applications',
+    'credit_applications', 'ledger',
   ],
 
   // Leadership: the Home dashboard's Financials tab and nothing else — no
   // settings, user management, or ops tooling. `financials` is otherwise
   // super-admin-only, so this explicit grant is what lets an executive see it.
   executive: [
-    'home', 'financials',
+    'home', 'financials', 'ledger',
   ],
 
   customer: ['home'],
