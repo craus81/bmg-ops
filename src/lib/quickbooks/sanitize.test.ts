@@ -137,4 +137,33 @@ describe('the policy constants themselves', () => {
     }
     expect(DROP_KEY_FUZZY_RE.test('DocNumber')).toBe(false);
   });
+
+  it('matches NetSuite\'s lowercase spellings too — the same sanitizer guards the mirror', () => {
+    // SuiteQL hands back lowercase column names. `ccnumber` is the PAN and
+    // `ccsecuritycode` the CVV on NetSuite's own transaction table, and
+    // neither contains the word "card": a case-sensitive PascalCase list
+    // would let both straight through into a reader-visible `raw` column.
+    const { clean, dropped } = sanitizeQboPayload('NetSuite', {
+      id: 501,
+      tranid: 'INV1042',
+      ccnumber: '4111111111111111',
+      ccsecuritycode: '123',
+      ccname: 'A Customer',
+      ccexpiredate: '11/2030',
+      ccstreet: '1 Main St',
+      cczipcode: '43004',
+      accountnumber: '000123456789',
+      routingnumber: '021000021',
+      bankaccount: { acctnum: '000123456789' },
+      // Reference data the ledger needs, and NetSuite's own chart-of-accounts
+      // column, which is `acctnumber` — NOT the carve-out's opposite.
+      acctnumber: '4000',
+      taxline: 'F',
+    });
+    expect(JSON.stringify(clean)).not.toMatch(/\d{9,19}/);
+    expect(clean).toEqual({ id: 501, tranid: 'INV1042', acctnumber: '4000', taxline: 'F' });
+    for (const key of ['ccnumber', 'ccsecuritycode', 'accountnumber', 'routingnumber', 'bankaccount']) {
+      expect(dropped, key).toContain(key);
+    }
+  });
 });

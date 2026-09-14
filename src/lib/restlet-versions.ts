@@ -44,9 +44,9 @@ export const RESTLET_SPECS = [
     label: 'PDF RESTlet',
     envVar: 'NETSUITE_PDF_RESTLET_URL',
     scriptFile: 'scripts/netsuite-pdf-restlet.js',
-    expectedVersion: '2026-09-10.1',
-    powers: "NetSuite's own transaction PDFs — the invoice and statement copies every customer email is required to carry",
-    runbook: null,
+    expectedVersion: '2026-09-15.1',
+    powers: "NetSuite's own transaction PDFs — the invoice and statement copies every customer email is required to carry, and the ledger mirror's credit-memo copies",
+    runbook: 'docs/netsuite-ledger-grants.md',
   },
 ] as const;
 

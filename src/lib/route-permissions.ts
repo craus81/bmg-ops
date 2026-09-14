@@ -215,6 +215,11 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cron/heartbeat-sentinel/route.ts': cron('requireAdmin('),
   'src/app/api/cron/so-matchmaker/route.ts': cron('requireAdmin('),
   'src/app/api/cron/ledger-qbo-sync/route.ts': cron('requireAdmin('),
+  // The NetSuite half of the ledger (R8-3): invoices, credit memos, their
+  // PDFs and — when the integration role permits it — customer payments.
+  // Same shape as every other cron: the shared secret drives it on schedule,
+  // an admin can trigger it by hand.
+  'src/app/api/cron/ledger-netsuite-mirror/route.ts': cron('requireAdmin('),
   'src/app/api/cron/health-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/netsuite-sync/route.ts': cron('requireAdmin('),
   'src/app/api/cron/owner-brief/route.ts': cron('requireAdmin('),
