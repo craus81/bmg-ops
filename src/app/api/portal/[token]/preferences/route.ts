@@ -21,14 +21,14 @@ const service = createClient(
 
 const PatchSchema = z.object({
   contactId: z.string().uuid(),
-  key: z.enum(['status_emails', 'weekly_digest', 'estimate_reminders']),
+  key: z.enum(['status_emails', 'weekly_digest']),
   /** true/false set an explicit choice; null returns the contact to
    *  following the company setting — a real third option, not "off". */
   value: z.boolean().nullable(),
 });
 
-const CONTACT_SELECT = 'id, name, email, is_primary, notify_status_emails, weekly_digest, notify_estimate_reminders, prefs_updated_at, prefs_updated_via';
-const COMPANY_SELECT = 'id, company_name, notify_status_emails, weekly_digest, notify_estimate_reminders';
+const CONTACT_SELECT = 'id, name, email, is_primary, notify_status_emails, weekly_digest, prefs_updated_at, prefs_updated_via';
+const COMPANY_SELECT = 'id, company_name, notify_status_emails, weekly_digest';
 
 /**
  * /api/portal/[token]/preferences (R6-11) — the customer's own email

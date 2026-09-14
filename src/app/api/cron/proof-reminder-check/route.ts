@@ -4,7 +4,6 @@ import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
-import { sendProofApproval } from '@/lib/proof-approval-send';
 import { fetchAllRows } from '@/lib/fetch-all';
 
 export const dynamic = 'force-dynamic';
@@ -12,11 +11,9 @@ export const maxDuration = 120;
 
 const service = createServiceClient();
 
-// Auto-resend the proof link after this many quiet days (and again every
-// interval), up to the cap; escalate internally at the threshold.
-const REMIND_AFTER_DAYS = 3;
-const MAX_REMINDERS = 3;
-const ESCALATE_AFTER_DAYS = 7;
+// Prompt a human after this many quiet days, and again every interval
+// while the proof stays unanswered.
+const ESCALATE_AFTER_DAYS = 3;
 
 // A proof stuck waiting doesn't matter once the job is effectively done
 // or dead — don't nag customers about jobs that already went out the door.
@@ -24,10 +21,16 @@ const IGNORE_STATUSES = ['cancelled', 'shipped', 'picked_up', 'installed'];
 
 /**
  * Daily proof-approval sweep: customers who sit on a proof link block
- * production silently. Quiet 3+ days → automatic reminder email with a
- * fresh link (capped at 3). Quiet 7+ days → internal escalation to the
- * sender/assignees so a human picks up the phone. A manual resend resets
- * the whole cycle.
+ * production silently. Quiet 3+ days → the sender/assignees are told, and
+ * they resend the link themselves from the job page ("Resend approval
+ * link"). Re-tells every 3 days while it stays unanswered; a manual resend
+ * resets the clock, since that is a fresh touch.
+ *
+ * THIS CRON DOES NOT EMAIL CUSTOMERS. It used to resend the proof link
+ * automatically on day 3/6/9 — the owner's call on 2026-09-14 was that
+ * every customer-facing send is a person's decision, not a schedule's
+ * (a customer had been chased repeatedly across several open records).
+ * Keep it that way: new branches here notify staff.
  */
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get('authorization');
@@ -44,7 +47,7 @@ export async function GET(req: NextRequest) {
     // rest were silently skipped (roadmap B9).
     const { data: jobs } = await fetchAllRows<any>((from, to) => service
       .from('graphics_jobs')
-      .select('id, job_number, title, customer, status, sent_for_approval_at, sent_for_approval_by, created_by, assigned_to, approval_reminder_sent_at, approval_reminder_count, approval_escalated_at')
+      .select('id, job_number, title, customer, status, sent_for_approval_at, sent_for_approval_by, created_by, assigned_to, approval_reminder_sent_at, approval_escalated_at')
       .not('sent_for_approval_at', 'is', null)
       .eq('customer_approved', false)
       .is('customer_rejected_at', null)
@@ -56,31 +59,25 @@ export async function GET(req: NextRequest) {
     const daysSince = (iso: string | null) => iso ? (now - new Date(iso).getTime()) / dayMs : null;
 
     const waiting = (jobs || []).filter(j => !IGNORE_STATUSES.includes(j.status));
-    let reminded = 0;
     let escalated = 0;
-    const failures: string[] = [];
 
     for (const job of waiting) {
       const sentDays = daysSince(job.sent_for_approval_at);
       if (sentDays == null) continue;
       const label = job.title || job.job_number || job.id.slice(0, 8);
 
-      // Reminder: quiet since the last touch (send or reminder) for 3+ days.
+      // Quiet since the last touch (the original send or a manual resend)
+      // for 3+ days → tell the humans, and tell them again every 3 days
+      // while it stays unanswered. Measured from the last touch, not from
+      // the original send, so a resend buys the customer another 3 days
+      // before anyone is nudged about it again.
       const lastTouch = Math.max(
         new Date(job.sent_for_approval_at).getTime(),
         job.approval_reminder_sent_at ? new Date(job.approval_reminder_sent_at).getTime() : 0,
       );
       const quietDays = (now - lastTouch) / dayMs;
-      if (quietDays >= REMIND_AFTER_DAYS && (job.approval_reminder_count || 0) < MAX_REMINDERS) {
-        const result = await sendProofApproval(service, job.id, { reminder: true });
-        if (result.ok) reminded++;
-        else if (!result.skipped) failures.push(`${label}: ${result.error}`);
-      }
-
-      // Escalation: waiting 7+ days total → tell the humans, re-escalate
-      // at most weekly while it stays stuck.
       const escalatedDays = daysSince(job.approval_escalated_at);
-      if (sentDays >= ESCALATE_AFTER_DAYS && (escalatedDays == null || escalatedDays >= ESCALATE_AFTER_DAYS)) {
+      if (quietDays >= ESCALATE_AFTER_DAYS && (escalatedDays == null || escalatedDays >= ESCALATE_AFTER_DAYS)) {
         const targets = new Set<string>();
         if (job.sent_for_approval_by) targets.add(job.sent_for_approval_by);
         if (job.created_by) targets.add(job.created_by);
@@ -96,9 +93,11 @@ export async function GET(req: NextRequest) {
           await notifyMany([...targets], {
             type: 'proof_stale',
             title: `Proof stuck ${Math.floor(sentDays)}d — ${label}`,
-            body: `${job.customer || 'The customer'} hasn't answered the proof for ${label} in ${Math.floor(sentDays)} days (${job.approval_reminder_count || 0} automatic reminder${(job.approval_reminder_count || 0) !== 1 ? 's' : ''} sent). Production is blocked — worth a call.`,
+            body: `${job.customer || 'The customer'} hasn't answered the proof for ${label} in ${Math.floor(sentDays)} days`
+              + ` — quiet ${Math.floor(quietDays)} day${Math.floor(quietDays) === 1 ? '' : 's'} since we last sent it. Production is blocked.`
+              + ' Nothing has gone to them automatically: open the job and use "Resend approval link", or call.',
             url: deepLinks.graphicsJob(job.id),
-            channels: ['in_app', 'push'],
+            channels: ['in_app', 'push', 'email'],
           });
         }
         await service.from('graphics_jobs')
@@ -109,10 +108,10 @@ export async function GET(req: NextRequest) {
     }
 
     const syncStateWrite = await recordHeartbeat(
-      service, 'proof_reminder_check', { status: 'ok', waiting: waiting.length, reminded, escalated, failures: failures.slice(0, 10) },
+      service, 'proof_reminder_check', { status: 'ok', waiting: waiting.length, escalated },
     );
 
-    return NextResponse.json({ status: 'ok', waiting: waiting.length, reminded, escalated, failures, syncStateWrite });
+    return NextResponse.json({ status: 'ok', waiting: waiting.length, escalated, syncStateWrite });
   } catch (e: any) {
     console.error('proof-reminder-check failed:', e);
     await recordHeartbeat(service, 'proof_reminder_check', { error: e.message || 'proof reminder check failed' }); // never throws; failure already logged
