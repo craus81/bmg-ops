@@ -16,6 +16,13 @@ import { DropZone } from '@/components/DropZone';
 import { theme } from '@/lib/theme';
 import { RollNesting, RollFilmInfo } from '@/components/RollNesting';
 import NumberInput from '@/components/NumberInput';
+import PhotoCoverageProof, { CoverageProofPreview } from '@/components/PhotoCoverageProof';
+import {
+  prepareCoveragePhoto,
+  renderCoverageProofBlob,
+  sanitizeCoverageBoxes,
+  type CoverageBox,
+} from '@/lib/coverage-proof';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { summarizeAudits, applyCoverageNorm, type TemplateAudit, type AuditSummary } from '@/lib/calibration-audit';
@@ -184,6 +191,11 @@ interface WrapQuote {
   accepted_at: string | null;
   customer_rejection_reason: string | null;
   diagram_path: string | null;
+  // Photo coverage proof: a photo of the customer's own vehicle plus the
+  // boxes drawn over it (migration 315). Used INSTEAD of a vehicle template
+  // on quotes for vehicles the 1:20 library doesn't cover.
+  photo_path: string | null;
+  photo_boxes: CoverageBox[] | null;
   attachments: QuoteAttachment[] | null;
   archived_at: string | null;
   netsuite_estimate_id: string | null;
@@ -339,6 +351,15 @@ export default function WrapQuotePage() {
   const [tplGridSearch, setTplGridSearch] = useState('');
   const [templateId, setTemplateId] = useState('');
   const [imgDim, setImgDim] = useState<{ w: number; h: number } | null>(null);
+  // ----- Photo coverage proof (drawing surface = a photo, not a template) -----
+  // photoPath set = this quote is drawn on a photo; the template picker and
+  // the measuring tools step aside and the boxes are a picture only.
+  const [photoMode, setPhotoMode] = useState(false);
+  const [photoPath, setPhotoPath] = useState<string | null>(null);
+  const [photoBoxes, setPhotoBoxes] = useState<CoverageBox[]>([]);
+  // No template means no vehicle label — the rep types one for the quote.
+  const [photoVehicle, setPhotoVehicle] = useState('');
+  const [photoUploading, setPhotoUploading] = useState(false);
   const [tool, setTool] = useState<Tool>('select');
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1294,8 +1315,18 @@ export default function WrapQuotePage() {
 
   const selected = measurements.find(m => m.id === selectedId) || null;
 
+  // Something worth quoting exists: measured shapes, or boxes on a photo proof
+  // (which price nothing but are still the deliverable the customer asked for).
+  const hasCoverage = measurements.length > 0 || (photoMode && photoBoxes.length > 0);
+
   const resetEstimate = () => {
     setMeasurements([]);
+    // The photo is one customer's vehicle (unlike a reusable template), so it
+    // goes with the estimate it was drawn for.
+    setPhotoMode(false);
+    setPhotoPath(null);
+    setPhotoBoxes([]);
+    setPhotoVehicle('');
     setSelectedId(null);
     setPendingPair(null);
     setPolyDraft(null);
@@ -1387,8 +1418,12 @@ export default function WrapQuotePage() {
     }
     return {
       quote_number: quoteNumber || legacyJobNumber.wq(),
-      template_id: template?.id || null,
-      vehicle_description: template ? templateLabel(template) : null,
+      template_id: photoMode ? null : template?.id || null,
+      vehicle_description: photoMode ? (photoVehicle.trim() || null) : template ? templateLabel(template) : null,
+      // Photo proof rides along so reopening the quote restores the backdrop
+      // and its boxes; a template quote clears both.
+      photo_path: photoMode ? photoPath : null,
+      photo_boxes: photoMode ? photoBoxes : [],
       customer_id: customerId,
       customer,
       project_type: projectType || null,
@@ -1496,13 +1531,18 @@ export default function WrapQuotePage() {
   };
 
   // Timestamped path so re-saves aren't served stale from CDN/email caches;
-  // failure is non-fatal (the quote just saves without a diagram).
+  // failure is non-fatal (the quote just saves without a diagram). A photo
+  // quote flattens its proof into the SAME diagram_path, so the preview, the
+  // emailed quote and the estimate attach need no photo-specific plumbing.
   const uploadDiagram = async (qn: string): Promise<string | null> => {
     try {
-      const blob = await renderDiagramBlob();
+      const photo = photoMode && photoPath;
+      const blob = photo
+        ? await renderCoverageProofBlob(imageUrl(photoPath), photoBoxes)
+        : await renderDiagramBlob();
       if (!blob) return null;
-      const path = `quote-diagrams/${qn}-${Date.now()}.png`;
-      const { error } = await storage.from('vehicle-templates').upload(path, blob, { contentType: 'image/png', upsert: true });
+      const path = `quote-diagrams/${qn}-${Date.now()}.${photo ? 'jpg' : 'png'}`;
+      const { error } = await storage.from('vehicle-templates').upload(path, blob, { contentType: photo ? 'image/jpeg' : 'image/png', upsert: true });
       return error ? null : path;
     } catch {
       return null;
@@ -1522,7 +1562,14 @@ export default function WrapQuotePage() {
     if (!savedQuoteId) snap.quote_number = await nextQuoteNumber();
     if (!quoteNumber) setQuoteNumber(snap.quote_number);
     const diagramPath = await uploadDiagram(snap.quote_number);
-    const row = diagramPath ? { ...snap, diagram_path: diagramPath } : snap;
+    // A render that fails (photo offline, image blocked) keeps whatever
+    // picture the quote already had; an EMPTY canvas clears it, so a quote
+    // switched from a template to a photo can't keep emailing the old
+    // template diagram.
+    const nothingDrawn = photoMode ? photoBoxes.length === 0 : measurements.length === 0;
+    const row = diagramPath
+      ? { ...snap, diagram_path: diagramPath }
+      : nothingDrawn ? { ...snap, diagram_path: null } : snap;
     if (savedQuoteId) {
       const { error } = await supabase.from('wrap_quotes').update({ ...row, updated_at: new Date().toISOString() }).eq('id', savedQuoteId);
       if (error) { await dialog.alert(`Save failed: ${saveErrorMessage(error)}`); return null; }
@@ -1573,7 +1620,7 @@ export default function WrapQuotePage() {
   // the real thing). The actual send happens in sendQuoteEmail.
   const createAndEmail = async () => {
     if (!customer.email?.trim()) { await dialog.alert('Enter a customer email first.'); return; }
-    if (measurements.length === 0) { await dialog.alert('No measurements — draw the wrap areas on the Estimator tab first.'); return; }
+    if (!hasCoverage) { await dialog.alert('Nothing drawn yet — mark the wrap areas on the Estimator tab first.'); return; }
     if (!sendInclude.pricing && !sendInclude.diagram && !sendInclude.netsuitePdf) {
       await dialog.alert('Nothing selected to send — pick pricing, the coverage picture, or the NetSuite PDF.');
       return;
@@ -1683,7 +1730,7 @@ export default function WrapQuotePage() {
   // (described as the quoted vehicle), labor total -> "Graphics Install
   // Labor". Taxes are NetSuite's job. No email is sent.
   const createNetsuiteQuote = async () => {
-    if (measurements.length === 0) { await dialog.alert('No measurements — draw the wrap areas on the Estimator tab first.'); return; }
+    if (!hasCoverage) { await dialog.alert('Nothing drawn yet — mark the wrap areas on the Estimator tab first.'); return; }
     if (!customerId) { await dialog.alert('Pick the customer from the NetSuite search first — a typed-in name has no NetSuite record to attach the quote to.'); return; }
     if (!(await dialog.confirm(`Create a NetSuite quote for ${customer.name}? Vinyl ($${fmt(totals.adjMaterials)}${totals.kitQty > 1 ? `, ${totals.kitQty} kits` : ''}) maps to "3M Vinyl", labor ($${fmt(totals.adjLabor)}) to "Graphics Install Labor" — NetSuite adds tax.`))) return;
     setPushingNetsuite(true);
@@ -1788,6 +1835,13 @@ export default function WrapQuotePage() {
 
     setTemplateId(q.template_id || '');
     setImgDim(null);
+    // A quote saved on a photo reopens on that photo with its boxes; one saved
+    // on a template reopens on the template.
+    const boxes = sanitizeCoverageBoxes(q.photo_boxes);
+    setPhotoMode(!!q.photo_path);
+    setPhotoPath(q.photo_path || null);
+    setPhotoBoxes(boxes);
+    setPhotoVehicle(q.photo_path ? (q.vehicle_description || '') : '');
     setMeasurements(ms);
     setSelectedId(null);
     setPendingPair(null);
@@ -1884,6 +1938,66 @@ export default function WrapQuotePage() {
   const removeAttachment = async (a: QuoteAttachment) => {
     setAttachments(prev => prev.filter(x => x.path !== a.path));
     await storage.from('vehicle-templates').remove([a.path]); // best-effort cleanup
+  };
+
+  // ----- Photo coverage proof -----
+  // Take a photo of the customer's actual vehicle as the drawing surface for
+  // quotes the 1:20 template library doesn't cover. The photo is downscaled
+  // client-side (email-sized, EXIF rotation baked in) before upload.
+  const pickCoveragePhoto = async (files: FileList | File[] | null) => {
+    const file = files ? Array.from(files)[0] : null;
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      await dialog.alert(`${file.name} isn't an image — pick a photo (JPG, PNG, HEIC).`);
+      return;
+    }
+    // Box coordinates belong to the photo they were drawn on, so swapping the
+    // photo discards them rather than scattering them over the new one.
+    if (photoBoxes.length > 0 && !(await dialog.confirm(`Replace the photo? The ${photoBoxes.length} box${photoBoxes.length === 1 ? '' : 'es'} drawn on it will be cleared.`))) return;
+    setPhotoUploading(true);
+    try {
+      const blob = await prepareCoveragePhoto(file);
+      const path = `quote-photos/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.[^.]*$/, '')}.jpg`;
+      const { error } = await storage.from('vehicle-templates').upload(path, blob, { contentType: 'image/jpeg' });
+      if (error) { await dialog.alert(`Photo upload failed: ${error.message}`); return; }
+      setPhotoPath(path);
+      setPhotoBoxes([]);
+      setPhotoMode(true);
+      setTemplateId('');
+    } catch (e: any) {
+      await dialog.alert(`Couldn't read that photo: ${e.message}`);
+    } finally {
+      setPhotoUploading(false);
+    }
+  };
+
+  // The two drawing surfaces are mutually exclusive: a quote is either
+  // measured on a 1:20 template or drawn on a photo, never half of each (the
+  // saved snapshot can only carry one).
+  const switchSurface = async (photo: boolean) => {
+    if (photo === photoMode) return;
+    if (photo && measurements.length > 0) {
+      if (!(await dialog.confirm('Switch to a photo proof? The shapes measured on the template will be cleared — a photo proof draws boxes only, with no sizes or pricing.'))) return;
+      setMeasurements([]);
+      setSelectedId(null);
+      setPendingPair(null);
+      setPolyDraft(null);
+      setPolyHover(null);
+      setPlacements({});
+      setUseRollPricing(false);
+    }
+    if (!photo && photoBoxes.length > 0) {
+      if (!(await dialog.confirm('Switch back to a vehicle template? The photo and the boxes drawn on it will be cleared.'))) return;
+      setPhotoPath(null);
+      setPhotoBoxes([]);
+    }
+    setPhotoMode(photo);
+  };
+
+  const clearCoveragePhoto = async () => {
+    if (photoBoxes.length > 0 && !(await dialog.confirm('Remove the photo and the boxes drawn on it?'))) return;
+    setPhotoPath(null);
+    setPhotoBoxes([]);
   };
 
   // ----- History: archive / delete -----
@@ -2302,6 +2416,13 @@ export default function WrapQuotePage() {
   // Read-only copy of the estimator canvas for the live quote preview, so it
   // matches the coverage diagram the customer gets in the emailed quote.
   const liveCoverageDiagram = () => {
+    // Photo quotes preview the proof itself — same picture the save flattens
+    // into diagram_path and the email carries.
+    if (photoMode) {
+      return photoPath && photoBoxes.length > 0
+        ? <CoverageProofPreview src={imageUrl(photoPath)} boxes={photoBoxes} />
+        : null;
+    }
     if (!template?.template_image_path || measurements.length === 0) return null;
     return (
       <div style={{ position: 'relative', marginBottom: '10px', background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '8px', overflow: 'hidden' }}>
@@ -2585,7 +2706,25 @@ export default function WrapQuotePage() {
       {/* ================= ESTIMATOR ================= */}
       {tab === 'estimator' && (
         <div>
+          {/* Drawing surface: a 1:20 outline template, or a photo of the
+              customer's actual vehicle when the library has no template. */}
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Draw on</span>
+            {([
+              { photo: false, label: 'Vehicle Template', hint: 'Measure and price coverage over a calibrated 1:20 outline' },
+              { photo: true, label: 'Photo', hint: 'Draw boxes over a photo of the vehicle — a coverage picture for the customer, no sizes' },
+            ]).map(o => (
+              <button key={String(o.photo)} onClick={() => switchSurface(o.photo)} title={o.hint} style={{
+                padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                background: photoMode === o.photo ? 'rgba(6,182,212,0.15)' : 'transparent',
+                border: photoMode === o.photo ? '1px solid rgba(6,182,212,0.4)' : '1px solid var(--border)',
+                color: photoMode === o.photo ? '#06b6d4' : 'var(--text-muted)',
+              }}>{o.label}</button>
+            ))}
+          </div>
+
           {/* Vehicle selection */}
+          {!photoMode && (
           <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
             <select value={yearFilter} onChange={e => { setYearFilter(e.target.value); setTemplateId(''); }} style={{ ...inputStyle, width: '110px' }}>
               <option value="">All years</option>
@@ -2630,13 +2769,15 @@ export default function WrapQuotePage() {
             </select>
           </div>
 
-          {activeTemplates.length === 0 && (
+          )}
+
+          {!photoMode && activeTemplates.length === 0 && (
             <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>
-              No vehicle templates yet — add your 1:20 outlines in the Templates tab.
+              No vehicle templates yet — add your 1:20 outlines in the Templates tab, or switch to <b>Photo</b> above and draw on a photo instead.
             </div>
           )}
 
-          {template && (
+          {!photoMode && template && (
             <div style={{ display: 'grid', gridTemplateColumns: '230px 1fr', gap: '12px', alignItems: 'start' }}>
               {/* Sidebar: tools + measurements */}
               <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '12px' }}>
@@ -3077,6 +3218,50 @@ export default function WrapQuotePage() {
               </div>
             </div>
           )}
+
+          {photoMode && (!photoPath ? (
+            <DropZone accept="image/*" multiple={false} disabled={photoUploading} onFiles={files => pickCoveragePhoto(files)}>
+              <div style={{ textAlign: 'center', padding: '36px 16px', border: `1px dashed ${theme.border}`, borderRadius: '12px', background: 'var(--card)' }}>
+                <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>Start from a photo</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px', lineHeight: 1.6 }}>
+                  Drop a photo of the vehicle here (or take one on your phone), then draw boxes over the areas
+                  being wrapped.<br />The boxes are a coverage picture for the customer — no measuring, no pricing.
+                </div>
+                <label style={{ ...btnStyle('#06b6d4', 'rgba(6,182,212,0.08)'), display: 'inline-block', opacity: photoUploading ? 0.6 : 1 }}>
+                  {photoUploading ? 'Uploading…' : 'Choose Photo'}
+                  <input type="file" accept="image/*" disabled={photoUploading} onChange={e => { pickCoveragePhoto(e.target.files); e.target.value = ''; }} style={{ display: 'none' }} />
+                </label>
+              </div>
+            </DropZone>
+          ) : (
+            <div>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <input
+                  value={photoVehicle}
+                  onChange={e => setPhotoVehicle(e.target.value)}
+                  placeholder="Vehicle — shown on the quote (e.g. 2021 Ford Transit 250 High Roof)"
+                  style={{ ...inputStyle, flex: 1, minWidth: '260px' }}
+                />
+                <label style={{ ...btnStyle('#a78bfa', 'rgba(167,139,250,0.08)'), display: 'inline-block', opacity: photoUploading ? 0.6 : 1 }}>
+                  {photoUploading ? 'Uploading…' : 'Replace Photo'}
+                  <input type="file" accept="image/*" disabled={photoUploading} onChange={e => { pickCoveragePhoto(e.target.files); e.target.value = ''; }} style={{ display: 'none' }} />
+                </label>
+                <button onClick={clearCoveragePhoto} style={btnStyle('#ef4444', 'transparent')}>Remove Photo</button>
+              </div>
+              <PhotoCoverageProof src={imageUrl(photoPath)} boxes={photoBoxes} onChange={setPhotoBoxes} />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '12px', marginTop: '10px', flexWrap: 'wrap' }}>
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                  Saved with the quote as the coverage picture — pricing comes from labor and adjustments.
+                </div>
+                <button onClick={() => setTab('quote')} disabled={photoBoxes.length === 0} style={{
+                  padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 800, border: 'none',
+                  background: photoBoxes.length === 0 ? 'var(--subtle-bg)' : '#22c55e',
+                  color: photoBoxes.length === 0 ? 'var(--text-muted)' : '#fff',
+                  cursor: photoBoxes.length === 0 ? 'default' : 'pointer',
+                }}>Quote →</button>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -3289,8 +3474,8 @@ export default function WrapQuotePage() {
                 );
               })()}
             </div>
-            {measurements.length === 0 && (
-              <div style={{ marginTop: '8px', fontSize: '10px', color: '#fbbf24', fontWeight: 700 }}>No measurements yet — use the Estimator tab first.</div>
+            {!hasCoverage && (
+              <div style={{ marginTop: '8px', fontSize: '10px', color: '#fbbf24', fontWeight: 700 }}>Nothing drawn yet — use the Estimator tab first.</div>
             )}
           </div>
           {quotePreview({ ...buildSnapshot(), created_at: new Date().toISOString() } as any, liveCoverageDiagram())}
