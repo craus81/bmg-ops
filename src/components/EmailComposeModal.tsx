@@ -113,6 +113,10 @@ interface Props {
    * external_contacts itself. Omit both to hide the dropdown.
    */
   contacts?: EmailComposeContact[];
+  /** Wording for the contacts dropdown. Defaults to the customer-contact
+   *  phrasing; internal flows (e.g. estimate review) name their own
+   *  audience. */
+  contactsLabel?: string;
   customerId?: string | null;
   /** Hide the "Cc a BMG teammate" row (on by default). */
   hideCc?: boolean;
@@ -164,6 +168,7 @@ const inputStyle: React.CSSProperties = {
 
 export default function EmailComposeModal({
   contacts,
+  contactsLabel,
   customerId,
   hideCc,
   title,
@@ -480,10 +485,10 @@ export default function EmailComposeModal({
                   refreshPreview({ ...currentFields(), emails: parseEmailList(next) });
                 }
               }}
-              title="Add one of the customer's contacts to the To line"
+              title={contactsLabel || "Add one of the customer's contacts to the To line"}
               style={{ ...inputStyle, marginTop: '6px', width: 'auto', maxWidth: '100%', color: 'var(--text-secondary)', fontSize: '11px' }}
             >
-              <option value="">+ Add a company contact…</option>
+              <option value="">{contactsLabel || '+ Add a company contact…'}</option>
               {contactOptions.filter(c => !emails.includes(c.email.toLowerCase())).map(c => (
                 <option key={c.email} value={c.email}>
                   {c.name}{c.title ? ` — ${c.title}` : ''}{c.isPrimary ? ' (primary)' : ''} · {c.email}

@@ -21,7 +21,7 @@ import { computeQuotedMargin, getMarginFloorPct } from '@/lib/quoted-margin';
 import { normalizeVehicleCount } from '@/lib/estimate-totals';
 import { getShopLaborRate } from '@/lib/shop-labor';
 import { logAudit } from '@/lib/audit';
-import { notifyMany, getSuperAdminIds } from '@/lib/notify';
+import { notify, notifyMany, getSuperAdminIds } from '@/lib/notify';
 
 // R3-22: proof images inlined in the approval email are presigned at the
 // 7-day SigV4 maximum — the actionable window. Beyond it the attached PDF
@@ -487,6 +487,35 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       };
     } catch (err: any) {
       dispatch.sms = { target: phone, ok: false, error: err?.message };
+    }
+  }
+
+  // An internal review still open when the customer send lands is settled by
+  // that send (migration 316): whoever sent it to the customer has, by
+  // definition, cleared it — a reviewer sending it on themselves is one of
+  // the paths the step is for. Without this the estimate would read "in
+  // review" forever while the customer already had it.
+  if (estimate.internal_review_status === 'pending' && (dispatch.email?.ok || dispatch.sms?.ok)) {
+    const { error: reviewErr } = await supabase
+      .from('estimates')
+      .update({
+        internal_review_status: 'approved',
+        internal_review_decided_by: auth.user.id,
+        internal_review_decided_at: new Date().toISOString(),
+      })
+      .eq('id', estimate.id)
+      .eq('internal_review_status', 'pending');
+    if (reviewErr) {
+      console.error('resolving internal review on customer send failed:', reviewErr.message);
+    } else if (estimate.internal_review_requested_by && estimate.internal_review_requested_by !== auth.user.id) {
+      const senderName = (auth.profile as any)?.full_name || auth.user?.email || 'A teammate';
+      await notify({
+        userId: estimate.internal_review_requested_by,
+        type: 'estimate_review_update',
+        title: `Estimate #${estimate.estimate_number} reviewed and sent to the customer`,
+        body: `${senderName} reviewed your estimate and sent it on to ${estimate.customer_name || 'the customer'} — the approval link is live.`,
+        url: deepLinks.estimate(estimate.id),
+      }).catch(err => console.error('review-sent notify failed:', err));
     }
   }
 
