@@ -11,7 +11,14 @@ import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
 import PartCatalogBrowser, { type BrowsePart, type KitWithMembers } from '@/components/PartCatalogBrowser';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
-import EmailComposeModal, { type EmailComposeAttachment, type EmailComposeFields } from '@/components/EmailComposeModal';
+import EmailComposeModal, { type EmailComposeAttachment, type EmailComposeContact, type EmailComposeFields } from '@/components/EmailComposeModal';
+import { INTERNAL_STAFF_ROLES } from '@/lib/features';
+import {
+  canDecideReview,
+  reviewStateOf,
+  REVIEW_STATUS_DISPLAY,
+  type ReviewDecision,
+} from '@/lib/estimate-review';
 import { flashNote } from '@/lib/focus-note';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import { resolvePlatform, matchQualifiersToConfig } from '@/lib/vin-platform';
@@ -197,6 +204,15 @@ interface Estimate {
   customer_approved_via: string | null;
   customer_rejected_at: string | null;
   customer_rejection_reason: string | null;
+  // Internal (BMG-side) review before the customer send — migration 316.
+  // Independent of `status`, which tracks the customer side.
+  internal_review_status: string | null;
+  internal_reviewer_id: string | null;
+  internal_review_requested_by: string | null;
+  internal_review_requested_at: string | null;
+  internal_review_decided_by: string | null;
+  internal_review_decided_at: string | null;
+  internal_review_note: string | null;
 }
 
 // Allowed qualifier options per platform, from vehicle_platforms.config —
@@ -590,6 +606,16 @@ export default function EstimatesPage() {
   const [openingRejectionThread, setOpeningRejectionThread] = useState(false);
   // Busy while the estimate saves ahead of opening the compose screen.
   const [sendingForApproval, setSendingForApproval] = useState(false);
+  // ── Internal review (migration 316) ──
+  // Same compose screen as the customer send, pointed at a BMG teammate:
+  // they read the estimate, edit it, then approve it or hand it back.
+  const [reviewModal, setReviewModal] = useState(false);
+  const [sendingForReview, setSendingForReview] = useState(false);
+  const [reviewPdfName, setReviewPdfName] = useState<string | null>(null);
+  const [decidingReview, setDecidingReview] = useState(false);
+  // Approved internal staff — the reviewer dropdown, and the names the
+  // review banner shows for reviewer/requester ids.
+  const [staffDirectory, setStaffDirectory] = useState<{ id: string; name: string; email: string }[]>([]);
   // Approval email goes through the standard compose screen (E4 +
   // docs/customer-email-standard.md): editable recipients, bcc-me,
   // personal note, and the exact rendered document as a live preview.
@@ -661,6 +687,31 @@ export default function EstimatesPage() {
     loadEstimates();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, user, isAdmin, isSales, isGraphicsProduction]);
+
+  // BMG staff directory — the internal-review reviewer dropdown, and the
+  // names behind reviewer/requester ids on the review banner. Same audience
+  // the server accepts as a reviewer (INTERNAL_STAFF_ROLES): a customer or
+  // an external installer account can't review an estimate.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, full_name, email, role, roles')
+        .eq('status', 'approved')
+        .order('full_name');
+      if (cancelled) return;
+      setStaffDirectory((data || [])
+        .filter((p: any) => {
+          const roles: string[] = p.roles?.length ? p.roles : [p.role];
+          return p.email && roles.some((r: string) => INTERNAL_STAFF_ROLES.includes(r));
+        })
+        .map((p: any) => ({ id: p.id, name: p.full_name || p.email, email: String(p.email).toLowerCase() })));
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per session
+  }, [user]);
 
   // Auto-open estimate from URL param (deep link from notifications/search).
   // One-shot per id: ?id= stays in the URL, and the effect re-runs whenever
@@ -2201,6 +2252,133 @@ export default function EstimatesPage() {
     return { ok: true };
   };
 
+  // ── Internal review: send it to a teammate first (migration 316) ──
+  // The reviewer of record is the first To address with a FleetView login —
+  // the server resolves it and says who it landed on.
+
+  const staffName = (id: string | null | undefined) =>
+    staffDirectory.find(s => s.id === id)?.name || 'a teammate';
+
+  // Reviewer dropdown: internal staff, minus yourself (reviewing your own
+  // estimate is the thing this step exists to avoid).
+  const reviewerContacts: EmailComposeContact[] = useMemo(
+    () => staffDirectory
+      .filter(s => s.email !== (user?.email || '').toLowerCase())
+      .map(s => ({ name: s.name, email: s.email })),
+    [staffDirectory, user?.email],
+  );
+
+  const fetchReviewPreview = async (fields: EmailComposeFields) => {
+    if (!editingId) return { error: 'No estimate open' };
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/send-for-review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          preview: true,
+          emails: fields.emails,
+          message: fields.message || undefined,
+          attachmentFileIds: fields.attachmentIds,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.preview) {
+        setReviewPdfName((Array.isArray(data.attachments) && data.attachments[0]) || null);
+        return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      }
+      return { error: data.error || 'Unknown error' };
+    } catch {
+      return { error: 'Network error — please try again.' };
+    }
+  };
+
+  const openReviewModal = async () => {
+    if (!editingId || sendingForReview) return;
+    // Persist edits first, exactly like the customer send: the reviewer must
+    // see (and the preview must render) what is actually saved.
+    setSendingForReview(true);
+    const currentStatus = estimates.find(e => e.id === editingId)?.status || 'draft';
+    await saveEstimate(currentStatus);
+    await loadEstimateFiles(editingId);
+    setSendingForReview(false);
+    setReviewPdfName(null);
+    setReviewModal(true);
+  };
+
+  const confirmSendReview = async (fields: EmailComposeFields): Promise<{ ok: boolean }> => {
+    if (!editingId) return { ok: false };
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/send-for-review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          emails: fields.emails,
+          bccSelf: fields.bccSelf,
+          cc: fields.cc,
+          message: fields.message || undefined,
+          attachmentFileIds: fields.attachmentIds,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
+        return { ok: false };
+      }
+      const em = data.dispatch?.email;
+      const delivery = em
+        ? (em.ok
+            ? `Email sent to ${em.target}${em.bcc ? ` (bcc ${em.bcc})` : ''}.`
+            : `Email failed: ${em.error || 'unknown'} — they still have the review in FleetView.`)
+        : '';
+      await dialog.alert(
+        `${data.reassigned ? 'Review reassigned to' : 'Sent for review to'} ${data.reviewer?.name || 'your teammate'}.\n\n${delivery}\n\nNothing has gone to the customer.`,
+      );
+      loadEstimates(true);
+      return { ok: true };
+    } catch {
+      await dialog.alert('Network error — please try again.');
+      return { ok: false };
+    }
+  };
+
+  // The reviewer's answer: clear it to send, or hand it back with notes.
+  const submitReviewDecision = async (decision: ReviewDecision) => {
+    if (!editingId || decidingReview) return;
+    let note: string | null = null;
+    if (decision === 'changes_requested') {
+      const typed = await dialog.prompt(
+        'What needs changing? This goes back to whoever asked for the review, with a link to the estimate.',
+        '',
+        { title: 'Send back with notes', confirmLabel: 'Send back', placeholder: 'What you changed, or what you want changed' },
+      );
+      if (typed === null || !typed.trim()) return;
+      note = typed.trim();
+    } else if (!(await dialog.confirm('Approve this estimate? The person who asked is told it\'s cleared to send to the customer.'))) {
+      return;
+    }
+    setDecidingReview(true);
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/review-decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision, ...(note ? { note } : {}) }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        await dialog.alert('Could not record that: ' + (data.error || 'Unknown error'));
+        return;
+      }
+      await dialog.alert(decision === 'approved'
+        ? 'Approved — they have been told it is cleared to send.'
+        : 'Sent back with your notes.');
+      loadEstimates(true);
+    } catch {
+      await dialog.alert('Network error — please try again.');
+    } finally {
+      setDecidingReview(false);
+    }
+  };
+
   const convertToSalesOrder = async () => {
     if (!editingId) return;
     const est = estimates.find(e => e.id === editingId);
@@ -2956,6 +3134,28 @@ export default function EstimatesPage() {
                           PDF
                         </button>
                       )}
+                      {/* Internal review, next to (not instead of) the
+                          customer-side status — they answer different
+                          questions and an estimate can be mid-both. */}
+                      {(() => {
+                        const rs = reviewStateOf(est);
+                        if (!rs.status) return null;
+                        const d = REVIEW_STATUS_DISPLAY[rs.status];
+                        return (
+                          <div
+                            title={rs.status === 'pending'
+                              ? `In review with ${staffName(rs.reviewerId)}`
+                              : `${d.label} by ${staffName(rs.decidedBy)}${rs.note ? ` — “${rs.note}”` : ''}`}
+                            style={{
+                              padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                              background: `${d.color}18`, border: `1px solid ${d.color}44`,
+                              color: d.color, whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {d.label}
+                          </div>
+                        );
+                      })()}
                       <div style={{
                         padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                         background: `${statusColor}18`, border: `1px solid ${statusColor}44`,
@@ -4289,6 +4489,26 @@ export default function EstimatesPage() {
           </>
         )}
 
+        {/* Send to a BMG teammate for review (migration 316). Optional by
+            design — it sits ABOVE the customer send because that's the order
+            it happens in, but neither one gates the other. */}
+        {editingId && lines.length > 0 && !(estimates.find(e => e.id === editingId) as any)?.customer_approved && (
+          <button
+            onClick={openReviewModal}
+            disabled={sendingForReview}
+            title="Email the estimate to an admin or owner to check before the customer sees it"
+            style={{
+              width: '100%', padding: '12px', borderRadius: '10px',
+              background: sendingForReview ? 'var(--subtle-bg)' : 'rgba(245,158,11,0.12)',
+              border: '1px solid rgba(245,158,11,0.3)',
+              color: '#f59e0b', fontWeight: 800, fontSize: '13px', cursor: 'pointer',
+              opacity: sendingForReview ? 0.5 : 1,
+            }}
+          >
+            {sendingForReview ? 'Opening…' : 'Send to a Teammate for Review'}
+          </button>
+        )}
+
         {/* Send for Customer Approval (magic link) */}
         {/* Either half counts: a lead's estimate is as sendable as a
             NetSuite customer's. Gating on customerId alone silently hid
@@ -4612,6 +4832,74 @@ export default function EstimatesPage() {
           );
         })()}
 
+        {/* Internal review state (migration 316) — who has it, what they
+            said, and the reviewer's own buttons when it's theirs to answer. */}
+        {editingId && (() => {
+          const est = estimates.find(e => e.id === editingId);
+          if (!est) return null;
+          const state = reviewStateOf(est);
+          if (!state.status) return null;
+          const display = REVIEW_STATUS_DISPLAY[state.status];
+          const mine = canDecideReview(state, user?.id, isAdmin);
+          const when = state.status === 'pending' ? state.requestedAt : state.decidedAt;
+          return (
+            <div style={{
+              width: '100%', padding: '10px 12px', borderRadius: '10px',
+              background: `${display.color}14`, border: `1px solid ${display.color}44`,
+              fontSize: '12px', color: 'var(--text-body)',
+            }}>
+              <div style={{ fontWeight: 800, color: display.color }}>
+                {state.status === 'pending' && `⏳ In review with ${staffName(state.reviewerId)}`}
+                {state.status === 'approved' && `✓ Reviewed by ${staffName(state.decidedBy)} — cleared to send to the customer`}
+                {state.status === 'changes_requested' && `↩ ${staffName(state.decidedBy)} sent this back for changes`}
+                {when && <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}> · {new Date(when).toLocaleDateString()}</span>}
+              </div>
+              {state.note && (
+                <div style={{ marginTop: '3px' }}>“{state.note}”</div>
+              )}
+              {state.status === 'pending' && (
+                <div style={{ marginTop: '3px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                  {mine
+                    ? 'Edit anything you want changed, then approve it, send it back, or send it to the customer yourself — nothing has gone out.'
+                    : `Asked by ${staffName(state.requestedBy)}. Nothing has gone to the customer.`}
+                </div>
+              )}
+              {mine && (
+                <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={() => submitReviewDecision('approved')}
+                    disabled={decidingReview}
+                    style={{
+                      padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 800, cursor: 'pointer',
+                      background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.35)', color: '#22c55e',
+                      opacity: decidingReview ? 0.5 : 1,
+                    }}
+                  >Approve — rep sends</button>
+                  <button
+                    onClick={() => submitReviewDecision('changes_requested')}
+                    disabled={decidingReview}
+                    style={{
+                      padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 800, cursor: 'pointer',
+                      background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.35)', color: '#f87171',
+                      opacity: decidingReview ? 0.5 : 1,
+                    }}
+                  >Send back with notes</button>
+                  <button
+                    onClick={openReviewModal}
+                    disabled={sendingForReview}
+                    title="Hand the review to someone else"
+                    style={{
+                      padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                      background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)',
+                      opacity: sendingForReview ? 0.5 : 1,
+                    }}
+                  >Pass to someone else</button>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* Approval provenance / rejection record (Stage 3): the customer's
             decision and its when/how, previously invisible in-app. */}
         {editingId && (() => {
@@ -4911,6 +5199,45 @@ export default function EstimatesPage() {
           fetchPreview={fetchApprovalPreview}
           onSend={confirmSendApproval}
           onClose={() => setApprovalModal(false)}
+        />
+      )}
+
+      {/* Internal review send — the same compose screen as the customer
+          approval, with the teammate directory in the To dropdown. */}
+      {reviewModal && (
+        <EmailComposeModal
+          title="Send Estimate for Internal Review"
+          contacts={reviewerContacts}
+          contactsLabel="+ Pick the teammate to review this…"
+          sendLabel="Send for Review"
+          messagePlaceholder="What should they look at? — e.g. “Check the labor hours and the shelving spec before this goes out.”"
+          emptyToNote="Pick the teammate who should review this — they need a FleetView login to open and change the estimate."
+          intro={(
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{
+                padding: '10px', borderRadius: '8px',
+                background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)',
+                fontSize: '11px', color: 'var(--text-body)', lineHeight: 1.6,
+              }}>
+                <b style={{ color: '#f59e0b' }}>This goes to your teammate, not the customer.</b> They get the same
+                estimate the customer would, with a button that opens it in FleetView — where they can edit it,
+                approve it, send it back with notes, or send it on to the customer themselves.
+                {' '}The <b>first BMG address in To</b> is the reviewer of record; anyone else just gets a copy.
+              </div>
+              {reviewPdfName && (
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  📎 <b style={{ color: 'var(--text-secondary)' }}>{reviewPdfName}</b> is attached automatically — the same PDF copy the customer send carries.
+                </div>
+              )}
+            </div>
+          )}
+          attachments={estimateFiles}
+          onUploadAttachment={f => uploadEstimateFile(editingId!, f)}
+          onRemoveAttachment={id => removeEstimateFile(editingId!, id)}
+          uploadHint="Anything the reviewer needs with the estimate. Files stay on the estimate for later emails."
+          fetchPreview={fetchReviewPreview}
+          onSend={confirmSendReview}
+          onClose={() => setReviewModal(false)}
         />
       )}
 
