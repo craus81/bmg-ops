@@ -23,9 +23,10 @@ export interface WrapDocOptions {
   /** Show the line table. Emails AND this with pricing; snapshots honor
    *  hide_line_items. */
   lineItems: boolean;
-  /** Coverage diagram URL to embed (emails only — snapshots must not
-   *  reference the mutable R2 object). */
-  diagramUrl?: string | null;
+  /** Coverage pictures to embed, in order (emails only — snapshots must not
+   *  reference the mutable R2 objects). A photo-proof quote passes one per
+   *  view with its label; a template quote passes its single diagram. */
+  diagrams?: { url: string; caption?: string | null }[] | null;
   /** 'Your quote is attached as a PDF.' note (netsuite-pdf sends). */
   pdfAttachedNote?: boolean;
 }
@@ -150,7 +151,7 @@ export function wrapQuoteDocModel(quote: any, opts: WrapDocOptions): QuoteDocMod
     customerBlockHtml: customerBlockHtml || null,
     identityLinesHtml,
     noteHtml: opts.pdfAttachedNote && !opts.pricing ? 'Your quote is attached as a PDF.' : null,
-    diagram: opts.diagramUrl ? { url: opts.diagramUrl, heading: 'Coverage Areas' } : null,
+    diagram: opts.diagrams?.length ? { heading: 'Coverage Areas', images: opts.diagrams } : null,
     columns: showLineTable ? { qty: 'Qty', rate: 'Price' } : null,
     rows: showLineTable ? rows : [],
     totals,
