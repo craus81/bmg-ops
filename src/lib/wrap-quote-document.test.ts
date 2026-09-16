@@ -117,7 +117,7 @@ describe('wrapQuoteDocModel formatting conventions', () => {
       { ...baseQuote, template_id: 't-1', vehicle_description: '2021 Transit 250' },
       { pricing: true, lineItems: true },
     );
-    expect(template.identityLinesHtml.join(' ')).toContain('<b>Vehicle:</b> 2021 Transit 250');
+    expect((template.identityLinesHtml || []).join(' ')).toContain('<b>Vehicle:</b> 2021 Transit 250');
 
     const photos = wrapQuoteDocModel(
       {
@@ -128,8 +128,8 @@ describe('wrapQuoteDocModel formatting conventions', () => {
       },
       { pricing: true, lineItems: true },
     );
-    expect(photos.identityLinesHtml.join(' ')).toContain('<b>Job:</b> 1420 Main St');
-    expect(photos.identityLinesHtml.join(' ')).not.toContain('Vehicle:');
+    expect((photos.identityLinesHtml || []).join(' ')).toContain('<b>Job:</b> 1420 Main St');
+    expect((photos.identityLinesHtml || []).join(' ')).not.toContain('Vehicle:');
   });
 
   it('carries every annotated photo, in order, with its view as the caption', () => {
