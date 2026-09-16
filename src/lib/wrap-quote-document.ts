@@ -143,7 +143,14 @@ export function wrapQuoteDocModel(quote: any, opts: WrapDocOptions): QuoteDocMod
 
   const identityLinesHtml: string[] = [];
   if (quote.project_type) identityLinesHtml.push(`<b>Project Type:</b> ${escHtml(quote.project_type)}`);
-  if (quote.vehicle_description) identityLinesHtml.push(`<b>Vehicle:</b> ${escHtml(quote.vehicle_description)}`);
+  // A template quote is always a vehicle; a photo-proof quote may be a
+  // vehicle OR a building (storefront signage is the same drawing job on a
+  // different subject), so it gets the neutral label rather than telling a
+  // sign customer their building is a vehicle.
+  if (quote.vehicle_description) {
+    const subjectLabel = !quote.template_id && quote.photo_proofs?.length ? 'Job' : 'Vehicle';
+    identityLinesHtml.push(`<b>${subjectLabel}:</b> ${escHtml(quote.vehicle_description)}`);
+  }
 
   return {
     docTitle: wrapDocTitle(opts.pricing, !!opts.pdfAttachedNote),

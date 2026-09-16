@@ -366,7 +366,10 @@ export default function WrapQuotePage() {
   // Several views of one vehicle, in the order the customer sees them; each
   // carries its own boxes and its own scale (migration 317).
   const [photoProofs, setPhotoProofs] = useState<PhotoProof[]>([]);
-  // No template means no vehicle label — the rep types one for the quote.
+  // No template means no subject label — the rep types one for the quote. On
+  // a photo quote that may be a vehicle OR a building (storefront signage is
+  // the same drawing job on a different subject), so the quote document
+  // labels it "Job" rather than "Vehicle".
   const [photoVehicle, setPhotoVehicle] = useState('');
   const [photoUploading, setPhotoUploading] = useState(false);
   const [tool, setTool] = useState<Tool>('select');
@@ -2584,7 +2587,7 @@ export default function WrapQuotePage() {
 
   // Quote preview shared by the Quote tab and History view modal. `coverage`
   // overrides the stored diagram with a live render (Quote tab, pre-save).
-  const quotePreview = (q: { quote_number: string; vehicle_description: string | null; customer: any; project_type: string | null; project_notes: string | null; measurements: any[]; labor: any; subtotal: number; tax_rate: number; tax_amount: number; total: number; diagram_path?: string | null; photo_proofs?: PhotoProof[] | null; attachments?: QuoteAttachment[] | null; created_at?: string; package_qty?: number | null; adjustments?: QuoteAdjustments | null; nesting?: NestingSnapshot | null }, coverage?: React.ReactNode) => (
+  const quotePreview = (q: { quote_number: string; vehicle_description: string | null; customer: any; project_type: string | null; project_notes: string | null; measurements: any[]; labor: any; subtotal: number; tax_rate: number; tax_amount: number; total: number; diagram_path?: string | null; photo_proofs?: PhotoProof[] | null; template_id?: string | null; attachments?: QuoteAttachment[] | null; created_at?: string; package_qty?: number | null; adjustments?: QuoteAdjustments | null; nesting?: NestingSnapshot | null }, coverage?: React.ReactNode) => (
     <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '18px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
         <div style={{ fontSize: '17px', fontWeight: 800, color: 'var(--text-primary)' }}>Wrap Quote <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700 }}>{q.quote_number}</span></div>
@@ -2612,7 +2615,13 @@ export default function WrapQuotePage() {
         </div>
       </div>
       {q.project_type && <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '6px' }}><b>Project Type:</b> {q.project_type}</div>}
-      {q.vehicle_description && <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '10px' }}><b>Vehicle:</b> {q.vehicle_description}</div>}
+      {q.vehicle_description && (
+        <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+          {/* Same label rule as the emailed document (wrap-quote-document.ts):
+              a photo quote may be a building, so it reads "Job". */}
+          <b>{!q.template_id && q.photo_proofs?.length ? 'Job' : 'Vehicle'}:</b> {q.vehicle_description}
+        </div>
+      )}
       {/* Saved quotes show the pictures they were saved with: every annotated
           photo in order on a photo quote, the outline diagram on a template
           one. `coverage` (the live estimator canvas) wins while editing. */}
@@ -2836,13 +2845,14 @@ export default function WrapQuotePage() {
       {/* ================= ESTIMATOR ================= */}
       {tab === 'estimator' && (
         <div>
-          {/* Drawing surface: a 1:20 outline template, or a photo of the
-              customer's actual vehicle when the library has no template. */}
+          {/* Drawing surface: a 1:20 outline template, or photos of the real
+              thing — a vehicle the library has no template for, or a
+              building being signed. */}
           <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Draw on</span>
             {([
-              { photo: false, label: 'Vehicle Template', hint: 'Measure and price coverage over a calibrated 1:20 outline' },
-              { photo: true, label: 'Photo', hint: 'Draw boxes over a photo of the vehicle — a coverage picture for the customer, no sizes' },
+              { photo: false, label: 'Vehicle Template', hint: 'Measure and price coverage over a calibrated 1:20 vehicle outline' },
+              { photo: true, label: 'Photos', hint: 'Draw boxes over photos of the real thing — a vehicle, or a building being signed. Set a scale on each photo and the boxes measure and price themselves' },
             ]).map(o => (
               <button key={String(o.photo)} onClick={() => switchSurface(o.photo)} title={o.hint} style={{
                 padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
@@ -3355,7 +3365,7 @@ export default function WrapQuotePage() {
                 <input
                   value={photoVehicle}
                   onChange={e => setPhotoVehicle(e.target.value)}
-                  placeholder="Vehicle — shown on the quote (e.g. 2021 Ford Transit 250 High Roof)"
+                  placeholder="What this job is — shown on the quote (e.g. 2021 Ford Transit 250, or 1420 Main St — storefront)"
                   style={{ ...inputStyle, flex: 1, minWidth: '260px' }}
                 />
               </div>

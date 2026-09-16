@@ -110,6 +110,28 @@ describe('wrapQuoteDocModel formatting conventions', () => {
     expect(m.docTitle).toBe('Wrap Coverage');
   });
 
+  it('calls the subject a Vehicle on a template quote and a Job on a photo one', () => {
+    // Storefront signage runs through the same estimator on photos, so a
+    // photo quote must not tell a sign customer their building is a vehicle.
+    const template = wrapQuoteDocModel(
+      { ...baseQuote, template_id: 't-1', vehicle_description: '2021 Transit 250' },
+      { pricing: true, lineItems: true },
+    );
+    expect((template.identityLinesHtml || []).join(' ')).toContain('<b>Vehicle:</b> 2021 Transit 250');
+
+    const photos = wrapQuoteDocModel(
+      {
+        ...baseQuote,
+        template_id: null,
+        photo_proofs: [{ id: 'p1', path: 'a.jpg', label: 'Storefront', boxes: [] }],
+        vehicle_description: '1420 Main St — storefront',
+      },
+      { pricing: true, lineItems: true },
+    );
+    expect((photos.identityLinesHtml || []).join(' ')).toContain('<b>Job:</b> 1420 Main St');
+    expect((photos.identityLinesHtml || []).join(' ')).not.toContain('Vehicle:');
+  });
+
   it('carries every annotated photo, in order, with its view as the caption', () => {
     // A quote drawn on photos sends one picture per view — driver side,
     // rear — not just the lead image (migration 317).

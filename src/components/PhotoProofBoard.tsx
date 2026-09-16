@@ -7,9 +7,10 @@ import PhotoCoverageProof, { type ProofFilmOption } from '@/components/PhotoCove
 import { MAX_PHOTO_PROOFS, proofLabel, type PhotoProof } from '@/lib/coverage-proof';
 import { isCalibrated, sqft } from '@/lib/photo-scale';
 
-// The photo side of the wrap estimator: several views of one vehicle (driver
-// side, passenger side, rear, roof), each annotated and calibrated on its own,
-// kept in the order the customer will see them.
+// The photo side of the wrap estimator: several views of one job — a vehicle
+// (driver side, passenger side, rear) or a building (storefront, front
+// windows, north wall) — each annotated and calibrated on its own, kept in
+// the order the customer will see them.
 
 interface Props {
   proofs: PhotoProof[];
@@ -63,7 +64,7 @@ export default function PhotoProofBoard({
 
   const addTile = (
     <label
-      title={full ? `${MAX_PHOTO_PROOFS} photos is the limit for one quote` : 'Add another view of this vehicle'}
+      title={full ? `${MAX_PHOTO_PROOFS} photos is the limit for one quote` : 'Add another view of this job'}
       style={{
         width: '96px', height: '72px', flexShrink: 0, borderRadius: '8px',
         border: `1px dashed ${theme.border}`, background: 'var(--subtle-bg)',
@@ -87,8 +88,10 @@ export default function PhotoProofBoard({
         <div style={{ textAlign: 'center', padding: '36px 16px', border: `1px dashed ${theme.border}`, borderRadius: '12px', background: 'var(--card)' }}>
           <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>Start from photos</div>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px', lineHeight: 1.6 }}>
-            Drop photos of the vehicle here (or take them on your phone) — one per view, as many as the job needs.<br />
-            Draw boxes over what gets wrapped, then set a scale on each photo to price them.
+            Drop photos here (or take them on your phone) — a vehicle, a storefront, whatever is being covered,
+            one photo per view.<br />
+            Shoot each face straight on where you can: a square-on photo measures with one known length.
+            Draw boxes over what gets covered, then set a scale on each photo to price them.
           </div>
           <label style={{
             display: 'inline-block', padding: '8px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
@@ -156,7 +159,7 @@ export default function PhotoProofBoard({
             <input
               value={active.label}
               onChange={e => patchActive({ label: e.target.value })}
-              placeholder={`What this view is — e.g. "Driver side" (photo ${activeIndex + 1})`}
+              placeholder={`What this view is — e.g. "Storefront" or "Driver side" (photo ${activeIndex + 1})`}
               style={{
                 flex: 1, minWidth: '220px', padding: '8px 10px', borderRadius: '8px', fontSize: '12px',
                 background: 'var(--input-bg)', border: `1px solid ${theme.border}`, color: 'var(--text-primary)',

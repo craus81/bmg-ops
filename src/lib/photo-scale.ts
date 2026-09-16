@@ -3,31 +3,39 @@
  *
  * WHAT ONE MEASUREMENT CAN AND CANNOT TELL YOU. A photo is a projection: a
  * known length fixes the scale IN ITS OWN PLANE, AT ITS OWN DISTANCE, and
- * nowhere else. Calibrating on something that isn't part of the wrap — a
- * door on the building behind the van — reads a length from farther away,
- * where every inch covers fewer pixels, and then applies that undersized
- * inch to a vehicle standing closer to the camera. Every box comes out too
- * big, and it is off by however much depth separates them. The reference has
- * to be ON the surface being measured (a panel, a wheel, the wheelbase), or
- * at least in the same plane at the same distance.
+ * nowhere else. So the rule is not about WHAT the reference is, it is about
+ * WHERE it is: it has to sit on the same face, at the same distance, as the
+ * thing being measured.
+ *
+ * On a storefront that makes the front door or a window frame the ideal
+ * reference — it is part of the wall the signage goes on, so its inches are
+ * the wall's inches. On a vehicle it is a panel, a door, the wheelbase.
+ * What breaks the scale is DEPTH: a reference on a different plane (the
+ * building behind a van, a side wall at an angle to the front, a car parked
+ * between the camera and the storefront) is a different distance away, so
+ * every inch there covers a different number of pixels. Apply that inch to
+ * the surface being measured and every box is off by however much depth
+ * separates the two.
  *
  * TWO CALIBRATIONS, DIFFERENT AMBITIONS.
  *
  *   line  — one dragged segment with its real length. Assumes the scale is
- *           uniform across the photo, which holds for a square-on shot and
- *           degrades as the camera swings around: on a three-quarter view
- *           the far end of the vehicle is genuinely smaller on the sensor,
- *           and a uniform ruler reports it short.
- *   plane — the four corners of a known rectangle (a door, a panel, a decal)
- *           with its real width and height. Four correspondences pin down a
- *           full homography, so anything in that plane can be measured with
- *           the foreshortening taken out — the far end stops reading short.
+ *           uniform across the photo, which is exactly true of a square-on
+ *           shot — the normal way to photograph a storefront — and degrades
+ *           as the camera swings around: on a three-quarter view the far end
+ *           of the subject is genuinely smaller on the sensor, and a uniform
+ *           ruler reports it short.
+ *   plane — the four corners of a known rectangle (a door, a window, a
+ *           panel) with its real width and height. Four correspondences pin
+ *           down a full homography, so anything in that plane can be
+ *           measured with the foreshortening taken out. Worth the extra
+ *           clicks when the shot could not be taken square-on.
  *
  * Both can be set on one photo. `measureRect` prefers the plane (strictly
  * more information), and `calibrationDisagreementPct` compares what the two
  * say about the same box: a big gap means the two references aren't in the
- * same plane, which is exactly the mistake described above, caught instead
- * of quietly priced.
+ * same plane as each other, so at least one of them isn't in the surface's
+ * plane either — the depth mistake above, caught instead of quietly priced.
  *
  * Pure math, no DOM — unit-tested in photo-scale.test.ts.
  */
@@ -207,9 +215,9 @@ export function isCalibrated(cal: PhotoCalibration | null | undefined): boolean 
 /**
  * How far apart the two calibrations are about the same box, as a percentage
  * of the larger area. Only meaningful when BOTH are set. A few percent is
- * measurement slop; a big number means the line and the rectangle aren't in
- * the same plane — the "door on the building behind the van" mistake — and
- * whichever is off the wrap surface is lying about every box.
+ * measurement slop; a big number means the line and the rectangle are at
+ * different depths, so at least one of them is not on the surface being
+ * measured — and that one is lying about every box on the photo.
  */
 export function calibrationDisagreementPct(
   rect: PixelRect,
