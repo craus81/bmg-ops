@@ -20,10 +20,11 @@ import {
   type Point,
 } from '@/lib/photo-scale';
 
-// Draw coverage boxes onto a photo of the customer's vehicle, and — once the
-// photo is calibrated — measure them. See src/lib/photo-scale.ts for what a
-// single reference can honestly tell you; the short version is that the
-// reference has to be in the same plane as the thing being measured.
+// Draw coverage boxes onto a photo of what's being covered — a vehicle, or a
+// building's storefront, windows and doors — and, once the photo is
+// calibrated, measure them. See src/lib/photo-scale.ts for what a single
+// reference can honestly tell you; the short version is that it has to sit
+// on the same face, at the same distance, as the thing being measured.
 
 export interface ProofFilmOption {
   id: string;
@@ -366,25 +367,27 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginTop: '6px' }}>
             <button
               onClick={() => { setTool('calibrate-line'); setCornerDraft([]); }}
-              title="Drag along something whose real length you know"
+              title="Drag along something on that same face whose real length you know — a door width, a window, a panel"
               style={btn(tool === 'calibrate-line', '#fbbf24')}
             >Known length</button>
             <button
               onClick={() => { setTool('calibrate-plane'); setLineDraft(null); setCornerDraft([]); }}
-              title="Click the four corners of something rectangular whose real size you know — corrects for camera angle"
+              title="Click the four corners of something rectangular whose real size you know — a door, a window. Corrects for camera angle, so it's the one to use when the shot isn't square-on"
               style={btn(tool === 'calibrate-plane', '#fbbf24')}
             >Known rectangle</button>
           </div>
           <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.5 }}>
-            Use something <b>on the vehicle itself</b> — a door, a panel, the wheelbase. A reference behind it
-            (a building door) sits farther from the camera and throws every box off.
+            Measure something <b>on the same face you&apos;re covering</b> — a door or window frame on that wall,
+            a panel or the wheelbase on that side of the vehicle. Anything at a different depth (a wall at an
+            angle, the building behind a van, a car parked in front) is a different distance from the camera and
+            throws every box off.
           </div>
         </div>
 
         {/* Calibration in progress */}
         {tool === 'calibrate-line' && !lineDraft && (
           <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
-            Drag a line along something you know the length of, then type that length.
+            Drag a line along something you know the length of — the front door, a window, a panel — then type that length.
           </div>
         )}
         {lineDraft && (
@@ -411,8 +414,9 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
                 : 'Four corners placed — now its real size'}
             </div>
             <div style={{ fontSize: '9px', color: 'var(--text-secondary)', marginBottom: '6px', lineHeight: 1.5 }}>
-              Go around the rectangle in order: top-left, top-right, bottom-right, bottom-left <b>as the rectangle
-              itself sits</b>, not as the photo does.
+              A door or window frame does nicely. Go around it in order: top-left, top-right, bottom-right,
+              bottom-left <b>as the rectangle itself sits</b>, not as the photo does. On a square-on shot the
+              known-length tool is quicker and just as accurate.
             </div>
             {cornerDraft.length === 4 && (
               <>
@@ -436,7 +440,7 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
 
         {tool === 'box' && !lineDraft && (
           <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
-            Drag a box over each area being wrapped.{calibrated ? ' Its size is measured off the photo as you draw.' : ' Set a scale above to get sizes and pricing.'}
+            Drag a box over each area being covered.{calibrated ? ' Its size is measured off the photo as you draw.' : ' Set a scale above to get sizes and pricing.'}
           </div>
         )}
 
@@ -465,7 +469,7 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
             <input
               value={selected.label}
               onChange={e => update(selected.id, { label: e.target.value })}
-              placeholder="Driver side, Hood, …"
+              placeholder="Front window, Driver side, …"
               style={{ ...inputStyle, marginBottom: '8px' }}
             />
             <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
@@ -508,7 +512,7 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
             {disagreement != null && disagreement > DISAGREEMENT_WARN_PCT && (
               <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '8px', lineHeight: 1.5 }}>
                 ⚠ Your two references disagree by {disagreement.toFixed(0)}% on this box. They&apos;re probably not
-                the same distance from the camera — drop whichever one isn&apos;t on the wrap surface.
+                the same distance from the camera — drop whichever one isn&apos;t on the face you&apos;re covering.
               </div>
             )}
             <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
@@ -560,7 +564,7 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
         {/* eslint-disable-next-line @next/next/no-img-element -- photo dimensions are unknown; next/image needs fixed sizes */}
         <img
           src={src}
-          alt="Vehicle photo"
+          alt="Job photo"
           onLoad={e => setDim({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
           style={{ width: '100%', display: 'block' }}
           draggable={false}
