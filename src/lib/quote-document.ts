@@ -87,7 +87,10 @@ export interface QuoteDocModel {
   customerBlockHtml?: string | null;
   /** Pre-escaped note above the table ('Your quote is attached as a PDF.'). */
   noteHtml?: string | null;
-  diagram?: { url: string; heading: string } | null;
+  /** Coverage pictures under the heading, in the order the customer sees
+   *  them. A wrap quote drawn on photos carries one per view (driver side,
+   *  rear, …); a template quote carries the single outline diagram. */
+  diagram?: { heading: string; images: { url: string; caption?: string | null }[] } | null;
   /** Column headings; null = no line table (coverage-only / hidden lines). */
   columns: { qty: string; rate: string } | null;
   rows: QuoteDocRow[];
@@ -183,7 +186,7 @@ export function renderQuoteDocument(model: QuoteDocModel, opts: QuoteDocRenderOp
 
     ${model.noteHtml ? `<div style="font-size:13px;color:#374151;margin:0 0 14px;">${model.noteHtml}</div>` : ''}
 
-    ${model.diagram ? `<div style="margin:0 0 14px;"><div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:4px;">${escHtml(model.diagram.heading)}</div><img src="${escHtml(model.diagram.url)}" alt="${escHtml(model.diagram.heading)}" width="584" style="width:100%;max-width:584px;display:block;border:1px solid #e5e7eb;border-radius:8px;"></div>` : ''}
+    ${model.diagram && model.diagram.images.length > 0 ? `<div style="margin:0 0 14px;"><div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:4px;">${escHtml(model.diagram.heading)}</div>${model.diagram.images.map(img => `${img.caption ? `<div style="font-size:12px;color:#374151;font-weight:700;margin:8px 0 3px;">${escHtml(img.caption)}</div>` : ''}<img src="${escHtml(img.url)}" alt="${escHtml(img.caption || model.diagram!.heading)}" width="584" style="width:100%;max-width:584px;display:block;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:6px;">`).join('')}</div>` : ''}
 
     ${model.columns ? `<table style="width:100%;border-collapse:collapse;">
       <thead><tr>

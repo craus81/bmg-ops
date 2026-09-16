@@ -103,11 +103,26 @@ describe('wrapQuoteDocModel formatting conventions', () => {
 
   it('carries no money at all on coverage-only sends', () => {
     const m = wrapQuoteDocModel({ ...baseQuote, diagram_path: 'x.png' },
-      { pricing: false, lineItems: false, diagramUrl: 'https://pub.example.com/vehicle-templates/x.png' });
+      { pricing: false, lineItems: false, diagrams: [{ url: 'https://pub.example.com/vehicle-templates/x.png' }] });
     expect(m.totals).toBeNull();
     expect(m.columns).toBeNull();
-    expect(m.diagram!.url).toContain('x.png');
+    expect(m.diagram!.images[0].url).toContain('x.png');
     expect(m.docTitle).toBe('Wrap Coverage');
+  });
+
+  it('carries every annotated photo, in order, with its view as the caption', () => {
+    // A quote drawn on photos sends one picture per view — driver side,
+    // rear — not just the lead image (migration 317).
+    const m = wrapQuoteDocModel(baseQuote, {
+      pricing: false,
+      lineItems: false,
+      diagrams: [
+        { url: 'https://pub.example.com/a.jpg', caption: 'Driver side' },
+        { url: 'https://pub.example.com/b.jpg', caption: 'Rear doors' },
+      ],
+    });
+    expect(m.diagram!.images.map(i => i.caption)).toEqual(['Driver side', 'Rear doors']);
+    expect(m.diagram!.heading).toBe('Coverage Areas');
   });
 
   it('escapes customer and quote fields', () => {
