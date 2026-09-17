@@ -114,24 +114,48 @@ export default function GraphicsPage() {
   const [stageSince, setStageSince] = useState<Record<string, string>>({});
   // "My jobs" filter: printers/cutters see only what's assigned to them.
   const [myJobsOnly, setMyJobsOnly] = useState(false);
-  const [myAssignedIds, setMyAssignedIds] = useState<Set<string>>(new Set());
+  // Every graphics assignment, jobId → userIds. This used to be "just mine",
+  // but the admin assignee picker needs to ask the same question about
+  // anyone, and two sources of truth for "who is on this job" is how the
+  // My Jobs count went wrong in the first place.
+  const [assigneesByJob, setAssigneesByJob] = useState<Record<string, string[]>>({});
+  /** '' = everyone, 'unassigned' = nobody on it, otherwise a user id. */
+  const [assigneeFilter, setAssigneeFilter] = useState<string>('');
   // Admin work order — the drag-to-rank list behind the "#" column.
   const [showWorkOrder, setShowWorkOrder] = useState(false);
 
   useEffect(() => {
     if (!user?.id) return;
     (async () => {
-      const { data } = await supabase
-        .from('job_assignments')
-        .select('job_id')
-        .eq('job_type', 'graphics_job')
-        .eq('user_id', user.id);
-      setMyAssignedIds(new Set((data || []).map((a: any) => a.job_id)));
+      // Paginated: one row per person per job, so this grows with the board
+      // and a plain read would silently stop at PostgREST's 1000-row cap —
+      // which reads as "that job has nobody on it", not as an error.
+      const { data } = await fetchAllRows<{ job_id: string; user_id: string }>((from, to) =>
+        supabase
+          .from('job_assignments')
+          .select('job_id, user_id')
+          .eq('job_type', 'graphics_job')
+          .order('job_id')
+          .order('id')
+          .range(from, to));
+      const byJob: Record<string, string[]> = {};
+      for (const a of data) (byJob[a.job_id] ||= []).push(a.user_id);
+      setAssigneesByJob(byJob);
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
   }, [user?.id]);
 
-  const isMine = (j: GraphicsJob) => j.assigned_to === user?.id || myAssignedIds.has(j.id);
+  /** A person's display name, for the assignee column, picker and sort. */
+  const personName = (id: string) => {
+    const p = profiles.find(pr => pr.id === id);
+    return p?.full_name || p?.email || 'Unknown user';
+  };
+
+  /** Everyone on a job — the picker's assignments plus the job's own owner. */
+  const assigneesOf = (j: GraphicsJob): string[] =>
+    [...new Set([j.assigned_to, ...(assigneesByJob[j.id] || [])].filter(Boolean) as string[])];
+  const isAssignedTo = (j: GraphicsJob, userId: string) => assigneesOf(j).includes(userId);
+  const isMine = (j: GraphicsJob) => !!user?.id && isAssignedTo(j, user.id);
   const [search, setSearch] = useState('');
   // Deep link: ?q=<term> (universal search "View all") prefills the board search.
   useEffect(() => {
@@ -871,6 +895,9 @@ export default function GraphicsPage() {
     if (j.status === 'flagged' && !isAdmin) return false;
     // My-jobs filter: assigned directly or via the assignment picker
     if (myJobsOnly && !isMine(j)) return false;
+    // Admin assignee picker — one person's board, or the unowned pile.
+    if (assigneeFilter === 'unassigned' && assigneesOf(j).length > 0) return false;
+    if (assigneeFilter && assigneeFilter !== 'unassigned' && !isAssignedTo(j, assigneeFilter)) return false;
     // Category filter
     if (filterCategory !== 'all' && (j.job_category || 'production') !== filterCategory) return false;
     // Metric tile filter (overdue / due this week / stuck)
@@ -904,6 +931,8 @@ export default function GraphicsPage() {
     rank: j => rankPosition.get(j.id) ?? null,
     title: j => j.title?.toLowerCase() || null,
     customer: j => j.customer?.toLowerCase() || null,
+    // Unassigned sorts last in either direction, like every other blank.
+    assignee: j => assigneesOf(j).map(personName).sort()[0]?.toLowerCase() || null,
     po: j => j.po_number || null,
     qty: j => j.quantity,
     priority: j => PRIORITY_RANK[j.priority] ?? 1,
@@ -918,6 +947,29 @@ export default function GraphicsPage() {
   // "My Jobs (23)" over a table of 6, the other 17 being jobs that shipped
   // and stayed assigned. A tab's number is a promise about its own rows.
   const myJobCount = visibleJobs.filter(j => isMine(j) && inStatusScope(j.status, filterStatus)).length;
+
+  // The assignee dropdown lists people who actually hold jobs on this board,
+  // with counts, rather than every approved account — a picker full of names
+  // with (0) beside them is a list you have to read to dismiss.
+  const assigneeOptions = (() => {
+    const inScope = visibleJobs.filter(j => inStatusScope(j.status, filterStatus));
+    const counts = new Map<string, number>();
+    let unassigned = 0;
+    for (const j of inScope) {
+      const ids = assigneesOf(j);
+      if (ids.length === 0) { unassigned++; continue; }
+      for (const id of ids) counts.set(id, (counts.get(id) || 0) + 1);
+    }
+    const people = [...counts.entries()]
+      .map(([id, count]) => ({ id, label: personName(id), count }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    // A filter set to someone who has since dropped off the board would
+    // otherwise vanish from the dropdown while still filtering the table.
+    if (assigneeFilter && assigneeFilter !== 'unassigned' && !counts.has(assigneeFilter)) {
+      people.push({ id: assigneeFilter, label: personName(assigneeFilter), count: 0 });
+    }
+    return { people, unassigned };
+  })();
 
   const priorityColor = (p: string) => {
     switch (p) {
@@ -1188,10 +1240,11 @@ export default function GraphicsPage() {
           }}
         />
         <FilterButton
-          activeCount={(filterCategory !== 'all' ? 1 : 0) + (statusSelectActive ? 1 : 0) + (myJobsOnly ? 1 : 0) + (showArchived ? 1 : 0)}
+          activeCount={(filterCategory !== 'all' ? 1 : 0) + (statusSelectActive ? 1 : 0) + (myJobsOnly ? 1 : 0) + (assigneeFilter ? 1 : 0) + (showArchived ? 1 : 0)}
           onClear={() => {
             setFilterCategory('all');
             setMyJobsOnly(false);
+            setAssigneeFilter('');
             setFilterStatus('active');
             if (showArchived) { setShowArchived(false); loadJobs(false); }
           }}
@@ -1238,6 +1291,24 @@ export default function GraphicsPage() {
               <option key={s} value={s}>{GRAPHICS_STATUS_LABELS[s]}</option>
             ))}
           </select>
+          {/* Admin-only: whose board is this? Everyone else has My Jobs. */}
+          {isAdmin && (
+            <>
+              <FilterLabel>Assignee</FilterLabel>
+              <select
+                value={assigneeFilter}
+                onChange={e => { setAssigneeFilter(e.target.value); setMetricFilter(null); }}
+                style={{ ...inputStyle, marginBottom: '10px' }}
+              >
+                <option value="">Anyone</option>
+                <option value="unassigned">— Unassigned ({assigneeOptions.unassigned}) —</option>
+                {assigneeOptions.people.map(p => (
+                  <option key={p.id} value={p.id}>{p.label} ({p.count})</option>
+                ))}
+              </select>
+            </>
+          )}
+
           <FilterLabel>Other</FilterLabel>
           <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
             <button
@@ -1278,11 +1349,12 @@ export default function GraphicsPage() {
         return (
           <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
             <div className="responsive-table">
-              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '870px' }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '960px' }}>
                 <thead><tr>
                   <SortableTh label="#" sortKey="rank" sort={sort} onToggle={toggle} style={{ ...thStyle, width: '44px' }} />
                   <SortableTh label="Title" sortKey="title" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="Customer" sortKey="customer" sort={sort} onToggle={toggle} style={thStyle} />
+                  <SortableTh label="Assignee" sortKey="assignee" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="PO #" sortKey="po" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="Qty" sortKey="qty" sort={sort} onToggle={toggle} align="right" style={thStyle} />
                   <SortableTh label="Priority" sortKey="priority" sort={sort} onToggle={toggle} defaultDir="desc" style={thStyle} />
@@ -1415,6 +1487,18 @@ export default function GraphicsPage() {
                         </td>
                         <td style={{ ...tdStyle, maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           {job.customer || <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        </td>
+                        <td style={{ ...tdStyle, maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {(() => {
+                            const ids = assigneesOf(job);
+                            if (ids.length === 0) return <span style={{ color: 'var(--text-muted)' }}>Unassigned</span>;
+                            const names = ids.map(personName).sort();
+                            return (
+                              <span title={names.join(', ')} style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
+                                {names[0]}{names.length > 1 ? ` +${names.length - 1}` : ''}
+                              </span>
+                            );
+                          })()}
                         </td>
                         <td style={tdStyle}>
                           {job.po_number
