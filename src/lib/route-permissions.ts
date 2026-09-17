@@ -74,6 +74,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/bulk-upload-proofs/route.ts': admin(),
   'src/app/api/admin/bulk-upload-templates/route.ts': admin(),
   'src/app/api/admin/calibrate-templates/route.ts': staff(),
+  'src/app/api/admin/calibration-audit/route.ts': staff(),
   'src/app/api/admin/create-user/route.ts': admin(),
   'src/app/api/admin/credits/route.ts': admin(),
   'src/app/api/admin/delete-template/route.ts': admin(),
