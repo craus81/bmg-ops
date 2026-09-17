@@ -286,6 +286,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/help/route.ts': staff(),
   'src/app/api/graphics-jobs/[id]/send-for-approval/route.ts': staff(),
   'src/app/api/graphics-jobs/assign-po/route.ts': staff(),
+  'src/app/api/graphics-jobs/rank/route.ts': admin(),
   'src/app/api/graphics/awaiting-prefill/route.ts': staff(),
   'src/app/api/graphics/create-estimate/route.ts': staff(),
   'src/app/api/graphics/create-invoice/route.ts': staff(),

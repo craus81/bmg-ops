@@ -25,6 +25,9 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import { roundChip, summarizeRounds } from '@/lib/proof-rounds';
+import { isFinishedStatus } from '@/lib/graphics-status';
+import { workOrderPositions, compareByDueDate } from '@/lib/graphics-work-order';
+import GraphicsWorkOrderModal from '@/components/GraphicsWorkOrderModal';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import GraphicsInvoiceReviewModal from '@/components/GraphicsInvoiceReviewModal';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
@@ -84,9 +87,6 @@ function relativeTime(iso: string): string {
 // Active statuses (not terminal)
 const ACTIVE_STATUSES: GraphicsJobStatus[] = ['flagged', 'received', 'designing', 'revision', 'printing', 'outgassing', 'cutting', 'packing', 'ready', 'ready_to_pickup'];
 
-// Statuses past which the due date has done its job — no overdue warning.
-const DONE_STATUSES: GraphicsJobStatus[] = ['shipped', 'picked_up', 'installed', 'cancelled'];
-
 const PRIORITY_RANK: Record<string, number> = { low: 0, normal: 1, high: 2, rush: 3 };
 
 // Everything ships UPS — tracking numbers link straight to their site.
@@ -117,6 +117,8 @@ export default function GraphicsPage() {
   // "My jobs" filter: printers/cutters see only what's assigned to them.
   const [myJobsOnly, setMyJobsOnly] = useState(false);
   const [myAssignedIds, setMyAssignedIds] = useState<Set<string>>(new Set());
+  // Admin work order — the drag-to-rank list behind the "#" column.
+  const [showWorkOrder, setShowWorkOrder] = useState(false);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -850,6 +852,13 @@ export default function GraphicsPage() {
       : 0,
   };
 
+  // ── Work order (migration 318) ──
+  // Ranks are stored as a contiguous 1..N block, but a job finishing between
+  // reorders leaves a hole, so the board numbers by POSITION among the ranked
+  // jobs it can actually see — nobody should open the board to a list that
+  // starts at #4.
+  const rankPosition = workOrderPositions(jobs);
+
   // Filter jobs
   const filteredJobs = jobs.filter(j => {
     // Flagged jobs only visible to admins
@@ -881,8 +890,16 @@ export default function GraphicsPage() {
   });
 
   // Sort — click-to-sort table headers (SortableTh). Missing values (no due
-  // date, no PO) sort last in either direction. Default: due date ascending.
-  const { sorted, sort, toggle } = useTableSort(filteredJobs, {
+  // date, no PO, no rank) sort last in either direction.
+  //
+  // The default is the work order: ranked jobs in the admin's order, then
+  // everything else by due date ascending — which is exactly what the board
+  // did before ranking existed. Pre-sorting by due date and letting the rank
+  // sort (which pushes unranked nulls last, and is stable) run on top is what
+  // preserves that due order in the unranked tail.
+  const dueOrdered = [...filteredJobs].sort(compareByDueDate);
+  const { sorted, sort, toggle } = useTableSort(dueOrdered, {
+    rank: j => rankPosition.get(j.id) ?? null,
     title: j => j.title?.toLowerCase() || null,
     customer: j => j.customer?.toLowerCase() || null,
     po: j => j.po_number || null,
@@ -890,11 +907,12 @@ export default function GraphicsPage() {
     priority: j => PRIORITY_RANK[j.priority] ?? 1,
     due: j => j.due_date ? j.due_date.slice(0, 10) : null,
     status: j => GRAPHICS_STATUS_ORDER.indexOf(j.status),
-  }, { key: 'due', dir: 'asc' });
+  }, { key: 'rank', dir: 'asc' });
 
   // Tab counts (hide flagged from non-admins)
   const visibleJobs = isAdmin ? jobs : jobs.filter(j => j.status !== 'flagged');
   const activeCount = visibleJobs.filter(j => ACTIVE_STATUSES.includes(j.status)).length;
+  const myJobCount = visibleJobs.filter(isMine).length;
 
   const priorityColor = (p: string) => {
     switch (p) {
@@ -962,13 +980,39 @@ export default function GraphicsPage() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
         <div style={{ fontSize: '22px', fontWeight: 800 }}>Graphics Production</div>
-        <button
-          onClick={() => setShowCreate(true)}
-          style={{ padding: '8px 14px', borderRadius: '10px', background: theme.orange, color: '#fff', fontWeight: 800, fontSize: '12px', border: 'none', cursor: 'pointer', boxShadow: '0 2px 8px rgba(238,49,32,0.3)' }}
-        >
-          + New Job
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {/* Admin-only: the running order the board sorts by. Everyone else
+              reads it in the "#" column. */}
+          {isAdmin && (
+            <button
+              onClick={() => setShowWorkOrder(true)}
+              title="Set what gets worked first"
+              style={{ padding: '8px 12px', borderRadius: '10px', background: 'var(--subtle-bg)', color: 'var(--text-secondary)', fontWeight: 800, fontSize: '12px', border: '1px solid var(--border)', cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              ⇅ Work Order{rankPosition.size > 0 ? ` (${rankPosition.size})` : ''}
+            </button>
+          )}
+          <button
+            onClick={() => setShowCreate(true)}
+            style={{ padding: '8px 14px', borderRadius: '10px', background: theme.orange, color: '#fff', fontWeight: 800, fontSize: '12px', border: 'none', cursor: 'pointer', boxShadow: '0 2px 8px rgba(238,49,32,0.3)' }}
+          >
+            + New Job
+          </button>
+        </div>
       </div>
+
+      {showWorkOrder && (
+        <GraphicsWorkOrderModal
+          jobs={jobs}
+          profiles={profiles}
+          onClose={changed => {
+            setShowWorkOrder(false);
+            // Reload so the "#" column and the board order reflect the new
+            // list — the modal wrote ranks straight to the server.
+            if (changed) loadJobs();
+          }}
+        />
+      )}
 
       {/* Awaiting Graphics queue — fleet_checkins flagged by the keyword
           scan at save time. Click an entry to open the create modal
@@ -1088,27 +1132,42 @@ export default function GraphicsPage() {
         </div>
       )}
 
-      {/* Toolbar: Active/All tabs + search + Filter popover */}
+      {/* Toolbar: Active / My Jobs / All tabs + search + Filter popover.
+          "My Jobs" used to be a chip buried in the Filter popover, where the
+          people it was built for never found it — it's a tab now. */}
       <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
         <button
-          onClick={() => { setFilterStatus('active'); setMetricFilter(null); }}
+          onClick={() => { setFilterStatus('active'); setMyJobsOnly(false); setMetricFilter(null); }}
           style={{
             padding: '7px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-            background: filterStatus === 'active' ? 'rgba(34,197,94,0.15)' : 'var(--subtle-bg)',
-            border: `1px solid ${filterStatus === 'active' ? 'rgba(34,197,94,0.5)' : 'var(--border)'}`,
-            color: filterStatus === 'active' ? '#22c55e' : 'var(--text-label)',
+            background: !myJobsOnly && filterStatus === 'active' ? 'rgba(34,197,94,0.15)' : 'var(--subtle-bg)',
+            border: `1px solid ${!myJobsOnly && filterStatus === 'active' ? 'rgba(34,197,94,0.5)' : 'var(--border)'}`,
+            color: !myJobsOnly && filterStatus === 'active' ? '#22c55e' : 'var(--text-label)',
             whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
           }}
         >
           Active ({activeCount})
         </button>
         <button
-          onClick={() => { setFilterStatus('all'); setMetricFilter(null); }}
+          onClick={() => { setMyJobsOnly(v => !v); setMetricFilter(null); }}
+          title="Only jobs assigned to you — directly or through the assignment picker"
           style={{
             padding: '7px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-            background: filterStatus === 'all' ? 'rgba(59,130,246,0.2)' : 'var(--subtle-bg)',
-            border: `1px solid ${filterStatus === 'all' ? 'rgba(59,130,246,0.4)' : 'var(--border)'}`,
-            color: filterStatus === 'all' ? '#60a5fa' : 'var(--text-label)',
+            background: myJobsOnly ? 'rgba(234,179,8,0.18)' : 'var(--subtle-bg)',
+            border: `1px solid ${myJobsOnly ? 'rgba(234,179,8,0.55)' : 'var(--border)'}`,
+            color: myJobsOnly ? '#eab308' : 'var(--text-label)',
+            whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
+          }}
+        >
+          ★ My Jobs ({myJobCount})
+        </button>
+        <button
+          onClick={() => { setFilterStatus('all'); setMyJobsOnly(false); setMetricFilter(null); }}
+          style={{
+            padding: '7px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+            background: !myJobsOnly && filterStatus === 'all' ? 'rgba(59,130,246,0.2)' : 'var(--subtle-bg)',
+            border: `1px solid ${!myJobsOnly && filterStatus === 'all' ? 'rgba(59,130,246,0.4)' : 'var(--border)'}`,
+            color: !myJobsOnly && filterStatus === 'all' ? '#60a5fa' : 'var(--text-label)',
             whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
           }}
         >
@@ -1177,19 +1236,6 @@ export default function GraphicsPage() {
           <FilterLabel>Other</FilterLabel>
           <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
             <button
-              onClick={() => setMyJobsOnly(v => !v)}
-              title="Only jobs assigned to you"
-              style={{
-                padding: '4px 9px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
-                background: myJobsOnly ? 'rgba(34,197,94,0.18)' : 'var(--subtle-bg)',
-                border: `1px solid ${myJobsOnly ? 'rgba(34,197,94,0.5)' : 'var(--border)'}`,
-                color: myJobsOnly ? '#22c55e' : 'var(--text-muted)',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              ★ My Jobs ({jobs.filter(j => (isAdmin || j.status !== 'flagged') && isMine(j)).length})
-            </button>
-            <button
               onClick={toggleArchived}
               title={showArchived ? 'Hide installed & cancelled jobs' : 'Show installed & cancelled (archived) jobs'}
               style={{
@@ -1227,8 +1273,9 @@ export default function GraphicsPage() {
         return (
           <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
             <div className="responsive-table">
-              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '820px' }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '870px' }}>
                 <thead><tr>
+                  <SortableTh label="#" sortKey="rank" sort={sort} onToggle={toggle} style={{ ...thStyle, width: '44px' }} />
                   <SortableTh label="Title" sortKey="title" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="Customer" sortKey="customer" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="PO #" sortKey="po" sort={sort} onToggle={toggle} style={thStyle} />
@@ -1246,7 +1293,7 @@ export default function GraphicsPage() {
                     // unread. Cleared when the record page stamps a view.
                     const myView = (jobViews[job.id] || []).find(v => v.user_id === user?.id);
                     const hasNew = !myView || new Date(job.updated_at).getTime() > new Date(myView.last_viewed_at).getTime();
-                    const overdue = !!job.due_date && job.due_date.slice(0, 10) < todayStr && !DONE_STATUSES.includes(job.status);
+                    const overdue = !!job.due_date && job.due_date.slice(0, 10) < todayStr && !isFinishedStatus(job.status);
                     // Flags: stuck-in-stage, proof aging, invoice, tracking
                     const flags: React.ReactNode[] = [];
                     if (PRODUCTION_STAGES.includes(job.status)) {
@@ -1332,6 +1379,19 @@ export default function GraphicsPage() {
                         onClick={() => router.push(`/graphics/${job.id}`)}
                         title={job.notes ? (job.notes.length > 120 ? job.notes.slice(0, 120) + '...' : job.notes) : undefined}
                       >
+                        <td style={{ ...tdStyle, fontVariantNumeric: 'tabular-nums' }}>
+                          {rankPosition.has(job.id)
+                            ? (
+                              <span
+                                title={`#${rankPosition.get(job.id)} in the work order${isAdmin ? ' — change it with ⇅ Work Order' : ''}`}
+                                style={{
+                                  fontSize: '11px', fontWeight: 800,
+                                  color: rankPosition.get(job.id) === 1 ? '#22c55e' : 'var(--text-secondary)',
+                                }}
+                              >#{rankPosition.get(job.id)}</span>
+                            )
+                            : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        </td>
                         <td style={{ ...tdStyle, maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           {hasNew && (
                             <span title="New activity since you last viewed this job" style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#ef4444', flexShrink: 0, marginRight: '6px', verticalAlign: '1px' }} />
