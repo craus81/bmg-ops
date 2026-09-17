@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireRole } from '@/lib/api-auth';
+import { requireMoney } from '@/lib/api-auth';
 import { fetchAllRows } from '@/lib/fetch-all';
 
 export const dynamic = 'force-dynamic';
@@ -19,7 +19,7 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
  * creation date; revenue is the invoice amount stamped on the job.
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireRole(req, ['admin', 'sales', 'graphics_production']);
+  const auth = await requireMoney(req);
   if (auth.error) return auth.error;
 
   const startParam = req.nextUrl.searchParams.get('start') || '';

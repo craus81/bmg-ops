@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireStaff } from '@/lib/api-auth';
+import { requireMoney } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { resolveCustomerNsId, deriveProposedLines, deriveWrapQuoteLines } from '@/lib/graphics-invoice';
 
@@ -24,7 +24,7 @@ function getSupabase() {
  * Body: { jobId: string }
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireStaff(req);
+  const auth = await requireMoney(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

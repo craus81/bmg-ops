@@ -105,7 +105,14 @@ const bestKeeperId = (g: Part[]) => [...g].sort((a, b) => partScore(b) - partSco
 export default function PartsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, isAdmin, isSales, hasFeature, loading: authLoading } = useAuth();
+  const { user, isAdmin, isSales, hasFeature, canSeeMoney, loading: authLoading } = useAuth();
+  // Two facts, two rules (owner decision 2026-09-17). What a part COSTS us —
+  // purchase price, margin, average installer cost — is money and stays with
+  // sales/admin/finance. What it SELLS for stays wherever ordering needs it:
+  // shop techs hold parts_ordering precisely so they can raise a request off
+  // a short-readiness card, and blinding that buys nothing.
+  const showCost = canSeeMoney;
+  const showPrice = canSeeMoney || hasFeature('parts_ordering');
   const dialog = useDialog();
   const supabase = createClient();
 
@@ -1011,7 +1018,7 @@ export default function PartsPage() {
                               border: `1px solid ${isRealNsPart(p) ? 'rgba(52,211,153,0.3)' : 'rgba(148,163,184,0.3)'}`,
                               color: isRealNsPart(p) ? '#34d399' : 'var(--text-muted)',
                             }}>{isRealNsPart(p) ? 'NetSuite' : 'local'}</span>
-                            <span style={{ fontSize: '11px', fontWeight: 700, color: '#34d399', minWidth: '54px' }}>{formatCurrency(p.sales_price)}</span>
+                            <span style={{ fontSize: '11px', fontWeight: 700, color: '#34d399', minWidth: '54px' }}>{showPrice ? formatCurrency(p.sales_price) : ''}</span>
                             <span style={{ fontSize: '11px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {p.display_name || p.description || '—'}
                             </span>
@@ -1106,7 +1113,7 @@ export default function PartsPage() {
               || !!(part.vehicle_type || part.graphic_package || part.customer || (part.proof_pages && part.proof_pages !== 1)));
             const key = (part.item_number || '').toUpperCase();
             const completed = completedByPart[key] || 0;
-            const margin = part.sales_price > 0 && part.purchase_price > 0
+            const margin = showCost && part.sales_price > 0 && part.purchase_price > 0
               ? ((part.sales_price - part.purchase_price) / part.sales_price * 100).toFixed(1)
               : null;
 
@@ -1153,7 +1160,7 @@ export default function PartsPage() {
                     </div>
                   </div>
                   <div style={{ textAlign: 'right', fontSize: '12px', fontWeight: 700, color: '#34d399' }}>
-                    {formatCurrency(part.sales_price)}
+                    {showPrice ? formatCurrency(part.sales_price) : '—'}
                   </div>
                   <div style={{ textAlign: 'right', fontSize: '12px', fontWeight: 600, color: part.quantity_on_hand > 0 ? 'var(--text-primary)' : 'var(--error)' }}>
                     {formatQty(part.quantity_on_hand)}
@@ -1180,7 +1187,7 @@ export default function PartsPage() {
                       </div>
                     )}
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '10px' }}>
-                      {isAdmin ? (
+                      {showPrice && (isAdmin ? (
                         <InlineEditField
                           label="Sales Price" display={formatCurrency(part.sales_price)} color="#34d399"
                           isEditing={fieldEditing('sales_price')} value={editFieldValue} onValueChange={setEditFieldValue}
@@ -1190,8 +1197,8 @@ export default function PartsPage() {
                         />
                       ) : (
                         <DetailField label="Sales Price" value={formatCurrency(part.sales_price)} color="#34d399" />
-                      )}
-                      {isAdmin ? (
+                      ))}
+                      {showCost && (isAdmin ? (
                         <InlineEditField
                           label="Purchase Price" display={formatCurrency(part.purchase_price)} color="#60a5fa"
                           isEditing={fieldEditing('purchase_price')} value={editFieldValue} onValueChange={setEditFieldValue}
@@ -1201,7 +1208,7 @@ export default function PartsPage() {
                         />
                       ) : (
                         <DetailField label="Purchase Price" value={formatCurrency(part.purchase_price)} color="#60a5fa" />
-                      )}
+                      ))}
                       <DetailField label="Qty On Hand" value={formatQty(part.quantity_on_hand)} color={part.quantity_on_hand > 0 ? 'var(--text-primary)' : 'var(--error)'} />
                       <DetailField label="Qty Available" value={formatQty(part.quantity_available)} color={part.quantity_available > 0 ? 'var(--text-primary)' : 'var(--error)'} />
                       <DetailField label={`Completed · ${RANGE_PHRASE[range]}`} value={statsLoading ? '…' : completed.toString()} color="#34d399" />
@@ -1212,7 +1219,7 @@ export default function PartsPage() {
                       {margin && (
                         <DetailField label="Margin" value={`${margin}%`} color={parseFloat(margin) > 30 ? '#34d399' : '#f59e0b'} />
                       )}
-                      {part.avg_install_cost != null && (
+                      {showCost && part.avg_install_cost != null && (
                         <DetailField
                           label={`Avg Installer Cost (${part.install_cost_count || 0} VIN${(part.install_cost_count || 0) !== 1 ? 's' : ''})`}
                           value={formatCurrency(part.avg_install_cost)}

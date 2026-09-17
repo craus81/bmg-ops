@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import type { User } from '@supabase/supabase-js';
 import type { Profile } from '@/lib/types';
 import { resolveFeatures, isAdminRole, type FeatureKey } from '@/lib/features';
+import { canSeeMoney as moneyVisibleTo } from '@/lib/money-visibility';
 
 interface AuthContextType {
   user: User | null;
@@ -18,6 +19,9 @@ interface AuthContextType {
   isInstaller: boolean;
   isFieldTech: boolean;
   isShopTech: boolean;
+  /** May this viewer see money? (src/lib/money-visibility.ts — sales,
+   *  admins, finance and executives; NOT the shop floor.) */
+  canSeeMoney: boolean;
   hasRole: (role: string) => boolean;
   hasFeature: (feature: FeatureKey) => boolean;
   loading: boolean;
@@ -35,7 +39,7 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType>({
-  user: null, profile: null, isAdmin: false, isProduction: false, isGraphicsProduction: false, isSales: false, isCustomer: false, isInstaller: false, isFieldTech: false, isShopTech: false, hasRole: () => false, hasFeature: () => false, loading: true, signOut: async () => {},
+  user: null, profile: null, isAdmin: false, isProduction: false, isGraphicsProduction: false, isSales: false, isCustomer: false, isInstaller: false, isFieldTech: false, isShopTech: false, canSeeMoney: false, hasRole: () => false, hasFeature: () => false, loading: true, signOut: async () => {},
   viewAsRole: null, setViewAsRole: () => {}, isActualAdmin: false,
   profileError: false, retryProfile: async () => {},
 });
@@ -225,6 +229,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isInstaller = hasRole('installer') || isAdmin;
   const isFieldTech = hasRole('field_tech') || isAdmin;
   const isShopTech = hasRole('shop_tech') || isAdmin;
+  // Resolved from EFFECTIVE roles, so an admin using View As sees exactly
+  // what that role sees — a money gate you can't preview is a money gate
+  // nobody trusts.
+  const canSeeMoney = moneyVisibleTo(userRoles);
 
   // Feature access — resolved from effective roles + per-user overrides
   const features = resolveFeatures(userRoles, viewAsRole ? [] : featureOverrides);
@@ -241,7 +249,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const authResolving = loading || profileError;
 
   return (
-    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isGraphicsProduction, isSales, isCustomer, isInstaller, isFieldTech, isShopTech, hasRole, hasFeature, loading: authResolving, signOut, viewAsRole, setViewAsRole, isActualAdmin, profileError, retryProfile }}>
+    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isGraphicsProduction, isSales, isCustomer, isInstaller, isFieldTech, isShopTech, canSeeMoney, hasRole, hasFeature, loading: authResolving, signOut, viewAsRole, setViewAsRole, isActualAdmin, profileError, retryProfile }}>
       {profileError && (
         <div role="alert" style={{
           position: 'sticky', top: 0, zIndex: 60, padding: '9px 14px',

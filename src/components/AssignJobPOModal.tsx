@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useAuth } from '@/components/AuthProvider';
 
 interface PO {
   id: string;
@@ -24,6 +25,7 @@ interface AssignJobPOModalProps {
 }
 
 export default function AssignJobPOModal({ open, onClose, jobId, jobPartNumber, jobTitle, initialQuery, onAssigned }: AssignJobPOModalProps) {
+  const { canSeeMoney } = useAuth();
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
   const [pos, setPOs] = useState<PO[]>([]);
@@ -212,7 +214,8 @@ export default function AssignJobPOModal({ open, onClose, jobId, jobPartNumber, 
                     </div>
                     <div style={{ fontSize: '11px', color: 'var(--text-body)', marginTop: '2px' }}>
                       {po.customer}{lineCount > 0 ? ` · ${lineCount} items` : ''}
-                      {totalValue > 0 ? ` · $${totalValue.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}` : ''}
+                      {/* A PO's dollar value is money; its item count isn't. */}
+                      {canSeeMoney && totalValue > 0 ? ` · $${totalValue.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}` : ''}
                     </div>
                     {po.po_line_items && po.po_line_items.length > 0 && (
                       <div style={{ marginTop: '6px' }}>

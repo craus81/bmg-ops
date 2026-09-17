@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { resolveFeatures, isAdminRole, INTERNAL_STAFF_ROLES, type FeatureKey } from '@/lib/features';
+import { canSeeMoney } from '@/lib/money-visibility';
 
 // Server-side call sites read admin authority through api-auth; the predicate
 // itself lives in features.ts (client-safe) so AuthProvider shares it.
@@ -226,6 +227,27 @@ export async function requireAdmin(req: NextRequest): Promise<AuthResult> {
  * standalone role outside INTERNAL_STAFF_ROLES, so requireStaff can't gate
  * these routes.
  */
+/**
+ * Money wall (src/lib/money-visibility.ts): sales, admins, finance and
+ * executives. Used by routes that RETURN or ACT ON money — invoice creation,
+ * amounts, cost reports — so hiding a button isn't the only thing stopping
+ * the shop floor from billing a customer.
+ *
+ * Narrower than requireStaff, wider than requireFinancials (which is the
+ * owner-level P&L wall, super_admin/executive only).
+ */
+export async function requireMoney(req: NextRequest): Promise<AuthResult> {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth;
+
+  const roles = profileRoles(auth.profile);
+  if (!canSeeMoney(roles)) {
+    return { user: auth.user, profile: auth.profile, error: NextResponse.json({ error: 'Forbidden: this account cannot see billing' }, { status: 403 }) };
+  }
+
+  return auth;
+}
+
 export async function requireFinancials(req: NextRequest): Promise<AuthResult> {
   const auth = await requireAuth(req);
   if (auth.error) return auth;

@@ -122,7 +122,7 @@ export default function GraphicsJobRecordPage() {
   const router = useRouter();
   const params = useParams();
   const jobId = String(params?.id || '');
-  const { user, isAdmin, isProduction, isSales, isInstaller, isFieldTech, isShopTech, hasFeature, loading: authLoading } = useAuth();
+  const { user, isAdmin, isProduction, isSales, isInstaller, isFieldTech, isShopTech, canSeeMoney, hasFeature, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
 
@@ -1447,7 +1447,14 @@ export default function GraphicsJobRecordPage() {
         )}
       </div>
 
-      {/* ── Estimate & Invoice ── */}
+      {/* ── Estimate & Invoice ──
+          Billing, end to end: totals, the NetSuite invoice, its PDF, and the
+          buttons that raise and send one. Hidden from the shop floor per the
+          money rule (src/lib/money-visibility.ts) — a designer needs the
+          work, the dates and the artwork, not what the customer was charged.
+          The header's Packing List link stays for everyone; the duplicate
+          inside this card goes with it. */}
+      {canSeeMoney && (
       <div style={card}>
         <div style={labelStyle}>Estimate &amp; Invoice</div>
 
@@ -1576,6 +1583,7 @@ export default function GraphicsJobRecordPage() {
           </div>
         )}
       </div>
+      )}
 
       {/* ── Team assignment ── */}
       <div style={card}>
@@ -2026,8 +2034,11 @@ export default function GraphicsJobRecordPage() {
         />
       )}
 
-      {/* ── Invoice review modal ── */}
-      {invoiceOpen && (
+      {/* ── Invoice review modal ──
+          Double-gated on purpose: the button that opens this is already
+          hidden, but a stale state flag or an old deep link must not be able
+          to put a billing screen in front of the shop floor. */}
+      {invoiceOpen && canSeeMoney && (
         <GraphicsInvoiceReviewModal
           job={job}
           onClose={() => setInvoiceOpen(false)}
@@ -2069,7 +2080,7 @@ export default function GraphicsJobRecordPage() {
         />
       )}
 
-      {emailInvoiceTarget && (
+      {emailInvoiceTarget && canSeeMoney && (
         <EmailInvoicesModal
           customerName={emailInvoiceTarget.customerName}
           invoices={emailInvoiceTarget.invoices}

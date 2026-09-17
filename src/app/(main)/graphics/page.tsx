@@ -94,7 +94,7 @@ const upsTrackingUrl = (trackingNumber: string) =>
 export default function GraphicsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, isAdmin, isProduction, isSales, loading: authLoading } = useAuth();
+  const { user, isAdmin, isProduction, isSales, canSeeMoney, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
 
@@ -321,6 +321,9 @@ export default function GraphicsPage() {
     if (loading) return;
     const invoiceJobId = searchParams.get('invoiceJob');
     if (!invoiceJobId) return;
+    // The bell notification that carries this link is money-gated too, but a
+    // forwarded URL isn't — so the prompt checks rather than trusting it.
+    if (!canSeeMoney) return;
     if (invoicePromptHandled.current.has(invoiceJobId)) return;
     invoicePromptHandled.current.add(invoiceJobId);
     router.replace('/graphics', { scroll: false });
@@ -1411,7 +1414,9 @@ export default function GraphicsPage() {
                         >🔁 {rc.text}</span>
                       );
                     }
-                    if (job.netsuite_invoice_number) {
+                    // An invoice number is a billing fact, so it follows the
+                    // money rule with the amount it refers to.
+                    if (job.netsuite_invoice_number && canSeeMoney) {
                       flags.push(
                         <span key="inv" style={{ fontSize: '10px', fontWeight: 700, color: '#22c55e', whiteSpace: 'nowrap' }}>
                           INV {job.netsuite_invoice_number}
@@ -2014,7 +2019,7 @@ export default function GraphicsPage() {
 
       {/* Invoice review modal — reached only via the ?invoiceJob= deep link
           (the record page owns the on-page Review & Invoice button). */}
-      {invoiceJob && (
+      {invoiceJob && canSeeMoney && (
         <GraphicsInvoiceReviewModal
           job={invoiceJob}
           onClose={() => setInvoiceJob(null)}
@@ -2061,7 +2066,7 @@ export default function GraphicsPage() {
         />
       )}
 
-      {emailInvoiceTarget && (
+      {emailInvoiceTarget && canSeeMoney && (
         <EmailInvoicesModal
           customerName={emailInvoiceTarget.customerName}
           invoices={emailInvoiceTarget.invoices}

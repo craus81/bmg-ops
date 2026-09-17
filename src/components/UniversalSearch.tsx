@@ -69,7 +69,10 @@ function statusColor(status: string): string {
   return 'var(--text-body)';
 }
 
-function renderResult(group: string, item: any, onSelect: (group: string, item: any) => void) {
+// `showMoney` is threaded in rather than read from a hook: this is a plain
+// function, and search results are the one place every entity in the app
+// surfaces at once — a PO total leaking here would undo every other gate.
+function renderResult(group: string, item: any, onSelect: (group: string, item: any) => void, showMoney: boolean) {
   // Tapping a result pops out the shared detail view instead of navigating away.
   const select = () => onSelect(group, item);
 
@@ -101,7 +104,7 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
               <span style={titleStyle}>PO #{item.po_number}</span>
               <span style={{ ...statusBadge, color: statusColor(item.status) }}>{item.status}</span>
             </div>
-            {totalValue > 0 && <span style={valueStyle}>{formatCurrency(totalValue)}</span>}
+            {showMoney && totalValue > 0 && <span style={valueStyle}>{formatCurrency(totalValue)}</span>}
           </div>
           <div style={subtitleStyle}>
             {item.customer}{lineCount > 0 ? ` · ${lineCount} items` : ''}{item.ordered_date ? ` · ${formatDate(item.ordered_date)}` : ''}
@@ -146,7 +149,7 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
             <span style={titleStyle}>{estimateHeadlineNumber(item) || 'Estimate'}</span>
             <div>
               <span style={{ ...statusBadge, color: statusColor(item.status) }}>{item.status}</span>
-              {item.total > 0 && <span style={valueStyle}>{formatCurrency(item.total)}</span>}
+              {showMoney && item.total > 0 && <span style={valueStyle}>{formatCurrency(item.total)}</span>}
             </div>
           </div>
           <div style={subtitleStyle}>
@@ -160,7 +163,7 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
         <button key={item.id} onClick={select} style={resultBtnStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
             <span style={titleStyle}>{item.part_number}</span>
-            {item.price > 0 && <span style={valueStyle}>{formatCurrency(item.price)}</span>}
+            {showMoney && item.price > 0 && <span style={valueStyle}>{formatCurrency(item.price)}</span>}
           </div>
           <div style={subtitleStyle}>
             {[item.end_customer, item.vehicle_type, item.graphic_package].filter(Boolean).join(' · ') || item.display_name || ''}
@@ -200,7 +203,7 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
             <span style={titleStyle}>{item.quote_number}</span>
             <div>
               <span style={{ ...statusBadge, color: statusColor(item.status) }}>{item.status}</span>
-              {item.total_price > 0 && <span style={valueStyle}>{formatCurrency(item.total_price)}</span>}
+              {showMoney && item.total_price > 0 && <span style={valueStyle}>{formatCurrency(item.total_price)}</span>}
             </div>
           </div>
           <div style={subtitleStyle}>{item.customer_name}{item.vehicle_description ? ` · ${item.vehicle_description}` : ''}</div>
@@ -257,7 +260,7 @@ const actionChipStyle: React.CSSProperties = {
 export default function UniversalSearch({ open, onClose }: UniversalSearchProps) {
   const router = useRouter();
   const {
-    isAdmin, isSales, hasFeature,
+    isAdmin, isSales, hasFeature, canSeeMoney,
     isGraphicsProduction, isInstaller, isShopTech, isFieldTech,
   } = useAuth();
   // What this viewer can actually reach. Quick actions and the recents strip
@@ -590,7 +593,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
                   const actions = quickActionsFor(group, item, access);
                   return (
                     <div key={`row-${item.id}`} style={{ borderBottom: rowDivider }}>
-                      {renderResult(group, item, openDetail)}
+                      {renderResult(group, item, openDetail, canSeeMoney)}
                       {actions.length > 0 && (
                         <div style={actionRowStyle}>
                           {actions.map(a => (
