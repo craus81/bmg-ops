@@ -23,6 +23,10 @@ export const deepLinks = {
   po: (poId: string) => `/admin/pos/${poId}`,
   /** Dedicated graphics job record page. */
   graphicsJob: (jobId: string) => `/graphics/${jobId}`,
+  /** The graphics board. `mine` opens it on the My Jobs tab — only ever for
+   *  a digest of the recipient's OWN jobs: sent to anyone else it lands on
+   *  an empty board, which is a dead click with extra steps. */
+  graphicsBoard: (opts?: { mine?: boolean }) => `/graphics${opts?.mine ? '?mine=1' : ''}`,
   /** In-Shop board — opens the vehicle's detail modal (optionally flashing one note). */
   vehicle: (checkinId: string, noteId?: string | null) =>
     `/tracking?vehicle=${checkinId}${noteId ? `&note=${noteId}` : ''}`,
