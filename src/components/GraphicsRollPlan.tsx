@@ -64,7 +64,7 @@ function parseSnapshot(raw: unknown): PlanSnapshot | null {
 
 export default function GraphicsRollPlan({ jobId, jobQuantity, vinylType, vinylColor, wrapQuoteId, nesting }: Props) {
   const supabase = createClient();
-  const { user } = useAuth();
+  const { user, canSeeMoney } = useAuth();
   const saved = useMemo(() => parseSnapshot(nesting), [nesting]);
 
   const [open, setOpen] = useState(!!saved);
@@ -285,7 +285,9 @@ export default function GraphicsRollPlan({ jobId, jobQuantity, vinylType, vinylC
       const what = lines.map(l => l.category).join(' + ');
       setMsg({
         kind: 'ok',
-        text: `Logged ${lines.length} line${lines.length !== 1 ? 's' : ''} (${what}) — ${num1(film.rollSqft)} ft² of roll, ${num1(film.graphicSqft)} ft² printed — at $${total.toFixed(2)}`
+        // Square footage is production's business; what the film cost us is
+        // not (src/lib/money-visibility.ts).
+        text: `Logged ${lines.length} line${lines.length !== 1 ? 's' : ''} (${what}) — ${num1(film.rollSqft)} ft² of roll, ${num1(film.graphicSqft)} ft² printed${canSeeMoney ? ` — at $${total.toFixed(2)}` : ''}`
           + (unpriced > 0 ? `, with ${unpriced} line${unpriced !== 1 ? 's' : ''} unpriced (set a rate on the film in Wrap Quote → Pricing).` : `.`)
           + drawNote
           + ' Refresh the materials card to see it.',

@@ -28,6 +28,7 @@ export type RouteGuardKind =
   | 'admin'        // requireAdmin
   | 'superAdmin'   // requireSuperAdmin — owner-level wall
   | 'financials'   // requireFinancials — super_admin / executive only
+  | 'money'        // requireMoney — sales/admin/finance/executive; not the floor
   | 'role'         // requireRole(...) — specific roles (admins auto-pass)
   | 'feature'      // requireFeature(req, key) — role defaults + per-user overrides
   | 'authScoped'   // requireAuth on purpose + in-route scoping (see why)
@@ -48,6 +49,9 @@ const staff = (): RouteGuard => ({ kind: 'staff', contains: ['requireStaff('] })
 const admin = (): RouteGuard => ({ kind: 'admin', contains: ['requireAdmin('] });
 const superAdmin = (): RouteGuard => ({ kind: 'superAdmin', contains: ['requireSuperAdmin('] });
 const financials = (): RouteGuard => ({ kind: 'financials', contains: ['requireFinancials('] });
+/** Billing: what a customer was charged, what we paid, what we make. Narrower
+ *  than staff, wider than financials (the owner-only P&L wall). */
+const money = (): RouteGuard => ({ kind: 'money', contains: ['requireMoney('] });
 const role = (): RouteGuard => ({ kind: 'role', contains: ['requireRole('] });
 /** Typing the key as FeatureKey ties every server gate to the same
  *  src/lib/features.ts registry the client UI resolves — a renamed or
@@ -290,15 +294,15 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/graphics-jobs/rank/route.ts': admin(),
   'src/app/api/admin/graphics-reminders/route.ts': staff(),
   'src/app/api/graphics/awaiting-prefill/route.ts': staff(),
-  'src/app/api/graphics/create-estimate/route.ts': staff(),
-  'src/app/api/graphics/create-invoice/route.ts': staff(),
+  'src/app/api/graphics/create-estimate/route.ts': money(),
+  'src/app/api/graphics/create-invoice/route.ts': money(),
   'src/app/api/graphics/from-estimate/route.ts': staff(),
   'src/app/api/graphics/from-wrap-quote/route.ts': staff(),
-  'src/app/api/graphics/invoice-pdf/route.ts': staff(),
-  'src/app/api/graphics/invoice-preview/route.ts': staff(),
+  'src/app/api/graphics/invoice-pdf/route.ts': money(),
+  'src/app/api/graphics/invoice-preview/route.ts': money(),
   'src/app/api/graphics/packing-list/route.ts': staff(),
   'src/app/api/graphics/pack-checklist/route.ts': staff(),
-  'src/app/api/graphics/mark-invoiced/route.ts': staff(),
+  'src/app/api/graphics/mark-invoiced/route.ts': money(),
   'src/app/api/graphics/notify-assignees/route.ts': staff(),
   'src/app/api/graphics/notify-pickup/route.ts': staff(),
   'src/app/api/graphics/notify-ready/route.ts': staff(),
@@ -420,7 +424,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/reports/financials/invoice-pdf/route.ts': financials(),
   'src/app/api/reports/financials/pnl/route.ts': financials(),
   'src/app/api/reports/financials/route.ts': financials(),
-  'src/app/api/reports/graphics-costs/route.ts': role(),
+  'src/app/api/reports/graphics-costs/route.ts': money(),
   'src/app/api/reports/material-yield/route.ts': role(),
   'src/app/api/reports/proof-revisions/route.ts': admin(),
   'src/app/api/reports/purchasing-kpis/route.ts': feature('parts_ordering'),

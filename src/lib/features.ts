@@ -85,8 +85,14 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
   // are @mentioned in project notes — their notification deep links land on
   // /upfit, so they must hold its key (found by the gate audit: task-assignment
   // pushes bounced every non-admin/sales assignee once /upfit was gated).
+  // estimates REMOVED (owner decision 2026-09-17): the estimates page is a
+  // quoting page — line prices, totals, margin, the customer send. Graphics
+  // production needs the job, not what it was quoted at, and the pieces they
+  // genuinely used (proof files attached to an estimate) are managed from the
+  // graphics job record, not here. An individual who needs it back can be
+  // granted it with a per-user feature override.
   graphics_production: [
-    'home', 'in_shop', 'graphics', 'estimates',
+    'home', 'in_shop', 'graphics',
     'messages', 'customers', 'parts_catalog', 'schedule', 'upfit_projects',
   ],
 

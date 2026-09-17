@@ -49,7 +49,7 @@ function StepIndicator({ current }: { current: number }) {
 // In-Shop page (and anywhere else). onCheckedIn fires after a successful
 // save so the host page can refresh its vehicle list.
 export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => void }) {
-  const { user } = useAuth();
+  const { user, canSeeMoney } = useAuth();
   const router = useRouter();
   const { open: openPopout } = usePopout();
   const supabase = createClient();
@@ -1769,8 +1769,16 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
                               {li.description && <div style={{ fontSize: '11px', color: theme.textMuted }}>{li.description}</div>}
                             </div>
                             <div style={{ textAlign: 'right', fontSize: '12px' }}>
-                              <div>{li.quantity} x ${li.rate.toFixed(2)}</div>
-                              <div style={{ fontWeight: 700 }}>${li.amount.toFixed(2)}</div>
+                              {/* Quantities are the job; rates and amounts are
+                                  what the customer was charged, which the
+                                  money rule keeps off the floor. */}
+                              <div>Qty {li.quantity}</div>
+                              {canSeeMoney && (
+                                <>
+                                  <div>@ ${li.rate.toFixed(2)}</div>
+                                  <div style={{ fontWeight: 700 }}>${li.amount.toFixed(2)}</div>
+                                </>
+                              )}
                             </div>
                           </div>
                         ))}
