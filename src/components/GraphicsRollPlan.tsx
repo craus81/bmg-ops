@@ -394,6 +394,7 @@ export default function GraphicsRollPlan({ jobId, jobQuantity, vinylType, vinylC
 
           {nestPieces.length > 0 && (
             <RollNesting
+              showMoney={canSeeMoney}
               pieces={nestPieces}
               films={films}
               config={config}

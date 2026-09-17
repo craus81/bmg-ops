@@ -59,11 +59,22 @@ function AdminDashboard() {
 // ─── Main Export ────────────────────────────────────────────────
 export default function HomePage() {
   const router = useRouter();
-  const { profile, hasFeature } = useAuth();
+  const { profile, hasFeature, hasRole, isAdmin } = useAuth();
 
   const role = profile?.role;
-  const roles = profile?.roles || [];
-  const isOnlyRole = (r: string) => role === r || (roles.includes(r as any) && !roles.includes('admin' as any));
+
+  // EFFECTIVE roles, via hasRole/isAdmin, not the raw profile columns. Two
+  // things were wrong with reading profile.role directly:
+  //
+  //  * "View As" was ignored here, so an admin previewing graphics production
+  //    stayed on the ops Dashboard — invoiced dollars, PO backlog, pipeline —
+  //    and the one tool for checking what a role sees showed something no
+  //    graphics account can reach. A preview that lies is worse than none.
+  //  * The legacy `production` role value never matched 'graphics_production',
+  //    so an account still carrying it skipped this redirect and landed on the
+  //    money dashboard for real. AuthProvider normalises that value; reading
+  //    through hasRole picks the normalisation up instead of re-deriving it.
+  const isOnlyRole = (r: string) => hasRole(r) && !isAdmin;
 
   // Redirect only when the destination's feature gate would admit the user —
   // the gated pages bounce back to /home, so an unguarded redirect plus a
@@ -78,8 +89,8 @@ export default function HomePage() {
     if (isOnlyRole('graphics_production')) { router.replace('/graphics'); return; }
     if ((isOnlyRole('field_tech') || isOnlyRole('installer')) && scanOk) { router.replace('/scan'); return; }
     if (isOnlyRole('shop_tech') && trackingOk) { router.replace('/tracking?checkin=1'); return; }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [role, roles, scanOk, trackingOk]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run when the effective role changes (including View As)
+  }, [role, isAdmin, scanOk, trackingOk]);
 
   if (role === 'customer') return null;
   if (isOnlyRole('graphics_production')) return null;
