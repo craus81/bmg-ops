@@ -32,6 +32,17 @@ export const GRAPHICS_PIPELINE: GraphicsJobStatus[] = [
   'packing', 'ready', 'ready_to_pickup', 'shipped', 'picked_up', 'installed',
 ];
 
+/**
+ * Statuses where the job is done being worked. They archive off the active
+ * board, stop counting as overdue, and drop out of the admin work order —
+ * a job nobody can work isn't "next".
+ */
+export const GRAPHICS_FINISHED_STATUSES: GraphicsJobStatus[] = ['shipped', 'picked_up', 'installed', 'cancelled'];
+
+export function isFinishedStatus(status: GraphicsJobStatus): boolean {
+  return GRAPHICS_FINISHED_STATUSES.includes(status);
+}
+
 /** Off-pipeline states: reachable from anywhere, leavable to anywhere. */
 export const GRAPHICS_SIDE_STATES: GraphicsJobStatus[] = ['flagged', 'revision', 'cancelled'];
 

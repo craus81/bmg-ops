@@ -583,6 +583,13 @@ export interface GraphicsJob {
   proof_url: string | null;
   created_by: string | null;
   assigned_to: string | null;
+  /** Admin-controlled work order (migration 318): 1 is the next job to work,
+   *  null means it isn't on the list (those sort below the ranked ones by due
+   *  date). Written ONLY by /api/graphics-jobs/rank, which rewrites the whole
+   *  queue as a contiguous 1..N block — never set it from an edit form. */
+  work_rank: number | null;
+  work_rank_set_at: string | null;
+  work_rank_set_by: string | null;
   created_at: string;
   updated_at: string;
   // Estimate & Invoice linkage
