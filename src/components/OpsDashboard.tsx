@@ -157,7 +157,7 @@ function ShopLoadStrip({ onOpen }: { onOpen: () => void }) {
 
 export default function OpsDashboard() {
   const router = useRouter();
-  const { user, isAdmin, hasFeature } = useAuth();
+  const { user, isAdmin, hasFeature, canSeeMoney } = useAuth();
   const supabase = createClient();
 
   // The dashboard renders for every role that lands on /home (sales, finance,
@@ -196,6 +196,10 @@ export default function OpsDashboard() {
   useEffect(() => { loadAll(); }, []);
 
   const loadAll = async () => {
+    // Read once here rather than closing over the render-time flag: loadAll
+    // runs from an effect, and a viewer who cannot see money must not have
+    // billing rows built into the triage queue at all.
+    const moneyOk = canSeeMoney;
     const todayStr = new Date().toISOString().split('T')[0];
     const in7 = new Date(); in7.setDate(in7.getDate() + 7);
     const in7Str = in7.toISOString().split('T')[0];
@@ -505,12 +509,12 @@ export default function OpsDashboard() {
       detail: flagged.slice(0, 3).map(j => j.part_number || j.title).filter(Boolean).join(' · '),
     });
     const unpaid = count(unpaidRes, 'unpaid');
-    if (unpaid > 0) queue.push({
+    if (unpaid > 0 && moneyOk) queue.push({
       key: 'unpaid', count: unpaid, tone: 'warn', path: '/tracking',
       title: 'Vehicles invoiced, awaiting payment', detail: 'From in-shop tracking',
     });
     const neverInvoiced = neverInvoicedRes.status === 'fulfilled' ? (neverInvoicedRes.value as number) || 0 : 0;
-    if (neverInvoiced > 0) queue.push({
+    if (neverInvoiced > 0 && moneyOk) queue.push({
       key: 'never-invoiced', count: neverInvoiced, tone: 'err', path: deepLinks.neverInvoicedQueue(),
       title: 'Completed vehicles never invoiced',
       detail: 'Done or shipped in the last 180 days with no invoice recorded — the queue says what each one needs',
@@ -766,7 +770,10 @@ export default function OpsDashboard() {
     </div>
   );
 
-  const kpis = (
+  // Every tile in this row is money or billing — invoiced dollars, the
+  // invoicing queue, PO backlog, pipeline — so the row goes as a unit for a
+  // viewer the money rule excludes (src/lib/money-visibility.ts).
+  const kpis = !canSeeMoney ? null : (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '10px', marginBottom: '12px' }}>
       <button onClick={() => router.push('/invoices?tab=sent')} style={{ ...card, textAlign: 'left', padding: '14px 16px 12px', cursor: 'pointer' }}>
         <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.7px', color: 'var(--text-muted)' }}>
@@ -863,11 +870,14 @@ export default function OpsDashboard() {
   );
 
   const stageDefs = [
-    { n: d.poBacklog.count, l: 'POs open', m: `${fmtK(d.poBacklog.remaining)} remaining`, color: '#60a5fa', path: '/admin/pos' },
+    // The COUNT of open POs is work in motion; the dollars remaining are money.
+    { n: d.poBacklog.count, l: 'POs open', m: canSeeMoney ? `${fmtK(d.poBacklog.remaining)} remaining` : 'in flight', color: '#60a5fa', path: '/admin/pos' },
     { n: d.stages.received, l: 'Received', m: `${d.stages.dueThisWeek} due this week`, color: '#a78bfa', path: '/graphics' },
     { n: d.stages.inProduction, l: 'In production', m: d.stages.rush > 0 ? `${d.stages.rush} rush` : 'no rush jobs', color: 'var(--warning)', path: '/graphics' },
     { n: d.stages.readyShipped, l: 'Ready / shipped', m: 'awaiting install or pickup', color: 'var(--success)', path: '/graphics' },
-    { n: d.stages.toInvoice, l: 'To invoice', m: `${d.readyToInvoice.batches} scan batches too`, color: 'var(--orange)', path: '/invoices' },
+    ...(canSeeMoney
+      ? [{ n: d.stages.toInvoice, l: 'To invoice', m: `${d.readyToInvoice.batches} scan batches too`, color: 'var(--orange)', path: '/invoices' }]
+      : []),
   ];
   const maxStage = Math.max(1, ...stageDefs.map(s => s.n));
 
@@ -1163,9 +1173,11 @@ export default function OpsDashboard() {
     </div>
   );
 
-  const leftColumn = preset === 'sales'
+  const leftColumnAll = preset === 'sales'
     ? [salesBand, needsAttention, workInMotion, upfitGlance]
     : [needsAttention, workInMotion, upfitGlance, salesBand];
+  // Pipeline value, closing forecast, won value, customer YTD spend — all money.
+  const leftColumn = canSeeMoney ? leftColumnAll : leftColumnAll.filter(el => el !== salesBand);
 
   return (
     <div>
@@ -1202,7 +1214,7 @@ export default function OpsDashboard() {
               ? `${d.queue.length} item${d.queue.length !== 1 ? 's' : ''} need attention`
               : d.unavailable.length > 0 ? 'Some checks didn\u2019t load' : 'Nothing needs attention'}
             {' · '}{d.lanes.gfxActive + d.lanes.shopActive + d.lanes.cniOpen} jobs in motion
-            {d.stages.toInvoice > 0 ? ` · ${d.stages.toInvoice} ready to invoice` : ''}
+            {canSeeMoney && d.stages.toInvoice > 0 ? ` · ${d.stages.toInvoice} ready to invoice` : ''}
           </div>
         </div>
         <div style={{ display: 'flex', gap: '6px' }}>
