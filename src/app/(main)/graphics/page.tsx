@@ -84,7 +84,6 @@ function relativeTime(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
-
 const PRIORITY_RANK: Record<string, number> = { low: 0, normal: 1, high: 2, rush: 3 };
 
 // Everything ships UPS — tracking numbers link straight to their site.
