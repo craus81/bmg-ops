@@ -93,6 +93,21 @@ interface LinkedGraphicsJob {
   approval_proof_file_id?: string | null;
 }
 
+/** A wrap quote feeding this estimate, and what it can put on the customer
+ *  copy (/api/estimates/[id]/graphics-attach). */
+interface WrapAttachQuote {
+  id: string;
+  quoteNumber: string;
+  vehicle: string | null;
+  proofCount: number;
+  proofLabels: string[];
+  hasDiagram: boolean;
+  fileCount: number;
+  filmCount: number;
+  totalSqft: number;
+  attach: { diagram?: boolean; attachments?: boolean; films?: boolean } | null;
+}
+
 /** A linked job's file as the approval compose proof picker lists it. */
 interface JobProofFile {
   id: string;
@@ -679,6 +694,16 @@ export default function EstimatesPage() {
   const [showGraphicsPicker, setShowGraphicsPicker] = useState(false);
   const [graphicsPickerSearch, setGraphicsPickerSearch] = useState('');
   const [graphicsPickerResults, setGraphicsPickerResults] = useState<LinkedGraphicsJob[]>([]);
+
+  // Coverage proofs from linked wrap quotes. wrap_quotes.estimate_attach
+  // (migration 223) used to be written ONLY by the wrap estimator's
+  // Add-to-Estimate checkboxes, i.e. frozen the moment graphics were added:
+  // a proof drawn afterwards could never reach the estimate. These flags are
+  // now editable here, and the estimate keeps pointing at the quote rather
+  // than copying it — so a redrawn proof updates the customer's copy on its
+  // own. See /api/estimates/[id]/graphics-attach.
+  const [wrapAttachQuotes, setWrapAttachQuotes] = useState<WrapAttachQuote[]>([]);
+  const [wrapAttachSaving, setWrapAttachSaving] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -1569,7 +1594,7 @@ export default function EstimatesPage() {
         if (revisionJumped && revisionNotes !== null) setInternalNotes(revisionNotes);
         // The revision starts with no attached graphics jobs — refresh the
         // panel so it doesn't keep showing the original's links.
-        if (revisionJumped) loadLinkedGraphicsJobs(savedId);
+        if (revisionJumped) { loadLinkedGraphicsJobs(savedId); loadWrapAttach(savedId); }
         // Notify teammates newly @mentioned in the internal notes this save.
         if (savedNotes !== savedInternalNotesRef.current) {
           reportMentions({
@@ -2248,7 +2273,7 @@ export default function EstimatesPage() {
     loadEstimates(true);
     // The send persisted the proof selection onto the linked jobs
     // (estimate_attach) — refresh so the panel reflects it.
-    if (editingId) loadLinkedGraphicsJobs(editingId);
+    if (editingId) { loadLinkedGraphicsJobs(editingId); loadWrapAttach(editingId); }
     return { ok: true };
   };
 
@@ -2608,6 +2633,7 @@ export default function EstimatesPage() {
 
     if (est.customer_id) loadCustomerDefaults(est.customer_id);
     loadLinkedGraphicsJobs(est.id);
+    loadWrapAttach(est.id);
 
     // Loaded server state = the autosave baseline; then offer any local
     // backup of unsaved edits (crash / stray navigation) on top of it.
@@ -2737,6 +2763,39 @@ export default function EstimatesPage() {
     setLinkedGraphicsJobs((data as LinkedGraphicsJob[]) || []);
   }, [supabase]);
 
+  // ── Coverage proofs from linked wrap quotes ──
+  const loadWrapAttach = useCallback(async (estimateId: string) => {
+    try {
+      const res = await fetch(`/api/estimates/${estimateId}/graphics-attach`);
+      const data = await res.json();
+      setWrapAttachQuotes(res.ok && Array.isArray(data.quotes) ? data.quotes : []);
+    } catch {
+      setWrapAttachQuotes([]);
+    }
+  }, []);
+
+  const toggleWrapAttach = async (quoteId: string, field: 'diagram' | 'attachments' | 'films', on: boolean) => {
+    if (!editingId || wrapAttachSaving) return;
+    setWrapAttachSaving(quoteId);
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/graphics-attach`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wrapQuoteId: quoteId, attach: { [field]: on } }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        await dialog.alert(apiErrorMessage(data, 'Could not change what this quote puts on the estimate.'));
+        return;
+      }
+      if (data.quote) setWrapAttachQuotes(prev => prev.map(q => (q.id === quoteId ? data.quote : q)));
+    } catch {
+      await dialog.alert('Network error — please try again.');
+    } finally {
+      setWrapAttachSaving(null);
+    }
+  };
+
   const spawnGraphicsJob = async () => {
     if (!editingId) return;
     setGraphicsLinking(true);
@@ -2846,6 +2905,7 @@ export default function EstimatesPage() {
     savedInternalNotesRef.current = '';
     setCustomerDefaults(null);
     setLinkedGraphicsJobs([]);
+    setWrapAttachQuotes([]);
     setShowGraphicsPicker(false);
     setGraphicsPickerSearch('');
     setGraphicsPickerResults([]);
@@ -4072,6 +4132,105 @@ export default function EstimatesPage() {
           a graphics job for production" prompt for combined upfit+graphics
           deals — see migrations/084-graphics-upfit-project-link.sql for the
           downstream upfit_project linkage. */}
+      {/* Coverage proofs from linked wrap quotes. The proof itself lives on
+          the wrap quote and stays there — these switches only say what rides
+          on the customer's copy of THIS estimate, and they work at any time,
+          not just in the moment the graphics were added. */}
+      {editingId && wrapAttachQuotes.length > 0 && (
+        <div style={{
+          background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '10px',
+          padding: '12px', marginBottom: '12px',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+            <div style={labelStyle}>Coverage proof on the customer copy</div>
+            <button
+              onClick={addGraphics}
+              disabled={saving}
+              title="Open the wrap-quote builder to draw or re-draw the coverage proof"
+              style={{
+                padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                background: 'var(--card)', border: '1px solid var(--border)',
+                color: 'var(--text-body)', cursor: saving ? 'wait' : 'pointer',
+              }}
+            >Edit in wrap builder</button>
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+            Tick what the estimate PDF and approval email carry. The estimate reads the quote's
+            current proof every time it's sent — redraw it in the wrap builder and the customer's
+            copy follows, with nothing to re-add here.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {wrapAttachQuotes.map(q => {
+              const busy = wrapAttachSaving === q.id;
+              const rows: { field: 'diagram' | 'attachments' | 'films'; label: string; available: boolean; note: string }[] = [
+                {
+                  field: 'diagram',
+                  label: 'Coverage proof',
+                  available: q.hasDiagram,
+                  note: q.proofCount > 1
+                    ? `${q.proofCount} views — ${q.proofLabels.join(', ')}`
+                    : q.hasDiagram ? 'the marked-up picture of what gets covered' : 'nothing drawn on this quote yet',
+                },
+                {
+                  field: 'attachments',
+                  label: 'Quote files',
+                  available: q.fileCount > 0,
+                  note: q.fileCount > 0 ? `${q.fileCount} file${q.fileCount === 1 ? '' : 's'} uploaded on the quote` : 'no files on this quote',
+                },
+                {
+                  field: 'films',
+                  label: 'Vinyl details',
+                  available: q.filmCount > 0,
+                  note: q.filmCount > 0
+                    ? `${q.filmCount} film${q.filmCount === 1 ? '' : 's'}${q.totalSqft > 0 ? ` · ${q.totalSqft.toFixed(1)} ft²` : ''}`
+                    : 'no measured areas on this quote',
+                },
+              ];
+              return (
+                <div key={q.id} style={{
+                  padding: '8px', borderRadius: '8px', background: 'var(--card)',
+                  border: '1px solid var(--border)', opacity: busy ? 0.6 : 1,
+                }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                    {q.quoteNumber}{q.vehicle ? ` — ${q.vehicle}` : ''}
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                    {rows.map(r => (
+                      <label
+                        key={r.field}
+                        title={r.note}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 8px',
+                          borderRadius: '6px', fontSize: '11px',
+                          background: q.attach?.[r.field] ? 'rgba(59,130,246,0.08)' : 'var(--subtle-bg)',
+                          border: '1px solid ' + (q.attach?.[r.field] ? 'rgba(59,130,246,0.3)' : 'var(--border)'),
+                          color: r.available ? 'var(--text-secondary)' : 'var(--text-muted)',
+                          cursor: r.available && !busy ? 'pointer' : 'default',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={!!q.attach?.[r.field]}
+                          disabled={!r.available || busy}
+                          onChange={e => toggleWrapAttach(q.id, r.field, e.target.checked)}
+                          style={{ accentColor: '#3b82f6' }}
+                        />
+                        {r.label}
+                      </label>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '5px' }}>
+                    {rows.filter(r => !r.available).length === rows.length
+                      ? 'Nothing on this quote to attach yet — draw the coverage proof in the wrap builder first.'
+                      : rows.find(r => r.field === 'diagram')!.note}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {editingId && (lines.some(isGraphicsLine) || linkedGraphicsJobs.length > 0) && (
         <div style={{
           background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '10px',
@@ -5156,6 +5315,7 @@ export default function EstimatesPage() {
         <EmailComposeModal
           title="Review Approval Email Before Sending"
           customerId={customerId}
+          stateKey={`estimate-approval:${editingId}`}
           sendLabel="Send for Approval"
           messagePlaceholder="Optional note to the customer — added above the estimate…"
           allowSendWithoutTo
@@ -5239,6 +5399,7 @@ export default function EstimatesPage() {
       {reviewModal && (
         <EmailComposeModal
           title="Send Estimate for Internal Review"
+          stateKey={`estimate-review:${editingId}`}
           contacts={reviewerContacts}
           contactsLabel="+ Pick the teammate to review this…"
           sendLabel="Send for Review"
@@ -5279,6 +5440,7 @@ export default function EstimatesPage() {
         <EmailComposeModal
           title={`Follow Up — Estimate #${estimateHeadlineNumber(followupEmailFor)}`}
           customerId={followupEmailFor.customer_id || customerId}
+          stateKey={`estimate-followup:${followupEmailFor.id}`}
           sendLabel="Send Follow-Up"
           intro={followupPdfName ? (
             <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
@@ -5367,6 +5529,7 @@ export default function EstimatesPage() {
         <EmailComposeModal
           title="Email Estimate PDF"
           customerId={customerId}
+          stateKey={`estimate-pdf:${editingId}`}
           sendLabel="Send PDF"
           messagePlaceholder="Optional note to the customer — shown in the email above the attached PDF…"
           attachments={estimateFiles}
