@@ -92,6 +92,7 @@ export const ENV_SPECS: EnvSpec[] = [
   { name: 'NETSUITE_TOKEN_SECRET', group: 'netsuite', powers: 'Token-based auth', whenMissing: 'fail' },
   { name: 'NETSUITE_SUBSIDIARY_ID', group: 'netsuite', powers: 'Which subsidiary new records post to', whenMissing: 'warn' },
   { name: 'NETSUITE_DEFAULT_LOCATION_ID', group: 'netsuite', powers: 'Fallback location on invoices when the mapping has no entry', whenMissing: 'warn' },
+  { name: 'NETSUITE_CURRENCY_ID', group: 'netsuite', powers: "Forces the currency on vendor bills. Blank is fine and preferred — the vendor's own record is read instead", whenMissing: 'off' },
   { name: 'NETSUITE_LABOR_ITEM_ID', group: 'netsuite', powers: 'Overrides the labor item. Blank is fine when Settings resolves one — see the Labor item check above', whenMissing: 'off' },
   { name: 'NETSUITE_SUBCONTRACTOR_ACCOUNT_ID', group: 'netsuite', powers: 'Expense account on CNI installer vendor bills (defaults to 223)', whenMissing: 'off', docs: 'docs/cni-vendor-bills.md' },
 
