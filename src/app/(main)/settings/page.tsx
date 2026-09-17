@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import GraphicsReminderSettingsCard from '@/components/GraphicsReminderSettingsCard';
 import PhoneInput from '@/components/PhoneInput';
 import TextSizeToggle from '@/components/TextSizeToggle';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_ORDER, GRAPHICS_STATUS_COLORS } from '@/lib/types';
@@ -1033,6 +1034,12 @@ export default function SettingsPage() {
           <QuickBooksCompanyCard sectionStyle={sectionStyle} />
         </>
       )}
+
+      {/* Graphics reminders — the daily "gone quiet" sweep's thresholds.
+          Visible to every staff account (anyone reminded can see why they
+          were), editable by admins. */}
+      <div style={{ fontSize: '16px', fontWeight: 800, marginBottom: '10px', marginTop: '20px' }}>Graphics Reminders</div>
+      <GraphicsReminderSettingsCard sectionStyle={sectionStyle} canEdit={isAdmin} />
 
       {/* Customer booking (R5-17) — admin ops config for the public
           pickup/drop-off pages, not owner-only like the money settings. */}

@@ -9,6 +9,7 @@
  * (+ its ?new=1&fromPo prefill flow), the Awaiting Graphics queue, and
  * the mentions inbox.
  *
+ * ?mine=1 opens the board on My Jobs — the reminder digest links there.
  * Legacy deep links (?editJob= / ?id=) predate the record page and are
  * forwarded there so old notification URLs keep working. ?invoiceJob=
  * (the bell notification's "create invoice?" prompt) stays here: the
@@ -271,6 +272,14 @@ export default function GraphicsPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- loadJobs is stable per mount
   }, [user]);
+
+  // ?mine=1 — the reminder digest's link (deepLinks.graphicsBoard({ mine }))
+  // opens the board already on My Jobs, so the notification lands on the
+  // list it was talking about rather than on the whole board.
+  useEffect(() => {
+    if (searchParams.get('mine') === '1') setMyJobsOnly(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: follow the param on each URL change
+  }, [searchParams]);
 
   // Legacy deep links (?editJob=<id> from mention notifications, ?id=<id>
   // from bell/new-job notifications) used to expand a card here — the

@@ -105,6 +105,10 @@
       "schedule": "20 14 * * *"
     },
     {
+      "path": "/api/cron/graphics-reminders",
+      "schedule": "20 13 * * 1-5"
+    },
+    {
       "path": "/api/cron/heartbeat-sentinel",
       "schedule": "10 16 * * *"
     },
