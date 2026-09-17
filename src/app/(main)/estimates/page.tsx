@@ -3189,7 +3189,15 @@ export default function EstimatesPage() {
   }
 
   // ═══════════ BUILDER VIEW ═══════════
-  const isPushed = editingId && estimates.find(e => e.id === editingId)?.netsuite_estimate_id;
+  const editingEst = editingId ? estimates.find(e => e.id === editingId) : null;
+  const isPushed = editingEst?.netsuite_estimate_id;
+  // The number the rep is looking at. The builder used to say only
+  // "Editing" — someone on the phone with a customer who asked "which
+  // estimate?" had to leave the screen they were editing to find out.
+  // Same headline/alt pair the list uses (src/lib/estimate-number.ts):
+  // NetSuite's number once it exists, FleetSuite's beside it.
+  const editingNumber = editingId ? estimateHeadlineNumber(editingEst) : '';
+  const editingAltNumber = editingId ? estimateAltNumber(editingEst) : null;
 
   return (
     <div data-form="estimate_builder">
@@ -3201,9 +3209,33 @@ export default function EstimatesPage() {
         >
           ← Back to Estimates
         </button>
-        <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>
-          {editingId ? 'Editing' : 'New Estimate'}
-        </div>
+        {editingId && editingNumber ? (
+          <div style={{ textAlign: 'right', minWidth: 0 }}>
+            <div style={{ fontSize: '10px', color: 'var(--text-label)', lineHeight: 1.3 }}>Editing</div>
+            <div
+              title="Click to select — the estimate number a customer will quote back at you"
+              style={{
+                fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)',
+                fontVariantNumeric: 'tabular-nums', userSelect: 'all', lineHeight: 1.2,
+              }}
+            >
+              #{editingNumber}
+            </div>
+            {editingAltNumber && (
+              <div
+                title="FleetSuite's own estimate number — NetSuite's is the one shown first"
+                style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa', userSelect: 'all' }}
+              >
+                FS: {editingAltNumber}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>
+            {/* No number until the first save mints one. */}
+            {editingId ? 'Editing' : 'New Estimate'}
+          </div>
+        )}
       </div>
 
       {/* Customer Selection */}
