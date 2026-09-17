@@ -14,7 +14,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { enrichLinesWithPartAssets } from './estimate-line-parts';
-import { loadEstimateGraphics, loadEstimateProofs, type EstimateProofBlock } from './estimate-graphics';
+import { coveragePictures, loadEstimateGraphics, loadEstimateProofs, type EstimateProofBlock } from './estimate-graphics';
 import { r2GetBytes } from './r2';
 import { buildEstimatePdf, estimatePdfFilename, type EstimatePdfGraphics, type EstimatePdfImage, type EstimatePdfLine } from './estimate-pdf';
 
@@ -147,7 +147,7 @@ export async function generateEstimatePdf(
   const proofBlocks = await loadEstimateProofs(supabase, estimateId);
 
   const needsMerge = proofBlocks.length > 0 || (wrapQuotes || []).some(q =>
-    (q.estimate_attach?.diagram && q.diagram_path)
+    (q.estimate_attach?.diagram && coveragePictures(q).length > 0)
     || (q.estimate_attach?.attachments && Array.isArray(q.attachments) && q.attachments.length > 0));
   if (needsMerge) {
     try {
@@ -201,11 +201,16 @@ async function mergeWrapAssets(base: Buffer, quotes: any[], proofBlocks: Estimat
   const readAsset = async (prefix: string, path: string) => r2GetBytes(prefix, path, MAX_MERGE_FILE_BYTES);
 
   for (const q of quotes) {
-    if (q.estimate_attach?.diagram && q.diagram_path) {
-      const asset = await readAsset('vehicle-templates', q.diagram_path);
-      if (asset) {
+    if (q.estimate_attach?.diagram) {
+      // Every view the quote carries, not just the lead one mirrored into
+      // diagram_path — a photo-proof job is routinely four photos.
+      for (const pic of coveragePictures(q)) {
+        if (appended >= MAX_APPENDED_PAGES) break;
+        const asset = await readAsset('vehicle-templates', pic.path);
+        if (!asset) continue;
+        const caption = `Coverage${pic.caption ? ` (${pic.caption})` : ''} — Quote ${q.quote_number}`;
         // Diagrams are rendered as PNG by the estimator.
-        try { await addImagePage(asset.bytes, 'image/png', `Coverage — Quote ${q.quote_number}`); }
+        try { await addImagePage(asset.bytes, 'image/png', caption); }
         catch (err: any) { console.warn('[estimate-pdf] diagram embed failed:', err?.message); }
       }
     }

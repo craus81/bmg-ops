@@ -12,6 +12,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { r2GetBytes, r2PresignGet, r2PublicUrl } from './r2';
+import { sanitizePhotoProofs, proofLabel } from './coverage-proof';
 
 export interface EstimateGraphicsSummary {
   quoteNumber: string;
@@ -22,8 +23,37 @@ export interface EstimateGraphicsSummary {
   films: { name: string; areas: string[] }[];
   /** Coverage diagram (PNG): the public URL when the diagram checkbox was
    *  on, else null. NOTE the R2 object is mutable (a later quote save
-   *  overwrites it) — frozen documents must go through inlineDiagrams. */
+   *  overwrites it) — frozen documents must go through inlineDiagrams.
+   *  This is the LEAD picture only; `diagrams` is the whole set. */
   diagramUrl: string | null;
+  /**
+   * Every coverage picture the quote has, in the estimator's order.
+   *
+   * A photo-proof quote (migration 317) can carry several views — driver
+   * side, passenger side, rear, roof — and only the lead one is mirrored
+   * into `diagram_path`. The quote's own email has always rendered them
+   * all; the estimate rendered one, so a customer approving through the
+   * estimate saw a single view of a job quoted from four. Same R2
+   * mutability caveat as diagramUrl.
+   */
+  diagrams: { url: string; caption: string | null }[];
+}
+
+/**
+ * The quote's coverage pictures as storage paths, in estimator order.
+ *
+ * Shared by the document surfaces and the PDF merge so a page can't appear
+ * in one and not the other. Photo proofs win; a quote with none falls back
+ * to the template diagram, which is what diagram_path means on a 1:20 quote.
+ */
+export function coveragePictures(q: any): { path: string; caption: string | null }[] {
+  const proofs = sanitizePhotoProofs(q?.photo_proofs, { path: q?.photo_path, boxes: q?.photo_boxes })
+    .map((p, i) => ({ path: p.diagram_path, caption: proofLabel(p, i) }))
+    .filter((p): p is { path: string; caption: string } => !!p.path);
+  if (proofs.length > 0) {
+    return proofs.length === 1 ? [{ path: proofs[0].path, caption: null }] : proofs;
+  }
+  return q?.diagram_path ? [{ path: q.diagram_path, caption: null }] : [];
 }
 
 export async function loadEstimateGraphics(
@@ -32,14 +62,18 @@ export async function loadEstimateGraphics(
 ): Promise<{ summaries: EstimateGraphicsSummary[]; wrapQuotes: any[] }> {
   const { data: wrapQuotes } = await supabase
     .from('wrap_quotes')
-    .select('id, quote_number, vehicle_description, diagram_path, attachments, measurements, estimate_attach, total_area_sqft')
+    .select('id, quote_number, vehicle_description, diagram_path, photo_path, photo_boxes, photo_proofs, attachments, measurements, estimate_attach, total_area_sqft')
     .eq('estimate_id', estimateId)
     .not('estimate_attach', 'is', null);
 
   const summaries: EstimateGraphicsSummary[] = [];
   for (const q of wrapQuotes || []) {
     const wantFilms = !!q.estimate_attach?.films;
-    const wantDiagram = !!(q.estimate_attach?.diagram && q.diagram_path);
+    // Every flattened photo proof, falling back to the single template
+    // diagram for a quote drawn on a 1:20 outline. A caption only when
+    // there is more than one — one picture needs no "Photo 1".
+    const pictures = coveragePictures(q);
+    const wantDiagram = !!(q.estimate_attach?.diagram && pictures.length > 0);
     if (!wantFilms && !wantDiagram) continue;
 
     let films: { name: string; areas: string[] }[] = [];
@@ -62,12 +96,17 @@ export async function loadEstimateGraphics(
       films = [...byFilm.entries()].map(([name, areas]) => ({ name, areas }));
     }
 
+    const diagrams = wantDiagram
+      ? pictures.map(pic => ({ url: r2PublicUrl('vehicle-templates', pic.path), caption: pic.caption }))
+      : [];
+
     summaries.push({
       quoteNumber: q.quote_number,
       vehicle: q.vehicle_description,
       totalSqft: wantFilms ? parseFloat(q.total_area_sqft) || 0 : 0,
       films,
-      diagramUrl: wantDiagram ? r2PublicUrl('vehicle-templates', q.diagram_path) : null,
+      diagramUrl: diagrams[0]?.url || null,
+      diagrams,
     });
   }
   return { summaries, wrapQuotes: wrapQuotes || [] };
@@ -220,18 +259,29 @@ const MAX_INLINE_DIAGRAM_BYTES = 4 * 1024 * 1024;
 export async function inlineDiagrams(
   summaries: EstimateGraphicsSummary[],
 ): Promise<EstimateGraphicsSummary[]> {
-  const out: EstimateGraphicsSummary[] = [];
-  for (const s of summaries) {
-    if (!s.diagramUrl) { out.push(s); continue; }
+  const inlineOne = async (url: string): Promise<string | null> => {
     try {
-      const res = await fetch(s.diagramUrl);
+      const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.byteLength === 0 || buf.byteLength > MAX_INLINE_DIAGRAM_BYTES) throw new Error('bad size');
-      out.push({ ...s, diagramUrl: `data:image/png;base64,${buf.toString('base64')}` });
+      return `data:image/png;base64,${buf.toString('base64')}`;
     } catch {
-      out.push({ ...s, diagramUrl: null });
+      return null;
     }
+  };
+
+  const out: EstimateGraphicsSummary[] = [];
+  for (const s of summaries) {
+    if (s.diagrams.length === 0) { out.push(s); continue; }
+    // A view that won't inline is DROPPED, not left pointing at mutable R2 —
+    // the whole reason a frozen record inlines in the first place.
+    const diagrams: { url: string; caption: string | null }[] = [];
+    for (const d of s.diagrams) {
+      const data = await inlineOne(d.url);
+      if (data) diagrams.push({ url: data, caption: d.caption });
+    }
+    out.push({ ...s, diagrams, diagramUrl: diagrams[0]?.url || null });
   }
   return out;
 }

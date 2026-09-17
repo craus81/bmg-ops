@@ -120,6 +120,13 @@ interface Props {
   customerId?: string | null;
   /** Hide the "Cc a BMG teammate" row (on by default). */
   hideCc?: boolean;
+  /**
+   * Stable id for THIS compose (e.g. `estimate-approval:<estimateId>`).
+   * Given one, what the sender has typed survives the screen being torn
+   * down and rebuilt — see the compose-state note below. Omit it and the
+   * modal keeps its old behavior: state lives and dies with the mount.
+   */
+  stateKey?: string;
 }
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -156,6 +163,61 @@ export function saveBccSelfPref(on: boolean): void {
   try { localStorage.setItem(BCC_SELF_KEY, on ? '1' : '0'); } catch { /* private mode — session-only */ }
 }
 
+/**
+ * What the sender has typed, kept somewhere a re-mount can't take it.
+ *
+ * Field bug: attaching a file on the send-estimate screen wiped the extra
+ * recipients, forcing a retype. Nothing in this component clears To — the
+ * one path that overwrites it is gated on the field being untouched — so
+ * the screen was being UNMOUNTED and rebuilt under the sender (a parent
+ * re-render on the desktop, the web view coming back from the native file
+ * picker on the phone), which resets useState to its initial value and
+ * lets the preview prefill just the resolved primary again.
+ *
+ * Rather than chase every way that can happen, the typed fields outlive the
+ * mount: they're mirrored into sessionStorage under the caller's stateKey
+ * and read back on the way up. A rebuild restores them; a real Send or
+ * Cancel clears them, so the next compose starts clean. sessionStorage, not
+ * local: a draft recipient list is for this tab and this sitting, and it
+ * also survives the full page reload an iOS web view can do.
+ */
+interface ComposeState {
+  to: string;
+  message: string;
+  cc: string[];
+  attachmentIds: string[];
+}
+
+const composeStateKey = (key: string) => `bmg-compose:${key}`;
+
+function readComposeState(key: string | undefined): ComposeState | null {
+  if (!key || typeof window === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(composeStateKey(key));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      to: typeof parsed.to === 'string' ? parsed.to : '',
+      message: typeof parsed.message === 'string' ? parsed.message : '',
+      cc: Array.isArray(parsed.cc) ? parsed.cc.filter((e: any) => typeof e === 'string') : [],
+      attachmentIds: Array.isArray(parsed.attachmentIds)
+        ? parsed.attachmentIds.filter((id: any) => typeof id === 'string') : [],
+    };
+  } catch { return null; }
+}
+
+function writeComposeState(key: string | undefined, state: ComposeState): void {
+  if (!key || typeof window === 'undefined') return;
+  try { sessionStorage.setItem(composeStateKey(key), JSON.stringify(state)); }
+  catch { /* private mode / quota — the compose just loses its safety net */ }
+}
+
+function clearComposeState(key: string | undefined): void {
+  if (!key || typeof window === 'undefined') return;
+  try { sessionStorage.removeItem(composeStateKey(key)); } catch { /* as above */ }
+}
+
 const labelStyle: React.CSSProperties = {
   fontSize: '9px', fontWeight: 700, color: 'var(--text-label)',
   textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '3px',
@@ -171,6 +233,7 @@ export default function EmailComposeModal({
   contactsLabel,
   customerId,
   hideCc,
+  stateKey,
   title,
   intro,
   initialTo,
@@ -193,18 +256,26 @@ export default function EmailComposeModal({
   const { user } = useAuth();
   const dialog = useDialog();
 
-  const [toInput, setToInputState] = useState(initialTo || '');
+  // Read once per mount: a rebuild after an attachment (or anything else)
+  // picks the sender's own text back up instead of starting empty.
+  const restored = useRef<ComposeState | null>(null);
+  if (restored.current === null) restored.current = readComposeState(stateKey);
+  const restoredState = restored.current;
+
+  const [toInput, setToInputState] = useState(restoredState?.to || initialTo || '');
   // A preview can prefill To *while* a click on Send is already being
   // handled, so the send path reads recipients from this ref — the click
   // handler's closure still holds the pre-prefill value.
   const toInputRef = useRef(toInput);
   const setToInput = (value: string) => { toInputRef.current = value; setToInputState(value); };
-  const toTouched = useRef(!!initialTo);
+  // Restored recipients count as touched: they are what the sender chose,
+  // so the preview must not overwrite them with the resolved primary.
+  const toTouched = useRef(!!initialTo || !!restoredState?.to);
   const [bccSelf, setBccSelf] = useState(loadBccSelfPref);
-  const [cc, setCc] = useState<string[]>([]);
+  const [cc, setCc] = useState<string[]>(restoredState?.cc || []);
   const [staff, setStaff] = useState<{ id: string; name: string; email: string }[]>(staffCache || []);
   const [loadedContacts, setLoadedContacts] = useState<EmailComposeContact[]>([]);
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useState(restoredState?.message || '');
 
   // Company contacts: the caller's list wins; otherwise load the customer's
   // external_contacts once per open (cheap, and it's the same list the
@@ -252,7 +323,14 @@ export default function EmailComposeModal({
   }, []);
 
   const contactOptions: EmailComposeContact[] = contacts || loadedContacts;
-  const [attachmentIds, setAttachmentIds] = useState<string[]>(initialAttachmentIds || []);
+  // Callers load the attachment list before opening, so a restored selection
+  // can be checked against it here — a file removed since is simply dropped
+  // rather than sent as an id the server can't resolve.
+  const [attachmentIds, setAttachmentIds] = useState<string[]>(() => {
+    if (!restoredState) return initialAttachmentIds || [];
+    const available = new Set((attachments || []).map(a => a.id));
+    return restoredState.attachmentIds.filter(id => available.has(id));
+  });
   const [uploadingName, setUploadingName] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -263,6 +341,16 @@ export default function EmailComposeModal({
 
   const emails = parseEmailList(toInput);
   const badEntries = invalidEntries(toInput);
+
+  // Mirror the typed fields out on every change, so whatever tears this
+  // screen down next has nothing of the sender's left to lose.
+  useEffect(() => {
+    writeComposeState(stateKey, { to: toInput, message, cc, attachmentIds });
+  }, [stateKey, toInput, message, cc, attachmentIds]);
+
+  // Leaving on purpose — Send, Cancel, ✕, a click on the backdrop — is the
+  // one thing that retires the draft; a re-mount must not.
+  const closeCompose = () => { clearComposeState(stateKey); onClose(); };
 
   const currentFields = (): EmailComposeFields => ({
     emails: parseEmailList(toInputRef.current),
@@ -422,7 +510,7 @@ export default function EmailComposeModal({
         return;
       }
       const result = await onSend(fields);
-      if (result.ok) onClose();
+      if (result.ok) closeCompose();
     } finally {
       sendingRef.current = false;
       setSending(false);
@@ -432,7 +520,7 @@ export default function EmailComposeModal({
   return (
     <div
       style={{ position: 'fixed', inset: 0, background: 'var(--overlay, rgba(0,0,0,0.5))', zIndex: 1500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
-      onClick={() => { if (!sending) onClose(); }}
+      onClick={() => { if (!sending) closeCompose(); }}
     >
       <div onClick={e => e.stopPropagation()} style={{
         background: 'var(--card)', borderRadius: '14px', padding: '16px',
@@ -443,7 +531,7 @@ export default function EmailComposeModal({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>{title}</div>
           <button
-            onClick={() => { if (!sending) onClose(); }}
+            onClick={() => { if (!sending) closeCompose(); }}
             style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '16px', cursor: 'pointer', padding: 0 }}
           >✕</button>
         </div>
@@ -657,7 +745,7 @@ export default function EmailComposeModal({
 
         <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
           <button
-            onClick={() => { if (!sending) onClose(); }}
+            onClick={() => { if (!sending) closeCompose(); }}
             style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-body)', fontWeight: 700, fontSize: '12px', cursor: 'pointer' }}
           >
             Cancel

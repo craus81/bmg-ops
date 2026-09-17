@@ -61,7 +61,14 @@ export interface QuoteDocGraphicsBlock {
   vehicle: string | null;
   totalSqft: number;
   films: { name: string; areas: string[] }[];
+  /** The lead coverage picture. Kept for callers that only have one; when
+   *  `diagrams` is present it is the first of those. */
   diagramUrl: string | null;
+  /** Every coverage picture, in estimator order, captioned when a quote has
+   *  more than one view (loadEstimateGraphics). A photo-proof quote is often
+   *  four views — rendering only the lead one showed the customer a fraction
+   *  of what they were approving. */
+  diagrams?: { url: string; caption: string | null }[];
 }
 
 export interface QuoteDocProofBlock {
@@ -212,7 +219,10 @@ export function renderQuoteDocument(model: QuoteDocModel, opts: QuoteDocRenderOp
       <div style="font-weight:700;">Quote ${escHtml(g.quoteNumber)}${g.vehicle ? ` — ${escHtml(g.vehicle)}` : ''}${g.totalSqft > 0 ? ` · ~${Math.round(g.totalSqft)} sqft coverage` : ''}</div>
       ${g.films.length > 0 ? `<ul style="margin:6px 0 0;padding-left:18px;">${g.films.map(f =>
         `<li style="margin-top:2px;">${escHtml(f.name)}${f.areas.length > 0 ? ` — ${escHtml(f.areas.join(', '))}` : ''}</li>`).join('')}</ul>` : ''}
-      ${g.diagramUrl ? `<img src="${escHtml(g.diagramUrl)}" alt="Coverage diagram — Quote ${escHtml(g.quoteNumber)}" style="max-width:100%;border:1px solid #e5e7eb;border-radius:8px;margin-top:10px;display:block;">` : ''}
+      ${(g.diagrams && g.diagrams.length > 0
+        ? g.diagrams
+        : g.diagramUrl ? [{ url: g.diagramUrl, caption: null }] : []
+      ).map(d => `<div style="margin-top:10px;">${d.caption ? `<div style="font-size:11px;font-weight:700;color:#6b7280;margin-bottom:3px;">${escHtml(d.caption)}</div>` : ''}<img src="${escHtml(d.url)}" alt="Coverage${d.caption ? ` (${escHtml(d.caption)})` : ''} — Quote ${escHtml(g.quoteNumber)}" style="max-width:100%;border:1px solid #e5e7eb;border-radius:8px;display:block;"></div>`).join('')}
     </div>`).join('')}
 
     ${(model.proofs || []).map(p => `
