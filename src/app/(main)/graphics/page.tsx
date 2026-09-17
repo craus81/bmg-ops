@@ -25,7 +25,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import { roundChip, summarizeRounds } from '@/lib/proof-rounds';
-import { isFinishedStatus } from '@/lib/graphics-status';
+import { isFinishedStatus, inStatusScope, GRAPHICS_ACTIVE_STATUSES } from '@/lib/graphics-status';
 import { workOrderPositions, compareByDueDate } from '@/lib/graphics-work-order';
 import GraphicsWorkOrderModal from '@/components/GraphicsWorkOrderModal';
 import AssignmentPicker from '@/components/AssignmentPicker';
@@ -83,9 +83,6 @@ function relativeTime(iso: string): string {
   if (day < 7) return `${day}d ago`;
   return new Date(iso).toLocaleDateString();
 }
-
-// Active statuses (not terminal)
-const ACTIVE_STATUSES: GraphicsJobStatus[] = ['flagged', 'received', 'designing', 'revision', 'printing', 'outgassing', 'cutting', 'packing', 'ready', 'ready_to_pickup'];
 
 const PRIORITY_RANK: Record<string, number> = { low: 0, normal: 1, high: 2, rush: 3 };
 
@@ -869,12 +866,8 @@ export default function GraphicsPage() {
     if (filterCategory !== 'all' && (j.job_category || 'production') !== filterCategory) return false;
     // Metric tile filter (overdue / due this week / stuck)
     if (metricFilter && !metricPredicates[metricFilter](j)) return false;
-    // Status filter
-    if (filterStatus === 'active') {
-      if (!ACTIVE_STATUSES.includes(j.status)) return false;
-    } else if (filterStatus !== 'all') {
-      if (j.status !== filterStatus) return false;
-    }
+    // Status filter (Active / All tabs + the popover's per-status select)
+    if (!inStatusScope(j.status, filterStatus)) return false;
     if (search) {
       const s = search.toLowerCase();
       return (
@@ -911,8 +904,11 @@ export default function GraphicsPage() {
 
   // Tab counts (hide flagged from non-admins)
   const visibleJobs = isAdmin ? jobs : jobs.filter(j => j.status !== 'flagged');
-  const activeCount = visibleJobs.filter(j => ACTIVE_STATUSES.includes(j.status)).length;
-  const myJobCount = visibleJobs.filter(isMine).length;
+  const activeCount = visibleJobs.filter(j => GRAPHICS_ACTIVE_STATUSES.includes(j.status)).length;
+  // Scoped to the status showing, or the tab lies: an unscoped count read
+  // "My Jobs (23)" over a table of 6, the other 17 being jobs that shipped
+  // and stayed assigned. A tab's number is a promise about its own rows.
+  const myJobCount = visibleJobs.filter(j => isMine(j) && inStatusScope(j.status, filterStatus)).length;
 
   const priorityColor = (p: string) => {
     switch (p) {
