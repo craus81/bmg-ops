@@ -51,6 +51,95 @@ const chunk = <T,>(arr: T[], size: number): T[][] => {
 };
 
 /**
+ * The item types the catalog mirrors. The full rebuild, the incremental cron
+ * and the price lookup below all read this one list so they cannot drift.
+ * (`findItems` in src/lib/netsuite.ts deliberately filters by no type at all,
+ * so a part outside this set still matches at invoicing while having no
+ * catalog row — see the PR that added fetchSalesPrices.)
+ */
+export const SYNCED_ITEM_TYPES = [
+  'InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly', 'OthCharge',
+] as const;
+
+const SYNCED_ITEM_TYPES_SQL = SYNCED_ITEM_TYPES.map(t => `'${t}'`).join(', ');
+
+/**
+ * Where a NetSuite item's sales price can live. Accounts differ in which of
+ * these tables exists and which is actually populated: `pricing` and
+ * `itemPrice` are the price-matrix tables, while the item record's own
+ * `baseprice` carries a price for items that have no matrix row at all.
+ * Same three sources, in the same order, as getItemBasePrices().
+ */
+const PRICE_SOURCES: { name: string; sql: (idList: string | null) => string }[] = [
+  {
+    name: 'pricing',
+    sql: idList =>
+      `SELECT p.item AS item_id, p.unitprice AS sales_price FROM pricing p WHERE p.pricelevel = 1${idList ? ` AND p.item IN (${idList})` : ''}`,
+  },
+  {
+    name: 'itemPrice',
+    sql: idList =>
+      `SELECT ip.item AS item_id, ip.unitprice AS sales_price FROM itemPrice ip WHERE ip.pricelevel = 1${idList ? ` AND ip.item IN (${idList})` : ''}`,
+  },
+  {
+    name: 'baseprice',
+    sql: idList =>
+      `SELECT i.id AS item_id, i.baseprice AS sales_price FROM item i WHERE i.isinactive = 'F' AND i.itemtype IN (${SYNCED_ITEM_TYPES_SQL})${idList ? ` AND i.id IN (${idList})` : ''}`,
+  },
+];
+
+/**
+ * Sales prices for NetSuite items, MERGED across every source that can carry
+ * one — earlier sources win, later ones only fill the gaps.
+ *
+ * The field bug this fixes: both sync paths used to read `pricing`, fall back
+ * to `itemPrice`, and STOP at the first table that returned any rows at all.
+ * In an account whose price matrix covers most items but not all, that meant
+ * the stragglers were never looked up a second way and landed in the catalog
+ * at 0 — after which invoicing refused to bill them ("No NetSuite price set
+ * for: 06T936") on parts NetSuite prices perfectly well. Neither path ever
+ * read the item record's own `baseprice`, which is where those prices were.
+ *
+ * `itemIds` scopes the reads to specific items (the incremental sync's
+ * modified set) and is chunked; pass null for the full rebuild's
+ * account-wide read. `coverageIds` is used only to stop early once every
+ * item of interest has a price, so a healthy account still pays for one
+ * query rather than three.
+ */
+export async function fetchSalesPrices(
+  itemIds: string[] | null,
+  coverageIds?: string[],
+): Promise<Record<string, number>> {
+  const priceMap: Record<string, number> = {};
+  if (itemIds && itemIds.length === 0) return priceMap;
+
+  const idLists: (string | null)[] = itemIds
+    ? chunk(itemIds, 500).map(ids => ids.join(','))
+    : [null];
+  const wanted = itemIds || coverageIds;
+
+  for (const source of PRICE_SOURCES) {
+    if (wanted && wanted.every(id => id in priceMap)) break;
+    try {
+      for (const idList of idLists) {
+        const rows = await suiteqlQueryAll(source.sql(idList));
+        for (const row of rows) {
+          const id = row.item_id?.toString();
+          const price = parseFloat(row.sales_price || '0');
+          if (id && price > 0 && !(id in priceMap)) priceMap[id] = price;
+        }
+      }
+    } catch (err: any) {
+      // The table or column may not exist in this account — that is what the
+      // next source is for. A source that throws must not abandon the rest.
+      console.warn(`[parts-sync] price source ${source.name} failed: ${err?.message || err}`);
+    }
+  }
+
+  return priceMap;
+}
+
+/**
  * Fold manual rows into their new NetSuite twin ("promote").
  * Graphics-only parts (source='manual', netsuite_id NULL) were folded in
  * from the old proof catalog. If NetSuite later gains a real item with the
@@ -214,7 +303,7 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
   const itemQuery = (extra: string) => `
     SELECT${extra}${ITEM_COLUMNS}
     FROM item i
-    WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly', 'OthCharge')
+    WHERE i.itemtype IN (${SYNCED_ITEM_TYPES_SQL})
       AND i.lastmodifieddate >= TO_DATE('${sinceStr}', 'MM/DD/YYYY')
     ORDER BY i.id
   `;
@@ -249,26 +338,9 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
     return { ...result, syncStateWrite: await recordHeartbeat(service, 'netsuite_parts', result) };
   }
 
-  // ── Sales prices, scoped to the modified items. Same two-table fallback
-  // as the full sync — SuiteQL pricing table names vary by account.
-  const pricingMap: Record<string, number> = {};
-  for (const table of [
-    { name: 'pricing', sql: (ids: string) => `SELECT p.item AS item_id, p.unitprice AS sales_price FROM pricing p WHERE p.pricelevel = 1 AND p.item IN (${ids})` },
-    { name: 'itemPrice', sql: (ids: string) => `SELECT ip.item AS item_id, ip.unitprice AS sales_price FROM itemPrice ip WHERE ip.pricelevel = 1 AND ip.item IN (${ids})` },
-  ]) {
-    try {
-      for (const ids of chunk(activeIds, 500)) {
-        const rows = await suiteqlQueryAll(table.sql(ids.join(',')));
-        for (const p of rows) {
-          const price = parseFloat(p.sales_price || '0');
-          if (p.item_id && price > 0) pricingMap[p.item_id.toString()] = price;
-        }
-      }
-      if (Object.keys(pricingMap).length > 0) break;
-    } catch {
-      // try the next table name
-    }
-  }
+  // ── Sales prices, scoped to the modified items. Same merged lookup as the
+  // full sync — see fetchSalesPrices for why one table is never enough.
+  const pricingMap = await fetchSalesPrices(activeIds);
 
   // ── Quantities for the modified inventory items. If the lookup fails
   // entirely, omit quantity fields from the upsert rather than writing 0s
