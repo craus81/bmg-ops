@@ -448,6 +448,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/reports/sales-performance/route.ts': role(),
   'src/app/api/reports/vendors/route.ts': staff(),
   'src/app/api/scan-worksheet/route.ts': authScoped('installer scan worksheet; external installer accounts are the intended callers'),
+  'src/app/api/scans/add-part/route.ts': admin(),
   'src/app/api/scans/bulk-update/route.ts': admin(),
   'src/app/api/scans/delete/route.ts': admin(),
   'src/app/api/scans/log/route.ts': authScoped('external installer companies log field scans by design; the route enforces an internal-staff-or-installer allowlist itself', 'isInternalStaffRole('),
