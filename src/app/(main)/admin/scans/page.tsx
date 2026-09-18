@@ -80,6 +80,11 @@ export default function AdminScansPage() {
   const [archivedScans, setArchivedScans] = useState<ScanLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<ViewTab>('ready');
+  // Waiting for PO grouping. By part is how POs get matched (select every VIN
+  // of one part, assign the PO); by vehicle answers the other question — what
+  // did THIS truck get — so a vehicle with a decal kit and a unit number reads
+  // as one scan with two parts instead of two look-alike lines.
+  const [waitingGroupBy, setWaitingGroupBy] = useState<'part' | 'vehicle'>('part');
   const [search, setSearch] = useState('');
   const [profiles, setProfiles] = useState<Record<string, string>>({});
   const [selectedScans, setSelectedScans] = useState<Set<string>>(new Set());
@@ -551,6 +556,10 @@ export default function AdminScansPage() {
     if (tab === 'ready' && s.po_number) {
       // Ready tab: group by PO so one invoice = one PO with multiple part lines
       subKey = `PO #${s.po_number}`;
+    } else if (tab === 'waiting' && waitingGroupBy === 'vehicle') {
+      // One scan per vehicle: the VIN heads the group and every part installed
+      // on it is a line underneath, each with its own PO state.
+      subKey = `VIN ${s.vin} · ${s.location_name || 'No Location'}`;
     } else {
       const poSuffix = tab === 'archived' && s.po_number ? ` · PO #${s.po_number}` : '';
       // On the archived tab, include invoice_number in the key so scans invoiced on
@@ -815,6 +824,62 @@ export default function AdminScansPage() {
     await supabase.from('scan_logs').update({ vin, vehicle_year, vehicle_make, vehicle_model, part_number, part_description, billable_customer, unit_number, serial_number: serial_number || null, imei: imei || null, iccid: iccid || null, location_name }).eq('id', id);
     setEditingScan(null);
     loadAll();
+  };
+
+  // Add another part to the vehicle being edited. A decal kit and a unit
+  // number are one visit but two billable parts, usually on two different POs
+  // — and scan_logs holds one part per row, so the vehicle gets a sibling row
+  // (what a multi-part field scan writes too). The server carries the
+  // vehicle, installer, photos and the crew's pay credit over, matches the
+  // new part to its own PO, and refuses a part the vehicle already has.
+  const [addPart, setAddPart] = useState('');
+  const [addPartPicked, setAddPartPicked] = useState<{ item_number: string; display_name: string | null } | null>(null);
+  const [addPartBusy, setAddPartBusy] = useState(false);
+  const [addPartError, setAddPartError] = useState('');
+  const [addPartNote, setAddPartNote] = useState('');
+  // A different scan in the editor starts with an empty box.
+  useEffect(() => {
+    setAddPart('');
+    setAddPartPicked(null);
+    setAddPartError('');
+    setAddPartNote('');
+  }, [editingScan?.id]);
+
+  const addPartToVehicle = async () => {
+    if (!editingScan) return;
+    const pn = (addPartPicked?.item_number || addPart).trim();
+    if (!pn) return;
+    setAddPartBusy(true);
+    setAddPartError('');
+    setAddPartNote('');
+    try {
+      const res = await fetch('/api/scans/add-part', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scanId: editingScan.id,
+          partNumber: pn,
+          partDescription: addPartPicked?.display_name || null,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        setAddPartError(data.error || 'Could not add the part');
+        return;
+      }
+      setAddPart('');
+      setAddPartPicked(null);
+      setAddPartNote(
+        `${data.partNumber} added${data.poNumber ? ` · matched PO #${data.poNumber}` : ' · waiting for PO'}`
+        + (data.creditsWritten ? ' · installer credited' : '')
+        + (data.creditsError ? ` · ${data.creditsError}` : ''),
+      );
+      await loadAll();
+    } catch (err: any) {
+      setAddPartError(err?.message || 'Could not add the part');
+    } finally {
+      setAddPartBusy(false);
+    }
   };
 
   // Delete — via the server route, which also removes the scan's unpaid pay
@@ -1373,6 +1438,15 @@ export default function AdminScansPage() {
         <button onClick={selectAllVisible} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
           {selectedScans.size === tabScans.length && tabScans.length > 0 ? 'Deselect All' : `Select All (${tabScans.length})`}
         </button>
+        {tab === 'waiting' && (
+          <button
+            onClick={() => setWaitingGroupBy(g => (g === 'part' ? 'vehicle' : 'part'))}
+            title="Group these scans by part number (to match a PO across many VINs) or by vehicle (to see every part one truck got)"
+            style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: waitingGroupBy === 'vehicle' ? 'var(--tab-active-bg)' : 'var(--subtle-bg)', border: `1px solid ${waitingGroupBy === 'vehicle' ? 'var(--tab-active-border)' : 'var(--border)'}`, color: waitingGroupBy === 'vehicle' ? 'var(--tab-active-color)' : 'var(--text-secondary)', cursor: 'pointer' }}
+          >
+            Group: {waitingGroupBy === 'part' ? 'Part' : 'Vehicle'}
+          </button>
+        )}
         {tab === 'waiting' && waitingForPO.length > 0 && (
           <button onClick={runAutoMatch} disabled={matching} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
             {matching ? 'Matching...' : 'Try Auto-Match POs'}
@@ -2302,7 +2376,8 @@ export default function AdminScansPage() {
                     const groupScans = subGroups[subKey];
                     const subCollapsed = !expandedGroups.has(`${customer}|${subKey}`);
                     const isPOGroup = subKey.startsWith('PO #');
-                    const uniqueParts = isPOGroup ? [...new Set(groupScans.map(s => s.part_number).filter(Boolean))] : [];
+                    const isVehicleGroup = subKey.startsWith('VIN ');
+                    const uniqueParts = isPOGroup || isVehicleGroup ? [...new Set(groupScans.map(s => s.part_number).filter(Boolean))] : [];
                     const [partLabel, locLabel] = isPOGroup
                       ? [subKey, groupScans[0]?.location_name || '']
                       : subKey.split(' · ');
@@ -2320,7 +2395,7 @@ export default function AdminScansPage() {
                           <div onClick={() => toggleGroup(`${customer}|${subKey}`)} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', flex: 1, minWidth: 0 }}>
                             <span style={{ fontSize: '9px', color: 'var(--text-muted)', transform: subCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', flexShrink: 0 }}>▼</span>
                             <span style={{ fontSize: '12px', fontWeight: 700, color: isPOGroup ? '#22c55e' : 'var(--text-primary)', flexShrink: 0 }}>{partLabel}</span>
-                            {isPOGroup ? (
+                            {isPOGroup || isVehicleGroup ? (
                               uniqueParts.length > 0 && <span style={{ fontSize: '10px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{uniqueParts.join(', ')}</span>
                             ) : groupScans[0]?.part_description ? (
                               <span style={{ fontSize: '10px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{groupScans[0].part_description}</span>
@@ -2331,7 +2406,9 @@ export default function AdminScansPage() {
                             <button onClick={(e) => { e.stopPropagation(); toggleSelectGroup(groupIds); }} style={{ padding: '2px 6px', borderRadius: '4px', fontSize: '8px', fontWeight: 700, background: allGroupSelected ? 'rgba(59,130,246,0.15)' : 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', cursor: 'pointer' }}>
                               {allGroupSelected ? 'Deselect' : 'Select'}
                             </button>
-                            {!isPOGroup && groupScans[0]?.po_number && <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>PO #{groupScans[0].po_number}</span>}
+                            {/* A vehicle group's parts can sit on different POs, so the
+                                PO belongs on each part's own line, not up here. */}
+                            {!isPOGroup && !isVehicleGroup && groupScans[0]?.po_number && <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>PO #{groupScans[0].po_number}</span>}
                             <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)' }}>{groupScans.length}</span>
                           </div>
                         </div>
@@ -2588,6 +2665,82 @@ export default function AdminScansPage() {
                 <input value={editingScan.location_name || ''} onChange={e => setEditingScan({ ...editingScan, location_name: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
               </div>
             </div>
+
+            {/* Every part on this VIN, and a box to add another. The parts a
+                vehicle got are separate scan rows on purpose: each one carries
+                its own PO, so a decal kit on one PO and a unit number on
+                another bill as two invoices while the vehicle was scanned
+                once. */}
+            {(() => {
+              const siblings = allScans.filter(s => s.id !== editingScan.id && sameVehicleVin(s.vin, editingScan.vin));
+              const chip = (key: string, label: string, po: string | null, isThis: boolean) => (
+                <span key={key} style={{
+                  fontSize: '9px', fontWeight: 700, padding: '3px 6px', borderRadius: '4px',
+                  background: isThis ? 'rgba(59,130,246,0.12)' : 'var(--card)',
+                  border: `1px solid ${isThis ? 'rgba(59,130,246,0.25)' : theme.border}`,
+                  color: 'var(--text-secondary)',
+                }}>
+                  {label}
+                  <span style={{ fontWeight: 400, color: po ? '#22c55e' : '#fbbf24' }}>{po ? ` · PO #${po}` : ' · waiting for PO'}</span>
+                </span>
+              );
+              const q = addPart.trim().toLowerCase();
+              const suggestions = q.length >= 2
+                ? allParts.filter(p =>
+                    p.item_number.toLowerCase() !== q && (
+                      p.item_number.toLowerCase().includes(q) ||
+                      p.display_name?.toLowerCase().includes(q)
+                    )).slice(0, 6)
+                : [];
+              return (
+                <div style={{ marginBottom: '12px', padding: '8px 10px', borderRadius: '8px', background: 'var(--subtle-bg)', border: `1px solid ${theme.border}` }}>
+                  <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>
+                    Parts on this VIN ({siblings.length + 1})
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '8px' }}>
+                    {chip(editingScan.id, editingScan.part_number || 'No Part', editingScan.po_number, true)}
+                    {siblings.map(s => chip(s.id, s.part_number || 'No Part', s.po_number, false))}
+                  </div>
+                  <div style={{ position: 'relative', display: 'flex', gap: '6px' }}>
+                    <input
+                      value={addPart}
+                      placeholder="Add another part number"
+                      onChange={e => { setAddPart(e.target.value); setAddPartPicked(null); }}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addPartToVehicle(); } }}
+                      style={{ flex: 1, minWidth: 0, padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }}
+                    />
+                    <button
+                      onClick={addPartToVehicle}
+                      disabled={addPartBusy || !addPart.trim()}
+                      style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid rgba(34,197,94,0.25)', background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontSize: '11px', fontWeight: 700, cursor: addPartBusy || !addPart.trim() ? 'default' : 'pointer', opacity: addPartBusy || !addPart.trim() ? 0.5 : 1 }}
+                    >
+                      {addPartBusy ? 'Adding…' : 'Add part'}
+                    </button>
+                    {suggestions.length > 0 && (
+                      <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '180px', overflowY: 'auto', marginTop: '2px' }}>
+                        {suggestions.map(p => (
+                          <button
+                            key={p.id}
+                            onMouseDown={e => e.preventDefault()}
+                            onClick={() => { setAddPart(p.item_number); setAddPartPicked({ item_number: p.item_number, display_name: p.display_name }); }}
+                            style={{ display: 'block', width: '100%', padding: '6px 8px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
+                          >
+                            <span style={{ fontWeight: 700 }}>{p.item_number}</span>
+                            {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
+                            {p.display_name && <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{p.display_name}</div>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                    The added part becomes its own line on this vehicle — same installer, photos and pay credit, its own PO and invoice.
+                  </div>
+                  {addPartError && <div style={{ fontSize: '10px', fontWeight: 700, color: '#ef4444', marginTop: '6px' }}>{addPartError}</div>}
+                  {addPartNote && <div style={{ fontSize: '10px', fontWeight: 700, color: '#22c55e', marginTop: '6px' }}>{addPartNote}</div>}
+                </div>
+              );
+            })()}
 
             {/* Verizon RFID device identifiers — shown for the Verizon part or any
                 scan that already carries device data. */}
