@@ -4,7 +4,9 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { fetchAllRows } from '@/lib/fetch-all';
-import { determineCatalog, promoteManualTwins, resolveSalesPrice } from '@/lib/parts-sync';
+import { determineCatalog, fetchSalesPrices, promoteManualTwins, resolveSalesPrice, SYNCED_ITEM_TYPES } from '@/lib/parts-sync';
+
+const ITEM_TYPES_SQL = SYNCED_ITEM_TYPES.map(t => `'${t}'`).join(', ');
 
 const Schema = z.object({
   userId: z.string().uuid().optional().nullable(),
@@ -42,8 +44,8 @@ export async function POST(req: NextRequest) {
     // Query all sellable item types from NetSuite: inventory, non-inventory,
     // service, kits/assemblies, and Other Charge (freight, misc fees — needed
     // as estimate lines). Get sales price, purchase/cost price, quantity on
-    // hand, and class info. Keep this type list in step with the incremental
-    // sync (src/lib/parts-sync.ts) and its cost query below.
+    // hand, and class info. The type list is SYNCED_ITEM_TYPES so this query,
+    // the cost query below and the incremental sync cannot drift.
     const query = `
       SELECT
         i.id,
@@ -59,7 +61,7 @@ export async function POST(req: NextRequest) {
         BUILTIN.DF(i.department) AS department_name,
         BUILTIN.DF(i.vendor) AS vendor_name
       FROM item i
-      WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly', 'OthCharge')
+      WHERE i.itemtype IN (${ITEM_TYPES_SQL})
       AND i.isinactive = 'F'
       ORDER BY i.itemid
     `;
@@ -93,7 +95,7 @@ export async function POST(req: NextRequest) {
           i.id,
           i.cost AS purchase_price
         FROM item i
-        WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly', 'OthCharge')
+        WHERE i.itemtype IN (${ITEM_TYPES_SQL})
         AND i.isinactive = 'F'
       `;
       const costItems = await suiteqlQueryAll(costQuery);
@@ -129,31 +131,16 @@ export async function POST(req: NextRequest) {
       console.error('[parts-sync] Cost query FAILED:', err.message?.substring(0, 300) || err);
     }
 
-    // 2. Get sales prices from pricing matrix — try "pricing" table first, then "itemPrice"
-    const pricingQueries = [
-      { name: 'pricing', sql: `SELECT p.item AS item_id, p.unitprice AS sales_price FROM pricing p WHERE p.pricelevel = 1` },
-      { name: 'itemPrice', sql: `SELECT ip.item AS item_id, ip.unitprice AS sales_price FROM itemPrice ip WHERE ip.pricelevel = 1` },
-    ];
-
-    for (const pq of pricingQueries) {
-      try {
-        const pricingItems = await suiteqlQueryAll(pq.sql);
-        let count = 0;
-        for (const p of pricingItems) {
-          if (p.item_id) {
-            const price = parseFloat(p.sales_price || '0');
-            if (price > 0) {
-              pricingMap[p.item_id.toString()] = price;
-              count++;
-            }
-          }
-        }
-        console.log(`[parts-sync] ${pq.name} table: found ${count} prices from ${pricingItems.length} rows`);
-        if (count > 0) break; // Got prices, no need to try next table
-      } catch (err: any) {
-        console.warn(`[parts-sync] ${pq.name} table query failed: ${err.message || err}`);
-      }
-    }
+    // 2. Get sales prices, merged across every source that carries one.
+    // This used to stop at the first pricing table that returned any rows,
+    // which left the items that table didn't cover at 0 — see
+    // fetchSalesPrices for the field bug that caused. The item ids are
+    // passed for coverage only: the reads stay account-wide, but a run whose
+    // first source already prices every item skips the other two.
+    pricingMap = await fetchSalesPrices(
+      null,
+      nsItems.map((item: any) => item.id?.toString()).filter(Boolean),
+    );
 
     const totalWithPrice = Object.values(pricingMap).filter(p => p > 0).length;
     console.log(`[parts-sync] Final pricing: ${totalWithPrice} items with non-zero prices`);

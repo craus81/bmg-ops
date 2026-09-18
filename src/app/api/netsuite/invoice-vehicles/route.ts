@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { createDirectInvoice, findCustomer, findItems } from '@/lib/netsuite';
+import { createDirectInvoice, findCustomer, findItems, getItemBasePrices } from '@/lib/netsuite';
 import { resolveLocationWithOverride } from '@/lib/invoice-location';
 import { requireRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
@@ -183,11 +183,33 @@ export async function POST(req: NextRequest) {
         // Look up NetSuite items by part number
         const nsItems = await findItems(Object.keys(partGroups));
 
+        // The catalog is a mirror, not the price authority NetSuite is. A part
+        // whose price sits somewhere parts-sync doesn't read arrives here at 0
+        // and the gate below refuses to bill it — "No NetSuite price set for:
+        // 06T936" on a part NetSuite prices perfectly well. Ask NetSuite
+        // directly before refusing, exactly as graphics invoicing does
+        // (src/app/api/graphics/create-invoice/route.ts). One extra round trip
+        // per group, and only for a group that would otherwise have failed.
+        // Nothing is written back: parts-sync owns the mirror, and a price
+        // recovered here would outrank NetSuite's forever (see
+        // resolveSalesPrice) if it landed in the catalog.
+        const needBasePrice = Object.entries(partGroups).filter(
+          ([partNum, g]) => nsItems[partNum] && !(g.price > 0),
+        );
+        if (needBasePrice.length > 0) {
+          const basePrices = await getItemBasePrices(needBasePrice.map(([partNum]) => nsItems[partNum].id));
+          for (const [partNum, g] of needBasePrice) {
+            const bp = basePrices[nsItems[partNum].id];
+            if (bp > 0) g.price = bp;
+          }
+        }
+
         // Build invoice line items
         const lineItems: { itemId: string | number; quantity: number; rate: number; description: string }[] = [];
         const unmatchedParts: string[] = [];
-        // Parts that matched a NetSuite item but have no price in netsuite_parts
-        // — billing them would silently send a $0 line (docs/cni-redesign.md §3.6).
+        // Parts that matched a NetSuite item but have no price in the catalog
+        // OR in NetSuite itself — billing them would silently send a $0 line
+        // (docs/cni-redesign.md §3.6).
         const unpricedParts: string[] = [];
         // Track which NetSuite item each part resolved to, so a NetSuite
         // rejection can name the part + internal ID + type rather than a bare id.
@@ -226,9 +248,9 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
-        // Refuse to bill a part at $0: without a price in netsuite_parts the
-        // line would silently invoice for nothing. Surface it so an admin sets
-        // the price and re-invoices, instead of sending a $0 line (§3.6).
+        // Refuse to bill a part at $0: with no price in the catalog and none
+        // in NetSuite either, the line would silently invoice for nothing.
+        // Surface it so an admin sets the price and re-invoices (§3.6).
         if (unpricedParts.length > 0) {
           results.push({
             customer: customerName,
@@ -236,7 +258,7 @@ export async function POST(req: NextRequest) {
             scanIds: custScans.map(s => s.id),
             vehicleCount: custScans.length,
             status: 'error',
-            error: `No NetSuite price set for: ${unpricedParts.join(', ')} — set a price in netsuite_parts, then re-invoice`,
+            error: `No price found for: ${unpricedParts.join(', ')} — neither the parts catalog nor NetSuite has one. Set the price, then re-invoice`,
           });
           continue;
         }
