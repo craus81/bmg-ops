@@ -20,9 +20,9 @@ Facts to check against, not to re-decide:
 | Signing style | Automatic, **no team set** | `project.pbxproj` (`CODE_SIGN_STYLE = Automatic`, no `DEVELOPMENT_TEAM`) |
 | Version / build | 1.0 / 1 | `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION` |
 | Push environment | `development` | `ios/App/App/App.entitlements` (`aps-environment`) |
-| Associated domain | `applinks:bmg-ops.vercel.app` | `App.entitlements` |
+| Associated domain | `applinks:go.bmgfleet.com` | `App.entitlements` |
 | Privacy strings | Camera + photo library present | `Info.plist` (`NSCameraUsageDescription`, `NSPhotoLibraryUsageDescription`) |
-| Web content | Loaded live from `https://bmg-ops.vercel.app` | `capacitor.config.ts` (`server.url`) |
+| Web content | Loaded live from `https://go.bmgfleet.com` | `capacitor.config.ts` (`server.url`) |
 
 APNs sending is already wired server-side (`src/lib/apns.ts`) and reads
 `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_PRIVATE_KEY`, and optionally
@@ -94,7 +94,7 @@ silently dropped.
      a privacy policy URL, and a demo account for the reviewer.
 
 > **Flag before you submit publicly.** `capacitor.config.ts` points
-> `server.url` at `https://bmg-ops.vercel.app`, so the app is a web view over
+> `server.url` at `https://go.bmgfleet.com`, so the app is a web view over
 > a live site with no bundled web assets. App Review rejects that shape under
 > guideline 4.2 ("minimum functionality") with some regularity. Custom App
 > distribution through Apple Business Manager avoids the argument entirely
@@ -114,8 +114,8 @@ silently dropped.
 
 ## 6. Universal links (needed before deep links open in the app)
 
-`App.entitlements` already claims `applinks:bmg-ops.vercel.app`, but nothing
-serves the matching file — so today those links open in Safari, not the app.
+`App.entitlements` claims `applinks:go.bmgfleet.com`, but nothing serves the
+matching file — so today those links open in Safari, not the app.
 
 1. Serve `/.well-known/apple-app-site-association` from the site (no file
    extension, `Content-Type: application/json`, no redirect), containing the
@@ -124,8 +124,10 @@ serves the matching file — so today those links open in Safari, not the app.
    plus a header rule in `next.config.js` for the content type.
 3. Decide the paths deliberately — every notification deep link comes from
    `src/lib/deep-links.ts`, and those are the URLs worth claiming.
-4. If the app ever moves to `ops.bmgfleet.com`, the entitlement, the AASA
-   file, and `server.url` all have to move together.
+4. The entitlement, the AASA file and `server.url` all name the same host and
+   have to move together. They point at `go.bmgfleet.com` as of the move off
+   `bmg-ops.vercel.app` — serve the AASA file from that host, not from the
+   old one.
 
 ## 7. Then, and only then: the Siri App Intent
 

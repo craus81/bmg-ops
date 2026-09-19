@@ -57,7 +57,7 @@ const esc = (s: string) => s
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 function creditAppCtaHtml(): string {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
   const link = `${appUrl}/credit-application`;
   return `
       <div style="margin:20px 0;text-align:center;">

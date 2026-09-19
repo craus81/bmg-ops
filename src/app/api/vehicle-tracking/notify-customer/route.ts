@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
     if (since) daysReady = Math.floor((Date.now() - new Date(since).getTime()) / 86_400_000);
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
   const content = buildVehicleCustomerEmail(
     { ...vehicle, daysReady },
     kind as VehicleEmailKind,

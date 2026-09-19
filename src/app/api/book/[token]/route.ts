@@ -255,7 +255,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   // bypasses the notify_status_emails opt-in the way on-demand sends do.
   const customerName = target.kind === 'pickup' ? target.checkin.customer_name : target.estimate.customer_name;
   if (customerName) {
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
     const bodyText = `Your ${kindNoun} for ${label} is ${verb} for ${when}. Need a different time? Use the same link to reschedule or cancel.`;
     await notifyCustomerByName(service, customerName, {
       respectOptOut: false,

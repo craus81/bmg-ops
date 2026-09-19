@@ -125,7 +125,7 @@ export interface RelinkEmailInput {
 /** One template for all three kinds — the message is identical and three
  *  copies would drift apart within a round (the expiry-warning lesson). */
 export function buildRelinkEmail(input: RelinkEmailInput): { subject: string; html: string; text: string } {
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app').replace(/\/$/, '');
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com').replace(/\/$/, '');
   const path = input.kind === 'estimate'
     ? deepLinks.approveEstimate(input.token)
     : input.kind === 'quote'

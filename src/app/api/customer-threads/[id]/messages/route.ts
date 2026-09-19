@@ -107,7 +107,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     try {
       const { sendEmailDetailed, buildNotificationEmail } = await import('@/lib/resend');
       const { deepLinks } = await import('@/lib/deep-links');
-      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
       // CTA lands on the customer portal — the only in-app page an external
       // customer login can open. The bare app origin just showed whoever
       // clicked a login screen with no destination (Round 3, §7.2.7); the

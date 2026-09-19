@@ -58,7 +58,7 @@ describe('templateRoute — ids, query, hash', () => {
   it('strips query string and hash always', () => {
     expect(templateRoute('/tracking?vehicle=abc&email=x@y.com#top')).toBe('/tracking');
     expect(templateRoute('/estimates#section')).toBe('/estimates');
-    expect(templateRoute('https://ops.bmgfleet.com/admin/inbox?thread=t-1')).toBe('/admin/inbox');
+    expect(templateRoute('https://go.bmgfleet.com/admin/inbox?thread=t-1')).toBe('/admin/inbox');
   });
   it('mixed-case words and hyphenated slugs are left alone', () => {
     expect(templateRoute('/admin/cni/jobs/new')).toBe('/admin/cni/jobs/new');
@@ -135,31 +135,31 @@ describe('cleanStack', () => {
   it('keeps at most 5 path:line:col frames with origin and query removed', () => {
     const stack = [
       'TypeError: x is not a function',
-      '    at foo (https://ops.bmgfleet.com/_next/static/chunks/app.js?v=abc:12:34)',
-      '    at bar (https://ops.bmgfleet.com/_next/static/chunks/app.js:56:7)',
+      '    at foo (https://go.bmgfleet.com/_next/static/chunks/app.js?v=abc:12:34)',
+      '    at bar (https://go.bmgfleet.com/_next/static/chunks/app.js:56:7)',
       '    at a (/x.js:1:1)', '    at b (/x.js:2:2)', '    at c (/x.js:3:3)', '    at d (/x.js:4:4)',
     ].join('\n');
     const out = cleanStack(stack)!;
     expect(out.split('\n')).toHaveLength(5);
     expect(out).toContain('/_next/static/chunks/app.js:12:34');
-    expect(out).not.toContain('ops.bmgfleet.com');
+    expect(out).not.toContain('go.bmgfleet.com');
     expect(out).not.toContain('v=abc');
   });
   it('a document-url frame on /book/<token> is templated, V8 style', () => {
     const token = '8f3a1b2c-4d5e-4f70-8a9b-0c1d2e3f4a5b';
-    const out = cleanStack(`TypeError: boom\n    at https://ops.bmgfleet.com/book/${token}:1:2345`)!;
+    const out = cleanStack(`TypeError: boom\n    at https://go.bmgfleet.com/book/${token}:1:2345`)!;
     expect(out).toBe('/book/:token:1:[n]');
     expect(out).not.toMatch(/[0-9a-f]{8}/i);
   });
   it('a document-url frame on /book/<token> is templated, Firefox style', () => {
     const token = '8f3a1b2c-4d5e-4f70-8a9b-0c1d2e3f4a5b';
-    const out = cleanStack(`onClick@https://ops.bmgfleet.com/book/${token}?x=1:7:12\n@https://ops.bmgfleet.com/_next/static/chunks/app.js:9:8`)!;
+    const out = cleanStack(`onClick@https://go.bmgfleet.com/book/${token}?x=1:7:12\n@https://go.bmgfleet.com/_next/static/chunks/app.js:9:8`)!;
     expect(out.split('\n')).toEqual(['/book/:token:7:12', '/_next/static/chunks/app.js:9:8']);
     expect(out).not.toContain(token.slice(0, 8));
   });
   it('a 64-hex portal token in a frame or a message never survives', () => {
     const tok = 'a'.repeat(32) + '0123456789abcdef0123456789abcdef';
-    const stack = `Error: bad token ${tok}\n    at https://ops.bmgfleet.com/portal/${tok}/billing:1:2`;
+    const stack = `Error: bad token ${tok}\n    at https://go.bmgfleet.com/portal/${tok}/billing:1:2`;
     const out = cleanStack(stack)!;
     expect(out).toContain('/portal/:token/billing:1:2');
     expect(out).not.toContain('0123456789abcdef');
@@ -219,7 +219,7 @@ describe('sanitizeDetail / sanitizeEvent', () => {
   it('page and error.source are masked after templating, and re-bounded to the column width', () => {
     expect(sanitizeEvent({ kind: 'error', page: '/search/bob@x.com' })!.page).toBe('/search/[email]');
     expect(sanitizeEvent({ kind: 'error', page: '/tracking/1FTBW3XM5PKA00001' })!.page).toBe('/tracking/[vin]');
-    expect(sanitizeDetail('error', { source: 'https://ops.bmgfleet.com/search/bob@x.com?q=1' }).source).toBe('/search/[email]');
+    expect(sanitizeDetail('error', { source: 'https://go.bmgfleet.com/search/bob@x.com?q=1' }).source).toBe('/search/[email]');
     // masking can lengthen a string: 40 emails of 7 chars → 40 × '[email]' = 280 chars; the CHECK is 200
     const long = '/' + Array(40).fill('a@b.cd').join('/');
     const page = sanitizeEvent({ kind: 'error', page: long })!.page;

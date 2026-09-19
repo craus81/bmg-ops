@@ -94,7 +94,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   (estimate as any).vehicle_platform_label = (estimate as any).vehicle_platforms?.label || null;
 
   const emailList = (body.emails || []).map(e => e.trim()).filter(Boolean);
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
   const reviewUrl = `${appUrl}${deepLinks.estimate(estimate.id)}`;
   const headline = estimateHeadlineNumber(estimate);
   const senderName = (auth.profile as any)?.full_name || auth.user?.email || 'A teammate';

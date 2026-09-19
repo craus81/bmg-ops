@@ -80,7 +80,7 @@ export async function GET(req: NextRequest) {
     }
     const recipients = (audience || []).filter(p => !optedOut.has(p.id));
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
     const weekLabel = fmtWeekLabel(data.weekStart, shiftDay(data.weekEnd, -1));
     const subject = `Owner's brief — week of ${fmtDayShort(data.weekStart)}`;
 

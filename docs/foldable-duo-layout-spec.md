@@ -49,7 +49,7 @@ Worth stating plainly because it changes the calculus: **the iOS app exists.**
 the live deployment:
 
 ```ts
-server: { url: 'https://bmg-ops.vercel.app', cleartext: false }
+server: { url: 'https://go.bmgfleet.com', cleartext: false }
 ```
 
 The native shell is a WKWebView loading production. There is no separate
