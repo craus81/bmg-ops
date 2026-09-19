@@ -127,7 +127,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: 'No email or phone on file for this customer. Add a contact first.' }, { status: 400 });
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
   const subject = `[BMG Fleet] Estimate #${estimate.estimate_number} — Ready for your approval`;
   const message = body.message?.trim() || undefined;
 

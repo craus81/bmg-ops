@@ -114,7 +114,7 @@ export async function POST(req: NextRequest) {
     + ' If anything needs adjusting, or you have questions, just reply to this email — it comes straight back to us.';
 
   // Live Review & Accept link, when the magic-link token hasn't expired.
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
   const tokenValid = quote.approval_token
     && quote.approval_token_expires_at
     && new Date(quote.approval_token_expires_at) > new Date();

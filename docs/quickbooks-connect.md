@@ -33,11 +33,13 @@ those fields are dropped at intake, not masked.
 On the app's **Redirect URIs** list add EXACTLY:
 
 ```
-https://<production host>/api/auth/quickbooks/callback
+https://go.bmgfleet.com/api/auth/quickbooks/callback
 ```
 
-Intuit matches this string character for character. The production host is an
-owner decision — write it down here once it is settled. Vercel preview
+Intuit matches this string character for character. The production host was
+settled as `go.bmgfleet.com` (owner decision 2026-09-19, replacing
+`bmg-ops.vercel.app`) — register it only once that domain is live in Vercel,
+because re-registering means coming back to Intuit. Vercel preview
 deployments get a different hostname every build, so **previews cannot
 complete OAuth**; always authorize from the production URL.
 
@@ -48,7 +50,7 @@ Vercel → Project → Settings → Environment Variables, **Production** scope:
 ```
 QBO_CLIENT_ID=<from the Intuit app>
 QBO_CLIENT_SECRET=<from the Intuit app>
-QBO_REDIRECT_URI=https://<production host>/api/auth/quickbooks/callback
+QBO_REDIRECT_URI=https://go.bmgfleet.com/api/auth/quickbooks/callback
 QBO_ENVIRONMENT=production
 QBO_MINOR_VERSION=            # optional; the app pins a default
 ```

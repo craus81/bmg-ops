@@ -38,7 +38,7 @@ skip it but a re-deploy re-runs the pipeline.
 Don't try to apply or verify one from a session container either:
 `SUPABASE_DB_URL` is present here, but the egress policy blocks Postgres
 (port 5432) — `npm run migrate` and `psql` both time out — and HTTPS to
-`ops.bmgfleet.com` is rejected too. To confirm a migration landed, check
+`go.bmgfleet.com` is rejected too. To confirm a migration landed, check
 the latest production build log on Vercel for `applied <file>.sql`.
 
 ## Git workflow

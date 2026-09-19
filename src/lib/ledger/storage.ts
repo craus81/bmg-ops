@@ -160,7 +160,7 @@ export function isSafeLedgerStoragePath(path: string): boolean {
  * `ledger_documents.content_type` is whatever the SOURCE said it was: a
  * QuickBooks `Attachable` carries a caller-chosen ContentType, so a
  * 'text/html' or 'image/svg+xml' attachment is an ordinary thing to find in
- * the ledger. Served inline from ops.bmgfleet.com that is stored XSS running
+ * the ledger. Served inline from go.bmgfleet.com that is stored XSS running
  * in the reader's own finance/executive session, and
  * `X-Content-Type-Options: nosniff` does not help — nosniff stops the browser
  * GUESSING a type, not honouring a declared one, and the app ships no

@@ -10,7 +10,7 @@ doing them.
 
 > **What this document is not.** It is not a status report. The session
 > container can't reach production (Postgres 5432 and HTTPS to
-> `ops.bmgfleet.com` are both blocked by the egress policy), so nothing here
+> `go.bmgfleet.com` are both blocked by the egress policy), so nothing here
 > is a claim that a given env var is unset or a given table is empty — it's
 > the complete list of what each feature *requires*, compiled from the code.
 > Skip any line you know is already done.
@@ -162,7 +162,7 @@ SMS_PROVIDER=dialpad
 Then register the Event Subscription webhook in Dialpad, pointed at:
 
 ```
-POST https://ops.bmgfleet.com/api/webhooks/dialpad
+POST https://go.bmgfleet.com/api/webhooks/dialpad
 ```
 
 Without the subscription the outbound SMS path works but no call ever

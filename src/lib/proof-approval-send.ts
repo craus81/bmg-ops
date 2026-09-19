@@ -171,7 +171,7 @@ export async function sendProofApproval(
     if (emailList.length === 0 && !phone) return { ok: false, status: 400, error: 'No email or phone on file for this customer.' };
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
   const label = job.title || job.job_number || `Job ${jobId.slice(0, 8)}`;
   const subject = reminder
     ? `[BMG Fleet] Reminder: proof awaiting your approval — ${label}`

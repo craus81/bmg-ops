@@ -136,7 +136,7 @@ export async function POST(req: NextRequest) {
       token = tokErr ? null : minted.token;
     }
     if (token) {
-      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
       approveUrl = `${appUrl}/approve/quote/${token}?via=email&to=${encodeURIComponent(email)}`;
     }
   }

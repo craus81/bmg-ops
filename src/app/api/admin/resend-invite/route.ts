@@ -10,7 +10,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
 
 const ResendInviteSchema = z.object({
   userId: z.string().uuid().optional(),

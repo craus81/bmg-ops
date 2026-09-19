@@ -55,7 +55,7 @@ export interface FeedJob {
 }
 
 export function appBaseUrl(): string {
-  return (process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app').replace(/\/$/, '');
+  return (process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com').replace(/\/$/, '');
 }
 
 /** The subscribe URL. The `.ics` suffix rides on the token segment: some

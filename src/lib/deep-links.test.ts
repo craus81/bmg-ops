@@ -68,10 +68,10 @@ describe('deepLinks.ledgerDocument', () => {
 
   it('is a src the PDF viewer will frame', () => {
     const src = deepLinks.ledgerDocument('11111111-2222-3333-4444-555555555555');
-    expect(allowedPdfSrc(src, 'https://ops.bmgfleet.com')).toBe(src);
+    expect(allowedPdfSrc(src, 'https://go.bmgfleet.com')).toBe(src);
     const url = deepLinks.pdfViewer(src, { name: 'Invoice 1042.pdf' });
     expect(new URLSearchParams(url.split('?')[1]).get('src')).toBe(src);
-    expect(allowedPdfSrc(url, 'https://ops.bmgfleet.com')).toBe(url);
+    expect(allowedPdfSrc(url, 'https://go.bmgfleet.com')).toBe(url);
   });
 });
 
@@ -103,7 +103,7 @@ describe('deepLinks.ledgerCustomerReview', () => {
 });
 
 describe('allowedPdfSrc', () => {
-  const ORIGIN = 'https://ops.bmgfleet.com';
+  const ORIGIN = 'https://go.bmgfleet.com';
   const FILE_HOST = 'https://files.example.com';
   afterEach(() => { delete process.env.NEXT_PUBLIC_R2_PUBLIC_URL; });
 
@@ -124,7 +124,7 @@ describe('allowedPdfSrc', () => {
     expect(allowedPdfSrc('https://evil.example.com/x.pdf', ORIGIN)).toBe(null);
     expect(allowedPdfSrc('javascript:alert(1)', ORIGIN)).toBe(null);
     expect(allowedPdfSrc('data:text/html,<h1>hi', ORIGIN)).toBe(null);
-    expect(allowedPdfSrc('http://ops.bmgfleet.com/x.pdf', ORIGIN)).toBe(null);
+    expect(allowedPdfSrc('http://go.bmgfleet.com/x.pdf', ORIGIN)).toBe(null);
     expect(allowedPdfSrc(null, ORIGIN)).toBe(null);
     expect(allowedPdfSrc('', ORIGIN)).toBe(null);
   });
