@@ -4,7 +4,7 @@ import {
   fetchOpenArInvoices, fetchOpenVendorBills, fetchAccountGroups, arCustomerKey,
   type OpenArInvoice, type OpenVendorBill,
 } from './financials-data';
-import { loadPnlPeriods } from './pnl';
+import { loadPnlPeriod } from './pnl';
 
 /**
  * Cash Outlook — 4-week forward view (R6-12).
@@ -306,7 +306,10 @@ export async function loadCashOutlook(service: SupabaseClient): Promise<CashOutl
     fetchOpenArInvoices(),
     fetchOpenVendorBills(),
     fetchAccountGroups(),
-    loadPnlPeriods(),
+    // Payroll run-rate wants a CLOSED month, and 'last-month' is the only
+    // closed period payrollRunRate ever used — so ask for that one alone
+    // rather than fetching every period to discard all but one.
+    loadPnlPeriod('last-month').then(r => ({ periods: [r.period], payrollConfigured: r.payrollConfigured })),
     fetchAllRows<any>((from, to) => service
       .from('fleet_checkins')
       .select('customer_name, customer_netsuite_id, invoice_number, date_invoiced, paid_at')

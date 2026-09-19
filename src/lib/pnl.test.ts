@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { summarizePnl, payrollAccountIds } from './pnl';
+import { summarizePnl, payrollAccountIds, pnlPeriodDefs, isPnlPeriodKey, PNL_PERIOD_KEYS } from './pnl';
 import type { RestletPnlRow } from './netsuite';
 
 const row = (accountType: string, amount: number, accountId = 'a'): RestletPnlRow => ({
@@ -68,5 +68,44 @@ describe('payrollAccountIds', () => {
   it('parses the env list and drops junk', () => {
     expect([...payrollAccountIds('101, 202 ,abc,')].sort()).toEqual(['101', '202']);
     expect(payrollAccountIds('').size).toBe(0);
+  });
+});
+
+describe('pnlPeriodDefs — selectable ranges (fiscal year = calendar year)', () => {
+  const d = pnlPeriodDefs('2026-09-19');
+
+  it('last month is the whole previous month, and closed', () => {
+    expect(d['last-month'].from).toBe('2026-08-01');
+    expect(d['last-month'].to).toBe('2026-08-31');
+    expect(d['last-month'].directional).toBe(false);
+  });
+
+  it('periods containing today are directional', () => {
+    expect(d['mtd']).toMatchObject({ from: '2026-09-01', to: '2026-09-19', directional: true });
+    expect(d['qtd']).toMatchObject({ from: '2026-07-01', to: '2026-09-19', directional: true });
+    expect(d['ytd']).toMatchObject({ from: '2026-01-01', to: '2026-09-19', directional: true });
+  });
+
+  it('last year is the full prior calendar year, and closed', () => {
+    expect(d['last-year']).toMatchObject({ from: '2025-01-01', to: '2025-12-31', directional: false });
+  });
+
+  it('rolls the year over in January', () => {
+    const jan = pnlPeriodDefs('2026-01-07');
+    expect(jan['last-month']).toMatchObject({ from: '2025-12-01', to: '2025-12-31' });
+    expect(jan['last-year']).toMatchObject({ from: '2025-01-01', to: '2025-12-31' });
+  });
+
+  it('every advertised key has a definition', () => {
+    for (const k of PNL_PERIOD_KEYS) expect(d[k].key).toBe(k);
+  });
+});
+
+describe('isPnlPeriodKey', () => {
+  it('accepts the known keys and rejects anything else', () => {
+    expect(isPnlPeriodKey('ytd')).toBe(true);
+    expect(isPnlPeriodKey('last-year')).toBe(true);
+    expect(isPnlPeriodKey('all-time')).toBe(false);
+    expect(isPnlPeriodKey(undefined)).toBe(false);
   });
 });

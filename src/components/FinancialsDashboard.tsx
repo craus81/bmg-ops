@@ -205,8 +205,8 @@ export default function FinancialsDashboard() {
   // incomeStatement mode. Null until fetched; per-period errors carry the
   // redeploy/grant hint (docs/pnl-restlet-deploy.md).
   const [pnl, setPnl] = useState<{
-    periods: {
-      label: string; from: string; to: string; directional: boolean;
+    period: {
+      key: string; label: string; from: string; to: string; directional: boolean;
       pnl: {
         income: number; cogs: number; expense: number; payroll: number;
         grossMargin: number; grossMarginPct: number | null;
@@ -214,9 +214,14 @@ export default function FinancialsDashboard() {
       } | null;
       collections: { total: number; count: number } | null;
       error: string | null;
-    }[];
+    };
+    options: { key: string; label: string }[];
     payrollConfigured: boolean;
   } | null>(null);
+  // Which period the band is showing. Changing it refetches just the band —
+  // one period at a time is what keeps us under NetSuite's concurrency limit.
+  const [pnlPeriod, setPnlPeriod] = useState('last-month');
+  const [pnlLoading, setPnlLoading] = useState(true);
   // A/R trends band (R5-6): DSO, nightly aging snapshots, slowest payers.
   const [trends, setTrends] = useState<{
     dsoNow: number | null;
@@ -250,13 +255,6 @@ export default function FinancialsDashboard() {
     })();
     (async () => {
       try {
-        const res = await apiFetch('/api/reports/financials/pnl');
-        const body = await res.json();
-        if (alive && res.ok) setPnl(body);
-      } catch { /* band stays hidden */ }
-    })();
-    (async () => {
-      try {
         const res = await apiFetch('/api/reports/financials/ar-trends');
         const body = await res.json();
         if (alive && res.ok) setTrends(body);
@@ -264,6 +262,22 @@ export default function FinancialsDashboard() {
     })();
     return () => { alive = false; };
   }, []);
+
+  // The P&L band loads on its own and reloads when the period changes, so
+  // switching period never re-runs the rest of the page.
+  useEffect(() => {
+    let alive = true;
+    setPnlLoading(true);
+    (async () => {
+      try {
+        const res = await apiFetch(`/api/reports/financials/pnl?period=${encodeURIComponent(pnlPeriod)}`);
+        const body = await res.json();
+        if (alive && res.ok) setPnl(body);
+      } catch { /* band stays as it was */ }
+      finally { if (alive) setPnlLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, [pnlPeriod]);
 
   if (error) {
     return (
@@ -450,45 +464,80 @@ export default function FinancialsDashboard() {
       )}
 
       {/* ── P&L band (R5-5) — GL-true numbers from the financials RESTlet's
-             incomeStatement/collections modes. Closed months reliable, the
-             current month directional (hard labeling requirement). ── */}
-      {(() => {
-        const closed = pnl?.periods?.find(p => !p.directional && p.pnl) || null;
-        const mtd = pnl?.periods?.find(p => p.label === 'Month to date') || null;
-        const ytd = pnl?.periods?.find(p => p.label === 'Year to date') || null;
-        const firstError = pnl?.periods?.find(p => p.error)?.error || null;
-        if (!pnl) return null;
-        if (!closed && firstError) {
+             incomeStatement/collections modes. One period at a time, picked
+             below; periods containing today are labeled directional (a hard
+             requirement, not polish). Tiles lead with dollars and carry the
+             percentage underneath — the owner reads the money first. ── */}
+      {pnl && (() => {
+        const p = pnl.period;
+        const c = p.pnl;
+        const picker = (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', margin: '0 2px 10px' }}>
+            {pnl.options.map(o => {
+              const on = o.key === pnlPeriod;
+              return (
+                <button
+                  key={o.key}
+                  onClick={() => setPnlPeriod(o.key)}
+                  aria-pressed={on}
+                  style={{
+                    background: on ? 'var(--navy, #4d8ba6)' : 'var(--card)',
+                    color: on ? '#fff' : 'var(--text-secondary)',
+                    border: `1px solid ${on ? 'var(--navy, #4d8ba6)' : 'var(--border)'}`,
+                    borderRadius: '999px', padding: '5px 12px', fontSize: '12px',
+                    fontWeight: 700, cursor: 'pointer',
+                  }}
+                >{o.label}</button>
+              );
+            })}
+            {pnlLoading && <span style={{ alignSelf: 'center', fontSize: '11.5px', color: 'var(--text-muted)' }}>Loading…</span>}
+          </div>
+        );
+
+        if (!c) {
           return (
-            <div style={{ ...card, padding: '11px 14px', fontSize: '12px', color: 'var(--text-secondary)', borderColor: 'color-mix(in srgb, var(--warning) 35%, var(--border))' }}>
-              <span style={{ color: 'var(--warning)', fontWeight: 700 }}>P&amp;L unavailable.</span>{' '}
-              NetSuite said: <code style={{ color: 'var(--text-primary)' }}>{firstError}</code>
-              {/RESTlet|permission/i.test(firstError) && <>{' '}— re-upload <code>scripts/netsuite-financials-restlet.js</code> and grant the RESTlet role transaction search per <code>docs/pnl-restlet-deploy.md</code>.</>}
+            <div>
+              <div style={{ ...eyebrow, margin: '2px 2px 10px' }}>Profit &amp; loss — from the NetSuite GL</div>
+              {picker}
+              {p.error && (
+                <div style={{ ...card, padding: '11px 14px', fontSize: '12px', color: 'var(--text-secondary)', borderColor: 'color-mix(in srgb, var(--warning) 35%, var(--border))' }}>
+                  <span style={{ color: 'var(--warning)', fontWeight: 700 }}>P&amp;L unavailable.</span>{' '}
+                  NetSuite said: <code style={{ color: 'var(--text-primary)' }}>{p.error}</code>
+                  {/RESTlet|permission/i.test(p.error) && <>{' '}— re-upload <code>scripts/netsuite-financials-restlet.js</code> and grant the RESTlet role transaction search per <code>docs/pnl-restlet-deploy.md</code>.</>}
+                </div>
+              )}
             </div>
           );
         }
-        if (!closed?.pnl) return null;
-        const c = closed.pnl;
-        const m = mtd?.pnl || null;
+
+        // Named to avoid shadowing the module-level pct(part, whole).
+        const ofRevenue = (v: number | null) => v == null ? '—' : `${v}%`;
         return (
-          <div>
-            <div style={{ ...eyebrow, margin: '2px 2px 10px' }}>Profit &amp; loss — {closed.label.toLowerCase()} (closed), from the NetSuite GL</div>
+          <div style={{ opacity: pnlLoading ? 0.55 : 1, transition: 'opacity .15s' }}>
+            <div style={{ ...eyebrow, margin: '2px 2px 10px' }}>
+              Profit &amp; loss — {p.label.toLowerCase()} {p.directional ? '(directional)' : '(closed)'}, from the NetSuite GL
+            </div>
+            {picker}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', marginBottom: '8px' }}>
               <Tile swatch="var(--navy, #4d8ba6)" label="Revenue (GL)" value={usd(c.income)}
-                sub={<>{m ? `${usd(m.income)} MTD (directional)` : 'MTD unavailable'}</>} />
-              <Tile swatch="var(--success)" label="Gross margin" value={c.grossMarginPct == null ? '—' : `${c.grossMarginPct}%`}
-                sub={<>{usd(c.grossMargin)}{m?.grossMarginPct != null && <> · {m.grossMarginPct}% MTD</>}</>} />
-              <Tile swatch={c.netProfitPct != null && c.netProfitPct < 0 ? 'var(--error)' : 'var(--success)'} label="Net profit" value={c.netProfitPct == null ? '—' : `${c.netProfitPct}%`}
-                sub={<>{usd(c.netProfit)}{m?.netProfitPct != null && <> · {m.netProfitPct}% MTD</>}</>} />
+                sub={<>{p.from} to {p.to}</>} />
+              <Tile swatch="var(--success)" label="Gross margin" value={usd(c.grossMargin)}
+                sub={<>{ofRevenue(c.grossMarginPct)} of revenue</>} />
+              <Tile swatch={c.netProfit < 0 ? 'var(--error)' : 'var(--success)'} label="Net income"
+                value={usd(c.netProfit)} valueColor={c.netProfit < 0 ? 'var(--error)' : undefined}
+                sub={<>{ofRevenue(c.netProfitPct)} of revenue</>} />
               <Tile swatch="var(--navy, #4d8ba6)" label="Payroll" value={pnl.payrollConfigured ? usd(c.payroll) : '—'}
                 sub={pnl.payrollConfigured
                   ? <>{c.laborPct != null ? `${c.laborPct}% of revenue` : 'Labor %'}</>
                   : <span style={hint}>Set NETSUITE_PAYROLL_ACCOUNT_IDS</span>} />
-              <Tile swatch="var(--navy, #4d8ba6)" label="Collections" value={closed.collections ? usd(closed.collections.total) : '—'}
-                sub={<>{closed.collections ? `${closed.collections.count} payments` : 'Unavailable'}{mtd?.collections && <> · {usd(mtd.collections.total)} MTD</>}</>} />
+              <Tile swatch="var(--navy, #4d8ba6)" label="Collections" value={p.collections ? usd(p.collections.total) : '—'}
+                sub={<>{p.collections ? `${p.collections.count} payments` : 'Unavailable'}</>} />
             </div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '0 2px' }}>
-              Closed months are reliable; month-to-date{ytd?.pnl ? ` and YTD (${ytd.pnl.netProfitPct != null ? `${ytd.pnl.netProfitPct}% net` : 'net —'})` : ''} are directional until the books close. Net profit is only as complete as what posts to the GL (payroll journals included).
+              {p.directional
+                ? 'This period contains today, so the numbers still move — closed periods are the reliable ones.'
+                : 'A closed period: these numbers are final.'}
+              {' '}Net income is only as complete as what posts to the GL (payroll journals included).
             </div>
           </div>
         );
