@@ -857,7 +857,7 @@ export default function AdminScansPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          scanId: editingScan.id,
+          scanIds: [editingScan.id],
           partNumber: pn,
           partDescription: addPartPicked?.display_name || null,
         }),
@@ -928,7 +928,19 @@ export default function AdminScansPage() {
   const [bulkEditCustomer, setBulkEditCustomer] = useState('');
   const [bulkEditLocation, setBulkEditLocation] = useState('');
   const [bulkEditPO, setBulkEditPO] = useState('');
+  // Extra parts for the same vehicles. A truck that got a decal kit AND a
+  // unit number is one scan with two billable parts, so each extra part
+  // becomes its own line on every selected VIN (with its own PO and invoice)
+  // instead of a second part number crammed into one field as "A/B", which
+  // matches no PO and prices as nothing.
+  const [bulkEditExtraParts, setBulkEditExtraParts] = useState<string[]>([]);
+  const [bulkExtraInput, setBulkExtraInput] = useState('');
+  const [bulkEditBusy, setBulkEditBusy] = useState(false);
   const [allPOs, setAllPOs] = useState<{ id: string; po_number: string; customer: string; line_items: { id: string; part_number: string; quantity: number; installed: number }[] }[]>([]);
+  /** "0602S029/06S646" typed into one part field → the two parts it means. */
+  const splitSlashParts = (raw: string | null | undefined) =>
+    (raw || '').split('/').map(t => t.trim()).filter(Boolean);
+
   const applyBulkEdit = async () => {
     const ids = [...selectedScans];
     if (ids.length === 0) return;
@@ -966,21 +978,54 @@ export default function AdminScansPage() {
         }
       }
     }
-    if (Object.keys(updates).length === 0) { setShowBulkEdit(false); return; }
+    if (Object.keys(updates).length === 0 && bulkEditExtraParts.length === 0) { setShowBulkEdit(false); return; }
+    setBulkEditBusy(true);
     try {
-      const res = await fetch('/api/scans/bulk-update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scanIds: ids, updates }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        await dialog.alert(`Failed to update: ${data.error || 'Unknown error'}`);
-        return;
+      if (Object.keys(updates).length > 0) {
+        const res = await fetch('/api/scans/bulk-update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scanIds: ids, updates }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          await dialog.alert(`Failed to update: ${data.error || 'Unknown error'}`);
+          return;
+        }
       }
+
+      // Extra parts run after the edits above, so each new line copies the
+      // customer and location this apply just set. The server gives every
+      // added line its own PO match and pays the crew for it.
+      const notes: string[] = [];
+      for (const extra of bulkEditExtraParts) {
+        try {
+          const res = await fetch('/api/scans/add-part', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ scanIds: ids, partNumber: extra }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.success) {
+            notes.push(`${extra}: ${data.error || 'could not be added'}`);
+            continue;
+          }
+          notes.push(
+            `${extra} added to ${data.added} vehicle${data.added === 1 ? '' : 's'}`
+            + (data.duplicates?.length ? ` · ${data.duplicates.length} already had it` : '')
+            + (data.failures?.length ? ` · ${data.failures.length} failed` : '')
+            + (data.notAttempted ? ` · ${data.notAttempted} not reached, run it again` : ''),
+          );
+        } catch (err: any) {
+          notes.push(`${extra}: ${err?.message || 'could not be added'}`);
+        }
+      }
+      if (notes.length > 0) await dialog.alert(notes.join('\n'));
     } catch (err: any) {
       await dialog.alert(`Update failed: ${err.message}`);
       return;
+    } finally {
+      setBulkEditBusy(false);
     }
     setShowBulkEdit(false);
     setBulkEditPart('');
@@ -988,6 +1033,8 @@ export default function AdminScansPage() {
     setBulkEditCustomer('');
     setBulkEditLocation('');
     setBulkEditPO('');
+    setBulkEditExtraParts([]);
+    setBulkExtraInput('');
     loadAll();
   };
 
@@ -1607,6 +1654,90 @@ export default function AdminScansPage() {
                   </div>
                 );
               })()}
+              {/* A second part for the same vehicles. Each one becomes its own
+                  line on every selected VIN — its own PO, its own invoice —
+                  which is what two parts crammed into one field as "A/B"
+                  could never do: that string matches no PO and prices as
+                  nothing. */}
+              {(() => {
+                const typedSplit = splitSlashParts(bulkEditPart);
+                const scannedSplit = splitSlashParts(selectedPart);
+                const offer = typedSplit.length > 1 ? typedSplit : scannedSplit.length > 1 ? scannedSplit : null;
+                const applySplit = (parts: string[]) => {
+                  const first = allParts.find(p => p.item_number.toUpperCase() === parts[0].toUpperCase());
+                  setBulkEditPart(first?.item_number || parts[0]);
+                  setBulkEditPartPicked(first || null);
+                  setBulkEditExtraParts(parts.slice(1));
+                  setBulkExtraInput('');
+                };
+                const addExtra = (raw: string) => {
+                  const pn = raw.trim();
+                  if (!pn) return;
+                  setBulkEditExtraParts(prev => prev.includes(pn) ? prev : [...prev, pn]);
+                  setBulkExtraInput('');
+                };
+                const q = bulkExtraInput.trim().toLowerCase();
+                const extraMatches = q.length >= 2
+                  ? allParts.filter(p =>
+                      p.item_number.toLowerCase() !== q && (
+                        p.item_number.toLowerCase().includes(q) ||
+                        p.display_name?.toLowerCase().includes(q)
+                      )).slice(0, 6)
+                  : [];
+                return (
+                  <div style={{ marginTop: '6px' }}>
+                    {offer && (
+                      <button
+                        onClick={() => applySplit(offer)}
+                        style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 7px', borderRadius: '5px', border: '1px solid rgba(251,191,36,0.3)', background: 'rgba(251,191,36,0.1)', color: '#fbbf24', fontSize: '9px', fontWeight: 700, cursor: 'pointer', marginBottom: '5px' }}
+                      >
+                        That is two parts in one field — split into {offer.join(' + ')}
+                      </button>
+                    )}
+                    {bulkEditExtraParts.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '5px' }}>
+                        {bulkEditExtraParts.map(pn => (
+                          <span key={pn} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '9px', fontWeight: 700, padding: '3px 6px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e' }}>
+                            + {pn}
+                            <button
+                              onClick={() => setBulkEditExtraParts(prev => prev.filter(x => x !== pn))}
+                              style={{ border: 'none', background: 'transparent', color: '#22c55e', cursor: 'pointer', fontSize: '10px', padding: 0, lineHeight: 1 }}
+                            >✕</button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ position: 'relative' }}>
+                      <input
+                        value={bulkExtraInput}
+                        onChange={e => setBulkExtraInput(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addExtra(bulkExtraInput); } }}
+                        placeholder="Second part number (optional)"
+                        style={{ width: '100%', padding: '7px 8px', borderRadius: '6px', border: `1px dashed ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}
+                      />
+                      {extraMatches.length > 0 && (
+                        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '180px', overflowY: 'auto', marginTop: '2px' }}>
+                          {extraMatches.map(p => (
+                            <button
+                              key={p.id}
+                              onMouseDown={e => e.preventDefault()}
+                              onClick={() => addExtra(p.item_number)}
+                              style={{ display: 'block', width: '100%', padding: '6px 8px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
+                            >
+                              <span style={{ fontWeight: 700 }}>{p.item_number}</span>
+                              {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
+                              {p.display_name && <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{p.display_name}</div>}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                      A second part becomes its own line on every selected VIN, with its own PO and invoice.
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
             <div style={{ position: 'relative' }}>
               <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Billable Customer</div>
@@ -1666,7 +1797,7 @@ export default function AdminScansPage() {
             </div>
           </div>
           <div style={{ display: 'flex', gap: '6px' }}>
-            <button onClick={applyBulkEdit} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer' }}>Apply Changes</button>
+            <button onClick={applyBulkEdit} disabled={bulkEditBusy} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: bulkEditBusy ? 'default' : 'pointer', opacity: bulkEditBusy ? 0.6 : 1 }}>{bulkEditBusy ? 'Applying…' : 'Apply Changes'}</button>
             <button onClick={() => setShowBulkEdit(false)} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-muted)', cursor: 'pointer' }}>Cancel</button>
           </div>
           </>); })()}
