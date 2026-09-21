@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { deepLinks } from '@/lib/deep-links';
 
 export const dynamic = 'force-dynamic';
 
@@ -172,7 +173,7 @@ export async function POST(req: NextRequest) {
         type: 'magiclink',
         email: email.toLowerCase().trim(),
         options: {
-          redirectTo: `${appUrl}/cni/onboarding`,
+          redirectTo: `${appUrl}${deepLinks.authCallback('/cni/onboarding')}`,
         },
       });
 
