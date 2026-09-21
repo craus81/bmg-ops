@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { normalizeItemNumber, isOpenPoStatus } from './vendor-po-sync';
 import { fetchAllRows } from './fetch-all';
 import { evaluateHealthRow, HEALTH_MONITORS, type SyncStateRow } from './system-health';
+import { normalizeVehicleCount } from './estimate-totals';
 
 /**
  * Total parts demand across every open job — "what do we need to buy to
@@ -67,6 +68,21 @@ export function isStockableItemType(itemType: string | null | undefined): boolea
 
 /** Placeholder line the estimate builder and the SO push both use. */
 const PLACEHOLDER_ITEMS = new Set(['FS-CUSTOM']);
+
+/**
+ * Parts one estimate line actually calls for.
+ *
+ * A fleet estimate stores ONE set of lines for N identical vehicles
+ * (migration 304 multiplies line quantities, never the finished totals), so
+ * the demand a twelve-van quote puts on the shelf is twelve times its line
+ * quantities. Reading the bare quantity reported a twelfth of the real need
+ * on the Open-job demand tab — the difference between ordering enough and
+ * ordering one van's worth.
+ */
+export function estimateLineQuantity(quantity: unknown, vehicleCount: unknown): number {
+  const qty = Number(quantity) || 0;
+  return qty * normalizeVehicleCount(vehicleCount);
+}
 
 export interface DemandSourceRef {
   kind: 'sales_order' | 'estimate';
@@ -251,7 +267,7 @@ export async function computePartsDemand(service: SupabaseClient<any, any, any>)
   );
   const approvedEstimates = must(await fetchAllRows<any>((from, to) => service
     .from('estimates')
-    .select('id, estimate_number, title, customer_name, status, customer_approved, customer_approved_at, netsuite_so_id')
+    .select('id, estimate_number, title, customer_name, status, customer_approved, customer_approved_at, netsuite_so_id, vehicle_count')
     .eq('customer_approved', true)
     .is('netsuite_so_id', null)
     .neq('status', 'rejected')
@@ -331,9 +347,9 @@ export async function computePartsDemand(service: SupabaseClient<any, any, any>)
     const key = normalizeItemNumber(line.item_number);
     if (!key) continue;
     if (!isDemandLine(key)) { skippedNonStock++; continue; }
-    const qty = Number(line.quantity) || 0;
-    if (qty <= 0) continue;
     const est = estimateById.get(line.estimate_id);
+    const qty = estimateLineQuantity(line.quantity, est?.vehicle_count);
+    if (qty <= 0) continue;
     const row = bucket(key, line.description || null);
     row.needed += qty;
     const existing = row.sources.find(s => s.kind === 'estimate' && s.id === line.estimate_id);

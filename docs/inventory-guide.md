@@ -24,6 +24,7 @@ Invoice email from vendor ──► PDF captured ──► one-click NetSuite bi
 | Screen | What it's for |
 |---|---|
 | **Upfit** (tab) | One project per job. Key dates, linked SO, Parts Readiness card, notes. |
+| **Estimates** (tab) | Stock check on the line items — before there is a job at all. Can hold parts for the quote. |
 | **More → Inventory** | Every part at a glance: on hand · allocated · free · on order. |
 | **Admin → Purchasing → Open-job demand** | Everything all the open work needs, rolled up by part. Ignores stock on purpose — see below. |
 | **More → Parts Mail** | **Incoming Parts** up top — what's on order and when it lands (from vendor email ETAs), checked against on-hand stock and what's reserved to jobs, with shortfalls flagged. Below it: the email scan's review queue and captured invoices. |
@@ -134,14 +135,60 @@ the same shelf stock.
   the vendor's invoice number becomes the bill's Reference No. It always
   asks before posting; nothing financial is ever automatic.
 
+## Checking stock from an estimate
+
+The readiness card above needs a sales order, which an estimate doesn't have
+yet — but the question comes up earlier than that. Whoever is quoting wants
+to know whether we can actually deliver before promising a date.
+
+So the estimate builder has the same check on its own line items. Hit
+**Check stock** above the line items and every line gets a verdict, worst
+first, with one line at the top for the whole quote:
+
+- 🟢 **In stock** — free right now, after every job's and every other
+  quote's holds.
+- 🟢 **Held for this quote** — reserved; nobody else can count them.
+- 🔵 **On order** — not enough free stock, but open POs cover it (with the
+  PO number and ETA).
+- 🔴 **Short** — not in stock and not on order.
+- 🟡 **Not in the parts catalog** — a custom line. It says so rather than
+  guessing, and the banner says how many it couldn't check.
+
+Two things to know:
+
+- **It answers about what's on screen**, not the last save, so it's worth
+  re-checking after you add lines. Editing lines marks the answer stale and
+  the banner says so.
+- **A fleet estimate multiplies.** Twelve identical vans need twelve sets,
+  and the numbers shown are the fleet quantities.
+
+### Holding parts for a quote
+
+**Reserve available** (or **Reserve N** on a single line) holds the parts for
+this estimate. A quote's hold counts against free stock exactly like a job's
+— that's the point, and it's why it's never automatic: you're taking parts
+off the shelf for work that isn't sold yet. Reserve when the job is real and
+the customer is about to say yes, not when you're pricing options.
+
+The hold lets go on its own in two cases: the estimate becomes a **sales
+order** (the upfit project's readiness card owns the parts from then on —
+reserve them there), or the estimate is **rejected**. Otherwise use **Release
+all**, or set a line back to zero. Holds show on the Inventory page and in
+Incoming Parts labelled with the estimate number, so it's always clear when
+stock is spoken for by a quote rather than a build.
+
+The estimate has to be saved before it can hold anything — a hold has to
+belong to something.
+
 ## The Inventory page (More → Inventory)
 
 One row per part that has stock, reservations, or an open PO:
 
 - **On Hand** — physical count per NetSuite.
 - **Avail** — on hand minus NetSuite-side commitments.
-- **Allocated** — reserved to jobs in FleetSuite; green chips name the
-  jobs (`3 → Anderson build`).
+- **Allocated** — reserved in FleetSuite; green chips name what's holding
+  them, a job (`3 → Anderson build`) or a quote (`3 → EST-2609-014
+  (quote)`).
 - **Free** — Avail minus Allocated. What a new job could actually take.
 - **On Order** — blue chips show quantity, PO, vendor, and ETA.
 
@@ -160,7 +207,8 @@ Two sources feed it, and it dedupes between them:
   finished work and drops out.
 - **Customer-approved estimates that haven't become a sales order yet.**
   Sold work NetSuite can't see. Once an estimate converts, its SO carries
-  the demand instead — it is never counted twice.
+  the demand instead — it is never counted twice. A fleet estimate counts
+  its line quantities × its vehicle count, the same as the quote itself.
 
 **It does not subtract stock, and that's the point.** The Needed column is
 what the jobs require, full stop. Two other columns sit beside it for
@@ -208,6 +256,9 @@ vendor or NetSuite item id to enrich it.
 - **Reserving is first-come.** "Available" on the card means available
   *right now* — if scheduling matters, reserve at the moment the job is
   confirmed, not the day before drop-off.
+- **Quotes can hold stock too.** A hold made from an estimate spends the
+  same shelf as a job's, so "free" can drop without any job changing. The
+  Inventory page names the estimate holding it.
 - **Open-job demand is only as fresh as the SO sync** (2 hours), and it
   reads mirrored sales orders rather than querying NetSuite live. The tab
   prints the sync timestamp — if it looks stale, check System Health.

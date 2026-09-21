@@ -2,8 +2,8 @@
 
 /**
  * Inventory at a glance: for every part with stock, reservations, or an
- * open vendor PO — on hand, available (NetSuite), allocated to jobs
- * (FleetSuite reservations, with the project names), free after
+ * open vendor PO — on hand, available (NetSuite), allocated (FleetSuite
+ * reservations, naming the job or the quote holding them), free after
  * reservations, and on order (with ETAs). The complete
  * on-hand / allocated / waiting picture in one screen.
  */
@@ -47,7 +47,7 @@ export default function InventoryPage() {
   const load = useCallback(async () => {
     const [allocRes, poRes, partsRes] = await Promise.all([
       supabase.from('part_allocations')
-        .select('item_number, quantity, upfit_projects(project_name)')
+        .select('item_number, quantity, upfit_projects(project_name), estimates(estimate_number)')
         .eq('status', 'reserved'),
       // Both paginated: PostgREST caps every response at 1000 rows no matter
       // the .limit(), silently dropping stocked parts / on-order lines.
@@ -83,7 +83,13 @@ export default function InventoryPage() {
       const row = ensure(normPart(a.item_number));
       const qty = Number(a.quantity) || 0;
       row.allocated += qty;
-      row.allocations.push({ project: (a as any).upfit_projects?.project_name || 'Unknown project', qty });
+      // A hold belongs to a job or to a quote (migration 320) — name which,
+      // because "reserved to a quote we haven't won yet" is a different
+      // conversation from "reserved to a build starting Tuesday".
+      const holder = (a as any).upfit_projects?.project_name
+        || ((a as any).estimates?.estimate_number ? `${(a as any).estimates.estimate_number} (quote)` : null)
+        || 'Unknown';
+      row.allocations.push({ project: holder, qty });
     }
     for (const l of poRes.data || []) {
       const po = (l as any).netsuite_vendor_pos;

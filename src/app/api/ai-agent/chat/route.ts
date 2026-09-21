@@ -226,7 +226,7 @@ SUPABASE TABLES (BMG Fleet App)
     - INCOMING quantity for a part = quantity − quantity_received, on lines whose PO status is OPEN.
     - Join netsuite_vendor_pos for vendor / ETA / tracking; match netsuite_parts and part_allocations by item_number.
 
-21. part_allocations — PARTS RESERVED TO JOBS (FleetSuite-side holds)
+21. part_allocations — PARTS RESERVED (FleetSuite-side holds). Exactly one owner per row: project_id (an upfit job) OR estimate_id (a quote holding stock before it is won).
     - id (uuid), project_id (FK upfit_projects), item_number (text), quantity (numeric)
     - status ('reserved' = active hold, 'consumed' = job finished, 'released' = freed). Only 'reserved' is a live commitment.
     - Join upfit_projects(project_name) to name the job a part is held for.
