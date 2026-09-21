@@ -26,8 +26,18 @@ export async function POST(req: NextRequest) {
 
   try {
 
+    // Which vehicle a row is, and the device fitted to it, belong to that one
+    // row — applying a VIN or an IMEI to a selection would stamp every scan as
+    // the same truck. The scans page only offers these when a single scan is
+    // open; the route refuses them for more than one either way.
+    const singleScanOnlyFields = [
+      'vin', 'vehicle_year', 'vehicle_make', 'vehicle_model',
+      'serial_number', 'imei', 'iccid',
+    ];
+
     // Only allow safe fields to be updated
     const allowedFields = [
+      ...singleScanOnlyFields,
       'part_number', 'part_description', 'billable_customer',
       'unit_number', 'location_id', 'location_name',
       'po_id', 'po_number', 'po_line_item_id',
@@ -45,12 +55,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 });
     }
 
+    const perScan = singleScanOnlyFields.filter((f) => f in safeUpdates);
+    if (scanIds.length > 1 && perScan.length > 0) {
+      return NextResponse.json(
+        { error: `${perScan.join(', ')} can only be changed one scan at a time` },
+        { status: 400 },
+      );
+    }
+
     // Capture the values being overwritten (only the touched fields) so the
-    // audit log can answer "what did this scan say before?".
-    const touchedCols = Object.keys(safeUpdates).join(', ');
+    // audit log can answer "what did this scan say before?". id and vin are
+    // always on the row, so a touched vin must not be listed twice.
+    const touchedCols = ['id', 'vin', ...Object.keys(safeUpdates).filter((k) => k !== 'id' && k !== 'vin')].join(', ');
     const { data: beforeRows } = await supabase
       .from('scan_logs')
-      .select(`id, vin, ${touchedCols}`)
+      .select(touchedCols)
       .in('id', scanIds);
 
     const { data, error } = await supabase

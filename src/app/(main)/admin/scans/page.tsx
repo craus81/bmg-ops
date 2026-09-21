@@ -47,6 +47,7 @@ interface ScanLog {
   imei: string | null;
   iccid: string | null;
   location_name: string | null;
+  location_id: string | null;
   po_id: string | null;
   po_number: string | null;
   po_line_item_id: string | null;
@@ -824,72 +825,6 @@ export default function AdminScansPage() {
     setInvoicing(false);
   };
 
-  // Edit scan
-  const [editingScan, setEditingScan] = useState<ScanLog | null>(null);
-  const saveEditScan = async () => {
-    if (!editingScan) return;
-    const { id, vin, vehicle_year, vehicle_make, vehicle_model, part_number, part_description, billable_customer, unit_number, serial_number, imei, iccid, location_name } = editingScan;
-    await supabase.from('scan_logs').update({ vin, vehicle_year, vehicle_make, vehicle_model, part_number, part_description, billable_customer, unit_number, serial_number: serial_number || null, imei: imei || null, iccid: iccid || null, location_name }).eq('id', id);
-    setEditingScan(null);
-    loadAll();
-  };
-
-  // Add another part to the vehicle being edited. A decal kit and a unit
-  // number are one visit but two billable parts, usually on two different POs
-  // — and scan_logs holds one part per row, so the vehicle gets a sibling row
-  // (what a multi-part field scan writes too). The server carries the
-  // vehicle, installer, photos and the crew's pay credit over, matches the
-  // new part to its own PO, and refuses a part the vehicle already has.
-  const [addPart, setAddPart] = useState('');
-  const [addPartPicked, setAddPartPicked] = useState<{ item_number: string; display_name: string | null } | null>(null);
-  const [addPartBusy, setAddPartBusy] = useState(false);
-  const [addPartError, setAddPartError] = useState('');
-  const [addPartNote, setAddPartNote] = useState('');
-  // A different scan in the editor starts with an empty box.
-  useEffect(() => {
-    setAddPart('');
-    setAddPartPicked(null);
-    setAddPartError('');
-    setAddPartNote('');
-  }, [editingScan?.id]);
-
-  const addPartToVehicle = async () => {
-    if (!editingScan) return;
-    const pn = (addPartPicked?.item_number || addPart).trim();
-    if (!pn) return;
-    setAddPartBusy(true);
-    setAddPartError('');
-    setAddPartNote('');
-    try {
-      const res = await fetch('/api/scans/add-part', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scanIds: [editingScan.id],
-          partNumber: pn,
-          partDescription: addPartPicked?.display_name || null,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.success) {
-        setAddPartError(data.error || 'Could not add the part');
-        return;
-      }
-      setAddPart('');
-      setAddPartPicked(null);
-      setAddPartNote(
-        `${data.partNumber} added${data.poNumber ? ` · matched PO #${data.poNumber}` : ' · waiting for PO'}`
-        + (data.creditsWritten ? ' · installer credited' : '')
-        + (data.creditsError ? ` · ${data.creditsError}` : ''),
-      );
-      await loadAll();
-    } catch (err: any) {
-      setAddPartError(err?.message || 'Could not add the part');
-    } finally {
-      setAddPartBusy(false);
-    }
-  };
-
   // Delete — via the server route, which also removes the scan's unpaid pay
   // credits (a direct scan_logs delete is refused by the credits FK, which is
   // why deletes used to silently do nothing).
@@ -929,13 +864,34 @@ export default function AdminScansPage() {
     loadAll();
   };
 
-  // Bulk edit — apply part/customer/location to all selected
+  // The scan editor — one panel, whether it is editing one scan or fifty.
+  // The per-row Edit button used to open a second, separate modal with its
+  // own set of fields (no PO at all, a free-text location that wrote
+  // location_name and left location_id pointing at the old place, and a
+  // direct browser write that skipped the audit log). The two drifted apart;
+  // there is now one panel and one save path.
   const [showBulkEdit, setShowBulkEdit] = useState(false);
+  // The scans the open panel is editing, snapshotted when it opens: ticking
+  // another checkbox mid-edit must not quietly widen what Apply writes.
+  const [editorIds, setEditorIds] = useState<string[]>([]);
+  const [editorSeq, setEditorSeq] = useState(0);
+  const bulkEditRef = useRef<HTMLDivElement | null>(null);
   const [bulkEditPart, setBulkEditPart] = useState('');
   const [bulkEditPartPicked, setBulkEditPartPicked] = useState<{ id: string; item_number: string; display_name: string | null; billable_customer: string | null } | null>(null);
   const [bulkEditCustomer, setBulkEditCustomer] = useState('');
   const [bulkEditLocation, setBulkEditLocation] = useState('');
   const [bulkEditPO, setBulkEditPO] = useState('');
+  // The vehicle it is, the unit it wears and the Verizon device on it. These
+  // belong to one row, so they are only shown — and only written — when the
+  // panel is open on exactly one scan.
+  const [bulkEditVin, setBulkEditVin] = useState('');
+  const [bulkEditYear, setBulkEditYear] = useState('');
+  const [bulkEditMake, setBulkEditMake] = useState('');
+  const [bulkEditModel, setBulkEditModel] = useState('');
+  const [bulkEditUnit, setBulkEditUnit] = useState('');
+  const [bulkEditSerial, setBulkEditSerial] = useState('');
+  const [bulkEditImei, setBulkEditImei] = useState('');
+  const [bulkEditIccid, setBulkEditIccid] = useState('');
   // Extra parts for the same vehicles. A truck that got a decal kit AND a
   // unit number is one scan with two billable parts, so each extra part
   // becomes its own line on every selected VIN (with its own PO and invoice)
@@ -949,26 +905,107 @@ export default function AdminScansPage() {
   const splitSlashParts = (raw: string | null | undefined) =>
     (raw || '').split('/').map(t => t.trim()).filter(Boolean);
 
+  /** The one scan the panel is editing, or null when it is editing several. */
+  const editorScan = editorIds.length === 1
+    ? allScans.find(s => s.id === editorIds[0]) || null
+    : null;
+
+  /**
+   * Open the editor on exactly these scans. One scan prefills every field
+   * from it (and Apply writes them all back); several leave the shared
+   * fields blank, where blank keeps meaning "leave this one alone".
+   */
+  const openScanEditor = (ids: string[]) => {
+    const one = ids.length === 1 ? allScans.find(s => s.id === ids[0]) || null : null;
+    const onePart = one?.part_number || '';
+    setSelectedScans(new Set(ids));
+    setEditorIds(ids);
+    setBulkEditPart(onePart);
+    setBulkEditPartPicked(onePart
+      ? allParts.find(p => p.item_number.toUpperCase() === onePart.toUpperCase()) || null
+      : null);
+    setBulkEditCustomer(one?.billable_customer || '');
+    setBulkEditLocation(one?.location_id || '');
+    setBulkEditPO(one?.po_id || '');
+    setBulkEditVin(one?.vin || '');
+    setBulkEditYear(one?.vehicle_year || '');
+    setBulkEditMake(one?.vehicle_make || '');
+    setBulkEditModel(one?.vehicle_model || '');
+    setBulkEditUnit(one?.unit_number || '');
+    setBulkEditSerial(one?.serial_number || '');
+    setBulkEditImei(one?.imei || '');
+    setBulkEditIccid(one?.iccid || '');
+    setBulkEditExtraParts([]);
+    setBulkExtraInput('');
+    setShowBulkEdit(true);
+    setEditorSeq(n => n + 1);
+  };
+
+  const closeScanEditor = () => {
+    setShowBulkEdit(false);
+    setEditorIds([]);
+  };
+
+  // The panel sits above the table, so a row's Edit button has to bring it
+  // into view — otherwise clicking Edit on the eightieth row looks like
+  // nothing happened at all.
+  useEffect(() => {
+    if (editorSeq > 0) bulkEditRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [editorSeq]);
+
   const applyBulkEdit = async () => {
-    const ids = [...selectedScans];
+    const ids = editorIds.length > 0 ? editorIds : [...selectedScans];
     if (ids.length === 0) return;
+    // One scan: the panel showed that scan's own values, so every box is
+    // authoritative and an emptied one means "clear it". Several scans: only
+    // the boxes that were filled in are applied, which is what the top-of-page
+    // Edit has always meant.
+    const single = ids.length === 1
+      ? (scans.find(s => s.id === ids[0]) || archivedScans.find(s => s.id === ids[0]) || null)
+      : null;
     const updates: any = {};
-    if (bulkEditPart) {
-      if (bulkEditPartPicked) {
-        updates.part_number = bulkEditPartPicked.item_number;
-        updates.part_description = bulkEditPartPicked.display_name;
-        if (!bulkEditCustomer) updates.billable_customer = bulkEditPartPicked.billable_customer;
+
+    const typedPart = bulkEditPart.trim();
+    const catalogPart = typedPart
+      ? (bulkEditPartPicked && bulkEditPartPicked.item_number.toUpperCase() === typedPart.toUpperCase()
+          ? bulkEditPartPicked
+          : allParts.find(p => p.item_number.toUpperCase() === typedPart.toUpperCase()) || null)
+      : null;
+    const partChanged = !single || typedPart.toUpperCase() !== (single.part_number || '').toUpperCase();
+    if (typedPart) {
+      updates.part_number = catalogPart ? catalogPart.item_number : typedPart;
+      // A hand-typed number that is not in the catalog keeps whatever
+      // description the row already had — blanking it loses more than it fixes.
+      if (catalogPart && partChanged) {
+        updates.part_description = catalogPart.display_name;
+        if (!bulkEditCustomer) updates.billable_customer = catalogPart.billable_customer;
+      }
+    } else if (single) {
+      updates.part_number = null;
+      updates.part_description = null;
+    }
+
+    // An emptied customer box clears the field — unless the part just picked
+    // above supplied one, which is the whole point of the part's own customer.
+    if (bulkEditCustomer.trim()) updates.billable_customer = bulkEditCustomer.trim();
+    else if (single && !('billable_customer' in updates)) updates.billable_customer = null;
+
+    // Location and PO are written only when they actually changed. That
+    // matters for the rows the old per-row editor wrote: it saved a typed
+    // location_name with no location_id, and saving a blank dropdown over one
+    // of those would wipe the only location it has.
+    if (bulkEditLocation !== (single ? single.location_id || '' : '')) {
+      if (!bulkEditLocation) {
+        updates.location_id = null;
+        updates.location_name = null;
       } else {
-        updates.part_number = bulkEditPart.trim();
+        const loc = allLocations.find(l => l.id === bulkEditLocation);
+        if (loc) { updates.location_id = loc.id; updates.location_name = loc.name; }
       }
     }
-    if (bulkEditCustomer) updates.billable_customer = bulkEditCustomer;
-    if (bulkEditLocation) {
-      const loc = allLocations.find(l => l.id === bulkEditLocation);
-      if (loc) { updates.location_id = loc.id; updates.location_name = loc.name; }
-    }
-    if (bulkEditPO) {
-      if (bulkEditPO === '__clear__') {
+
+    if (bulkEditPO !== (single ? single.po_id || '' : '')) {
+      if (!bulkEditPO || bulkEditPO === '__clear__') {
         updates.po_id = null;
         updates.po_number = null;
         updates.po_line_item_id = null;
@@ -977,16 +1014,35 @@ export default function AdminScansPage() {
         if (po) {
           updates.po_id = po.id;
           updates.po_number = po.po_number;
-          // Try to match line item by part number from first selected scan
+          // Match the line item by part number — the part this apply is
+          // setting if it is changing one, otherwise the first scan's own.
           const firstScan = scans.find(s => ids.includes(s.id)) || archivedScans.find(s => ids.includes(s.id));
-          const matchedLine = firstScan?.part_number
-            ? po.line_items.find(li => li.part_number.toUpperCase() === firstScan.part_number!.toUpperCase())
+          const partForLine: string | null = updates.part_number ?? firstScan?.part_number ?? null;
+          const matchedLine = partForLine
+            ? po.line_items.find(li => li.part_number.toUpperCase() === partForLine.toUpperCase())
             : null;
           updates.po_line_item_id = matchedLine?.id || null;
         }
       }
     }
-    if (Object.keys(updates).length === 0 && bulkEditExtraParts.length === 0) { setShowBulkEdit(false); return; }
+
+    // The vehicle, its unit number and its Verizon device identify one truck,
+    // so they only ride along on a single-scan edit — the server refuses them
+    // on a multi-scan update for the same reason.
+    if (single) {
+      const vin = bulkEditVin.trim().toUpperCase();
+      if (!vin) { await dialog.alert('A scan needs a VIN.'); return; }
+      updates.vin = vin;
+      updates.vehicle_year = bulkEditYear.trim() || null;
+      updates.vehicle_make = bulkEditMake.trim() || null;
+      updates.vehicle_model = bulkEditModel.trim() || null;
+      updates.unit_number = bulkEditUnit.trim() || null;
+      updates.serial_number = bulkEditSerial.trim().toUpperCase() || null;
+      updates.imei = bulkEditImei.trim() || null;
+      updates.iccid = bulkEditIccid.trim() || null;
+    }
+
+    if (Object.keys(updates).length === 0 && bulkEditExtraParts.length === 0) { closeScanEditor(); return; }
     setBulkEditBusy(true);
     try {
       if (Object.keys(updates).length > 0) {
@@ -1035,12 +1091,20 @@ export default function AdminScansPage() {
     } finally {
       setBulkEditBusy(false);
     }
-    setShowBulkEdit(false);
+    closeScanEditor();
     setBulkEditPart('');
     setBulkEditPartPicked(null);
     setBulkEditCustomer('');
     setBulkEditLocation('');
     setBulkEditPO('');
+    setBulkEditVin('');
+    setBulkEditYear('');
+    setBulkEditMake('');
+    setBulkEditModel('');
+    setBulkEditUnit('');
+    setBulkEditSerial('');
+    setBulkEditImei('');
+    setBulkEditIccid('');
     setBulkEditExtraParts([]);
     setBulkExtraInput('');
     loadAll();
@@ -1540,7 +1604,7 @@ export default function AdminScansPage() {
         )}
         {tab !== 'bulk' && selectedScans.size > 0 && (
           <>
-            <button onClick={() => setShowBulkEdit(true)} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', cursor: 'pointer' }}>
+            <button onClick={() => openScanEditor([...selectedScans])} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', cursor: 'pointer' }}>
               Edit {selectedScans.size}
             </button>
             <button onClick={bulkDelete} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', cursor: 'pointer' }}>
@@ -1607,12 +1671,14 @@ export default function AdminScansPage() {
         />
       )}
 
-      {/* Bulk edit modal */}
+      {/* The scan editor. The same panel serves the per-row Edit button (one
+          scan, every field prefilled from it) and Edit N at the top (several
+          scans, where a blank field still means "leave that one alone"). */}
       {showBulkEdit && (
-        <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
+        <div ref={bulkEditRef} style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
           {(() => {
-            // Find the common part number across selected scans for PO filtering
-            const selectedScanList = [...selectedScans].map(id => scans.find(s => s.id === id) || archivedScans.find(s => s.id === id)).filter(Boolean) as ScanLog[];
+            // Find the common part number across the scans being edited
+            const selectedScanList = editorIds.map(id => scans.find(s => s.id === id) || archivedScans.find(s => s.id === id)).filter(Boolean) as ScanLog[];
             const selectedPartNumbers = [...new Set(selectedScanList.map(s => s.part_number?.toUpperCase()).filter(Boolean))];
             const hasOnePart = selectedPartNumbers.length === 1;
             const selectedPart = hasOnePart ? selectedPartNumbers[0] : null;
@@ -1622,6 +1688,26 @@ export default function AdminScansPage() {
               ? allPOs.filter(po => po.line_items.some(li => li.part_number.toUpperCase() === selectedPart))
               : allPOs;
 
+            const single = editorScan;
+            // A single scan's own PO stays on the list even when the part
+            // filter would drop it — otherwise the dropdown reads empty on a
+            // scan that plainly has a PO, and Apply looks like it cleared it.
+            const currentPO = single?.po_id
+              ? allPOs.find(p => p.id === single.po_id)
+                || { id: single.po_id, po_number: single.po_number || '—', customer: 'currently assigned', ship_to: null, line_items: [] as { id: string; part_number: string; quantity: number; installed: number }[] }
+              : null;
+            const poOptions = currentPO && !matchingPOs.some(p => p.id === currentPO.id)
+              ? [currentPO, ...matchingPOs]
+              : matchingPOs;
+            // Verizon RFID identifiers — shown for the Verizon part, or for any
+            // scan that already carries device data.
+            const showDeviceFields = !!single && (
+              bulkEditPart.toUpperCase().replace(/O/g, '0').replace(/\s+/g, '') === '06CS901033'
+              || !!bulkEditSerial || !!bulkEditImei || !!bulkEditIccid
+            );
+            const fieldLabel = { fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' as const, marginBottom: '3px' };
+            const fieldBox = { width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' };
+            const monoBox = { ...fieldBox, fontFamily: 'monospace', fontSize: '12px' };
             // Where the selected scans were done, when they agree on it —
             // either the location this edit is about to set, or the one they
             // already carry. Used to flag a PO that ships somewhere else.
@@ -1630,14 +1716,45 @@ export default function AdminScansPage() {
             const selectedLocationLabel = pendingLoc || (scanLocs.length === 1 ? scanLocs[0] : null);
 
             return (<>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '10px' }}>Edit {selectedScans.size} Scan{selectedScans.size !== 1 ? 's' : ''}{selectedPart ? <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '6px' }}>({selectedPart})</span> : ''}</div>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '10px' }}>
+            {single
+              ? <>Edit Scan <span style={{ fontFamily: 'monospace', fontSize: '11px', fontWeight: 400, color: 'var(--text-secondary)' }}>{single.vin}</span></>
+              : <>Edit {editorIds.length} Scan{editorIds.length !== 1 ? 's' : ''}{selectedPart ? <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '6px' }}>({selectedPart})</span> : ''}</>}
+          </div>
+
+          {/* The vehicle this row is — one scan at a time, because a VIN and a
+              unit number name one truck and can't be applied to a selection. */}
+          {single && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <div style={fieldLabel}>VIN</div>
+                <input value={bulkEditVin} onChange={e => setBulkEditVin(e.target.value.toUpperCase())} style={monoBox} />
+              </div>
+              <div>
+                <div style={fieldLabel}>Year</div>
+                <input value={bulkEditYear} onChange={e => setBulkEditYear(e.target.value)} style={fieldBox} />
+              </div>
+              <div>
+                <div style={fieldLabel}>Make</div>
+                <input value={bulkEditMake} onChange={e => setBulkEditMake(e.target.value)} style={fieldBox} />
+              </div>
+              <div>
+                <div style={fieldLabel}>Model</div>
+                <input value={bulkEditModel} onChange={e => setBulkEditModel(e.target.value)} style={fieldBox} />
+              </div>
+              <div>
+                <div style={fieldLabel}>Unit #</div>
+                <input value={bulkEditUnit} onChange={e => setBulkEditUnit(e.target.value)} style={fieldBox} />
+              </div>
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
             <div style={{ position: 'relative' }}>
               <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Part Number</div>
               <input
                 value={bulkEditPart}
                 onChange={e => { setBulkEditPart(e.target.value); setBulkEditPartPicked(null); }}
-                placeholder="No change"
+                placeholder={single ? 'Part number' : 'No change'}
                 style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}
               />
               {bulkEditPart.length >= 2 && !bulkEditPartPicked && (() => {
@@ -1748,7 +1865,9 @@ export default function AdminScansPage() {
                       )}
                     </div>
                     <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                      A second part becomes its own line on every selected VIN, with its own PO and invoice.
+                      {single
+                        ? 'A second part becomes its own line on this VIN — same installer, photos and pay credit, its own PO and invoice.'
+                        : 'A second part becomes its own line on every selected VIN, with its own PO and invoice.'}
                     </div>
                   </div>
                 );
@@ -1759,7 +1878,7 @@ export default function AdminScansPage() {
               <input
                 value={bulkEditCustomer}
                 onChange={e => setBulkEditCustomer(e.target.value)}
-                placeholder="No change"
+                placeholder={single ? 'Billable customer' : 'No change'}
                 style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}
               />
               {customerQuickPick(bulkEditCustomer, setBulkEditCustomer)}
@@ -1791,16 +1910,24 @@ export default function AdminScansPage() {
             <div>
               <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Location</div>
               <select value={bulkEditLocation} onChange={e => setBulkEditLocation(e.target.value)} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}>
-                <option value="">— No change —</option>
+                <option value="">{single ? '— No location —' : '— No change —'}</option>
                 {allLocations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select>
+              {/* The old per-row editor typed the location as free text, so
+                  those rows carry a name with no location this list knows.
+                  Say so rather than showing an empty box over a real value. */}
+              {single && !single.location_id && single.location_name && (
+                <div style={{ fontSize: '9px', color: '#fbbf24', marginTop: '3px' }}>
+                  Currently “{single.location_name}”, typed by hand — pick a location to set it properly.
+                </div>
+              )}
             </div>
             <div>
               <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Assign to PO</div>
               <select value={bulkEditPO} onChange={e => setBulkEditPO(e.target.value)} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}>
-                <option value="">— No change —</option>
-                <option value="__clear__">Clear PO assignment</option>
-                {matchingPOs.map(p => {
+                <option value="">{single ? '— No PO —' : '— No change —'}</option>
+                {!single && <option value="__clear__">Clear PO assignment</option>}
+                {poOptions.map(p => {
                   const matchedLine = selectedPart ? p.line_items.find(li => li.part_number.toUpperCase() === selectedPart) : null;
                   const remaining = matchedLine ? matchedLine.quantity - matchedLine.installed : null;
                   // Where the PO ships, spelled out: the same part is ordered
@@ -1822,9 +1949,74 @@ export default function AdminScansPage() {
               )}
             </div>
           </div>
+
+          {showDeviceFields && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+              <div>
+                <div style={fieldLabel}>Serial # (SN)</div>
+                <input value={bulkEditSerial} onChange={e => setBulkEditSerial(e.target.value.toUpperCase())} style={monoBox} />
+              </div>
+              <div>
+                <div style={fieldLabel}>IMEI</div>
+                <input value={bulkEditImei} onChange={e => setBulkEditImei(e.target.value)} style={monoBox} />
+              </div>
+              <div>
+                <div style={fieldLabel}>CCID</div>
+                <input value={bulkEditIccid} onChange={e => setBulkEditIccid(e.target.value)} style={monoBox} />
+              </div>
+            </div>
+          )}
+
+          {/* Every part on this VIN. The parts a vehicle got are separate scan
+              rows on purpose: each carries its own PO, so a decal kit on one
+              PO and a unit number on another bill as two invoices while the
+              vehicle was scanned once. Add another with the second-part box
+              above — it lands as its own line on Apply. */}
+          {single && (() => {
+            const siblings = allScans.filter(s => s.id !== single.id && sameVehicleVin(s.vin, single.vin));
+            const chip = (key: string, label: string, po: string | null, isThis: boolean) => (
+              <span key={key} style={{
+                fontSize: '9px', fontWeight: 700, padding: '3px 6px', borderRadius: '4px',
+                background: isThis ? 'rgba(59,130,246,0.12)' : 'var(--card)',
+                border: `1px solid ${isThis ? 'rgba(59,130,246,0.25)' : theme.border}`,
+                color: 'var(--text-secondary)',
+              }}>
+                {label}
+                <span style={{ fontWeight: 400, color: po ? '#22c55e' : '#fbbf24' }}>{po ? ` · PO #${po}` : ' · waiting for PO'}</span>
+              </span>
+            );
+            return (
+              <div style={{ marginBottom: '8px', padding: '8px 10px', borderRadius: '8px', background: 'var(--subtle-bg)', border: `1px solid ${theme.border}` }}>
+                <div style={{ ...fieldLabel, marginBottom: '6px' }}>Parts on this VIN ({siblings.length + 1})</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                  {chip(single.id, single.part_number || 'No Part', single.po_number, true)}
+                  {siblings.map(s => chip(s.id, s.part_number || 'No Part', s.po_number, false))}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Attribution record — read-only. The installer is whoever the work
+              is credited to; the scanner is the account that logged the row
+              (kept for the audit trail even when it's an admin). */}
+          {single && (() => {
+            const names = installerNamesOf(single);
+            const company = installerCompanyOf(single);
+            return (
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '10px', lineHeight: 1.6 }}>
+                <span style={{ fontWeight: 700 }}>Installer:</span>{' '}
+                {names.length > 0 ? names.join(', ') : (company || '—')}
+                {names.length > 0 && company ? ` · ${company}` : ''}
+                <br />
+                <span style={{ fontWeight: 700 }}>Scanned by:</span>{' '}
+                {profiles[single.scanned_by || ''] || '—'} · {new Date(single.scanned_at).toLocaleString()}
+              </div>
+            );
+          })()}
+
           <div style={{ display: 'flex', gap: '6px' }}>
-            <button onClick={applyBulkEdit} disabled={bulkEditBusy} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: bulkEditBusy ? 'default' : 'pointer', opacity: bulkEditBusy ? 0.6 : 1 }}>{bulkEditBusy ? 'Applying…' : 'Apply Changes'}</button>
-            <button onClick={() => setShowBulkEdit(false)} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-muted)', cursor: 'pointer' }}>Cancel</button>
+            <button onClick={applyBulkEdit} disabled={bulkEditBusy} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: bulkEditBusy ? 'default' : 'pointer', opacity: bulkEditBusy ? 0.6 : 1 }}>{bulkEditBusy ? 'Applying…' : single ? 'Save Scan' : 'Apply Changes'}</button>
+            <button onClick={closeScanEditor} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-muted)', cursor: 'pointer' }}>Cancel</button>
           </div>
           </>); })()}
         </div>
@@ -2352,7 +2544,7 @@ export default function AdminScansPage() {
                       {installerCompanyOf(scan) && (<>{installerCompanyOf(scan)}<br /></>)}
                       {new Date(scan.scanned_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                     </div>
-                    <button onClick={() => setEditingScan({ ...scan })} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(59,130,246,0.08)', color: '#60a5fa', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>Edit</button>
+                    <button onClick={() => openScanEditor([scan.id])} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(59,130,246,0.08)', color: '#60a5fa', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>Edit</button>
                     <button onClick={() => deleteScan(scan.id)} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(239,68,68,0.08)', color: '#ef4444', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
                   </div>
                 </div>
@@ -2700,7 +2892,7 @@ export default function AdminScansPage() {
                                     {installerCompanyOf(scan) && (<>{installerCompanyOf(scan)}<br /></>)}
                                     {new Date(scan.scanned_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
                                   </div>
-                                  <button onClick={() => setEditingScan({ ...scan })} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(59,130,246,0.08)', color: '#60a5fa', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>Edit</button>
+                                  <button onClick={() => openScanEditor([scan.id])} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(59,130,246,0.08)', color: '#60a5fa', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>Edit</button>
                                   <button onClick={() => deleteScan(scan.id)} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(239,68,68,0.08)', color: '#ef4444', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
                                 </div>
                               </div>
@@ -2717,231 +2909,6 @@ export default function AdminScansPage() {
           );
         })}
       </div>}
-
-      {/* Edit scan modal */}
-      {editingScan && (
-        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }} onClick={() => setEditingScan(null)}>
-          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '14px', padding: '20px', width: '100%', maxWidth: '450px', boxShadow: '0 8px 30px rgba(0,0,0,0.3)' }}>
-            <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '12px' }}>Edit Scan</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
-              <div style={{ gridColumn: '1 / -1' }}>
-                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>VIN</div>
-                <input value={editingScan.vin} onChange={e => setEditingScan({ ...editingScan, vin: e.target.value.toUpperCase() })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'monospace' }} />
-              </div>
-              <div>
-                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Year</div>
-                <input value={editingScan.vehicle_year || ''} onChange={e => setEditingScan({ ...editingScan, vehicle_year: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
-              </div>
-              <div>
-                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Make</div>
-                <input value={editingScan.vehicle_make || ''} onChange={e => setEditingScan({ ...editingScan, vehicle_make: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
-              </div>
-              <div>
-                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Model</div>
-                <input value={editingScan.vehicle_model || ''} onChange={e => setEditingScan({ ...editingScan, vehicle_model: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
-              </div>
-              <div style={{ position: 'relative' }}>
-                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Part Number</div>
-                <input
-                  value={editingScan.part_number || ''}
-                  onChange={e => setEditingScan({ ...editingScan, part_number: e.target.value })}
-                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }}
-                />
-                {(editingScan.part_number || '').length >= 2 && (() => {
-                  const q = (editingScan.part_number || '').toLowerCase();
-                  const matches = allParts.filter(p =>
-                    p.item_number.toLowerCase() !== q && (
-                      p.item_number.toLowerCase().includes(q) ||
-                      p.display_name?.toLowerCase().includes(q) ||
-                      p.billable_customer?.toLowerCase().includes(q)
-                    )
-                  ).slice(0, 8);
-                  if (matches.length === 0) return null;
-                  return (
-                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '180px', overflowY: 'auto', marginTop: '2px' }}>
-                      {matches.map(p => (
-                        <button
-                          key={p.id}
-                          onMouseDown={e => e.preventDefault()}
-                          onClick={() => setEditingScan({
-                            ...editingScan,
-                            part_number: p.item_number,
-                            part_description: p.display_name,
-                            ...(editingScan.billable_customer ? {} : { billable_customer: p.billable_customer }),
-                          })}
-                          style={{ display: 'block', width: '100%', padding: '6px 8px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
-                        >
-                          <span style={{ fontWeight: 700 }}>{p.item_number}</span>
-                          {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
-                          {p.display_name && <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{p.display_name}</div>}
-                        </button>
-                      ))}
-                    </div>
-                  );
-                })()}
-              </div>
-              <div style={{ position: 'relative' }}>
-                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Billable Customer</div>
-                <input
-                  value={editingScan.billable_customer || ''}
-                  onChange={e => setEditingScan({ ...editingScan, billable_customer: e.target.value })}
-                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }}
-                />
-                {customerQuickPick(editingScan.billable_customer || '', n => setEditingScan({ ...editingScan, billable_customer: n || null }))}
-                {(editingScan.billable_customer || '').length >= 1 && (() => {
-                  const q = (editingScan.billable_customer || '').toLowerCase();
-                  const set = new Set<string>();
-                  for (const p of allParts) {
-                    const c = (p.billable_customer || '').trim();
-                    if (c && c.toLowerCase() !== q && c.toLowerCase().includes(q)) set.add(c);
-                  }
-                  const matches = [...set].sort().slice(0, 8);
-                  if (matches.length === 0) return null;
-                  return (
-                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '180px', overflowY: 'auto', marginTop: '2px' }}>
-                      {matches.map(c => (
-                        <button
-                          key={c}
-                          onMouseDown={e => e.preventDefault()}
-                          onClick={() => setEditingScan({ ...editingScan, billable_customer: c })}
-                          style={{ display: 'block', width: '100%', padding: '6px 8px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
-                        >
-                          {c}
-                        </button>
-                      ))}
-                    </div>
-                  );
-                })()}
-              </div>
-              <div>
-                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Unit #</div>
-                <input value={editingScan.unit_number || ''} onChange={e => setEditingScan({ ...editingScan, unit_number: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
-              </div>
-              <div>
-                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Location</div>
-                <input value={editingScan.location_name || ''} onChange={e => setEditingScan({ ...editingScan, location_name: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
-              </div>
-            </div>
-
-            {/* Every part on this VIN, and a box to add another. The parts a
-                vehicle got are separate scan rows on purpose: each one carries
-                its own PO, so a decal kit on one PO and a unit number on
-                another bill as two invoices while the vehicle was scanned
-                once. */}
-            {(() => {
-              const siblings = allScans.filter(s => s.id !== editingScan.id && sameVehicleVin(s.vin, editingScan.vin));
-              const chip = (key: string, label: string, po: string | null, isThis: boolean) => (
-                <span key={key} style={{
-                  fontSize: '9px', fontWeight: 700, padding: '3px 6px', borderRadius: '4px',
-                  background: isThis ? 'rgba(59,130,246,0.12)' : 'var(--card)',
-                  border: `1px solid ${isThis ? 'rgba(59,130,246,0.25)' : theme.border}`,
-                  color: 'var(--text-secondary)',
-                }}>
-                  {label}
-                  <span style={{ fontWeight: 400, color: po ? '#22c55e' : '#fbbf24' }}>{po ? ` · PO #${po}` : ' · waiting for PO'}</span>
-                </span>
-              );
-              const q = addPart.trim().toLowerCase();
-              const suggestions = q.length >= 2
-                ? allParts.filter(p =>
-                    p.item_number.toLowerCase() !== q && (
-                      p.item_number.toLowerCase().includes(q) ||
-                      p.display_name?.toLowerCase().includes(q)
-                    )).slice(0, 6)
-                : [];
-              return (
-                <div style={{ marginBottom: '12px', padding: '8px 10px', borderRadius: '8px', background: 'var(--subtle-bg)', border: `1px solid ${theme.border}` }}>
-                  <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>
-                    Parts on this VIN ({siblings.length + 1})
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '8px' }}>
-                    {chip(editingScan.id, editingScan.part_number || 'No Part', editingScan.po_number, true)}
-                    {siblings.map(s => chip(s.id, s.part_number || 'No Part', s.po_number, false))}
-                  </div>
-                  <div style={{ position: 'relative', display: 'flex', gap: '6px' }}>
-                    <input
-                      value={addPart}
-                      placeholder="Add another part number"
-                      onChange={e => { setAddPart(e.target.value); setAddPartPicked(null); }}
-                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addPartToVehicle(); } }}
-                      style={{ flex: 1, minWidth: 0, padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }}
-                    />
-                    <button
-                      onClick={addPartToVehicle}
-                      disabled={addPartBusy || !addPart.trim()}
-                      style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid rgba(34,197,94,0.25)', background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontSize: '11px', fontWeight: 700, cursor: addPartBusy || !addPart.trim() ? 'default' : 'pointer', opacity: addPartBusy || !addPart.trim() ? 0.5 : 1 }}
-                    >
-                      {addPartBusy ? 'Adding…' : 'Add part'}
-                    </button>
-                    {suggestions.length > 0 && (
-                      <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '180px', overflowY: 'auto', marginTop: '2px' }}>
-                        {suggestions.map(p => (
-                          <button
-                            key={p.id}
-                            onMouseDown={e => e.preventDefault()}
-                            onClick={() => { setAddPart(p.item_number); setAddPartPicked({ item_number: p.item_number, display_name: p.display_name }); }}
-                            style={{ display: 'block', width: '100%', padding: '6px 8px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
-                          >
-                            <span style={{ fontWeight: 700 }}>{p.item_number}</span>
-                            {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
-                            {p.display_name && <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{p.display_name}</div>}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '6px' }}>
-                    The added part becomes its own line on this vehicle — same installer, photos and pay credit, its own PO and invoice.
-                  </div>
-                  {addPartError && <div style={{ fontSize: '10px', fontWeight: 700, color: '#ef4444', marginTop: '6px' }}>{addPartError}</div>}
-                  {addPartNote && <div style={{ fontSize: '10px', fontWeight: 700, color: '#22c55e', marginTop: '6px' }}>{addPartNote}</div>}
-                </div>
-              );
-            })()}
-
-            {/* Verizon RFID device identifiers — shown for the Verizon part or any
-                scan that already carries device data. */}
-            {((editingScan.part_number || '').toUpperCase().replace(/O/g, '0').replace(/\s+/g, '') === '06CS901033'
-              || editingScan.serial_number || editingScan.imei || editingScan.iccid) && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '12px' }}>
-                <div>
-                  <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Serial # (SN)</div>
-                  <input value={editingScan.serial_number || ''} onChange={e => setEditingScan({ ...editingScan, serial_number: e.target.value.toUpperCase() })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', fontFamily: 'monospace' }} />
-                </div>
-                <div>
-                  <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>IMEI</div>
-                  <input value={editingScan.imei || ''} onChange={e => setEditingScan({ ...editingScan, imei: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', fontFamily: 'monospace' }} />
-                </div>
-                <div>
-                  <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>CCID</div>
-                  <input value={editingScan.iccid || ''} onChange={e => setEditingScan({ ...editingScan, iccid: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', fontFamily: 'monospace' }} />
-                </div>
-              </div>
-            )}
-            {/* Attribution record — read-only. The installer is whoever the
-                work is credited to; the scanner is the account that logged
-                the row (kept for the audit trail even when it's an admin). */}
-            {(() => {
-              const names = installerNamesOf(editingScan);
-              const company = installerCompanyOf(editingScan);
-              return (
-                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '12px', lineHeight: 1.6 }}>
-                  <span style={{ fontWeight: 700 }}>Installer:</span>{' '}
-                  {names.length > 0 ? names.join(', ') : (company || '—')}
-                  {names.length > 0 && company ? ` · ${company}` : ''}
-                  <br />
-                  <span style={{ fontWeight: 700 }}>Scanned by:</span>{' '}
-                  {profiles[editingScan.scanned_by || ''] || '—'} · {new Date(editingScan.scanned_at).toLocaleString()}
-                </div>
-              );
-            })()}
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button onClick={() => setEditingScan(null)} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-body)', cursor: 'pointer' }}>Cancel</button>
-              <button onClick={saveEditScan} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer' }}>Save</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {createItemFor !== null && (
         <CreateNetsuiteItemModal
