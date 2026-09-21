@@ -14,6 +14,15 @@ describe('deepLinks.pickList / vehicleLinkFor', () => {
     expect(deepLinks.inboxThread('t-1')).toBe('/admin/inbox?thread=t-1');
   });
 
+  // Invites and password resets are magic links: the session is only
+  // exchanged in /auth/callback, so a redirectTo aimed straight at a page
+  // delivers an unexchanged code and strands the recipient on /login.
+  it('authCallback routes an auth redirect through the session exchange', () => {
+    expect(deepLinks.authCallback('/home')).toBe('/auth/callback?next=%2Fhome');
+    expect(deepLinks.authCallback('/cni/onboarding'))
+      .toBe('/auth/callback?next=%2Fcni%2Fonboarding');
+  });
+
   it('vehicleLinkFor carries the visit into the pick-list fallback', () => {
     // External installer: no in_shop/fleet_checkin feature → pick-list, pinned.
     expect(vehicleLinkFor(['installer'], 'ci-123', '1FTBW3XM5PKA00001'))
