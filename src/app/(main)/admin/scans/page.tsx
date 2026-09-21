@@ -12,6 +12,8 @@ import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInv
 import PhoneInput from '@/components/PhoneInput';
 import { theme } from '@/lib/theme';
 import { locationBillingOverride } from '@/lib/scan-billing';
+import { shipToCityLabel } from '@/lib/graphics-job-from-po';
+import { sameCity } from '@/lib/plant-location';
 import { findExistingScanVins, sameVehicleVin, vinTail, fetchScansMatchingVins, pickScanForLine } from '@/lib/vin-match';
 import { scanLifecycle } from '@/lib/scan-state';
 import { customerRequiresPo, loadBillableCustomers, matchesBillableCustomer, DEFAULT_BILLABLE_CUSTOMERS, type BillableCustomer } from '@/lib/billable-customers';
@@ -256,7 +258,7 @@ export default function AdminScansPage() {
       // truncated read here made scans read "Waiting on PO" for POs that exist.
       fetchAllRows<any>((from, to) => supabase
         .from('purchase_orders')
-        .select('id, po_number, customer, line_items:po_line_items(id, part_number, quantity, installed)')
+        .select('id, po_number, customer, ship_to, line_items:po_line_items(id, part_number, quantity, installed)')
         .in('status', ['open', 'complete'])
         .order('po_number')
         .order('id')
@@ -664,7 +666,13 @@ export default function AdminScansPage() {
     try {
       const res = await fetch('/api/scans/match-po', { method: 'POST' });
       const data = await res.json();
-      await dialog.alert(`Matched ${data.matched} of ${data.total} unmatched scans`);
+      // Scans whose part IS on an open PO, just not one shipping to where the
+      // work was done. Worth calling out: they look identical to "no PO yet"
+      // on the board, but the fix is a PO for that plant, not waiting.
+      const held = data.skippedForLocation
+        ? `\n\n${data.skippedForLocation} left unmatched — the part is on an open PO, but not one for that location.`
+        : '';
+      await dialog.alert(`Matched ${data.matched} of ${data.total} unmatched scans${held}`);
       await loadAll();
     } catch {
       await dialog.alert('Match failed');
@@ -892,7 +900,7 @@ export default function AdminScansPage() {
   const [bulkEditExtraParts, setBulkEditExtraParts] = useState<string[]>([]);
   const [bulkExtraInput, setBulkExtraInput] = useState('');
   const [bulkEditBusy, setBulkEditBusy] = useState(false);
-  const [allPOs, setAllPOs] = useState<{ id: string; po_number: string; customer: string; line_items: { id: string; part_number: string; quantity: number; installed: number }[] }[]>([]);
+  const [allPOs, setAllPOs] = useState<{ id: string; po_number: string; customer: string; ship_to: any; line_items: { id: string; part_number: string; quantity: number; installed: number }[] }[]>([]);
   /** "0602S029/06S646" typed into one part field → the two parts it means. */
   const splitSlashParts = (raw: string | null | undefined) =>
     (raw || '').split('/').map(t => t.trim()).filter(Boolean);
@@ -1684,8 +1692,12 @@ export default function AdminScansPage() {
             // A single scan's own PO stays on the list even when the part
             // filter would drop it — otherwise the dropdown reads empty on a
             // scan that plainly has a PO, and Apply looks like it cleared it.
-            const poOptions = single?.po_id && !matchingPOs.some(p => p.id === single.po_id)
-              ? [{ id: single.po_id, po_number: single.po_number || '—', customer: 'currently assigned', line_items: [] as { id: string; part_number: string; quantity: number; installed: number }[] }, ...matchingPOs]
+            const currentPO = single?.po_id
+              ? allPOs.find(p => p.id === single.po_id)
+                || { id: single.po_id, po_number: single.po_number || '—', customer: 'currently assigned', ship_to: null, line_items: [] as { id: string; part_number: string; quantity: number; installed: number }[] }
+              : null;
+            const poOptions = currentPO && !matchingPOs.some(p => p.id === currentPO.id)
+              ? [currentPO, ...matchingPOs]
               : matchingPOs;
             // Verizon RFID identifiers — shown for the Verizon part, or for any
             // scan that already carries device data.
@@ -1696,6 +1708,12 @@ export default function AdminScansPage() {
             const fieldLabel = { fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' as const, marginBottom: '3px' };
             const fieldBox = { width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' };
             const monoBox = { ...fieldBox, fontFamily: 'monospace', fontSize: '12px' };
+            // Where the selected scans were done, when they agree on it —
+            // either the location this edit is about to set, or the one they
+            // already carry. Used to flag a PO that ships somewhere else.
+            const pendingLoc = bulkEditLocation ? allLocations.find(l => l.id === bulkEditLocation)?.name : null;
+            const scanLocs = [...new Set(selectedScanList.map(sc => sc.location_name).filter(Boolean) as string[])];
+            const selectedLocationLabel = pendingLoc || (scanLocs.length === 1 ? scanLocs[0] : null);
 
             return (<>
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '10px' }}>
@@ -1912,7 +1930,18 @@ export default function AdminScansPage() {
                 {poOptions.map(p => {
                   const matchedLine = selectedPart ? p.line_items.find(li => li.part_number.toUpperCase() === selectedPart) : null;
                   const remaining = matchedLine ? matchedLine.quantity - matchedLine.installed : null;
-                  return <option key={p.id} value={p.id}>PO #{p.po_number} — {p.customer}{remaining !== null ? ` (${remaining} remaining)` : ''}</option>;
+                  // Where the PO ships, spelled out: the same part is ordered
+                  // per plant, so PO number and customer alone never said
+                  // which one you were about to assign to.
+                  const city = shipToCityLabel(p.ship_to);
+                  const elsewhere = city && selectedLocationLabel && !sameCity(city, selectedLocationLabel);
+                  return (
+                    <option key={p.id} value={p.id}>
+                      PO #{p.po_number} — {p.customer}{city ? ` · ${city}` : ' · no ship-to'}
+                      {remaining !== null ? ` (${remaining} remaining)` : ''}
+                      {elsewhere ? ' ⚠ different location' : ''}
+                    </option>
+                  );
                 })}
               </select>
               {hasOnePart && matchingPOs.length === 0 && (

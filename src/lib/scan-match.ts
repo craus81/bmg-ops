@@ -2,11 +2,25 @@
  * Shared scan → open-PO matching.
  *
  * A scan matches an open PO when the part numbers are equal (compared
- * case-insensitively and trimmed) and the PO line still has remaining capacity
- * (installed < quantity). When several open POs carry the same part, a scan
- * whose location lines up with a PO's ship-to is preferred — but location is
- * only a tie-breaker, never a hard filter, so a part match always connects to
- * *some* open PO with capacity.
+ * case-insensitively and trimmed), the PO line still has remaining capacity
+ * (installed < quantity), and the PO ships to where the work was done.
+ *
+ * Location is a requirement, not a tie-breaker (field ask, 2026-09-21: "when
+ * matching PO's the location has to match"). A PO is ruled out when its
+ * ship-to and the scan's work location name two *different* known plants —
+ * the same part is ordered per plant, so a Kansas City install must never
+ * consume a Wentzville PO's line. It cost twice when it did: the wrong
+ * plant's PO burned a unit of capacity (and could flip to 'complete'), and
+ * invoicing reads the plant back off the PO ship-to plus the scan location,
+ * so the invoice booked to the wrong NetSuite location too.
+ *
+ * What it does NOT do is rule out a PO we simply can't place. A ship-to is
+ * AI-extracted from the PO PDF and is often absent, and work locations like
+ * "BMG Shop" and "National Fleet" name no plant at all. Those stay eligible:
+ * "we don't know" is not "it's the wrong one", and refusing them would strand
+ * scans that match fine today. Only a genuine plant-vs-plant disagreement
+ * blocks a match, and a scan left with nowhere to go stays unmatched (and is
+ * counted in `skippedForLocation`) instead of landing on the wrong PO.
  *
  * This is the single source of truth used by both the retroactive matcher
  * (POST /api/scans/match-po) and the at-scan-time match (POST /api/scans/log).
@@ -16,6 +30,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { compareShipToLocation, normLocationText } from '@/lib/plant-location';
 
 function normalizePart(p: string | null | undefined): string {
   return (p || '').trim().toUpperCase();
@@ -57,24 +72,39 @@ async function fetchLinesForPos<T>(
 }
 
 /**
- * Does a PO's ship_to plausibly correspond to a scan's location_name?
- * Scan locations often look like "Masterack - Kansas City"; we compare the
- * city portion against the ship_to name/city, both directions, fuzzily.
+ * The cities BMG works in, normalized, taken from work_locations rather than
+ * hard-coded — adding a plant there teaches the matcher about it.
+ *
+ * A work location with no city ("BMG Shop", "National Fleet") contributes
+ * nothing on purpose: it names no plant, so it can never be the evidence that
+ * rules a PO out. Returns null if the table can't be read — the caller must
+ * treat that as "don't decide" rather than fall back to matching blind.
  */
-export function shipToMatchesLocation(shipTo: any, locationName: string | null | undefined): boolean {
-  if (!shipTo || !locationName) return false;
-  const locLower = locationName.toLowerCase();
-  const shipName = (shipTo.name || '').toLowerCase();
-  const shipCity = (shipTo.city || '').toLowerCase();
-  const locCity = (locLower.includes(' - ') ? locLower.split(' - ')[1] : locLower).trim();
-  if (!locCity) return false;
-  return (
-    (!!shipName && shipName.includes(locCity)) ||
-    (!!shipCity && (shipCity.includes(locCity) || locCity.includes(shipCity)))
-  );
+async function fetchPlantCities(service: SupabaseClient): Promise<string[] | null> {
+  const { data, error } = await service.from('work_locations').select('name, city');
+  if (error) return null;
+  const cities = new Set<string>();
+  for (const row of (data || []) as { city: string | null }[]) {
+    const c = normLocationText(row.city);
+    if (c) cities.add(c);
+  }
+  return [...cities];
 }
 
-export interface MatchResult { matched: number; total: number; }
+export interface MatchResult {
+  matched: number;
+  total: number;
+  /**
+   * Scans that had an open PO line for their part but every one of them
+   * shipped to a different plant. They are left unmatched on purpose —
+   * surfaced so "waiting on PO" can be told apart from "the part is on a PO,
+   * just not this location's".
+   */
+  skippedForLocation: number;
+}
+
+/** Nothing matched, nothing skipped — the shape every early return needs. */
+const EMPTY_RESULT: MatchResult = { matched: 0, total: 0, skippedForLocation: 0 };
 
 /**
  * Recompute open ↔ complete for the given POs: a PO is complete (fulfilled)
@@ -129,6 +159,10 @@ export async function recomputePoFulfillment(service: SupabaseClient, poIds: str
  * capacity. Pass `scanIds` to limit to specific scans (e.g. the one just
  * logged); omit to sweep all outstanding scans. Increments
  * po_line_items.installed for each match.
+ *
+ * A PO whose ship-to names a different plant than the scan's work location is
+ * never chosen — see the file header. When that rules out every candidate the
+ * scan is left unmatched and counted in `skippedForLocation`.
  */
 export async function matchScansToOpenPos(
   service: SupabaseClient,
@@ -148,7 +182,14 @@ export async function matchScansToOpenPos(
     if (scanIds && scanIds.length > 0) query = query.in('id', scanIds);
     return query.order('id').range(from, to);
   });
-  if (unmatchedErr || !unmatched || unmatched.length === 0) return { matched: 0, total: 0 };
+  if (unmatchedErr || !unmatched || unmatched.length === 0) return EMPTY_RESULT;
+
+  // Location is a requirement now, so a matcher that can't read the plant
+  // list can't safely decide anything — the same "don't decide on a partial
+  // read" rule the line fetch follows. Matching blind here is what put Kansas
+  // City installs on Wentzville POs in the first place.
+  const plantCities = await fetchPlantCities(service);
+  if (plantCities === null) return { ...EMPTY_RESULT, total: unmatched.length };
 
   // When PO capacity is scarce, active (unexported) scans claim lines first —
   // they need the match to reach "Ready"; for exported scans it's enrichment.
@@ -162,7 +203,7 @@ export async function matchScansToOpenPos(
       .order('id')
       .range(from, to),
   );
-  if (posErr || !pos || pos.length === 0) return { matched: 0, total: unmatched.length };
+  if (posErr || !pos || pos.length === 0) return { ...EMPTY_RESULT, total: unmatched.length };
 
   const poById = new Map(pos.map(p => [p.id, p]));
   const allLines = await fetchLinesForPos<{ id: string; po_id: string; part_number: string | null; quantity: number | null; installed: number | null }>(
@@ -170,10 +211,11 @@ export async function matchScansToOpenPos(
   );
   // Partial lines would mis-route scans to the wrong PO and bump the wrong
   // line's installed count — skip the sweep and let the next run match.
-  if (allLines === null) return { matched: 0, total: unmatched.length };
+  if (allLines === null) return { ...EMPTY_RESULT, total: unmatched.length };
   const lines = allLines;
 
   let matched = 0;
+  let skippedForLocation = 0;
   const touchedPoIds: string[] = [];
 
   for (const scan of unmatched) {
@@ -186,12 +228,21 @@ export async function matchScansToOpenPos(
     );
     if (openLines.length === 0) continue;
 
-    // Prefer a PO whose ship_to matches the scan's location; otherwise take the
-    // first open line. Location is a tie-breaker, not a requirement.
-    const chosenLine =
-      (scan.location_name &&
-        openLines.find(l => shipToMatchesLocation(poById.get(l.po_id)?.ship_to, scan.location_name))) ||
-      openLines[0];
+    // Rule out the POs that ship somewhere else, then prefer one that
+    // positively agrees with the scan's location over one we can't place.
+    const eligible = openLines
+      .map(l => ({ line: l, verdict: compareShipToLocation(poById.get(l.po_id)?.ship_to, scan.location_name, plantCities) }))
+      .filter(c => c.verdict !== 'conflict');
+
+    // Every open line for this part belongs to another plant. Leaving the
+    // scan unmatched is the point: it shows as waiting on a PO until this
+    // location's PO arrives, instead of silently eating another plant's.
+    if (eligible.length === 0) {
+      skippedForLocation++;
+      continue;
+    }
+
+    const chosenLine = (eligible.find(c => c.verdict === 'match') || eligible[0]).line;
 
     const po = poById.get(chosenLine.po_id);
     if (!po) continue;
@@ -216,5 +267,5 @@ export async function matchScansToOpenPos(
   // so it moves off the open list automatically.
   await recomputePoFulfillment(service, touchedPoIds);
 
-  return { matched, total: unmatched.length };
+  return { matched, total: unmatched.length, skippedForLocation };
 }
