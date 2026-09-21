@@ -394,6 +394,12 @@ export default function CompletionModal({
       const data = await res.json().catch(() => ({}));
       if (res.status === 422 && Array.isArray(data.missing)) {
         setMissing(data.missing);
+      } else if (res.status === 400 && Array.isArray(data.allowed) && data.fromStatus) {
+        // Illegal transition — stuck_parts and stuck_graphics have no legal
+        // path to complete at all. For the operator that's the same kind of
+        // problem as an unmet gate, so show it in the blocked list and give
+        // an admin the same override button rather than a dead-end error.
+        setMissing([`Status "${data.fromStatus}" has no direct path to complete`]);
       } else if (!res.ok) {
         setError(data.error || 'Submit failed');
       } else {
@@ -421,6 +427,19 @@ export default function CompletionModal({
   const requiredRemaining = tasks.filter(t => t.required && !t.completed).length;
   const hasCompletionPhoto = photos.length > 0;
   const ready = requiredRemaining === 0 && hasCompletionPhoto;
+  // An admin may submit while the gate is unmet. The server is the one that
+  // decides — it answers 422 with the authoritative missing list (including
+  // the graphics-lane gate this component can't see) and that list is what
+  // renders the override button below. Before this, the override was
+  // unreachable in the exact case it exists for: a job nobody ran the
+  // completion process on has no photo, so this button stayed disabled, so
+  // the request that produces the list never fired.
+  const canSubmit = ready || isAdmin;
+  // "2 required tasks + photo" — what the gate is still waiting on.
+  const outstanding = [
+    requiredRemaining > 0 ? `${requiredRemaining} required task${requiredRemaining === 1 ? '' : 's'}` : null,
+    hasCompletionPhoto ? null : 'photo',
+  ].filter(Boolean).join(' + ');
 
   return (
     <div onClick={onClose} style={{
@@ -844,15 +863,15 @@ export default function CompletionModal({
             <button onClick={onClose} style={{ padding: '10px 14px', borderRadius: '10px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
             <button
               onClick={() => submit(false)}
-              disabled={!ready || submitting}
+              disabled={!canSubmit || submitting}
               style={{
                 padding: '10px 18px', borderRadius: '10px', border: 'none',
-                background: ready ? '#22c55e' : 'var(--border)',
+                background: ready ? '#22c55e' : canSubmit ? 'var(--warning, #f59e0b)' : 'var(--border)',
                 color: '#fff', fontSize: '14px', fontWeight: 800,
-                cursor: ready && !submitting ? 'pointer' : 'not-allowed',
-                opacity: ready && !submitting ? 1 : 0.5,
+                cursor: canSubmit && !submitting ? 'pointer' : 'not-allowed',
+                opacity: canSubmit && !submitting ? 1 : 0.5,
               }}
-            >{submitting ? 'Submitting…' : ready ? 'Mark Complete' : `${requiredRemaining} req. left${hasCompletionPhoto ? '' : ' + photo'}`}</button>
+            >{submitting ? 'Submitting…' : ready ? 'Mark Complete' : canSubmit ? 'Complete anyway…' : `Needs ${outstanding}`}</button>
           </div>
         </div>
       </div>

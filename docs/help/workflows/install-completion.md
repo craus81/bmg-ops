@@ -36,30 +36,38 @@ You can't mark complete unless:
 - The graphics-install lane is also done (if there is a linked
   graphics job).
 
-If anything's missing, the app shows you exactly what.
+If anything's missing, the app shows you exactly what. Admins can
+override — see below.
 
 ---
 
 ## What happens when it succeeds
 
 - The vehicle flips to **Complete**.
-- The customer is auto-notified.
-- The shop team is auto-notified.
+- The shop team is notified.
+- You and the admins get a "tell the customer it's ready" prompt.
+  Nothing goes to the customer until someone taps **Email Customer**.
 - The vehicle's record locks in the completion photos, notes, and
   who marked it complete.
 
 ---
 
-## Force complete (admin only)
+## Admin override
 
-When the gate is wrong (customer waived something, etc.):
+When the gate is wrong — the installer left without photographing it,
+the customer waived something, the job is sitting in a stuck status
+nobody cleared:
 
-1. Open the pick-list.
-2. Tap **Force Complete (Admin)**.
-3. Type a reason.
-4. Confirm.
+1. Open the completion modal the normal way (In-Shop tab → **Run
+   Completion Process**, or the pick-list's **Mark Complete**).
+2. Type a completion note saying why you're overriding.
+3. Tap **Complete anyway…**. The app lists exactly what's unmet.
+4. Tap **Admin override · mark complete anyway**.
 
-It's recorded in the audit trail.
+Only admins see steps 3 and 4 — for everyone else the button stays
+disabled and reads what's still needed. The override is recorded in
+the audit trail with the specific gates it bypassed, and the weekly
+exceptions digest picks it up.
 
 ---
 
