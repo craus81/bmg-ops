@@ -285,6 +285,16 @@ export const deepLinks = {
     if (opts?.backLabel) params.set('backLabel', opts.backLabel);
     return `/pdf?${params.toString()}`;
   },
+  /** Wrap an in-app path so a Supabase auth email lands SIGNED IN.
+   *  `exchangeCodeForSession` runs in exactly one place
+   *  (src/app/auth/callback/route.ts), so a magic link whose `redirectTo`
+   *  points straight at a page arrives with an unexchanged code and dumps
+   *  the recipient on /login — which is how every invite this app has ever
+   *  sent behaved. Every `generateLink` redirectTo goes through here.
+   *  Note the host still has to be on Supabase's Redirect URLs allow-list
+   *  (Authentication -> URL Configuration); an unlisted redirect_to is
+   *  discarded silently and the Site URL is substituted. */
+  authCallback: (next: string) => `/auth/callback?next=${encodeURIComponent(next)}`,
 };
 
 import { resolveFeatures } from '@/lib/features';
