@@ -85,6 +85,24 @@ const isRetryableStatus = (status: number) => status === 429 || status >= 500;
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 /**
+ * NetSuite's SuiteCloud concurrency governor rejecting us because too many
+ * of our own requests are in flight at once — NOT a permission or data
+ * problem, and the same request succeeds moments later.
+ *
+ * It arrives in two different shapes depending on the endpoint: SuiteQL
+ * answers 429 with "Concurrent request limit exceeded", RESTlets answer
+ * **400** with an SSS_REQUEST_LIMIT_EXCEEDED body. The status alone is
+ * therefore not enough to recognise it — a plain 400 is normally a
+ * permanent error we must not retry — so match the body too.
+ */
+const isConcurrencyError = (status: number, body: string) =>
+  status === 429 || /SSS_REQUEST_LIMIT_EXCEEDED|Concurrent request limit/i.test(body);
+
+/** Attempts for a concurrency rejection, over and above any caller retries. */
+const CONCURRENCY_RETRIES = 3;
+const CONCURRENCY_BASE_DELAY_MS = 700;
+
+/**
  * Execute a SuiteQL query against NetSuite
  */
 export async function suiteqlQuery(query: string, limit: number = 1000, offset: number = 0, opts?: SuiteqlOptions): Promise<any> {
@@ -120,6 +138,15 @@ export async function suiteqlQuery(query: string, limit: number = 1000, offset: 
     const text = await response.text();
     if (isRetryableStatus(response.status) && attempt < retries) {
       await sleep(baseDelay * 2 ** attempt);
+      continue;
+    }
+    // A concurrency rejection is retried even when the caller asked for no
+    // retries: it says nothing about the query, only that we asked too much
+    // at once, and an interactive read that gives up here shows the user a
+    // raw NetSuite error for something that would have worked a second
+    // later. SuiteQL is a read, so replaying it is free.
+    if (isConcurrencyError(response.status, text) && attempt < Math.max(retries, CONCURRENCY_RETRIES)) {
+      await sleep(CONCURRENCY_BASE_DELAY_MS * 2 ** attempt);
       continue;
     }
     throw Object.assign(new Error(`NetSuite SuiteQL error (${response.status}): ${text}`), { status: response.status });
@@ -177,31 +204,44 @@ export async function callRestlet(
   }
 
   const fullUrl = url.toString();
-  const authHeader = getAuthHeader(oauth, token, { url: fullUrl, method: method.toUpperCase() });
+  const verb = method.toUpperCase();
 
-  const headers: Record<string, string> = {
-    'Authorization': authHeader,
-    'Content-Type': 'application/json',
-  };
+  // Concurrency rejections are retried for GET only. A GET is a read and
+  // replaying it is free; a POST may have created a record even when the
+  // response never reached us, and re-sending it is how you mint duplicates
+  // (see the create-customer note further down this file).
+  const retries = verb === 'GET' ? CONCURRENCY_RETRIES : 0;
 
-  const fetchOptions: RequestInit = {
-    method: method.toUpperCase(),
-    headers,
-    ...(opts?.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}),
-  };
+  for (let attempt = 0; ; attempt++) {
+    // Signed per attempt: the OAuth nonce/timestamp must be fresh.
+    const authHeader = getAuthHeader(oauth, token, { url: fullUrl, method: verb });
 
-  if (method.toUpperCase() === 'POST' && jsonData) {
-    fetchOptions.body = JSON.stringify(jsonData);
-  }
+    const headers: Record<string, string> = {
+      'Authorization': authHeader,
+      'Content-Type': 'application/json',
+    };
 
-  const response = await fetch(fullUrl, fetchOptions);
+    const fetchOptions: RequestInit = {
+      method: verb,
+      headers,
+      ...(opts?.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}),
+    };
 
-  if (!response.ok) {
+    if (verb === 'POST' && jsonData) {
+      fetchOptions.body = JSON.stringify(jsonData);
+    }
+
+    const response = await fetch(fullUrl, fetchOptions);
+
+    if (response.ok) return response.json();
+
     const text = await response.text();
+    if (attempt < retries && isConcurrencyError(response.status, text)) {
+      await sleep(CONCURRENCY_BASE_DELAY_MS * 2 ** attempt);
+      continue;
+    }
     throw new Error(`NetSuite RESTlet error (${response.status}): ${text}`);
   }
-
-  return response.json();
 }
 
 // ─── Sales Order Specific Functions ────────────────────────────
