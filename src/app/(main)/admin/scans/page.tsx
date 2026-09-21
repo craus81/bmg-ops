@@ -12,6 +12,8 @@ import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInv
 import PhoneInput from '@/components/PhoneInput';
 import { theme } from '@/lib/theme';
 import { locationBillingOverride } from '@/lib/scan-billing';
+import { shipToCityLabel } from '@/lib/graphics-job-from-po';
+import { sameCity } from '@/lib/plant-location';
 import { findExistingScanVins, sameVehicleVin, vinTail, fetchScansMatchingVins, pickScanForLine } from '@/lib/vin-match';
 import { scanLifecycle } from '@/lib/scan-state';
 import { customerRequiresPo, loadBillableCustomers, matchesBillableCustomer, DEFAULT_BILLABLE_CUSTOMERS, type BillableCustomer } from '@/lib/billable-customers';
@@ -255,7 +257,7 @@ export default function AdminScansPage() {
       // truncated read here made scans read "Waiting on PO" for POs that exist.
       fetchAllRows<any>((from, to) => supabase
         .from('purchase_orders')
-        .select('id, po_number, customer, line_items:po_line_items(id, part_number, quantity, installed)')
+        .select('id, po_number, customer, ship_to, line_items:po_line_items(id, part_number, quantity, installed)')
         .in('status', ['open', 'complete'])
         .order('po_number')
         .order('id')
@@ -663,7 +665,13 @@ export default function AdminScansPage() {
     try {
       const res = await fetch('/api/scans/match-po', { method: 'POST' });
       const data = await res.json();
-      await dialog.alert(`Matched ${data.matched} of ${data.total} unmatched scans`);
+      // Scans whose part IS on an open PO, just not one shipping to where the
+      // work was done. Worth calling out: they look identical to "no PO yet"
+      // on the board, but the fix is a PO for that plant, not waiting.
+      const held = data.skippedForLocation
+        ? `\n\n${data.skippedForLocation} left unmatched — the part is on an open PO, but not one for that location.`
+        : '';
+      await dialog.alert(`Matched ${data.matched} of ${data.total} unmatched scans${held}`);
       await loadAll();
     } catch {
       await dialog.alert('Match failed');
@@ -936,7 +944,7 @@ export default function AdminScansPage() {
   const [bulkEditExtraParts, setBulkEditExtraParts] = useState<string[]>([]);
   const [bulkExtraInput, setBulkExtraInput] = useState('');
   const [bulkEditBusy, setBulkEditBusy] = useState(false);
-  const [allPOs, setAllPOs] = useState<{ id: string; po_number: string; customer: string; line_items: { id: string; part_number: string; quantity: number; installed: number }[] }[]>([]);
+  const [allPOs, setAllPOs] = useState<{ id: string; po_number: string; customer: string; ship_to: any; line_items: { id: string; part_number: string; quantity: number; installed: number }[] }[]>([]);
   /** "0602S029/06S646" typed into one part field → the two parts it means. */
   const splitSlashParts = (raw: string | null | undefined) =>
     (raw || '').split('/').map(t => t.trim()).filter(Boolean);
@@ -1614,6 +1622,13 @@ export default function AdminScansPage() {
               ? allPOs.filter(po => po.line_items.some(li => li.part_number.toUpperCase() === selectedPart))
               : allPOs;
 
+            // Where the selected scans were done, when they agree on it —
+            // either the location this edit is about to set, or the one they
+            // already carry. Used to flag a PO that ships somewhere else.
+            const pendingLoc = bulkEditLocation ? allLocations.find(l => l.id === bulkEditLocation)?.name : null;
+            const scanLocs = [...new Set(selectedScanList.map(sc => sc.location_name).filter(Boolean) as string[])];
+            const selectedLocationLabel = pendingLoc || (scanLocs.length === 1 ? scanLocs[0] : null);
+
             return (<>
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '10px' }}>Edit {selectedScans.size} Scan{selectedScans.size !== 1 ? 's' : ''}{selectedPart ? <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '6px' }}>({selectedPart})</span> : ''}</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
@@ -1788,7 +1803,18 @@ export default function AdminScansPage() {
                 {matchingPOs.map(p => {
                   const matchedLine = selectedPart ? p.line_items.find(li => li.part_number.toUpperCase() === selectedPart) : null;
                   const remaining = matchedLine ? matchedLine.quantity - matchedLine.installed : null;
-                  return <option key={p.id} value={p.id}>PO #{p.po_number} — {p.customer}{remaining !== null ? ` (${remaining} remaining)` : ''}</option>;
+                  // Where the PO ships, spelled out: the same part is ordered
+                  // per plant, so PO number and customer alone never said
+                  // which one you were about to assign to.
+                  const city = shipToCityLabel(p.ship_to);
+                  const elsewhere = city && selectedLocationLabel && !sameCity(city, selectedLocationLabel);
+                  return (
+                    <option key={p.id} value={p.id}>
+                      PO #{p.po_number} — {p.customer}{city ? ` · ${city}` : ' · no ship-to'}
+                      {remaining !== null ? ` (${remaining} remaining)` : ''}
+                      {elsewhere ? ' ⚠ different location' : ''}
+                    </option>
+                  );
                 })}
               </select>
               {hasOnePart && matchingPOs.length === 0 && (
