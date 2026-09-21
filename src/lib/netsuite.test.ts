@@ -9,6 +9,7 @@ import {
   createBillFromPo,
   createItemReceiptFromPo,
   createCustomerOrLead,
+  updateCustomer,
   getItemBasePrices,
 } from './netsuite';
 
@@ -638,5 +639,109 @@ describe('getItemBasePrices', () => {
   it('returns an empty map for no IDs without any network call', async () => {
     expect(await getItemBasePrices([])).toEqual({});
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('updateCustomer', () => {
+  const billingLine = {
+    id: '7',
+    defaultBilling: true,
+    addressBookAddress: { addr1: '1 Old Rd', addr2: 'Suite 2', city: 'Dallas', state: 'TX', zip: '75201' },
+  };
+  const shippingLine = {
+    id: '9',
+    defaultShipping: true,
+    addressBookAddress: { addr1: '500 Dock St', city: 'Dallas', state: 'TX', zip: '75202' },
+  };
+
+  it('patches the default-billing line by id and leaves the other addresses alone', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ addressBook: { items: [billingLine, shippingLine] } }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    const result = await updateCustomer('4242', { address: '2 New Rd', city: 'Plano' });
+
+    const [readUrl] = fetchMock.mock.calls[0];
+    expect(readUrl).toContain('/customer/4242?expandSubResources=true');
+
+    const [writeUrl, init] = fetchMock.mock.calls[1];
+    // No ?replace= — replacing the sublist would drop the shipping address.
+    expect(writeUrl).toBe(writeUrl.split('?')[0]);
+    expect(init.method).toBe('PATCH');
+    const body = JSON.parse(init.body);
+    expect(body.addressBook.items).toHaveLength(1);
+    expect(body.addressBook.items[0].id).toBe('7');
+    expect(body.addressBook.items[0].addressBookAddress).toEqual({
+      addr1: '2 New Rd',
+      // Untouched parts keep NetSuite's values rather than blanking.
+      addr2: 'Suite 2',
+      city: 'Plano',
+      state: 'TX',
+      zip: '75201',
+    });
+    // Country is left off an existing line so a non-US customer keeps its own.
+    expect(body.addressBook.items[0].addressBookAddress.country).toBeUndefined();
+    expect(result).toEqual({ success: true, address: 'updated' });
+  });
+
+  it('refuses rather than guessing when several addresses exist and none is default billing', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      addressBook: { items: [{ id: '1', addressBookAddress: {} }, { id: '2', addressBookAddress: {} }] },
+    }));
+
+    const result = await updateCustomer('4242', { address: '2 New Rd' });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('none is marked default billing');
+    // Nothing was written — one call, the read.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('adds the first address when the customer has none', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ addressBook: { items: [] } }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    const result = await updateCustomer('4242', { address: '2 New Rd', city: 'Plano', state: 'TX', zip: '75024' });
+
+    const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(body.addressBook.items[0].id).toBeUndefined();
+    expect(body.addressBook.items[0]).toMatchObject({ defaultBilling: true, defaultShipping: true });
+    expect(body.addressBook.items[0].addressBookAddress.country).toEqual({ id: 'US' });
+    expect(result).toEqual({ success: true, address: 'created' });
+  });
+
+  it('skips the record read entirely when no address field is being changed', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    const result = await updateCustomer('4242', { companyName: 'Acme Co', phone: '214-555-0100' });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/customer/4242');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body)).toEqual({ companyName: 'Acme Co', phone: '214-555-0100' });
+    expect(result).toEqual({ success: true, address: undefined });
+  });
+
+  it('rejects a malformed email before it reaches NetSuite', async () => {
+    const result = await updateCustomer('4242', { email: 'not-an-email' });
+
+    // A bad value must not fail the whole save with NetSuite's generic 400.
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("doesn't look like an email address");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces NetSuite\'s own refusal', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(
+      { 'o:errorDetails': [{ detail: 'You do not have permissions to set a value for element companyname.' }] },
+      403,
+    ));
+
+    const result = await updateCustomer('4242', { companyName: 'Acme Co' });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('do not have permissions');
   });
 });

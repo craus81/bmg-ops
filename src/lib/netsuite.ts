@@ -534,6 +534,8 @@ export async function createCustomerOrLead(payload: {
   email?: string;
   phone?: string;
   address?: string;
+  /** NetSuite's second address line — suite / unit. */
+  address2?: string;
   city?: string;
   state?: string;
   zip?: string;
@@ -582,7 +584,7 @@ export async function createCustomerOrLead(payload: {
   if (website) body.url = website;
 
   // Default address
-  if (payload.address || payload.city || payload.state || payload.zip) {
+  if (payload.address || payload.address2 || payload.city || payload.state || payload.zip) {
     body.addressBook = {
       items: [
         {
@@ -590,6 +592,7 @@ export async function createCustomerOrLead(payload: {
           defaultShipping: true,
           addressBookAddress: {
             addr1: payload.address || '',
+            addr2: payload.address2 || '',
             city: payload.city || '',
             state: payload.state || '',
             zip: payload.zip || '',
@@ -1283,6 +1286,223 @@ export async function deactivateCustomer(customerId: string): Promise<{ success:
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** The address fields a Customer Record edit can carry. */
+export interface CustomerAddressFields {
+  address?: string | null;
+  address2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+}
+
+/** Everything the Customer Record's Edit panel can push to NetSuite. */
+export interface CustomerUpdateFields extends CustomerAddressFields {
+  companyName?: string;
+  email?: string | null;
+  phone?: string | null;
+  website?: string | null;
+}
+
+const CUSTOMER_ADDRESS_KEYS = ['address', 'address2', 'city', 'state', 'zip'] as const;
+
+/**
+ * One authenticated call against a customer record. GET reads it, PATCH
+ * writes it; both share the 25s timeout and the error unwrapping every
+ * other write in this file uses. A 204 (what PATCH answers with) has no
+ * body, which is a success and not a parse failure.
+ */
+async function customerRecordCall(
+  path: string,
+  method: 'GET' | 'PATCH',
+  body?: unknown,
+): Promise<{ ok: true; data: any } | { ok: false; error: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/customer/${path}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method,
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { ok: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+
+    const text = await response.text();
+    return { ok: true, data: text ? JSON.parse(text) : {} };
+  } catch (e: any) {
+    const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';
+    return { ok: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The address sub-record on an addressBook line. REST has spelled this key
+ * three ways across versions and this account's exact casing is only
+ * observable against the live account, so read all three and write the
+ * documented one (`addressBookAddress` — what createCustomerOrLead already
+ * sends successfully here).
+ */
+function addressBookLineAddress(item: any): any {
+  return item?.addressBookAddress || item?.addressbookAddress || item?.addressbookaddress || {};
+}
+
+/**
+ * Update an existing NetSuite customer — the write-back behind the Customer
+ * Record's Edit panel.
+ *
+ * Scalar fields are a plain PATCH. The ADDRESS is not a field: NetSuite keeps
+ * addresses in the `addressBook` sublist, so editing one means naming the
+ * right line. This reads the record first, finds the default-billing line,
+ * and patches THAT line by id. Two things it deliberately does not do:
+ *
+ *  - No `?replace=addressBook`. Replace drops every other address on the
+ *    customer — shipping, alternate sites — and a record with one corrected
+ *    billing address and no shipping address is worse than the one we
+ *    started with. Merging by id leaves the rest alone.
+ *  - No guessing. NetSuite APPENDS an addressBook item sent without an id,
+ *    so a customer with several addresses and no clear billing one gets a
+ *    refusal rather than a silent second address. Mark the default in
+ *    NetSuite and try again.
+ *
+ * `country` rides along only when the customer has no address at all and
+ * this call is creating the first one; on an existing line it is left out
+ * so a non-US customer keeps its country.
+ *
+ * Fail closed: the caller must not write its local copy unless this
+ * returns success, or FleetSuite ends up showing an address NetSuite
+ * never accepted.
+ */
+export async function updateCustomer(
+  customerId: string,
+  fields: CustomerUpdateFields,
+): Promise<{ success: boolean; error?: string; address?: 'updated' | 'created' }> {
+  const body: any = {};
+
+  if (fields.companyName !== undefined) {
+    const name = fields.companyName.trim();
+    if (!name) return { success: false, error: 'A customer needs a company name.' };
+    body.companyName = name;
+  }
+
+  // Validated here rather than at NetSuite's door: a malformed address or
+  // phone comes back as a generic 400 that fails the WHOLE save, so the
+  // person editing a street address would be told nothing useful about the
+  // email they also touched. The create path drops bad values silently —
+  // that is right for a scan-populated create and wrong for a human edit,
+  // where dropping it looks exactly like saving it.
+  if (fields.email !== undefined) {
+    const email = (fields.email || '').trim();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return { success: false, error: `"${email}" doesn't look like an email address.` };
+    }
+    body.email = email;
+  }
+
+  if (fields.phone !== undefined) {
+    const phone = (fields.phone || '').trim();
+    if (phone && phone.replace(/\D/g, '').length < 7) {
+      return { success: false, error: `"${phone}" is too short to be a phone number.` };
+    }
+    body.phone = phone;
+  }
+
+  if (fields.website !== undefined) {
+    body.url = normalizeWebsiteUrl(fields.website) || '';
+  }
+
+  const wantsAddress = CUSTOMER_ADDRESS_KEYS.some(k => fields[k] !== undefined);
+  let addressOutcome: 'updated' | 'created' | undefined;
+
+  if (wantsAddress) {
+    const read = await customerRecordCall(`${customerId}?expandSubResources=true`, 'GET');
+    if (!read.ok) {
+      return { success: false, error: `Could not read this customer's addresses from NetSuite — ${read.error}` };
+    }
+
+    const items: any[] = read.data?.addressBook?.items || [];
+    const billing = items.filter(i => i?.defaultBilling === true || i?.defaultBilling === 'T');
+
+    let target: any = null;
+    if (billing.length === 1) {
+      target = billing[0];
+    } else if (billing.length > 1) {
+      return {
+        success: false,
+        error: `This customer has ${billing.length} addresses marked default billing in NetSuite. Sort that out there first — FleetSuite won't guess which one you meant.`,
+      };
+    } else if (items.length === 1) {
+      target = items[0];
+    } else if (items.length > 1) {
+      return {
+        success: false,
+        error: `This customer has ${items.length} addresses in NetSuite and none is marked default billing. Mark the billing one there first — FleetSuite won't guess which one you meant.`,
+      };
+    }
+
+    const existing = target ? addressBookLineAddress(target) : {};
+    // Unsent parts keep what NetSuite already has: a caller editing only the
+    // zip must not blank the street.
+    const addr: any = {
+      addr1: fields.address !== undefined ? (fields.address || '') : (existing.addr1 || ''),
+      addr2: fields.address2 !== undefined ? (fields.address2 || '') : (existing.addr2 || ''),
+      city: fields.city !== undefined ? (fields.city || '') : (existing.city || ''),
+      state: fields.state !== undefined ? (fields.state || '') : (existing.state || ''),
+      zip: fields.zip !== undefined ? (fields.zip || '') : (existing.zip || ''),
+    };
+
+    if (target) {
+      const lineId = target.id ?? target.internalId;
+      if (lineId === undefined || lineId === null || lineId === '') {
+        // Without a line id a PATCH would append instead of replace, which
+        // is the one outcome this function exists to avoid.
+        return {
+          success: false,
+          error: "NetSuite returned this customer's address without an id, so FleetSuite can't tell which line to change. Edit it in NetSuite this once.",
+        };
+      }
+      body.addressBook = { items: [{ id: String(lineId), addressBookAddress: addr }] };
+      addressOutcome = 'updated';
+    } else {
+      body.addressBook = {
+        items: [{
+          defaultBilling: true,
+          defaultShipping: true,
+          addressBookAddress: { ...addr, country: { id: 'US' } },
+        }],
+      };
+      addressOutcome = 'created';
+    }
+  }
+
+  if (Object.keys(body).length === 0) return { success: true };
+
+  const res = await customerRecordCall(String(customerId), 'PATCH', body);
+  if (!res.ok) return { success: false, error: res.error };
+
+  return { success: true, address: addressOutcome };
 }
 
 /**
