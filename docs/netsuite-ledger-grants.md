@@ -3,9 +3,9 @@
 The ledger mirrors NetSuite invoices and credit memos into the same tables the
 QuickBooks history lands in, with PDF copies pulled through the existing PDF
 RESTlet. Two NetSuite-side permissions decide how much of that actually
-works, and neither can be granted from code: customer **payments** need a
-grant on the SuiteQL integration role, and **credit-memo PDFs** need the PDF
-RESTlet's role to see Credit Memo. Everything here is a one-time task in the
+works, and neither can be granted from code: customer **payments** need
+Customer Payment: View, and **credit-memo PDFs** need Credit Memo: View —
+both on the single role of §0. Everything here is a one-time task in the
 NetSuite UI; nothing in the app changes behavior when you finish, it simply
 stops reporting the limitation.
 
@@ -20,19 +20,35 @@ documents sit at `needs_restlet`. Neither blocks invoice mirroring.
 > check that a grant took — no redeploy is involved, they change on the next
 > scheduled run.
 
-## 0. Record the two role names (~2 minutes)
+## 0. There is ONE role: `Custom System Administrator 3`
 
-NetSuite has two distinct roles in play and the repo names neither. Write
-them down here the first time, because every step below says "that same
-role" and picking the wrong one is the usual failure:
+Every NetSuite call this app makes — SuiteQL and all three RESTlets — builds
+its OAuth from the same single `NETSUITE_TOKEN_ID`/`NETSUITE_TOKEN_SECRET`
+pair (`getConfig()` in `src/lib/netsuite.ts`). So one role decides what data
+comes back, and in this account that role is **`Custom System Administrator
+3`** (confirmed 2026-09-22). Every grant below goes there.
 
-- **SuiteQL integration role** — the role behind the TBA token
-  (`NETSUITE_TOKEN_ID`/`NETSUITE_TOKEN_SECRET`; Setup → Users/Roles → Access
-  Tokens). Name: `________________`
-- **PDF RESTlet deployment role** — the role on the RESTlet's script
-  deployment (Setup → Users/Roles → Manage Roles). Name: `________________`
+This section used to tell you to record *two* roles — a "SuiteQL integration
+role" and a "PDF RESTlet deployment role" — and warned that picking the wrong
+one was the usual failure. That framing misleads, and it cost time:
 
-## 1. SuiteQL role: credit memos and customer payments (~5 minutes)
+- A **Script Deployment's Audience** decides which roles may *execute* the
+  script. The deployments here are set to **All Internal Roles**, which is
+  why execution has never been the problem. It is not a data permission.
+- The **token's role** decides what the script can read. That is the only
+  thing a grant changes. (Caveat: a deployment's *Execute As Role* field can
+  override this; it is not set that way here.)
+
+So: don't go hunting for a deployment's role. If a read comes back empty,
+short or "not permitted", grant on the token's role. If a RESTlet call fails
+*outright*, then check that deployment's Audience.
+
+As of 2026-09-22 that role has **View on every transaction type** (granted
+wholesale while fixing the P&L — see `docs/pnl-restlet-deploy.md` §2), which
+already satisfies the Customer Payment and Credit Memo grants in §1 and §2
+below. Re-read them as "confirm", not "do".
+
+## 1. Credit memos and customer payments (~5 minutes)
 
 1. **Credit memos** — confirm the integration role can already read Credit
    Memo headers and lines: System Health → Connections → *NetSuite ledger —
@@ -46,8 +62,8 @@ role" and picking the wrong one is the usual failure:
      **Transactions → Invoice: View** and **Credit Memo: View**.
    - `The last run never reached the header query` / `No run yet` — nothing
      has been confirmed either way. Wait for the next 2-hourly run.
-2. **Customer payments** — on the SuiteQL integration role (Setup →
-   Users/Roles → Manage Roles → the role from step 0) add:
+2. **Customer payments** — on the role from step 0 (Setup → Users/Roles →
+   Manage Roles) add:
    - **Transactions → Customer Payment: View**
    - **Transactions → Find Transaction: View**
 
@@ -66,13 +82,16 @@ role" and picking the wrong one is the usual failure:
 
 ## 2. PDF RESTlet: credit-memo PDFs (~5 minutes)
 
-1. In NetSuite: **Documents → Files → File Cabinet**, find the existing
-   `bmg-pdf-restlet.js` and upload the repo's current
-   `scripts/netsuite-pdf-restlet.js` **over it** (Edit → replace file, same
-   name and path), exactly as docs/pnl-restlet-deploy.md §1. The Script
-   record and deployment pick up the new code automatically; the RESTlet URL
-   does not change.
-2. Grant that deployment's role **View on Credit Memo**.
+1. Find the file **via Customization → Scripting → Scripts** → the PDF
+   RESTlet → its **Script File** field, exactly as
+   docs/pnl-restlet-deploy.md §1 describes. Do not search the File Cabinet
+   for `bmg-pdf-restlet.js` — that name is a suggestion from the script's own
+   setup comment, not necessarily what this account holds. Edit that file and
+   upload the repo's current `scripts/netsuite-pdf-restlet.js` over it, same
+   name and path. The Script record and deployment pick up the new code
+   automatically; the RESTlet URL does not change.
+2. Grant the step-0 role **View on Credit Memo** (already covered by the
+   blanket grant — confirm rather than add).
 
 ## 3. Verify (~5 minutes)
 
@@ -130,5 +149,9 @@ mirrored payment rows stay.
 
 - Vendor bills and journal entries are the same shape and the same kind of
   grant, deliberately not mirrored yet.
-- If the SuiteQL role is ever replaced, redo step 1 against the new role —
-  the Connections rows will show `not permitted` again the moment it is.
+- If the token is ever reissued against a different role, redo the grants on
+  that role — the Connections rows will show `not permitted` again the moment
+  it happens. Note there are currently **three** active `BMG Fleet API`
+  tokens (two on `Custom System Administrator 3`, one on `System
+  Administrator`); which one the app uses is only knowable from
+  `NETSUITE_TOKEN_ID` in Vercel. Worth pruning the unused ones, carefully.
