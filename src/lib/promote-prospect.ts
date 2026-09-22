@@ -34,6 +34,7 @@ export interface ProspectRow {
   email?: string | null;
   phone?: string | null;
   address?: string | null;
+  address2?: string | null;
   city?: string | null;
   state?: string | null;
   zip?: string | null;
@@ -131,6 +132,7 @@ export async function promoteProspect(
     email: prospect.email ?? undefined,
     phone: prospect.phone ?? undefined,
     address: prospect.address ?? undefined,
+    address2: prospect.address2 ?? undefined,
     city: prospect.city ?? undefined,
     state: prospect.state ?? undefined,
     zip: prospect.zip ?? undefined,
@@ -193,6 +195,7 @@ export async function promoteProspect(
   // can't race itself.
   const addressLine = [
     prospect.address,
+    prospect.address2,
     [prospect.city, prospect.state].filter(Boolean).join(', '),
     prospect.zip,
   ].filter(Boolean).join(', ');
@@ -334,7 +337,7 @@ export async function resolveOrPromoteByName(
   if (prospectId) {
     const { data: linked } = await supabase
       .from('prospects')
-      .select('id, company_name, contact_name, title, email, phone, address, city, state, zip, website, record_type, netsuite_id')
+      .select('id, company_name, contact_name, title, email, phone, address, address2, city, state, zip, website, record_type, netsuite_id')
       .eq('id', prospectId)
       .maybeSingle();
     if (linked?.netsuite_id) {
@@ -369,7 +372,7 @@ export async function resolveOrPromoteByName(
   const exact = name.replace(/([%_\\])/g, '\\$1');
   const { data: leads } = await supabase
     .from('prospects')
-    .select('id, company_name, contact_name, title, email, phone, address, city, state, zip, website, record_type, netsuite_id')
+    .select('id, company_name, contact_name, title, email, phone, address, address2, city, state, zip, website, record_type, netsuite_id')
     .ilike('company_name', exact)
     .is('netsuite_id', null)
     .neq('record_type', 'vendor')

@@ -77,8 +77,22 @@ export async function GET(req: NextRequest) {
 
     const nsCustomers = await suiteqlQueryAll(customerQuery);
 
-    // Fetch addresses for modified customers
-    const addressMap: Record<string, string> = {};
+    // Fetch addresses for modified customers.
+    //
+    // The PARTS are kept, not a flattened string. The customers mirror still
+    // wants one display line, but the CRM record now stores the NetSuite
+    // shape (addr1/addr2/city/state/zip) so an edit made there can be pushed
+    // back line by line — see updateCustomer in src/lib/netsuite.ts. Writing
+    // the flattened string into prospects.address was harmless while that
+    // form only wrote to Postgres; once it pushes, the flattened string
+    // would land in NetSuite as addr1.
+    type NsAddress = { addr1: string; addr2: string; city: string; state: string; zip: string };
+    const addressMap: Record<string, NsAddress> = {};
+    // A customer with no default billing address simply has no row here, and
+    // that is meaningfully different from the query having failed: the first
+    // means "clear the address", the second must leave every address column
+    // untouched rather than null five of them over a transient NetSuite hiccup.
+    let addressesLoaded = false;
     if (nsCustomers.length > 0) {
       try {
         const custIds = nsCustomers.map((c: any) => c.id).join(',');
@@ -94,11 +108,21 @@ export async function GET(req: NextRequest) {
         for (const row of addrRows) {
           const custId = row.customer_id?.toString();
           if (custId) {
-            addressMap[custId] = [row.addr1, row.addr2, row.city, row.state, row.zip].filter(Boolean).join(', ');
+            addressMap[custId] = {
+              addr1: row.addr1 || '', addr2: row.addr2 || '',
+              city: row.city || '', state: row.state || '', zip: row.zip || '',
+            };
           }
         }
+        addressesLoaded = true;
       } catch { /* address fetch optional */ }
+    } else {
+      addressesLoaded = true;
     }
+
+    /** The one-line form the customers mirror has always stored. */
+    const composeAddress = (a?: NsAddress): string | null =>
+      a ? ([a.addr1, a.addr2, a.city, a.state, a.zip].filter(Boolean).join(', ') || null) : null;
 
     // Fetch spend data for modified customers
     const currentYear = new Date().getFullYear();
@@ -132,6 +156,17 @@ export async function GET(req: NextRequest) {
 
     for (const nsc of nsCustomers) {
       const nsId = nsc.id?.toString();
+      // Address columns are written only when the address query actually
+      // ran — see addressesLoaded above.
+      const nsAddr = addressMap[nsId];
+      const customerAddress = addressesLoaded ? { address: composeAddress(nsAddr) } : {};
+      const prospectAddress = addressesLoaded ? {
+        address: nsAddr?.addr1 || null,
+        address2: nsAddr?.addr2 || null,
+        city: nsAddr?.city || null,
+        state: nsAddr?.state || null,
+        zip: nsAddr?.zip || null,
+      } : {};
       const at = allTimeMap[nsId] || {};
       const yt = ytdMap[nsId] || {};
       const lyr = lastYearMap[nsId] || {};
@@ -146,7 +181,7 @@ export async function GET(req: NextRequest) {
         entity_id: nsc.entityid || '',
         email: nsc.email || null,
         phone: nsc.phone || null,
-        address: addressMap[nsId] || null,
+        ...customerAddress,
         // NS hierarchy only — the manual parent link (parent_customer_id/
         // parent_source, migration 186) is FleetSuite-owned and stays out
         // of this SET list. NetSuite reports a customer as its own parent
@@ -172,7 +207,7 @@ export async function GET(req: NextRequest) {
         company_name: nsc.companyname || nsc.entityid || 'Unknown',
         email: nsc.email || null,
         phone: nsc.phone || null,
-        address: addressMap[nsId] || null,
+        ...prospectAddress,
         status: 'converted',
         source: 'netsuite',
         pushed_at: new Date().toISOString(),

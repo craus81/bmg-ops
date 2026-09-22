@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff, requireAdmin } from '@/lib/api-auth';
-import { deleteCustomer, deactivateCustomer } from '@/lib/netsuite';
+import { deleteCustomer, deactivateCustomer, updateCustomer, type CustomerUpdateFields } from '@/lib/netsuite';
 import { logAudit } from '@/lib/audit';
 import { validateBody, z } from '@/lib/validate';
 import { findCustomerDuplicates } from '@/lib/customer-dupes';
@@ -23,6 +23,7 @@ const ProspectFields = {
   email: z.string().email().max(254).optional().nullable(),
   phone: z.string().max(40).optional().nullable(),
   address: z.string().max(300).optional().nullable(),
+  address2: z.string().max(300).optional().nullable(),
   city: z.string().max(120).optional().nullable(),
   state: z.string().max(40).optional().nullable(),
   zip: z.string().max(20).optional().nullable(),
@@ -61,6 +62,7 @@ const UpdateProspectSchema = z
     email: ProspectFields.email,
     phone: ProspectFields.phone,
     address: ProspectFields.address,
+    address2: ProspectFields.address2,
     city: ProspectFields.city,
     state: ProspectFields.state,
     zip: ProspectFields.zip,
@@ -127,7 +129,12 @@ export async function POST(req: NextRequest) {
         company_name: mirror.company_name || mirror.entity_id || 'Unknown',
         email: mirror.email || null,
         phone: mirror.phone || null,
-        address: mirror.address || null,
+        // The mirror keeps ONE flattened display line ("123 Main St, Suite
+        // 300, Dallas, TX, 75201") and this table now keeps NetSuite's
+        // parts, so copying it here would seed a street field holding the
+        // whole address — which an edit would then push back to NetSuite as
+        // addr1. Left empty: the record page falls back to the mirror's line
+        // for display, and the next customer sync fills the real parts.
         status: 'converted',
         netsuite_id: mirror.netsuite_id,
         netsuite_url: mirror.netsuite_url || null,
@@ -168,6 +175,7 @@ export async function POST(req: NextRequest) {
       email: body.email || null,
       phone: body.phone || null,
       address: body.address || null,
+      address2: body.address2 || null,
       city: body.city || null,
       state: body.state || null,
       zip: body.zip || null,
@@ -195,6 +203,12 @@ export async function PUT(req: NextRequest) {
   if (parsed.error) return parsed.error;
   const { id, netsuite_id, ...fields } = parsed.data;
 
+  const { data: before } = await supabase
+    .from('prospects')
+    .select('netsuite_id, company_name, record_type')
+    .eq('id', id)
+    .maybeSingle();
+
   // Re-pointing the NetSuite linkage decides which REAL NetSuite customer a
   // later delete destroys and where money documents attach — admin-only,
   // and the old → new pair lands in the audit log (Round 3, §7.2.5).
@@ -207,8 +221,6 @@ export async function PUT(req: NextRequest) {
         { status: 403 },
       );
     }
-    const { data: before } = await supabase
-      .from('prospects').select('netsuite_id, company_name').eq('id', id).maybeSingle();
     await logAudit(supabase, {
       actorId: auth.user.id,
       table: 'prospects',
@@ -222,6 +234,54 @@ export async function PUT(req: NextRequest) {
     });
   }
 
+  // ── Push identity edits to NetSuite FIRST ────────────────────────────────
+  //
+  // Owner decision 2026-09-21: NetSuite stays the master record, and
+  // FleetSuite edits are pushed there rather than held locally. The order
+  // matters for a reason that used to bite silently — the 2-hourly customer
+  // sync overwrites company_name, email, phone and the address columns from
+  // NetSuite, so a local-only save reverted within two hours and looked to
+  // the person editing exactly like it had worked.
+  //
+  // Fail closed: if NetSuite refuses, nothing is written locally, so the two
+  // systems can never disagree about what the address is.
+  //
+  // Not pushed: a VENDOR row's netsuite_id names a vendor record, not a
+  // customer, and a relink is a linkage change whose new id this request has
+  // not verified — both are left to their own paths.
+  const pushable: Array<[keyof typeof fields, keyof CustomerUpdateFields]> = [
+    ['company_name', 'companyName'],
+    ['email', 'email'],
+    ['phone', 'phone'],
+    ['website', 'website'],
+    ['address', 'address'],
+    ['address2', 'address2'],
+    ['city', 'city'],
+    ['state', 'state'],
+    ['zip', 'zip'],
+  ];
+  const pushFields: CustomerUpdateFields = {};
+  for (const [local, remote] of pushable) {
+    if (local in fields) (pushFields as any)[remote] = (fields as any)[local];
+  }
+
+  const linkedCustomerId =
+    !relink && (before?.record_type || 'customer') === 'customer' && before?.netsuite_id
+      ? String(before.netsuite_id)
+      : null;
+
+  let netsuite: 'updated' | 'not_linked' = 'not_linked';
+  if (linkedCustomerId && Object.keys(pushFields).length > 0) {
+    const pushed = await updateCustomer(linkedCustomerId, pushFields);
+    if (!pushed.success) {
+      return NextResponse.json(
+        { error: `NetSuite wouldn't take that change, so nothing was saved: ${pushed.error}` },
+        { status: 502 },
+      );
+    }
+    netsuite = 'updated';
+  }
+
   const { data, error } = await supabase
     .from('prospects')
     .update(relink ? { ...fields, netsuite_id: netsuite_id || null } : fields)
@@ -230,7 +290,27 @@ export async function PUT(req: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ success: true, prospect: data });
+
+  // Keep the customers mirror in step so the record page's NetSuite-side
+  // panel doesn't contradict the edit for up to two hours. Best-effort —
+  // NetSuite already has the truth and the sync will reconcile either way.
+  if (netsuite === 'updated' && linkedCustomerId) {
+    const mirrorPatch: Record<string, any> = {};
+    if ('company_name' in fields) mirrorPatch.company_name = fields.company_name;
+    if ('email' in fields) mirrorPatch.email = fields.email || null;
+    if ('phone' in fields) mirrorPatch.phone = fields.phone || null;
+    if (['address', 'address2', 'city', 'state', 'zip'].some(k => k in fields)) {
+      mirrorPatch.address = [data?.address, data?.address2, data?.city, data?.state, data?.zip]
+        .filter(Boolean).join(', ') || null;
+    }
+    if (Object.keys(mirrorPatch).length > 0) {
+      const { error: mirrorErr } = await supabase
+        .from('customers').update(mirrorPatch).eq('netsuite_id', linkedCustomerId);
+      if (mirrorErr) console.error('prospects PUT: customers mirror update failed:', mirrorErr.message);
+    }
+  }
+
+  return NextResponse.json({ success: true, prospect: data, netsuite });
 }
 
 /**
