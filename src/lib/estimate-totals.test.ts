@@ -112,13 +112,19 @@ describe('computeTotals', () => {
   });
 });
 
-// Per-item taxability (migration 252) and NetSuite-identical rounding.
+// NetSuite-identical rounding, and the removal of per-item taxability.
 //
 // EST-2608-024, reproduced line for line from the NetSuite estimate EST942
-// it was pushed to. Two things made the quote disagree with the invoice:
-// Freight is non-taxable in NetSuite, and NetSuite books tax per line with
-// half-cent ties going to the even cent. Both are pinned here — if this
-// fails, a customer is signing a total we won't bill.
+// it was pushed to. NetSuite books tax per line with half-cent ties going to
+// the even cent, which is pinned here — if this fails, a customer is signing
+// a total we will not bill.
+//
+// The `taxable: false` exclusion this suite used to assert is GONE. It came
+// from NetSuite's item Taxable checkbox, which turned out not to be
+// maintained in this account: a Sep 2026 quote excluded $6,848.61 of
+// ordinary parts and taxed only $175 of freight, while NetSuite's invoice
+// taxed everything. Every non-labor line is taxed now, and the cases below
+// pin that a stray `taxable: false` on a line can no longer reduce tax.
 describe('computeTotals — EST-2608-024 against NetSuite EST942', () => {
   const lines = [
     { quantity: 4, unit_price: 697.50, labor_hours: 0 }, // 5010 — exactly $221.805 of tax
@@ -128,53 +134,57 @@ describe('computeTotals — EST-2608-024 against NetSuite EST942', () => {
     { quantity: 1, unit_price: 595.97, labor_hours: 0 }, // 256500
     { quantity: 1, unit_price: 63.14, labor_hours: 0 },  // 202003
     { quantity: 1, unit_price: 94.73, labor_hours: 0 },  // 202999
-    { quantity: 1, unit_price: 150.00, labor_hours: 0, taxable: false }, // Freight
+    { quantity: 1, unit_price: 150.00, labor_hours: 0 }, // Freight — taxed like everything else
   ];
 
-  it('matches the NetSuite invoice to the penny', () => {
+  it('books tax per line, ties to the even cent', () => {
     const r = computeTotals(lines, 0.0795, false, 115, 4.5);
     expect(r.subtotal).toBe(4046.48);
     expect(r.labor_total).toBe(517.5);
-    expect(r.tax_amount).toBe(309.76);   // NetSuite EST942
-    expect(r.grand_total).toBe(4873.74); // NetSuite EST942
+    // 309.76 across the seven part lines + 11.92 on freight (its $11.925 is
+    // a tie too, so it books down). Per-line booking is the point: taxing
+    // the combined base in one go gives a different, wrong figure.
+    expect(r.tax_amount).toBe(321.68);
+    expect(r.grand_total).toBe(4885.66);
   });
 
   it('taxing the combined base instead would be a cent high', () => {
-    // The pre-fix arithmetic, kept as the contrast: 3896.48 × 7.95% rounds
-    // to 309.77, and per-line booking is what makes it 309.76.
+    // The pre-fix arithmetic, kept as the contrast: the seven part lines
+    // come to 3896.48, and 3896.48 × 7.95% rounds to 309.77 in one go while
+    // per-line booking makes it 309.76.
     expect(roundCentsHalfEven(3896.48 * 0.0795)).toBe(309.77);
-  });
-
-  it('still taxes freight when NetSuite has not said otherwise', () => {
-    const r = computeTotals(lines.map(({ taxable, ...l }) => l), 0.0795, false, 115, 4.5);
-    // 309.76 + 11.92 — the freight line's own tax is a tie too ($11.925),
-    // so it books down as well. Slightly under the $321.70 the builder used
-    // to show, because that taxed the combined base in one go.
-    expect(r.tax_amount).toBe(321.68);
   });
 
   it('tax-exempt still wins over everything', () => {
     expect(computeTotals(lines, 0.0795, true, 115, 4.5).tax_amount).toBe(0);
   });
 
-  it('only an explicit false excludes — unknown stays taxable', () => {
-    const unknown = [
+  it('a leftover taxable:false on a line no longer reduces tax', () => {
+    // Saved estimates and in-flight payloads may still carry the field.
+    // It must be inert, or this fix silently does nothing for them.
+    const withFlag = lines.map(l => ({ ...l, taxable: false }));
+    expect(computeTotals(withFlag, 0.0795, false, 115, 4.5).tax_amount).toBe(321.68);
+  });
+
+  it('every non-labor line is taxed, whatever the flag says', () => {
+    const mixed = [
       { quantity: 1, unit_price: 100, labor_hours: 0 },
       { quantity: 1, unit_price: 100, labor_hours: 0, taxable: null },
       { quantity: 1, unit_price: 100, labor_hours: 0, taxable: undefined },
       { quantity: 1, unit_price: 100, labor_hours: 0, taxable: true },
+      { quantity: 1, unit_price: 100, labor_hours: 0, taxable: false },
     ];
-    expect(computeTotals(unknown, 0.1, false, 0, 0).tax_amount).toBe(40);
+    expect(computeTotals(mixed, 0.1, false, 0, 0).tax_amount).toBe(50);
   });
 
-  it('an all-non-taxable estimate has no tax but keeps its subtotal', () => {
+  it('labor is still never taxed', () => {
     const r = computeTotals(
-      [{ quantity: 2, unit_price: 75, labor_hours: 0, taxable: false }],
-      0.0795, false, 115, 0,
+      [{ quantity: 2, unit_price: 75, labor_hours: 3 }],
+      0.0795, false, 115, null,
     );
     expect(r.subtotal).toBe(150);
-    expect(r.tax_amount).toBe(0);
-    expect(r.grand_total).toBe(150);
+    expect(r.labor_total).toBe(690);
+    expect(r.tax_amount).toBe(11.92); // 150 × 7.95% = 11.925, a tie → even cent
   });
 });
 
@@ -244,12 +254,14 @@ describe('vehicle count', () => {
     expect(t.subtotal).toBe(2790);
   });
 
-  it('keeps a non-taxable line out of the tax base however many vehicles there are', () => {
+  it('taxes the fleet amount even on a line still carrying taxable:false', () => {
+    // The flag is inert now (see the EST942 suite). A fleet estimate is
+    // where an accidental exclusion would cost the most, so pin it here too.
     const t = computeTotals(
       [{ quantity: 1, unit_price: 500, labor_hours: 0, taxable: false }],
       0.0795, false, 85, null, 10,
     );
-    expect(t.tax_amount).toBe(0);
+    expect(t.tax_amount).toBe(397.5); // 5000 × 7.95%
     expect(t.subtotal).toBe(5000);
   });
 

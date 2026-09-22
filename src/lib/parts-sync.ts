@@ -282,12 +282,15 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
   const since = new Date(syncState?.last_synced_at || '2020-01-01T00:00:00Z');
   const sinceStr = `${since.getMonth() + 1}/${since.getDate()}/${since.getFullYear()}`;
 
-  // istaxable is the field the quote's tax base needs (migration 252 —
-  // Freight is non-taxable in NetSuite and FleetSuite was taxing it). Not
-  // every account/role exposes it on every item type, so it is requested in
-  // its own attempt: if SuiteQL rejects the column the sync still runs and
-  // taxability stays NULL, which computeTotals reads as taxable — exactly
-  // today's behavior, never a silent under-charge.
+  // istaxable is mirrored for reference only — NOTHING prices off it. It
+  // fed the quote's tax base under migration 252 until Sep 2026, when the
+  // checkbox turned out to be unmaintained in this account: it excluded
+  // $6,848.61 of ordinary parts from a quote and left $175 of freight as
+  // the only taxed line, while NetSuite's invoice taxed all of it. Quotes
+  // now tax every non-labor line (src/lib/estimate-totals.ts). Do not wire
+  // this column back into money without fixing the source data first.
+  // Requested in its own attempt because not every account/role exposes it
+  // on every item type; if SuiteQL rejects the column the sync still runs.
   const ITEM_COLUMNS = `
       i.id,
       i.itemid AS item_number,

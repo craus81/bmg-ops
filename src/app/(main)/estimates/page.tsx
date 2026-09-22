@@ -454,12 +454,6 @@ export default function EstimatesPage() {
   // halves of "who is this for" — exactly one is set once a customer is
   // picked, and the approval/send paths accept either.
   const [prospectId, setProspectId] = useState<string | null>(null);
-  // Item numbers NetSuite marks non-taxable (netsuite_parts.is_taxable =
-  // false, migration 252). Resolved from the line set rather than threaded
-  // through every add-a-line path — catalog search, the browser, packages,
-  // wrap quotes and reload all feed the same list, and one lookup can't
-  // drift from the server's.
-  const [nonTaxableItems, setNonTaxableItems] = useState<Set<string>>(new Set());
   // Sales tax is company-wide and NOT editable here — it comes from
   // quote_settings and only a super admin can change it (Settings → Sales
   // Tax). `taxRate` still holds a per-estimate value because an already-saved
@@ -1516,53 +1510,21 @@ export default function EstimatesPage() {
   const laborUnsetCount = lines.filter(l => !l.is_custom && l.labor_hours == null).length;
   const effectiveLaborHours = laborOverride !== null ? laborOverride : autoLaborHours;
   const laborTotal = effectiveLaborHours * laborRate;
-  // Parts/materials only (never labor), minus anything NetSuite marks
-  // non-taxable — Freight is the live case. Mirrors computeTotals on the
-  // server, which is what actually gets stored: only an explicit false
-  // excludes, so an unmatched or un-synced item is still taxed.
-  const isLineTaxable = (l: LineItem) =>
-    !nonTaxableItems.has(String(l.item_number || '').trim().toUpperCase());
-  const taxableAmount = lines.reduce((s, l) => (isLineTaxable(l) ? s + fleetQty(l) * l.unit_price : s), 0);
+  // Parts/materials only (never labor) — every one of them. Mirrors
+  // computeTotals on the server, which is what actually gets stored. The
+  // per-item exclusion that used to live here is gone; see the note atop
+  // src/lib/estimate-totals.ts.
   // Per line, each rounded to cents, ties to the even cent — the same math
   // computeTotals runs server-side, which is the same math NetSuite books.
-  // Taxing `taxableAmount` in one go drifts a cent or two off the invoice.
+  // Taxing the combined base in one go drifts a cent or two off the invoice.
   const taxAmount = taxExempt
     ? 0
-    : lines.reduce((s, l) => (isLineTaxable(l)
-      ? s + roundCentsHalfEven(fleetQty(l) * l.unit_price * taxRate)
-      : s), 0);
+    : lines.reduce((s, l) => s + roundCentsHalfEven(fleetQty(l) * l.unit_price * taxRate), 0);
   // Compare at the precision the rate is displayed and stored at — a float
   // round-trip through the database is not a "different rate".
   const atCompanyRate = Math.abs(rateToPct(taxRate) - rateToPct(companyTaxRate)) < 0.005;
   const grandTotal = subtotal + laborTotal + taxAmount;
   const perVehicle = perVehicleAmount(grandTotal, units);
-
-  // Refresh the non-taxable set whenever the line-up of items changes. Keyed
-  // on the sorted item numbers, so re-ordering or a quantity edit doesn't
-  // re-query. An item that can't be resolved simply isn't in the set, which
-  // means taxed — the same fallback the server takes.
-  const lineItemKey = [...new Set(lines.map(l => String(l.item_number || '').trim().toUpperCase()).filter(Boolean))]
-    .sort().join('|');
-  useEffect(() => {
-    const numbers = lineItemKey ? lineItemKey.split('|') : [];
-    if (numbers.length === 0) { setNonTaxableItems(new Set()); return; }
-    let cancelled = false;
-    (async () => {
-      const found = new Set<string>();
-      for (let i = 0; i < numbers.length; i += 200) {
-        const { data } = await supabase
-          .from('netsuite_parts')
-          .select('item_number, is_taxable')
-          .in('item_number', numbers.slice(i, i + 200));
-        for (const p of data || []) {
-          if (p.is_taxable === false) found.add(String(p.item_number || '').trim().toUpperCase());
-        }
-      }
-      if (!cancelled) setNonTaxableItems(found);
-    })();
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- the item line-up is the only real input; the client is stable
-  }, [lineItemKey]);
 
   // ── Stock check ──
   // The signature is what the answer was computed FOR: item numbers,
@@ -4933,13 +4895,6 @@ export default function EstimatesPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-body)', marginBottom: '4px' }}>
               <span>
                 Sales Tax on Parts ({rateToPct(taxRate).toFixed(2)}%)
-                {/* Say WHY the tax is below parts × rate, so nobody has to
-                    reverse-engineer it off a NetSuite invoice again. */}
-                {taxableAmount < subtotal && (
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                    {' '}— on {fmt(taxableAmount)}; {fmt(subtotal - taxableAmount)} is non-taxable in NetSuite
-                  </span>
-                )}
               </span>
               <span>{fmt(taxAmount)}</span>
             </div>
