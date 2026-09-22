@@ -1911,7 +1911,15 @@ export default function EstimatesPage() {
       // the screen is worse than handing over nothing.
       if (!saved) { w?.close(); return; }
     }
-    const url = `/api/estimates/${editingId}/pdf${print ? '?print=1' : ''}`;
+    // Every open gets its own URL. The endpoint sends `Cache-Control:
+    // no-store`, but a bare tab navigation at a FIXED url is still a cache
+    // key, and printing an estimate, editing it, and printing again handed
+    // back the browser's stored copy of the first render — the document was
+    // right, the file was old (field bug: an edited labor override kept
+    // printing at the previous hours, while the NetSuite copy, fetched as
+    // bytes each time, was correct). A url nothing has seen before cannot
+    // be served from any cache.
+    const url = `/api/estimates/${editingId}/pdf?t=${Date.now()}${print ? '&print=1' : ''}`;
     if (w) w.location.href = url;
     else window.open(url, '_blank');
   };
