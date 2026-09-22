@@ -318,19 +318,7 @@ const PO_EXTRACTION_PROMPT = `You are extracting purchase order data from a PDF 
 
 CRITICAL: You MUST extract every single line item from the table. Each line item row has: a line number (like 1.000, 2.000), a part number, a description, quantity, unit of measure (EA/PC), and a unit price. Some POs have many line items across multiple pages — extract ALL of them.
 
-NEVER DROP A LINE BECAUSE ITS TEXT IS AWKWARD TO QUOTE. Descriptions on these
-POs routinely contain double quotes and apostrophes, sometimes unbalanced,
-because they name the words printed on a decal:
-  DECAL "KEY BOX MASTER SET        SWITCH LABEL 'STROBE LIGHT'
-Escape every double quote inside a JSON string as \" and emit the line like
-any other. Omitting a line to keep the JSON valid is the WORST possible
-outcome — it silently understates the customer's order and the total we
-confirm back to them. A real PO lost its first line exactly this way.
-
-COUNT THE LINES BEFORE YOU RETURN. Count the rows that start with a line
-number (1.000, 2.000, 3.000 …) across ALL pages, then confirm the "lines"
-array you are about to emit has exactly that many entries. If it has fewer,
-you dropped a row — go back and add it.
+Descriptions name the words printed on a decal, so they often carry double quotes and apostrophes, sometimes unbalanced (DECAL "KEY BOX MASTER SET). Escape a double quote inside a JSON string as \" and emit the line like any other — never omit a line to keep the JSON valid.
 
 LOOK FOR THESE SPECIFIC ELEMENTS:
 - PURCHASE ORDER NUMBER: Usually at top right, labeled "PURCHASE ORDER NUMBER" followed by a number like 35045953
