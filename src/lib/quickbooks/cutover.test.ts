@@ -57,6 +57,15 @@ describe('netsuiteFirstInvoiceDate', () => {
     expect(await netsuiteFirstInvoiceDate(svc as any)).toEqual({ date: '2021-04-01', source: 'suiteql' });
   });
 
+  it("normalizes SuiteQL's account-format date to ISO before it reaches a QuickBooks query", async () => {
+    // Production SuiteQL returns '1/7/2024', not '2024-01-07'; sliced as-is it
+    // became `TxnDate >= '1/7/2024'`, which QuickBooks rejects, failing the
+    // dry run in its connect phase.
+    vi.spyOn(netsuite, 'suiteqlQuery').mockResolvedValue({ items: [{ d: '1/7/2024' }] });
+    const svc = makeFakeService({ netsuite_sales_orders: [] });
+    expect(await netsuiteFirstInvoiceDate(svc as any)).toEqual({ date: '2024-01-07', source: 'suiteql' });
+  });
+
   it('falls back to the SO mirror and WARNS that it is a weaker number', async () => {
     // A first-SO date is not a first-invoice date; presenting one as the
     // other would be the report stating something it does not know.
