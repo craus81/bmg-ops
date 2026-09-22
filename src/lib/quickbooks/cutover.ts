@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQuery } from '@/lib/netsuite';
+import { isoDate } from '@/lib/financials-data';
 
 /**
  * The QuickBooks → NetSuite cutover window.
@@ -83,8 +84,11 @@ export async function netsuiteFirstInvoiceDate(
       0,
       { retries: 2 },
     );
-    const raw = result?.items?.[0]?.d;
-    if (raw) return { date: String(raw).slice(0, 10), source: 'suiteql' };
+    // SuiteQL answers in the account's date format ('1/7/2024'), and this
+    // date is spliced into a QuickBooks `TxnDate >= '…'` query, which only
+    // accepts ISO — so normalize, never slice.
+    const date = isoDate(result?.items?.[0]?.d);
+    if (date) return { date, source: 'suiteql' };
   } catch (e: any) {
     console.error('[ledger] SuiteQL cutover probe failed, falling back to the SO mirror:', e?.message || e);
   }
@@ -96,7 +100,8 @@ export async function netsuiteFirstInvoiceDate(
     .order('trandate', { ascending: true })
     .limit(1)
     .maybeSingle();
-  if (error || !data?.trandate) {
+  const mirrorDate = isoDate(data?.trandate);
+  if (error || !mirrorDate) {
     return {
       date: null,
       source: 'none',
@@ -104,7 +109,7 @@ export async function netsuiteFirstInvoiceDate(
     };
   }
   return {
-    date: String(data.trandate).slice(0, 10),
+    date: mirrorDate,
     source: 'so_mirror',
     warning: 'The NetSuite date came from the sales-order mirror, not from invoices — the first INVOICE may be later.',
   };
