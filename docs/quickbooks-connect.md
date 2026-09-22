@@ -36,7 +36,19 @@ On the app's **Redirect URIs** list add EXACTLY:
 https://go.bmgfleet.com/api/auth/quickbooks/callback
 ```
 
-Intuit matches this string character for character. The production host was
+Intuit's production-key profile also asks for these; FleetSuite serves the
+two legal pages publicly (no login) for exactly this form:
+
+| Field | Value |
+|---|---|
+| Host domain | `go.bmgfleet.com` |
+| Launch URL | `https://go.bmgfleet.com` |
+| Connect/Reconnect URL | `https://go.bmgfleet.com/settings` |
+| Disconnect URL | `https://go.bmgfleet.com/settings` |
+| Privacy policy URL | `https://go.bmgfleet.com/privacy` |
+| EULA URL | `https://go.bmgfleet.com/terms` |
+
+Intuit matches the redirect URI character for character. The production host was
 settled as `go.bmgfleet.com` (owner decision 2026-09-19, replacing
 `bmg-ops.vercel.app`) — register it only once that domain is live in Vercel,
 because re-registering means coming back to Intuit. Vercel preview
