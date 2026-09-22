@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin, getProfileRoles } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { deepLinks } from '@/lib/deep-links';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,7 +30,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
 
 function buildInviteEmailHtml(fullName: string, email: string, password: string, inviteLink: string): string {
   return `
@@ -140,7 +141,7 @@ export async function POST(req: NextRequest) {
         type: 'magiclink',
         email,
         options: {
-          redirectTo: `${appUrl}/home`,
+          redirectTo: `${appUrl}${deepLinks.authCallback('/home')}`,
         },
       });
 

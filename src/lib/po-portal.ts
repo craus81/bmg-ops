@@ -18,7 +18,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from './fetch-all';
 import { r2PresignGet } from './r2';
-import { carrierTrackingUrl } from './deep-links';
+import { carrierTrackingUrl, deepLinks } from './deep-links';
+import { loadPortalActions, type PortalAction } from './portal-actions';
 
 export type PortalStageKey =
   | 'received' | 'in_design' | 'in_production' | 'ready' | 'shipped'
@@ -122,6 +123,10 @@ export interface PortalData {
   pos: PortalPo[];
   /** Estimates section (R3-17 remainder) — where each quote stands. */
   estimates: PortalEstimate[];
+  /** Action Center (R6-11) — every approval still owed us, across
+   *  estimates, wrap quotes and artwork proofs, pinned above everything
+   *  else. Empty is the good state and renders as nothing. */
+  actions: PortalAction[];
 }
 
 const DETAIL_WINDOW_DAYS = 90;
@@ -178,7 +183,7 @@ async function buildPortalEstimates(
       stateLabel: meta[state].label,
       color: meta[state].color,
       decidedAt: e.customer_approved_at || e.customer_rejected_at || null,
-      approveUrl: state === 'awaiting' ? `/approve/estimate/${e.approval_token}` : null,
+      approveUrl: state === 'awaiting' ? deepLinks.approveEstimate(String(e.approval_token)) : null,
     };
   });
 }
@@ -227,7 +232,7 @@ export function derivePoStage(po: { status: string }, lines: { quantity: number;
  */
 export async function buildPoPortalData(
   service: SupabaseClient,
-  customer: { netsuite_id: string; company_name: string | null },
+  customer: { id: string; netsuite_id: string; company_name: string | null },
 ): Promise<PortalData> {
   const { data: pos } = await fetchAllRows<any>((from, to) =>
     service
@@ -341,6 +346,13 @@ export async function buildPoPortalData(
   const olderViews = await Promise.all(olderPos.map(p => buildPo(p, false)));
   const all = [...detailViews, ...olderViews];
   const estimates = await buildPortalEstimates(service, customer.netsuite_id);
+  // The PO ids are the second id-hop the action center uses to find proofs
+  // on jobs created from a PO before the netsuite id was stamped on them.
+  const actions = await loadPortalActions(
+    service,
+    { id: customer.id, netsuite_id: customer.netsuite_id },
+    pos.map(p => String(p.id)),
+  );
 
   const fulfilled90 = detailViews.filter(p => p.stage.key === 'fulfilled' || p.stage.key === 'closed').length;
   return {
@@ -355,5 +367,6 @@ export async function buildPoPortalData(
     },
     pos: all,
     estimates,
+    actions,
   };
 }

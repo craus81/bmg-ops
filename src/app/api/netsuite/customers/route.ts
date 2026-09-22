@@ -225,7 +225,13 @@ export async function GET(req: NextRequest) {
         company_name: nsc.companyname || nsc.entityid || 'Unknown',
         email: nsc.email || null,
         phone: nsc.phone || null,
-        address: addressMap[nsId] || null,
+        // No address here on purpose. prospects now stores NetSuite's PARTS
+        // (addr1/addr2/city/state/zip) so an edit on the Customer Record can
+        // be pushed back line by line, and addressMap above is one flattened
+        // string — with a fallback branch that can only ever produce one.
+        // Writing it would put the whole address into the street field, which
+        // a later edit would push to NetSuite as addr1. The 2-hourly
+        // /api/cron/netsuite-sync owns these columns and fills them properly.
         status: 'converted',
         source: 'netsuite',
         pushed_at: new Date().toISOString(),

@@ -495,3 +495,22 @@ button {
   animation: noteFlash 2s ease-out 1;
   scroll-margin: 20px;
 }
+
+/* ── Command palette (R6-13) ──────────────────────────────────────────────
+   Two affordances that only make sense on one class of device, split by
+   media query because inline styles can't ask what the pointer is.
+
+   The ⌘K / Ctrl K hint on the header's Search button is noise on a phone —
+   there are no keys to press — and the bottom-left search launcher is noise
+   on a desktop, where the header button and the chord are both at hand. */
+.palette-kbd-hint { display: none; }
+.palette-fab { display: none; }
+@media (pointer: fine) {
+  .palette-kbd-hint { display: inline-block; }
+}
+@media (max-width: 640px), (pointer: coarse) {
+  .palette-fab { display: flex; }
+}
+@media print {
+  .palette-fab { display: none !important; }
+}

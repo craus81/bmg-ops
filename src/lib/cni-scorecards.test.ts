@@ -15,16 +15,6 @@ describe('computeCniScorecards', () => {
       { jobId: 'j1', at: '2026-09-09T12:00:00Z' }, // current window, on time
       { jobId: 'j2', at: '2026-07-01T12:00:00Z' }, // prior window, no deadline
     ],
-    photos: [
-      // One set (j1, vin-1, front): first decided photo DENIED, reshoot approved —
-      // the effective-set rule counts ONE set, denied first-pass.
-      { jobId: 'j1', vinId: 'v1', photoType: 'front', uploadedBy: 'u1', uploadedAt: '2026-09-09T01:00:00Z', reviewStatus: 'denied' },
-      { jobId: 'j1', vinId: 'v1', photoType: 'front', uploadedBy: 'u1', uploadedAt: '2026-09-09T02:00:00Z', reviewStatus: 'approved' },
-      // A second set passes first time (conditional counts as pass).
-      { jobId: 'j1', vinId: 'v1', photoType: 'back', uploadedBy: 'u1', uploadedAt: '2026-09-09T03:00:00Z', reviewStatus: 'conditionally_approved' },
-      // Pending photos don't decide a set.
-      { jobId: 'j1', vinId: 'v1', photoType: 'detail', uploadedBy: 'u1', uploadedAt: '2026-09-09T04:00:00Z', reviewStatus: 'pending' },
-    ],
     invites: [
       { jobId: 'j1', installerId: 'u1', sentAt: '2026-09-09T00:00:00Z' },
       { jobId: 'j2', installerId: 'u1', sentAt: '2026-09-09T00:00:00Z' },
@@ -44,9 +34,12 @@ describe('computeCniScorecards', () => {
     expect(c1.prev).toMatchObject({ jobsCompleted: 1, onTimeRate: null, onTimeSamples: 0 });
   });
 
-  it('photo first-pass respects the effective-set rule: reshoots never double-count', () => {
-    const c1 = out.companies.c1;
-    expect(c1).toMatchObject({ photoSets: 2, photoFirstPassRate: 50, photoDenials: 1 });
+  // Migration 307 retired the photo approve/deny review, and the photo
+  // first-pass metric went with it: there are no verdicts to score. Photos
+  // are no longer read by the scorecards at all.
+  it('scores nothing from photos', () => {
+    expect(out.companies.c1).not.toHaveProperty('photoFirstPassRate');
+    expect(out.companies.c1).not.toHaveProperty('photoDenials');
   });
 
   it('invite→response median and decline rate on both grains', () => {
@@ -58,13 +51,13 @@ describe('computeCniScorecards', () => {
 describe('cniChipText', () => {
   it('joins the stats that exist; null when none', () => {
     expect(cniChipText({
-      jobsCompleted: 12, onTimeRate: 92, onTimeSamples: 10, photoFirstPassRate: 88,
-      photoSets: 40, photoDenials: 4, medianResponseHours: 5, responseSamples: 9,
+      jobsCompleted: 12, onTimeRate: 92, onTimeSamples: 10,
+      medianResponseHours: 5, responseSamples: 9,
       declineRate: 0, vehiclesCompleted: 30,
-    })).toBe('12 jobs · 92% on time · 88% photo first-pass · ~5h response');
+    })).toBe('12 jobs · 92% on time · ~5h response');
     expect(cniChipText({
-      jobsCompleted: 0, onTimeRate: null, onTimeSamples: 0, photoFirstPassRate: null,
-      photoSets: 0, photoDenials: 0, medianResponseHours: null, responseSamples: 0,
+      jobsCompleted: 0, onTimeRate: null, onTimeSamples: 0,
+      medianResponseHours: null, responseSamples: 0,
       declineRate: null, vehiclesCompleted: 0,
     })).toBe(null);
   });

@@ -72,7 +72,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     // Same lock definition as the save/delete gates in ../route.ts: any of
     // these means the document's content is frozen, so the copy supersedes.
-    const isRevision = !!(source.customer_approved || source.status === 'accepted' || source.netsuite_so_id);
+    //
+    // A REJECTED estimate supersedes too (R6-9). The customer said no to that
+    // document, and the counter replaces it for the same job — so it keeps
+    // the PO number and the check-in link, and carries the lineage, exactly
+    // like an accepted-then-revised one. Treating a counter-offer as an
+    // unrelated new quote loses both the authorization and the thread of
+    // what was actually being negotiated.
+    const wasRejected = !!(source.customer_rejected_at || source.status === 'rejected');
+    const isRevision = !!(source.customer_approved || source.status === 'accepted' || source.netsuite_so_id || wasRejected);
 
     const { data: sourceLines, error: linesErr } = await supabase
       .from('estimate_line_items')
@@ -96,14 +104,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
 
     const today = new Date().toISOString().slice(0, 10);
-    const provenanceNote = isRevision
-      ? `Revision of ${source.estimate_number} (${today}) — original is locked by customer acceptance/conversion.`
-      : `Copied from ${source.estimate_number} (${today}).`;
+    // The customer's own words on the counter's notes: the reason they said
+    // no is the brief for what this revision has to answer, and it lives on
+    // the rejected row the copy deliberately strips.
+    const rejectionLine = wasRejected && source.customer_rejection_reason
+      ? `Customer's reason for declining: ${String(source.customer_rejection_reason).trim()}`
+      : null;
+    const provenanceNote = wasRejected
+      ? `Counter-offer revising ${source.estimate_number} (${today}) — the customer declined that document.`
+      : isRevision
+        ? `Revision of ${source.estimate_number} (${today}) — original is locked by customer acceptance/conversion.`
+        : `Copied from ${source.estimate_number} (${today}).`;
 
     copy.status = 'draft';
     copy.created_by = auth.user.id;
     copy.supersedes_estimate_id = isRevision ? source.id : null;
-    copy.internal_notes = [provenanceNote, source.internal_notes].filter(Boolean).join('\n');
+    copy.internal_notes = [provenanceNote, rejectionLine, source.internal_notes].filter(Boolean).join('\n');
 
     // Same 23505 retry as the create path: the number is UNIQUE and the
     // RPC-failure fallback format can collide within a month.

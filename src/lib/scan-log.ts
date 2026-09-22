@@ -34,6 +34,16 @@ export interface ScanRecordInput {
   location_id?: string | null;
   location_name?: string | null;
   /**
+   * Attribution carried over when an admin adds a second part to a vehicle
+   * that was already scanned (POST /api/scans/add-part). The added part is a
+   * new row, but it is the SAME visit: it belongs to whoever did the install,
+   * on the day they did it — not to the admin who typed it in. Left unset by
+   * every scanning path, where the installer and the timestamp are the
+   * scanner and now.
+   */
+  installer_name?: string | null;
+  scanned_at?: string | null;
+  /**
    * Admin escape hatch: skip the "all three device IDs required" gate for an
    * RFID part so a missed vehicle can still be logged and credited. Whatever
    * device IDs ARE provided are still validated; missing ones are stored null.
@@ -161,6 +171,10 @@ export async function logScan(
       location_name: rec.location_name ?? null,
       scanned_by: scannedBy,
       scanned_by_company: company,
+      // Only set when a caller carries attribution over (see above); a null
+      // would blank installer_name and override scanned_at's now() default.
+      ...(rec.installer_name ? { installer_name: rec.installer_name } : {}),
+      ...(rec.scanned_at ? { scanned_at: rec.scanned_at } : {}),
     })
     .select('id')
     .single();

@@ -25,6 +25,15 @@ describe('checkStoragePath — shape defenses (every tier)', () => {
     expect(checkStoragePath('signed-documents', 'x.pdf', { write: true, access: 'staff' })).toBe('Forbidden bucket');
     expect(checkStoragePath('signed-documents', 'x.pdf', installer)).toBe('Forbidden bucket');
   });
+
+  // Migration 314: the imported QuickBooks/NetSuite ledger. Staff reads pass
+  // for any prefix that is not denied, so this line is the whole wall — its
+  // bytes must only ever come out of GET /api/ledger/documents/[id].
+  it('ledger is denied for everyone, both operations', () => {
+    expect(checkStoragePath('ledger', 'quickbooks/Invoice/123/Invoice_1042.pdf', staff)).toBe('Forbidden bucket');
+    expect(checkStoragePath('ledger', 'quickbooks/Invoice/123/Invoice_1042.pdf', { write: true, access: 'staff' })).toBe('Forbidden bucket');
+    expect(checkStoragePath('ledger', 'quickbooks/Invoice/123/Invoice_1042.pdf', installer)).toBe('Forbidden bucket');
+  });
 });
 
 describe('checkStoragePath — R3-22 caller tiers', () => {

@@ -16,6 +16,8 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { deepLinks } from '@/lib/deep-links';
 import { flashNote } from '@/lib/focus-note';
+import { expiryLabel, type ExpiryState } from '@/lib/quote-expiry';
+import { viewLabel, type ViewSummary } from '@/lib/quote-views';
 
 interface FollowUpNote {
   id: string;
@@ -45,6 +47,15 @@ interface QuoteItem {
   lastFollowupAt: string | null;
   followups: FollowUpNote[];
   nextReminderAt: string | null;
+  /** When the customer's approval link stops working (R6-9). */
+  expiresAt: string | null;
+  expiryState: ExpiryState;
+  /** Approval-page opens (R6-9) — people only; machine fetches are counted
+   *  apart and never shown as customer interest. */
+  views: ViewSummary;
+  /** False = this quote was sent before open-tracking existed, so zero
+   *  views means unknown, not "nobody looked". */
+  viewsTracked: boolean;
 }
 
 type Group = 'working' | 'sent' | 'won' | 'lost';
@@ -85,6 +96,14 @@ const quietDaysOf = (i: QuoteItem): number => {
   return ref ? Math.floor((Date.now() - ref) / 86_400_000) : 0;
 };
 const quietColor = (d: number) => d >= 14 ? '#ef4444' : d >= 5 ? '#fbbf24' : 'var(--text-muted)';
+
+// Only the two states worth interrupting a scan for. 'active' is the normal
+// case and 'no_link' means nothing was ever sent for approval — a chip for
+// either would be noise on every row.
+const EXPIRY_CHIP: Partial<Record<ExpiryState, { color: string; title: string }>> = {
+  expiring: { color: '#fb923c', title: 'The customer\u2019s approval link is about to stop working' },
+  expired: { color: '#ef4444', title: 'The approval link has expired — the customer can no longer accept. Re-send to give them a live link.' },
+};
 
 export default function QuotesPage() {
   const router = useRouter();
@@ -307,6 +326,21 @@ export default function QuotesPage() {
                     {(group === 'all' || !isSent) && (
                       <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '5px', background: `${chip.color}22`, color: chip.color }}>
                         {chip.label}
+                      </span>
+                    )}
+                    {isSent && item.views.humanCount > 0 && (
+                      <span title={`${item.views.machineCount > 0 ? `${item.views.machineCount} more fetch${item.views.machineCount === 1 ? '' : 'es'} looked like a link scanner and are not counted. ` : ''}Opens are counted from the approval page itself.`} style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '5px', background: 'rgba(56,189,248,0.14)', color: '#38bdf8' }}>
+                        👀 {viewLabel(item.views)}
+                      </span>
+                    )}
+                    {isSent && item.viewsTracked && item.views.humanCount === 0 && item.sentAt && (
+                      <span title="Nobody has opened the approval link yet. Machine fetches from link scanners do not count — worth checking the address if this persists." style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '5px', background: 'rgba(148,163,184,0.14)', color: '#94a3b8' }}>
+                        never opened
+                      </span>
+                    )}
+                    {isSent && EXPIRY_CHIP[item.expiryState] && (
+                      <span title={EXPIRY_CHIP[item.expiryState]!.title} style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '5px', background: `${EXPIRY_CHIP[item.expiryState]!.color}22`, color: EXPIRY_CHIP[item.expiryState]!.color }}>
+                        {expiryLabel(item.expiresAt)}
                       </span>
                     )}
                     {item.nextReminderAt && (

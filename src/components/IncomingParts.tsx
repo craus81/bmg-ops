@@ -85,7 +85,7 @@ export default function IncomingParts({ refreshKey = 0 }: { refreshKey?: number 
           .range(from, to)),
       fetchAllRows<any>((from, to) =>
         supabase.from('part_allocations')
-          .select('item_number, quantity, upfit_projects(project_name)')
+          .select('item_number, quantity, upfit_projects(project_name), estimates(estimate_number)')
           .eq('status', 'reserved')
           .order('id')
           .range(from, to)),
@@ -102,7 +102,9 @@ export default function IncomingParts({ refreshKey = 0 }: { refreshKey?: number 
     const allocations = (allocRes.data || []).map(a => ({
       item_number: a.item_number,
       quantity: a.quantity,
-      project_name: (a as any).upfit_projects?.project_name || null,
+      // Either a job or a quote holds it (migration 320); the label says which.
+      project_name: (a as any).upfit_projects?.project_name
+        || ((a as any).estimates?.estimate_number ? `${(a as any).estimates.estimate_number} (quote)` : null),
     }));
     const { rows: assembled, summary: sum } = assembleIncomingParts({
       poLines: poRes.data,

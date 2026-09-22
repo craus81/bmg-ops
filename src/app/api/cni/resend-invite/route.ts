@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { deepLinks } from '@/lib/deep-links';
 
 const ResendInviteSchema = z.object({
   userId: z.string().uuid(),
@@ -16,7 +17,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
 
 function buildCniReinviteEmailHtml(fullName: string, inviteLink: string): string {
   return `
@@ -65,12 +66,13 @@ export async function POST(req: NextRequest) {
       .eq('user_id', userId)
       .single();
 
-    const redirectTo = cniProfile?.profile_complete
-      ? `${appUrl}/installer`
-      : `${appUrl}/cni/onboarding`;
+    const destination = cniProfile?.profile_complete ? '/installer' : '/cni/onboarding';
+    const redirectTo = `${appUrl}${deepLinks.authCallback(destination)}`;
 
-    // Generate a fresh magic link
-    let inviteLink = redirectTo;
+    // Generate a fresh magic link. The plain destination is the fallback if
+    // the link can't be minted — it bounces to /login, which is at least a
+    // door they can open.
+    let inviteLink = `${appUrl}${destination}`;
     try {
       const { data: linkData, error: linkError } = await supabase.auth.admin.generateLink({
         type: 'magiclink',

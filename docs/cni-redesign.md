@@ -437,7 +437,7 @@ pre-loaded-list assumptions and *finishing* the company migration, not a rebuild
 | 3 | **Schedule** | `scheduling…` → `scheduled_confirmed` | Admin proposes a datetime (`scheduled_start_at`, migration 113); company confirms/declines; admin may confirm on their behalf. |
 | 4 | **In progress** | `in_progress` | Admin "Start Work". Installer **starts a shift, picks the part** (defaults to the job's if set), held persistent; **scans VINs** (each → `scan_logs` + credits + `cni_job_vins`), like field. Crew tagged on the shift. |
 | 5 | **Complete** | `completed_pending_review` | **Installer-driven** "End Shift / Mark Job Complete" — *not* auto-on-empty (see fix). Optional **target quantity** gives a countdown. |
-| 6 | **Review & close** | `approved_closed` | Admin reviews per-VIN photos → approves → closes → unlocks payout. Billing (Scan Log → invoice) runs independently. |
+| 6 | **Review & close** | `approved_closed` | Admin closes the job once every VIN is complete, the install checklist is done and the payout/AP invoice is settled → unlocks payout. Photos do NOT gate closure (owner decision 2026-09-12): they are documentation of what was installed, not a requirement to satisfy — the approve/deny review went in migration 307 and the residual "at least one photo on file" check went with it. Billing (Scan Log → invoice) runs independently. |
 
 > **Resolved 2026-08:** company-mode billing is now exclusively the
 > vendor_invoices AP flow — the legacy per-job invoice upload/approve flow is
@@ -478,7 +478,25 @@ auto-advance-on-empty.
   (individual) path — company invites/bids (migration 111) fully supersede the
   per-installer ones (036). `assigned_installer_id` stays read-only for
   historical jobs.
-- **Photo review stays**, but the **required photo set becomes configurable per
+- **The vehicle record** (`/vehicles/<vin>`, owner decision 2026-09-12): a
+  vehicle an installer completes in a customer's yard never gets a
+  `fleet_checkins` row, so it had no record and its photos were reachable
+  only by knowing which job to open. The record reads the install spine that
+  already exists — `complete-vin` writes a `scan_logs` row carrying VIN,
+  install location, billable customer, part and device ids — and hangs both
+  photo sets off it through FKs (`scan_photos.scan_log_id`,
+  `cni_job_vins.scan_log_id`, `cni_job_photos.vin_id`). Shop visits are NOT
+  merged in: they keep their own screens and the record links across, so
+  T1.4's check-in-scoped timeline stays check-in-scoped. Merging CNI photos
+  INTO that timeline was considered and dropped — it would only ever have
+  covered bridge-created vehicles, which is the minority, and the record
+  answers the same question for all of them.
+
+- **Photo review is gone** (owner decision 2026-09-12, migration 307): photos
+  are documentation of what was installed, not work to approve. The admin
+  screen is a gallery, no verdict is written, and the "photo first-pass rate"
+  that scored installers off denials is removed from the scorecards. What
+  remains open is that the **required photo set should become configurable per
   job** — an RFID/device-capture job needs different evidence than a full wrap,
   and forcing 5 fixed angles on every job is friction. (Today's required types
   are hard-coded, migration 038.)

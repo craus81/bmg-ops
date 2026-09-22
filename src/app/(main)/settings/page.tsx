@@ -4,13 +4,116 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import GraphicsReminderSettingsCard from '@/components/GraphicsReminderSettingsCard';
 import PhoneInput from '@/components/PhoneInput';
 import TextSizeToggle from '@/components/TextSizeToggle';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_ORDER, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import type { GraphicsJobStatus, NotificationPreferences } from '@/lib/types';
+import NotificationMatrix from '@/components/NotificationMatrix';
 import { isPushSupported, getPushPermission, getExistingSubscription, subscribeToPush, unsubscribeFromPush } from '@/lib/push-client';
 import { FALLBACK_SALES_TAX_RATE_PCT } from '@/lib/sales-tax';
 import { apiFetch } from '@/lib/api-client';
+
+/**
+ * QuickBooks Online + the ledger PDF gate — the Company card's ledger row.
+ *
+ * Super-admin only, like everything else in that card: connecting decides
+ * which company a decade of financial history is imported from, and stamping
+ * the gate is what lets those documents' BYTES reach R2 at all
+ * (docs/r2-private-flip.md must be verified first — the stamp is a claim
+ * that it was, and it is audited).
+ */
+function QuickBooksCompanyCard({ sectionStyle }: { sectionStyle: React.CSSProperties }) {
+  const [status, setStatus] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    try {
+      const res = await apiFetch('/api/admin/quickbooks/status');
+      const body = await res.json();
+      if (!res.ok) { setError(body?.error || 'Could not read the connection.'); return; }
+      setStatus(body);
+      setError(null);
+    } catch (e: any) {
+      setError(e?.message || 'Could not reach the server.');
+    }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const disconnect = async () => {
+    if (!confirm('Disconnect QuickBooks? Imported rows stay; the app stops being able to read the company.')) return;
+    setBusy(true);
+    try {
+      await apiFetch('/api/admin/quickbooks/disconnect', { method: 'POST' });
+      await load();
+    } finally { setBusy(false); }
+  };
+
+  const enablePdfs = async () => {
+    if (!confirm('Confirm the R2 privacy flip has been VERIFIED (docs/r2-private-flip.md) — this lets the importer write financial PDFs.')) return;
+    setBusy(true);
+    try {
+      const res = await apiFetch('/api/admin/ledger/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ pdfsEnabled: true }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(body?.error || 'Could not stamp the gate.');
+      }
+      await load();
+    } finally { setBusy(false); }
+  };
+
+  const btn: React.CSSProperties = {
+    padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#3b82f6',
+    color: '#fff', fontSize: '12px', fontWeight: 800, cursor: busy ? 'default' : 'pointer',
+    opacity: busy ? 0.5 : 1, marginRight: '8px',
+  };
+
+  return (
+    <div style={sectionStyle}>
+      <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>QuickBooks Online</div>
+      <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
+        The historical ledger tenant. Connecting lets the importer read the company&apos;s books;
+        the import itself runs from the Ledger page. See docs/quickbooks-connect.md.
+      </div>
+      {error ? (
+        <div style={{ fontSize: '11px', color: '#ef4444', marginBottom: '8px' }}>Could not read the connection — {error}</div>
+      ) : !status ? (
+        <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '8px' }}>Loading…</div>
+      ) : !status.configured ? (
+        <div style={{ fontSize: '11px', marginBottom: '8px' }}>Not configured — set the QBO_* variables first.</div>
+      ) : !status.connected ? (
+        <div style={{ fontSize: '11px', marginBottom: '8px' }}>Not connected.</div>
+      ) : (
+        <div style={{ fontSize: '11px', marginBottom: '8px', lineHeight: 1.7 }}>
+          <div><strong>{status.companyName || 'company name unavailable'}</strong> ({status.environment}, realm {status.realmMasked})</div>
+          <div>Access token refreshes {status.accessExpiresAt ? new Date(status.accessExpiresAt).toLocaleString() : '—'}</div>
+          <div>Reconnect by {status.refreshExpiresAt ? new Date(status.refreshExpiresAt).toLocaleDateString() : '—'}</div>
+          {status.needsReauth && <div style={{ color: '#ef4444' }}>Needs reconnecting — {status.lastError}</div>}
+        </div>
+      )}
+      <a href="/api/auth/quickbooks" style={{ ...btn, display: 'inline-block', textDecoration: 'none' }}>
+        {status?.connected ? 'Reconnect' : 'Connect'}
+      </a>
+      {status?.connected && (
+        <button onClick={disconnect} disabled={busy} style={{ ...btn, background: '#ef4444' }}>Disconnect</button>
+      )}
+
+      <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', margin: '16px 0 4px' }}>Ledger PDF storage</div>
+      <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '8px' }}>
+        {status?.pdfGate?.reason || 'Loading…'}
+      </div>
+      {status && !status.pdfGate?.enabled && (
+        <button onClick={enablePdfs} disabled={busy} style={btn}>
+          R2 privacy flip verified — enable ledger PDFs
+        </button>
+      )}
+    </div>
+  );
+}
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -497,6 +600,7 @@ export default function SettingsPage() {
         email_messages: false,
         email_mentions: true,
         notify_weekly_brief: true,
+        type_channels: {},
       });
     }
     setLoading(false);
@@ -525,6 +629,7 @@ export default function SettingsPage() {
       sms_messages_mode: prefs.sms_messages_mode,
       email_messages: prefs.email_messages,
       email_mentions: prefs.email_mentions ?? true,
+      type_channels: prefs.type_channels ?? {},
       notify_weekly_brief: prefs.notify_weekly_brief ?? true,
       updated_at: new Date().toISOString(),
     };
@@ -925,8 +1030,16 @@ export default function SettingsPage() {
               <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{capError}</div>
             )}
           </div>
+
+          <QuickBooksCompanyCard sectionStyle={sectionStyle} />
         </>
       )}
+
+      {/* Graphics reminders — the daily "gone quiet" sweep's thresholds.
+          Visible to every staff account (anyone reminded can see why they
+          were), editable by admins. */}
+      <div style={{ fontSize: '16px', fontWeight: 800, marginBottom: '10px', marginTop: '20px' }}>Graphics Reminders</div>
+      <GraphicsReminderSettingsCard sectionStyle={sectionStyle} canEdit={isAdmin} />
 
       {/* Customer booking (R5-17) — admin ops config for the public
           pickup/drop-off pages, not owner-only like the money settings. */}
@@ -1067,35 +1180,30 @@ export default function SettingsPage() {
 
       <div style={{ fontSize: '16px', fontWeight: 800, marginBottom: '10px', marginTop: '20px' }}>Notifications</div>
 
-      {/* Graphics Job Notifications */}
+      {/* Which alerts reach you, and how (R6-13). Built from the type
+          registry, so this list can never be shorter than what the app
+          actually sends. */}
       <div style={sectionStyle}>
-        <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '10px' }}>Graphics Job Alerts</div>
+        <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '10px' }}>Which alerts reach you</div>
+        <NotificationMatrix
+          overrides={prefs.type_channels}
+          accountInApp={prefs.notify_in_app}
+          accountEmail={prefs.notify_email}
+          onChange={next => setPrefs({ ...prefs, type_channels: next })}
+        />
+      </div>
+
+      {/* Audience opt-ins: these decide whether you are TARGETED at all,
+          which is a different question from which channels you hear it on
+          — so they stay their own switches rather than joining the matrix
+          above, where a tick would wrongly imply it subscribes you. */}
+      <div style={sectionStyle}>
+        <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>Alerts you can opt into</div>
+        <div style={{ fontSize: '10px', color: 'var(--text-label)', marginBottom: '10px', lineHeight: 1.5 }}>
+          These add you to an audience you are not in by default. The matrix above then decides how they reach you.
+        </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-            <input type="checkbox" checked={prefs.notify_new_job} onChange={e => setPrefs({ ...prefs, notify_new_job: e.target.checked })} />
-            <div>
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>New Job Created</div>
-              <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>Get notified when a new graphics job is created or flagged from a PO</div>
-            </div>
-          </label>
-
-          <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-            <input type="checkbox" checked={prefs.notify_status_change} onChange={e => setPrefs({ ...prefs, notify_status_change: e.target.checked })} />
-            <div>
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>Status Changes</div>
-              <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>Get notified when any job status changes</div>
-            </div>
-          </label>
-
-          <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-            <input type="checkbox" checked={prefs.notify_ready} onChange={e => setPrefs({ ...prefs, notify_ready: e.target.checked })} />
-            <div>
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>Ready to Install</div>
-              <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>Get notified when a job is marked ready to install</div>
-            </div>
-          </label>
-
           <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
             <input
               type="checkbox"
@@ -1105,14 +1213,6 @@ export default function SettingsPage() {
             <div>
               <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>Install-Ready Alerts (all vehicles)</div>
               <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>Notify me when any vehicle becomes ready to install, even if not assigned to me. Assigned installers and admins always get these.</div>
-            </div>
-          </label>
-
-          <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-            <input type="checkbox" checked={prefs.notify_shipped} onChange={e => setPrefs({ ...prefs, notify_shipped: e.target.checked })} />
-            <div>
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>Shipped</div>
-              <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>Get notified when a job is shipped with tracking info</div>
             </div>
           </label>
 

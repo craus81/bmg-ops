@@ -40,7 +40,7 @@ export async function pushGraphicsJobToCalendar(
   // Deep link to the FleetSuite job card — /graphics?id= opens the card
   // directly, so anyone reading the calendar entry has a one-tap path to
   // the full job (proofs, notes, status history).
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app').replace(/\/$/, '');
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com').replace(/\/$/, '');
   const descLines = [
     `Job: ${job.job_number || job.id.slice(0, 8)}`,
     job.customer ? `Customer: ${job.customer}` : '',

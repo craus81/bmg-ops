@@ -89,6 +89,9 @@ type EditableField =
 const NETSUITE_FIELDS: EditableField[] = ['item_number', 'display_name', 'sales_price', 'purchase_price'];
 const TEXT_FIELDS: EditableField[] = ['item_number', 'display_name', 'vehicle_type', 'graphic_package', 'customer', 'product_url'];
 
+// Banner text that should read as a problem rather than a success.
+const isProblemMessage = (msg: string) => /fail|error|⚠/i.test(msg);
+
 // A real NetSuite-synced part has a numeric internal id, not a local placeholder.
 const isRealNsPart = (p: { netsuite_id: string | null }) => !!p.netsuite_id && !/^(LOCAL-|bmg-)/i.test(p.netsuite_id);
 // Pick the best survivor when merging duplicates: prefer a real NetSuite row,
@@ -102,7 +105,14 @@ const bestKeeperId = (g: Part[]) => [...g].sort((a, b) => partScore(b) - partSco
 export default function PartsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, isAdmin, isSales, hasFeature, loading: authLoading } = useAuth();
+  const { user, isAdmin, isSales, hasFeature, canSeeMoney, loading: authLoading } = useAuth();
+  // Two facts, two rules (owner decision 2026-09-17). What a part COSTS us —
+  // purchase price, margin, average installer cost — is money and stays with
+  // sales/admin/finance. What it SELLS for stays wherever ordering needs it:
+  // shop techs hold parts_ordering precisely so they can raise a request off
+  // a short-readiness card, and blinding that buys nothing.
+  const showCost = canSeeMoney;
+  const showPrice = canSeeMoney || hasFeature('parts_ordering');
   const dialog = useDialog();
   const supabase = createClient();
 
@@ -495,9 +505,11 @@ export default function PartsPage() {
 
   // Save an edited part field. NetSuite-backed fields (number, name, prices) go
   // through /api/parts/[id], which writes the change back to NetSuite before
-  // mirroring it locally. Graphics metadata (vehicle type, package, brand, proof
-  // pages) is local-only — the sync never touches it — so it updates the row
-  // directly.
+  // mirroring it locally — and, when that write-back doesn't land, still saves
+  // the sales price here (FleetSuite is the pricing authority; the sync no
+  // longer overwrites it) while refusing the fields the sync would revert.
+  // Graphics metadata (vehicle type, package, brand, proof pages) is local-only
+  // — the sync never touches it — so it updates the row directly.
   const savePartField = async (partId: string) => {
     if (!editField) return;
     const { field } = editField;
@@ -528,6 +540,19 @@ export default function PartsPage() {
         if (!res.ok) {
           setFieldError(body.error || `Save failed (${res.status})`);
           return;
+        }
+        // The server drops a field NetSuite refused when the next parts sync
+        // would revert it anyway (everything but the price) — so it reports
+        // what actually saved. Don't mirror a field that didn't.
+        if (Array.isArray(body.saved) && !body.saved.includes(field)) {
+          setFieldError(body.netsuiteWarning || 'NetSuite refused the change — nothing was saved.');
+          return;
+        }
+        // Saved here but never reached NetSuite: legitimate for a price
+        // (FleetSuite's price is what the app bills from), worth flagging.
+        if (body.netsuiteWarning) {
+          setSyncMessage(`⚠ ${body.netsuiteWarning}`);
+          setTimeout(() => setSyncMessage(''), 12000);
         }
         // On a rename, the server also carries old part-number strings (scans, PO
         // lines, estimates, …) over to the new number — confirm how many moved.
@@ -847,16 +872,14 @@ export default function PartsPage() {
         )}
       </div>
 
-      {/* Sync message */}
+      {/* Sync message. A message flagged with ⚠ (e.g. a price that saved here
+          but never reached NetSuite) reads as a problem, same as a failure. */}
       {syncMessage && (
         <div style={{
           padding: '8px 12px', borderRadius: '8px', marginBottom: '10px',
-          background: syncMessage.includes('fail') || syncMessage.includes('error')
-            ? 'var(--error-bg)' : 'rgba(16,185,129,0.1)',
-          border: `1px solid ${syncMessage.includes('fail') || syncMessage.includes('error')
-            ? 'var(--error-border)' : 'rgba(16,185,129,0.2)'}`,
-          color: syncMessage.includes('fail') || syncMessage.includes('error')
-            ? 'var(--error)' : '#34d399',
+          background: isProblemMessage(syncMessage) ? 'var(--error-bg)' : 'rgba(16,185,129,0.1)',
+          border: `1px solid ${isProblemMessage(syncMessage) ? 'var(--error-border)' : 'rgba(16,185,129,0.2)'}`,
+          color: isProblemMessage(syncMessage) ? 'var(--error)' : '#34d399',
           fontSize: '12px', fontWeight: 600,
         }}>
           {syncMessage}
@@ -995,7 +1018,7 @@ export default function PartsPage() {
                               border: `1px solid ${isRealNsPart(p) ? 'rgba(52,211,153,0.3)' : 'rgba(148,163,184,0.3)'}`,
                               color: isRealNsPart(p) ? '#34d399' : 'var(--text-muted)',
                             }}>{isRealNsPart(p) ? 'NetSuite' : 'local'}</span>
-                            <span style={{ fontSize: '11px', fontWeight: 700, color: '#34d399', minWidth: '54px' }}>{formatCurrency(p.sales_price)}</span>
+                            <span style={{ fontSize: '11px', fontWeight: 700, color: '#34d399', minWidth: '54px' }}>{showPrice ? formatCurrency(p.sales_price) : ''}</span>
                             <span style={{ fontSize: '11px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {p.display_name || p.description || '—'}
                             </span>
@@ -1090,7 +1113,7 @@ export default function PartsPage() {
               || !!(part.vehicle_type || part.graphic_package || part.customer || (part.proof_pages && part.proof_pages !== 1)));
             const key = (part.item_number || '').toUpperCase();
             const completed = completedByPart[key] || 0;
-            const margin = part.sales_price > 0 && part.purchase_price > 0
+            const margin = showCost && part.sales_price > 0 && part.purchase_price > 0
               ? ((part.sales_price - part.purchase_price) / part.sales_price * 100).toFixed(1)
               : null;
 
@@ -1137,7 +1160,7 @@ export default function PartsPage() {
                     </div>
                   </div>
                   <div style={{ textAlign: 'right', fontSize: '12px', fontWeight: 700, color: '#34d399' }}>
-                    {formatCurrency(part.sales_price)}
+                    {showPrice ? formatCurrency(part.sales_price) : '—'}
                   </div>
                   <div style={{ textAlign: 'right', fontSize: '12px', fontWeight: 600, color: part.quantity_on_hand > 0 ? 'var(--text-primary)' : 'var(--error)' }}>
                     {formatQty(part.quantity_on_hand)}
@@ -1164,7 +1187,7 @@ export default function PartsPage() {
                       </div>
                     )}
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '10px' }}>
-                      {isAdmin ? (
+                      {showPrice && (isAdmin ? (
                         <InlineEditField
                           label="Sales Price" display={formatCurrency(part.sales_price)} color="#34d399"
                           isEditing={fieldEditing('sales_price')} value={editFieldValue} onValueChange={setEditFieldValue}
@@ -1174,8 +1197,8 @@ export default function PartsPage() {
                         />
                       ) : (
                         <DetailField label="Sales Price" value={formatCurrency(part.sales_price)} color="#34d399" />
-                      )}
-                      {isAdmin ? (
+                      ))}
+                      {showCost && (isAdmin ? (
                         <InlineEditField
                           label="Purchase Price" display={formatCurrency(part.purchase_price)} color="#60a5fa"
                           isEditing={fieldEditing('purchase_price')} value={editFieldValue} onValueChange={setEditFieldValue}
@@ -1185,7 +1208,7 @@ export default function PartsPage() {
                         />
                       ) : (
                         <DetailField label="Purchase Price" value={formatCurrency(part.purchase_price)} color="#60a5fa" />
-                      )}
+                      ))}
                       <DetailField label="Qty On Hand" value={formatQty(part.quantity_on_hand)} color={part.quantity_on_hand > 0 ? 'var(--text-primary)' : 'var(--error)'} />
                       <DetailField label="Qty Available" value={formatQty(part.quantity_available)} color={part.quantity_available > 0 ? 'var(--text-primary)' : 'var(--error)'} />
                       <DetailField label={`Completed · ${RANGE_PHRASE[range]}`} value={statsLoading ? '…' : completed.toString()} color="#34d399" />
@@ -1196,7 +1219,7 @@ export default function PartsPage() {
                       {margin && (
                         <DetailField label="Margin" value={`${margin}%`} color={parseFloat(margin) > 30 ? '#34d399' : '#f59e0b'} />
                       )}
-                      {part.avg_install_cost != null && (
+                      {showCost && part.avg_install_cost != null && (
                         <DetailField
                           label={`Avg Installer Cost (${part.install_cost_count || 0} VIN${(part.install_cost_count || 0) !== 1 ? 's' : ''})`}
                           value={formatCurrency(part.avg_install_cost)}

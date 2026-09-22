@@ -9,7 +9,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { deepLinks } from './deep-links';
 
 export function portalLinkUrl(token: string): string {
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app').replace(/\/$/, '');
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com').replace(/\/$/, '');
   return `${appUrl}${deepLinks.customerPoPortal(token)}`;
 }
 

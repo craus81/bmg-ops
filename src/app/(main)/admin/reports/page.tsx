@@ -62,6 +62,12 @@ const REPORTS: ReportLink[] = [
     visibility: 'admin',
   },
   {
+    title: 'Quiet Lead Triage',
+    blurb: 'Active leads with no logged contact in 30+ days, longest-quiet first \u2014 touch, park as nurturing, or close as lost (with a reason) without leaving the row. Rows never contacted are dated from the record itself and say so. The queue behind the dashboard tile.',
+    href: '/admin/leads/quiet',
+    source: 'FleetSuite',
+  },
+  {
     title: 'Never-Invoiced Recovery',
     blurb: 'Every completed or shipped vehicle with no invoice anywhere \u2014 oldest first, bucketed by what each needs: a linked sales order to bill, an estimate someone has to convert, or no paperwork at all. The queue behind the dashboard tile.',
     href: '/admin/reports/never-invoiced',

@@ -89,6 +89,7 @@ External + sessionless:
 - Open an OLD sent email → logo (and diagram, if present) still render.
 - Directly request a sensitive object's public URL (e.g. a `photos/…`
   vehicle photo URL from an old DB row) → **blocked**. That's the win.
+- Ledger: run `node scripts/import-quickbooks.mjs --mode probe-r2 --confirm <host>` (PR2) and request the `publicUrlToTest` it prints (`${R2_PUBLIC_URL}/ledger/probe.txt`) → **blocked**. A printed `null` means R2_PUBLIC_URL is unset — finish the custom-domain step first. Only then set LEDGER_PDFS_ENABLED or stamp the gate in Settings → Company, then confirm it took: System Health → Connections → Connected apps → 'Ledger PDF storage gate' reads `Enabled via LEDGER_PDFS_ENABLED` or `Enabled via Settings → Company (stamped <date>)`.
 
 If anything sensitive still loads publicly, the rule expression's hostname
 or path list is off; if an in-app image broke, check the browser network

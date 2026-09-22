@@ -16,8 +16,22 @@ import { DropZone } from '@/components/DropZone';
 import { theme } from '@/lib/theme';
 import { RollNesting, RollFilmInfo } from '@/components/RollNesting';
 import NumberInput from '@/components/NumberInput';
+import { CoverageProofPreview, type ProofFilmOption } from '@/components/PhotoCoverageProof';
+import PhotoProofBoard from '@/components/PhotoProofBoard';
+import {
+  allProofBoxes,
+  prepareCoveragePhoto,
+  proofLabel,
+  renderCoverageProofBlob,
+  sanitizePhotoProofs,
+  MAX_PHOTO_PROOFS,
+  type PhotoProof,
+} from '@/lib/coverage-proof';
+import { sqft } from '@/lib/photo-scale';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
+import { summarizeAudits, applyCoverageNorm, type TemplateAudit, type AuditSummary } from '@/lib/calibration-audit';
+import { referenceDimensions, calibrationDelta, type PanelDimension } from '@/lib/wrap-reference';
 import { estimateHeadlineNumber } from '@/lib/estimate-number';
 import {
   DEFAULT_ROLL,
@@ -56,7 +70,12 @@ interface Template {
   template_code: string | null;
   template_image_path: string | null;
   px_per_in: number | null;
+  // What the wrap dimension sheet publishes for this vehicle — the
+  // yardstick the scale is calibrated against. See src/lib/wrap-reference.ts.
   overall_length_in: number | null;
+  overall_height_in: number | null;
+  wheelbase_in: number | null;
+  panel_data: PanelDimension[] | null;
   is_active: boolean | null;
 }
 
@@ -177,6 +196,14 @@ interface WrapQuote {
   accepted_at: string | null;
   customer_rejection_reason: string | null;
   diagram_path: string | null;
+  // Photo coverage proofs: photos of the customer's own vehicle with the
+  // boxes drawn over them and each photo's scale (migration 317). Used
+  // INSTEAD of a vehicle template on quotes the 1:20 library doesn't cover.
+  photo_proofs: PhotoProof[] | null;
+  // The single-photo shape migration 315 wrote; read only as a fallback for
+  // a row the 317 backfill hasn't reached.
+  photo_path: string | null;
+  photo_boxes: any[] | null;
   attachments: QuoteAttachment[] | null;
   archived_at: string | null;
   netsuite_estimate_id: string | null;
@@ -332,8 +359,49 @@ export default function WrapQuotePage() {
   const [tplGridSearch, setTplGridSearch] = useState('');
   const [templateId, setTemplateId] = useState('');
   const [imgDim, setImgDim] = useState<{ w: number; h: number } | null>(null);
+  // ----- Photo coverage proof (drawing surface = a photo, not a template) -----
+  // Photo mode: the template picker and the measuring tools step aside, and
+  // the boxes drawn on the photos are what gets measured and priced.
+  const [photoMode, setPhotoMode] = useState(false);
+  // Several views of one vehicle, in the order the customer sees them; each
+  // carries its own boxes and its own scale (migration 317).
+  const [photoProofs, setPhotoProofs] = useState<PhotoProof[]>([]);
+  // No template means no subject label — the rep types one for the quote. On
+  // a photo quote that may be a vehicle OR a building (storefront signage is
+  // the same drawing job on a different subject), so the quote document
+  // labels it "Job" rather than "Vehicle".
+  const [photoVehicle, setPhotoVehicle] = useState('');
+  const [photoUploading, setPhotoUploading] = useState(false);
   const [tool, setTool] = useState<Tool>('select');
-  const [measurements, setMeasurements] = useState<Measurement[]>([]);
+  // Shapes drawn on a 1:20 template. In photo mode `measurements` (below) is
+  // derived from the photo boxes instead, so pricing, roll nesting, the line
+  // table and the NetSuite push all read ONE array whichever surface is live.
+  const [drawnMeasurements, setDrawnMeasurements] = useState<Measurement[]>([]);
+
+  // Photo boxes priced as measurement lines. A box only becomes a line once
+  // the photo is calibrated and it HAS real inches — an uncalibrated proof
+  // stays what it was before sizes existed: a picture, priced at nothing,
+  // rather than a $0 line pretending to be measured.
+  const photoMeasurements = useMemo<Measurement[]>(() => {
+    const many = photoProofs.length > 1;
+    return photoProofs.flatMap((proof, pi) => proof.boxes
+      .filter(b => num(b.width_in) > 0 && num(b.height_in) > 0)
+      .map(b => ({
+        id: b.id,
+        // With several views, the line says which photo it came off.
+        name: many ? `${proofLabel(proof, pi)} — ${b.label || 'Area'}` : (b.label || 'Area'),
+        type: 'box' as MType,
+        dim1_in: num(b.width_in),
+        dim2_in: num(b.height_in),
+        qty: Math.max(1, num(b.qty) || 1),
+        substrate_id: b.substrate_id || null,
+      })));
+  }, [photoProofs]);
+
+  // The one array every downstream reader uses — totals, roll nesting, the
+  // quote lines, the NetSuite push. Which surface filled it is not their
+  // business.
+  const measurements = photoMode ? photoMeasurements : drawnMeasurements;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Film applied to newly drawn shapes: sticks to the last film the user
   // picked instead of resetting to the first film in the list on every box.
@@ -346,6 +414,7 @@ export default function WrapQuotePage() {
   // Calibration: after drawing the line, ask for its real length.
   const [calibLine, setCalibLine] = useState<{ lenPx: number } | null>(null);
   const [calibInches, setCalibInches] = useState('');
+  const [calibRefKey, setCalibRefKey] = useState('');
   // Freeform shape in progress: clicked vertices + the live cursor point
   // (image-pixel coords). Clicking the first vertex again closes the shape.
   const [polyDraft, setPolyDraft] = useState<{ x: number; y: number }[] | null>(null);
@@ -538,6 +607,11 @@ export default function WrapQuotePage() {
   const [tplUploading, setTplUploading] = useState(false);
   const [calibrating, setCalibrating] = useState(false);
   const [calibStatus, setCalibStatus] = useState('');
+  // Scale audit (read-only): re-derives every template's scale from its
+  // source files and compares it to what the estimator measures with today.
+  const [auditing, setAuditing] = useState(false);
+  const [auditStatus, setAuditStatus] = useState('');
+  const [audits, setAudits] = useState<TemplateAudit[] | null>(null);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
   useEffect(() => { loadAll(); }, []);
@@ -548,7 +622,7 @@ export default function WrapQuotePage() {
       // The template library can exceed PostgREST's silent 1000-row cap — a
       // bare select made everything past row 1000 unfindable in the pickers.
       fetchAllRows<Template>((from, to) =>
-        supabase.from('vehicle_templates').select('id, name, make, model, year, variant, scale, template_code, template_image_path, px_per_in, overall_length_in, is_active').not('template_image_path', 'is', null).order('make').order('model').order('id').range(from, to)),
+        supabase.from('vehicle_templates').select('id, name, make, model, year, variant, scale, template_code, template_image_path, px_per_in, overall_length_in, overall_height_in, wheelbase_in, panel_data, is_active').not('template_image_path', 'is', null).order('make').order('model').order('id').range(from, to)),
       supabase.from('wrap_substrates').select('*').order('name'),
       supabase.from('wrap_quote_settings').select('*').eq('id', 1).maybeSingle(),
       supabase.from('wrap_quotes').select('*').order('created_at', { ascending: false }).limit(200),
@@ -686,6 +760,17 @@ export default function WrapQuotePage() {
     const unitPrice = billedArea * (sub ? filmRate(sub) : 0);
     return { sub, trimArea, billedArea, unitPrice, lineTotal: unitPrice * Math.max(1, num(m.qty)) };
   };
+
+  // Film choices for the photo proof sidebar — same active films and rates
+  // the template estimator offers, in the shape that component wants.
+  const proofFilms = useMemo<ProofFilmOption[]>(
+    () => activeSubstrates.map(f => ({
+      id: f.id,
+      label: `${filmLabel(f)} ($${fmt(filmRate(f))}/ft²)`,
+      ratePerSqft: filmRate(f),
+    })),
+    [activeSubstrates],
+  );
 
   // Stable per-film color for canvas shapes; stored color wins, else palette.
   const filmColor = (id: string | null) => {
@@ -990,7 +1075,7 @@ export default function WrapQuotePage() {
       qty: 1,
       substrate_id: defaultFilmId(),
     };
-    setMeasurements(prev => [...prev, m]);
+    setDrawnMeasurements(prev => [...prev, m]);
     setSelectedId(m.id);
     setPolyDraft(null);
     setPolyHover(null);
@@ -1042,7 +1127,7 @@ export default function WrapQuotePage() {
     if (editDrag) {
       const dx = p.x - editDrag.grabX, dy = p.y - editDrag.grabY;
       const ppi = num(template?.px_per_in);
-      setMeasurements(prev => prev.map(m => {
+      setDrawnMeasurements(prev => prev.map(m => {
         if (m.id !== editDrag.id) return m;
         if (editDrag.kind === 'lineend' && editDrag.line && editDrag.lineNo) {
           // Dead zone: a jittery tap on an endpoint (touchscreens emit a
@@ -1091,7 +1176,8 @@ export default function WrapQuotePage() {
 
     if (tool === 'calibrate') {
       setCalibLine({ lenPx });
-      setCalibInches(template?.overall_length_in ? String(template.overall_length_in) : '');
+      setCalibInches('');
+      setCalibRefKey('');
       return;
     }
 
@@ -1109,7 +1195,7 @@ export default function WrapQuotePage() {
         qty: 1,
         substrate_id: defaultFilmId(),
       };
-      setMeasurements(prev => [...prev, m]);
+      setDrawnMeasurements(prev => [...prev, m]);
       setSelectedId(m.id);
       setTool('select');
       return;
@@ -1132,12 +1218,19 @@ export default function WrapQuotePage() {
       setPendingPair(m);
     } else {
       const m = { ...pendingPair, line2: line, dim2_in: lenPx / ppi };
-      setMeasurements(prev => [...prev, m]);
+      setDrawnMeasurements(prev => [...prev, m]);
       setSelectedId(m.id);
       setPendingPair(null);
       setTool('select');
     }
   };
+
+  // What the wrap dimension sheet publishes for this vehicle, longest
+  // first — the calibration yardstick, in place of a typed guess.
+  const calibRefs = useMemo(() => referenceDimensions(template), [template]);
+  const calibPreview = useMemo(
+    () => (calibLine ? calibrationDelta(calibLine.lenPx, num(calibInches), template?.px_per_in) : null),
+    [calibLine, calibInches, template]);
 
   const saveCalibration = async () => {
     const inches = num(calibInches);
@@ -1147,13 +1240,14 @@ export default function WrapQuotePage() {
     setTemplates(prev => prev.map(t => t.id === template.id ? { ...t, px_per_in: ppi } : t));
     setCalibLine(null);
     setCalibInches('');
+    setCalibRefKey('');
     setTool('select');
   };
 
   const updateMeasurement = (id: string, patch: Partial<Measurement>) => {
     // Remember the last film explicitly chosen so new shapes default to it.
     if (patch.substrate_id) setLastFilmId(patch.substrate_id);
-    setMeasurements(prev => prev.map(m => {
+    setDrawnMeasurements(prev => prev.map(m => {
       if (m.id !== id) return m;
       const next = { ...m, ...patch };
       // Typing a width/height reshapes the drawn box to match (boxes only —
@@ -1228,7 +1322,7 @@ export default function WrapQuotePage() {
   };
 
   const removeMeasurement = (id: string) => {
-    setMeasurements(prev => prev.filter(m => m.id !== id));
+    setDrawnMeasurements(prev => prev.filter(m => m.id !== id));
     if (selectedId === id) setSelectedId(null);
   };
 
@@ -1243,7 +1337,7 @@ export default function WrapQuotePage() {
   };
 
   const flipMeasurement = (id: string, axis: 'h' | 'v') => {
-    setMeasurements(prev => prev.map(m =>
+    setDrawnMeasurements(prev => prev.map(m =>
       m.id === id && m.type === 'poly' && m.points ? { ...m, points: mirrorPoints(m.points, axis) } : m));
   };
 
@@ -1266,14 +1360,23 @@ export default function WrapQuotePage() {
       line2: src.line2 ? { x1: src.line2.x1 + OFFSET, y1: src.line2.y1 + OFFSET, x2: src.line2.x2 + OFFSET, y2: src.line2.y2 + OFFSET } : undefined,
       points,
     };
-    setMeasurements(prev => [...prev, copy]);
+    setDrawnMeasurements(prev => [...prev, copy]);
     setSelectedId(copy.id);
   };
 
   const selected = measurements.find(m => m.id === selectedId) || null;
 
+  // Something worth quoting exists: measured shapes, or boxes on a photo proof
+  // (which price nothing but are still the deliverable the customer asked for).
+  const hasCoverage = measurements.length > 0 || (photoMode && allProofBoxes(photoProofs).length > 0);
+
   const resetEstimate = () => {
-    setMeasurements([]);
+    setDrawnMeasurements([]);
+    // The photo is one customer's vehicle (unlike a reusable template), so it
+    // goes with the estimate it was drawn for.
+    setPhotoMode(false);
+    setPhotoProofs([]);
+    setPhotoVehicle('');
     setSelectedId(null);
     setPendingPair(null);
     setPolyDraft(null);
@@ -1365,8 +1468,15 @@ export default function WrapQuotePage() {
     }
     return {
       quote_number: quoteNumber || legacyJobNumber.wq(),
-      template_id: template?.id || null,
-      vehicle_description: template ? templateLabel(template) : null,
+      template_id: photoMode ? null : template?.id || null,
+      vehicle_description: photoMode ? (photoVehicle.trim() || null) : template ? templateLabel(template) : null,
+      // Photo proof rides along so reopening the quote restores the backdrop
+      // and its boxes; a template quote clears both.
+      photo_proofs: photoMode ? photoProofs : [],
+      // The single-photo columns migration 315 wrote are superseded by
+      // photo_proofs; clear them so there is one source of truth.
+      photo_path: null,
+      photo_boxes: [],
       customer_id: customerId,
       customer,
       project_type: projectType || null,
@@ -1487,6 +1597,34 @@ export default function WrapQuotePage() {
     }
   };
 
+  // Flatten EVERY photo proof to its own picture, in order. Each proof keeps
+  // its own diagram_path so the emailed quote can show all the views; the
+  // first one also becomes the quote's diagram_path, which is what the
+  // single-picture surfaces (the estimate attach) still read.
+  const uploadProofDiagrams = async (qn: string): Promise<PhotoProof[]> => {
+    const out: PhotoProof[] = [];
+    for (const [i, proof] of photoProofs.entries()) {
+      let path = proof.diagram_path || null;
+      try {
+        const blob = proof.boxes.length > 0
+          ? await renderCoverageProofBlob(imageUrl(proof.path), proof.boxes)
+          : null;
+        if (blob) {
+          const target = `quote-diagrams/${qn}-${i + 1}-${Date.now()}.jpg`;
+          const { error } = await storage.from('vehicle-templates').upload(target, blob, { contentType: 'image/jpeg', upsert: true });
+          // A failed upload keeps the picture this proof already had rather
+          // than blanking a view that was fine a moment ago.
+          if (!error) path = target;
+        } else if (proof.boxes.length === 0) {
+          // Every box deleted — this view has nothing left to show.
+          path = null;
+        }
+      } catch { /* keep whatever it had */ }
+      out.push({ ...proof, diagram_path: path });
+    }
+    return out;
+  };
+
   const saveQuote = async (): Promise<string | null> => {
     // A crossed freeform outline shoelaces to less area than what's visually
     // filled — block the save (and therefore email/NetSuite) until it's
@@ -1499,8 +1637,22 @@ export default function WrapQuotePage() {
     const snap = buildSnapshot();
     if (!savedQuoteId) snap.quote_number = await nextQuoteNumber();
     if (!quoteNumber) setQuoteNumber(snap.quote_number);
-    const diagramPath = await uploadDiagram(snap.quote_number);
-    const row = diagramPath ? { ...snap, diagram_path: diagramPath } : snap;
+    // A render that fails (photo offline, image blocked) keeps whatever
+    // picture the quote already had; an EMPTY canvas clears it, so a quote
+    // switched from a template to photos can't keep emailing the old
+    // template diagram.
+    let row: any;
+    if (photoMode) {
+      const proofs = await uploadProofDiagrams(snap.quote_number);
+      setPhotoProofs(proofs);
+      const lead = proofs.find(p => p.diagram_path)?.diagram_path || null;
+      row = { ...snap, photo_proofs: proofs, diagram_path: lead };
+    } else {
+      const diagramPath = await uploadDiagram(snap.quote_number);
+      row = diagramPath
+        ? { ...snap, diagram_path: diagramPath }
+        : measurements.length === 0 ? { ...snap, diagram_path: null } : snap;
+    }
     if (savedQuoteId) {
       const { error } = await supabase.from('wrap_quotes').update({ ...row, updated_at: new Date().toISOString() }).eq('id', savedQuoteId);
       if (error) { await dialog.alert(`Save failed: ${saveErrorMessage(error)}`); return null; }
@@ -1551,7 +1703,7 @@ export default function WrapQuotePage() {
   // the real thing). The actual send happens in sendQuoteEmail.
   const createAndEmail = async () => {
     if (!customer.email?.trim()) { await dialog.alert('Enter a customer email first.'); return; }
-    if (measurements.length === 0) { await dialog.alert('No measurements — draw the wrap areas on the Estimator tab first.'); return; }
+    if (!hasCoverage) { await dialog.alert('Nothing drawn yet — mark the wrap areas on the Estimator tab first.'); return; }
     if (!sendInclude.pricing && !sendInclude.diagram && !sendInclude.netsuitePdf) {
       await dialog.alert('Nothing selected to send — pick pricing, the coverage picture, or the NetSuite PDF.');
       return;
@@ -1661,7 +1813,7 @@ export default function WrapQuotePage() {
   // (described as the quoted vehicle), labor total -> "Graphics Install
   // Labor". Taxes are NetSuite's job. No email is sent.
   const createNetsuiteQuote = async () => {
-    if (measurements.length === 0) { await dialog.alert('No measurements — draw the wrap areas on the Estimator tab first.'); return; }
+    if (!hasCoverage) { await dialog.alert('Nothing drawn yet — mark the wrap areas on the Estimator tab first.'); return; }
     if (!customerId) { await dialog.alert('Pick the customer from the NetSuite search first — a typed-in name has no NetSuite record to attach the quote to.'); return; }
     if (!(await dialog.confirm(`Create a NetSuite quote for ${customer.name}? Vinyl ($${fmt(totals.adjMaterials)}${totals.kitQty > 1 ? `, ${totals.kitQty} kits` : ''}) maps to "3M Vinyl", labor ($${fmt(totals.adjLabor)}) to "Graphics Install Labor" — NetSuite adds tax.`))) return;
     setPushingNetsuite(true);
@@ -1766,7 +1918,18 @@ export default function WrapQuotePage() {
 
     setTemplateId(q.template_id || '');
     setImgDim(null);
-    setMeasurements(ms);
+    // A quote saved on photos reopens on those photos with their boxes and
+    // their scales; one saved on a template reopens on the template. The
+    // legacy single-photo columns are read as a fallback, so a row the
+    // migration hasn't backfilled still opens with its proof.
+    const proofs = sanitizePhotoProofs(q.photo_proofs, { path: q.photo_path, boxes: q.photo_boxes });
+    setPhotoMode(proofs.length > 0);
+    setPhotoProofs(proofs);
+    setPhotoVehicle(proofs.length > 0 ? (q.vehicle_description || '') : '');
+    // Photo quotes derive their measurements from the boxes — keep the drawn
+    // array empty so the two can't stack up.
+    if (proofs.length > 0) ms.length = 0;
+    setDrawnMeasurements(ms);
     setSelectedId(null);
     setPendingPair(null);
     setPolyDraft(null);
@@ -1862,6 +2025,81 @@ export default function WrapQuotePage() {
   const removeAttachment = async (a: QuoteAttachment) => {
     setAttachments(prev => prev.filter(x => x.path !== a.path));
     await storage.from('vehicle-templates').remove([a.path]); // best-effort cleanup
+  };
+
+  // ----- Photo coverage proofs -----
+  // Photos of the customer's actual vehicle as the drawing surface for quotes
+  // the 1:20 template library doesn't cover — one per view. Each is
+  // downscaled client-side (email-sized, EXIF rotation baked in) before
+  // upload, then calibrated and annotated on its own.
+  const addCoveragePhotos = async (files: FileList | File[] | null) => {
+    const picked = files ? Array.from(files) : [];
+    if (picked.length === 0) return;
+    const room = MAX_PHOTO_PROOFS - photoProofs.length;
+    if (room <= 0) {
+      await dialog.alert(`A quote can carry ${MAX_PHOTO_PROOFS} photos. Remove one before adding another.`);
+      return;
+    }
+    if (picked.length > room) {
+      await dialog.alert(`Only ${room} more photo${room === 1 ? '' : 's'} fit on this quote — adding the first ${room}.`);
+    }
+    setPhotoUploading(true);
+    try {
+      const added: PhotoProof[] = [];
+      for (const file of picked.slice(0, room)) {
+        if (!file.type.startsWith('image/')) {
+          await dialog.alert(`${file.name} isn't an image — pick a photo (JPG, PNG, HEIC).`);
+          continue;
+        }
+        try {
+          const blob = await prepareCoveragePhoto(file);
+          const path = `quote-photos/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.[^.]*$/, '')}.jpg`;
+          const { error } = await storage.from('vehicle-templates').upload(path, blob, { contentType: 'image/jpeg' });
+          if (error) { await dialog.alert(`Photo upload failed for ${file.name}: ${error.message}`); continue; }
+          added.push({ id: crypto.randomUUID(), path, label: '', boxes: [], calibration: null, diagram_path: null });
+        } catch (e: any) {
+          await dialog.alert(`Couldn't read ${file.name}: ${e.message}`);
+        }
+      }
+      if (added.length > 0) {
+        setPhotoProofs(prev => [...prev, ...added]);
+        setPhotoMode(true);
+        setTemplateId('');
+      }
+    } finally {
+      setPhotoUploading(false);
+    }
+  };
+
+  const removeCoveragePhoto = async (proof: PhotoProof) => {
+    const n = proof.boxes.length;
+    if (n > 0 && !(await dialog.confirm(`Remove this photo? The ${n} box${n === 1 ? '' : 'es'} drawn on it ${n === 1 ? 'goes' : 'go'} with it — including ${n === 1 ? 'its' : 'their'} pricing.`))) return;
+    setPhotoProofs(prev => prev.filter(p => p.id !== proof.id));
+  };
+
+  // The two drawing surfaces are mutually exclusive: a quote is either
+  // measured on a 1:20 template or drawn on photos, never half of each (the
+  // saved snapshot can only carry one).
+  const switchSurface = async (photo: boolean) => {
+    if (photo === photoMode) return;
+    if (photo && drawnMeasurements.length > 0) {
+      if (!(await dialog.confirm('Switch to photo proofs? The shapes measured on the template will be cleared — photo boxes are measured off the photos instead.'))) return;
+      setDrawnMeasurements([]);
+      setSelectedId(null);
+      setPendingPair(null);
+      setPolyDraft(null);
+      setPolyHover(null);
+      setPlacements({});
+      setUseRollPricing(false);
+    }
+    if (!photo && photoProofs.length > 0) {
+      const n = allProofBoxes(photoProofs).length;
+      if (!(await dialog.confirm(`Switch back to a vehicle template? The ${photoProofs.length} photo${photoProofs.length === 1 ? '' : 's'}${n > 0 ? ` and the ${n} box${n === 1 ? '' : 'es'} on ${photoProofs.length === 1 ? 'it' : 'them'}` : ''} will be cleared.`))) return;
+      setPhotoProofs([]);
+      setPlacements({});
+      setUseRollPricing(false);
+    }
+    setPhotoMode(photo);
   };
 
   // ----- History: archive / delete -----
@@ -2197,6 +2435,58 @@ export default function WrapQuotePage() {
     }
   };
 
+  // Scale audit. Reads only — it never writes a px_per_in — because the
+  // question it answers ("can the library's square footages be trusted?")
+  // has to be settled before anybody changes a number. Loops the same
+  // cursor batches as auto-calibration, then scores the whole library at
+  // once: the templates a person calibrated by hand are the reference, and
+  // the gap between their coverage and everyone else's IS the scale error.
+  const runScaleAudit = async () => {
+    setAuditing(true);
+    setAuditStatus('Reading template source files…');
+    setAudits(null);
+    let cursor: string | null = null;
+    const all: TemplateAudit[] = [];
+    try {
+      do {
+        const res: Response = await apiFetch('/api/admin/calibration-audit', {
+          method: 'POST',
+          body: JSON.stringify({ cursor }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          setAuditStatus(`Failed: ${data.error || 'Unknown error'}`);
+          return;
+        }
+        all.push(...(data.audits as TemplateAudit[]));
+        cursor = data.nextCursor;
+        setAuditStatus(`Checked ${all.length} templates…`);
+      } while (cursor);
+      const firstPass = summarizeAudits(all);
+      setAudits(applyCoverageNorm(all, firstPass.referenceCoverage));
+      setAuditStatus(`Done — ${all.length} templates checked.`);
+    } catch (e: any) {
+      setAuditStatus(`Failed: ${e.message}`);
+    } finally {
+      setAuditing(false);
+    }
+  };
+
+  const auditSummary: AuditSummary | null = useMemo(
+    () => (audits ? summarizeAudits(audits) : null), [audits]);
+
+  // Worst first: the templates quoting furthest from reality are the ones
+  // worth a hand recalibration, and the rest is a long tail of "fine".
+  const auditProblems = useMemo(() => {
+    if (!audits) return [];
+    const rank: Record<string, number> = {
+      impossible: 0, 'suspect-cropped-preview': 1, 'suspect-scale': 2, unreadable: 3, uncalibrated: 4,
+    };
+    return audits
+      .filter(a => a.verdict in rank)
+      .sort((a, b) => (rank[a.verdict] - rank[b.verdict]) || (a.coverage ?? 1) - (b.coverage ?? 1));
+  }, [audits]);
+
   // ----- Shared styles -----
   const inputStyle: React.CSSProperties = { width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' };
   const labelStyle: React.CSSProperties = { fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' };
@@ -2228,6 +2518,24 @@ export default function WrapQuotePage() {
   // Read-only copy of the estimator canvas for the live quote preview, so it
   // matches the coverage diagram the customer gets in the emailed quote.
   const liveCoverageDiagram = () => {
+    // Photo quotes preview the proof itself — same picture the save flattens
+    // into diagram_path and the email carries.
+    if (photoMode) {
+      const shown = photoProofs.filter(p => p.boxes.length > 0);
+      if (shown.length === 0) return null;
+      return (
+        <>
+          {shown.map((p, i) => (
+            <CoverageProofPreview
+              key={p.id}
+              src={imageUrl(p.path)}
+              boxes={p.boxes}
+              caption={shown.length > 1 ? proofLabel(p, photoProofs.indexOf(p)) : undefined}
+            />
+          ))}
+        </>
+      );
+    }
     if (!template?.template_image_path || measurements.length === 0) return null;
     return (
       <div style={{ position: 'relative', marginBottom: '10px', background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '8px', overflow: 'hidden' }}>
@@ -2279,7 +2587,7 @@ export default function WrapQuotePage() {
 
   // Quote preview shared by the Quote tab and History view modal. `coverage`
   // overrides the stored diagram with a live render (Quote tab, pre-save).
-  const quotePreview = (q: { quote_number: string; vehicle_description: string | null; customer: any; project_type: string | null; project_notes: string | null; measurements: any[]; labor: any; subtotal: number; tax_rate: number; tax_amount: number; total: number; diagram_path?: string | null; attachments?: QuoteAttachment[] | null; created_at?: string; package_qty?: number | null; adjustments?: QuoteAdjustments | null; nesting?: NestingSnapshot | null }, coverage?: React.ReactNode) => (
+  const quotePreview = (q: { quote_number: string; vehicle_description: string | null; customer: any; project_type: string | null; project_notes: string | null; measurements: any[]; labor: any; subtotal: number; tax_rate: number; tax_amount: number; total: number; diagram_path?: string | null; photo_proofs?: PhotoProof[] | null; template_id?: string | null; attachments?: QuoteAttachment[] | null; created_at?: string; package_qty?: number | null; adjustments?: QuoteAdjustments | null; nesting?: NestingSnapshot | null }, coverage?: React.ReactNode) => (
     <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '18px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
         <div style={{ fontSize: '17px', fontWeight: 800, color: 'var(--text-primary)' }}>Wrap Quote <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700 }}>{q.quote_number}</span></div>
@@ -2307,13 +2615,39 @@ export default function WrapQuotePage() {
         </div>
       </div>
       {q.project_type && <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '6px' }}><b>Project Type:</b> {q.project_type}</div>}
-      {q.vehicle_description && <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '10px' }}><b>Vehicle:</b> {q.vehicle_description}</div>}
-      {coverage || (q.diagram_path ? (
-        <div style={{ marginBottom: '10px', background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '8px', overflow: 'hidden' }}>
-          {/* eslint-disable-next-line @next/next/no-img-element -- diagram dimensions are unknown; next/image needs fixed sizes */}
-          <img src={imageUrl(q.diagram_path)} alt="Coverage areas" style={{ width: '100%', display: 'block' }} />
+      {q.vehicle_description && (
+        <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+          {/* Same label rule as the emailed document (wrap-quote-document.ts):
+              a photo quote may be a building, so it reads "Job". */}
+          <b>{!q.template_id && q.photo_proofs?.length ? 'Job' : 'Vehicle'}:</b> {q.vehicle_description}
         </div>
-      ) : null)}
+      )}
+      {/* Saved quotes show the pictures they were saved with: every annotated
+          photo in order on a photo quote, the outline diagram on a template
+          one. `coverage` (the live estimator canvas) wins while editing. */}
+      {coverage || (() => {
+        const saved = (q.photo_proofs || [])
+          .filter((p: any) => p?.diagram_path)
+          .map((p: any, i: number) => ({
+            path: p.diagram_path as string,
+            caption: (q.photo_proofs || []).length > 1 ? (String(p?.label || '').trim() || `Photo ${i + 1}`) : null,
+          }));
+        const images = saved.length > 0
+          ? saved
+          : q.diagram_path ? [{ path: q.diagram_path, caption: null }] : [];
+        if (images.length === 0) return null;
+        return images.map(img => (
+          <div key={img.path} style={{ marginBottom: '10px' }}>
+            {img.caption && (
+              <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>{img.caption}</div>
+            )}
+            <div style={{ background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '8px', overflow: 'hidden' }}>
+              {/* eslint-disable-next-line @next/next/no-img-element -- diagram dimensions are unknown; next/image needs fixed sizes */}
+              <img src={imageUrl(img.path)} alt={img.caption || 'Coverage areas'} style={{ width: '100%', display: 'block' }} />
+            </div>
+          </div>
+        ));
+      })()}
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
         <thead>
           <tr style={{ color: 'var(--text-muted)', textTransform: 'uppercase', fontSize: '9px' }}>
@@ -2511,7 +2845,26 @@ export default function WrapQuotePage() {
       {/* ================= ESTIMATOR ================= */}
       {tab === 'estimator' && (
         <div>
+          {/* Drawing surface: a 1:20 outline template, or photos of the real
+              thing — a vehicle the library has no template for, or a
+              building being signed. */}
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Draw on</span>
+            {([
+              { photo: false, label: 'Vehicle Template', hint: 'Measure and price coverage over a calibrated 1:20 vehicle outline' },
+              { photo: true, label: 'Photos', hint: 'Draw boxes over photos of the real thing — a vehicle, or a building being signed. Set a scale on each photo and the boxes measure and price themselves' },
+            ]).map(o => (
+              <button key={String(o.photo)} onClick={() => switchSurface(o.photo)} title={o.hint} style={{
+                padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                background: photoMode === o.photo ? 'rgba(6,182,212,0.15)' : 'transparent',
+                border: photoMode === o.photo ? '1px solid rgba(6,182,212,0.4)' : '1px solid var(--border)',
+                color: photoMode === o.photo ? '#06b6d4' : 'var(--text-muted)',
+              }}>{o.label}</button>
+            ))}
+          </div>
+
           {/* Vehicle selection */}
+          {!photoMode && (
           <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
             <select value={yearFilter} onChange={e => { setYearFilter(e.target.value); setTemplateId(''); }} style={{ ...inputStyle, width: '110px' }}>
               <option value="">All years</option>
@@ -2556,13 +2909,15 @@ export default function WrapQuotePage() {
             </select>
           </div>
 
-          {activeTemplates.length === 0 && (
+          )}
+
+          {!photoMode && activeTemplates.length === 0 && (
             <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>
-              No vehicle templates yet — add your 1:20 outlines in the Templates tab.
+              No vehicle templates yet — add your 1:20 outlines in the Templates tab, or switch to <b>Photo</b> above and draw on a photo instead.
             </div>
           )}
 
-          {template && (
+          {!photoMode && template && (
             <div style={{ display: 'grid', gridTemplateColumns: '230px 1fr', gap: '12px', alignItems: 'start' }}>
               {/* Sidebar: tools + measurements */}
               <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '12px' }}>
@@ -2626,11 +2981,65 @@ export default function WrapQuotePage() {
 
                 {calibLine && (
                   <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', marginBottom: '10px' }}>
-                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '4px' }}>How long is that line in real life?</div>
-                    <input type="number" value={calibInches} onChange={e => setCalibInches(e.target.value)} placeholder="inches" style={{ ...inputStyle, marginBottom: '4px' }} />
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '6px' }}>
+                      {calibRefs.length > 0 ? 'What did you just trace?' : 'How long is that line in real life?'}
+                    </div>
+
+                    {calibRefs.length > 0 ? (
+                      <>
+                        <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '6px', lineHeight: 1.5 }}>
+                          From this vehicle&apos;s wrap dimension sheet. Pick the one you traced — longest first, because a
+                          few pixels of sloppy tracing matter far less over a long line.
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+                          {calibRefs.map(r => (
+                            <button
+                              key={r.key}
+                              onClick={() => { setCalibRefKey(r.key); setCalibInches(String(r.inches)); }}
+                              style={{
+                                padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                                background: calibRefKey === r.key ? 'rgba(34,197,94,0.15)' : 'transparent',
+                                border: `1px solid ${calibRefKey === r.key ? '#22c55e' : theme.border}`,
+                                color: calibRefKey === r.key ? '#22c55e' : 'var(--text-secondary)',
+                              }}
+                            >
+                              {r.label} <span style={{ color: 'var(--text-muted)' }}>{r.inches}&quot;</span>
+                            </button>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '3px' }}>Or type it</div>
+                      </>
+                    ) : (
+                      <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '6px', lineHeight: 1.5 }}>
+                        No wrap dimension sheet data for this vehicle, so this one has to be measured. Trace a dimension you
+                        can verify and enter it.
+                      </div>
+                    )}
+
+                    <input
+                      type="number"
+                      value={calibInches}
+                      onChange={e => { setCalibInches(e.target.value); setCalibRefKey(''); }}
+                      placeholder="inches"
+                      style={{ ...inputStyle, marginBottom: '6px' }}
+                    />
+
+                    {calibPreview && calibPreview.areaRatio != null && Math.abs(calibPreview.areaRatio - 1) > 0.005 && (
+                      <div style={{
+                        fontSize: '10px', lineHeight: 1.5, marginBottom: '6px', padding: '6px', borderRadius: '6px',
+                        background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', color: 'var(--text-secondary)',
+                      }}>
+                        Saving this changes the scale from <b>{fmt(num(template.px_per_in))}</b> to <b>{fmt(calibPreview.pxPerIn)}</b> px/in.
+                        Panels on this template will measure{' '}
+                        <b>{fmt(Math.abs(calibPreview.linearRatio! - 1) * 100)}% {calibPreview.linearRatio! < 1 ? 'shorter' : 'longer'}</b>, so
+                        quoted area drops{calibPreview.areaRatio! > 1 ? ' — rises' : ''}{' '}
+                        <b>{fmt(Math.abs(calibPreview.areaRatio! - 1) * 100)}%</b>. Existing saved quotes keep their own numbers.
+                      </div>
+                    )}
+
                     <div style={{ display: 'flex', gap: '4px' }}>
-                      <button onClick={saveCalibration} style={btnStyle('#22c55e', 'rgba(34,197,94,0.1)')}>Save</button>
-                      <button onClick={() => { setCalibLine(null); setTool('select'); }} style={btnStyle('#94a3b8', 'transparent')}>Cancel</button>
+                      <button onClick={saveCalibration} disabled={num(calibInches) <= 0} style={btnStyle('#22c55e', 'rgba(34,197,94,0.1)')}>Save</button>
+                      <button onClick={() => { setCalibLine(null); setCalibInches(''); setCalibRefKey(''); setTool('select'); }} style={btnStyle('#94a3b8', 'transparent')}>Cancel</button>
                     </div>
                   </div>
                 )}
@@ -2703,7 +3112,11 @@ export default function WrapQuotePage() {
               <div>
                 {!template.px_per_in && !calibLine && (
                   <div style={{ padding: '10px 14px', borderRadius: '10px', marginBottom: '10px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)', fontSize: '11px', fontWeight: 700, color: '#fbbf24' }}>
-                    This template isn&apos;t calibrated yet. Click <b>Calibrate Scale</b>, drag a line along a dimension you know (e.g. the vehicle&apos;s overall length{template.overall_length_in ? ` — ${template.overall_length_in}"` : ''}), and enter its real length. You only do this once per template.
+                    This template isn&apos;t calibrated yet. Click <b>Calibrate Scale</b> and drag a line along{' '}
+                    {calibRefs.length > 0
+                      ? <>a dimension from this vehicle&apos;s wrap dimension sheet — its {calibRefs[0].label.toLowerCase()} is {calibRefs[0].inches}&quot; — then pick that dimension from the list.</>
+                      : <>a dimension you can verify, then enter its real length.</>}
+                    {' '}You only do this once per template.
                   </div>
                 )}
                 <div style={{ position: 'relative', background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '12px', overflow: 'hidden' }}>
@@ -2945,6 +3358,52 @@ export default function WrapQuotePage() {
               </div>
             </div>
           )}
+
+          {photoMode && (
+            <div>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <input
+                  value={photoVehicle}
+                  onChange={e => setPhotoVehicle(e.target.value)}
+                  placeholder="What this job is — shown on the quote (e.g. 2021 Ford Transit 250, or 1420 Main St — storefront)"
+                  style={{ ...inputStyle, flex: 1, minWidth: '260px' }}
+                />
+              </div>
+              <PhotoProofBoard
+                proofs={photoProofs}
+                onChange={setPhotoProofs}
+                imageUrl={imageUrl}
+                onAddPhotos={addCoveragePhotos}
+                onRemovePhoto={removeCoveragePhoto}
+                uploading={photoUploading}
+                films={proofFilms}
+                defaultFilmId={lastFilmId}
+                onPickFilm={setLastFilmId}
+              />
+              {photoProofs.length > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '12px', marginTop: '10px', flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                    {photoMeasurements.length > 0
+                      ? `${photoMeasurements.length} measured box${photoMeasurements.length === 1 ? '' : 'es'} · ${fmt(totals.area)} ft² priced like template shapes`
+                      : 'Set a scale on each photo to price its boxes — until then they are a picture only.'}
+                  </div>
+                  <button onClick={() => setTab('nesting')} disabled={measurements.length === 0} title="Lay the measured boxes out on the vinyl roll" style={{
+                    padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 800,
+                    background: measurements.length === 0 ? 'var(--subtle-bg)' : 'rgba(244,114,182,0.12)',
+                    border: measurements.length === 0 ? 'none' : '1px solid rgba(244,114,182,0.4)',
+                    color: measurements.length === 0 ? 'var(--text-muted)' : '#f472b6',
+                    cursor: measurements.length === 0 ? 'default' : 'pointer',
+                  }}>Nest Roll →</button>
+                  <button onClick={() => setTab('quote')} disabled={allProofBoxes(photoProofs).length === 0} style={{
+                    padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 800, border: 'none',
+                    background: allProofBoxes(photoProofs).length === 0 ? 'var(--subtle-bg)' : '#22c55e',
+                    color: allProofBoxes(photoProofs).length === 0 ? 'var(--text-muted)' : '#fff',
+                    cursor: allProofBoxes(photoProofs).length === 0 ? 'default' : 'pointer',
+                  }}>Quote →</button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -3157,8 +3616,8 @@ export default function WrapQuotePage() {
                 );
               })()}
             </div>
-            {measurements.length === 0 && (
-              <div style={{ marginTop: '8px', fontSize: '10px', color: '#fbbf24', fontWeight: 700 }}>No measurements yet — use the Estimator tab first.</div>
+            {!hasCoverage && (
+              <div style={{ marginTop: '8px', fontSize: '10px', color: '#fbbf24', fontWeight: 700 }}>Nothing drawn yet — use the Estimator tab first.</div>
             )}
           </div>
           {quotePreview({ ...buildSnapshot(), created_at: new Date().toISOString() } as any, liveCoverageDiagram())}
@@ -3563,6 +4022,108 @@ export default function WrapQuotePage() {
               </div>
             );
           })()}
+
+          <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
+            {sectionHead('Scale Audit')}
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '10px', lineHeight: 1.5 }}>
+              Every panel you draw is measured in preview pixels and divided by the template&apos;s scale, so a scale that&apos;s too small
+              makes each panel measure too long — and because quotes bill <b>area</b>, the error is squared: a 16% scale error prints
+              about 35% more square footage. This re-reads each template&apos;s vector file and preview and reports what it finds.
+              It doesn&apos;t change anything.
+            </div>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: auditSummary ? '12px' : 0 }}>
+              <button onClick={runScaleAudit} disabled={auditing} style={{ ...btnStyle('#fff', '#0ea5e9'), border: 'none' }}>
+                {auditing ? 'Checking…' : 'Run Scale Audit'}
+              </button>
+              {auditStatus && <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)' }}>{auditStatus}</span>}
+            </div>
+
+            {auditSummary && (
+              <>
+                {auditSummary.impliedAreaError != null ? (
+                  <div style={{
+                    background: auditSummary.impliedAreaError > 1.05 ? 'rgba(239,68,68,0.08)' : 'rgba(34,197,94,0.08)',
+                    border: `1px solid ${auditSummary.impliedAreaError > 1.05 ? 'rgba(239,68,68,0.35)' : 'rgba(34,197,94,0.35)'}`,
+                    borderRadius: '8px', padding: '10px', marginBottom: '12px', fontSize: '11px', lineHeight: 1.6,
+                  }}>
+                    <b style={{ fontSize: '13px' }}>
+                      Auto-calibrated templates measure {fmt(Math.abs(auditSummary.impliedLinearError! - 1) * 100)}%{' '}
+                      {auditSummary.impliedLinearError! > 1 ? 'long' : 'short'} — areas bill{' '}
+                      {fmt(Math.abs(auditSummary.impliedAreaError! - 1) * 100)}%{' '}
+                      {auditSummary.impliedAreaError! > 1 ? 'high' : 'low'}.
+                    </b>
+                    <div style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      On the {auditSummary.referenceCount} template{auditSummary.referenceCount !== 1 ? 's' : ''} somebody calibrated by hand,
+                      the vehicle covers {fmt(auditSummary.referenceCoverage! * 100)}% of its preview. On the {auditSummary.autoCount} auto-calibrated
+                      ones it covers {fmt(auditSummary.autoCoverage! * 100)}%. Same drawings, same vehicles — so that gap is the scale, not the metal.
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.35)', borderRadius: '8px', padding: '10px', marginBottom: '12px', fontSize: '11px', lineHeight: 1.6 }}>
+                    <b>Not enough hand-measured templates to score the library yet.</b>
+                    <div style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      This compares auto-calibrated templates against ones calibrated against a known dimension, and there {auditSummary.referenceCount === 1 ? 'is only 1' : `are ${auditSummary.referenceCount}`} of those
+                      with a known vehicle length. Open two or three templates you quote often in the Estimator, hit <b>Recalibrate Scale</b>, trace a panel
+                      the wrap dimension sheet publishes, and pick it from the list — you aren&apos;t measuring anything, just confirming which line you drew.
+                      Do that a few times and run this again.
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '10px' }}>
+                  <span>{auditSummary.total} checked</span>
+                  {([
+                    ['impossible', 'scale provably wrong', '#ef4444'],
+                    ['suspect-cropped-preview', 'cropped-preview risk', '#f59e0b'],
+                    ['suspect-scale', 'off the hand-measured norm', '#f59e0b'],
+                    ['hand-calibrated', 'hand-measured', '#22c55e'],
+                    ['ok', 'matches its files', '#22c55e'],
+                    ['uncalibrated', 'no scale', 'var(--text-muted)'],
+                    ['unreadable', 'files unreadable', 'var(--text-muted)'],
+                  ] as [keyof typeof auditSummary.byVerdict, string, string][]).map(([k, label, color]) =>
+                    auditSummary.byVerdict[k] > 0 ? (
+                      <span key={k} style={{ color }}>{auditSummary.byVerdict[k]} {label}</span>
+                    ) : null)}
+                </div>
+
+                {auditProblems.length > 0 && (
+                  <div style={{ maxHeight: 'calc(45vh / var(--ts))', overflowY: 'auto', border: `1px solid ${theme.border}`, borderRadius: '8px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '10px' }}>
+                      <thead>
+                        <tr style={{ background: 'var(--input-bg)', position: 'sticky', top: 0 }}>
+                          {['Template', 'Scale (px/in)', 'Should be', 'Vehicle covers', 'What it means'].map(h => (
+                            <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px', whiteSpace: 'nowrap' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {auditProblems.slice(0, 200).map(a => (
+                          <tr key={a.id} style={{ borderTop: `1px solid ${theme.border}` }}>
+                            <td style={{ padding: '6px 8px', fontWeight: 700 }}>{a.label}</td>
+                            <td style={{ padding: '6px 8px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                              {a.storedPxPerIn == null ? '—' : fmt(a.storedPxPerIn)}
+                            </td>
+                            <td style={{ padding: '6px 8px', color: a.suggestedPxPerIn != null ? '#f59e0b' : 'var(--text-muted)', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                              {a.suggestedPxPerIn != null ? fmt(a.suggestedPxPerIn) : '—'}
+                            </td>
+                            <td style={{ padding: '6px 8px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                              {a.coverage == null ? 'length unknown' : `${fmt(a.coverage * 100)}%`}
+                            </td>
+                            <td style={{ padding: '6px 8px', color: 'var(--text-muted)', lineHeight: 1.5 }}>{a.note}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {auditProblems.length > 200 && (
+                      <div style={{ padding: '6px 8px', fontSize: '10px', color: 'var(--text-muted)' }}>
+                        Showing the 200 worst of {auditProblems.length}.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
 
           <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
             {sectionHead('Add Template')}

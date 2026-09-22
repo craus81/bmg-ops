@@ -1,6 +1,7 @@
 // Google OAuth2 + Gmail API helpers for server-side use
 import { google } from 'googleapis';
-import { createClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { createServiceClient } from './supabase-service';
 
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
@@ -33,6 +34,49 @@ export async function exchangeCode(code: string) {
   return tokens;
 }
 
+/** Prefix for "the database wouldn't answer", as opposed to NO_GOOGLE_TOKEN
+ *  ("there is no token"). Kept distinct so callers and alerts can tell a
+ *  disconnected mailbox from an unreachable database. */
+export const GOOGLE_TOKEN_READ_FAILED = 'GOOGLE_TOKEN_READ_FAILED';
+
+/** True for either token failure — a per-item loop should abort on both. */
+export const isGoogleTokenError = (err: any) =>
+  err?.message === 'NO_GOOGLE_TOKEN' ||
+  String(err?.message || '').startsWith(GOOGLE_TOKEN_READ_FAILED);
+
+/**
+ * Read the stored Google OAuth token, distinguishing "not connected" from
+ * "couldn't ask the database".
+ *
+ * supabase-js never throws — it returns { data, error } — so discarding the
+ * error made a timed-out read look identical to a missing row, and every
+ * caller reports the latter. Field evidence: Supabase 504s during the
+ * top-of-hour cron pileup surfaced as "Gmail not connected" on the POs page
+ * and as a healthchecks.io DOWN page reading "last run recorded an error",
+ * while the token sat in the table the whole time. maybeSingle() keeps zero
+ * rows out of the error channel, so a real error is always a real error; a
+ * transient one gets a single retry before we give up.
+ */
+async function readGoogleToken(supabase: SupabaseClient) {
+  let lastError = 'unknown error';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { data, error } = await supabase
+      .from('google_tokens')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!error) {
+      if (!data) throw new Error('NO_GOOGLE_TOKEN');
+      return data;
+    }
+    lastError = error.message || JSON.stringify(error);
+    console.error(`[google] google_tokens read failed (attempt ${attempt + 1}):`, lastError);
+    if (attempt === 0) await new Promise(r => setTimeout(r, 500));
+  }
+  throw new Error(`${GOOGLE_TOKEN_READ_FAILED}: ${lastError}`);
+}
+
 // Per-process cache for the authenticated Gmail client. Without this, every
 // getMessage/getAttachment call re-runs a Supabase round-trip + builds a new
 // OAuth client, which turns the per-message loops in search-pos / import-po
@@ -48,22 +92,8 @@ export async function getGmailClient() {
     return cachedGmail.client;
   }
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
-
-  // Get the stored Google token
-  const { data: tokenRow } = await supabase
-    .from('google_tokens')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .single();
-
-  if (!tokenRow) {
-    throw new Error('NO_GOOGLE_TOKEN');
-  }
+  const supabase = createServiceClient();
+  const tokenRow = await readGoogleToken(supabase);
 
   const client = getOAuth2Client();
   client.setCredentials({
@@ -248,21 +278,8 @@ const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || 'primary';
 
 // Get an authenticated Calendar client using stored refresh token
 async function getCalendarClient() {
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
-
-  const { data: tokenRow } = await supabase
-    .from('google_tokens')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .single();
-
-  if (!tokenRow) {
-    throw new Error('NO_GOOGLE_TOKEN');
-  }
+  const supabase = createServiceClient();
+  const tokenRow = await readGoogleToken(supabase);
 
   const client = getOAuth2Client();
   client.setCredentials({

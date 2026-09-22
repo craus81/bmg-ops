@@ -48,7 +48,7 @@ import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
   GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
 } from '@/lib/types';
-import { requiresReason, proofGateApplies } from '@/lib/graphics-status';
+import { requiresReason, proofGateApplies, isFinishedStatus } from '@/lib/graphics-status';
 
 // ── Date helpers (same behavior as the board — avoid UTC shift) ──────────
 function parseLocalDate(dateStr: string | null | undefined): Date | null {
@@ -122,7 +122,7 @@ export default function GraphicsJobRecordPage() {
   const router = useRouter();
   const params = useParams();
   const jobId = String(params?.id || '');
-  const { user, isAdmin, isProduction, isSales, isInstaller, isFieldTech, isShopTech, hasFeature, loading: authLoading } = useAuth();
+  const { user, isAdmin, isProduction, isSales, isInstaller, isFieldTech, isShopTech, canSeeMoney, hasFeature, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
 
@@ -138,6 +138,12 @@ export default function GraphicsJobRecordPage() {
   // Bridge: the CNI job spawned from this graphics job, if one exists.
   const [cniJob, setCniJob] = useState<{ id: string; job_number: string | null; title: string; status: string } | null>(null);
   const [views, setViews] = useState<GraphicsJobView[]>([]);
+  // Where this job sits in the admin work order (migration 318), by position
+  // rather than by the stored number: a job finishing between reorders leaves
+  // a hole in the 1..N block, and "#4 of 6" that is really third is worse than
+  // no chip at all. The ranked set is whatever admins have put on the list —
+  // a handful, never the whole table — so it reads in one query.
+  const [workRank, setWorkRank] = useState<{ position: number; total: number } | null>(null);
 
   // Edit mode — a working copy of the job, same as the board's editingJob.
   const [edit, setEdit] = useState<GraphicsJob | null>(null);
@@ -417,6 +423,24 @@ export default function GraphicsJobRecordPage() {
     }).catch(() => {});
   };
 
+  useEffect(() => {
+    if (!job || job.work_rank == null || isFinishedStatus(job.status)) { setWorkRank(null); return; }
+    const jobId = job.id;
+    (async () => {
+      const { data } = await supabase
+        .from('graphics_jobs')
+        .select('id, status, work_rank')
+        .not('work_rank', 'is', null)
+        .order('work_rank')
+        .order('id');
+      const rows = (data || []) as { id: string; status: GraphicsJobStatus; work_rank: number | null }[];
+      const queue = rows.filter(r => !isFinishedStatus(r.status));
+      const at = queue.findIndex(r => r.id === jobId);
+      setWorkRank(at >= 0 ? { position: at + 1, total: queue.length } : null);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
+  }, [job?.id, job?.work_rank, job?.status]);
+
   const changeStatus = async (
     newStatus: GraphicsJobStatus,
     note?: string,
@@ -460,6 +484,10 @@ export default function GraphicsJobRecordPage() {
 
     const shipFields: Partial<GraphicsJob> = {};
     if (ship?.tracking) shipFields.tracking_number = ship.tracking;
+    // A finished job leaves the work order on its own — leaving it ranked
+    // would burn a slot at the top of the designer's list on a job nobody
+    // can work. Re-ranking it is an admin action, same as ranking it was.
+    if (isFinishedStatus(newStatus) && job.work_rank != null) shipFields.work_rank = null;
 
     const { error } = await supabase
       .from('graphics_jobs')
@@ -961,6 +989,12 @@ export default function GraphicsJobRecordPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
           <div style={{ fontSize: '22px', fontWeight: 800, letterSpacing: '-0.5px', color: 'var(--text-primary)' }}>{job.title}</div>
           {job.priority !== 'normal' && <span style={chip(priorityColor(job.priority))}>{job.priority}</span>}
+          {workRank && (
+            <span
+              title={`Work order set by an admin on the Graphics board — ${workRank.position} of ${workRank.total} ranked jobs`}
+              style={chip(workRank.position === 1 ? '#22c55e' : '#60a5fa')}
+            >#{workRank.position} of {workRank.total}</span>
+          )}
           {category !== 'production' && <span style={chip(GRAPHICS_CATEGORY_COLORS[category])}>{GRAPHICS_CATEGORY_LABELS[category]}</span>}
           <span style={chip(statusColor)}>{GRAPHICS_STATUS_LABELS[job.status]}</span>
           {/* Pre-invoice pick/pack sheet (Stage 5): the invoice-based packing
@@ -1413,7 +1447,14 @@ export default function GraphicsJobRecordPage() {
         )}
       </div>
 
-      {/* ── Estimate & Invoice ── */}
+      {/* ── Estimate & Invoice ──
+          Billing, end to end: totals, the NetSuite invoice, its PDF, and the
+          buttons that raise and send one. Hidden from the shop floor per the
+          money rule (src/lib/money-visibility.ts) — a designer needs the
+          work, the dates and the artwork, not what the customer was charged.
+          The header's Packing List link stays for everyone; the duplicate
+          inside this card goes with it. */}
+      {canSeeMoney && (
       <div style={card}>
         <div style={labelStyle}>Estimate &amp; Invoice</div>
 
@@ -1542,6 +1583,7 @@ export default function GraphicsJobRecordPage() {
           </div>
         )}
       </div>
+      )}
 
       {/* ── Team assignment ── */}
       <div style={card}>
@@ -1992,8 +2034,11 @@ export default function GraphicsJobRecordPage() {
         />
       )}
 
-      {/* ── Invoice review modal ── */}
-      {invoiceOpen && (
+      {/* ── Invoice review modal ──
+          Double-gated on purpose: the button that opens this is already
+          hidden, but a stale state flag or an old deep link must not be able
+          to put a billing screen in front of the shop floor. */}
+      {invoiceOpen && canSeeMoney && (
         <GraphicsInvoiceReviewModal
           job={job}
           onClose={() => setInvoiceOpen(false)}
@@ -2035,7 +2080,7 @@ export default function GraphicsJobRecordPage() {
         />
       )}
 
-      {emailInvoiceTarget && (
+      {emailInvoiceTarget && canSeeMoney && (
         <EmailInvoicesModal
           customerName={emailInvoiceTarget.customerName}
           invoices={emailInvoiceTarget.invoices}

@@ -214,7 +214,7 @@ export async function POST(request: Request) {
     // bookkeeping correction — the customer was already told).
     if (isCompleting) {
       // Don't block the response on notifications
-      notifyCompletion(vehicle, userName, user.email || null).catch((err) => {
+      notifyCompletion(vehicle, userName).catch((err) => {
         console.error('notifyCompletion error:', err);
       });
     }
@@ -222,7 +222,7 @@ export async function POST(request: Request) {
     // On → shipped, tell the customer their vehicle left the shop —
     // "where is my vehicle?" answered before it's asked.
     if (newStatus === 'shipped') {
-      notifyShipped(vehicle, user.email || null).catch((err) => {
+      notifyShipped(vehicle).catch((err) => {
         console.error('notifyShipped error:', err);
       });
     }
@@ -272,7 +272,7 @@ async function instantiateChecklist(vehicleId: string, hasGraphics: boolean) {
   }
 }
 
-async function notifyCompletion(vehicle: any, actorName: string, actorEmail: string | null) {
+async function notifyCompletion(vehicle: any, actorName: string) {
   const vehicleLabel = [vehicle.vehicle_year, vehicle.vehicle_make, vehicle.vehicle_model]
     .filter(Boolean)
     .join(' ') || `VIN ${vehicle.vin?.slice(-8) || ''}`;
@@ -301,55 +301,59 @@ async function notifyCompletion(vehicle: any, actorName: string, actorEmail: str
     });
   }
 
-  // Customer: shared resolver (customers-by-name → primary contact →
-  // thread → email + SMS), honoring the customer's status-email opt-out.
+  // The customer is NOT emailed here. This used to send "your vehicle is
+  // ready" (with the booking link and the review ask) the instant anyone
+  // moved the status — owner decision 2026-09-14 made every customer-facing
+  // send a person's decision. So we prompt instead: whoever completed it,
+  // plus the admins, get a notification whose whole job is to get the email
+  // sent from the vehicle's Email Customer button
+  // (/api/vehicle-tracking/notify-customer, kind 'ready' — the same content,
+  // review ask included, now with a preview and editable recipients).
   if (!vehicle.customer_name) return;
-  const { notifyCustomerByName } = await import('@/lib/customer-notify');
-  const { buildNotificationEmail } = await import('@/lib/resend');
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
-  // Customer CTA (R5-17): the tokenized booking page — the customer picks
-  // a pickup slot instead of playing phone tag ("contact us to arrange
-  // pickup" was the whole flow). Every check-in has a portal token
-  // (auto-minted since migration 001); fall back to the portal dashboard
-  // only if a legacy row somehow lacks one — never a dead click.
-  const bookUrl = vehicle.customer_portal_token
-    ? `${appUrl}/book/${vehicle.customer_portal_token}`
-    : `${appUrl}${deepLinks.customerPortal()}`;
-  const emailBody = vehicle.customer_portal_token
-    ? `The install for your ${vehicleLabel} (VIN ending ${vehicle.vin?.slice(-8)}) is complete. Book a pickup time online — or reply to this email if another arrangement works better.`
-    : `The install for your ${vehicleLabel} (VIN ending ${vehicle.vin?.slice(-8)}) is complete. Please contact us to arrange pickup.`;
-  await notifyCustomerByName(serviceSupabase, vehicle.customer_name, {
-    contextEntityType: 'fleet_checkin',
-    contextEntityId: vehicle.id,
-    threadSubject: `${vehicleLabel} ready for pickup`,
-    emailSubject: `[BMG Fleet] Your vehicle is ready — ${vehicleLabel}`,
-    emailHtml: buildNotificationEmail(`Your vehicle is ready — ${vehicleLabel}`, emailBody, bookUrl, vehicle.customer_portal_token ? 'Book your pickup time' : 'View order status'),
-    messageBody: emailBody,
-    smsBody: `[BMG Fleet] Your ${vehicleLabel} is ready for pickup. Book a time: ${bookUrl}`,
-    replyTo: actorEmail,
+  await promptCustomerEmail(vehicle, {
+    title: `Tell ${customerName}: ${vehicleLabel} is ready`,
+    body: `${actorName} marked ${vehicleLabel} complete and nothing has gone to the customer.`
+      + ' Open the vehicle and use Email Customer to send them the pickup booking link.',
   });
 }
 
-/** Customer email when their vehicle leaves the shop. */
-async function notifyShipped(vehicle: any, actorEmail: string | null) {
+/**
+ * Ask a human to send the customer email this route used to send itself.
+ * Goes to the vehicle's assignee and the admins — somebody is always on
+ * the hook, so a finished vehicle can't sit there un-announced.
+ */
+async function promptCustomerEmail(vehicle: any, msg: { title: string; body: string }) {
+  const targets = new Set<string>();
+  if (vehicle.assigned_to) targets.add(vehicle.assigned_to);
+  const { data: admins } = await serviceSupabase
+    .from('profiles').select('id')
+    .or('role.in.(admin,super_admin),roles.cs.{admin},roles.cs.{super_admin}')
+    .eq('status', 'approved');
+  for (const a of admins || []) targets.add(a.id);
+  if (targets.size === 0) return;
+  await notifyMany([...targets], {
+    type: 'vehicle_complete',
+    title: msg.title,
+    body: msg.body,
+    url: deepLinks.vehicle(vehicle.id),
+    channels: ['in_app', 'push', 'email'],
+  });
+}
+
+/**
+ * Staff prompt when a vehicle leaves the shop. This used to email the
+ * customer "your vehicle has shipped" on its own; see notifyCompletion for
+ * why it no longer does. The email itself is one press of Email Customer
+ * on the vehicle (kind 'shipped').
+ */
+async function notifyShipped(vehicle: any) {
   if (!vehicle.customer_name) return;
   const vehicleLabel = [vehicle.vehicle_year, vehicle.vehicle_make, vehicle.vehicle_model]
     .filter(Boolean)
     .join(' ') || `VIN ${vehicle.vin?.slice(-8) || ''}`;
-  const { notifyCustomerByName } = await import('@/lib/customer-notify');
-  const { buildNotificationEmail } = await import('@/lib/resend');
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
-  // Customer CTA → portal dashboard (see notifyCompletion) — the shipped
-  // email previously had no button at all.
-  const portalUrl = `${appUrl}${deepLinks.customerPortal()}`;
-  const emailBody = `Your ${vehicleLabel} (VIN ending ${vehicle.vin?.slice(-8)}) has left our facility. Reply to this email with any questions.`;
-  await notifyCustomerByName(serviceSupabase, vehicle.customer_name, {
-    contextEntityType: 'fleet_checkin',
-    contextEntityId: vehicle.id,
-    threadSubject: `${vehicleLabel} shipped`,
-    emailSubject: `[BMG Fleet] Your vehicle has shipped — ${vehicleLabel}`,
-    emailHtml: buildNotificationEmail(`On its way — ${vehicleLabel}`, emailBody, portalUrl, 'View order status'),
-    messageBody: emailBody,
-    replyTo: actorEmail,
+  await promptCustomerEmail(vehicle, {
+    title: `Tell ${vehicle.customer_name}: ${vehicleLabel} has shipped`,
+    body: `${vehicleLabel} was marked shipped and nothing has gone to the customer.`
+      + ' Open the vehicle and use Email Customer to let them know it is on its way.',
   });
 }

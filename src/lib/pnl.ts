@@ -87,6 +87,7 @@ export function summarizePnl(rows: RestletPnlRow[], payrollIds: Set<string>): Pn
 }
 
 export interface PnlPeriod {
+  key: PnlPeriodKey;
   label: string;
   from: string;
   to: string;
@@ -98,38 +99,82 @@ export interface PnlPeriod {
 }
 
 /**
- * The /pnl payload: month-to-date (directional), last full month, and
- * year-to-date. Each period fails independently; a stale-deployment error
- * surfaces verbatim so the UI can show the redeploy hint.
+ * The periods the Financials P&L band offers. Fiscal year = calendar year
+ * (confirmed by the owner 2026-09-19); if that ever changes, `ytd` and
+ * `last-year` are the two that move.
  */
-export async function loadPnlPeriods(): Promise<{ periods: PnlPeriod[]; payrollConfigured: boolean }> {
-  const today = chicagoDay();
+export const PNL_PERIOD_KEYS = ['mtd', 'last-month', 'qtd', 'ytd', 'last-year'] as const;
+export type PnlPeriodKey = typeof PNL_PERIOD_KEYS[number];
+export const DEFAULT_PNL_PERIOD: PnlPeriodKey = 'last-month';
+
+export function isPnlPeriodKey(v: unknown): v is PnlPeriodKey {
+  return typeof v === 'string' && (PNL_PERIOD_KEYS as readonly string[]).includes(v);
+}
+
+export interface PnlPeriodDef {
+  key: PnlPeriodKey;
+  label: string;
+  from: string;
+  to: string;
+  directional: boolean;
+}
+
+/**
+ * Date bounds for each selectable period, relative to `today` (Chicago).
+ * `directional` means the range contains today, so the books aren't closed
+ * and the numbers still move — the band must label those, which is a hard
+ * requirement carried over from R5-5, not polish.
+ */
+export function pnlPeriodDefs(today: string): Record<PnlPeriodKey, PnlPeriodDef> {
   const b = revenuePeriodBounds(today);
-  const lastMonthEnd = (() => {
-    const [y, m] = b.monthStart.split('-').map(Number);
-    const d = new Date(Date.UTC(y, m - 1, 0)); // day 0 of this month = last day of previous
-    return d.toISOString().slice(0, 10);
-  })();
+  const [y, m] = today.split('-').map(Number);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  // Day 0 of this month = the last day of the previous month.
+  const lastMonthEnd = new Date(Date.UTC(y, m - 1, 0)).toISOString().slice(0, 10);
+
+  return {
+    'mtd': { key: 'mtd', label: 'This month', from: b.monthStart, to: today, directional: true },
+    'last-month': { key: 'last-month', label: 'Last month', from: b.lastMonthStart, to: lastMonthEnd, directional: false },
+    'qtd': { key: 'qtd', label: 'Quarter to date', from: b.quarterStart, to: today, directional: true },
+    'ytd': { key: 'ytd', label: 'Year to date', from: b.yearStart, to: today, directional: true },
+    'last-year': { key: 'last-year', label: 'Last year', from: `${y - 1}-01-01`, to: `${y - 1}-12-31`, directional: false },
+  };
+}
+
+/**
+ * The /pnl payload: ONE period, chosen by the caller. Loading a single
+ * period rather than every period up front is deliberate — the previous
+ * shape fired six RESTlet requests at once (three periods x P&L +
+ * collections) and, together with the balances call on the same page, put
+ * us over NetSuite's SuiteCloud concurrency limit, which rejects the
+ * overflow with SSS_REQUEST_LIMIT_EXCEEDED. Two requests per view is well
+ * inside it, and the user only ever looks at one period at a time.
+ *
+ * A stale-deployment error surfaces verbatim so the UI can show the
+ * redeploy hint (docs/pnl-restlet-deploy.md) rather than a bare $0.
+ */
+export async function loadPnlPeriod(key: PnlPeriodKey = DEFAULT_PNL_PERIOD): Promise<{
+  period: PnlPeriod;
+  options: { key: PnlPeriodKey; label: string }[];
+  payrollConfigured: boolean;
+}> {
+  const defs = pnlPeriodDefs(chicagoDay());
+  const def = defs[key] ?? defs[DEFAULT_PNL_PERIOD];
   const ids = payrollAccountIds();
 
-  const defs = [
-    { label: 'Month to date', from: b.monthStart, to: today, directional: true },
-    { label: 'Last month', from: b.lastMonthStart, to: lastMonthEnd, directional: false },
-    { label: 'Year to date', from: b.yearStart, to: today, directional: true },
-  ];
+  const [pnlRes, colRes] = await Promise.all([
+    getIncomeStatementFromRestlet(def.from, def.to),
+    getCollectionsFromRestlet(def.from, def.to),
+  ]);
 
-  const periods = await Promise.all(defs.map(async (d): Promise<PnlPeriod> => {
-    const [pnlRes, colRes] = await Promise.all([
-      getIncomeStatementFromRestlet(d.from, d.to),
-      getCollectionsFromRestlet(d.from, d.to),
-    ]);
-    return {
-      ...d,
+  return {
+    period: {
+      ...def,
       pnl: pnlRes.success && pnlRes.rows ? summarizePnl(pnlRes.rows, ids) : null,
       collections: colRes.success ? { total: Math.abs(colRes.total || 0), count: colRes.count || 0 } : null,
       error: pnlRes.success ? (colRes.success ? null : colRes.error || null) : pnlRes.error || null,
-    };
-  }));
-
-  return { periods, payrollConfigured: ids.size > 0 };
+    },
+    options: PNL_PERIOD_KEYS.map(k => ({ key: k, label: defs[k].label })),
+    payrollConfigured: ids.size > 0,
+  };
 }

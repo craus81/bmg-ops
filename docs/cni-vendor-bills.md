@@ -29,8 +29,32 @@ create fails (often as an opaque 500) if any is wrong:
 | `location` (header only) | one of Wentzville / Kansas City / O'Fallon / Social Circle | resolved by name via `findLocation`. Do **not** also set it on the expense line (that 500s unless per-line locations are enabled). |
 | expense line `account` | **Subcontractors** (#53000) = internal id **223** | |
 | expense line `amount` | payout total | |
+| `currency` | the **vendor's own** currency internal id | sent only when read off the vendor (or `NETSUITE_CURRENCY_ID` is set); omitted otherwise — see below. |
 
-Currency, exchange rate, and posting period auto-derive — we don't send them.
+Exchange rate and posting period auto-derive — we don't send those.
+
+**Currency is the vendor's, and a constant will not do.** NetSuite validates a
+bill's currency against the **vendor's** currency list, not just the account's.
+The two failure modes look unrelated but are the same problem:
+
+- `400 "Please enter value(s) for: Currency"` — the vendor record has no
+  currency, so there is nothing to derive.
+- `400 "You have entered an Invalid Field Value 1 for the following field:
+  currency"` — we sent USD (id 1) and *that vendor* doesn't carry it.
+
+Hardcoding id 1 produced the second error for the same vendor that produced the
+first (Slight Wraps, id 2663), while every other installer billed fine on the
+identical body — that is the tell that it is per-vendor, not per-account.
+`resolveVendorCurrency` therefore reads the vendor's own currency
+(`SELECT currency FROM vendor WHERE id = N` — the role *can* query `vendor`,
+unlike `account`/`subsidiary`), honours `NETSUITE_CURRENCY_ID` as an override,
+and otherwise **omits** the field so NetSuite derives it as before. It never
+guesses an id.
+
+**A currency error is fixed on the vendor record, not in this code.** Set the
+vendor's primary currency in NetSuite (Financial tab). The create now says so
+in the returned error rather than surfacing NetSuite's wording, which sends
+people looking at the bill.
 
 ## The Vendor ID must be the **Internal ID**, not the **Entity ID**
 

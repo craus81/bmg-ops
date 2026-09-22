@@ -61,7 +61,14 @@ export interface QuoteDocGraphicsBlock {
   vehicle: string | null;
   totalSqft: number;
   films: { name: string; areas: string[] }[];
+  /** The lead coverage picture. Kept for callers that only have one; when
+   *  `diagrams` is present it is the first of those. */
   diagramUrl: string | null;
+  /** Every coverage picture, in estimator order, captioned when a quote has
+   *  more than one view (loadEstimateGraphics). A photo-proof quote is often
+   *  four views — rendering only the lead one showed the customer a fraction
+   *  of what they were approving. */
+  diagrams?: { url: string; caption: string | null }[];
 }
 
 export interface QuoteDocProofBlock {
@@ -87,7 +94,10 @@ export interface QuoteDocModel {
   customerBlockHtml?: string | null;
   /** Pre-escaped note above the table ('Your quote is attached as a PDF.'). */
   noteHtml?: string | null;
-  diagram?: { url: string; heading: string } | null;
+  /** Coverage pictures under the heading, in the order the customer sees
+   *  them. A wrap quote drawn on photos carries one per view (driver side,
+   *  rear, …); a template quote carries the single outline diagram. */
+  diagram?: { heading: string; images: { url: string; caption?: string | null }[] } | null;
   /** Column headings; null = no line table (coverage-only / hidden lines). */
   columns: { qty: string; rate: string } | null;
   rows: QuoteDocRow[];
@@ -183,7 +193,7 @@ export function renderQuoteDocument(model: QuoteDocModel, opts: QuoteDocRenderOp
 
     ${model.noteHtml ? `<div style="font-size:13px;color:#374151;margin:0 0 14px;">${model.noteHtml}</div>` : ''}
 
-    ${model.diagram ? `<div style="margin:0 0 14px;"><div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:4px;">${escHtml(model.diagram.heading)}</div><img src="${escHtml(model.diagram.url)}" alt="${escHtml(model.diagram.heading)}" width="584" style="width:100%;max-width:584px;display:block;border:1px solid #e5e7eb;border-radius:8px;"></div>` : ''}
+    ${model.diagram && model.diagram.images.length > 0 ? `<div style="margin:0 0 14px;"><div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:4px;">${escHtml(model.diagram.heading)}</div>${model.diagram.images.map(img => `${img.caption ? `<div style="font-size:12px;color:#374151;font-weight:700;margin:8px 0 3px;">${escHtml(img.caption)}</div>` : ''}<img src="${escHtml(img.url)}" alt="${escHtml(img.caption || model.diagram!.heading)}" width="584" style="width:100%;max-width:584px;display:block;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:6px;">`).join('')}</div>` : ''}
 
     ${model.columns ? `<table style="width:100%;border-collapse:collapse;">
       <thead><tr>
@@ -209,7 +219,10 @@ export function renderQuoteDocument(model: QuoteDocModel, opts: QuoteDocRenderOp
       <div style="font-weight:700;">Quote ${escHtml(g.quoteNumber)}${g.vehicle ? ` — ${escHtml(g.vehicle)}` : ''}${g.totalSqft > 0 ? ` · ~${Math.round(g.totalSqft)} sqft coverage` : ''}</div>
       ${g.films.length > 0 ? `<ul style="margin:6px 0 0;padding-left:18px;">${g.films.map(f =>
         `<li style="margin-top:2px;">${escHtml(f.name)}${f.areas.length > 0 ? ` — ${escHtml(f.areas.join(', '))}` : ''}</li>`).join('')}</ul>` : ''}
-      ${g.diagramUrl ? `<img src="${escHtml(g.diagramUrl)}" alt="Coverage diagram — Quote ${escHtml(g.quoteNumber)}" style="max-width:100%;border:1px solid #e5e7eb;border-radius:8px;margin-top:10px;display:block;">` : ''}
+      ${(g.diagrams && g.diagrams.length > 0
+        ? g.diagrams
+        : g.diagramUrl ? [{ url: g.diagramUrl, caption: null }] : []
+      ).map(d => `<div style="margin-top:10px;">${d.caption ? `<div style="font-size:11px;font-weight:700;color:#6b7280;margin-bottom:3px;">${escHtml(d.caption)}</div>` : ''}<img src="${escHtml(d.url)}" alt="Coverage${d.caption ? ` (${escHtml(d.caption)})` : ''} — Quote ${escHtml(g.quoteNumber)}" style="max-width:100%;border:1px solid #e5e7eb;border-radius:8px;display:block;"></div>`).join('')}
     </div>`).join('')}
 
     ${(model.proofs || []).map(p => `

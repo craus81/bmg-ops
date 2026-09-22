@@ -391,6 +391,115 @@ export async function rewriteVehicleCredits(
   return { ok: true };
 }
 
+/** A live credit row on the scan an added part is being credited from. */
+export interface SourceCredit {
+  shift_id: string;
+  profile_id: string;
+  share_weight: number | string;
+  source: string;
+}
+
+/**
+ * Credit rows for a part added to a vehicle that was already scanned (the
+ * admin "Add part" action — a decal kit and a unit number are one visit but
+ * two billable parts, so they are two scan rows).
+ *
+ * The crew comes from the credits snapshotted on the scan the part was added
+ * to, NOT from the shift's current roster: a roster edit since that day must
+ * never rewrite who was on the vehicle. The added part is priced on its OWN
+ * field rate, so an unpriced part still credits (amount NULL) and lands in
+ * the admin needs-pricing queue like any field scan.
+ */
+export function creditRowsForAddedPart(
+  sourceCredits: SourceCredit[],
+  target: {
+    scanLogId: string;
+    vin: string;
+    partNumber: string | null;
+    rate: number | null;
+    createdBy: string;
+  },
+) {
+  // One entry per crew member, at the weight they were credited at. Keyed by
+  // profile so a member who somehow holds two live rows isn't paid twice.
+  const byProfile = new Map<string, ShiftMember>();
+  for (const c of sourceCredits) {
+    if (!byProfile.has(c.profile_id)) {
+      byProfile.set(c.profile_id, { profile_id: c.profile_id, share_weight: Number(c.share_weight) });
+    }
+  }
+  const members = [...byProfile.values()];
+  if (members.length === 0) return [];
+
+  const totalWeight = members.reduce((s, m) => s + Number(m.share_weight), 0);
+  const now = new Date().toISOString();
+  return splitAmounts(target.rate, members).map(m => ({
+    shift_id: sourceCredits[0].shift_id,
+    profile_id: m.profile_id,
+    scan_log_id: target.scanLogId,
+    cni_job_vin_id: null,
+    vin: target.vin,
+    part_number: target.partNumber,
+    source: sourceCredits[0].source,
+    rate_per_vehicle: target.rate,
+    share_weight: m.share_weight,
+    crew_size: members.length,
+    total_weight: totalWeight,
+    amount: m.amount,
+    edited_by: target.createdBy,
+    edited_at: now,
+  }));
+}
+
+/**
+ * Pay the crew for a part added to an already-scanned vehicle. Idempotent per
+ * scan row (a part that already carries live credits is left alone), and a
+ * no-op when the vehicle's first part was never credited to anyone — a bulk
+ * upload or a vendor install has no crew to pay.
+ */
+export async function creditAddedPart(
+  service: SupabaseClient,
+  opts: {
+    sourceScanLogId: string;
+    targetScanLogId: string;
+    vin: string;
+    partNumber: string | null;
+    createdBy: string;
+  },
+): Promise<{ ok: boolean; credited: number; error?: string }> {
+  const { data: existing } = await service
+    .from('install_credits')
+    .select('id')
+    .eq('scan_log_id', opts.targetScanLogId)
+    .is('voided_at', null)
+    .limit(1);
+  if (existing && existing.length > 0) return { ok: true, credited: 0 };
+
+  const { data: source, error: srcErr } = await service
+    .from('install_credits')
+    .select('shift_id, profile_id, share_weight, source')
+    .eq('scan_log_id', opts.sourceScanLogId)
+    .is('voided_at', null);
+  if (srcErr) {
+    return { ok: false, credited: 0, error: "Could not read the vehicle's pay credits: " + srcErr.message };
+  }
+  if (!source || source.length === 0) return { ok: true, credited: 0 };
+
+  const rate = await getFieldRate(service, opts.partNumber);
+  const rows = creditRowsForAddedPart(source as SourceCredit[], {
+    scanLogId: opts.targetScanLogId,
+    vin: opts.vin,
+    partNumber: opts.partNumber,
+    rate,
+    createdBy: opts.createdBy,
+  });
+  if (rows.length === 0) return { ok: true, credited: 0 };
+
+  const { error } = await service.from('install_credits').insert(rows);
+  if (error) return { ok: false, credited: 0, error: 'Failed to write pay credits: ' + error.message };
+  return { ok: true, credited: rows.length };
+}
+
 /**
  * Admin correction for a whole shift ("Joe wasn't there Tuesday"): rewrite
  * every unlocked vehicle on the shift from the shift's CURRENT active

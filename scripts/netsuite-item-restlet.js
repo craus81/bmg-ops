@@ -44,12 +44,22 @@
  */
 define(['N/search', 'N/record'], function (search, record) {
 
+  // Bump on every functional edit — see the note in
+  // scripts/netsuite-financials-restlet.js. Expected value lives in
+  // src/lib/restlet-versions.ts and is asserted by a test.
+  var SCRIPT_VERSION = '2026-09-10.1';
+
   function isProvided(v) {
     return v !== undefined && v !== null && v !== '';
   }
 
   function post(body) {
     body = body || {};
+    // Deployment probe for the Integration Checkup. Answered before the
+    // itemId requirement so a ping never looks like a bad update call.
+    if (body.action === 'ping') {
+      return { success: true, mode: 'ping', version: SCRIPT_VERSION };
+    }
     var itemId = body.itemId;
 
     if (!itemId) {

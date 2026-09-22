@@ -38,7 +38,7 @@ skip it but a re-deploy re-runs the pipeline.
 Don't try to apply or verify one from a session container either:
 `SUPABASE_DB_URL` is present here, but the egress policy blocks Postgres
 (port 5432) — `npm run migrate` and `psql` both time out — and HTTPS to
-`ops.bmgfleet.com` is rejected too. To confirm a migration landed, check
+`go.bmgfleet.com` is rejected too. To confirm a migration landed, check
 the latest production build log on Vercel for `applied <file>.sql`.
 
 ## Git workflow
@@ -140,6 +140,25 @@ they tell you to go back to auto-shipping.
   and pass the built url at the call site. This came from a field bug
   ("New for you" clicks going to the page, or nowhere).
 
+- **No customer email sends itself — a person picks, previews and sends
+  every one.** Owner decision 2026-09-14, after a customer reported being
+  chased repeatedly by the automatic estimate-approval reminders (capped
+  at 3 per estimate, but they had several open at once). Six automatic
+  sends were retired: estimate approval reminders, quote pre-expiry
+  warnings, proof reminders, the ready-for-pickup nudge, the "vehicle
+  ready"/"shipped" status emails, and the Monday customer digest. Their
+  crons and routes still run — they notify the rep (or the admins) and
+  every notification names the button that sends it: ✉ Follow Up on a
+  quote, "Resend approval link" on a proof, ✉ Email Customer on a vehicle
+  (`/api/vehicle-tracking/notify-customer`), ✉ Send update on
+  `/admin/customer-notifications`. **When you add a background job that
+  spots something a customer should hear about, notify staff — do not
+  send.** The only sends that still leave on their own answer a
+  customer's own action (booking confirmation, approval re-link) or a
+  vendor PO receipt. Customer subscriptions no longer gate a send: they
+  gate the prompt, and the compose screen warns the sender when the
+  customer opted out.
+
 - **Every customer/vendor email goes through the standard compose
   screen** — see `docs/customer-email-standard.md`. Any feature where
   staff email someone outside the company must open
@@ -186,6 +205,21 @@ they tell you to go back to auto-shipping.
   Fulfillment for all open lines, marked Shipped — and fails closed if it
   errors; an SO already Pending Billing/Billed is skipped, not
   re-fulfilled. When adding a new way to invoice an SO, wire this in.
+
+- **Every cron in `vercel.json` gets its own minute — never schedule on the
+  hour.** `*/20`, `*/30`, `*/15` and `0 * * * *` all fire together at :00, and
+  that pileup (gmail auto-import + parts-email-scan + health-check +
+  calendar-pull, plus netsuite-sync on even hours) saturated Supabase into
+  `Gateway Timeout` 504s on ordinary reads and writes. Symptoms are diffuse
+  and blame the wrong thing: heartbeat writes fail so healthy jobs report
+  stale ("no run in 3h"), and a timed-out `google_tokens` read surfaced as
+  "Gmail not connected". Every DOWN alert landed on :00; the same health
+  check at :30 never failed. The recurring jobs now hold exclusive minutes
+  (calendar-pull :02/:17/:32/:47, auto-import :05/:25/:45, health-check
+  :12/:42, parts-email-scan :22, parts-sync :37, netsuite-sync :52) — when
+  adding a cron, pick a minute nothing else uses rather than a `*/N` step,
+  and keep the health check alone on its minute so the watcher is never a
+  victim of the load it is watching.
 
 - **Supabase reads silently cap at 1000 rows** (PostgREST default —
   `.limit(N > 1000)` does NOT raise it). Any read of a table that can

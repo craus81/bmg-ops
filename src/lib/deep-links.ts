@@ -23,6 +23,10 @@ export const deepLinks = {
   po: (poId: string) => `/admin/pos/${poId}`,
   /** Dedicated graphics job record page. */
   graphicsJob: (jobId: string) => `/graphics/${jobId}`,
+  /** The graphics board. `mine` opens it on the My Jobs tab — only ever for
+   *  a digest of the recipient's OWN jobs: sent to anyone else it lands on
+   *  an empty board, which is a dead click with extra steps. */
+  graphicsBoard: (opts?: { mine?: boolean }) => `/graphics${opts?.mine ? '?mine=1' : ''}`,
   /** In-Shop board — opens the vehicle's detail modal (optionally flashing one note). */
   vehicle: (checkinId: string, noteId?: string | null) =>
     `/tracking?vehicle=${checkinId}${noteId ? `&note=${noteId}` : ''}`,
@@ -101,11 +105,35 @@ export const deepLinks = {
   atRiskCustomer: (customerId: string) => `/admin/reports/at-risk?id=${customerId}`,
   /** Dedicated CNI job record page (admin side). */
   cniJob: (jobId: string) => `/admin/cni/jobs/${jobId}`,
+  /** The job's installer photo gallery (admin side) — where a "photos
+   *  submitted" alert has to land. `cniJob` drops the reader on the job and
+   *  makes them hunt for the tile holding the thing they were told about. */
+  cniJobPhotos: (jobId: string) => `/admin/cni/jobs/${jobId}/photos`,
+  /** The vehicle record for one VIN — what was installed outside the shop,
+   *  where, for whom, and every photo of it. */
+  vehicleRecord: (vin: string) => `/vehicles/${encodeURIComponent(vin.trim().toUpperCase())}`,
+  /** Installer photos across every job, optionally narrowed to one
+   *  installer or company (the gallery reads both off the query string). */
+  cniPhotos: (filter?: { installerId?: string | null; companyId?: string | null }) => {
+    const params = new URLSearchParams();
+    if (filter?.installerId) params.set('installer', filter.installerId);
+    if (filter?.companyId) params.set('company', filter.companyId);
+    const qs = params.toString();
+    return `/admin/cni/photos${qs ? `?${qs}` : ''}`;
+  },
   /** Dedicated CNI installer record page (optionally flashing an internal note). */
   cniInstaller: (userId: string, noteId?: string | null) =>
     `/admin/cni/installers/${userId}${noteId ? `?note=${noteId}` : ''}`,
   /** Dedicated prospect / customer record page. */
   prospect: (prospectId: string) => `/admin/prospects/${prospectId}`,
+  /** The same record page with the standard customer compose screen already
+   *  open, optionally pre-addressed. Every customer email goes through that
+   *  screen (docs/customer-email-standard.md) — this is the link for surfaces
+   *  that offer "email this customer" without owning a compose modal of their
+   *  own (the command palette's quick action). Works for `ns-<id>` mirror ids
+   *  too, since the page resolves those before it renders. */
+  prospectCompose: (prospectId: string, to?: string | null) =>
+    `/admin/prospects/${prospectId}?compose=1${to ? `&to=${encodeURIComponent(to)}` : ''}`,
   /** One deal on the prospect record — ?opp= scroll-flashes that
    *  opportunity card (R5-8 slippage nudges land on the exact deal). */
   opportunity: (prospectId: string, opportunityId: string) =>
@@ -156,6 +184,24 @@ export const deepLinks = {
   /** Customer PO-status portal — the shared link on a customer record
    *  (customers.portal_token, migration 260). Public page, no login. */
   customerPoPortal: (token: string) => `/portal/${encodeURIComponent(token)}`,
+  /** The three tokenized approval pages. Public, no login: the token IS
+   *  the credential, so these strings are only ever built server-side and
+   *  handed straight to the audience the link was minted for — an emailed
+   *  customer, or that same customer's own portal page. Never log one,
+   *  never return one to staff (stripApprovalSecrets exists for that). */
+  approveEstimate: (token: string) => `/approve/estimate/${encodeURIComponent(token)}`,
+  approveQuote: (token: string) => `/approve/quote/${encodeURIComponent(token)}`,
+  approveProof: (token: string) => `/approve/proof/${encodeURIComponent(token)}`,
+  /** The installer's own profile page — documents, insurance expiry, and the
+   *  agreements. The destination for every compliance warning: entering a new
+   *  expiry here clears the flag on its own. */
+  installerProfile: () => '/installer/profile',
+  /** Installer compliance panel: every company and installer with their
+   *  computed eligibility, worst first. */
+  cniCompliance: () => '/admin/cni/compliance',
+  /** Quiet-lead triage queue (R6-9) — the destination for the dashboard's
+   *  quiet-leads tile, which used to land on the bare prospects list. */
+  quietLeads: (days?: number) => `/admin/leads/quiet${days ? `?days=${days}` : ''}`,
   /** The installer's own earnings/payout history — the destination for CNI
    *  payout-status notifications (there is no per-payout page). */
   earnings: () => '/earnings',
@@ -176,10 +222,53 @@ export const deepLinks = {
   installerAvailableJob: (jobId: string) => `/installer/available/${jobId}`,
   /** System health dashboard (checks are keyed by sync type, not record ids). */
   systemHealth: () => '/admin/system-health',
+  /** System health's Usage tab (R7-4 browser telemetry), optionally
+   *  pre-filtered to one event kind / templated page / form id and window.
+   *  The tab reads these params, applies the filter and flashes the row.
+   *  Any future alert about client errors must pass this as its url. */
+  systemHealthUsage: (opts?: { kind?: string | null; page?: string | null; form?: string | null; days?: 7 | 30 }) => {
+    const params = new URLSearchParams({ tab: 'usage' });
+    if (opts?.kind) params.set('kind', opts.kind);
+    if (opts?.page) params.set('page', opts.page);
+    if (opts?.form) params.set('form', opts.form);
+    if (opts?.days) params.set('days', String(opts.days));
+    return `/admin/system-health?${params.toString()}`;
+  },
+  /** The audit log pre-filtered to ONE record (R6-13) — the destination for
+   *  the History control on estimate, check-in, graphics, upfit and CNI
+   *  pages. `table` must be the real table name, since that is what
+   *  audit_log.table_name stores. */
+  recordHistory: (table: string, recordId: string) =>
+    `/admin/audit?table=${encodeURIComponent(table)}&record=${encodeURIComponent(recordId)}`,
   /** System health's Email delivery section — flashes one email_log row.
    *  The bounce-alert fallback when a send has no record context_url. */
   emailDelivery: (logId?: string | null) =>
     `/admin/system-health${logId ? `?email=${logId}` : ''}`,
+  /** The ledger admin page (QuickBooks import + the customer review queue).
+   *  Params are emitted only when given, so the bare call is the clean page
+   *  URL: `run` opens one import run's progress feed, `tab` picks the pane,
+   *  and `qboAuth`/`reason` are what the OAuth callback redirects with. */
+  ledgerAdmin: (opts?: { run?: string | null; tab?: 'import' | 'review'; qboAuth?: 'success' | 'error'; reason?: string | null }) => {
+    const params = new URLSearchParams();
+    if (opts?.tab) params.set('tab', opts.tab);
+    if (opts?.run) params.set('run', opts.run);
+    if (opts?.qboAuth) params.set('qboAuth', opts.qboAuth);
+    if (opts?.reason) params.set('reason', opts.reason);
+    const q = params.toString();
+    return `/admin/ledger${q ? `?${q}` : ''}`;
+  },
+  /** The review queue, optionally scroll-flashing ONE ledger customer — the
+   *  landing for "this QuickBooks customer needs a match" (never the bare
+   *  list while a row id is in scope). */
+  ledgerCustomerReview: (ledgerCustomerId?: string | null) =>
+    `/admin/ledger?tab=review${ledgerCustomerId ? `&customer=${ledgerCustomerId}` : ''}`,
+  /** Bytes of one imported ledger document (QuickBooks/NetSuite PDF or
+   *  attachment, migration 314). Same-origin and role-gated
+   *  (finance/executive) — `allowedPdfSrc` therefore accepts it, so feed it
+   *  to `pdfViewer` rather than opening the raw bytes in a bare tab. Add
+   *  `?download=1` for a save-as (a 5-minute presigned URL). Never a public
+   *  R2 URL: the `ledger` prefix is denied on the generic storage routes. */
+  ledgerDocument: (documentId: string) => `/api/ledger/documents/${documentId}`,
   /** In-app PDF viewer tab. Use this instead of linking a new tab straight at
    *  PDF bytes: a raw-PDF tab has no app chrome and no working Back button,
    *  so it strands whoever opened it (field bug: opening a PO PDF mid-import).
@@ -196,6 +285,16 @@ export const deepLinks = {
     if (opts?.backLabel) params.set('backLabel', opts.backLabel);
     return `/pdf?${params.toString()}`;
   },
+  /** Wrap an in-app path so a Supabase auth email lands SIGNED IN.
+   *  `exchangeCodeForSession` runs in exactly one place
+   *  (src/app/auth/callback/route.ts), so a magic link whose `redirectTo`
+   *  points straight at a page arrives with an unexchanged code and dumps
+   *  the recipient on /login — which is how every invite this app has ever
+   *  sent behaved. Every `generateLink` redirectTo goes through here.
+   *  Note the host still has to be on Supabase's Redirect URLs allow-list
+   *  (Authentication -> URL Configuration); an unlisted redirect_to is
+   *  discarded silently and the Site URL is substituted. */
+  authCallback: (next: string) => `/auth/callback?next=${encodeURIComponent(next)}`,
 };
 
 import { resolveFeatures } from '@/lib/features';

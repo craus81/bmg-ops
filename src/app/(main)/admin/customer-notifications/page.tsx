@@ -1,20 +1,30 @@
 'use client';
 
 /**
- * Customer Notifications — per-customer subscriptions to automatic emails.
+ * Customer Notifications — who has agreed to hear from us, and the place
+ * the weekly customer update is sent from.
  *
- * Since migration 171 every automatic customer-facing send is opt-IN:
- * nothing emails a customer on status changes or crons unless they're
- * subscribed here. "Status emails" covers vehicle complete/shipped,
- * graphics shipped, and automatic proof reminders; "Weekly digest" is the
- * Monday summary. On-demand sends (staff clicks Send and confirms the
- * address) are unaffected by these switches.
+ * As of 2026-09-14 NOTHING emails a customer on a schedule (owner decision
+ * after a customer reported repeated automatic chasing). These switches no
+ * longer gate a send; they record what the customer asked for, and the app
+ * shows that to whoever is about to press Send. The Monday cron uses the
+ * digest switch to decide who it offers, and "Send update" here is what
+ * actually mails one — through the standard compose screen, with a preview
+ * of that customer's week.
+ *
+ * These are the COMPANY-level settings. Since migration 306 each contact
+ * can also override them for themselves from the customer portal's Email
+ * preferences section, and that override wins in either direction — so a
+ * company switched on here can still have one person who has opted out.
  */
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
+import { apiFetch } from '@/lib/api-client';
+import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { theme } from '@/lib/theme';
 
 interface CustomerRow {
@@ -29,12 +39,17 @@ export default function CustomerNotificationsPage() {
   const router = useRouter();
   const { isAdmin, hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
+  const dialog = useDialog();
 
   const [rows, setRows] = useState<CustomerRow[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [subscribedOnly, setSubscribedOnly] = useState(false);
+  // The customer whose weekly update is being composed, and whether they
+  // have the digest switched off (shown to the sender, never enforced).
+  const [digestFor, setDigestFor] = useState<CustomerRow | null>(null);
+  const [digestOptedOut, setDigestOptedOut] = useState(false);
 
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
@@ -60,6 +75,53 @@ export default function CustomerNotificationsPage() {
       setRows(prev => prev.map(r => r.id === row.id ? { ...r, [flag]: value } : r));
     }
     setSavingId(null);
+  };
+
+  const fetchDigestPreview = async (fields: EmailComposeFields) => {
+    if (!digestFor) return { error: 'No customer selected' };
+    try {
+      const res = await apiFetch('/api/customers/digest/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerName: digestFor.company_name, preview: true,
+          emails: fields.emails, message: fields.message || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.preview) {
+        setDigestOptedOut(!!data.optedOut);
+        return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      }
+      return { error: data.error || 'Unknown error' };
+    } catch {
+      return { error: 'Network error — please try again.' };
+    }
+  };
+
+  const sendDigest = async (fields: EmailComposeFields): Promise<{ ok: boolean }> => {
+    if (!digestFor) return { ok: false };
+    try {
+      const res = await apiFetch('/api/customers/digest/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerName: digestFor.company_name,
+          emails: fields.emails, bccSelf: fields.bccSelf, cc: fields.cc,
+          message: fields.message || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
+        return { ok: false };
+      }
+      await dialog.alert(`Weekly update sent to ${(data.dispatch?.to || []).join(', ') || 'the customer'}.`);
+      return { ok: true };
+    } catch {
+      await dialog.alert('Network error — please try again.');
+      return { ok: false };
+    }
   };
 
   const visible = rows.filter(r => {
@@ -98,9 +160,10 @@ export default function CustomerNotificationsPage() {
     <div style={{ maxWidth: '760px' }}>
       <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '2px' }}>Customer Notifications</div>
       <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '14px' }}>
-        Automatic emails are off for everyone unless subscribed here. <b>Status emails</b> = vehicle ready/shipped,
-        graphics shipped, and automatic proof reminders. <b>Weekly digest</b> = Monday summary. On-demand sends
-        (you click Send and confirm the address) always work regardless.
+        Nothing emails a customer on a schedule any more — every customer email is sent by a person.
+        These switches record what the customer asked for: they decide who we&rsquo;re <i>prompted</i> to email,
+        and anyone about to press Send is shown an opt-out. <b>Send update</b> mails this customer their
+        weekly vehicle summary now, with a preview first.
       </div>
 
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap' }}>
@@ -126,6 +189,7 @@ export default function CustomerNotificationsPage() {
             <div style={{ flex: 1 }}>Customer</div>
             <div style={{ width: '90px', textAlign: 'center' }}>Status emails</div>
             <div style={{ width: '90px', textAlign: 'center' }}>Weekly digest</div>
+            <div style={{ width: '104px', textAlign: 'center' }}>Send now</div>
           </div>
           {visible.map(r => (
             <div key={r.id} style={{
@@ -138,9 +202,44 @@ export default function CustomerNotificationsPage() {
               </div>
               <div style={{ width: '90px', textAlign: 'center' }}>{toggle(r, 'notify_status_emails')}</div>
               <div style={{ width: '90px', textAlign: 'center' }}>{toggle(r, 'weekly_digest')}</div>
+              <div style={{ width: '104px', textAlign: 'center' }}>
+                <button
+                  onClick={() => { setDigestOptedOut(false); setDigestFor(r); }}
+                  title="Preview and send this customer their weekly vehicle update"
+                  style={{
+                    padding: '4px 10px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                    background: 'rgba(96,165,250,0.12)', border: '1px solid rgba(96,165,250,0.4)', color: '#60a5fa',
+                  }}
+                >
+                  ✉ Send update
+                </button>
+              </div>
             </div>
           ))}
         </div>
+      )}
+
+      {digestFor && (
+        <EmailComposeModal
+          title={`Weekly update — ${digestFor.company_name}`}
+          customerId={digestFor.id}
+          sendLabel="Send Update"
+          messagePlaceholder="Personal note — shown above the vehicle list…"
+          intro={(
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              The preview below is this customer&rsquo;s actual week — vehicles in the shop, what finished,
+              shipped and was invoiced. Nothing sends on a schedule; this is the only way it goes out.
+              {digestOptedOut && (
+                <div style={{ color: '#f59e0b', marginTop: '6px' }}>
+                  ⚠ This customer turned the weekly summary off. Sending is still allowed — just make sure you have a reason.
+                </div>
+              )}
+            </div>
+          )}
+          fetchPreview={fetchDigestPreview}
+          onSend={sendDigest}
+          onClose={() => setDigestFor(null)}
+        />
       )}
     </div>
   );

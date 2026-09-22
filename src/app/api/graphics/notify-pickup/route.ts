@@ -164,7 +164,7 @@ export async function POST(req: NextRequest) {
 
     if (contactEmail) {
       try {
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
         // Customer CTA → portal dashboard (shows their graphics orders); the
         // internal /graphics job card is role-gated and dead-clicks customers.
         const portalUrl = `${appUrl}${deepLinks.customerPortal()}`;

@@ -33,8 +33,6 @@ interface Photo {
   vin_id: string | null;
   storage_path: string;
   photo_type: string;
-  review_status: string;
-  review_notes: string | null;
   uploaded_at: string;
 }
 
@@ -92,6 +90,10 @@ export default function InstallerPhotoUploadPage() {
   };
 
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
+  // Advisory pre-screen results worth showing (R6-8). A 'pass' is silence
+  // and so is 'not_screened' — telling an installer "we didn't check it" is
+  // not news, and a green tick on an unchecked photo would be a lie.
+  const [prescreenFlags, setPrescreenFlags] = useState<{ type: string; verdict: string; notes: string }[]>([]);
 
   const authHeaders = async () => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -105,6 +107,8 @@ export default function InstallerPhotoUploadPage() {
     if (!user || !job || files.length === 0) return;
     setUploading(true);
     setUploadProgress({ done: 0, total: files.length });
+    setPrescreenFlags([]);
+    const flags: { type: string; verdict: string; notes: string }[] = [];
 
     try {
       for (let i = 0; i < files.length; i++) {
@@ -121,7 +125,7 @@ export default function InstallerPhotoUploadPage() {
         const result = await res.json();
 
         if (result.success) {
-          await fetch('/api/cni/job-photos', {
+          const meta = await fetch('/api/cni/job-photos', {
             method: 'POST', headers: await authHeaders(),
             body: JSON.stringify({
               jobId: job.id,
@@ -130,10 +134,23 @@ export default function InstallerPhotoUploadPage() {
               photoType: selectedType,
             }),
           });
+          // Pre-screen feedback (R6-8) — the point of checking at upload is
+          // that the crew is still standing at the vehicle. Only 'retake' and
+          // 'unsure' are worth saying; 'pass' and 'not_screened' are silence,
+          // because "we didn't check it" is not news to an installer.
+          try {
+            const body = await meta.json();
+            const v = body?.prescreen?.verdict;
+            if (v === 'retake' || v === 'unsure') {
+              flags.push({ type: selectedType, verdict: v, notes: body.prescreen.notes || '' });
+            }
+          } catch { /* the upload stands regardless */ }
         }
 
         setUploadProgress({ done: i + 1, total: files.length });
       }
+
+      setPrescreenFlags(flags);
 
       // Once every required angle is on file, flag the VIN submitted. The route
       // re-verifies the required set server-side and notifies BMG to review.
@@ -309,6 +326,39 @@ export default function InstallerPhotoUploadPage() {
               Choose
             </button>
           </div>
+
+          {/* Pre-screen feedback (R6-8) — advisory, and it says so. BMG still
+              reviews every photo; this is a chance to fix one while you are
+              still standing at the vehicle. */}
+          {prescreenFlags.length > 0 && (
+            <div style={{
+              marginTop: '10px', padding: '11px 13px', borderRadius: '10px',
+              background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.4)',
+            }}>
+              <div style={{ fontSize: '12.5px', fontWeight: 800, color: '#f59e0b', marginBottom: '5px' }}>
+                {prescreenFlags.some(f => f.verdict === 'retake')
+                  ? 'Worth retaking before you leave'
+                  : 'Worth a second look'}
+              </div>
+              <ul style={{ margin: 0, paddingLeft: '17px', fontSize: '12px', color: 'var(--text-primary)' }}>
+                {prescreenFlags.map((f, i) => (
+                  <li key={i} style={{ marginBottom: '2px' }}>
+                    <strong>{TYPE_LABELS[f.type] || f.type}:</strong> {f.notes}
+                  </li>
+                ))}
+              </ul>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '5px' }}>
+                This is an automatic check and it can be wrong — the photos are uploaded either way, and BMG reviews them.
+              </div>
+              <button
+                onClick={() => setPrescreenFlags([])}
+                style={{
+                  marginTop: '7px', padding: '5px 11px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                  background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)',
+                }}
+              >Dismiss</button>
+            </div>
+          )}
           <PhotoSession
             open={photoSession}
             title={`${TYPE_LABELS[selectedType] || selectedType} photos`}
@@ -333,8 +383,8 @@ export default function InstallerPhotoUploadPage() {
                 background: 'var(--input-bg)', border: '1px solid var(--border)',
               }}>
                 {/* Thumbnail (R3-2: the installer side rendered no images at
-                    all — a denied "reshoot this" verdict pointed at a photo
-                    they couldn't see). Same key-splitting as the review page. */}
+                    all, so they couldn't see what they'd already sent). Same
+                    key-splitting as the admin gallery. */}
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={photoUrl(p.storage_path)}
@@ -350,35 +400,13 @@ export default function InstallerPhotoUploadPage() {
                     {new Date(p.uploaded_at).toLocaleString()}
                   </div>
                 </div>
-                <span style={{
-                  fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px',
-                  background: p.review_status === 'approved' ? 'var(--success-bg)'
-                    : p.review_status === 'denied' ? 'var(--error-bg)'
-                    : p.review_status === 'conditionally_approved' ? 'var(--warning-bg)'
-                    : 'var(--subtle-bg)',
-                  color: p.review_status === 'approved' ? 'var(--success)'
-                    : p.review_status === 'denied' ? 'var(--error)'
-                    : p.review_status === 'conditionally_approved' ? 'var(--warning)'
-                    : 'var(--text-muted)',
-                }}>
-                  {p.review_status === 'approved' ? '✓ Approved'
-                    : p.review_status === 'denied' ? '✕ Denied'
-                    : p.review_status === 'conditionally_approved' ? '⚠ Conditional'
-                    : 'Pending'}
-                </span>
+                {/* No verdict badge: migration 307 retired the photo
+                    approve/deny review. A photo that uploaded is on file,
+                    full stop — the only feedback an installer gets is the
+                    pre-screen at upload, while they can still act on it. */}
               </div>
             ))}
           </div>
-          {currentVinPhotos.some(p => p.review_status === 'denied' && p.review_notes) && (
-            <div style={{ marginTop: '10px', padding: '10px', borderRadius: '8px', background: 'var(--error-bg)', border: '1px solid var(--error-border)' }}>
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--error)', marginBottom: '4px' }}>Review Notes</div>
-              {currentVinPhotos.filter(p => p.review_status === 'denied' && p.review_notes).map(p => (
-                <div key={p.id} style={{ fontSize: '12px', color: 'var(--error)', marginBottom: '4px' }}>
-                  {TYPE_LABELS[p.photo_type]}: {p.review_notes}
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
 

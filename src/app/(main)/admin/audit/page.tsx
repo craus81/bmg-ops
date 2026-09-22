@@ -1,9 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { readableEntry } from '@/lib/audit-readable';
 
 interface AuditRow {
   id: string;
@@ -27,6 +28,7 @@ const TABLE_LABELS: Record<string, string> = {
   graphics_jobs: 'Graphics Jobs',
   cni_jobs: 'CNI Jobs',
   estimates: 'Estimates',
+  fleet_checkins: 'Vehicle Check-Ins',
 };
 
 const PAGE = 100;
@@ -39,8 +41,13 @@ export default function AuditLogPage() {
   const [rows, setRows] = useState<AuditRow[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
-  const [tableFilter, setTableFilter] = useState('');
-  const [search, setSearch] = useState('');
+  // R6-13: the History control on a record page lands here pre-filtered.
+  // Seeded from the URL so the page opens already showing that record's
+  // history rather than the whole log with a filter the user must apply.
+  const searchParams = useSearchParams();
+  const [tableFilter, setTableFilter] = useState(searchParams?.get('table') || '');
+  const [search, setSearch] = useState(searchParams?.get('record') || '');
+  const focusedRecord = searchParams?.get('record') || '';
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const [hasMore, setHasMore] = useState(false);
@@ -128,7 +135,9 @@ export default function AuditLogPage() {
       {loading && <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)', fontSize: '13px' }}>Loading…</div>}
       {!loading && visible.length === 0 && (
         <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>
-          No audit entries{tableFilter || search ? ' match the filters' : ' yet — they appear as money-touching changes happen'}
+          {focusedRecord
+            ? 'No recorded changes for this record yet. Field-level history starts from when the change was made, so anything edited before then is not here.'
+            : `No audit entries${tableFilter || search ? ' match the filters' : ' yet — they appear as money-touching changes happen'}`}
         </div>
       )}
 
@@ -144,23 +153,47 @@ export default function AuditLogPage() {
                 <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '5px', background: 'rgba(96,165,250,0.1)', color: '#60a5fa', whiteSpace: 'nowrap' }}>
                   {TABLE_LABELS[r.table_name] || r.table_name}
                 </span>
-                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{r.action}</span>
-                {r.record_id && <span style={{ fontSize: '10px', fontFamily: 'monospace', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.record_id}</span>}
-                <span style={{ flex: 1 }} />
-                <span style={{ fontSize: '11px', color: r.actor_id ? 'var(--text-secondary)' : 'var(--text-muted)', whiteSpace: 'nowrap', fontStyle: r.actor_id ? 'normal' : 'italic' }}>
-                  {r.actor_id ? (names[r.actor_id] || '…') : 'System'}
+                {/* R6-13: the readable sentence leads; the raw action and
+                    id stay available but stop being the whole story. */}
+                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {readableEntry(r.action, r.detail, r.actor_id ? (names[r.actor_id] || null) : null).summary}
                 </span>
+                {r.record_id && !focusedRecord && <span style={{ fontSize: '10px', fontFamily: 'monospace', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.record_id}</span>}
+                <span style={{ flex: 1 }} />
                 <span style={{ fontSize: '10px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                   {new Date(r.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                 </span>
               </button>
-              {isOpen && (
-                <div style={{ borderTop: '1px solid var(--border)', padding: '10px 12px', overflowX: 'auto' }}>
-                  <pre style={{ margin: 0, fontSize: '11px', fontFamily: 'monospace', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                    {JSON.stringify(r.detail ?? {}, null, 2)}
-                  </pre>
-                </div>
-              )}
+              {isOpen && (() => {
+                const entry = readableEntry(r.action, r.detail, r.actor_id ? (names[r.actor_id] || null) : null);
+                return (
+                  <div style={{ borderTop: '1px solid var(--border)', padding: '10px 12px', overflowX: 'auto' }}>
+                    {entry.changes.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: entry.fallback ? '10px' : 0 }}>
+                        {entry.changes.map(c => (
+                          <div key={c.field} style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                            <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{c.label}</span>
+                            {/* An unlabelled column is shown, not hidden —
+                                marked so nobody reads it as a curated name. */}
+                            {c.raw && <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}> (raw column)</span>}
+                            {': '}
+                            <span style={{ textDecoration: 'line-through', opacity: 0.7 }}>{c.from}</span>
+                            {' → '}
+                            <span style={{ fontWeight: 700 }}>{c.to}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {/* Anything the renderer could not summarise stays here
+                        verbatim rather than being paraphrased. */}
+                    {(entry.fallback || entry.changes.length === 0) && (
+                      <pre style={{ margin: 0, fontSize: '11px', fontFamily: 'monospace', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        {entry.fallback ?? JSON.stringify(r.detail ?? {}, null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           );
         })}

@@ -60,12 +60,6 @@ export async function GET(req: NextRequest) {
       .in('message_id', messageIds);
     const processedMap = new Map((existing || []).map((e: any) => [e.message_id, e.status]));
 
-    // Get existing PO numbers
-    const { data: existingPOs } = await supabase
-      .from('purchase_orders')
-      .select('po_number');
-    const existingPoNumbers = new Set((existingPOs || []).map((p: any) => p.po_number));
-
     let imported = 0;
     let skipped = 0;
     let errors = 0;
@@ -190,7 +184,7 @@ export async function GET(req: NextRequest) {
     // After importing POs, retroactively match unmatched scans
     if (imported > 0) {
       try {
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
         await fetch(`${appUrl}/api/scans/match-po`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` },
@@ -223,7 +217,7 @@ export async function GET(req: NextRequest) {
     });
   } catch (err: any) {
     if (err.message === 'NO_GOOGLE_TOKEN') {
-      const w = await recordRun(supabase, { status: 'error', reason: 'NO_GOOGLE_TOKEN' });
+      const w = await recordRun(supabase, { status: 'error', error: 'Gmail not connected — no stored Google token' });
       return NextResponse.json({ error: 'Gmail not connected', needsAuth: true, syncStateWrite: w }, { status: 401 });
     }
     console.error('Auto-import error:', err);

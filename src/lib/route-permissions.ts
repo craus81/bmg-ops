@@ -28,6 +28,7 @@ export type RouteGuardKind =
   | 'admin'        // requireAdmin
   | 'superAdmin'   // requireSuperAdmin — owner-level wall
   | 'financials'   // requireFinancials — super_admin / executive only
+  | 'money'        // requireMoney — sales/admin/finance/executive; not the floor
   | 'role'         // requireRole(...) — specific roles (admins auto-pass)
   | 'feature'      // requireFeature(req, key) — role defaults + per-user overrides
   | 'authScoped'   // requireAuth on purpose + in-route scoping (see why)
@@ -48,6 +49,9 @@ const staff = (): RouteGuard => ({ kind: 'staff', contains: ['requireStaff('] })
 const admin = (): RouteGuard => ({ kind: 'admin', contains: ['requireAdmin('] });
 const superAdmin = (): RouteGuard => ({ kind: 'superAdmin', contains: ['requireSuperAdmin('] });
 const financials = (): RouteGuard => ({ kind: 'financials', contains: ['requireFinancials('] });
+/** Billing: what a customer was charged, what we paid, what we make. Narrower
+ *  than staff, wider than financials (the owner-only P&L wall). */
+const money = (): RouteGuard => ({ kind: 'money', contains: ['requireMoney('] });
 const role = (): RouteGuard => ({ kind: 'role', contains: ['requireRole('] });
 /** Typing the key as FeatureKey ties every server gate to the same
  *  src/lib/features.ts registry the client UI resolves — a renamed or
@@ -70,6 +74,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/bulk-upload-proofs/route.ts': admin(),
   'src/app/api/admin/bulk-upload-templates/route.ts': admin(),
   'src/app/api/admin/calibrate-templates/route.ts': staff(),
+  'src/app/api/admin/calibration-audit/route.ts': staff(),
   'src/app/api/admin/create-user/route.ts': admin(),
   'src/app/api/admin/credits/route.ts': admin(),
   'src/app/api/admin/delete-template/route.ts': admin(),
@@ -80,6 +85,25 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // GL account every labor dollar posts to.
   'src/app/api/admin/labor-item/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   'src/app/api/admin/link-customer/route.ts': admin(),
+  // The QuickBooks ledger import (migration 314 / R8-2). Driven from OUTSIDE
+  // the app by scripts/import-quickbooks.mjs with CRON_SECRET, because the
+  // deployment is unreachable from a session container; the admin page drives
+  // the same route with a session for small runs.
+  'src/app/api/admin/ledger/import/route.ts': cron('requireAdmin('),
+  // The progress feed the ledger page polls, and the review queue's read
+  // half: the ledger reader tier (finance/executive; admins auto-pass). Run
+  // rows carry no secret — realm_id is stored already masked.
+  'src/app/api/admin/ledger/runs/route.ts': role(),
+  // Reading the queue is the ledger tier; attaching/ignoring/unlinking a
+  // customer is admin.
+  'src/app/api/admin/ledger/customer-links/route.ts': { kind: 'admin', contains: ['requireAdmin(', 'requireRole('] },
+  // Reading the PDF gate (with WHO stamped it) is admin; stamping it is
+  // super-admin — it is what lets a decade of financial PDFs reach R2.
+  'src/app/api/admin/ledger/settings/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
+  // Reading connection state is the ledger tier so a finance viewer sees the
+  // card; disconnecting revokes at Intuit, so it is the owner-level wall.
+  'src/app/api/admin/quickbooks/status/route.ts': role(),
+  'src/app/api/admin/quickbooks/disconnect/route.ts': superAdmin(),
   // ZIP centroids for invite distance ranking (R6-5): reference data an
   // admin loads once, never customer data.
   'src/app/api/admin/zip-centroids/route.ts': admin(),
@@ -98,6 +122,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/shop-capacity/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   'src/app/api/admin/payouts/route.ts': admin(),
   'src/app/api/admin/payroll/route.ts': admin(),
+  'src/app/api/admin/review-link/route.ts': admin(),
   'src/app/api/admin/resend-invite/route.ts': admin(),
   // Reading the company sales tax rate is staff-wide (both quote builders
   // show it); changing it is super-admin only, matching the DB trigger in
@@ -108,11 +133,15 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/user-settings/route.ts': superAdmin(),
   'src/app/api/ai-agent/chat/route.ts': authScoped('the caller\'s role is resolved server-side and per-role capability checks decide which data sources each query may touch', 'rolesOf'),
   'src/app/api/approve/condition/[token]/route.ts': token('customer acknowledgment of the vehicle condition report via the emailed magic link; the token is the credential and expiry is enforced', '\'condition_token\''),
+  'src/app/api/badges/route.ts': authScoped('attention-queue counts for the caller only: the queues computed are exactly the ones their own resolved features and admin flag allow, so a customer login gets an empty set rather than a 403', 'resolveFeatures('),
   'src/app/api/approve/estimate/[token]/route.ts': token('customer approval via the emailed magic link; the token is the credential and expiry is enforced', '\'approval_token\''),
   'src/app/api/approve/proof/[token]/route.ts': token('customer proof approval via the emailed magic link; token + expiry enforced', '\'approval_token\''),
+  'src/app/api/cni/schedule/[token]/route.ts': token('installer install-calendar subscription; the token is the credential, reads are rate-limited and the feed carries only the jobs already assigned to that company', '\'schedule_token\''),
   'src/app/api/portal/[token]/route.ts': token('customer PO-status portal via the shared link; the token is the credential, reads are rate-limited and the payload is the customer-safe projection in src/lib/po-portal.ts', '\'portal_token\''),
   'src/app/api/portal/[token]/ask/route.ts': token('portal invoice question → customer_threads; the token is the credential, rate-limited, and the invoice id is verified against the token customer\'s own open set', 'resolvePortalCustomer('),
+  'src/app/api/portal/[token]/fresh-link/route.ts': token('customer-requested fresh approval link; the token is the credential, rate-limited per IP AND per record, and the named record is re-verified against the token customer by id before anything is minted — the new link is emailed to the address on file and never returned', 'resolvePortalCustomer('),
   'src/app/api/portal/[token]/billing/route.ts': token('portal billing read (balance/aging/open invoices) keyed on the token customer\'s netsuite_id; rate-limited + cached', 'resolvePortalCustomer('),
+  'src/app/api/portal/[token]/preferences/route.ts': token('customer email preferences behind the portal token; rate-limited, the contact must belong to the token customer, and the only writable surface is three booleans per contact — addresses are returned masked and can never be added, read or edited here', 'resolvePortalCustomer('),
   'src/app/api/portal/[token]/invoice-pdf/route.ts': token('token-guarded invoice-PDF stream; the id must belong to the token customer\'s open set before any fetch', 'resolvePortalCustomer('),
   'src/app/api/portal/[token]/statement/route.ts': token('portal statement download/email; recipients locked to the customer\'s own record, never free input', 'resolvePortalCustomer('),
   'src/app/api/approve/quote/[token]/route.ts': token('customer wrap-quote approval via the emailed magic link; token + expiry enforced', '\'approval_token\''),
@@ -121,6 +150,12 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // rate-limited both verbs, slot race settled by a partial unique index.
   'src/app/api/book/[token]/route.ts': token('customer pickup/drop-off booking via the completion-email or approval-page link; token resolved + state-gated before any write', 'resolveBookingToken('),
   'src/app/api/auth/google/callback/route.ts': staff(),
+  // /api/auth/* is public at the middleware, so BOTH QuickBooks routes call
+  // requireAdmin themselves: the callback writes the single shared
+  // quickbooks_tokens row, and an unauthenticated hit could point the whole
+  // ledger import at a company someone else controls.
+  'src/app/api/auth/quickbooks/route.ts': admin(),
+  'src/app/api/auth/quickbooks/callback/route.ts': admin(),
   'src/app/api/auth/google/route.ts': staff(),
   'src/app/api/auth/signup/route.ts': pub('account creation; new profiles land status=pending and every guard rejects them until an admin approves'),
   'src/app/api/calendar/sync-event/route.ts': staff(),
@@ -131,6 +166,9 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cni/add-completed-vin/route.ts': admin(),
   'src/app/api/cni/assign-company/route.ts': feature('cni_admin'),
   'src/app/api/cni/bid/route.ts': authScoped('external installer / coordinator flow; requireStaff would wrongly reject the installer side, so membership is checked in-route against the CNI job'),
+  'src/app/api/cni/compliance/route.ts': feature('cni_admin'),
+  'src/app/api/cni/invite-sla/route.ts': feature('cni_admin'),
+  'src/app/api/cni/job-pnl/route.ts': feature('cni_admin'),
   'src/app/api/cni/complete-job/route.ts': authScoped('external installer / coordinator flow; requireStaff would wrongly reject the installer side, so membership is checked in-route against the CNI job'),
   'src/app/api/cni/complete-vin/route.ts': authScoped('external installer / coordinator flow; requireStaff would wrongly reject the installer side, so membership is checked in-route against the CNI job'),
   'src/app/api/cni/create-vendor/route.ts': admin(),
@@ -149,12 +187,15 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cni/mark-messages-read/route.ts': authScoped('external installer / coordinator flow; requireStaff would wrongly reject the installer side, so membership is checked in-route against the CNI job'),
   'src/app/api/cni/materials-received/route.ts': authScoped('external installer / coordinator flow; requireStaff would wrongly reject the installer side, so membership is checked in-route against the CNI job'),
   'src/app/api/cni/my-docs/route.ts': role(),
+  'src/app/api/cni/my-schedule-link/route.ts': role(),
+  'src/app/api/leads/quiet/route.ts': role(),
   'src/app/api/cni/my-invoices/route.ts': role(),
   'src/app/api/cni/propose-schedule/route.ts': admin(),
   'src/app/api/cni/refresh-vendor/route.ts': admin(),
   'src/app/api/cni/resend-invite/route.ts': admin(),
-  'src/app/api/cni/review-photo/route.ts': feature('cni_admin'),
+  'src/app/api/cni/photos/route.ts': feature('cni_admin'),
   'src/app/api/cni/scorecards/route.ts': feature('cni_admin'),
+  'src/app/api/cni/schedule-link/route.ts': feature('cni_admin'),
   'src/app/api/cni/scan-vehicle/route.ts': authScoped('external installer / coordinator flow; requireStaff would wrongly reject the installer side, so membership is checked in-route against the CNI job'),
   'src/app/api/cni/search-vendors/route.ts': admin(),
   'src/app/api/cni/submit-photos/route.ts': authScoped('external installer / coordinator flow; requireStaff would wrongly reject the installer side, so membership is checked in-route against the CNI job'),
@@ -164,15 +205,31 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/credit-application/submit/route.ts': pub('the public credit-application form; honeypot + fake bot success, service-role insert only, and the review side is feature-gated'),
   'src/app/api/credit-applications/[id]/route.ts': feature('credit_applications'),
   'src/app/api/credit-applications/route.ts': feature('credit_applications'),
+  // Usage-telemetry beacon (R7-4): the public booking/credit-application
+  // pages have no session, so identity is optional and taken from the
+  // cookie/bearer when present (role only — user_id is never stored);
+  // per-user-or-IP and per-session checkRateLimit, 16 KB / 25-event caps.
+  'src/app/api/client-events/route.ts': { kind: 'public', contains: ['checkRateLimit('], why: 'usage beacon from public booking and credit-application pages that have no session; identity is optional and resolved server-side only for rate limiting and role, anonymous and unverifiable-token batches are restricted to those two pages, and every batch is ip-gated before any auth lookup then user+session rate limited via checkRateLimit' },
+  'src/app/api/admin/client-events/route.ts': feature('system_health'),
+  'src/app/api/cron/client-events-purge/route.ts': cron('requireAdmin('),
   'src/app/api/cron/at-risk-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/auto-archive-shipped/route.ts': cron('requireAdmin('),
   'src/app/api/cron/calendar-pull/route.ts': cron('requireAdmin('),
   'src/app/api/cron/deal-forecast-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/exceptions-digest/route.ts': cron('requireAdmin('),
+  'src/app/api/cron/heartbeat-sentinel/route.ts': cron('requireAdmin('),
+  'src/app/api/cron/so-matchmaker/route.ts': cron('requireAdmin('),
+  'src/app/api/cron/ledger-qbo-sync/route.ts': cron('requireAdmin('),
+  // The NetSuite half of the ledger (R8-3): invoices, credit memos, their
+  // PDFs and — when the integration role permits it — customer payments.
+  // Same shape as every other cron: the shared secret drives it on schedule,
+  // an admin can trigger it by hand.
+  'src/app/api/cron/ledger-netsuite-mirror/route.ts': cron('requireAdmin('),
   'src/app/api/cron/health-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/netsuite-sync/route.ts': cron('requireAdmin('),
   'src/app/api/cron/owner-brief/route.ts': cron('requireAdmin('),
   'src/app/api/cron/parts-email-scan/route.ts': cron('requireAdmin('),
+  'src/app/api/cron/graphics-reminders/route.ts': cron('requireAdmin('),
   'src/app/api/cron/pickup-nudges/route.ts': cron('requireAdmin('),
   'src/app/api/cron/parts-sync/route.ts': cron('requireAdmin('),
   'src/app/api/cron/promised-back-check/route.ts': cron('requireAdmin('),
@@ -181,6 +238,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cron/quote-followup-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/reorder-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/metric-snapshots/route.ts': cron('requireAdmin('),
+  'src/app/api/cron/cni-sweep/route.ts': cron('requireAdmin('),
   'src/app/api/cron/field-shift-sweep/route.ts': cron('requireAdmin('),
   'src/app/api/cron/shop-shift-sweep/route.ts': cron('requireAdmin('),
   'src/app/api/cron/stale-purchase-requests/route.ts': cron('requireAdmin('),
@@ -189,6 +247,8 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/customer-threads/[id]/messages/route.ts': staff(),
   'src/app/api/customer-threads/[id]/route.ts': staff(),
   'src/app/api/customer-threads/route.ts': staff(),
+  'src/app/api/customers/brief/route.ts': staff(),
+  'src/app/api/customers/digest/email/route.ts': admin(),
   'src/app/api/customers/portal-link/route.ts': staff(),
   'src/app/api/customer/billing/route.ts': authScoped('logged-in customer billing card; scoped by the caller\'s own profiles.customer_netsuite_id, with the same admin preview path as customer/portal', 'customer_netsuite_id'),
   'src/app/api/customer/portal/route.ts': authScoped('customer-facing portal; scoped by the caller\'s profiles.customer_netsuite_id, with an admin preview path', 'customer_netsuite_id'),
@@ -200,17 +260,24 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/dropbox/thumbnail/route.ts': staff(),
   'src/app/api/estimates/[id]/add-lines/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/add-wrap-quote/route.ts': feature('estimates'),
+  'src/app/api/estimates/draft-from-text/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/approval-preview/route.ts': feature('estimates'),
+  'src/app/api/estimates/[id]/revision-diff/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/duplicate/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/email-pdf/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/files/route.ts': feature('estimates'),
+  'src/app/api/estimates/[id]/graphics-attach/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/link-so/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/push-so/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/pdf-debug/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/pdf/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/rejection-thread/route.ts': feature('estimates'),
+  'src/app/api/estimates/[id]/review-decision/route.ts': feature('estimates'),
   'src/app/api/estimates/[id]/send-for-approval/route.ts': feature('estimates'),
+  'src/app/api/estimates/[id]/send-for-review/route.ts': feature('estimates'),
+  'src/app/api/estimates/allocations/route.ts': feature('estimates'),
   'src/app/api/estimates/convert-to-so/route.ts': feature('estimates'),
+  'src/app/api/estimates/parts-readiness/route.ts': feature('estimates'),
   'src/app/api/estimates/push/route.ts': feature('estimates'),
   'src/app/api/estimates/route.ts': feature('estimates'),
   'src/app/api/external-contacts/[id]/route.ts': staff(),
@@ -225,18 +292,21 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/gmail/search-pos/route.ts': staff(),
   'src/app/api/gmail/search-proofs/route.ts': staff(),
   'src/app/api/graphics-jobs/[id]/download-all/route.ts': staff(),
+  'src/app/api/help/route.ts': staff(),
   'src/app/api/graphics-jobs/[id]/send-for-approval/route.ts': staff(),
   'src/app/api/graphics-jobs/assign-po/route.ts': staff(),
+  'src/app/api/graphics-jobs/rank/route.ts': admin(),
+  'src/app/api/admin/graphics-reminders/route.ts': staff(),
   'src/app/api/graphics/awaiting-prefill/route.ts': staff(),
-  'src/app/api/graphics/create-estimate/route.ts': staff(),
-  'src/app/api/graphics/create-invoice/route.ts': staff(),
+  'src/app/api/graphics/create-estimate/route.ts': money(),
+  'src/app/api/graphics/create-invoice/route.ts': money(),
   'src/app/api/graphics/from-estimate/route.ts': staff(),
   'src/app/api/graphics/from-wrap-quote/route.ts': staff(),
-  'src/app/api/graphics/invoice-pdf/route.ts': staff(),
-  'src/app/api/graphics/invoice-preview/route.ts': staff(),
+  'src/app/api/graphics/invoice-pdf/route.ts': money(),
+  'src/app/api/graphics/invoice-preview/route.ts': money(),
   'src/app/api/graphics/packing-list/route.ts': staff(),
   'src/app/api/graphics/pack-checklist/route.ts': staff(),
-  'src/app/api/graphics/mark-invoiced/route.ts': staff(),
+  'src/app/api/graphics/mark-invoiced/route.ts': money(),
   'src/app/api/graphics/notify-assignees/route.ts': staff(),
   'src/app/api/graphics/notify-pickup/route.ts': staff(),
   'src/app/api/graphics/notify-ready/route.ts': staff(),
@@ -250,6 +320,11 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/jobs/assign/route.ts': staff(),
   'src/app/api/knowledge/reprocess/route.ts': admin(),
   'src/app/api/knowledge/upload/route.ts': admin(),
+  // The only way bytes leave the R2 `ledger` prefix (migration 314): that
+  // prefix is denied on the generic storage routes, so this record-scoped
+  // reader IS the wall. requireRole admits finance + executive (admins and
+  // super admins auto-pass) — the ledger reader tier.
+  'src/app/api/ledger/documents/[id]/route.ts': role(),
   'src/app/api/mentions/route.ts': staff(),
   'src/app/api/messages/send-sms/route.ts': authScoped('sender is forced to the authenticated caller and must be a participant of the conversation being notified', 'participant'),
   'src/app/api/messages/sms-webhook/route.ts': webhook('inbound SMS from the provider; the signature is verified and mismatches are rejected', 'verifyWebhookSignature'),
@@ -323,6 +398,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/prospects/contacts/route.ts': staff(),
   'src/app/api/prospects/email/route.ts': staff(),
   'src/app/api/prospects/files/route.ts': staff(),
+  'src/app/api/prospects/segment-email/route.ts': role(),
   'src/app/api/prospects/push-to-netsuite/route.ts': staff(),
   'src/app/api/prospects/route.ts': { kind: 'staff', contains: ['requireStaff(', 'requireAdmin('] },
   'src/app/api/prospects/scan-card/route.ts': staff(),
@@ -339,6 +415,8 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/quotes/follow-up/email/route.ts': role(),
   'src/app/api/quotes/follow-up/route.ts': role(),
   'src/app/api/quotes/route.ts': role(),
+  'src/app/api/reports/alert-scoreboard/route.ts': admin(),
+  'src/app/api/reports/email-reach/route.ts': admin(),
   'src/app/api/reports/accounting-package/route.ts': role(),
   'src/app/api/reports/ar-sync-paid/route.ts': staff(),
   'src/app/api/reports/at-risk/route.ts': role(),
@@ -350,7 +428,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/reports/financials/invoice-pdf/route.ts': financials(),
   'src/app/api/reports/financials/pnl/route.ts': financials(),
   'src/app/api/reports/financials/route.ts': financials(),
-  'src/app/api/reports/graphics-costs/route.ts': role(),
+  'src/app/api/reports/graphics-costs/route.ts': money(),
   'src/app/api/reports/material-yield/route.ts': role(),
   'src/app/api/reports/proof-revisions/route.ts': admin(),
   'src/app/api/reports/purchasing-kpis/route.ts': feature('parts_ordering'),
@@ -372,6 +450,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/reports/sales-performance/route.ts': role(),
   'src/app/api/reports/vendors/route.ts': staff(),
   'src/app/api/scan-worksheet/route.ts': authScoped('installer scan worksheet; external installer accounts are the intended callers'),
+  'src/app/api/scans/add-part/route.ts': admin(),
   'src/app/api/scans/bulk-update/route.ts': admin(),
   'src/app/api/scans/delete/route.ts': admin(),
   'src/app/api/scans/log/route.ts': authScoped('external installer companies log field scans by design; the route enforces an internal-staff-or-installer allowlist itself', 'isInternalStaffRole('),
@@ -404,6 +483,12 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/storage/presign/route.ts': authScoped('write presigns pass the tiered storage-guard ACL first', 'checkStoragePath'),
   'src/app/api/storage/route.ts': authScoped('every bucket/path goes through the tiered storage-guard ACL', 'checkStoragePath'),
   'src/app/api/system-health/route.ts': cron('requireAdmin('),
+  'src/app/api/so-matches/route.ts': staff(),
+  // Narrower than its sibling above on purpose: a map of which
+  // integrations are unconfigured is a map of where the app is soft, so
+  // it stays with the owner-level feature rather than all admins.
+  'src/app/api/system-health/runs/route.ts': staff(),
+  'src/app/api/system-health/connections/route.ts': feature('system_health'),
   'src/app/api/upfit-projects/allocations/route.ts': staff(),
   'src/app/api/upfit-projects/link-po/route.ts': staff(),
   'src/app/api/upfit-projects/notes/route.ts': staff(),
@@ -414,9 +499,11 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/vehicle-tracking/[id]/refresh-checklist/route.ts': staff(),
   'src/app/api/vehicle-tracking/graphics-install-status/route.ts': staff(),
   'src/app/api/vehicle-tracking/labor-burn/route.ts': staff(),
+  'src/app/api/vehicle-tracking/notify-customer/route.ts': staff(),
   'src/app/api/vehicle-tracking/invoice/route.ts': admin(),
   'src/app/api/vehicle-tracking/turnaround-suggest/route.ts': staff(),
   'src/app/api/vehicle-tracking/update-status/route.ts': staff(),
+  'src/app/api/vehicles/[vin]/installs/route.ts': staff(),
   'src/app/api/vehicles/[vin]/photos/route.ts': staff(),
   'src/app/api/vehicles/archive/route.ts': admin(),
   'src/app/api/vehicles/delete/route.ts': admin(),

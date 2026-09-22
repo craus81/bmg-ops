@@ -9,6 +9,7 @@
  * (+ its ?new=1&fromPo prefill flow), the Awaiting Graphics queue, and
  * the mentions inbox.
  *
+ * ?mine=1 opens the board on My Jobs — the reminder digest links there.
  * Legacy deep links (?editJob= / ?id=) predate the record page and are
  * forwarded there so old notification URLs keep working. ?invoiceJob=
  * (the bell notification's "create invoice?" prompt) stays here: the
@@ -25,6 +26,9 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import { roundChip, summarizeRounds } from '@/lib/proof-rounds';
+import { isFinishedStatus, inStatusScope, GRAPHICS_ACTIVE_STATUSES } from '@/lib/graphics-status';
+import { workOrderPositions, compareByDueDate } from '@/lib/graphics-work-order';
+import GraphicsWorkOrderModal from '@/components/GraphicsWorkOrderModal';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import GraphicsInvoiceReviewModal from '@/components/GraphicsInvoiceReviewModal';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
@@ -81,12 +85,6 @@ function relativeTime(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
-// Active statuses (not terminal)
-const ACTIVE_STATUSES: GraphicsJobStatus[] = ['flagged', 'received', 'designing', 'revision', 'printing', 'outgassing', 'cutting', 'packing', 'ready', 'ready_to_pickup'];
-
-// Statuses past which the due date has done its job — no overdue warning.
-const DONE_STATUSES: GraphicsJobStatus[] = ['shipped', 'picked_up', 'installed', 'cancelled'];
-
 const PRIORITY_RANK: Record<string, number> = { low: 0, normal: 1, high: 2, rush: 3 };
 
 // Everything ships UPS — tracking numbers link straight to their site.
@@ -96,7 +94,7 @@ const upsTrackingUrl = (trackingNumber: string) =>
 export default function GraphicsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, isAdmin, isProduction, isSales, loading: authLoading } = useAuth();
+  const { user, isAdmin, isProduction, isSales, canSeeMoney, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
 
@@ -116,22 +114,48 @@ export default function GraphicsPage() {
   const [stageSince, setStageSince] = useState<Record<string, string>>({});
   // "My jobs" filter: printers/cutters see only what's assigned to them.
   const [myJobsOnly, setMyJobsOnly] = useState(false);
-  const [myAssignedIds, setMyAssignedIds] = useState<Set<string>>(new Set());
+  // Every graphics assignment, jobId → userIds. This used to be "just mine",
+  // but the admin assignee picker needs to ask the same question about
+  // anyone, and two sources of truth for "who is on this job" is how the
+  // My Jobs count went wrong in the first place.
+  const [assigneesByJob, setAssigneesByJob] = useState<Record<string, string[]>>({});
+  /** '' = everyone, 'unassigned' = nobody on it, otherwise a user id. */
+  const [assigneeFilter, setAssigneeFilter] = useState<string>('');
+  // Admin work order — the drag-to-rank list behind the "#" column.
+  const [showWorkOrder, setShowWorkOrder] = useState(false);
 
   useEffect(() => {
     if (!user?.id) return;
     (async () => {
-      const { data } = await supabase
-        .from('job_assignments')
-        .select('job_id')
-        .eq('job_type', 'graphics_job')
-        .eq('user_id', user.id);
-      setMyAssignedIds(new Set((data || []).map((a: any) => a.job_id)));
+      // Paginated: one row per person per job, so this grows with the board
+      // and a plain read would silently stop at PostgREST's 1000-row cap —
+      // which reads as "that job has nobody on it", not as an error.
+      const { data } = await fetchAllRows<{ job_id: string; user_id: string }>((from, to) =>
+        supabase
+          .from('job_assignments')
+          .select('job_id, user_id')
+          .eq('job_type', 'graphics_job')
+          .order('job_id')
+          .order('id')
+          .range(from, to));
+      const byJob: Record<string, string[]> = {};
+      for (const a of data) (byJob[a.job_id] ||= []).push(a.user_id);
+      setAssigneesByJob(byJob);
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
   }, [user?.id]);
 
-  const isMine = (j: GraphicsJob) => j.assigned_to === user?.id || myAssignedIds.has(j.id);
+  /** A person's display name, for the assignee column, picker and sort. */
+  const personName = (id: string) => {
+    const p = profiles.find(pr => pr.id === id);
+    return p?.full_name || p?.email || 'Unknown user';
+  };
+
+  /** Everyone on a job — the picker's assignments plus the job's own owner. */
+  const assigneesOf = (j: GraphicsJob): string[] =>
+    [...new Set([j.assigned_to, ...(assigneesByJob[j.id] || [])].filter(Boolean) as string[])];
+  const isAssignedTo = (j: GraphicsJob, userId: string) => assigneesOf(j).includes(userId);
+  const isMine = (j: GraphicsJob) => !!user?.id && isAssignedTo(j, user.id);
   const [search, setSearch] = useState('');
   // Deep link: ?q=<term> (universal search "View all") prefills the board search.
   useEffect(() => {
@@ -273,6 +297,14 @@ export default function GraphicsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- loadJobs is stable per mount
   }, [user]);
 
+  // ?mine=1 — the reminder digest's link (deepLinks.graphicsBoard({ mine }))
+  // opens the board already on My Jobs, so the notification lands on the
+  // list it was talking about rather than on the whole board.
+  useEffect(() => {
+    if (searchParams.get('mine') === '1') setMyJobsOnly(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: follow the param on each URL change
+  }, [searchParams]);
+
   // Legacy deep links (?editJob=<id> from mention notifications, ?id=<id>
   // from bell/new-job notifications) used to expand a card here — the
   // record page owns per-job viewing/editing now, so forward them there.
@@ -289,6 +321,9 @@ export default function GraphicsPage() {
     if (loading) return;
     const invoiceJobId = searchParams.get('invoiceJob');
     if (!invoiceJobId) return;
+    // The bell notification that carries this link is money-gated too, but a
+    // forwarded URL isn't — so the prompt checks rather than trusting it.
+    if (!canSeeMoney) return;
     if (invoicePromptHandled.current.has(invoiceJobId)) return;
     invoicePromptHandled.current.add(invoiceJobId);
     router.replace('/graphics', { scroll: false });
@@ -850,22 +885,28 @@ export default function GraphicsPage() {
       : 0,
   };
 
+  // ── Work order (migration 318) ──
+  // Ranks are stored as a contiguous 1..N block, but a job finishing between
+  // reorders leaves a hole, so the board numbers by POSITION among the ranked
+  // jobs it can actually see — nobody should open the board to a list that
+  // starts at #4.
+  const rankPosition = workOrderPositions(jobs);
+
   // Filter jobs
   const filteredJobs = jobs.filter(j => {
     // Flagged jobs only visible to admins
     if (j.status === 'flagged' && !isAdmin) return false;
     // My-jobs filter: assigned directly or via the assignment picker
     if (myJobsOnly && !isMine(j)) return false;
+    // Admin assignee picker — one person's board, or the unowned pile.
+    if (assigneeFilter === 'unassigned' && assigneesOf(j).length > 0) return false;
+    if (assigneeFilter && assigneeFilter !== 'unassigned' && !isAssignedTo(j, assigneeFilter)) return false;
     // Category filter
     if (filterCategory !== 'all' && (j.job_category || 'production') !== filterCategory) return false;
     // Metric tile filter (overdue / due this week / stuck)
     if (metricFilter && !metricPredicates[metricFilter](j)) return false;
-    // Status filter
-    if (filterStatus === 'active') {
-      if (!ACTIVE_STATUSES.includes(j.status)) return false;
-    } else if (filterStatus !== 'all') {
-      if (j.status !== filterStatus) return false;
-    }
+    // Status filter (Active / All tabs + the popover's per-status select)
+    if (!inStatusScope(j.status, filterStatus)) return false;
     if (search) {
       const s = search.toLowerCase();
       return (
@@ -881,20 +922,57 @@ export default function GraphicsPage() {
   });
 
   // Sort — click-to-sort table headers (SortableTh). Missing values (no due
-  // date, no PO) sort last in either direction. Default: due date ascending.
-  const { sorted, sort, toggle } = useTableSort(filteredJobs, {
+  // date, no PO, no rank) sort last in either direction.
+  //
+  // The default is the work order: ranked jobs in the admin's order, then
+  // everything else by due date ascending — which is exactly what the board
+  // did before ranking existed. Pre-sorting by due date and letting the rank
+  // sort (which pushes unranked nulls last, and is stable) run on top is what
+  // preserves that due order in the unranked tail.
+  const dueOrdered = [...filteredJobs].sort(compareByDueDate);
+  const { sorted, sort, toggle } = useTableSort(dueOrdered, {
+    rank: j => rankPosition.get(j.id) ?? null,
     title: j => j.title?.toLowerCase() || null,
     customer: j => j.customer?.toLowerCase() || null,
+    // Unassigned sorts last in either direction, like every other blank.
+    assignee: j => assigneesOf(j).map(personName).sort()[0]?.toLowerCase() || null,
     po: j => j.po_number || null,
     qty: j => j.quantity,
     priority: j => PRIORITY_RANK[j.priority] ?? 1,
     due: j => j.due_date ? j.due_date.slice(0, 10) : null,
     status: j => GRAPHICS_STATUS_ORDER.indexOf(j.status),
-  }, { key: 'due', dir: 'asc' });
+  }, { key: 'rank', dir: 'asc' });
 
   // Tab counts (hide flagged from non-admins)
   const visibleJobs = isAdmin ? jobs : jobs.filter(j => j.status !== 'flagged');
-  const activeCount = visibleJobs.filter(j => ACTIVE_STATUSES.includes(j.status)).length;
+  const activeCount = visibleJobs.filter(j => GRAPHICS_ACTIVE_STATUSES.includes(j.status)).length;
+  // Scoped to the status showing, or the tab lies: an unscoped count read
+  // "My Jobs (23)" over a table of 6, the other 17 being jobs that shipped
+  // and stayed assigned. A tab's number is a promise about its own rows.
+  const myJobCount = visibleJobs.filter(j => isMine(j) && inStatusScope(j.status, filterStatus)).length;
+
+  // The assignee dropdown lists people who actually hold jobs on this board,
+  // with counts, rather than every approved account — a picker full of names
+  // with (0) beside them is a list you have to read to dismiss.
+  const assigneeOptions = (() => {
+    const inScope = visibleJobs.filter(j => inStatusScope(j.status, filterStatus));
+    const counts = new Map<string, number>();
+    let unassigned = 0;
+    for (const j of inScope) {
+      const ids = assigneesOf(j);
+      if (ids.length === 0) { unassigned++; continue; }
+      for (const id of ids) counts.set(id, (counts.get(id) || 0) + 1);
+    }
+    const people = [...counts.entries()]
+      .map(([id, count]) => ({ id, label: personName(id), count }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    // A filter set to someone who has since dropped off the board would
+    // otherwise vanish from the dropdown while still filtering the table.
+    if (assigneeFilter && assigneeFilter !== 'unassigned' && !counts.has(assigneeFilter)) {
+      people.push({ id: assigneeFilter, label: personName(assigneeFilter), count: 0 });
+    }
+    return { people, unassigned };
+  })();
 
   const priorityColor = (p: string) => {
     switch (p) {
@@ -962,13 +1040,39 @@ export default function GraphicsPage() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
         <div style={{ fontSize: '22px', fontWeight: 800 }}>Graphics Production</div>
-        <button
-          onClick={() => setShowCreate(true)}
-          style={{ padding: '8px 14px', borderRadius: '10px', background: theme.orange, color: '#fff', fontWeight: 800, fontSize: '12px', border: 'none', cursor: 'pointer', boxShadow: '0 2px 8px rgba(238,49,32,0.3)' }}
-        >
-          + New Job
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {/* Admin-only: the running order the board sorts by. Everyone else
+              reads it in the "#" column. */}
+          {isAdmin && (
+            <button
+              onClick={() => setShowWorkOrder(true)}
+              title="Set what gets worked first"
+              style={{ padding: '8px 12px', borderRadius: '10px', background: 'var(--subtle-bg)', color: 'var(--text-secondary)', fontWeight: 800, fontSize: '12px', border: '1px solid var(--border)', cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              ⇅ Work Order{rankPosition.size > 0 ? ` (${rankPosition.size})` : ''}
+            </button>
+          )}
+          <button
+            onClick={() => setShowCreate(true)}
+            style={{ padding: '8px 14px', borderRadius: '10px', background: theme.orange, color: '#fff', fontWeight: 800, fontSize: '12px', border: 'none', cursor: 'pointer', boxShadow: '0 2px 8px rgba(238,49,32,0.3)' }}
+          >
+            + New Job
+          </button>
+        </div>
       </div>
+
+      {showWorkOrder && (
+        <GraphicsWorkOrderModal
+          jobs={jobs}
+          profiles={profiles}
+          onClose={changed => {
+            setShowWorkOrder(false);
+            // Reload so the "#" column and the board order reflect the new
+            // list — the modal wrote ranks straight to the server.
+            if (changed) loadJobs();
+          }}
+        />
+      )}
 
       {/* Awaiting Graphics queue — fleet_checkins flagged by the keyword
           scan at save time. Click an entry to open the create modal
@@ -1088,27 +1192,42 @@ export default function GraphicsPage() {
         </div>
       )}
 
-      {/* Toolbar: Active/All tabs + search + Filter popover */}
+      {/* Toolbar: Active / My Jobs / All tabs + search + Filter popover.
+          "My Jobs" used to be a chip buried in the Filter popover, where the
+          people it was built for never found it — it's a tab now. */}
       <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
         <button
-          onClick={() => { setFilterStatus('active'); setMetricFilter(null); }}
+          onClick={() => { setFilterStatus('active'); setMyJobsOnly(false); setMetricFilter(null); }}
           style={{
             padding: '7px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-            background: filterStatus === 'active' ? 'rgba(34,197,94,0.15)' : 'var(--subtle-bg)',
-            border: `1px solid ${filterStatus === 'active' ? 'rgba(34,197,94,0.5)' : 'var(--border)'}`,
-            color: filterStatus === 'active' ? '#22c55e' : 'var(--text-label)',
+            background: !myJobsOnly && filterStatus === 'active' ? 'rgba(34,197,94,0.15)' : 'var(--subtle-bg)',
+            border: `1px solid ${!myJobsOnly && filterStatus === 'active' ? 'rgba(34,197,94,0.5)' : 'var(--border)'}`,
+            color: !myJobsOnly && filterStatus === 'active' ? '#22c55e' : 'var(--text-label)',
             whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
           }}
         >
           Active ({activeCount})
         </button>
         <button
-          onClick={() => { setFilterStatus('all'); setMetricFilter(null); }}
+          onClick={() => { setMyJobsOnly(v => !v); setMetricFilter(null); }}
+          title="Only jobs assigned to you — directly or through the assignment picker"
           style={{
             padding: '7px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-            background: filterStatus === 'all' ? 'rgba(59,130,246,0.2)' : 'var(--subtle-bg)',
-            border: `1px solid ${filterStatus === 'all' ? 'rgba(59,130,246,0.4)' : 'var(--border)'}`,
-            color: filterStatus === 'all' ? '#60a5fa' : 'var(--text-label)',
+            background: myJobsOnly ? 'rgba(234,179,8,0.18)' : 'var(--subtle-bg)',
+            border: `1px solid ${myJobsOnly ? 'rgba(234,179,8,0.55)' : 'var(--border)'}`,
+            color: myJobsOnly ? '#eab308' : 'var(--text-label)',
+            whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
+          }}
+        >
+          ★ My Jobs ({myJobCount})
+        </button>
+        <button
+          onClick={() => { setFilterStatus('all'); setMyJobsOnly(false); setMetricFilter(null); }}
+          style={{
+            padding: '7px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+            background: !myJobsOnly && filterStatus === 'all' ? 'rgba(59,130,246,0.2)' : 'var(--subtle-bg)',
+            border: `1px solid ${!myJobsOnly && filterStatus === 'all' ? 'rgba(59,130,246,0.4)' : 'var(--border)'}`,
+            color: !myJobsOnly && filterStatus === 'all' ? '#60a5fa' : 'var(--text-label)',
             whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
           }}
         >
@@ -1124,10 +1243,11 @@ export default function GraphicsPage() {
           }}
         />
         <FilterButton
-          activeCount={(filterCategory !== 'all' ? 1 : 0) + (statusSelectActive ? 1 : 0) + (myJobsOnly ? 1 : 0) + (showArchived ? 1 : 0)}
+          activeCount={(filterCategory !== 'all' ? 1 : 0) + (statusSelectActive ? 1 : 0) + (myJobsOnly ? 1 : 0) + (assigneeFilter ? 1 : 0) + (showArchived ? 1 : 0)}
           onClear={() => {
             setFilterCategory('all');
             setMyJobsOnly(false);
+            setAssigneeFilter('');
             setFilterStatus('active');
             if (showArchived) { setShowArchived(false); loadJobs(false); }
           }}
@@ -1174,21 +1294,26 @@ export default function GraphicsPage() {
               <option key={s} value={s}>{GRAPHICS_STATUS_LABELS[s]}</option>
             ))}
           </select>
+          {/* Admin-only: whose board is this? Everyone else has My Jobs. */}
+          {isAdmin && (
+            <>
+              <FilterLabel>Assignee</FilterLabel>
+              <select
+                value={assigneeFilter}
+                onChange={e => { setAssigneeFilter(e.target.value); setMetricFilter(null); }}
+                style={{ ...inputStyle, marginBottom: '10px' }}
+              >
+                <option value="">Anyone</option>
+                <option value="unassigned">— Unassigned ({assigneeOptions.unassigned}) —</option>
+                {assigneeOptions.people.map(p => (
+                  <option key={p.id} value={p.id}>{p.label} ({p.count})</option>
+                ))}
+              </select>
+            </>
+          )}
+
           <FilterLabel>Other</FilterLabel>
           <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-            <button
-              onClick={() => setMyJobsOnly(v => !v)}
-              title="Only jobs assigned to you"
-              style={{
-                padding: '4px 9px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
-                background: myJobsOnly ? 'rgba(34,197,94,0.18)' : 'var(--subtle-bg)',
-                border: `1px solid ${myJobsOnly ? 'rgba(34,197,94,0.5)' : 'var(--border)'}`,
-                color: myJobsOnly ? '#22c55e' : 'var(--text-muted)',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              ★ My Jobs ({jobs.filter(j => (isAdmin || j.status !== 'flagged') && isMine(j)).length})
-            </button>
             <button
               onClick={toggleArchived}
               title={showArchived ? 'Hide installed & cancelled jobs' : 'Show installed & cancelled (archived) jobs'}
@@ -1227,10 +1352,12 @@ export default function GraphicsPage() {
         return (
           <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
             <div className="responsive-table">
-              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '820px' }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '960px' }}>
                 <thead><tr>
+                  <SortableTh label="#" sortKey="rank" sort={sort} onToggle={toggle} style={{ ...thStyle, width: '44px' }} />
                   <SortableTh label="Title" sortKey="title" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="Customer" sortKey="customer" sort={sort} onToggle={toggle} style={thStyle} />
+                  <SortableTh label="Assignee" sortKey="assignee" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="PO #" sortKey="po" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="Qty" sortKey="qty" sort={sort} onToggle={toggle} align="right" style={thStyle} />
                   <SortableTh label="Priority" sortKey="priority" sort={sort} onToggle={toggle} defaultDir="desc" style={thStyle} />
@@ -1246,7 +1373,7 @@ export default function GraphicsPage() {
                     // unread. Cleared when the record page stamps a view.
                     const myView = (jobViews[job.id] || []).find(v => v.user_id === user?.id);
                     const hasNew = !myView || new Date(job.updated_at).getTime() > new Date(myView.last_viewed_at).getTime();
-                    const overdue = !!job.due_date && job.due_date.slice(0, 10) < todayStr && !DONE_STATUSES.includes(job.status);
+                    const overdue = !!job.due_date && job.due_date.slice(0, 10) < todayStr && !isFinishedStatus(job.status);
                     // Flags: stuck-in-stage, proof aging, invoice, tracking
                     const flags: React.ReactNode[] = [];
                     if (PRODUCTION_STAGES.includes(job.status)) {
@@ -1287,7 +1414,9 @@ export default function GraphicsPage() {
                         >🔁 {rc.text}</span>
                       );
                     }
-                    if (job.netsuite_invoice_number) {
+                    // An invoice number is a billing fact, so it follows the
+                    // money rule with the amount it refers to.
+                    if (job.netsuite_invoice_number && canSeeMoney) {
                       flags.push(
                         <span key="inv" style={{ fontSize: '10px', fontWeight: 700, color: '#22c55e', whiteSpace: 'nowrap' }}>
                           INV {job.netsuite_invoice_number}
@@ -1332,6 +1461,19 @@ export default function GraphicsPage() {
                         onClick={() => router.push(`/graphics/${job.id}`)}
                         title={job.notes ? (job.notes.length > 120 ? job.notes.slice(0, 120) + '...' : job.notes) : undefined}
                       >
+                        <td style={{ ...tdStyle, fontVariantNumeric: 'tabular-nums' }}>
+                          {rankPosition.has(job.id)
+                            ? (
+                              <span
+                                title={`#${rankPosition.get(job.id)} in the work order${isAdmin ? ' — change it with ⇅ Work Order' : ''}`}
+                                style={{
+                                  fontSize: '11px', fontWeight: 800,
+                                  color: rankPosition.get(job.id) === 1 ? '#22c55e' : 'var(--text-secondary)',
+                                }}
+                              >#{rankPosition.get(job.id)}</span>
+                            )
+                            : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        </td>
                         <td style={{ ...tdStyle, maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           {hasNew && (
                             <span title="New activity since you last viewed this job" style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#ef4444', flexShrink: 0, marginRight: '6px', verticalAlign: '1px' }} />
@@ -1350,6 +1492,18 @@ export default function GraphicsPage() {
                         </td>
                         <td style={{ ...tdStyle, maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           {job.customer || <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        </td>
+                        <td style={{ ...tdStyle, maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {(() => {
+                            const ids = assigneesOf(job);
+                            if (ids.length === 0) return <span style={{ color: 'var(--text-muted)' }}>Unassigned</span>;
+                            const names = ids.map(personName).sort();
+                            return (
+                              <span title={names.join(', ')} style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
+                                {names[0]}{names.length > 1 ? ` +${names.length - 1}` : ''}
+                              </span>
+                            );
+                          })()}
                         </td>
                         <td style={tdStyle}>
                           {job.po_number
@@ -1865,7 +2019,7 @@ export default function GraphicsPage() {
 
       {/* Invoice review modal — reached only via the ?invoiceJob= deep link
           (the record page owns the on-page Review & Invoice button). */}
-      {invoiceJob && (
+      {invoiceJob && canSeeMoney && (
         <GraphicsInvoiceReviewModal
           job={invoiceJob}
           onClose={() => setInvoiceJob(null)}
@@ -1912,7 +2066,7 @@ export default function GraphicsPage() {
         />
       )}
 
-      {emailInvoiceTarget && (
+      {emailInvoiceTarget && canSeeMoney && (
         <EmailInvoicesModal
           customerName={emailInvoiceTarget.customerName}
           invoices={emailInvoiceTarget.invoices}

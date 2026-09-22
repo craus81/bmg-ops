@@ -27,7 +27,7 @@ export default function CniCompaniesPage() {
   const [companies, setCompanies] = useState<CniCompany[]>([]);
   const [loading, setLoading] = useState(true);
   // R5-12: computed 90-day scorecards per company for the record cards.
-  const [scorecards, setScorecards] = useState<Record<string, { jobsCompleted: number; onTimeRate: number | null; photoFirstPassRate: number | null; vehiclesCompleted: number }>>({});
+  const [scorecards, setScorecards] = useState<Record<string, { jobsCompleted: number; onTimeRate: number | null; vehiclesCompleted: number }>>({});
   useEffect(() => {
     if (authLoading || !hasFeature('cni_admin')) return;
     fetch('/api/cni/scorecards')
@@ -288,7 +288,6 @@ export default function CniCompaniesPage() {
                   <span title="Computed from job history — last 90 days" style={{ color: 'var(--success)', fontWeight: 700 }}>
                     ⚡ {scorecards[c.id].jobsCompleted} job{scorecards[c.id].jobsCompleted !== 1 ? 's' : ''}
                     {scorecards[c.id].onTimeRate != null ? ` · ${scorecards[c.id].onTimeRate}% on time` : ''}
-                    {scorecards[c.id].photoFirstPassRate != null ? ` · ${scorecards[c.id].photoFirstPassRate}% photo pass` : ''}
                   </span>
                 )}
                 <span>NetSuite vendor: {c.netsuite_vendor_id || '—'}</span>

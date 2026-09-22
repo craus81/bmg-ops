@@ -12,7 +12,9 @@
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { useAuth } from '@/components/AuthProvider';
 import { deepLinks } from '@/lib/deep-links';
+import { buildRecent, pushRecent } from '@/lib/command-palette';
 import { estimateHeadlineNumber, estimateAltNumber } from '@/lib/estimate-number';
 
 export type PopoutType =
@@ -157,7 +159,10 @@ function detailRow(label: string, value: any) {
   );
 }
 
-export function renderDetail(type: PopoutType, item: any) {
+// `showMoney` is threaded in rather than read from a hook: renderDetail is a
+// plain function, and the popout is the shared detail view for POs, estimates,
+// parts and quotes alike — one ungated total here undoes every other gate.
+export function renderDetail(type: PopoutType, item: any, showMoney = false) {
   switch (type) {
     case 'invoices':
       return (
@@ -195,7 +200,7 @@ export function renderDetail(type: PopoutType, item: any) {
                     {l.description && <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>{l.description}</div>}
                   </div>
                   <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    <div style={{ fontSize: '11px', color: 'var(--text-body)' }}>{l.quantity} × {formatCurrency(l.unit_price)}</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-body)' }}>{l.quantity}{showMoney ? ` × ${formatCurrency(l.unit_price)}` : ''}</div>
                     <div style={{ fontSize: '10px', fontWeight: 700, color: doneColor(l.installed || 0, l.quantity || 0) }}>{l.installed || 0} of {l.quantity || 0} done</div>
                   </div>
                 </div>
@@ -212,7 +217,7 @@ export function renderDetail(type: PopoutType, item: any) {
               {total > 0 && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0 0' }}>
                   <span style={{ fontSize: '12px', color: 'var(--text-label)', fontWeight: 800 }}>TOTAL</span>
-                  <span style={{ fontSize: '14px', color: '#60a5fa', fontWeight: 800 }}>{formatCurrency(total)}</span>
+                  <span style={{ fontSize: '14px', color: '#60a5fa', fontWeight: 800 }}>{showMoney ? formatCurrency(total) : '—'}</span>
                 </div>
               )}
             </div>
@@ -225,7 +230,7 @@ export function renderDetail(type: PopoutType, item: any) {
         <div>
           {detailRow('Part #', item.part_number)}
           {detailRow('Name', item.display_name)}
-          {detailRow('Price', item.price > 0 ? formatCurrency(item.price) : null)}
+          {showMoney && detailRow('Price', item.price > 0 ? formatCurrency(item.price) : null)}
           {detailRow('Customer', item.end_customer)}
           {detailRow('Vehicle', item.vehicle_type)}
           {detailRow('Package', item.graphic_package)}
@@ -260,7 +265,7 @@ export function renderDetail(type: PopoutType, item: any) {
           {detailRow('FleetSuite #', estimateAltNumber(item))}
           {detailRow('Title', item.title)}
           {detailRow('Status', item.status)}
-          {detailRow('Total', item.total > 0 ? formatCurrency(item.total) : null)}
+          {showMoney && detailRow('Total', item.total > 0 ? formatCurrency(item.total) : null)}
         </div>
       );
     case 'customers':
@@ -287,7 +292,7 @@ export function renderDetail(type: PopoutType, item: any) {
           {detailRow('Customer', item.customer_name)}
           {detailRow('Vehicle', item.vehicle_description)}
           {detailRow('Status', item.status)}
-          {detailRow('Total', item.total_price > 0 ? formatCurrency(item.total_price) : null)}
+          {showMoney && detailRow('Total', item.total_price > 0 ? formatCurrency(item.total_price) : null)}
         </div>
       );
     default:
@@ -310,6 +315,7 @@ export function usePopout() {
 
 export function PopoutProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
+  const { canSeeMoney } = useAuth();
   const [supabase] = useState(() => createClient());
   const [state, setState] = useState<PopoutState | null>(null);
 
@@ -356,12 +362,20 @@ export function PopoutProvider({ children }: { children: ReactNode }) {
               {!state.loading && !state.item && (
                 <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-label)', fontSize: '13px' }}>Not found.</div>
               )}
-              {!state.loading && state.item && renderDetail(state.type, state.item)}
+              {!state.loading && state.item && renderDetail(state.type, state.item, canSeeMoney)}
             </div>
             {!state.loading && state.item && (
               <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
                 <button
-                  onClick={() => { const p = pathFor(state.type, state.item); close(); router.push(p); }}
+                  onClick={() => {
+                    const p = pathFor(state.type, state.item);
+                    // Feeds the command palette's recents strip (R6-13), so
+                    // records opened from a list or card show up there too and
+                    // not only the ones found through search.
+                    pushRecent(buildRecent(state.type, state.item, p));
+                    close();
+                    router.push(p);
+                  }}
                   style={{ width: '100%', padding: '12px', borderRadius: '10px', background: '#60a5fa', color: '#fff', fontSize: '13px', fontWeight: 800, border: 'none', cursor: 'pointer' }}
                 >
                   Open full page →

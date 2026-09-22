@@ -3,10 +3,10 @@ import type { CapacitorConfig } from '@capacitor/cli';
 const config: CapacitorConfig = {
   appId: 'com.bmgfleet.fleetsuite',
   appName: 'BMG FleetSuite',
-  // Load from the live Vercel deployment — updates deploy instantly
+  // Load from the live production site — updates deploy instantly
   // without app store submissions
   server: {
-    url: 'https://bmg-ops.vercel.app',
+    url: 'https://go.bmgfleet.com',
     cleartext: false,
   },
   // Native plugin configuration

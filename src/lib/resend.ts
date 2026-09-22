@@ -320,6 +320,10 @@ export function buildCustomerDigestEmail(
   customerName: string,
   sections: { title: string; rows: string[] }[],
   footerNote?: string,
+  /** The compose screen's personal message and the sender's signature —
+   *  the digest is staff-sent now, so it carries both like every other
+   *  composed email. `footerNote` stays the fine print under the card. */
+  opts?: { note?: string; signature?: EmailSignature | string | null },
 ): string {
   const sectionHtml = sections
     .filter(s => s.rows.length > 0)
@@ -339,11 +343,15 @@ export function buildCustomerDigestEmail(
     <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:28px;">
       <div style="font-size:11px;font-weight:800;color:#ee3120;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px;">BMG Fleet</div>
       <div style="font-size:19px;font-weight:800;color:#111827;">Your weekly vehicle update</div>
-      <div style="font-size:13px;color:#6b7280;margin-top:2px;">${escapeHtml(customerName)} · ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</div>
+      <div style="font-size:13px;color:#6b7280;margin-top:2px;">${escapeHtml(customerName)} · ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</div>${
+        opts?.note?.trim()
+          ? `
+      <div style="margin-top:16px;font-size:13px;color:#374151;line-height:1.6;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px;">${escapeHtml(opts.note.trim()).replace(/\n/g, '<br>')}</div>`
+          : ''}
       ${sectionHtml}
       <div style="margin-top:20px;font-size:12px;color:#6b7280;line-height:1.5;">
         Questions about any vehicle? Just reply to this email.
-      </div>
+      </div>${renderSignatureHtml(opts?.signature, 'light')}
     </div>
     <div style="text-align:center;padding:14px;font-size:11px;color:#9ca3af;">
       ${escapeHtml(footerNote || "Don't want these weekly summaries? Reply and we'll turn them off.")}
@@ -444,7 +452,7 @@ export function buildInvoiceEmail(customerName: string, invoiceNumbers: string[]
       </div>
       <div style="padding:24px;">
         <div style="font-size:16px;font-weight:800;color:#f5f8fc;margin-bottom:12px;">
-          ${invoiceNumbers.length === 1 ? 'Invoice' : 'Invoices'} for ${escapeHtml(customerName)}
+          ${invoiceNumbers.length === 1 ? 'Invoice' : 'Invoices'}${customerName.trim() ? ` for ${escapeHtml(customerName.trim())}` : ''}
         </div>
         <div style="font-size:14px;color:#8899aa;line-height:1.6;margin-bottom:16px;">
           ${bodyHtml}

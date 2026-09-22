@@ -66,8 +66,15 @@ function num(v: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** Normalize NetSuite dates ('YYYY-MM-DD' or 'M/D/YYYY') to ISO, else null. */
-function isoDate(d: unknown): string | null {
+/**
+ * Normalize NetSuite dates ('YYYY-MM-DD' or 'M/D/YYYY') to ISO, else null.
+ *
+ * Exported because the ledger's NetSuite mirror (src/lib/ledger/netsuite-mirror.ts)
+ * writes `doc_date`/`due_date` from the same SuiteQL columns these aging reads
+ * parse, and a second copy of this parser is how the mirror and the Financials
+ * tab would quietly disagree about what '3/4/2026' means.
+ */
+export function isoDate(d: unknown): string | null {
   if (!d) return null;
   const s = String(d);
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;

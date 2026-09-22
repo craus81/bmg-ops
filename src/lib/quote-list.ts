@@ -14,6 +14,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from './fetch-all';
 import { estimateHeadlineNumber, estimateAltNumber } from './estimate-number';
+import { expiryState, type ExpiryState } from './quote-expiry';
+import { summarizeViews, type ViewSummary } from './quote-views';
 
 export type QuoteListStatus = 'working' | 'sent' | 'won' | 'lost' | 'all';
 
@@ -52,6 +54,20 @@ export interface QuoteListItem {
   followups: QuoteFollowUpNote[];
   /** Earliest pending (undelivered, future-or-today) reminder date, if any. */
   nextReminderAt: string | null;
+  /** When the customer's approval link stops working (R6-9). The TOKEN
+   *  expiry is the quote's expiry — it is the date in their email and the
+   *  moment Accept stops working. The token itself is never exposed here:
+   *  it is a credential, stripped from every estimate GET for that reason. */
+  expiresAt: string | null;
+  /** no_link when nothing was ever sent for approval — never 'expired'. */
+  expiryState: ExpiryState;
+  /** Approval-page opens (R6-9), people and machines counted apart. Loaded
+   *  for sent quotes only — that is where a rep reads it. */
+  views: ViewSummary;
+  /** Was this quote sent while the app was recording opens? False means
+   *  zero views is UNKNOWN, not "nobody looked" — the UI must not claim
+   *  "never opened" about a quote nothing was watching. */
+  viewsTracked: boolean;
 }
 
 // The "working" group is everything not yet in front of the customer:
@@ -78,14 +94,14 @@ export async function loadQuoteListItems(
   const estQuery = () => {
     let q = service
       .from('estimates')
-      .select('id, estimate_number, netsuite_estimate_number, title, customer_name, grand_total, status, created_by, created_at, sent_for_approval_at, updated_at, last_followup_at, customer_approved_at');
+      .select('id, estimate_number, netsuite_estimate_number, title, customer_name, grand_total, status, created_by, created_at, sent_for_approval_at, updated_at, last_followup_at, customer_approved_at, approval_token_expires_at');
     if (status !== 'all') q = q.in('status', EST_STATUSES[status]);
     return q.order('created_at', { ascending: false }).order('id');
   };
   const wrapQuery = () => {
     let q = service
       .from('wrap_quotes')
-      .select('id, quote_number, vehicle_description, customer, total, status, created_by, created_at, sent_at, last_followup_at, accepted_at, rejected_at')
+      .select('id, quote_number, vehicle_description, customer, total, status, created_by, created_at, sent_at, last_followup_at, accepted_at, rejected_at, approval_token_expires_at')
       .is('archived_at', null);
     if (status !== 'all') q = q.in('status', WRAP_STATUSES[status]);
     return q.order('created_at', { ascending: false }).order('id');
@@ -118,6 +134,10 @@ export async function loadQuoteListItems(
       lastFollowupAt: e.last_followup_at,
       followups: [] as QuoteFollowUpNote[],
       nextReminderAt: null,
+      expiresAt: e.approval_token_expires_at || null,
+      expiryState: expiryState(e.approval_token_expires_at),
+      views: { humanCount: 0, firstHumanAt: null, lastHumanAt: null, machineCount: 0 } as ViewSummary,
+      viewsTracked: false,
     })),
     ...(wrapRes.data || []).map((w: any) => ({
       type: 'wrap' as const,
@@ -136,6 +156,10 @@ export async function loadQuoteListItems(
       lastFollowupAt: w.last_followup_at,
       followups: [] as QuoteFollowUpNote[],
       nextReminderAt: null,
+      expiresAt: w.approval_token_expires_at || null,
+      expiryState: expiryState(w.approval_token_expires_at),
+      views: { humanCount: 0, firstHumanAt: null, lastHumanAt: null, machineCount: 0 } as ViewSummary,
+      viewsTracked: false,
     })),
   ];
 
@@ -170,6 +194,51 @@ export async function loadQuoteListItems(
       if (r.remind_at && !r.reminder_sent_at && r.remind_at >= today) {
         if (!item.nextReminderAt || r.remind_at < item.nextReminderAt) item.nextReminderAt = r.remind_at;
       }
+    }
+  }
+
+  // Approval-page opens for the sent quotes (R6-9). Best-effort: a list that
+  // will not render because migration 302 has not applied yet would be a
+  // worse trade than a list with no view chips.
+  if (sentItems.length > 0) {
+    try {
+      const { data: settings } = await service
+        .from('quote_settings').select('view_tracking_started_at').eq('id', 1).maybeSingle();
+      const startedAt = (settings as any)?.view_tracking_started_at
+        ? Date.parse((settings as any).view_tracking_started_at)
+        : NaN;
+
+      const ids = sentItems.map(i => i.id);
+      const byQuote = new Map<string, any[]>();
+      // Chunked: `.in()` rides in the URL, and a shop with hundreds of sent
+      // quotes would build a query string long enough to be rejected.
+      for (let i = 0; i < ids.length; i += 200) {
+        const slice = ids.slice(i, i + 200);
+        const { data: viewRows } = await fetchAllRows<any>((from, to) =>
+          service
+            .from('quote_views')
+            .select('quote_type, quote_id, viewed_at, viewer_kind')
+            .in('quote_id', slice)
+            .order('viewed_at', { ascending: false })
+            .order('id')
+            .range(from, to),
+        );
+        for (const v of viewRows || []) {
+          const k = `${v.quote_type}-${v.quote_id}`;
+          const arr = byQuote.get(k) || [];
+          arr.push(v);
+          byQuote.set(k, arr);
+        }
+      }
+      for (const [k, item] of byKey) {
+        item.views = summarizeViews(byQuote.get(k) || []);
+        const sent = item.sentAt ? Date.parse(item.sentAt) : NaN;
+        item.viewsTracked = !Number.isNaN(startedAt) && !Number.isNaN(sent) && sent >= startedAt;
+      }
+    } catch {
+      // Leave every summary empty and viewsTracked false — with no data the
+      // honest reading is "we do not know", which is exactly what the false
+      // flag makes the UI say.
     }
   }
 

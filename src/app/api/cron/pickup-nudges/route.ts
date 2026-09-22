@@ -3,8 +3,6 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { loadReadyForPickup, decideNudges } from '@/lib/ready-pickup';
 import { loadBookingSettings } from '@/lib/booking';
-import { notifyCustomerByName } from '@/lib/customer-notify';
-import { buildNotificationEmail } from '@/lib/resend';
 import { notify, notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
@@ -19,12 +17,17 @@ const service = createClient(
 
 /**
  * Daily ready-for-pickup sweep (R5-17 part 2). Vehicles complete N+ days
- * with no booked pickup get an automated customer reminder carrying the
- * booking link — weekly repeats, and these ARE automated sends, so the
- * customer's notify_status_emails opt-in gates them (unlike the booking
- * confirmation, which answers the customer's own action). At 2N days the
- * sales rep (source estimate's creator, else the admins) hears about it
- * once. Quiet when nothing qualifies.
+ * with no booked pickup need chasing: the customer has to book a slot or
+ * the van just sits in the lot.
+ *
+ * THIS CRON DOES NOT EMAIL CUSTOMERS. It used to send the reminder itself,
+ * weekly, with the booking link. Owner decision 2026-09-14: every
+ * customer-facing send is a person's decision, so the same weekly policy
+ * now decides when to PROMPT the rep (or the admins) — they send it from
+ * the vehicle's Email Customer button, and that send stamps the same nudge
+ * columns, so pressing it buys the customer the same week of quiet the
+ * automatic one did. At 2N days the second, louder alert still fires.
+ * Quiet when nothing qualifies.
  */
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get('authorization');
@@ -41,30 +44,45 @@ export async function GET(req: NextRequest) {
       loadBookingSettings(service),
     ]);
     const plan = decideNudges(vehicles, settings.nudgeDays, Date.now());
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
 
+    // Vehicles with no sales rep fall back to the admins so nothing goes
+    // unwatched. Loaded once and shared by both passes.
+    let adminIdsCache: string[] | null = null;
+    const adminIds = async (): Promise<string[]> => {
+      if (adminIdsCache) return adminIdsCache;
+      const { data: admins } = await service
+        .from('profiles').select('id')
+        .or('role.in.(admin,super_admin),roles.cs.{admin},roles.cs.{super_admin}')
+        .eq('status', 'approved');
+      adminIdsCache = (admins || []).map((p: any) => p.id);
+      return adminIdsCache;
+    };
+
+    // Prompt, don't send — and stamp, because pickup_nudge_sent_at is the
+    // repeat clock decideNudges reads. Without a stamp every unbooked
+    // vehicle would prompt EVERY DAY instead of weekly, which is how a rep
+    // learns to ignore the whole notification type. The stamp now means
+    // "last chased, by a prompt or a send"; pickup_nudge_count still counts
+    // only what the customer actually received, and only the staff send in
+    // /api/vehicle-tracking/notify-customer increments it.
     let nudged = 0;
-    let optedOut = 0;
     for (const v of plan.nudges) {
-      if (!v.customerName || !v.portalToken) continue;
-      const bookUrl = `${appUrl}/book/${v.portalToken}`;
-      const bodyText = `Your ${v.label} has been ready for pickup for ${v.daysReady} day${v.daysReady !== 1 ? 's' : ''}. Book a time that works and we'll have it waiting.`;
-      const result = await notifyCustomerByName(service, v.customerName, {
-        contextEntityType: 'fleet_checkin',
-        contextEntityId: v.id,
-        threadSubject: `${v.label} ready for pickup`,
-        emailSubject: `[BMG Fleet] Reminder — your ${v.label} is ready for pickup`,
-        emailHtml: buildNotificationEmail(`Your ${v.label} is ready`, bodyText, bookUrl, 'Book your pickup time'),
-        messageBody: bodyText,
-        smsBody: `[BMG Fleet] Reminder: your ${v.label} is ready for pickup. Book a time: ${bookUrl}`,
-      }).catch(e => { console.error('pickup nudge failed:', v.id, e); return null; });
-      if (result?.skipped === 'opted_out') { optedOut++; continue; }
-      if (!result || (!result.emailed && !result.smsSent)) continue; // nothing reached them — don't stamp
+      if (!v.customerName) continue;
+      const waited = `ready for ${v.daysReady} day${v.daysReady !== 1 ? 's' : ''}`;
+      const targets = v.salesRepId ? [v.salesRepId] : await adminIds();
+      if (targets.length === 0) continue;
+      await notifyMany(targets, {
+        type: 'booking',
+        title: `Remind ${v.customerName}: ${v.label}`,
+        body: `${v.label} has been ${waited} with no pickup booked, and nothing has gone to the customer.`
+          + ' Open the vehicle and use Email Customer to send them the booking link.',
+        url: deepLinks.vehicle(v.id),
+        channels: ['in_app', 'push', 'email'],
+      });
       nudged++;
-      await service.from('fleet_checkins').update({
-        pickup_nudge_sent_at: new Date().toISOString(),
-        pickup_nudge_count: v.nudgeCount + 1,
-      }).eq('id', v.id);
+      await service.from('fleet_checkins')
+        .update({ pickup_nudge_sent_at: new Date().toISOString() })
+        .eq('id', v.id);
     }
 
     let escalated = 0;
@@ -75,11 +93,7 @@ export async function GET(req: NextRequest) {
       if (v.salesRepId) {
         await notify({ userId: v.salesRepId, type: 'booking', title, body, url });
       } else {
-        const { data: admins } = await service
-          .from('profiles').select('id')
-          .or('role.in.(admin,super_admin),roles.cs.{admin},roles.cs.{super_admin}')
-          .eq('status', 'approved');
-        await notifyMany((admins || []).map((p: any) => p.id), { type: 'booking', title, body, url });
+        await notifyMany(await adminIds(), { type: 'booking', title, body, url });
       }
       escalated++;
       await service.from('fleet_checkins').update({ pickup_escalated_at: new Date().toISOString() }).eq('id', v.id);
@@ -89,7 +103,6 @@ export async function GET(req: NextRequest) {
       ready: vehicles.length,
       unbooked: vehicles.filter(v => !v.hasBooking).length,
       nudged,
-      optedOut,
       escalated,
       oldestDays: vehicles[0]?.daysReady ?? 0,
     };

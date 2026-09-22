@@ -103,11 +103,48 @@ describe('wrapQuoteDocModel formatting conventions', () => {
 
   it('carries no money at all on coverage-only sends', () => {
     const m = wrapQuoteDocModel({ ...baseQuote, diagram_path: 'x.png' },
-      { pricing: false, lineItems: false, diagramUrl: 'https://pub.example.com/vehicle-templates/x.png' });
+      { pricing: false, lineItems: false, diagrams: [{ url: 'https://pub.example.com/vehicle-templates/x.png' }] });
     expect(m.totals).toBeNull();
     expect(m.columns).toBeNull();
-    expect(m.diagram!.url).toContain('x.png');
+    expect(m.diagram!.images[0].url).toContain('x.png');
     expect(m.docTitle).toBe('Wrap Coverage');
+  });
+
+  it('calls the subject a Vehicle on a template quote and a Job on a photo one', () => {
+    // Storefront signage runs through the same estimator on photos, so a
+    // photo quote must not tell a sign customer their building is a vehicle.
+    const template = wrapQuoteDocModel(
+      { ...baseQuote, template_id: 't-1', vehicle_description: '2021 Transit 250' },
+      { pricing: true, lineItems: true },
+    );
+    expect((template.identityLinesHtml || []).join(' ')).toContain('<b>Vehicle:</b> 2021 Transit 250');
+
+    const photos = wrapQuoteDocModel(
+      {
+        ...baseQuote,
+        template_id: null,
+        photo_proofs: [{ id: 'p1', path: 'a.jpg', label: 'Storefront', boxes: [] }],
+        vehicle_description: '1420 Main St — storefront',
+      },
+      { pricing: true, lineItems: true },
+    );
+    expect((photos.identityLinesHtml || []).join(' ')).toContain('<b>Job:</b> 1420 Main St');
+    expect((photos.identityLinesHtml || []).join(' ')).not.toContain('Vehicle:');
+  });
+
+  it('carries every annotated photo, in order, with its view as the caption', () => {
+    // A quote drawn on photos sends one picture per view — driver side,
+    // rear — not just the lead image (migration 317).
+    const m = wrapQuoteDocModel(baseQuote, {
+      pricing: false,
+      lineItems: false,
+      diagrams: [
+        { url: 'https://pub.example.com/a.jpg', caption: 'Driver side' },
+        { url: 'https://pub.example.com/b.jpg', caption: 'Rear doors' },
+      ],
+    });
+    expect(m.diagram!.images.map(i => i.caption)).toEqual(['Driver side', 'Rear doors']);
+    expect(m.diagram!.heading).toBe('Coverage Areas');
   });
 
   it('escapes customer and quote fields', () => {

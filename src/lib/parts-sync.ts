@@ -51,6 +51,95 @@ const chunk = <T,>(arr: T[], size: number): T[][] => {
 };
 
 /**
+ * The item types the catalog mirrors. The full rebuild, the incremental cron
+ * and the price lookup below all read this one list so they cannot drift.
+ * (`findItems` in src/lib/netsuite.ts deliberately filters by no type at all,
+ * so a part outside this set still matches at invoicing while having no
+ * catalog row — see the PR that added fetchSalesPrices.)
+ */
+export const SYNCED_ITEM_TYPES = [
+  'InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly', 'OthCharge',
+] as const;
+
+const SYNCED_ITEM_TYPES_SQL = SYNCED_ITEM_TYPES.map(t => `'${t}'`).join(', ');
+
+/**
+ * Where a NetSuite item's sales price can live. Accounts differ in which of
+ * these tables exists and which is actually populated: `pricing` and
+ * `itemPrice` are the price-matrix tables, while the item record's own
+ * `baseprice` carries a price for items that have no matrix row at all.
+ * Same three sources, in the same order, as getItemBasePrices().
+ */
+const PRICE_SOURCES: { name: string; sql: (idList: string | null) => string }[] = [
+  {
+    name: 'pricing',
+    sql: idList =>
+      `SELECT p.item AS item_id, p.unitprice AS sales_price FROM pricing p WHERE p.pricelevel = 1${idList ? ` AND p.item IN (${idList})` : ''}`,
+  },
+  {
+    name: 'itemPrice',
+    sql: idList =>
+      `SELECT ip.item AS item_id, ip.unitprice AS sales_price FROM itemPrice ip WHERE ip.pricelevel = 1${idList ? ` AND ip.item IN (${idList})` : ''}`,
+  },
+  {
+    name: 'baseprice',
+    sql: idList =>
+      `SELECT i.id AS item_id, i.baseprice AS sales_price FROM item i WHERE i.isinactive = 'F' AND i.itemtype IN (${SYNCED_ITEM_TYPES_SQL})${idList ? ` AND i.id IN (${idList})` : ''}`,
+  },
+];
+
+/**
+ * Sales prices for NetSuite items, MERGED across every source that can carry
+ * one — earlier sources win, later ones only fill the gaps.
+ *
+ * The field bug this fixes: both sync paths used to read `pricing`, fall back
+ * to `itemPrice`, and STOP at the first table that returned any rows at all.
+ * In an account whose price matrix covers most items but not all, that meant
+ * the stragglers were never looked up a second way and landed in the catalog
+ * at 0 — after which invoicing refused to bill them ("No NetSuite price set
+ * for: 06T936") on parts NetSuite prices perfectly well. Neither path ever
+ * read the item record's own `baseprice`, which is where those prices were.
+ *
+ * `itemIds` scopes the reads to specific items (the incremental sync's
+ * modified set) and is chunked; pass null for the full rebuild's
+ * account-wide read. `coverageIds` is used only to stop early once every
+ * item of interest has a price, so a healthy account still pays for one
+ * query rather than three.
+ */
+export async function fetchSalesPrices(
+  itemIds: string[] | null,
+  coverageIds?: string[],
+): Promise<Record<string, number>> {
+  const priceMap: Record<string, number> = {};
+  if (itemIds && itemIds.length === 0) return priceMap;
+
+  const idLists: (string | null)[] = itemIds
+    ? chunk(itemIds, 500).map(ids => ids.join(','))
+    : [null];
+  const wanted = itemIds || coverageIds;
+
+  for (const source of PRICE_SOURCES) {
+    if (wanted && wanted.every(id => id in priceMap)) break;
+    try {
+      for (const idList of idLists) {
+        const rows = await suiteqlQueryAll(source.sql(idList));
+        for (const row of rows) {
+          const id = row.item_id?.toString();
+          const price = parseFloat(row.sales_price || '0');
+          if (id && price > 0 && !(id in priceMap)) priceMap[id] = price;
+        }
+      }
+    } catch (err: any) {
+      // The table or column may not exist in this account — that is what the
+      // next source is for. A source that throws must not abandon the rest.
+      console.warn(`[parts-sync] price source ${source.name} failed: ${err?.message || err}`);
+    }
+  }
+
+  return priceMap;
+}
+
+/**
  * Fold manual rows into their new NetSuite twin ("promote").
  * Graphics-only parts (source='manual', netsuite_id NULL) were folded in
  * from the old proof catalog. If NetSuite later gains a real item with the
@@ -135,6 +224,32 @@ export async function promoteManualTwins(
   return promoted;
 }
 
+/**
+ * Resolve the sales price a sync run writes for a part.
+ *
+ * FleetSuite is the pricing authority: when the two systems disagree about a
+ * price, FleetSuite's number is the current one, so a sync run NEVER
+ * overwrites a price this catalog already carries. NetSuite's price only
+ * FILLS a part that has none here — a brand-new item, or one nobody has
+ * priced in FleetSuite yet.
+ *
+ * This reverses the original policy (migration 117, "NetSuite price wins"),
+ * which also carried a destructive edge: an item with no price-level-1 row in
+ * NetSuite resolved to 0, so `pricingMap[id] || 0` wrote 0 over a good
+ * FleetSuite price on every hourly run. It matches how labor_hours, vendor
+ * and catalog_override already behave in the same upsert — what FleetSuite
+ * knows survives the sync.
+ *
+ * Both sync paths call this (the manual full rebuild in
+ * `/api/parts/sync` and the hourly incremental cron below), so the two
+ * cannot drift the way the labor-item lookups did.
+ */
+export function resolveSalesPrice(localPrice: unknown, netsuitePrice: unknown): number {
+  const local = Number(localPrice) || 0;
+  if (local > 0) return local;
+  return Number(netsuitePrice) || 0;
+}
+
 export interface PartsIncrementalResult {
   modified: number;
   upserted: number;
@@ -167,12 +282,15 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
   const since = new Date(syncState?.last_synced_at || '2020-01-01T00:00:00Z');
   const sinceStr = `${since.getMonth() + 1}/${since.getDate()}/${since.getFullYear()}`;
 
-  // istaxable is the field the quote's tax base needs (migration 252 —
-  // Freight is non-taxable in NetSuite and FleetSuite was taxing it). Not
-  // every account/role exposes it on every item type, so it is requested in
-  // its own attempt: if SuiteQL rejects the column the sync still runs and
-  // taxability stays NULL, which computeTotals reads as taxable — exactly
-  // today's behavior, never a silent under-charge.
+  // istaxable is mirrored for reference only — NOTHING prices off it. It
+  // fed the quote's tax base under migration 252 until Sep 2026, when the
+  // checkbox turned out to be unmaintained in this account: it excluded
+  // $6,848.61 of ordinary parts from a quote and left $175 of freight as
+  // the only taxed line, while NetSuite's invoice taxed all of it. Quotes
+  // now tax every non-labor line (src/lib/estimate-totals.ts). Do not wire
+  // this column back into money without fixing the source data first.
+  // Requested in its own attempt because not every account/role exposes it
+  // on every item type; if SuiteQL rejects the column the sync still runs.
   const ITEM_COLUMNS = `
       i.id,
       i.itemid AS item_number,
@@ -188,7 +306,7 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
   const itemQuery = (extra: string) => `
     SELECT${extra}${ITEM_COLUMNS}
     FROM item i
-    WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly', 'OthCharge')
+    WHERE i.itemtype IN (${SYNCED_ITEM_TYPES_SQL})
       AND i.lastmodifieddate >= TO_DATE('${sinceStr}', 'MM/DD/YYYY')
     ORDER BY i.id
   `;
@@ -223,26 +341,9 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
     return { ...result, syncStateWrite: await recordHeartbeat(service, 'netsuite_parts', result) };
   }
 
-  // ── Sales prices, scoped to the modified items. Same two-table fallback
-  // as the full sync — SuiteQL pricing table names vary by account.
-  const pricingMap: Record<string, number> = {};
-  for (const table of [
-    { name: 'pricing', sql: (ids: string) => `SELECT p.item AS item_id, p.unitprice AS sales_price FROM pricing p WHERE p.pricelevel = 1 AND p.item IN (${ids})` },
-    { name: 'itemPrice', sql: (ids: string) => `SELECT ip.item AS item_id, ip.unitprice AS sales_price FROM itemPrice ip WHERE ip.pricelevel = 1 AND ip.item IN (${ids})` },
-  ]) {
-    try {
-      for (const ids of chunk(activeIds, 500)) {
-        const rows = await suiteqlQueryAll(table.sql(ids.join(',')));
-        for (const p of rows) {
-          const price = parseFloat(p.sales_price || '0');
-          if (p.item_id && price > 0) pricingMap[p.item_id.toString()] = price;
-        }
-      }
-      if (Object.keys(pricingMap).length > 0) break;
-    } catch {
-      // try the next table name
-    }
-  }
+  // ── Sales prices, scoped to the modified items. Same merged lookup as the
+  // full sync — see fetchSalesPrices for why one table is never enough.
+  const pricingMap = await fetchSalesPrices(activeIds);
 
   // ── Quantities for the modified inventory items. If the lookup fails
   // entirely, omit quantity fields from the upsert rather than writing 0s
@@ -279,18 +380,26 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
   // idea for vendors assigned by the vendor-asset import: NetSuite's
   // item-record vendor wins when it exists, but a locally assigned vendor
   // survives while NetSuite's field is blank (which it almost always is).
+  // Sales prices ride along in the same read — FleetSuite's price wins over
+  // NetSuite's (see resolveSalesPrice).
   const catalogOverrides: Record<string, 'upfit' | 'graphics'> = {};
   const localVendors: Record<string, string> = {};
+  const localPrices: Record<string, number> = {};
   for (const ids of chunk(activeIds, 200)) {
-    const { data: rows } = await service
+    const { data: rows, error: localErr } = await service
       .from('netsuite_parts')
-      .select('netsuite_id, catalog_override, vendor')
+      .select('netsuite_id, catalog_override, vendor, sales_price')
       .in('netsuite_id', ids);
+    // Fail the run rather than upsert with an incomplete picture: a missed
+    // row here reads as "FleetSuite has no price" and lets NetSuite's number
+    // (or 0) overwrite a good one.
+    if (localErr) throw new Error(`Failed to read existing catalog rows: ${localErr.message}`);
     for (const r of rows || []) {
       if (r.netsuite_id && (r.catalog_override === 'upfit' || r.catalog_override === 'graphics')) {
         catalogOverrides[String(r.netsuite_id)] = r.catalog_override;
       }
       if (r.netsuite_id && r.vendor) localVendors[String(r.netsuite_id)] = r.vendor;
+      if (r.netsuite_id) localPrices[String(r.netsuite_id)] = Number(r.sales_price) || 0;
     }
   }
 
@@ -315,7 +424,8 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
         description: item.description || item.display_name || '',
         item_type: item.itemtype || '',
         catalog: catalogOverrides[nsId] || determineCatalog(itemNumber, className),
-        sales_price: pricingMap[nsId] || 0,
+        // FleetSuite's price wins; NetSuite's only fills a part with none.
+        sales_price: resolveSalesPrice(localPrices[nsId], pricingMap[nsId]),
         purchase_price: parseFloat(item.purchase_price || '0') || 0,
         ...(qty ? { quantity_on_hand: qty.onHand, quantity_available: qty.available } : {}),
         // Labor hours only when NetSuite actually carries a value (custitem1).

@@ -200,7 +200,7 @@ export async function PATCH(req: NextRequest) {
         .limit(1);
       if (dupes && dupes.length > 0) {
         return NextResponse.json(
-          { error: `Invoice #${newNumber} from ${dupes[0].vendor_name} already exists — pick a distinct number.` },
+          { error: `Invoice #${newNumber} from "${dupes[0].vendor_name}" already exists — pick a distinct number.` },
           { status: 409 },
         );
       }

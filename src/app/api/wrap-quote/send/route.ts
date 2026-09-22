@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
   if (!carriesQuote && !flags.diagram) {
     return NextResponse.json({ error: 'Nothing selected to send — pick pricing, the coverage picture, or the NetSuite PDF.' }, { status: 400 });
   }
-  if (!carriesQuote && flags.diagram && !quote.diagram_path) {
+  if (!carriesQuote && flags.diagram && !quote.diagram_path && !(Array.isArray(quote.photo_proofs) && quote.photo_proofs.some((p: any) => p?.diagram_path))) {
     return NextResponse.json({ error: 'This quote has no coverage drawing — save it from the estimator first.' }, { status: 400 });
   }
   if (flags.netsuitePdf && !quote.netsuite_estimate_id) {
@@ -136,7 +136,7 @@ export async function POST(req: NextRequest) {
       token = tokErr ? null : minted.token;
     }
     if (token) {
-      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
       approveUrl = `${appUrl}/approve/quote/${token}?via=email&to=${encodeURIComponent(email)}`;
     }
   }
@@ -151,9 +151,23 @@ export async function POST(req: NextRequest) {
   // Coverage diagram / logo / attachments live in R2, not Supabase storage —
   // lib/storage (the client uploader) is an R2 shim, so URLs and reads here
   // must go through lib/r2 with the bucket name as the key prefix.
-  const diagramUrl = quote.diagram_path
-    ? r2PublicUrl('vehicle-templates', quote.diagram_path)
-    : null;
+  // Coverage pictures, in the order the estimator arranged them: one per
+  // annotated photo on a photo-proof quote (migration 317), each captioned
+  // with its view, or the single outline diagram on a template quote. The
+  // lead photo's picture is also quote.diagram_path, so surfaces that carry
+  // exactly one image (the estimate attach) are unaffected.
+  const proofRows: any[] = Array.isArray(quote.photo_proofs) ? quote.photo_proofs : [];
+  const proofDiagrams = proofRows
+    .filter(p => typeof p?.diagram_path === 'string' && p.diagram_path)
+    .map((p, i) => ({
+      url: r2PublicUrl('vehicle-templates', p.diagram_path),
+      caption: proofRows.length > 1 ? (String(p?.label || '').trim() || `Photo ${i + 1}`) : null,
+    }));
+  const diagrams = proofDiagrams.length > 0
+    ? proofDiagrams
+    : quote.diagram_path
+      ? [{ url: r2PublicUrl('vehicle-templates', quote.diagram_path), caption: null }]
+      : [];
   const logoUrl = company?.logo_path
     ? r2PublicUrl('vehicle-templates', company.logo_path)
     : null;
@@ -176,7 +190,7 @@ export async function POST(req: NextRequest) {
     wrapQuoteDocModel(quote, {
       pricing: flags.pricing,
       lineItems: flags.lineItems,
-      diagramUrl: flags.diagram ? diagramUrl : null,
+      diagrams: flags.diagram ? diagrams : null,
       pdfAttachedNote: flags.netsuitePdf,
     }),
     {

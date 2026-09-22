@@ -44,7 +44,7 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
     return NextResponse.json({ status: 'invalid' }, { status: 404 });
   }
 
-  const data = await buildPoPortalData(supabase, { netsuite_id: customer.netsuite_id, company_name: customer.company_name });
+  const data = await buildPoPortalData(supabase, { id: customer.id, netsuite_id: customer.netsuite_id, company_name: customer.company_name });
 
   // Best-effort "someone looked" stamp for the customer record.
   supabase.from('customers').update({ portal_last_viewed_at: new Date().toISOString() }).eq('id', customer.id)

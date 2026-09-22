@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import HistoryButton from '@/components/HistoryButton';
+import { useDialog } from '@/components/DialogProvider';
 import { apiFetch } from '@/lib/api-client';
 import PartPicker, { type PickedPart } from '@/components/PartPicker';
 import { loadCompaniesWithCounts } from '@/lib/cni-companies';
@@ -84,7 +86,6 @@ interface CniVin {
   status: string;
   completed_at: string | null;
   photos_submitted: boolean;
-  photos_approved: boolean;
   serial_number: string | null;
   imei: string | null;
   iccid: string | null;
@@ -399,11 +400,15 @@ export default function CniJobDetailPage() {
   // R6-5: ranked matches for the invite picker. Falls back to the plain
   // list when ranking is unavailable, so the modal never goes blank.
   const [matches, setMatches] = useState<any[] | null>(null);
+  // Compliance per company (R6-8), keyed by company id. Rides alongside the
+  // ranking rather than inside it: a non-compliant company can still be the
+  // closest and most capable, and folding that into a score hides both facts.
+  const [compliance, setCompliance] = useState<Record<string, { eligible: boolean; state: string; blocking: string[] }>>({});
   const [matchMeta, setMatchMeta] = useState<{ distanceAvailable: boolean; serviceType: string | null } | null>(null);
   const [bidCount, setBidCount] = useState(0);
 
   // Phase 3: photos + messages
-  const [photoStats, setPhotoStats] = useState({ total: 0, pending: 0, approved: 0, denied: 0 });
+  const [photoStats, setPhotoStats] = useState({ total: 0 });
   const [unreadMsgCount, setUnreadMsgCount] = useState(0);
 
   // Bridge provenance back-link (graphics job or check-in this came from).
@@ -412,7 +417,18 @@ export default function CniJobDetailPage() {
   // Phase 4: closure. Company-mode billing coverage from the AP flow
   // (vendor_invoices) — the legacy per-job invoice columns are read-only
   // history now.
-  const [budgetExceeded, setBudgetExceeded] = useState(false);
+  const dialog = useDialog();
+  // Job P&L (R6-8). Replaces a `budgetExceeded` flag that was declared and
+  // never set — a budget warning that could never fire.
+  const [pnl, setPnl] = useState<{
+    budget: number | null; payoutMode: string;
+    vinsTotal: number; vinsCompleted: number;
+    revenue: { amount: number; vinsCounted: number; vinsMissing: number };
+    installerCost: { approved: number; pending: number; unpricedCredits: number };
+    marginBeforeMaterials: number | null; marginPct: number | null;
+    perVehicle: { revenue: number | null; installerCost: number | null; margin: number | null };
+    budgetPct: number | null; overBudget: boolean; caveats: string[];
+  } | null>(null);
   // Crew hours vs estimate (R6-12). Null until loaded, and absent entirely
   // when no timer has run on this job — a chip claiming 0h would read as
   // "nobody worked", not "nobody timed it".
@@ -451,8 +467,19 @@ export default function CniJobDetailPage() {
     if (!hasFeature('cni_admin')) { router.push('/home'); return; }
     loadJob();
     loadProductivity();
+    loadPnl();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, isAdmin, jobId]);
+
+  /** Job P&L (R6-8). Best-effort: a failure leaves the card off rather than
+   *  blocking the console. */
+  const loadPnl = async () => {
+    try {
+      const res = await apiFetch(`/api/cni/job-pnl?jobId=${jobId}`);
+      if (!res.ok) return;
+      setPnl(await res.json());
+    } catch { /* no card this load */ }
+  };
 
   /** Crew hours vs estimate (R6-12). Best-effort: a failure leaves the chip
    *  off rather than blocking the console. */
@@ -576,31 +603,16 @@ export default function CniJobDetailPage() {
       .eq('job_id', jobId);
     setInvitedIds((inviteData || []).map((i: any) => i.company_id).filter(Boolean));
 
-    // Load photo stats over the EFFECTIVE set: the newest photo per
-    // (vin, type). R3-2: counting every row ever uploaded meant one denied
-    // photo failed the closure checklist forever — even after an approved
-    // reshoot replaced it — permanently blocking the payout. A superseded
-    // photo no longer counts; the reviewer page and the route's
-    // photos_approved recompute use the same rule.
-    const { data: photoData } = await supabase
+    // How many photos this job has. A plain count now that migration 307
+    // retired the approve/deny review — the old effective-set arithmetic
+    // (newest photo per vin+type) existed only to keep a superseded denial
+    // from failing the closure checklist forever, and there are no verdicts
+    // left to supersede. This count matches what the gallery shows.
+    const { count: photoCount } = await supabase
       .from('cni_job_photos')
-      .select('vin_id, photo_type, review_status, uploaded_at')
-      .eq('job_id', jobId)
-      .order('uploaded_at', { ascending: false });
-    if (photoData) {
-      const newestByKey = new Map<string, string>();
-      for (const p of photoData as any[]) {
-        const key = `${p.vin_id || 'general'}::${p.photo_type || 'other'}`;
-        if (!newestByKey.has(key)) newestByKey.set(key, p.review_status);
-      }
-      const effective = [...newestByKey.values()];
-      setPhotoStats({
-        total: effective.length,
-        pending: effective.filter(s => s === 'pending').length,
-        approved: effective.filter(s => s === 'approved').length,
-        denied: effective.filter(s => s === 'denied').length,
-      });
-    }
+      .select('*', { count: 'exact', head: true })
+      .eq('job_id', jobId);
+    setPhotoStats({ total: photoCount || 0 });
 
     // Load unread message count
     if (user) {
@@ -717,18 +729,36 @@ export default function CniJobDetailPage() {
     setShowAssign(true);
   };
 
-  const assignCompany = async (companyId: string) => {
+  const assignCompany = async (companyId: string, overrideReason?: string) => {
     if (!job || updating) return;
     setUpdating(true);
     try {
       const res = await fetch('/api/cni/assign-company', {
         method: 'POST', headers: await authHeaders(),
-        body: JSON.stringify({ jobId: job.id, companyId }),
+        body: JSON.stringify({ jobId: job.id, companyId, ...(overrideReason ? { overrideReason } : {}) }),
       });
       if (res.ok) {
         setShowAssign(false);
         await loadJob();
+        return;
       }
+      // Compliance gate (R6-8): the server refuses the first call and hands
+      // back exactly what is wrong. It warns rather than hard-blocks — but
+      // going ahead needs a written reason, and it is logged as an override.
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 409 && body.complianceBlock) {
+        const b = body.complianceBlock;
+        const reason = window.prompt(
+          `${b.name} is not eligible for work.\n\n`
+          + (b.details || []).map((d: string) => `• ${d}`).join('\n')
+          + '\n\nAssigning anyway is recorded as an override. Why are you going ahead?',
+        );
+        if (!reason || !reason.trim()) return;
+        setUpdating(false);
+        await assignCompany(companyId, reason.trim());
+        return;
+      }
+      await dialog.alert(body.error || 'Could not assign the company');
     } finally {
       setUpdating(false);
     }
@@ -839,6 +869,7 @@ export default function CniJobDetailPage() {
         setMatches(body.matches || []);
         setMatchMeta({ distanceAvailable: !!body.distanceAvailable, serviceType: body.job?.serviceType || null });
         if (Array.isArray(body.invitedIds)) setInvitedIds(body.invitedIds);
+        setCompliance(body.compliance || {});
       }
     } catch { /* the unranked list still works */ }
   };
@@ -905,6 +936,8 @@ export default function CniJobDetailPage() {
             </div>
           )}
         </div>
+        {/* R6-13: who changed what on this job. */}
+        <HistoryButton table="cni_jobs" recordId={job.id} compact />
       </div>
 
       {/* Status Badge */}
@@ -1161,6 +1194,59 @@ export default function CniJobDetailPage() {
           )}
         </div>
       )}
+
+      {/* Job P&L (R6-8) — revenue against installer cost, per job and per
+          vehicle, with everything the numbers cannot see stated underneath.
+          Hidden entirely until there is something to say: a card of dashes
+          on a job with no completions is noise. */}
+      {pnl && (pnl.revenue.vinsCounted > 0 || pnl.installerCost.approved > 0 || pnl.budget != null) && (() => {
+        const money = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        const cell = (label: string, value: string, sub: string | null, color?: string) => (
+          <div style={{ minWidth: '120px' }}>
+            <div style={{ fontSize: '10.5px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px' }}>{label}</div>
+            <div style={{ fontSize: '17px', fontWeight: 800, color: color || 'var(--text-primary)', marginTop: '1px' }}>{value}</div>
+            {sub && <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>{sub}</div>}
+          </div>
+        );
+        return (
+          <div style={{
+            padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
+            background: 'var(--card)',
+            border: `1px solid ${pnl.overBudget ? 'var(--error)' : 'var(--border)'}`,
+          }}>
+            <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '9px' }}>
+              Job P&amp;L
+              <span style={{ fontWeight: 500, textTransform: 'none', letterSpacing: 0, marginLeft: '7px' }}>
+                before materials · {pnl.vinsCompleted} of {pnl.vinsTotal} vehicles done
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '18px', flexWrap: 'wrap' }}>
+              {cell('Revenue',
+                pnl.revenue.vinsCounted > 0 ? money(pnl.revenue.amount) : '—',
+                pnl.revenue.vinsMissing > 0
+                  ? `${pnl.revenue.vinsCounted} of ${pnl.vinsCompleted} vehicles billed`
+                  : (pnl.perVehicle.revenue != null ? `${money(pnl.perVehicle.revenue)} per vehicle` : 'nothing billed yet'))}
+              {cell('Installer cost',
+                money(pnl.installerCost.approved),
+                pnl.perVehicle.installerCost != null ? `${money(pnl.perVehicle.installerCost)} per vehicle` : null)}
+              {cell('Margin',
+                pnl.marginBeforeMaterials == null ? '—' : money(pnl.marginBeforeMaterials),
+                pnl.marginPct != null ? `${pnl.marginPct}% before materials` : 'no revenue on file yet',
+                pnl.marginBeforeMaterials == null ? undefined
+                  : pnl.marginBeforeMaterials >= 0 ? 'var(--success)' : 'var(--error)')}
+              {pnl.budget != null && cell('Budget',
+                `${pnl.budgetPct ?? 0}%`,
+                `${money(pnl.installerCost.approved)} of ${money(pnl.budget)}`,
+                pnl.overBudget ? 'var(--error)' : undefined)}
+            </div>
+            {pnl.caveats.length > 0 && (
+              <ul style={{ margin: '9px 0 0', paddingLeft: '17px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                {pnl.caveats.map((c, i) => <li key={i} style={{ marginBottom: '1px' }}>{c}</li>)}
+              </ul>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Job Info */}
       <div style={{
@@ -1509,21 +1595,13 @@ export default function CniJobDetailPage() {
             onClick={() => router.push(`/admin/cni/jobs/${job.id}/photos`)}
             style={{
               flex: 1, padding: '14px', borderRadius: '12px', textAlign: 'center',
-              background: photoStats.pending > 0
-                ? 'color-mix(in srgb, var(--warning) 8%, var(--card))'
-                : 'var(--card)',
-              border: photoStats.pending > 0 ? '1px solid var(--warning)' : '1px solid var(--border)',
+              background: 'var(--card)', border: '1px solid var(--border)',
             }}
           >
             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px' }}>Photos</div>
             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
               Photos {photoStats.total > 0 ? `(${photoStats.total})` : ''}
             </div>
-            {photoStats.pending > 0 && (
-              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--warning)' }}>
-                {photoStats.pending} pending review
-              </div>
-            )}
           </button>
           <button
             onClick={() => router.push(`/admin/cni/jobs/${job.id}/messages`)}
@@ -1860,7 +1938,14 @@ export default function CniJobDetailPage() {
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>CLOSURE CHECKLIST</div>
           {(() => {
             const allVinsComplete = vins.length > 0 && vins.every(v => v.status === 'completed');
-            const allPhotosApproved = photoStats.total > 0 && photoStats.denied === 0 && photoStats.pending === 0;
+            // Photos do NOT gate closure (owner decision 2026-09-12). The old
+            // checklist required "all photos approved"; when migration 307
+            // retired the review that was reduced to "at least one photo on
+            // file", and this removes the rest of it. Photos are
+            // documentation of what was installed — a job whose vehicles are
+            // done, tasks are done and money is settled is closable whether
+            // or not anyone pointed a camera at it. The Photos tile above
+            // still shows the count for anyone who wants to look.
             // Individual payout mode has no job invoice — the pay gate is
             // instead "every credit is on an approved-or-beyond payout".
             const individual = job.payout_mode === 'individual';
@@ -1884,7 +1969,7 @@ export default function CniJobDetailPage() {
             // when the job has none, so older jobs stay closable.
             const requiredTasks = jobTasks.filter(t => t.required);
             const tasksDone = requiredTasks.every(t => t.completed);
-            const canClose = allVinsComplete && allPhotosApproved && invoiceApproved && tasksDone;
+            const canClose = allVinsComplete && invoiceApproved && tasksDone;
 
             return (
               <>
@@ -1897,9 +1982,6 @@ export default function CniJobDetailPage() {
                       {tasksDone ? '✓' : '✕'} Install checklist done ({requiredTasks.filter(t => t.completed).length}/{requiredTasks.length} required)
                     </div>
                   )}
-                  <div style={{ fontSize: '13px', color: allPhotosApproved ? 'var(--success)' : 'var(--error)' }}>
-                    {allPhotosApproved ? '✓' : '✕'} All photos approved ({photoStats.approved}/{photoStats.total})
-                  </div>
                   <div style={{ fontSize: '13px', color: invoiceApproved ? 'var(--success)' : 'var(--error)' }}>
                     {individual
                       ? `${invoiceApproved ? '✓' : '✕'} Employee payouts ${invoiceApproved ? 'approved' : 'pending'}`
@@ -2031,6 +2113,14 @@ export default function CniJobDetailPage() {
                           >Invite</button>
                         )}
                       </div>
+                      {compliance[m.companyId] && !compliance[m.companyId].eligible && (
+                        <div
+                          title={compliance[m.companyId].blocking.join(' · ')}
+                          style={{ fontSize: '11px', fontWeight: 700, color: '#ef4444', marginTop: '5px' }}
+                        >
+                          ⚠ Not eligible for work — {compliance[m.companyId].blocking.join(', ').toLowerCase()}
+                        </div>
+                      )}
                       <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '6px' }}>
                         {(m.chips || []).map((chip: any, i: number) => (
                           <span key={i} style={{

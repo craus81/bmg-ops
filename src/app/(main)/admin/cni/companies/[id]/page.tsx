@@ -8,6 +8,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 import NetsuiteVendorSearch, { type NsVendor } from '@/components/NetsuiteVendorSearch';
 import PhoneInput from '@/components/PhoneInput';
+import { apiFetch } from '@/lib/api-client';
 
 interface CniCompany {
   id: string;
@@ -82,6 +83,16 @@ const VI_STATUS: Record<VendorInvoiceStatus, { label: string; color: string; bg:
   paid: { label: 'Paid', color: '#4ade80', bg: 'rgba(74,222,128,0.12)', cta: 'View →' },
 };
 
+interface FeedLink {
+  url: string | null;
+  webcalUrl: string | null;
+  createdAt: string | null;
+  lastFetchedAt: string | null;
+}
+
+const shortDate = (iso: string | null) =>
+  iso ? new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : null;
+
 // Profiles that carry an installer role can belong to a CNI company.
 const INSTALLER_FILTER = 'role.eq.installer,roles.cs.{installer}';
 
@@ -124,6 +135,13 @@ export default function CniCompanyDetailPage() {
   const [memberBusy, setMemberBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
 
+  // Install calendar feed (R6-8). Kept out of the main company select so a
+  // page that predates migration 300 still renders its other cards.
+  const [feed, setFeed] = useState<FeedLink | null>(null);
+  const [feedBusy, setFeedBusy] = useState(false);
+  const [feedMsg, setFeedMsg] = useState<{ success: boolean; message: string } | null>(null);
+  const [feedCopied, setFeedCopied] = useState(false);
+
   // Compliance documents
   const [docBusy, setDocBusy] = useState<DocColumn | null>(null);
   const [docMsg, setDocMsg] = useState<{ success: boolean; message: string } | null>(null);
@@ -136,6 +154,7 @@ export default function CniCompanyDetailPage() {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!hasFeature('cni_admin')) { router.push('/home'); return; }
     loadData();
+    loadFeed();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, isAdmin, companyId]);
 
@@ -249,6 +268,78 @@ export default function CniCompanyDetailPage() {
 
   // Explicit re-sync: overwrite email/phone/address with the NetSuite
   // vendor's current values (the add-time import only fills blanks).
+  // ── Install calendar feed (R6-8) ──────────────────────────────────────
+  const loadFeed = async () => {
+    try {
+      const res = await apiFetch(`/api/cni/schedule-link?companyId=${companyId}`);
+      if (!res.ok) return;
+      setFeed(await res.json());
+    } catch {
+      // Contained on purpose: a calendar link that can't be read is not a
+      // reason to blank the compliance and member cards next to it.
+    }
+  };
+
+  const manageFeed = async (action: 'create' | 'regenerate' | 'revoke') => {
+    if (feedBusy) return;
+    if (action === 'regenerate' && !(await dialog.confirm(
+      'Replace this link? Every calendar already subscribed to the old one stops updating and starts showing an error — everyone has to subscribe again.',
+      { confirmLabel: 'Replace link' },
+    ))) return;
+    if (action === 'revoke' && !(await dialog.confirm(
+      'Revoke this link? Every calendar subscribed to it stops updating immediately.',
+      { confirmLabel: 'Revoke' },
+    ))) return;
+
+    setFeedBusy(true);
+    setFeedMsg(null);
+    setFeedCopied(false);
+    try {
+      const res = await apiFetch('/api/cni/schedule-link', {
+        method: 'POST',
+        body: JSON.stringify({ companyId, action }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setFeedMsg({ success: false, message: data.error || 'Could not update the calendar link' });
+      } else {
+        setFeed({
+          url: data.url || null,
+          webcalUrl: data.webcalUrl || null,
+          createdAt: data.createdAt || null,
+          // A regenerated link has never been fetched — carrying the old
+          // link's timestamp forward would claim somebody is subscribed to a
+          // URL that did not exist a second ago.
+          lastFetchedAt: action === 'create' ? (data.lastFetchedAt || null) : null,
+        });
+        setFeedMsg({
+          success: true,
+          message: action === 'revoke' ? 'Calendar link revoked.'
+            : action === 'regenerate' ? 'New link issued — send it to the crew; the old one is dead.'
+            : 'Calendar link created.',
+        });
+      }
+    } catch (e: any) {
+      setFeedMsg({ success: false, message: e.message || 'Could not update the calendar link' });
+    } finally {
+      setFeedBusy(false);
+    }
+  };
+
+  const copyFeed = async () => {
+    if (!feed?.url) return;
+    try {
+      await navigator.clipboard.writeText(feed.url);
+      setFeedCopied(true);
+      setTimeout(() => setFeedCopied(false), 2500);
+    } catch {
+      // Clipboard access is denied outside a secure context and in some
+      // embedded browsers. The URL is in a selectable field either way, so
+      // say what happened rather than silently doing nothing.
+      setFeedMsg({ success: false, message: 'Copy was blocked by the browser — select the link above and copy it manually.' });
+    }
+  };
+
   const refreshFromNetsuite = async () => {
     if (refreshing) return;
     if (!(await dialog.confirm('Pull the current email, phone & mailing address from NetSuite? This overwrites those fields on this company.', { confirmLabel: 'Refresh' }))) return;
@@ -717,6 +808,103 @@ export default function CniCompanyDetailPage() {
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '10px' }}>
           Direct deposit is kept as an uploaded document (authorization form or voided check) — bank details are never stored in FleetSuite. Per-person docs for CNI members live on their installer profile.
         </div>
+      </div>
+
+      {/* Install calendar feed — a subscribe-once ICS link for this company */}
+      <div style={{
+        padding: '16px', borderRadius: '14px', marginBottom: '14px',
+        background: 'var(--card)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-sm)',
+      }}>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
+          Install Calendar Feed
+        </div>
+
+        {feedMsg && (
+          <div style={{
+            padding: '10px 14px', borderRadius: '8px', marginBottom: '12px', fontSize: '12px', fontWeight: 600,
+            background: feedMsg.success ? 'var(--success-bg)' : 'var(--error-bg)',
+            border: `1px solid ${feedMsg.success ? 'var(--success-border)' : 'var(--error-border)'}`,
+            color: feedMsg.success ? 'var(--success)' : 'var(--error)',
+          }}>
+            {feedMsg.message}
+          </div>
+        )}
+
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px', lineHeight: 1.5 }}>
+          A read-only calendar this company subscribes to once — every confirmed BMG install then appears
+          and updates in their own calendar app, with the site address, the site contact and a link to the
+          job. Work assigned with no agreed install date shows on its deadline, marked as unscheduled.
+          Anyone holding the link can read it, so treat it like a password: revoking kills every existing
+          subscription instantly.
+        </div>
+
+        {!feed?.url ? (
+          <button
+            onClick={() => manageFeed('create')}
+            disabled={feedBusy}
+            style={{
+              padding: '10px 18px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+              background: feedBusy ? 'var(--text-muted)' : 'var(--orange)', color: '#fff',
+              border: 'none', cursor: feedBusy ? 'default' : 'pointer',
+            }}
+          >
+            {feedBusy ? 'Working…' : 'Create calendar link'}
+          </button>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                readOnly
+                value={feed.url}
+                onFocus={e => e.currentTarget.select()}
+                style={{ ...inputStyle, flex: '1 1 320px', width: 'auto', fontSize: '12px', fontFamily: 'monospace' }}
+              />
+              <button
+                onClick={copyFeed}
+                style={{ padding: '10px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, background: 'var(--card)', color: 'var(--text-body)', border: '1px solid var(--border)', cursor: 'pointer' }}
+              >
+                {feedCopied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+
+            {feed.webcalUrl && (
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px' }}>
+                On a computer with a calendar app installed,{' '}
+                {/* webcal:// hands the URL to the calendar app as a live
+                    subscription; clicking the https link in a browser
+                    downloads a one-time snapshot that never updates. */}
+                <a href={feed.webcalUrl} style={{ color: 'var(--accent)', fontWeight: 700 }}>this link subscribes directly</a>
+                {' '}— in Google Calendar, paste the address above under &ldquo;From URL&rdquo; instead.
+              </div>
+            )}
+
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '10px', lineHeight: 1.6 }}>
+              {feed.createdAt && <div>Issued {shortDate(feed.createdAt)}</div>}
+              <div>
+                {feed.lastFetchedAt
+                  ? `Last pulled by a calendar ${shortDate(feed.lastFetchedAt)}`
+                  : 'No calendar has pulled this yet — the link exists, but nobody has subscribed to it.'}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => manageFeed('regenerate')}
+                disabled={feedBusy}
+                style={{ padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--card)', color: 'var(--text-body)', border: '1px solid var(--border)', cursor: feedBusy ? 'default' : 'pointer' }}
+              >
+                Replace link
+              </button>
+              <button
+                onClick={() => manageFeed('revoke')}
+                disabled={feedBusy}
+                style={{ padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--card)', color: 'var(--error)', border: '1px solid var(--error-border)', cursor: feedBusy ? 'default' : 'pointer' }}
+              >
+                Revoke
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Members card */}

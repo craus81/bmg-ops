@@ -9,7 +9,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { resolveFeatures, isAdminRole, type FeatureKey } from '@/lib/features';
+import { resolveFeatures, isAdminRole, INTERNAL_STAFF_ROLES, type FeatureKey } from '@/lib/features';
+import { canSeeMoney } from '@/lib/money-visibility';
 
 // Server-side call sites read admin authority through api-auth; the predicate
 // itself lives in features.ts (client-safe) so AuthProvider shares it.
@@ -84,12 +85,24 @@ function extractAccessToken(req: NextRequest): string | null {
   return null;
 }
 
-// Roles that belong to internal BMG staff. Excludes 'customer' accounts and
-// external CNI 'installer' accounts, which must never see company-wide data.
-// Mirrors the DB's is_internal_staff() allowlist (migration 224) — which has
-// included super_admin all along; the app-side list omitting it was the
-// inconsistency the super_admin ⊇ admin decision (2026-09-07) closed.
-const INTERNAL_STAFF_ROLES = ['admin', 'super_admin', 'sales', 'graphics_production', 'shop_tech', 'field_tech', 'finance'];
+/**
+ * The session token a request carries (Authorization bearer, then the
+ * Supabase auth cookie / chunked cookies), or null. Exposed for routes
+ * where identity is OPTIONAL — the usage-telemetry beacon resolves a role
+ * from it when present and treats absence as anonymous, without any of the
+ * requireX helpers' 401s. No behaviour change to the guards.
+ */
+export function getAccessToken(req: NextRequest): string | null {
+  return extractAccessToken(req);
+}
+
+// Roles that belong to internal BMG staff — one list, defined in features.ts
+// so client components gate on exactly what requireStaff() enforces. Excludes
+// 'customer' accounts and external CNI 'installer' accounts, which must never
+// see company-wide data. Mirrors the DB's is_internal_staff() allowlist
+// (migration 224) — which has included super_admin all along; the app-side
+// list omitting it was the inconsistency the super_admin ⊇ admin decision
+// (2026-09-07) closed.
 
 function profileRoles(profile: any): string[] {
   return profile?.roles?.length > 0 ? profile.roles : [profile?.role];
@@ -214,6 +227,27 @@ export async function requireAdmin(req: NextRequest): Promise<AuthResult> {
  * standalone role outside INTERNAL_STAFF_ROLES, so requireStaff can't gate
  * these routes.
  */
+/**
+ * Money wall (src/lib/money-visibility.ts): sales, admins, finance and
+ * executives. Used by routes that RETURN or ACT ON money — invoice creation,
+ * amounts, cost reports — so hiding a button isn't the only thing stopping
+ * the shop floor from billing a customer.
+ *
+ * Narrower than requireStaff, wider than requireFinancials (which is the
+ * owner-level P&L wall, super_admin/executive only).
+ */
+export async function requireMoney(req: NextRequest): Promise<AuthResult> {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth;
+
+  const roles = profileRoles(auth.profile);
+  if (!canSeeMoney(roles)) {
+    return { user: auth.user, profile: auth.profile, error: NextResponse.json({ error: 'Forbidden: this account cannot see billing' }, { status: 403 }) };
+  }
+
+  return auth;
+}
+
 export async function requireFinancials(req: NextRequest): Promise<AuthResult> {
   const auth = await requireAuth(req);
   if (auth.error) return auth;

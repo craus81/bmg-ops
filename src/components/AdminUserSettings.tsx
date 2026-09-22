@@ -49,12 +49,18 @@ const DEFAULT_PREFS: Prefs = {
 };
 
 // Same vocabulary as the user's own Settings page.
+//
+// R6-13 removed notify_new_job / notify_status_change / notify_ready /
+// notify_shipped from both surfaces. They were resolved by substring match
+// on the notification type, which meant they governed three of the ~64
+// types the app sends (and "Shipped" governed none at all — no type
+// contains the word). Per-type channels now live in
+// notification_preferences.type_channels, editable by the user in
+// Settings → Which alerts reach you. What remains here are the AUDIENCE
+// opt-ins, which decide whether someone is targeted at all — a different
+// question, and one a super admin legitimately sets on their behalf.
 const ALERT_TOGGLES: [keyof Prefs, string][] = [
-  ['notify_new_job', 'New Job Created'],
-  ['notify_status_change', 'Status Changes'],
-  ['notify_ready', 'Ready to Install'],
   ['notify_ready_for_install', 'Install-Ready Alerts (all vehicles)'],
-  ['notify_shipped', 'Shipped'],
   ['notify_invoicing', 'Invoicing Alerts'],
   ['notify_new_po', 'New Purchase Orders'],
 ];
@@ -207,7 +213,7 @@ export default function AdminUserSettings({ userId, userName }: { userId: string
             </div>
           )}
 
-          <div style={groupLabel}>Graphics Job Alerts</div>
+          <div style={groupLabel}>Alerts they can opt into</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
             {ALERT_TOGGLES.map(toggleRow)}
           </div>

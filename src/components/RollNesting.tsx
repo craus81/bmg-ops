@@ -29,6 +29,8 @@ export interface RollFilmInfo {
 }
 
 interface Props {
+  /** Defaults true; false hides material cost for viewers the money rule excludes. */
+  showMoney?: boolean;
   pieces: NestPiece[];
   films: RollFilmInfo[];
   config: RollConfig;
@@ -58,6 +60,11 @@ interface DragState {
 }
 
 export function RollNesting(props: Props) {
+  // Square footage, waste and roll length are production facts. What the film
+  // COSTS is money (src/lib/money-visibility.ts), and this component renders
+  // inside the graphics job page. Passed in rather than hooked so the
+  // component stays presentational.
+  const showMoney = props.showMoney !== false;
   const { pieces, films, config, onConfigChange, placements, onPlacementsChange, sets, onSetsChange, useRollPricing, onUseRollPricingChange, extraSqftByFilm = {} } = props;
 
   const [zoom, setZoom] = useState(6); // px per inch
@@ -250,7 +257,7 @@ export function RollNesting(props: Props) {
           <input type="checkbox" checked={useRollPricing} onChange={e => onUseRollPricingChange(e.target.checked)} />
           Price materials from roll usage
           <span style={{ fontWeight: 700, color: 'var(--text-muted)' }}>
-            {fmt1(usage.totalRollSqft)} ft²{totalExtraSqft > 0.005 ? ` + ${fmt1(totalExtraSqft)} ft² by area` : ''}{totalMaterial > 0 ? ` → $${fmt2(totalMaterial)}` : ''}
+            {fmt1(usage.totalRollSqft)} ft²{totalExtraSqft > 0.005 ? ` + ${fmt1(totalExtraSqft)} ft² by area` : ''}{showMoney && totalMaterial > 0 ? ` → $${fmt2(totalMaterial)}` : ''}
           </span>
         </label>
       </div>
@@ -286,7 +293,7 @@ export function RollNesting(props: Props) {
                 <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)' }}>
                   {fUsage ? `${fUsage.rolls.length > 1 ? `${fUsage.rolls.length} rolls · ` : ''}${fmtFtIn(fUsage.rolls.reduce((s, r) => s + r.usedLengthIn, 0))} used · ${fmt1(fUsage.rollSqft)} ft² roll · ${fmt1(fUsage.graphicSqft)} ft² graphics · ${waste.toFixed(0)}% waste` : ''}
                   {extra > 0.005 ? `${fUsage ? ' · ' : ''}${fmt1(extra)} ft² billed by area` : ''}
-                  {film.ratePerSqft > 0 ? ` · $${fmt2(material)} @ $${fmt2(film.ratePerSqft)}/ft²` : ''}
+                  {showMoney && film.ratePerSqft > 0 ? ` · $${fmt2(material)} @ $${fmt2(film.ratePerSqft)}/ft²` : ''}
                 </span>
               )}
             </div>

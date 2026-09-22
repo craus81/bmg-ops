@@ -29,6 +29,11 @@ export interface Profile {
   requested_role?: string;
   company_id?: string;
   deactivated?: boolean;
+  /** For customer-role logins: the NetSuite customer this account belongs
+   *  to (migration 157). One link scopes their whole portal — purchase
+   *  orders, estimates, approvals, billing and vehicles all resolve from
+   *  it — so an unset value means the login sees nothing. */
+  customer_netsuite_id?: string | null;
 }
 
 export interface CatalogItem {
@@ -578,6 +583,13 @@ export interface GraphicsJob {
   proof_url: string | null;
   created_by: string | null;
   assigned_to: string | null;
+  /** Admin-controlled work order (migration 318): 1 is the next job to work,
+   *  null means it isn't on the list (those sort below the ranked ones by due
+   *  date). Written ONLY by /api/graphics-jobs/rank, which rewrites the whole
+   *  queue as a contiguous 1..N block — never set it from an edit form. */
+  work_rank: number | null;
+  work_rank_set_at: string | null;
+  work_rank_set_by: string | null;
   created_at: string;
   updated_at: string;
   // Estimate & Invoice linkage
@@ -662,6 +674,10 @@ export interface NotificationPreferences {
   /** Opt-out (migration 276, default true): the Monday owner's brief. Only
    *  super_admin/executive accounts are ever targeted by the cron. */
   notify_weekly_brief?: boolean;
+  /** Per-notification-type channel choice (migration 307). Keys are types
+   *  from src/lib/notification-registry.ts; an absent key follows the
+   *  account-wide switches, an empty array means send nothing of that type. */
+  type_channels?: Record<string, ('in_app' | 'push' | 'email')[]> | null;
 }
 
 // ═══════════ MESSAGING ═══════════

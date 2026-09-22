@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { getGmailClient, getMessage, getHeader, getPdfAttachments, getAttachment } from '@/lib/google';
+import { getGmailClient, getMessage, getHeader, getPdfAttachments, getAttachment, isGoogleTokenError } from '@/lib/google';
 import { r2Upload } from '@/lib/r2';
 import { isProofLikeName } from '@/lib/pdf-classify';
 
@@ -216,7 +216,7 @@ export async function POST(req: NextRequest) {
         else if (storeError) storeFailed.push({ poId: po.id, poNumber });
         else noMatch.push({ poId: po.id, poNumber });
       } catch (err: any) {
-        if (err?.message === 'NO_GOOGLE_TOKEN') throw err;
+        if (isGoogleTokenError(err)) throw err;
         console.warn(`Backfill failed for PO ${poNumber}:`, err);
         noMatch.push({ poId: po.id, poNumber });
       }

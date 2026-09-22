@@ -96,12 +96,20 @@ export interface ApnsSendDetail {
  */
 export async function sendApnsNotificationDetailed(
   deviceToken: string,
-  payload: { title: string; body: string; url?: string },
+  payload: { title: string; body: string; url?: string; badge?: number },
 ): Promise<ApnsSendDetail> {
   if (!apnsConfigured()) return { result: 'error', reason: 'APNs env vars not configured' };
 
   const body = JSON.stringify({
-    aps: { alert: { title: payload.title, body: payload.body }, sound: 'default' },
+    aps: {
+      alert: { title: payload.title, body: payload.body },
+      sound: 'default',
+      // App-icon badge (R6-13). Only set when the caller computed a real
+      // number: omitting the key leaves the existing badge alone, while
+      // sending 0 would CLEAR it — so an unknown count must not be
+      // rendered as zero here either.
+      ...(typeof payload.badge === 'number' ? { badge: payload.badge } : {}),
+    },
     ...(payload.url ? { url: payload.url } : {}),
   });
 
@@ -126,7 +134,7 @@ export async function sendApnsNotificationDetailed(
 /** Send one alert push; see sendApnsNotificationDetailed for result meanings. */
 export async function sendApnsNotification(
   deviceToken: string,
-  payload: { title: string; body: string; url?: string },
+  payload: { title: string; body: string; url?: string; badge?: number },
 ): Promise<'sent' | 'stale' | 'error'> {
   return (await sendApnsNotificationDetailed(deviceToken, payload)).result;
 }

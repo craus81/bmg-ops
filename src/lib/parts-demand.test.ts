@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isOpenSalesOrderStatus, isStockableItemType, CLOSED_SO_STATUS_CODES, describeSoMirrorHealth } from './parts-demand';
+import { isOpenSalesOrderStatus, isStockableItemType, CLOSED_SO_STATUS_CODES, describeSoMirrorHealth, estimateLineQuantity } from './parts-demand';
 
 // The demand list is only as right as its "is this job still open" gate.
 // NetSuite reuses the same status letters across transaction types with
@@ -112,5 +112,33 @@ describe('describeSoMirrorHealth', () => {
 
   it('healthy', () => {
     expect(describeSoMirrorHealth(row({}), 40, now)).toMatchObject({ status: 'ok', problem: null, lastRunAt: '2026-09-02T11:30:00Z' });
+  });
+});
+
+// A fleet estimate holds one set of lines for N identical vehicles, so the
+// parts it needs are qty × count. Reading the bare quantity put a twelfth of
+// the real demand on the Open-job demand tab.
+describe('estimateLineQuantity', () => {
+  it('multiplies the line quantity by the vehicle count', () => {
+    expect(estimateLineQuantity(3, 12)).toBe(36);
+  });
+
+  it('leaves an ordinary single-vehicle estimate alone', () => {
+    expect(estimateLineQuantity(3, 1)).toBe(3);
+  });
+
+  it('treats a missing or nonsense count as one vehicle, never as zero', () => {
+    for (const count of [null, undefined, 0, -4, 'x']) {
+      expect(estimateLineQuantity(3, count)).toBe(3);
+    }
+  });
+
+  it('a missing quantity is no demand', () => {
+    expect(estimateLineQuantity(null, 12)).toBe(0);
+    expect(estimateLineQuantity('', 12)).toBe(0);
+  });
+
+  it('reads a numeric string, the shape Postgres numerics arrive in', () => {
+    expect(estimateLineQuantity('2.5', 4)).toBe(10);
   });
 });

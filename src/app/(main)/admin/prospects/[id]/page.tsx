@@ -36,6 +36,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
+import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import PhoneInput from '@/components/PhoneInput';
 import { exportProspectPDF } from '@/lib/prospect-pdf';
 import { deepLinks } from '@/lib/deep-links';
@@ -49,6 +50,7 @@ import type { OpenArInvoice, AgingBucketKey, StatementInvoice, StatementScope } 
 import { fetchAllRows } from '@/lib/fetch-all';
 import { samePerson } from '@/lib/primary-contact';
 import NumberInput from '@/components/NumberInput';
+import BriefMeSheet from '@/components/BriefMeSheet';
 
 interface Prospect {
   id: string;
@@ -58,6 +60,7 @@ interface Prospect {
   email: string | null;
   phone: string | null;
   address: string | null;
+  address2: string | null;
   city: string | null;
   state: string | null;
   zip: string | null;
@@ -348,6 +351,12 @@ export default function CustomerRecordPage() {
   const [bulkProgress, setBulkProgress] = useState<string | null>(null);
   const [bulkError, setBulkError] = useState<string | null>(null);
 
+  // Email invoices from the transactions list — the shared screen the
+  // Invoicing hub, PO record and graphics pages use. The same list that can
+  // zip a customer's invoices can now send them, which is what the customer
+  // asking for copies actually wanted.
+  const [emailInvoiceTarget, setEmailInvoiceTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
+
   // Statement data — this customer's open invoices with true open balances,
   // prefetched so the print click stays synchronous (popup blockers).
   const [stInvoices, setStInvoices] = useState<OpenArInvoice[] | null>(null);
@@ -545,7 +554,7 @@ export default function CustomerRecordPage() {
 
   // ── Record editing (ported from the CRM list card — the record page is
   // the primary edit surface now, the list is just the index) ──────────────
-  const emptyEditForm = { company_name: '', contact_name: '', email: '', phone: '', website: '', address: '', city: '', state: '', zip: '', notes: '', location_count: 1, lead_source: '', lead_source_other: '', record_type: 'customer' };
+  const emptyEditForm = { company_name: '', contact_name: '', email: '', phone: '', website: '', address: '', address2: '', city: '', state: '', zip: '', notes: '', location_count: 1, lead_source: '', lead_source_other: '', record_type: 'customer' };
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState(emptyEditForm);
   const [editSaving, setEditSaving] = useState(false);
@@ -555,7 +564,7 @@ export default function CustomerRecordPage() {
     setEditForm({
       company_name: prospect.company_name || '', contact_name: prospect.contact_name || '',
       email: prospect.email || '', phone: prospect.phone || '', website: prospect.website || '',
-      address: prospect.address || '', city: prospect.city || '', state: prospect.state || '', zip: prospect.zip || '',
+      address: prospect.address || '', address2: prospect.address2 || '', city: prospect.city || '', state: prospect.state || '', zip: prospect.zip || '',
       notes: prospect.notes || '', location_count: prospect.location_count || 1,
       lead_source: prospect.lead_source || '', lead_source_other: prospect.lead_source_other || '',
       record_type: prospect.record_type || 'customer',
@@ -569,17 +578,37 @@ export default function CustomerRecordPage() {
     const patch = {
       company_name: editForm.company_name.trim(), contact_name: editForm.contact_name || null,
       email: editForm.email || null, phone: editForm.phone || null, website: editForm.website || null,
-      address: editForm.address || null, city: editForm.city || null, state: editForm.state || null, zip: editForm.zip || null,
+      address: editForm.address || null, address2: editForm.address2 || null,
+      city: editForm.city || null, state: editForm.state || null, zip: editForm.zip || null,
       notes: editForm.notes || null, location_count: editForm.location_count || 1,
       lead_source: editForm.lead_source || null,
       lead_source_other: editForm.lead_source === 'Other' ? editForm.lead_source_other || null : null,
       record_type: editForm.record_type || 'customer',
     };
-    const { error } = await supabase.from('prospects').update(patch).eq('id', prospect.id);
-    setEditSaving(false);
-    if (error) { await dialog.alert(`Could not save: ${error.message}`); return; }
-    setProspect(prev => (prev ? { ...prev, ...patch } : prev));
-    setEditOpen(false);
+    // Through the API, not straight at Postgres: on a NetSuite-linked
+    // customer the route pushes the name, contact details and address to
+    // NetSuite first and refuses the whole save if NetSuite won't take it.
+    // Writing here directly would skip that — and the customer sync would
+    // quietly revert the edit a couple of hours later. Same reasoning as
+    // deleteRecord below.
+    try {
+      const res = await fetch('/api/prospects', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: prospect.id, ...patch }),
+      });
+      const body = await res.json().catch(() => ({}));
+      setEditSaving(false);
+      if (!res.ok || !body?.success) {
+        await dialog.alert(`Could not save: ${body?.error || `HTTP ${res.status}`}`);
+        return;
+      }
+      setProspect(prev => (prev ? { ...prev, ...patch } : prev));
+      setEditOpen(false);
+    } catch (err: any) {
+      setEditSaving(false);
+      await dialog.alert(`Could not save: ${err?.message || 'unknown error'}`);
+    }
   };
 
   const deleteRecord = async () => {
@@ -1480,6 +1509,15 @@ export default function CustomerRecordPage() {
   // Only NetSuite documents have a PDF to zip — quotes that never left
   // FleetSuite, and payments/credits, are skipped by the bulk download.
   const zippableTxns = (list: Txn[]) => list.filter(t => t.nsId && t.nsPdfType);
+  // Only invoices can be emailed to the customer, and only ones carrying a
+  // number: the email screen keys the PDF lookup, the already-sent check and
+  // the invoice_emails log on the invoice NUMBER. Sales orders, estimates
+  // and payments in the same list have their own flows.
+  const emailableTxns = (list: Txn[]) => list.filter(t => t.kind === 'invoice' && !!t.number);
+  const asEmailable = (t: Txn): EmailableInvoice => ({
+    invoiceId: t.nsId || undefined,
+    invoiceNumber: t.number,
+  });
   const toggleDocSelected = (t: Txn) => {
     setSelectedDocKeys(prev => {
       const next = new Set(prev);
@@ -1598,6 +1636,9 @@ export default function CustomerRecordPage() {
     try { await navigator.clipboard.writeText(text); await dialog.alert('Link copied.'); }
     catch { await dialog.alert(text); }
   };
+  // Pre-call rundown (R6-13).
+  const [briefOpen, setBriefOpen] = useState(false);
+
   const portalAction = async (action: 'create' | 'regenerate' | 'revoke') => {
     if (!customer) return;
     if (action === 'revoke' && !(await dialog.confirm('Revoke the portal link? Anyone holding it will see "no longer active".', { destructive: true, confirmLabel: 'Revoke' }))) return;
@@ -1863,6 +1904,9 @@ export default function CustomerRecordPage() {
   const zippableShown = zippableTxns(sortedTxns);
   const selectedShown = zippableShown.filter(t => selectedDocKeys.has(t.key)).length;
   const allDocsSelected = zippableShown.length > 0 && selectedShown === zippableShown.length;
+  // Invoices inside the current selection — a selection may mix in sales
+  // orders and estimates, which the email screen has nothing to do with.
+  const selectedInvoiceTxns = emailableTxns(txns).filter(t => selectedDocKeys.has(t.key));
   const openBalance = stInvoices ? stInvoices.reduce((s, i) => s + i.unpaid, 0) : null;
 
   // Which CRM contact currently wears the star: the primary lives on
@@ -1898,8 +1942,12 @@ export default function CustomerRecordPage() {
   const isVendor = prospect?.record_type === 'vendor';
   const email = prospect?.email || customer?.email || null;
   const phone = prospect?.phone || customer?.phone || null;
+  // Falls back to the mirror's one-line address when the CRM row carries no
+  // address parts yet — a record just added from an existing NetSuite
+  // customer has none until the next customer sync.
   const address = prospect
-    ? [prospect.address, [prospect.city, prospect.state].filter(Boolean).join(', '), prospect.zip].filter(Boolean).join(' · ')
+    ? ([prospect.address, prospect.address2, [prospect.city, prospect.state].filter(Boolean).join(', '), prospect.zip]
+        .filter(Boolean).join(' · ') || customer?.address || null)
     : customer?.address || null;
   const nsUrl = prospect?.netsuite_url || customer?.netsuite_url || null;
   const m = customer;
@@ -1983,6 +2031,15 @@ export default function CustomerRecordPage() {
         )}
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}>
           {phone && <a href={`tel:${phone}`} style={btnSm}>{phone}</a>}
+          {/* Brief me (R6-13) — sits next to the phone number on purpose:
+              the rundown is for the thirty seconds before the call. */}
+          {!isVendor && (prospect?.id || customer?.netsuite_id) && (
+            <button
+              onClick={() => setBriefOpen(true)}
+              title="One-page rundown before you call: open estimates, A/R, vehicles in the shop, whether our emails are arriving, open threads and the last activities"
+              style={btnSm}
+            >Brief me</button>
+          )}
           {email && (
             <button onClick={() => openCompose(email)}
               title="Email this record from FleetSuite — sends from the company address with replies to your inbox, and lands on the activity history"
@@ -2778,6 +2835,20 @@ export default function CustomerRecordPage() {
                       {bulkDownloading ? (bulkProgress || 'Preparing…') : `Download ${selectedDocKeys.size} PDF${selectedDocKeys.size === 1 ? '' : 's'} as ZIP`}
                     </button>
                   )}
+                  {/* Send the invoices in the selection. Only invoices — a
+                      selection can mix in sales orders and estimates, and the
+                      count says so rather than silently emailing fewer. */}
+                  {selectedInvoiceTxns.length > 0 && (
+                    <button
+                      onClick={() => setEmailInvoiceTarget({ customerName: name, invoices: selectedInvoiceTxns.map(asEmailable) })}
+                      title={selectedInvoiceTxns.length === selectedDocKeys.size
+                        ? `Email ${selectedInvoiceTxns.length === 1 ? 'this invoice' : `these ${selectedInvoiceTxns.length} invoices`} to ${name}`
+                        : `Email the ${selectedInvoiceTxns.length} invoice${selectedInvoiceTxns.length === 1 ? '' : 's'} in this selection — sales orders and estimates aren't emailed from here`}
+                      style={{ ...btnSm, padding: '4px 10px', color: '#34d399' }}
+                    >
+                      ✉ Email {selectedInvoiceTxns.length} invoice{selectedInvoiceTxns.length === 1 ? '' : 's'}
+                    </button>
+                  )}
                   {bulkError && <span style={{ fontSize: '11px', color: 'var(--error)' }}>{bulkError}</span>}
                 </div>
               )}
@@ -2847,6 +2918,17 @@ export default function CustomerRecordPage() {
                                 {pdfBusy === t.key ? '…' : 'NetSuite PDF'}
                               </button>
                             )}
+                            {/* Email just this invoice — same screen as the
+                                selection action above, scoped to one row. */}
+                            {t.kind === 'invoice' && t.number && (
+                              <button
+                                onClick={() => setEmailInvoiceTarget({ customerName: name, invoices: [asEmailable(t)] })}
+                                title={`Email invoice #${t.number} to ${name}`}
+                                style={{ ...btnSm, padding: '4px 10px', color: '#34d399' }}
+                              >
+                                ✉
+                              </button>
+                            )}
                             {t.origin?.pdfUrl && (
                               <a
                                 href={deepLinks.pdfViewer(t.origin.pdfUrl, {
@@ -2892,6 +2974,10 @@ export default function CustomerRecordPage() {
               <input style={cInput} type="email" placeholder="Email" value={editForm.email} onChange={e => setEditForm({ ...editForm, email: e.target.value })} />
               <input style={cInput} placeholder="Website" value={editForm.website} onChange={e => setEditForm({ ...editForm, website: e.target.value })} />
               <input style={{ ...cInput, gridColumn: '1 / -1' }} placeholder="Street address" value={editForm.address} onChange={e => setEditForm({ ...editForm, address: e.target.value })} />
+              {/* NetSuite keeps a second address line of its own; without a
+                  box for it here, a suite number could only be saved by
+                  cramming it into the street line. */}
+              <input style={{ ...cInput, gridColumn: '1 / -1' }} placeholder="Suite / unit (optional)" value={editForm.address2} onChange={e => setEditForm({ ...editForm, address2: e.target.value })} />
               <input style={cInput} placeholder="City" value={editForm.city} onChange={e => setEditForm({ ...editForm, city: e.target.value })} />
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                 <input style={cInput} placeholder="State" value={editForm.state} onChange={e => setEditForm({ ...editForm, state: e.target.value })} />
@@ -2989,6 +3075,16 @@ export default function CustomerRecordPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Invoice email — the shared screen, opened from the transactions
+          list (one row, or the invoices in the selection). */}
+      {emailInvoiceTarget && (
+        <EmailInvoicesModal
+          customerName={emailInvoiceTarget.customerName}
+          invoices={emailInvoiceTarget.invoices}
+          onClose={() => setEmailInvoiceTarget(null)}
+        />
       )}
 
       {/* Statement email — standard compose screen. Recipients prefill from
@@ -3121,6 +3217,17 @@ export default function CustomerRecordPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {briefOpen && (
+        <BriefMeSheet
+          target={{
+            prospectId: prospect?.id || null,
+            netsuiteId: customer?.netsuite_id ? String(customer.netsuite_id) : null,
+            name: prospect?.company_name || customer?.company_name || null,
+          }}
+          onClose={() => setBriefOpen(false)}
+        />
       )}
 
       <style>{`@media (max-width:760px){ .rec-cols{ grid-template-columns:1fr !important; } }`}</style>

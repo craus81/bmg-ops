@@ -16,6 +16,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import type { PortalData, PortalPo } from '@/lib/po-portal';
+import type { PortalAction } from '@/lib/portal-actions';
 
 type PageStatus = 'loading' | 'ready' | 'invalid' | 'error';
 
@@ -411,6 +412,213 @@ function BillingRowGroup({ inv, token, asking, askText, setAskText, onToggleAsk,
   );
 }
 
+/**
+ * Action Center (R6-11) — every approval still waiting on this customer,
+ * pinned above everything else so three scattered asks read as one list.
+ *
+ * A live row gets the real Review & Approve button. A dead one gets no
+ * button at all: the link genuinely does not work, and a button that
+ * lands on "this link has expired" is a worse lie than no button. (The
+ * fresh-link request fills that gap — R6-11 item 2.)
+ */
+function ActionCenter({ actions, token }: { actions: PortalAction[]; token: string }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Record<string, string>>({});
+  if (actions.length === 0) return null;
+
+  const requestFresh = async (a: PortalAction) => {
+    const key = `${a.kind}-${a.id}`;
+    setBusy(key);
+    try {
+      const res = await fetch(`/api/portal/${encodeURIComponent(token)}/fresh-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: a.kind, id: a.id }),
+      });
+      const json = await res.json().catch(() => ({}));
+      // The server's message is the only text shown — it is written to be
+      // true for every outcome, including the ones that sent nothing.
+      setNotice(n => ({ ...n, [key]: json.message || 'We could not issue a new link just now — please try again shortly.' }));
+    } catch {
+      setNotice(n => ({ ...n, [key]: 'We could not reach the server — please try again shortly.' }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const waiting = actions.filter(a => a.state === 'awaiting').length;
+  const expired = actions.length - waiting;
+  return (
+    <section style={{ ...card, borderColor: '#fbbf24', borderWidth: '2px', background: '#fffbeb', marginBottom: '14px', padding: '14px 16px' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
+        <div style={{ fontSize: '14px', fontWeight: 900, color: '#92400e' }}>Action needed</div>
+        <div style={{ ...muted, color: '#92400e' }}>
+          {waiting > 0 && <>{waiting} waiting on your approval</>}
+          {waiting > 0 && expired > 0 && <> · </>}
+          {expired > 0 && <>{expired} with an expired link</>}
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {actions.map(a => (
+          <div key={`${a.kind}-${a.id}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', background: '#fff', border: '1px solid #fde68a', borderRadius: '10px', padding: '10px 12px' }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: '13px', fontWeight: 700 }}>
+                {a.ref}
+                {a.title ? <span style={{ fontWeight: 500, color: '#374151' }}> — {a.title}</span> : null}
+              </div>
+              <div style={{ ...muted, display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <span>{a.kindLabel}</span>
+                {a.sentAt && <span>Sent {fmtDate(a.sentAt)}</span>}
+                {a.remindedAt && <span>Reminded {fmtDate(a.remindedAt)}</span>}
+                {a.total != null && <span>{usd(a.total)}</span>}
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              {a.state === 'awaiting' && a.approveUrl ? (
+                <a href={a.approveUrl} target="_blank" rel="noopener noreferrer"
+                  style={{ padding: '7px 14px', borderRadius: '8px', background: '#2563eb', color: '#fff', fontSize: '12px', fontWeight: 800, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                  {a.actionLabel}
+                </a>
+              ) : notice[`${a.kind}-${a.id}`] ? (
+                <span style={{ ...muted, maxWidth: '320px', textAlign: 'right' }}>{notice[`${a.kind}-${a.id}`]}</span>
+              ) : (
+                <>
+                  <span style={chip('#9ca3af')}>Link expired</span>
+                  {/* No link is shown here, ever: the new one is emailed to
+                      the address already on file, which is the channel the
+                      approval token's security rests on. This page can be
+                      forwarded — its own footer asks that it isn't. */}
+                  <button type="button" disabled={busy === `${a.kind}-${a.id}`} onClick={() => requestFresh(a)}
+                    style={{ padding: '7px 14px', borderRadius: '8px', background: '#fff', border: '1px solid #2563eb', color: '#2563eb', fontSize: '12px', fontWeight: 800, cursor: busy ? 'default' : 'pointer', whiteSpace: 'nowrap', opacity: busy === `${a.kind}-${a.id}` ? 0.6 : 1 }}>
+                    {busy === `${a.kind}-${a.id}` ? 'Sending…' : 'Email me a fresh link'}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+interface PrefRow { key: string; label: string; description: string; state: string; on: boolean }
+interface PrefContact { id: string; name: string | null; maskedEmail: string; isPrimary: boolean; prefs: PrefRow[] }
+interface PrefState { company: { name: string | null; settings: { key: string; label: string; description: string; on: boolean }[] }; contacts: PrefContact[] }
+
+/**
+ * Email preferences (R6-11) — what each person at this company has agreed
+ * to receive, changeable here.
+ *
+ * Addresses arrive MASKED from the server and are never editable: this
+ * page can be forwarded, so it has to be useful to someone who recognises
+ * their own mailbox and useless as a contact directory to anyone else.
+ *
+ * Three states per row, not two. "Following your company setting" is real
+ * and is what a contact who has never touched this page is in — showing it
+ * as a plain off (or on) would claim a decision nobody made.
+ */
+function PreferencesSection({ token }: { token: string }) {
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState<PrefState | null>(null);
+  const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || status !== 'idle') return;
+    setStatus('loading');
+    (async () => {
+      try {
+        const res = await fetch(`/api/portal/${encodeURIComponent(token)}/preferences`);
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) { setStatus('error'); setError(json.error || ''); return; }
+        setState(json); setStatus('ready');
+      } catch (e: any) { setStatus('error'); setError(e?.message || ''); }
+    })();
+  }, [open, status, token]);
+
+  const set = async (contactId: string, key: string, value: boolean | null) => {
+    const mark = `${contactId}-${key}`;
+    setBusy(mark); setError(null);
+    try {
+      const res = await fetch(`/api/portal/${encodeURIComponent(token)}/preferences`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactId, key, value }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(json.error || 'Could not save that — try again shortly.'); return; }
+      // The server returns the whole recomputed state, so the page can
+      // never drift from what was actually stored.
+      setState(json);
+    } catch (e: any) {
+      setError(e?.message || 'Could not save that — try again shortly.');
+    } finally { setBusy(null); }
+  };
+
+  const pill = (active: boolean): React.CSSProperties => ({
+    padding: '5px 11px', borderRadius: '999px', fontSize: '11px', fontWeight: 800, cursor: 'pointer',
+    border: `1px solid ${active ? '#2563eb' : '#d1d5db'}`,
+    background: active ? '#2563eb' : '#fff',
+    color: active ? '#fff' : '#6b7280',
+  });
+
+  return (
+    <section style={{ marginBottom: '22px' }}>
+      <button type="button" onClick={() => setOpen(o => !o)}
+        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '13px', fontWeight: 800, color: '#374151' }}>
+        {open ? '▾' : '▸'} Email preferences
+      </button>
+      {open && (
+        <div style={{ ...card, marginTop: '8px' }}>
+          {status === 'loading' && <div style={muted}>Loading…</div>}
+          {status === 'error' && <div style={muted}>We couldn&apos;t load your preferences{error ? ` (${error})` : ''} — try again in a moment.</div>}
+          {status === 'ready' && state && (
+            <>
+              <div style={{ ...muted, marginBottom: '12px', lineHeight: 1.5 }}>
+                These control the automatic emails we send. Turning something off here never affects
+                an email a person at BMG sends you directly.
+              </div>
+              {state.contacts.length === 0 && (
+                <div style={muted}>We don&apos;t have any email contacts on file for your company yet.</div>
+              )}
+              {state.contacts.map(c => (
+                <div key={c.id} style={{ borderTop: '1px solid #f1f5f9', paddingTop: '10px', marginTop: '10px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700 }}>
+                    {c.name || 'Contact'}{c.isPrimary ? <span style={{ ...muted, fontWeight: 600 }}> · main contact</span> : null}
+                  </div>
+                  <div style={{ ...muted, marginBottom: '8px' }}>{c.maskedEmail}</div>
+                  {c.prefs.map(pref => (
+                    <div key={pref.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', padding: '6px 0' }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: '12px', fontWeight: 600 }}>{pref.label}</div>
+                        <div style={muted}>
+                          {pref.description}
+                          {(pref.state === 'inherit_on' || pref.state === 'inherit_off') && (
+                            <> · following your company setting ({pref.on ? 'on' : 'off'})</>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px', opacity: busy === `${c.id}-${pref.key}` ? 0.5 : 1 }}>
+                        <button type="button" disabled={!!busy} onClick={() => set(c.id, pref.key, true)} style={pill(pref.state === 'on')}>On</button>
+                        <button type="button" disabled={!!busy} onClick={() => set(c.id, pref.key, false)} style={pill(pref.state === 'off')}>Off</button>
+                        <button type="button" disabled={!!busy} onClick={() => set(c.id, pref.key, null)}
+                          style={pill(pref.state === 'inherit_on' || pref.state === 'inherit_off')}>Company default</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ))}
+              {error && <div style={{ ...muted, color: '#b91c1c', marginTop: '10px' }}>{error}</div>}
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function PoPortalPage() {
   const params = useParams<{ token: string }>();
   const token = params?.token || '';
@@ -483,6 +691,8 @@ export default function PoPortalPage() {
           </div>
           <div style={muted}>Updated {fmtDateTime(data.generatedAt)} · <button type="button" onClick={() => window.location.reload()} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 700, cursor: 'pointer', padding: 0, fontSize: '12px' }}>Refresh</button></div>
         </div>
+
+        <ActionCenter actions={data.actions || []} token={token} />
 
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '14px' }}>
           {tile('Open', data.summary.open, '#1a2b36')}
@@ -568,6 +778,8 @@ export default function PoPortalPage() {
             </div>
           </section>
         )}
+
+        <PreferencesSection token={token} />
 
         <div style={{ ...muted, textAlign: 'center', marginTop: '30px' }}>
           Questions about an order? Reply to any of our emails or contact your BMG representative.<br />

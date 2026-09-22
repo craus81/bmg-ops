@@ -20,6 +20,7 @@ import type { NetsuiteSalesOrder, GraphicsProof, FleetCheckin, VehicleTrackingSt
 import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS } from '@/lib/types';
 import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
+import { useFormTelemetry } from '@/lib/use-form-telemetry';
 
 // ─── Step indicator ────────────────────────────────────────────
 function StepIndicator({ current }: { current: number }) {
@@ -48,11 +49,13 @@ function StepIndicator({ current }: { current: number }) {
 // In-Shop page (and anywhere else). onCheckedIn fires after a successful
 // save so the host page can refresh its vehicle list.
 export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => void }) {
-  const { user } = useAuth();
+  const { user, canSeeMoney } = useAuth();
   const router = useRouter();
   const { open: openPopout } = usePopout();
   const supabase = createClient();
   const dialog = useDialog();
+  // Usage telemetry (R7-4): the modal unmounting closes any started attempt.
+  const formTel = useFormTelemetry('vehicle_checkin');
 
   // Workflow state
   const [step, setStep] = useState(0);
@@ -295,6 +298,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
       }
       const vehicle = await decodeVIN(v);
       setVehicleData({ vin: v, vehicle });
+      formTel.markStarted(0);
       setStep(1);
       // Pre-fill the SO step when the estimate chain already knows this
       // VIN. Skipped when SO context is being kept (Clone / same-customer
@@ -550,6 +554,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   // selected order drives the proof / Dropbox search (its customer name).
   const continueWithSelectedOrders = () => {
     const first = selectedOrders[0];
+    formTel.markStep(2);
     setStep(2);
     if (first?.customer_name) {
       setProofSearch(first.customer_name);
@@ -563,6 +568,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
 
   const skipSalesOrder = () => {
     setSelectedOrders([]);
+    formTel.markStep(2);
     setStep(2);
     setProofSearch('');
     loadProofs('');
@@ -905,6 +911,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
       return;
     }
     const data: FleetCheckin = saveBody.checkin;
+    formTel.markSubmitted();
 
     // Photo bookkeeping for the saved screen: uploads that failed stayed
     // out of the record; the ones that made it are already verified rows.
@@ -1186,7 +1193,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   // ═══════════════════════════════════════════════════════════
   if (saved && savedCheckin) {
     return (
-      <div ref={rootRef}>
+      <div ref={rootRef} data-form="vehicle_checkin">
         <div style={{ textAlign: 'center', padding: '28px 0' }}>
           <div style={{
             width: '64px', height: '64px', borderRadius: '50%', background: theme.successBg,
@@ -1317,7 +1324,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
     const heldSO = selectedOrder?.sales_order_number;
     const heldProof = selectedProof?.file_name || dbxSelected?.name;
     return (
-      <div ref={rootRef}>
+      <div ref={rootRef} data-form="vehicle_checkin">
         <StepIndicator current={0} />
         <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
           Fleet Check-In
@@ -1594,7 +1601,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   // ═══════════════════════════════════════════════════════════
   if (step === 1) {
     return (
-      <div ref={rootRef}>
+      <div ref={rootRef} data-form="vehicle_checkin">
         <StepIndicator current={1} />
 
         {returningNote && (
@@ -1762,8 +1769,16 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
                               {li.description && <div style={{ fontSize: '11px', color: theme.textMuted }}>{li.description}</div>}
                             </div>
                             <div style={{ textAlign: 'right', fontSize: '12px' }}>
-                              <div>{li.quantity} x ${li.rate.toFixed(2)}</div>
-                              <div style={{ fontWeight: 700 }}>${li.amount.toFixed(2)}</div>
+                              {/* Quantities are the job; rates and amounts are
+                                  what the customer was charged, which the
+                                  money rule keeps off the floor. */}
+                              <div>Qty {li.quantity}</div>
+                              {canSeeMoney && (
+                                <>
+                                  <div>@ ${li.rate.toFixed(2)}</div>
+                                  <div style={{ fontWeight: 700 }}>${li.amount.toFixed(2)}</div>
+                                </>
+                              )}
                             </div>
                           </div>
                         ))}
@@ -1821,7 +1836,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   // ═══════════════════════════════════════════════════════════
   if (step === 2) {
     return (
-      <div ref={rootRef}>
+      <div ref={rootRef} data-form="vehicle_checkin">
         <StepIndicator current={2} />
 
         {/* Summary cards */}

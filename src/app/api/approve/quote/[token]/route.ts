@@ -15,6 +15,7 @@ import { validateBody, z } from '@/lib/validate';
 import { r2PublicUrl } from '@/lib/r2';
 import { escHtml, renderQuoteDocument } from '@/lib/quote-document';
 import { wrapQuoteDocModel } from '@/lib/wrap-quote-document';
+import { recordQuoteView } from '@/lib/quote-view-recorder';
 
 export const dynamic = 'force-dynamic';
 
@@ -66,6 +67,17 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
   if (quote.status === 'rejected') {
     return NextResponse.json({ status: 'already_rejected', quote: publicQuote(quote) });
   }
+
+  // Open tracking (R6-9) — see the estimate route for why this is awaited.
+  await recordQuoteView(supabase, {
+    type: 'wrap',
+    id: quote.id,
+    req,
+    sentAt: quote.sent_at || null,
+    repIds: [quote.created_by],
+    label: `Quote ${quote.quote_number}${quote.vehicle_description ? ` — ${quote.vehicle_description}` : ''}`,
+    customerName: (quote.customer as any)?.name || null,
+  });
 
   return NextResponse.json({ status: 'ready', quote: publicQuote(quote) });
 }

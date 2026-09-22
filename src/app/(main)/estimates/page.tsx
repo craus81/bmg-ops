@@ -6,11 +6,19 @@ import { usePopout } from '@/components/Popout';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
+import HistoryButton from '@/components/HistoryButton';
 import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
 import PartCatalogBrowser, { type BrowsePart, type KitWithMembers } from '@/components/PartCatalogBrowser';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
-import EmailComposeModal, { type EmailComposeAttachment, type EmailComposeFields } from '@/components/EmailComposeModal';
+import EmailComposeModal, { type EmailComposeAttachment, type EmailComposeContact, type EmailComposeFields } from '@/components/EmailComposeModal';
+import { INTERNAL_STAFF_ROLES } from '@/lib/features';
+import {
+  canDecideReview,
+  reviewStateOf,
+  REVIEW_STATUS_DISPLAY,
+  type ReviewDecision,
+} from '@/lib/estimate-review';
 import { flashNote } from '@/lib/focus-note';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import { resolvePlatform, matchQualifiersToConfig } from '@/lib/vin-platform';
@@ -21,11 +29,14 @@ import { apiErrorMessage } from '@/lib/api-error-message';
 import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
-import { roundCentsHalfEven } from '@/lib/estimate-totals';
+import { roundCentsHalfEven, normalizeVehicleCount, perVehicleAmount } from '@/lib/estimate-totals';
+import { deltaLabel, type EstimateDiff } from '@/lib/estimate-diff';
+import { type DraftLine } from '@/lib/paste-to-estimate';
 import { FALLBACK_SALES_TAX_RATE, pctToRate, rateToPct } from '@/lib/sales-tax';
 import NumberInput from '@/components/NumberInput';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
 import { estimateHeadlineNumber, estimateAltNumber, estimateNumberMatches } from '@/lib/estimate-number';
+import { useFormTelemetry } from '@/lib/use-form-telemetry';
 
 interface Part {
   id: string;
@@ -39,6 +50,65 @@ interface Part {
   catalog: string;
   purchase_price: number | null;
   avg_install_cost: number | null;
+}
+
+type StockState = 'reserved' | 'available' | 'waiting' | 'short' | 'unknown';
+
+interface StockPartRow {
+  item_number: string;
+  description: string | null;
+  needed: number;
+  allocated: number;
+  free: number;
+  usable: number;
+  on_hand: number;
+  on_order: number;
+  short: number;
+  state: StockState;
+  allocatable: number;
+  pos: { tranid: string | null; vendor_name: string | null; eta_date: string | null; remaining: number }[];
+  uncatalogued: boolean;
+}
+
+interface StockReadiness {
+  vehicleCount: number;
+  stockSource: 'live' | 'mirror';
+  parts: StockPartRow[];
+  skippedNonStock: number;
+  summary: {
+    covered: number; onOrder: number; short: number; unknown: number;
+    verdict: 'reserved' | 'ready' | 'waiting' | 'short' | 'unknown';
+    lastEta: string | null;
+  };
+}
+
+/** One tone per verdict, plus the neutral one for "nobody has asked yet". */
+const STOCK_TONE: Record<StockState | StockReadiness['summary']['verdict'] | 'idle', { fg: string; bg: string; border: string }> = {
+  idle: { fg: 'var(--text-label)', bg: 'transparent', border: 'var(--border)' },
+  reserved: { fg: '#22c55e', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.25)' },
+  ready: { fg: '#22c55e', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.25)' },
+  available: { fg: '#22c55e', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.25)' },
+  waiting: { fg: '#60a5fa', bg: 'rgba(96,165,250,0.08)', border: 'rgba(96,165,250,0.25)' },
+  short: { fg: '#f87171', bg: 'rgba(248,113,113,0.08)', border: 'rgba(248,113,113,0.28)' },
+  unknown: { fg: '#fbbf24', bg: 'rgba(251,191,36,0.08)', border: 'rgba(251,191,36,0.25)' },
+};
+
+const stockEta = (d: string | null) =>
+  d ? new Date(`${d.slice(0, 10)}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' }) : null;
+
+/** The banner sentence. Says what to do about it, not just what it is. */
+function stockVerdictText(stock: StockReadiness): string {
+  const { verdict, short, onOrder, lastEta } = stock.summary;
+  const eta = stockEta(lastEta);
+  if (verdict === 'short') {
+    return `${short} part${short === 1 ? '' : 's'} not in stock and not on order — someone has to buy ${short === 1 ? 'it' : 'them'}`;
+  }
+  if (verdict === 'waiting') {
+    return `${onOrder} part${onOrder === 1 ? '' : 's'} still on order${eta ? ` — ETA ${eta}` : ''}`;
+  }
+  if (verdict === 'reserved') return 'Every part is held for this quote';
+  if (verdict === 'unknown') return 'Nothing on this estimate is in the parts catalog, so nothing could be checked';
+  return 'Everything is in stock — reserve it so another job can’t take it first';
 }
 
 interface LineItem {
@@ -80,6 +150,21 @@ interface LinkedGraphicsJob {
   /** The file a proof-only send showed the customer — the picker's default
    *  when nothing is stored yet. */
   approval_proof_file_id?: string | null;
+}
+
+/** A wrap quote feeding this estimate, and what it can put on the customer
+ *  copy (/api/estimates/[id]/graphics-attach). */
+interface WrapAttachQuote {
+  id: string;
+  quoteNumber: string;
+  vehicle: string | null;
+  proofCount: number;
+  proofLabels: string[];
+  hasDiagram: boolean;
+  fileCount: number;
+  filmCount: number;
+  totalSqft: number;
+  attach: { diagram?: boolean; attachments?: boolean; films?: boolean } | null;
 }
 
 /** A linked job's file as the approval compose proof picker lists it. */
@@ -142,6 +227,8 @@ interface Estimate {
   status: string;
   tax_rate: number;
   tax_exempt: boolean;
+  /** Identical vehicles this line set covers (R6-9, migration 304). */
+  vehicle_count?: number | null;
   labor_rate: number;
   labor_hours: number;
   labor_hours_override: number | null;
@@ -191,6 +278,15 @@ interface Estimate {
   customer_approved_via: string | null;
   customer_rejected_at: string | null;
   customer_rejection_reason: string | null;
+  // Internal (BMG-side) review before the customer send — migration 316.
+  // Independent of `status`, which tracks the customer side.
+  internal_review_status: string | null;
+  internal_reviewer_id: string | null;
+  internal_review_requested_by: string | null;
+  internal_review_requested_at: string | null;
+  internal_review_decided_by: string | null;
+  internal_review_decided_at: string | null;
+  internal_review_note: string | null;
 }
 
 // Allowed qualifier options per platform, from vehicle_platforms.config —
@@ -260,6 +356,60 @@ const STATUS_LABELS: Record<string, string> = {
   pushed: 'Pushed to NS',
 };
 
+/**
+ * What the list actually shows on a row, which is NOT `estimates.status`.
+ *
+ * The stored status never learns about the sales order: convert-to-so writes
+ * netsuite_so_id and leaves status on 'accepted', so an estimate converted
+ * weeks ago read identically to one the customer approved a minute ago —
+ * the SO number was grey metadata next to the date. Owner ask (2026-09-21):
+ * an approved estimate that has become a sales order is the signal that
+ * parts can be ordered, so it has to be the thing you see.
+ *
+ * Two derived states sit in front of the stored status. Both are computed
+ * from columns the list already loads — nothing is written, and no NetSuite
+ * call is involved.
+ */
+function estimateDisplayStatus(est: Estimate): { key: string; label: string; color: string; title?: string } {
+  // An SO exists: good to order parts. Checked first so a linked-but-
+  // unapproved estimate (link-so's repair path) still reads as sold.
+  if (est.netsuite_so_id) {
+    return {
+      key: 'sales_order',
+      label: `SO #${est.netsuite_so_number || est.netsuite_so_id}`,
+      color: '#22c55e',
+      title: 'Converted to a NetSuite sales order — good to order parts',
+    };
+  }
+  // Approved with no SO: the work nobody has converted yet. Same predicate
+  // the save/convert gates use — customer_approved is the real acceptance
+  // signal, status 'accepted' covers estimates approved by phone or PO.
+  if (est.customer_approved || est.status === 'accepted') {
+    return {
+      key: 'needs_so',
+      label: 'Needs sales order',
+      color: '#f59e0b',
+      title: 'Approved by the customer but not converted yet — open it and use Convert to Sales Order',
+    };
+  }
+  return {
+    key: est.status,
+    label: STATUS_LABELS[est.status] || est.status,
+    color: STATUS_COLORS[est.status] || '#6b7280',
+  };
+}
+
+/** Filter chips, in pipeline order. 'all' is the default. */
+const LIST_FILTERS: { key: string; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'draft', label: 'Draft' },
+  { key: 'sent', label: 'Sent' },
+  { key: 'pushed', label: 'Pushed to NS' },
+  { key: 'needs_so', label: 'Needs sales order' },
+  { key: 'sales_order', label: 'Sales orders' },
+  { key: 'rejected', label: 'Rejected' },
+];
+
 function genKey() {
   return Math.random().toString(36).substring(2, 10);
 }
@@ -277,9 +427,14 @@ export default function EstimatesPage() {
   const supabase = createClient();
 
   const [view, setView] = useState<ViewMode>('list');
+  // Usage telemetry (R7-4): a started builder attempt that returns to the
+  // list unsaved is an abandon; the localStorage draft mechanism is separate.
+  const formTel = useFormTelemetry('estimate_builder', { active: view === 'builder' });
   const [estimates, setEstimates] = useState<Estimate[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  /** One of LIST_FILTERS' keys — matched against estimateDisplayStatus. */
+  const [statusFilter, setStatusFilter] = useState('all');
   // Deep link: ?q=<term> (universal search "View all") prefills the list search.
   useEffect(() => {
     const q = searchParams.get('q');
@@ -299,12 +454,6 @@ export default function EstimatesPage() {
   // halves of "who is this for" — exactly one is set once a customer is
   // picked, and the approval/send paths accept either.
   const [prospectId, setProspectId] = useState<string | null>(null);
-  // Item numbers NetSuite marks non-taxable (netsuite_parts.is_taxable =
-  // false, migration 252). Resolved from the line set rather than threaded
-  // through every add-a-line path — catalog search, the browser, packages,
-  // wrap quotes and reload all feed the same list, and one lookup can't
-  // drift from the server's.
-  const [nonTaxableItems, setNonTaxableItems] = useState<Set<string>>(new Set());
   // Sales tax is company-wide and NOT editable here — it comes from
   // quote_settings and only a super admin can change it (Settings → Sales
   // Tax). `taxRate` still holds a per-estimate value because an already-saved
@@ -315,6 +464,34 @@ export default function EstimatesPage() {
   // re-creating themselves on every settings load.
   const companyTaxRateRef = useRef(DEFAULT_TAX_RATE);
   const [taxExempt, setTaxExempt] = useState(false);
+  /** Identical vehicles this line set covers (R6-9). 1 = an ordinary estimate. */
+  const [vehicleCount, setVehicleCount] = useState(1);
+
+  // ── Stock check (R6: "can we actually build what we just quoted?") ──
+  // Answered against the current lines, not the last save — see the
+  // /api/estimates/parts-readiness route for why that is the honest input.
+  const [stock, setStock] = useState<StockReadiness | null>(null);
+  const [stockKey, setStockKey] = useState<string | null>(null);
+  const [stockLoading, setStockLoading] = useState(false);
+  const [stockErr, setStockErr] = useState<string | null>(null);
+  const [stockBusy, setStockBusy] = useState<string | null>(null);
+  // Counter-offer workbench (R6-9): what this revision changed against the
+  // document it supersedes. Derived server-side on open, never stored.
+  // Paste-to-estimate (R6-9). The grid is a PROPOSAL — nothing reaches the
+  // line list until the rep accepts it here.
+  const [draftOpen, setDraftOpen] = useState(false);
+  const [draftText, setDraftText] = useState('');
+  const [draftBusy, setDraftBusy] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [draftResult, setDraftResult] = useState<{
+    vehicleCount: number | null;
+    lines: DraftLine[];
+    summary: { total: number; exact: number; suggested: number; unmatched: number; missingQuantity: number; missingPrice: number };
+    truncated: { found: number; shown: number } | null;
+  } | null>(null);
+  const [draftPicked, setDraftPicked] = useState<Set<number>>(new Set());
+
+  const [revisionDiff, setRevisionDiff] = useState<{ diff: EstimateDiff | null; original: { estimateNumber: string; rejectionReason: string | null } | null } | null>(null);
   const [laborRate, setLaborRate] = useState(DEFAULT_LABOR_RATE);
   const [laborOverride, setLaborOverride] = useState<number | null>(null);
   const [lines, setLines] = useState<LineItem[]>([]);
@@ -562,6 +739,16 @@ export default function EstimatesPage() {
   const [openingRejectionThread, setOpeningRejectionThread] = useState(false);
   // Busy while the estimate saves ahead of opening the compose screen.
   const [sendingForApproval, setSendingForApproval] = useState(false);
+  // ── Internal review (migration 316) ──
+  // Same compose screen as the customer send, pointed at a BMG teammate:
+  // they read the estimate, edit it, then approve it or hand it back.
+  const [reviewModal, setReviewModal] = useState(false);
+  const [sendingForReview, setSendingForReview] = useState(false);
+  const [reviewPdfName, setReviewPdfName] = useState<string | null>(null);
+  const [decidingReview, setDecidingReview] = useState(false);
+  // Approved internal staff — the reviewer dropdown, and the names the
+  // review banner shows for reviewer/requester ids.
+  const [staffDirectory, setStaffDirectory] = useState<{ id: string; name: string; email: string }[]>([]);
   // Approval email goes through the standard compose screen (E4 +
   // docs/customer-email-standard.md): editable recipients, bcc-me,
   // personal note, and the exact rendered document as a live preview.
@@ -626,6 +813,16 @@ export default function EstimatesPage() {
   const [graphicsPickerSearch, setGraphicsPickerSearch] = useState('');
   const [graphicsPickerResults, setGraphicsPickerResults] = useState<LinkedGraphicsJob[]>([]);
 
+  // Coverage proofs from linked wrap quotes. wrap_quotes.estimate_attach
+  // (migration 223) used to be written ONLY by the wrap estimator's
+  // Add-to-Estimate checkboxes, i.e. frozen the moment graphics were added:
+  // a proof drawn afterwards could never reach the estimate. These flags are
+  // now editable here, and the estimate keeps pointing at the quote rather
+  // than copying it — so a redrawn proof updates the customer's copy on its
+  // own. See /api/estimates/[id]/graphics-attach.
+  const [wrapAttachQuotes, setWrapAttachQuotes] = useState<WrapAttachQuote[]>([]);
+  const [wrapAttachSaving, setWrapAttachSaving] = useState<string | null>(null);
+
   useEffect(() => {
     if (!user) return;
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
@@ -633,6 +830,31 @@ export default function EstimatesPage() {
     loadEstimates();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, user, isAdmin, isSales, isGraphicsProduction]);
+
+  // BMG staff directory — the internal-review reviewer dropdown, and the
+  // names behind reviewer/requester ids on the review banner. Same audience
+  // the server accepts as a reviewer (INTERNAL_STAFF_ROLES): a customer or
+  // an external installer account can't review an estimate.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, full_name, email, role, roles')
+        .eq('status', 'approved')
+        .order('full_name');
+      if (cancelled) return;
+      setStaffDirectory((data || [])
+        .filter((p: any) => {
+          const roles: string[] = p.roles?.length ? p.roles : [p.role];
+          return p.email && roles.some((r: string) => INTERNAL_STAFF_ROLES.includes(r));
+        })
+        .map((p: any) => ({ id: p.id, name: p.full_name || p.email, email: String(p.email).toLowerCase() })));
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per session
+  }, [user]);
 
   // Auto-open estimate from URL param (deep link from notifications/search).
   // One-shot per id: ?id= stays in the URL, and the effect re-runs whenever
@@ -823,7 +1045,7 @@ export default function EstimatesPage() {
   // save retires it. See src/lib/estimate-draft.ts.
   const draftFields = {
     editingId, title, notes, customerId, prospectId, customerName, customerNsId,
-    taxRate, taxExempt, laborRate, laborOverride, lines,
+    taxRate, taxExempt, vehicleCount, laborRate, laborOverride, lines,
     vin, unitNumber, vehiclePlatformId, vehicleOther, vehicleOtherMode,
     vehicleYear, vehicleWheelbase, vehicleRoof, vehicleCab, vehicleBed,
     installInstructions, onSiteContactName, onSiteContactPhone,
@@ -900,6 +1122,7 @@ export default function EstimatesPage() {
     setProspectId(f.prospectId ?? null);
     setTaxRate(typeof f.taxRate === 'number' ? f.taxRate : companyTaxRateRef.current);
     setTaxExempt(!!f.taxExempt);
+    setVehicleCount(normalizeVehicleCount((f as any).vehicleCount));
     setLaborRate(typeof f.laborRate === 'number' ? f.laborRate : DEFAULT_LABOR_RATE);
     setLaborOverride(typeof f.laborOverride === 'number' ? f.laborOverride : null);
     setLines(Array.isArray(f.lines)
@@ -1087,6 +1310,73 @@ export default function EstimatesPage() {
     partSearchRef.current?.focus();
   };
 
+  // ── Paste-to-estimate (R6-9) ──────────────────────────────────────────
+  const runDraft = async () => {
+    if (draftBusy || draftText.trim().length < 10) return;
+    setDraftBusy(true);
+    setDraftError(null);
+    setDraftResult(null);
+    try {
+      const res = await fetch('/api/estimates/draft-from-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: draftText }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setDraftError(data.error || 'Could not draft from that text'); return; }
+      setDraftResult(data);
+      // Pre-ticked: only what was matched with confidence. A weak suggestion
+      // and an unmatched request both need a decision, so neither arrives
+      // already accepted.
+      setDraftPicked(new Set(
+        (data.lines as DraftLine[])
+          .map((l, i) => (l.confidence === 'exact' || l.confidence === 'strong' ? i : -1))
+          .filter(i => i >= 0),
+      ));
+    } catch (e: any) {
+      setDraftError(e?.message || 'Network error');
+    } finally {
+      setDraftBusy(false);
+    }
+  };
+
+  const acceptDraft = () => {
+    if (!draftResult) return;
+    const additions: LineItem[] = [];
+    draftResult.lines.forEach((l, i) => {
+      if (!draftPicked.has(i)) return;
+      const p = l.part;
+      additions.push({
+        key: genKey(),
+        part_id: p?.id || null,
+        netsuite_item_id: p?.netsuite_id || null,
+        item_number: p?.item_number || '',
+        description: p?.display_name || p?.description || l.request.description,
+        // An unstated quantity lands as 1 HERE, where the rep is looking at
+        // the line and can change it — not silently inside the extraction.
+        quantity: l.request.quantity ?? 1,
+        // Never the model's number: the catalog price, or 0 for a line the
+        // rep has to price, which the builder already flags as a custom line.
+        unit_price: l.unitPrice ?? 0,
+        labor_hours: l.laborHours ?? null,
+        is_custom: !p,
+        notes: p ? undefined : `From the request: "${l.request.raw}"`,
+        purchase_price: (p as any)?.purchase_price ?? null,
+        avg_install_cost: (p as any)?.avg_install_cost ?? null,
+      });
+    });
+    if (additions.length > 0) setLines(prev => [...prev, ...additions]);
+    // The vehicle count is the customer's own statement, so it fills the
+    // header field — visibly, where the rep can correct it.
+    if (draftResult.vehicleCount && draftResult.vehicleCount > 1) {
+      setVehicleCount(normalizeVehicleCount(draftResult.vehicleCount));
+    }
+    setDraftOpen(false);
+    setDraftText('');
+    setDraftResult(null);
+    setDraftPicked(new Set());
+  };
+
   // ── Packages (N4-B): explode a kit template into ordinary lines ──
   // Each member arrives as a normal item line, so inventory downstream is
   // untouched machinery: members commit on SO conversion and decrement on
@@ -1207,59 +1497,124 @@ export default function EstimatesPage() {
   const unmatchedLines = lines.filter(l => !l.netsuite_item_id);
 
   // ── Computed totals ──
-  const subtotal = lines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
-  const autoLaborHours = lines.reduce((s, l) => s + ((l.labor_hours ?? 0) * l.quantity), 0);
+  // Fleet multi-unit (R6-9): the count multiplies LINE QUANTITIES, never the
+  // finished totals — mirroring computeTotals on the server, which is what
+  // actually gets stored. Multiplying totals would break the per-line tax
+  // rounding that keeps the quote and the NetSuite invoice penny-identical.
+  const units = normalizeVehicleCount(vehicleCount);
+  const fleetQty = (l: LineItem) => l.quantity * units;
+  const subtotal = lines.reduce((s, l) => s + fleetQty(l) * l.unit_price, 0);
+  const autoLaborHours = lines.reduce((s, l) => s + ((l.labor_hours ?? 0) * fleetQty(l)), 0);
   // Lines built from parts whose labor was never set (NULL, migration 258):
   // they sum as zero, which is exactly the silent under-quote to flag.
   const laborUnsetCount = lines.filter(l => !l.is_custom && l.labor_hours == null).length;
   const effectiveLaborHours = laborOverride !== null ? laborOverride : autoLaborHours;
   const laborTotal = effectiveLaborHours * laborRate;
-  // Parts/materials only (never labor), minus anything NetSuite marks
-  // non-taxable — Freight is the live case. Mirrors computeTotals on the
-  // server, which is what actually gets stored: only an explicit false
-  // excludes, so an unmatched or un-synced item is still taxed.
-  const isLineTaxable = (l: LineItem) =>
-    !nonTaxableItems.has(String(l.item_number || '').trim().toUpperCase());
-  const taxableAmount = lines.reduce((s, l) => (isLineTaxable(l) ? s + l.quantity * l.unit_price : s), 0);
+  // Parts/materials only (never labor) — every one of them. Mirrors
+  // computeTotals on the server, which is what actually gets stored. The
+  // per-item exclusion that used to live here is gone; see the note atop
+  // src/lib/estimate-totals.ts.
   // Per line, each rounded to cents, ties to the even cent — the same math
   // computeTotals runs server-side, which is the same math NetSuite books.
-  // Taxing `taxableAmount` in one go drifts a cent or two off the invoice.
+  // Taxing the combined base in one go drifts a cent or two off the invoice.
   const taxAmount = taxExempt
     ? 0
-    : lines.reduce((s, l) => (isLineTaxable(l)
-      ? s + roundCentsHalfEven(l.quantity * l.unit_price * taxRate)
-      : s), 0);
+    : lines.reduce((s, l) => s + roundCentsHalfEven(fleetQty(l) * l.unit_price * taxRate), 0);
   // Compare at the precision the rate is displayed and stored at — a float
   // round-trip through the database is not a "different rate".
   const atCompanyRate = Math.abs(rateToPct(taxRate) - rateToPct(companyTaxRate)) < 0.005;
   const grandTotal = subtotal + laborTotal + taxAmount;
+  const perVehicle = perVehicleAmount(grandTotal, units);
 
-  // Refresh the non-taxable set whenever the line-up of items changes. Keyed
-  // on the sorted item numbers, so re-ordering or a quantity edit doesn't
-  // re-query. An item that can't be resolved simply isn't in the set, which
-  // means taxed — the same fallback the server takes.
-  const lineItemKey = [...new Set(lines.map(l => String(l.item_number || '').trim().toUpperCase()).filter(Boolean))]
-    .sort().join('|');
+  // ── Stock check ──
+  // The signature is what the answer was computed FOR: item numbers,
+  // quantities and the vehicle count. Anything else about a line (price,
+  // description, order) can't change whether the parts are on the shelf, so
+  // it must not mark a perfectly good answer stale.
+  const stockSignature = `${units}|${lines
+    .map(l => `${String(l.item_number || '').trim().toUpperCase()}:${l.quantity}`)
+    .filter(x => !x.startsWith(':'))
+    .sort()
+    .join(',')}`;
+  const stockStale = stock != null && stockKey !== stockSignature;
+  const stockLines = () => lines.map(l => ({ item_number: l.item_number, quantity: l.quantity }));
+  const stockByItem = new Map((stock?.parts || []).map(r => [r.item_number, r]));
+
+  const applyStock = (data: StockReadiness, signature: string) => {
+    setStock(data);
+    setStockKey(signature);
+    setStockErr(null);
+  };
+
+  const checkStock = async () => {
+    const signature = stockSignature;
+    setStockLoading(true);
+    setStockErr(null);
+    try {
+      const res = await fetch('/api/estimates/parts-readiness', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ estimateId: editingId, vehicleCount: units, lines: stockLines() }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setStockErr(data.error || 'Stock check failed'); return; }
+      applyStock(data, signature);
+    } catch (e: any) {
+      setStockErr(e?.message || 'Stock check failed');
+    } finally {
+      setStockLoading(false);
+    }
+  };
+
+  /** Reserve / release. `item` is null for the whole-estimate actions. */
+  const holdStock = async (
+    action: 'set' | 'allocate_all' | 'release_all',
+    item?: string,
+    quantity?: number,
+  ) => {
+    if (!editingId) { setStockErr('Save the estimate first — a hold has to belong to something.'); return; }
+    const signature = stockSignature;
+    setStockBusy(item || action);
+    setStockErr(null);
+    try {
+      const res = await fetch('/api/estimates/allocations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action, estimateId: editingId, vehicleCount: units, lines: stockLines(),
+          ...(action === 'set' ? { itemNumber: item, quantity } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setStockErr(data.error || 'Could not change the hold'); return; }
+      applyStock(data, signature);
+    } catch (e: any) {
+      setStockErr(e?.message || 'Could not change the hold');
+    } finally {
+      setStockBusy(null);
+    }
+  };
+
+  // Check once when an existing estimate is opened, so the answer is already
+  // there when someone goes looking for it. Not on every edit: the check asks
+  // NetSuite for live quantities, and firing that per keystroke would be
+  // rude to the account and slower than the typing. Edits mark it stale
+  // instead, and the banner says so.
+  const stockAutoRef = useRef<string | null>(null);
   useEffect(() => {
-    const numbers = lineItemKey ? lineItemKey.split('|') : [];
-    if (numbers.length === 0) { setNonTaxableItems(new Set()); return; }
-    let cancelled = false;
-    (async () => {
-      const found = new Set<string>();
-      for (let i = 0; i < numbers.length; i += 200) {
-        const { data } = await supabase
-          .from('netsuite_parts')
-          .select('item_number, is_taxable')
-          .in('item_number', numbers.slice(i, i + 200));
-        for (const p of data || []) {
-          if (p.is_taxable === false) found.add(String(p.item_number || '').trim().toUpperCase());
-        }
-      }
-      if (!cancelled) setNonTaxableItems(found);
-    })();
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- the item line-up is the only real input; the client is stable
-  }, [lineItemKey]);
+    if (view !== 'builder' || !editingId || lines.length === 0) return;
+    if (stockAutoRef.current === editingId) return;
+    stockAutoRef.current = editingId;
+    void checkStock();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one shot per opened estimate
+  }, [view, editingId, lines.length]);
+
+  useEffect(() => {
+    // A different estimate (or a new one) gets a clean slate, never the
+    // previous estimate's verdict sitting under its lines.
+    setStock(null); setStockKey(null); setStockErr(null);
+    stockAutoRef.current = null;
+  }, [editingId]);
 
   // ── Margin (internal only — never on the customer-facing quote) ──
   // True cost per line = NetSuite part cost + avg installer cost. Lines with
@@ -1270,8 +1625,12 @@ export default function EstimatesPage() {
   const lineMarginPct = (l: LineItem): number | null =>
     lineHasCost(l) && l.unit_price > 0 ? ((l.unit_price - lineTrueCost(l)) / l.unit_price) * 100 : null;
   const costedLines = lines.filter(lineHasCost);
-  const trueCostTotal = costedLines.reduce((s, l) => s + l.quantity * lineTrueCost(l), 0);
-  const costedRevenue = costedLines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
+  // Fleet multi-unit (R6-9): the margin strip reports the WHOLE job, matching
+  // the Total beside it. The percentage is unchanged either way — scaling both
+  // sides cannot move a ratio — but per-vehicle dollars under a fleet total
+  // would read as the job's margin and be off by the vehicle count.
+  const trueCostTotal = costedLines.reduce((s, l) => s + fleetQty(l) * lineTrueCost(l), 0);
+  const costedRevenue = costedLines.reduce((s, l) => s + fleetQty(l) * l.unit_price, 0);
   const marginDollars = costedRevenue - trueCostTotal;
   const marginPct = costedRevenue > 0 ? (marginDollars / costedRevenue) * 100 : null;
   const uncostedCount = lines.length - costedLines.length;
@@ -1296,6 +1655,7 @@ export default function EstimatesPage() {
         title, notes, status,
         tax_rate: taxRate,
         tax_exempt: taxExempt,
+        vehicle_count: units,
         labor_rate: laborRate,
         labor_hours_override: laborOverride,
         install_instructions: installInstructions,
@@ -1401,6 +1761,7 @@ export default function EstimatesPage() {
         // ('new' on a first save, which then re-keys under the real id).
         clearEstimateDraft(editingId);
         if (savedId !== editingId) clearEstimateDraft(savedId);
+        formTel.markSubmitted();
         setDraftSession(s => s + 1);
         if (!editingId || revisionJumped) setEditingId(savedId);
         // On a revision jump the saved notes carry the provenance line —
@@ -1409,7 +1770,7 @@ export default function EstimatesPage() {
         if (revisionJumped && revisionNotes !== null) setInternalNotes(revisionNotes);
         // The revision starts with no attached graphics jobs — refresh the
         // panel so it doesn't keep showing the original's links.
-        if (revisionJumped) loadLinkedGraphicsJobs(savedId);
+        if (revisionJumped) { loadLinkedGraphicsJobs(savedId); loadWrapAttach(savedId); }
         // Notify teammates newly @mentioned in the internal notes this save.
         if (savedNotes !== savedInternalNotesRef.current) {
           reportMentions({
@@ -1726,7 +2087,15 @@ export default function EstimatesPage() {
       // the screen is worse than handing over nothing.
       if (!saved) { w?.close(); return; }
     }
-    const url = `/api/estimates/${editingId}/pdf${print ? '?print=1' : ''}`;
+    // Every open gets its own URL. The endpoint sends `Cache-Control:
+    // no-store`, but a bare tab navigation at a FIXED url is still a cache
+    // key, and printing an estimate, editing it, and printing again handed
+    // back the browser's stored copy of the first render — the document was
+    // right, the file was old (field bug: an edited labor override kept
+    // printing at the previous hours, while the NetSuite copy, fetched as
+    // bytes each time, was correct). A url nothing has seen before cannot
+    // be served from any cache.
+    const url = `/api/estimates/${editingId}/pdf?t=${Date.now()}${print ? '&print=1' : ''}`;
     if (w) w.location.href = url;
     else window.open(url, '_blank');
   };
@@ -2088,8 +2457,135 @@ export default function EstimatesPage() {
     loadEstimates(true);
     // The send persisted the proof selection onto the linked jobs
     // (estimate_attach) — refresh so the panel reflects it.
-    if (editingId) loadLinkedGraphicsJobs(editingId);
+    if (editingId) { loadLinkedGraphicsJobs(editingId); loadWrapAttach(editingId); }
     return { ok: true };
+  };
+
+  // ── Internal review: send it to a teammate first (migration 316) ──
+  // The reviewer of record is the first To address with a FleetView login —
+  // the server resolves it and says who it landed on.
+
+  const staffName = (id: string | null | undefined) =>
+    staffDirectory.find(s => s.id === id)?.name || 'a teammate';
+
+  // Reviewer dropdown: internal staff, minus yourself (reviewing your own
+  // estimate is the thing this step exists to avoid).
+  const reviewerContacts: EmailComposeContact[] = useMemo(
+    () => staffDirectory
+      .filter(s => s.email !== (user?.email || '').toLowerCase())
+      .map(s => ({ name: s.name, email: s.email })),
+    [staffDirectory, user?.email],
+  );
+
+  const fetchReviewPreview = async (fields: EmailComposeFields) => {
+    if (!editingId) return { error: 'No estimate open' };
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/send-for-review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          preview: true,
+          emails: fields.emails,
+          message: fields.message || undefined,
+          attachmentFileIds: fields.attachmentIds,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.preview) {
+        setReviewPdfName((Array.isArray(data.attachments) && data.attachments[0]) || null);
+        return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      }
+      return { error: data.error || 'Unknown error' };
+    } catch {
+      return { error: 'Network error — please try again.' };
+    }
+  };
+
+  const openReviewModal = async () => {
+    if (!editingId || sendingForReview) return;
+    // Persist edits first, exactly like the customer send: the reviewer must
+    // see (and the preview must render) what is actually saved.
+    setSendingForReview(true);
+    const currentStatus = estimates.find(e => e.id === editingId)?.status || 'draft';
+    await saveEstimate(currentStatus);
+    await loadEstimateFiles(editingId);
+    setSendingForReview(false);
+    setReviewPdfName(null);
+    setReviewModal(true);
+  };
+
+  const confirmSendReview = async (fields: EmailComposeFields): Promise<{ ok: boolean }> => {
+    if (!editingId) return { ok: false };
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/send-for-review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          emails: fields.emails,
+          bccSelf: fields.bccSelf,
+          cc: fields.cc,
+          message: fields.message || undefined,
+          attachmentFileIds: fields.attachmentIds,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
+        return { ok: false };
+      }
+      const em = data.dispatch?.email;
+      const delivery = em
+        ? (em.ok
+            ? `Email sent to ${em.target}${em.bcc ? ` (bcc ${em.bcc})` : ''}.`
+            : `Email failed: ${em.error || 'unknown'} — they still have the review in FleetView.`)
+        : '';
+      await dialog.alert(
+        `${data.reassigned ? 'Review reassigned to' : 'Sent for review to'} ${data.reviewer?.name || 'your teammate'}.\n\n${delivery}\n\nNothing has gone to the customer.`,
+      );
+      loadEstimates(true);
+      return { ok: true };
+    } catch {
+      await dialog.alert('Network error — please try again.');
+      return { ok: false };
+    }
+  };
+
+  // The reviewer's answer: clear it to send, or hand it back with notes.
+  const submitReviewDecision = async (decision: ReviewDecision) => {
+    if (!editingId || decidingReview) return;
+    let note: string | null = null;
+    if (decision === 'changes_requested') {
+      const typed = await dialog.prompt(
+        'What needs changing? This goes back to whoever asked for the review, with a link to the estimate.',
+        '',
+        { title: 'Send back with notes', confirmLabel: 'Send back', placeholder: 'What you changed, or what you want changed' },
+      );
+      if (typed === null || !typed.trim()) return;
+      note = typed.trim();
+    } else if (!(await dialog.confirm('Approve this estimate? The person who asked is told it\'s cleared to send to the customer.'))) {
+      return;
+    }
+    setDecidingReview(true);
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/review-decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision, ...(note ? { note } : {}) }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        await dialog.alert('Could not record that: ' + (data.error || 'Unknown error'));
+        return;
+      }
+      await dialog.alert(decision === 'approved'
+        ? 'Approved — they have been told it is cleared to send.'
+        : 'Sent back with your notes.');
+      loadEstimates(true);
+    } catch {
+      await dialog.alert('Network error — please try again.');
+    } finally {
+      setDecidingReview(false);
+    }
   };
 
   const convertToSalesOrder = async () => {
@@ -2237,6 +2733,16 @@ export default function EstimatesPage() {
     setProspectId(est.prospect_id ?? null);
     setTaxRate(est.tax_rate || companyTaxRateRef.current);
     setTaxExempt(est.tax_exempt);
+    setVehicleCount(normalizeVehicleCount(est.vehicle_count));
+    // Best-effort: a comparison that will not load is not a reason to fail
+    // opening the estimate.
+    setRevisionDiff(null);
+    if (est.supersedes_estimate_id) {
+      fetch(`/api/estimates/${est.id}/revision-diff`)
+        .then(r => r.json())
+        .then(d => setRevisionDiff(d?.diff ? { diff: d.diff, original: d.original || null } : null))
+        .catch(() => {});
+    }
     setLaborRate(est.labor_rate || DEFAULT_LABOR_RATE);
     setLaborOverride(est.labor_hours_override);
     setVin(est.vin || '');
@@ -2311,6 +2817,7 @@ export default function EstimatesPage() {
 
     if (est.customer_id) loadCustomerDefaults(est.customer_id);
     loadLinkedGraphicsJobs(est.id);
+    loadWrapAttach(est.id);
 
     // Loaded server state = the autosave baseline; then offer any local
     // backup of unsaved edits (crash / stray navigation) on top of it.
@@ -2440,6 +2947,39 @@ export default function EstimatesPage() {
     setLinkedGraphicsJobs((data as LinkedGraphicsJob[]) || []);
   }, [supabase]);
 
+  // ── Coverage proofs from linked wrap quotes ──
+  const loadWrapAttach = useCallback(async (estimateId: string) => {
+    try {
+      const res = await fetch(`/api/estimates/${estimateId}/graphics-attach`);
+      const data = await res.json();
+      setWrapAttachQuotes(res.ok && Array.isArray(data.quotes) ? data.quotes : []);
+    } catch {
+      setWrapAttachQuotes([]);
+    }
+  }, []);
+
+  const toggleWrapAttach = async (quoteId: string, field: 'diagram' | 'attachments' | 'films', on: boolean) => {
+    if (!editingId || wrapAttachSaving) return;
+    setWrapAttachSaving(quoteId);
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/graphics-attach`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wrapQuoteId: quoteId, attach: { [field]: on } }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        await dialog.alert(apiErrorMessage(data, 'Could not change what this quote puts on the estimate.'));
+        return;
+      }
+      if (data.quote) setWrapAttachQuotes(prev => prev.map(q => (q.id === quoteId ? data.quote : q)));
+    } catch {
+      await dialog.alert('Network error — please try again.');
+    } finally {
+      setWrapAttachSaving(null);
+    }
+  };
+
   const spawnGraphicsJob = async () => {
     if (!editingId) return;
     setGraphicsLinking(true);
@@ -2515,6 +3055,8 @@ export default function EstimatesPage() {
     setProspectId(null);
     setTaxRate(companyTaxRateRef.current);
     setTaxExempt(false);
+    setVehicleCount(1);
+    setRevisionDiff(null);
     setLaborRate(DEFAULT_LABOR_RATE);
     setLaborOverride(null);
     setLines([]);
@@ -2547,6 +3089,7 @@ export default function EstimatesPage() {
     savedInternalNotesRef.current = '';
     setCustomerDefaults(null);
     setLinkedGraphicsJobs([]);
+    setWrapAttachQuotes([]);
     setShowGraphicsPicker(false);
     setGraphicsPickerSearch('');
     setGraphicsPickerResults([]);
@@ -2708,7 +3251,7 @@ export default function EstimatesPage() {
 
   // ═══════════ LIST VIEW ═══════════
   if (view === 'list') {
-    const filteredEstimates = estimates.filter(e => {
+    const searchedEstimates = estimates.filter(e => {
       if (!search) return true;
       const s = search.toLowerCase();
       return (
@@ -2719,6 +3262,16 @@ export default function EstimatesPage() {
         e.unit_number?.toLowerCase().includes(s)
       );
     });
+    // Counts come off the searched set, so a chip's number always matches
+    // what clicking it shows.
+    const filterCounts = searchedEstimates.reduce<Record<string, number>>((acc, e) => {
+      const key = estimateDisplayStatus(e).key;
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    const filteredEstimates = statusFilter === 'all'
+      ? searchedEstimates
+      : searchedEstimates.filter(e => estimateDisplayStatus(e).key === statusFilter);
 
     return (
       <div>
@@ -2736,17 +3289,47 @@ export default function EstimatesPage() {
           placeholder="Search estimates..."
           value={search}
           onChange={e => setSearch(e.target.value)}
-          style={{ ...inputStyle, marginBottom: '12px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}
+          style={{ ...inputStyle, marginBottom: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}
         />
+
+        {/* Pipeline filter. "Needs sales order" is the one that earns its
+            keep: approved work waiting on a conversion nobody has done. */}
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
+          {LIST_FILTERS.map(f => {
+            const count = f.key === 'all' ? searchedEstimates.length : (filterCounts[f.key] || 0);
+            const active = statusFilter === f.key;
+            // Keep a chip you're standing on, even at zero, so the list
+            // doesn't explain its own emptiness by vanishing.
+            if (count === 0 && !active && f.key !== 'all') return null;
+            return (
+              <button
+                key={f.key}
+                onClick={() => setStatusFilter(f.key)}
+                style={{
+                  padding: '5px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 700,
+                  cursor: 'pointer', whiteSpace: 'nowrap',
+                  background: active ? 'rgba(238,49,32,0.12)' : 'var(--subtle-bg)',
+                  border: `1px solid ${active ? 'rgba(238,49,32,0.4)' : 'var(--border)'}`,
+                  color: active ? theme.orange : 'var(--text-label)',
+                }}
+              >
+                {f.label} {count}
+              </button>
+            );
+          })}
+        </div>
 
         {filteredEstimates.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-label)', fontSize: '13px' }}>
-            {search ? 'No matching estimates.' : 'No estimates yet. Create one to get started.'}
+            {statusFilter !== 'all' ? 'Nothing in this state right now.'
+              : search ? 'No matching estimates.'
+              : 'No estimates yet. Create one to get started.'}
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {filteredEstimates.map(est => {
-              const statusColor = STATUS_COLORS[est.status] || '#6b7280';
+              const display = estimateDisplayStatus(est);
+              const statusColor = display.color;
               return (
                 <button
                   key={est.id}
@@ -2771,7 +3354,8 @@ export default function EstimatesPage() {
                         <span style={{ color: 'var(--text-body)', fontWeight: 700 }}>{fmt(est.grand_total)}</span>
                         <span>{new Date(est.created_at).toLocaleDateString()}</span>
                         {estimateAltNumber(est) && <span style={{ color: '#a78bfa' }} title="FleetSuite's own estimate number — NetSuite's is the one shown first">FS: {estimateAltNumber(est)}</span>}
-                        {est.netsuite_so_number && <span style={{ color: '#22c55e' }}>SO: {est.netsuite_so_number}</span>}
+                        {/* The SO number moved to the status pill — showing it
+                            here too put it on the row twice. */}
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
@@ -2835,12 +3419,34 @@ export default function EstimatesPage() {
                           PDF
                         </button>
                       )}
-                      <div style={{
+                      {/* Internal review, next to (not instead of) the
+                          customer-side status — they answer different
+                          questions and an estimate can be mid-both. */}
+                      {(() => {
+                        const rs = reviewStateOf(est);
+                        if (!rs.status) return null;
+                        const d = REVIEW_STATUS_DISPLAY[rs.status];
+                        return (
+                          <div
+                            title={rs.status === 'pending'
+                              ? `In review with ${staffName(rs.reviewerId)}`
+                              : `${d.label} by ${staffName(rs.decidedBy)}${rs.note ? ` — “${rs.note}”` : ''}`}
+                            style={{
+                              padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                              background: `${d.color}18`, border: `1px solid ${d.color}44`,
+                              color: d.color, whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {d.label}
+                          </div>
+                        );
+                      })()}
+                      <div title={display.title} style={{
                         padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                         background: `${statusColor}18`, border: `1px solid ${statusColor}44`,
                         color: statusColor, whiteSpace: 'nowrap',
                       }}>
-                        {STATUS_LABELS[est.status] || est.status}
+                        {display.label}
                       </div>
                       {isAdmin && (
                         <button
@@ -2868,10 +3474,18 @@ export default function EstimatesPage() {
   }
 
   // ═══════════ BUILDER VIEW ═══════════
-  const isPushed = editingId && estimates.find(e => e.id === editingId)?.netsuite_estimate_id;
+  const editingEst = editingId ? estimates.find(e => e.id === editingId) : null;
+  const isPushed = editingEst?.netsuite_estimate_id;
+  // The number the rep is looking at. The builder used to say only
+  // "Editing" — someone on the phone with a customer who asked "which
+  // estimate?" had to leave the screen they were editing to find out.
+  // Same headline/alt pair the list uses (src/lib/estimate-number.ts):
+  // NetSuite's number once it exists, FleetSuite's beside it.
+  const editingNumber = editingId ? estimateHeadlineNumber(editingEst) : '';
+  const editingAltNumber = editingId ? estimateAltNumber(editingEst) : null;
 
   return (
-    <div>
+    <div data-form="estimate_builder">
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
         <button
@@ -2880,9 +3494,33 @@ export default function EstimatesPage() {
         >
           ← Back to Estimates
         </button>
-        <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>
-          {editingId ? 'Editing' : 'New Estimate'}
-        </div>
+        {editingId && editingNumber ? (
+          <div style={{ textAlign: 'right', minWidth: 0 }}>
+            <div style={{ fontSize: '10px', color: 'var(--text-label)', lineHeight: 1.3 }}>Editing</div>
+            <div
+              title="Click to select — the estimate number a customer will quote back at you"
+              style={{
+                fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)',
+                fontVariantNumeric: 'tabular-nums', userSelect: 'all', lineHeight: 1.2,
+              }}
+            >
+              #{editingNumber}
+            </div>
+            {editingAltNumber && (
+              <div
+                title="FleetSuite's own estimate number — NetSuite's is the one shown first"
+                style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa', userSelect: 'all' }}
+              >
+                FS: {editingAltNumber}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>
+            {/* No number until the first save mints one. */}
+            {editingId ? 'Editing' : 'New Estimate'}
+          </div>
+        )}
       </div>
 
       {/* Customer Selection */}
@@ -3122,7 +3760,7 @@ export default function EstimatesPage() {
               )}
             </div>
             {checkinPickerOpen && (
-              <div style={{ position: 'absolute', top: '100%', left: 0, zIndex: 60, marginTop: '4px', width: 'min(520px, 92vw)', background: 'var(--card)', border: '1px solid var(--border-strong)', borderRadius: '10px', boxShadow: '0 8px 24px rgba(0,0,0,0.25)', padding: '10px' }}>
+              <div style={{ position: 'absolute', top: '100%', left: 0, zIndex: 60, marginTop: '4px', width: 'min(520px, calc(92vw / var(--ts)))', background: 'var(--card)', border: '1px solid var(--border-strong)', borderRadius: '10px', boxShadow: '0 8px 24px rgba(0,0,0,0.25)', padding: '10px' }}>
                 <input
                   autoFocus
                   value={checkinSearch}
@@ -3313,6 +3951,87 @@ export default function EstimatesPage() {
           )}
         </div>
 
+        {/* ── STOCK CHECK ──
+            "Do we have everything for this order?" answered without leaving
+            the estimate. Read-only until someone chooses to hold the parts:
+            a hold counts against free stock for every other job and quote,
+            so it is never automatic. */}
+        {lines.length > 0 && (
+          <div style={{
+            marginBottom: '8px', padding: '8px 10px', borderRadius: '8px',
+            border: `1px solid ${STOCK_TONE[stock && !stockStale ? stock.summary.verdict : 'idle'].border}`,
+            background: STOCK_TONE[stock && !stockStale ? stock.summary.verdict : 'idle'].bg,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <div style={{ flex: 1, minWidth: '200px', fontSize: '11px', fontWeight: 700, color: STOCK_TONE[stock && !stockStale ? stock.summary.verdict : 'idle'].fg }}>
+                {stockLoading ? 'Checking stock…'
+                  : !stock ? 'Stock not checked yet'
+                    : stockStale ? 'Lines changed since the last check'
+                      : stockVerdictText(stock)}
+              </div>
+              <button
+                type="button"
+                onClick={checkStock}
+                disabled={stockLoading}
+                title="Check on-hand stock, what other jobs and quotes have reserved, and what's on order"
+                style={{
+                  padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 800,
+                  border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)',
+                  cursor: stockLoading ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+                }}
+              >
+                {stock && !stockStale ? 'Re-check' : 'Check stock'}
+              </button>
+              {stock && !stockStale && editingId && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => holdStock('allocate_all')}
+                    disabled={stockBusy != null || !stock.parts.some(r => r.allocatable > 0)}
+                    title="Hold every part that's free right now, so another job or quote can't take it first"
+                    style={{
+                      padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 800,
+                      border: '1px solid rgba(34,197,94,0.35)', background: 'rgba(34,197,94,0.1)', color: '#22c55e',
+                      cursor: stockBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+                      opacity: stock.parts.some(r => r.allocatable > 0) ? 1 : 0.4,
+                    }}
+                  >
+                    {stockBusy === 'allocate_all' ? 'Holding…' : 'Reserve available'}
+                  </button>
+                  {stock.parts.some(r => r.allocated > 0) && (
+                    <button
+                      type="button"
+                      onClick={() => holdStock('release_all')}
+                      disabled={stockBusy != null}
+                      title="Give every part this quote is holding back to the pool"
+                      style={{
+                        padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 800,
+                        border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-muted)',
+                        cursor: stockBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {stockBusy === 'release_all' ? 'Releasing…' : 'Release all'}
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+
+            {stock && !stockStale && (
+              <div style={{ marginTop: '4px', fontSize: '9px', color: 'var(--text-label)' }}>
+                {stock.stockSource === 'mirror' && 'NetSuite didn’t answer — these are the last sync’s figures. '}
+                {stock.summary.unknown > 0 && `${stock.summary.unknown} line${stock.summary.unknown === 1 ? '' : 's'} not in the parts catalog, so ${stock.summary.unknown === 1 ? 'it wasn’t' : 'they weren’t'} checked. `}
+                {units > 1 && `Quantities are ×${units} for the fleet. `}
+                {!editingId && 'Save the estimate to hold parts for it.'}
+              </div>
+            )}
+
+            {stockErr && (
+              <div style={{ marginTop: '4px', fontSize: '10px', fontWeight: 700, color: '#f87171' }}>{stockErr}</div>
+            )}
+          </div>
+        )}
+
         {/* Part search + visual catalog browser (N4-A) */}
         {(
           <div style={{ position: 'relative', marginBottom: '8px', display: 'flex', gap: '8px' }}>
@@ -3330,6 +4049,14 @@ export default function EstimatesPage() {
               style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
             >
               Browse Catalog
+            </button>
+            <button
+              type="button"
+              onClick={() => { setDraftError(null); setDraftResult(null); setDraftOpen(true); }}
+              title="Paste an RFQ email and get a reviewable grid of candidate lines. Nothing is added until you accept it."
+              style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.3)', background: 'rgba(167,139,250,0.08)', color: '#a78bfa', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              Draft from Text
             </button>
             <button
               type="button"
@@ -3615,6 +4342,63 @@ export default function EstimatesPage() {
                   </div>
                 </div>
 
+                {/* Per-line stock, once someone has asked. One slim line
+                    rather than a column: the grid collapses to stacked cells
+                    on a phone, and a sixth column there is unreadable. */}
+                {(() => {
+                  if (!stock || stockStale) return null;
+                  const key = String(line.item_number || '').trim().toUpperCase();
+                  const row = key ? stockByItem.get(key) : undefined;
+                  if (!row) return null;
+                  const tone = STOCK_TONE[row.state];
+                  const eta = stockEta(row.pos.map(po => po.eta_date).filter(Boolean).sort().pop() || null);
+                  const text =
+                    row.state === 'unknown' ? 'Not in the parts catalog — stock unknown'
+                      : row.state === 'reserved' ? `Held for this quote — ${row.allocated} of ${row.needed}`
+                        : row.state === 'available' ? `In stock — ${row.free} free, ${row.needed} needed`
+                          : row.state === 'waiting' ? `${row.needed - row.usable} on order${eta ? `, ETA ${eta}` : ', no ETA yet'}${row.pos[0]?.tranid ? ` (${row.pos[0].tranid})` : ''}`
+                            : `Short ${row.short} — ${row.free} free${row.on_order > 0 ? `, ${row.on_order} on order` : ', none on order'}`;
+                  return (
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
+                      padding: '3px 8px', marginBottom: '4px', borderRadius: '6px',
+                      background: tone.bg, border: `1px solid ${tone.border}`,
+                    }}>
+                      <span style={{ fontSize: '10px', fontWeight: 700, color: tone.fg }}>{text}</span>
+                      {editingId && row.allocatable > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => holdStock('set', row.item_number, row.allocated + row.allocatable)}
+                          disabled={stockBusy != null}
+                          title="Hold these on the shelf for this quote"
+                          style={{
+                            padding: '2px 7px', borderRadius: '5px', fontSize: '9px', fontWeight: 800,
+                            border: '1px solid rgba(34,197,94,0.35)', background: 'rgba(34,197,94,0.1)',
+                            color: '#22c55e', cursor: stockBusy ? 'wait' : 'pointer',
+                          }}
+                        >
+                          {stockBusy === row.item_number ? 'Holding…' : `Reserve ${row.allocatable}`}
+                        </button>
+                      )}
+                      {editingId && row.allocated > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => holdStock('set', row.item_number, 0)}
+                          disabled={stockBusy != null}
+                          title="Give these back to the pool"
+                          style={{
+                            padding: '2px 7px', borderRadius: '5px', fontSize: '9px', fontWeight: 800,
+                            border: '1px solid var(--border)', background: 'var(--card)',
+                            color: 'var(--text-muted)', cursor: stockBusy ? 'wait' : 'pointer',
+                          }}
+                        >
+                          Release
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {/* NetSuite item id required — a line without one silently
                     drops off the pushed Estimate. Force a catalog match here
                     instead of letting it disappear invisibly at push time. */}
@@ -3711,6 +4495,105 @@ export default function EstimatesPage() {
           a graphics job for production" prompt for combined upfit+graphics
           deals — see migrations/084-graphics-upfit-project-link.sql for the
           downstream upfit_project linkage. */}
+      {/* Coverage proofs from linked wrap quotes. The proof itself lives on
+          the wrap quote and stays there — these switches only say what rides
+          on the customer's copy of THIS estimate, and they work at any time,
+          not just in the moment the graphics were added. */}
+      {editingId && wrapAttachQuotes.length > 0 && (
+        <div style={{
+          background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '10px',
+          padding: '12px', marginBottom: '12px',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+            <div style={labelStyle}>Coverage proof on the customer copy</div>
+            <button
+              onClick={addGraphics}
+              disabled={saving}
+              title="Open the wrap-quote builder to draw or re-draw the coverage proof"
+              style={{
+                padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                background: 'var(--card)', border: '1px solid var(--border)',
+                color: 'var(--text-body)', cursor: saving ? 'wait' : 'pointer',
+              }}
+            >Edit in wrap builder</button>
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+            Tick what the estimate PDF and approval email carry. The estimate reads the quote's
+            current proof every time it's sent — redraw it in the wrap builder and the customer's
+            copy follows, with nothing to re-add here.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {wrapAttachQuotes.map(q => {
+              const busy = wrapAttachSaving === q.id;
+              const rows: { field: 'diagram' | 'attachments' | 'films'; label: string; available: boolean; note: string }[] = [
+                {
+                  field: 'diagram',
+                  label: 'Coverage proof',
+                  available: q.hasDiagram,
+                  note: q.proofCount > 1
+                    ? `${q.proofCount} views — ${q.proofLabels.join(', ')}`
+                    : q.hasDiagram ? 'the marked-up picture of what gets covered' : 'nothing drawn on this quote yet',
+                },
+                {
+                  field: 'attachments',
+                  label: 'Quote files',
+                  available: q.fileCount > 0,
+                  note: q.fileCount > 0 ? `${q.fileCount} file${q.fileCount === 1 ? '' : 's'} uploaded on the quote` : 'no files on this quote',
+                },
+                {
+                  field: 'films',
+                  label: 'Vinyl details',
+                  available: q.filmCount > 0,
+                  note: q.filmCount > 0
+                    ? `${q.filmCount} film${q.filmCount === 1 ? '' : 's'}${q.totalSqft > 0 ? ` · ${q.totalSqft.toFixed(1)} ft²` : ''}`
+                    : 'no measured areas on this quote',
+                },
+              ];
+              return (
+                <div key={q.id} style={{
+                  padding: '8px', borderRadius: '8px', background: 'var(--card)',
+                  border: '1px solid var(--border)', opacity: busy ? 0.6 : 1,
+                }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                    {q.quoteNumber}{q.vehicle ? ` — ${q.vehicle}` : ''}
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                    {rows.map(r => (
+                      <label
+                        key={r.field}
+                        title={r.note}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 8px',
+                          borderRadius: '6px', fontSize: '11px',
+                          background: q.attach?.[r.field] ? 'rgba(59,130,246,0.08)' : 'var(--subtle-bg)',
+                          border: '1px solid ' + (q.attach?.[r.field] ? 'rgba(59,130,246,0.3)' : 'var(--border)'),
+                          color: r.available ? 'var(--text-secondary)' : 'var(--text-muted)',
+                          cursor: r.available && !busy ? 'pointer' : 'default',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={!!q.attach?.[r.field]}
+                          disabled={!r.available || busy}
+                          onChange={e => toggleWrapAttach(q.id, r.field, e.target.checked)}
+                          style={{ accentColor: '#3b82f6' }}
+                        />
+                        {r.label}
+                      </label>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '5px' }}>
+                    {rows.filter(r => !r.available).length === rows.length
+                      ? 'Nothing on this quote to attach yet — draw the coverage proof in the wrap builder first.'
+                      : rows.find(r => r.field === 'diagram')!.note}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {editingId && (lines.some(isGraphicsLine) || linkedGraphicsJobs.length > 0) && (
         <div style={{
           background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '10px',
@@ -3877,8 +4760,27 @@ export default function EstimatesPage() {
                 setLaborOverride(v === '' ? null : parseFloat(v) || 0);
               }}
               placeholder={autoLaborHours.toFixed(1)}
-  
+              title="Hours for the WHOLE job, not per vehicle — the same figure that reaches the sales order and the labor-burn meter."
               step={0.1}
+            />
+          </div>
+          <div>
+            {/* Fleet multi-unit (R6-9). The count multiplies line quantities,
+                so the lines below stay one vehicle's build. */}
+            <div style={labelStyle}>Vehicles</div>
+            <input
+              type="number"
+              style={inputStyle}
+              value={vehicleCount}
+              min={1}
+              step={1}
+              title="How many identical vehicles this line set covers. Build the lines once for a single vehicle; quantities, labor and totals multiply."
+              onChange={e => {
+                const v = e.target.value;
+                // Empty while typing is 1, never 0 — a zero would silently
+                // zero out the whole estimate.
+                setVehicleCount(v === '' ? 1 : normalizeVehicleCount(v));
+              }}
             />
           </div>
         </div>
@@ -3993,13 +4895,6 @@ export default function EstimatesPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-body)', marginBottom: '4px' }}>
               <span>
                 Sales Tax on Parts ({rateToPct(taxRate).toFixed(2)}%)
-                {/* Say WHY the tax is below parts × rate, so nobody has to
-                    reverse-engineer it off a NetSuite invoice again. */}
-                {taxableAmount < subtotal && (
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                    {' '}— on {fmt(taxableAmount)}; {fmt(subtotal - taxableAmount)} is non-taxable in NetSuite
-                  </span>
-                )}
               </span>
               <span>{fmt(taxAmount)}</span>
             </div>
@@ -4010,11 +4905,20 @@ export default function EstimatesPage() {
               <span>{fmt(0)}</span>
             </div>
           )}
+          {perVehicle && (
+            <div
+              title="Derived from the total. Build the lines once for a single vehicle; the count multiplies quantities, labor and tax."
+              style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}
+            >
+              <span>Per vehicle (× {units})</span>
+              <span>{perVehicle.exact ? '' : '≈ '}{fmt(perVehicle.amount)}</span>
+            </div>
+          )}
           <div style={{
             display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: 800,
             color: 'var(--text-body)', borderTop: '1px solid var(--border)', paddingTop: '8px', marginTop: '4px',
           }}>
-            <span>Total</span>
+            <span>Total{units > 1 ? ` (${units} vehicles)` : ''}</span>
             <span>{fmt(grandTotal)}</span>
           </div>
         </div>
@@ -4132,6 +5036,26 @@ export default function EstimatesPage() {
           </>
         )}
 
+        {/* Send to a BMG teammate for review (migration 316). Optional by
+            design — it sits ABOVE the customer send because that's the order
+            it happens in, but neither one gates the other. */}
+        {editingId && lines.length > 0 && !(estimates.find(e => e.id === editingId) as any)?.customer_approved && (
+          <button
+            onClick={openReviewModal}
+            disabled={sendingForReview}
+            title="Email the estimate to an admin or owner to check before the customer sees it"
+            style={{
+              width: '100%', padding: '12px', borderRadius: '10px',
+              background: sendingForReview ? 'var(--subtle-bg)' : 'rgba(245,158,11,0.12)',
+              border: '1px solid rgba(245,158,11,0.3)',
+              color: '#f59e0b', fontWeight: 800, fontSize: '13px', cursor: 'pointer',
+              opacity: sendingForReview ? 0.5 : 1,
+            }}
+          >
+            {sendingForReview ? 'Opening…' : 'Send to a Teammate for Review'}
+          </button>
+        )}
+
         {/* Send for Customer Approval (magic link) */}
         {/* Either half counts: a lead's estimate is as sendable as a
             NetSuite customer's. Gating on customerId alone silently hid
@@ -4242,6 +5166,283 @@ export default function EstimatesPage() {
                   ⚠ Superseded by {r.estimate_number} ({r.status}) — open the revision
                 </button>
               ))}
+            </div>
+          );
+        })()}
+
+        {/* Paste-to-estimate review grid (R6-9). Every row is a PROPOSAL:
+            nothing reaches the line list until it is ticked and accepted. */}
+        {draftOpen && (
+          <div
+            onClick={() => !draftBusy && setDraftOpen(false)}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', zIndex: 70 }}
+          >
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '16px', width: '100%', maxWidth: '720px', maxHeight: 'calc(88vh / var(--ts))', overflowY: 'auto' }}
+            >
+              <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                Draft from text
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px', lineHeight: 1.5 }}>
+                Paste the customer&rsquo;s request. Prices always come from the catalog, never from the reading —
+                anything without a catalog match stays a custom line for you to price.
+              </div>
+
+              <textarea
+                value={draftText}
+                onChange={e => setDraftText(e.target.value)}
+                rows={6}
+                placeholder="Paste the RFQ email or message here…"
+                style={{ ...inputStyle, width: '100%', resize: 'vertical', fontFamily: 'inherit' }}
+              />
+
+              <div style={{ display: 'flex', gap: '8px', marginTop: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={runDraft}
+                  disabled={draftBusy || draftText.trim().length < 10}
+                  style={{
+                    padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 800, border: 'none',
+                    background: draftBusy || draftText.trim().length < 10 ? 'var(--text-muted)' : 'var(--orange)',
+                    color: '#fff', cursor: draftBusy ? 'default' : 'pointer',
+                  }}
+                >
+                  {draftBusy ? 'Reading…' : 'Read it'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDraftOpen(false)}
+                  style={{ padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--card)', color: 'var(--text-body)', border: '1px solid var(--border)', cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+              </div>
+
+              {draftError && (
+                <div style={{ marginTop: '10px', padding: '10px 12px', borderRadius: '8px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px' }}>
+                  {draftError}
+                </div>
+              )}
+
+              {draftResult && (
+                <div style={{ marginTop: '12px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '2px' }}>
+                    {draftResult.summary.total} request{draftResult.summary.total === 1 ? '' : 's'} read
+                    {draftResult.vehicleCount && draftResult.vehicleCount > 1 && <> · {draftResult.vehicleCount} vehicles</>}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px', lineHeight: 1.6 }}>
+                    {draftResult.summary.exact} matched · {draftResult.summary.suggested} suggested · {draftResult.summary.unmatched} with no catalog match
+                    {draftResult.summary.missingQuantity > 0 && <> · {draftResult.summary.missingQuantity} did not state a quantity</>}
+                    {draftResult.summary.missingPrice > 0 && <> · {draftResult.summary.missingPrice} matched a part with no catalog price</>}
+                    {draftResult.truncated && (
+                      <div style={{ color: 'var(--error)', fontWeight: 700 }}>
+                        Only the first {draftResult.truncated.shown} of {draftResult.truncated.found} requests are shown — add the rest by hand.
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    {draftResult.lines.map((l, i) => {
+                      const tone = l.confidence === 'exact' ? '#22c55e'
+                        : l.confidence === 'strong' ? '#4ade80'
+                        : l.confidence === 'weak' ? '#fbbf24' : '#94a3b8';
+                      return (
+                        <label
+                          key={`${l.request.raw}-${i}`}
+                          style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border)', cursor: 'pointer' }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={draftPicked.has(i)}
+                            onChange={() => {
+                              const next = new Set(draftPicked);
+                              if (next.has(i)) next.delete(i); else next.add(i);
+                              setDraftPicked(next);
+                            }}
+                            style={{ marginTop: '2px' }}
+                          />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                              {l.part ? `${l.part.item_number} — ${l.part.display_name || l.part.description || ''}` : l.request.description}
+                              <span style={{ marginLeft: '6px', fontSize: '9px', fontWeight: 800, color: tone, textTransform: 'uppercase' }}>
+                                {l.confidence === 'none' ? 'custom line' : l.confidence}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px', lineHeight: 1.5 }}>
+                              They wrote: &ldquo;{l.request.raw}&rdquo; · {l.signal}
+                            </div>
+                            <div style={{ fontSize: '10px', marginTop: '2px' }}>
+                              <span style={{ color: l.request.quantity == null ? '#fbbf24' : 'var(--text-muted)' }}>
+                                {l.request.quantity == null ? 'no quantity stated — lands as 1' : `qty ${l.request.quantity}`}
+                              </span>
+                              {' · '}
+                              <span style={{ color: l.unitPrice == null ? '#fbbf24' : 'var(--text-muted)' }}>
+                                {l.unitPrice == null
+                                  ? (l.part ? 'no catalog price — you price it' : 'you price it')
+                                  : `${fmt(l.unitPrice)} from the catalog`}
+                              </span>
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={acceptDraft}
+                    disabled={draftPicked.size === 0}
+                    style={{
+                      marginTop: '10px', width: '100%', padding: '10px', borderRadius: '10px', border: 'none',
+                      background: draftPicked.size === 0 ? 'var(--text-muted)' : 'var(--orange)',
+                      color: '#fff', fontSize: '13px', fontWeight: 800, cursor: draftPicked.size === 0 ? 'default' : 'pointer',
+                    }}
+                  >
+                    Add {draftPicked.size} line{draftPicked.size === 1 ? '' : 's'} to the estimate
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Counter-offer workbench (R6-9): what this revision changed against
+            the document it supersedes. Derived live on the server, so it is
+            always against the two documents as they stand right now. */}
+        {revisionDiff?.diff && (() => {
+          const d = revisionDiff.diff!;
+          const kindColor: Record<string, string> = {
+            changed: '#fbbf24', added: '#22c55e', removed: '#ef4444', unchanged: 'var(--text-muted)',
+          };
+          const moved = d.lines.filter(l => l.kind !== 'unchanged');
+          return (
+            <div style={{
+              padding: '12px 14px', borderRadius: '12px',
+              background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.25)',
+            }}>
+              <div style={{ fontSize: '11px', fontWeight: 800, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                Changes vs {revisionDiff.original?.estimateNumber || 'the original'}
+              </div>
+
+              {revisionDiff.original?.rejectionReason && (
+                <div style={{ fontSize: '11px', color: 'var(--text-body)', marginBottom: '8px', fontStyle: 'italic', lineHeight: 1.5 }}>
+                  &ldquo;{revisionDiff.original.rejectionReason}&rdquo;
+                  <span style={{ fontStyle: 'normal', color: 'var(--text-muted)' }}> — what the customer said when they declined</span>
+                </div>
+              )}
+
+              {d.identical ? (
+                <div style={{ fontSize: '12px', color: '#fbbf24', fontWeight: 700 }}>
+                  Nothing has changed yet — this is still a copy of the original.
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '6px' }}>
+                    Total {deltaLabel(d.grandTotal, { money: true })}
+                    <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>
+                      {' '}({fmt(d.grandTotal.before)} → {fmt(d.grandTotal.after)})
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                    Labor {deltaLabel(d.laborHours)} hrs · {d.counts.changed} changed · {d.counts.added} added · {d.counts.removed} removed
+                    {d.vehicleCount.change !== 0 && <> · vehicles {d.vehicleCount.before} → {d.vehicleCount.after}</>}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', maxHeight: '220px', overflowY: 'auto' }}>
+                    {moved.map((l, i) => (
+                      <div key={`${l.key}-${i}`} style={{ fontSize: '11px', color: 'var(--text-body)' }}>
+                        <span style={{ fontWeight: 800, color: kindColor[l.kind], textTransform: 'uppercase', fontSize: '9px' }}>
+                          {l.kind}
+                        </span>{' '}
+                        <b>{l.itemNumber || l.description || 'Line'}</b>
+                        {l.kind === 'changed' && l.before && l.after && (
+                          <span style={{ color: 'var(--text-muted)' }}>
+                            {' '}— {l.before.quantity} × {fmt(l.before.unitPrice)} → {l.after.quantity} × {fmt(l.after.unitPrice)}
+                          </span>
+                        )}
+                        {l.kind === 'removed' && l.before && (
+                          <span style={{ color: 'var(--text-muted)' }}> — was {l.before.quantity} × {fmt(l.before.unitPrice)}</span>
+                        )}
+                        {l.kind === 'added' && l.after && (
+                          <span style={{ color: 'var(--text-muted)' }}> — {l.after.quantity} × {fmt(l.after.unitPrice)}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '8px', lineHeight: 1.5 }}>
+                Lines are matched on part number, or on description when there is none. A pairing this cannot
+                make confidently is shown as an add and a remove rather than as a change.
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Internal review state (migration 316) — who has it, what they
+            said, and the reviewer's own buttons when it's theirs to answer. */}
+        {editingId && (() => {
+          const est = estimates.find(e => e.id === editingId);
+          if (!est) return null;
+          const state = reviewStateOf(est);
+          if (!state.status) return null;
+          const display = REVIEW_STATUS_DISPLAY[state.status];
+          const mine = canDecideReview(state, user?.id, isAdmin);
+          const when = state.status === 'pending' ? state.requestedAt : state.decidedAt;
+          return (
+            <div style={{
+              width: '100%', padding: '10px 12px', borderRadius: '10px',
+              background: `${display.color}14`, border: `1px solid ${display.color}44`,
+              fontSize: '12px', color: 'var(--text-body)',
+            }}>
+              <div style={{ fontWeight: 800, color: display.color }}>
+                {state.status === 'pending' && `⏳ In review with ${staffName(state.reviewerId)}`}
+                {state.status === 'approved' && `✓ Reviewed by ${staffName(state.decidedBy)} — cleared to send to the customer`}
+                {state.status === 'changes_requested' && `↩ ${staffName(state.decidedBy)} sent this back for changes`}
+                {when && <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}> · {new Date(when).toLocaleDateString()}</span>}
+              </div>
+              {state.note && (
+                <div style={{ marginTop: '3px' }}>“{state.note}”</div>
+              )}
+              {state.status === 'pending' && (
+                <div style={{ marginTop: '3px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                  {mine
+                    ? 'Edit anything you want changed, then approve it, send it back, or send it to the customer yourself — nothing has gone out.'
+                    : `Asked by ${staffName(state.requestedBy)}. Nothing has gone to the customer.`}
+                </div>
+              )}
+              {mine && (
+                <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={() => submitReviewDecision('approved')}
+                    disabled={decidingReview}
+                    style={{
+                      padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 800, cursor: 'pointer',
+                      background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.35)', color: '#22c55e',
+                      opacity: decidingReview ? 0.5 : 1,
+                    }}
+                  >Approve — rep sends</button>
+                  <button
+                    onClick={() => submitReviewDecision('changes_requested')}
+                    disabled={decidingReview}
+                    style={{
+                      padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 800, cursor: 'pointer',
+                      background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.35)', color: '#f87171',
+                      opacity: decidingReview ? 0.5 : 1,
+                    }}
+                  >Send back with notes</button>
+                  <button
+                    onClick={openReviewModal}
+                    disabled={sendingForReview}
+                    title="Hand the review to someone else"
+                    style={{
+                      padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                      background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)',
+                      opacity: sendingForReview ? 0.5 : 1,
+                    }}
+                  >Pass to someone else</button>
+                </div>
+              )}
             </div>
           );
         })()}
@@ -4411,13 +5612,19 @@ export default function EstimatesPage() {
         {editingId && (() => {
           const est = estimates.find(e => e.id === editingId);
           const locked = !!(est && ((est as any).customer_approved || est.status === 'accepted' || est.netsuite_so_id));
+          // A declined estimate counters rather than copies (R6-9): the copy
+          // supersedes it, keeps the PO and check-in link, and carries the
+          // customer's stated reason onto its notes.
+          const declined = !!(est && ((est as any).customer_rejected_at || est.status === 'rejected'));
           return (
             <button
               onClick={duplicateEstimate}
               disabled={duplicating || saving}
-              title={locked
-                ? 'Copies everything into a new draft marked as a revision of this one. This signed original stays untouched.'
-                : 'Saves, then copies this estimate into a new draft (approval and NetSuite state are not copied).'}
+              title={declined
+                ? 'Opens a counter-offer: a new draft superseding this declined estimate, carrying the customer\u2019s reason and a side-by-side of everything you change.'
+                : locked
+                  ? 'Copies everything into a new draft marked as a revision of this one. This signed original stays untouched.'
+                  : 'Saves, then copies this estimate into a new draft (approval and NetSuite state are not copied).'}
               style={{
                 width: '100%', padding: '10px', borderRadius: '10px',
                 background: duplicating ? 'var(--subtle-bg)' : 'rgba(96,165,250,0.08)',
@@ -4426,10 +5633,18 @@ export default function EstimatesPage() {
                 opacity: duplicating || saving ? 0.5 : 1,
               }}
             >
-              {duplicating ? 'Duplicating…' : locked ? 'Duplicate as New Revision' : 'Duplicate Estimate'}
+              {duplicating ? 'Duplicating…' : declined ? '↔ Revise & Counter' : locked ? 'Duplicate as New Revision' : 'Duplicate Estimate'}
             </button>
           );
         })()}
+
+        {/* R6-13: who changed what on this estimate. Only for a saved one —
+            an unsaved draft has no audit rows to show. */}
+        {editingId && (
+          <div style={{ marginTop: '8px' }}>
+            <HistoryButton table="estimates" recordId={editingId} />
+          </div>
+        )}
 
         {/* Delete — only for saved estimates */}
         {editingId && isAdmin && (
@@ -4456,6 +5671,7 @@ export default function EstimatesPage() {
         <EmailComposeModal
           title="Review Approval Email Before Sending"
           customerId={customerId}
+          stateKey={`estimate-approval:${editingId}`}
           sendLabel="Send for Approval"
           messagePlaceholder="Optional note to the customer — added above the estimate…"
           allowSendWithoutTo
@@ -4534,12 +5750,53 @@ export default function EstimatesPage() {
         />
       )}
 
+      {/* Internal review send — the same compose screen as the customer
+          approval, with the teammate directory in the To dropdown. */}
+      {reviewModal && (
+        <EmailComposeModal
+          title="Send Estimate for Internal Review"
+          stateKey={`estimate-review:${editingId}`}
+          contacts={reviewerContacts}
+          contactsLabel="+ Pick the teammate to review this…"
+          sendLabel="Send for Review"
+          messagePlaceholder="What should they look at? — e.g. “Check the labor hours and the shelving spec before this goes out.”"
+          emptyToNote="Pick the teammate who should review this — they need a FleetView login to open and change the estimate."
+          intro={(
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{
+                padding: '10px', borderRadius: '8px',
+                background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)',
+                fontSize: '11px', color: 'var(--text-body)', lineHeight: 1.6,
+              }}>
+                <b style={{ color: '#f59e0b' }}>This goes to your teammate, not the customer.</b> They get the same
+                estimate the customer would, with a button that opens it in FleetView — where they can edit it,
+                approve it, send it back with notes, or send it on to the customer themselves.
+                {' '}The <b>first BMG address in To</b> is the reviewer of record; anyone else just gets a copy.
+              </div>
+              {reviewPdfName && (
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  📎 <b style={{ color: 'var(--text-secondary)' }}>{reviewPdfName}</b> is attached automatically — the same PDF copy the customer send carries.
+                </div>
+              )}
+            </div>
+          )}
+          attachments={estimateFiles}
+          onUploadAttachment={f => uploadEstimateFile(editingId!, f)}
+          onRemoveAttachment={id => removeEstimateFile(editingId!, id)}
+          uploadHint="Anything the reviewer needs with the estimate. Files stay on the estimate for later emails."
+          fetchPreview={fetchReviewPreview}
+          onSend={confirmSendReview}
+          onClose={() => setReviewModal(false)}
+        />
+      )}
+
       {/* Follow-up email on a sent estimate — standard compose screen;
           sending also logs the follow-up (resets the queue's quiet clock). */}
       {followupEmailFor && (
         <EmailComposeModal
           title={`Follow Up — Estimate #${estimateHeadlineNumber(followupEmailFor)}`}
           customerId={followupEmailFor.customer_id || customerId}
+          stateKey={`estimate-followup:${followupEmailFor.id}`}
           sendLabel="Send Follow-Up"
           intro={followupPdfName ? (
             <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
@@ -4628,6 +5885,7 @@ export default function EstimatesPage() {
         <EmailComposeModal
           title="Email Estimate PDF"
           customerId={customerId}
+          stateKey={`estimate-pdf:${editingId}`}
           sendLabel="Send PDF"
           messagePlaceholder="Optional note to the customer — shown in the email above the attached PDF…"
           attachments={estimateFiles}

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
-import { loadEstimateGraphics, loadEstimateProofs } from '@/lib/estimate-graphics';
+import { coveragePictures, loadEstimateGraphics, loadEstimateProofs } from '@/lib/estimate-graphics';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -71,7 +71,10 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const appended = {
     wrapQuotes: (wrapQuotes || []).map((q: any) => ({
       quoteNumber: q.quote_number,
-      attachDiagram: !!q.estimate_attach?.diagram && !!q.diagram_path,
+      attachDiagram: !!q.estimate_attach?.diagram && coveragePictures(q).length > 0,
+      // One page per coverage view, so "why is only one photo on the PDF"
+      // is answerable without opening the quote.
+      coverageViews: coveragePictures(q).map(pic => ({ path: pic.path, caption: pic.caption })),
       attachAttachments: !!q.estimate_attach?.attachments,
       // The suspicious case: a PDF stored here is merged page-by-page into
       // the estimate, whatever it happens to contain.

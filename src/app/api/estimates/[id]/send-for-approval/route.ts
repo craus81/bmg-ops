@@ -18,9 +18,10 @@ import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
 import { estimatePdfFilename } from '@/lib/estimate-pdf';
 import { validateBody, z } from '@/lib/validate';
 import { computeQuotedMargin, getMarginFloorPct } from '@/lib/quoted-margin';
+import { normalizeVehicleCount } from '@/lib/estimate-totals';
 import { getShopLaborRate } from '@/lib/shop-labor';
 import { logAudit } from '@/lib/audit';
-import { notifyMany, getSuperAdminIds } from '@/lib/notify';
+import { notify, notifyMany, getSuperAdminIds } from '@/lib/notify';
 
 // R3-22: proof images inlined in the approval email are presigned at the
 // 7-day SigV4 maximum — the actionable window. Beyond it the attached PDF
@@ -126,7 +127,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: 'No email or phone on file for this customer. Add a contact first.' }, { status: 400 });
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
   const subject = `[BMG Fleet] Estimate #${estimate.estimate_number} — Ready for your approval`;
   const message = body.message?.trim() || undefined;
 
@@ -275,10 +276,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     getShopLaborRate(supabase),
     getMarginFloorPct(supabase),
   ]);
+  // Fleet multi-unit (R6-9): the frozen margin describes the WHOLE job, like
+  // the total the customer signs. The percentage is unchanged either way, so
+  // the floor gate behaves identically — but the stored cost and revenue
+  // figures feed the Quoted Margin report, and per-vehicle dollars there
+  // would be the job's margin divided by the vehicle count.
+  const marginUnits = normalizeVehicleCount((estimate as any).vehicle_count);
   const quotedMargin = computeQuotedMargin(
     (rawLineItems || []).map((l: any) => ({
       item_number: l.item_number ?? null,
-      quantity: Number(l.quantity) || 0,
+      quantity: (Number(l.quantity) || 0) * marginUnits,
       unit_price: Number(l.unit_price) || 0,
       purchase_price: l.part_id ? (costByPart.get(l.part_id)?.purchase_price ?? null) : null,
       avg_install_cost: l.part_id ? (costByPart.get(l.part_id)?.avg_install_cost ?? null) : null,
@@ -480,6 +487,35 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       };
     } catch (err: any) {
       dispatch.sms = { target: phone, ok: false, error: err?.message };
+    }
+  }
+
+  // An internal review still open when the customer send lands is settled by
+  // that send (migration 316): whoever sent it to the customer has, by
+  // definition, cleared it — a reviewer sending it on themselves is one of
+  // the paths the step is for. Without this the estimate would read "in
+  // review" forever while the customer already had it.
+  if (estimate.internal_review_status === 'pending' && (dispatch.email?.ok || dispatch.sms?.ok)) {
+    const { error: reviewErr } = await supabase
+      .from('estimates')
+      .update({
+        internal_review_status: 'approved',
+        internal_review_decided_by: auth.user.id,
+        internal_review_decided_at: new Date().toISOString(),
+      })
+      .eq('id', estimate.id)
+      .eq('internal_review_status', 'pending');
+    if (reviewErr) {
+      console.error('resolving internal review on customer send failed:', reviewErr.message);
+    } else if (estimate.internal_review_requested_by && estimate.internal_review_requested_by !== auth.user.id) {
+      const senderName = (auth.profile as any)?.full_name || auth.user?.email || 'A teammate';
+      await notify({
+        userId: estimate.internal_review_requested_by,
+        type: 'estimate_review_update',
+        title: `Estimate #${estimate.estimate_number} reviewed and sent to the customer`,
+        body: `${senderName} reviewed your estimate and sent it on to ${estimate.customer_name || 'the customer'} — the approval link is live.`,
+        url: deepLinks.estimate(estimate.id),
+      }).catch(err => console.error('review-sent notify failed:', err));
     }
   }
 

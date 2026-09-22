@@ -53,6 +53,9 @@ interface ScheduleItem {
 }
 
 interface DashData {
+  /** Sources that did not answer this load. Non-empty means every number on
+   *  the page is a floor, not a fact — and "nothing to do" cannot be claimed. */
+  unavailable: string[];
   invoiced: { total: number; invoices: number; deltaPct: number | null } | null;
   readyToInvoice: { jobs: number; batches: number; oldest: string | null };
   poBacklog: { remaining: number; total: number; count: number };
@@ -154,7 +157,7 @@ function ShopLoadStrip({ onOpen }: { onOpen: () => void }) {
 
 export default function OpsDashboard() {
   const router = useRouter();
-  const { user, isAdmin, hasFeature } = useAuth();
+  const { user, isAdmin, hasFeature, canSeeMoney } = useAuth();
   const supabase = createClient();
 
   // The dashboard renders for every role that lands on /home (sales, finance,
@@ -193,6 +196,10 @@ export default function OpsDashboard() {
   useEffect(() => { loadAll(); }, []);
 
   const loadAll = async () => {
+    // Read once here rather than closing over the render-time flag: loadAll
+    // runs from an effect, and a viewer who cannot see money must not have
+    // billing rows built into the triage queue at all.
+    const moneyOk = canSeeMoney;
     const todayStr = new Date().toISOString().split('T')[0];
     const in7 = new Date(); in7.setDate(in7.getDate() + 7);
     const in7Str = in7.toISOString().split('T')[0];
@@ -204,7 +211,7 @@ export default function OpsDashboard() {
 
     const [
       invoicedRes, gfxRes, scansRes, partsRes, poRes,
-      importsRes, unpaidRes, usersRes, cniPhotosRes,
+      importsRes, unpaidRes, usersRes,
       shopRes, cniRes,
       schedGfxRes, schedUpfitRes, schedCniRes, schedEventsRes,
       scansTodayRes, scansWeekRes, msgRes, unreadRes,
@@ -245,7 +252,6 @@ export default function OpsDashboard() {
       supabase.from('gmail_po_imports').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
       supabase.from('fleet_checkins').select('*', { count: 'exact', head: true }).not('invoice_number', 'is', null).eq('is_paid', false),
       supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
-      supabase.from('cni_job_photos').select('*', { count: 'exact', head: true }).eq('review_status', 'pending'),
       // Lanes — paginated so the shop lane counts stay exact as history grows
       fetchAllRows<any>((from, to) => supabase.from('fleet_checkins')
         .select('id, status')
@@ -376,12 +382,34 @@ export default function OpsDashboard() {
         .is('pickup_scheduled_date', null),
     ]);
 
-    const val = <T,>(r: PromiseSettledResult<T>): T | null => (r.status === 'fulfilled' ? r.value : null);
-    const count = (r: PromiseSettledResult<any>): number => (r.status === 'fulfilled' ? (r.value?.count || 0) : 0);
-    const rows = (r: PromiseSettledResult<any>): any[] => (r.status === 'fulfilled' ? (r.value?.data || []) : []);
+    // A read that FAILED is not a read that found nothing. Collapsing the two
+    // is how this page told an owner "all caught up" on a dropped connection
+    // while it knew nothing at all: every count fell to 0, the queue came back
+    // empty, and the empty queue renders as "All clear". Each helper now
+    // records the sources that did not answer, and `unavailable` carries them
+    // to the render so the page can say so instead of inventing a clean slate.
+    const failed: string[] = [];
+    const ok = (label: string, good: boolean) => { if (!good) failed.push(label); return good; };
+
+    const val = <T,>(r: PromiseSettledResult<T>, label: string): T | null => {
+      ok(label, r.status === 'fulfilled');
+      return r.status === 'fulfilled' ? r.value : null;
+    };
+    const count = (r: PromiseSettledResult<any>, label: string): number => {
+      ok(label, r.status === 'fulfilled');
+      return r.status === 'fulfilled' ? (r.value?.count || 0) : 0;
+    };
+    // fetchAllRows resolves with { data, error } and returns the pages it DID
+    // get alongside a failed one — so a fulfilled promise can still be a short
+    // read. Treat that as a failure too: half a table rendered as a whole one
+    // is worse than a zero, because nothing about it looks wrong.
+    const rows = (r: PromiseSettledResult<any>, label: string): any[] => {
+      ok(label, r.status === 'fulfilled' && !r.value?.error);
+      return r.status === 'fulfilled' ? (r.value?.data || []) : [];
+    };
 
     // ── KPI 1: invoiced this month (NetSuite) ──
-    const inv = val(invoicedRes) as any;
+    const inv = val(invoicedRes, 'invoiced totals') as any;
     const invoiced = inv?.success
       ? {
           total: inv.thisMonth.total,
@@ -393,7 +421,7 @@ export default function OpsDashboard() {
       : null;
 
     // ── Graphics jobs → stages + ready-to-invoice + lanes ──
-    const gfxJobs = rows(gfxRes);
+    const gfxJobs = rows(gfxRes, 'graphics jobs');
     const inStatus = (set: GraphicsJobStatus[]) => gfxJobs.filter(j => set.includes(j.status)).length;
     const doneJobs = gfxJobs.filter(j => DONE_STATUSES.includes(j.status));
     const activeGfx = gfxJobs.filter(j => [...RECEIVED, ...IN_PRODUCTION, ...READY_SHIPPED].includes(j.status));
@@ -404,11 +432,11 @@ export default function OpsDashboard() {
 
     // ── Ready-to-invoice scan batches (mirror Invoicing hub grouping) ──
     const poRequired: Record<string, boolean> = {};
-    for (const p of rows(partsRes)) poRequired[p.item_number] = p.requires_po_match !== false;
+    for (const p of rows(partsRes, 'parts')) poRequired[p.item_number] = p.requires_po_match !== false;
     // Invoice-first customers (billable_customers.requires_po = FALSE, e.g.
     // Reading Truck) count as ready without a PO — matching the Invoicing hub.
     const billableCustomers = await loadBillableCustomers(supabase);
-    const readyScans = rows(scansRes).filter(s =>
+    const readyScans = rows(scansRes, 'scans').filter(s =>
       !s.exported_at && (s.po_id || poRequired[s.part_number || ''] === false
         || !customerRequiresPo(s.billable_customer, billableCustomers))
     );
@@ -416,7 +444,7 @@ export default function OpsDashboard() {
 
     // ── PO backlog ──
     let poRemaining = 0, poTotal = 0;
-    const openPos = rows(poRes);
+    const openPos = rows(poRes, 'purchase orders');
     for (const po of openPos) {
       for (const l of po.po_line_items || []) {
         poTotal += (l.quantity || 0) * (l.unit_price || 0);
@@ -425,7 +453,7 @@ export default function OpsDashboard() {
     }
 
     // ── Sales ──
-    const opps = rows(oppsRes);
+    const opps = rows(oppsRes, 'pipeline');
     const stageAgg = OPP_STAGES.map(({ stage, label }) => {
       const inStage = opps.filter((o: any) => o.stage === stage);
       return { stage, label, count: inStage.length, value: inStage.reduce((s: number, o: any) => s + (o.value || 0), 0) };
@@ -447,8 +475,8 @@ export default function OpsDashboard() {
         createdBy: null,
       }));
     const forecast = summarizeDealForecast(forecastDeals, chiToday);
-    const quotes = rows(quotesRes);
-    const openEstimates = rows(openEstRes);
+    const quotes = rows(quotesRes, 'open quotes');
+    const openEstimates = rows(openEstRes, 'open estimates');
     const openQuoteCount = quotes.length + openEstimates.length;
     const openQuoteValue =
       quotes.reduce((s: number, q: any) => s + (Number(q.total) || 0), 0)
@@ -469,7 +497,7 @@ export default function OpsDashboard() {
         ].filter(Boolean).join(' · '),
       });
     }
-    const pendingImports = count(importsRes);
+    const pendingImports = count(importsRes, 'imports');
     if (pendingImports > 0) queue.push({
       key: 'imports', count: pendingImports, tone: 'blue', path: '/admin/pos',
       title: 'Imported POs waiting for review', detail: 'From the email import queue',
@@ -480,46 +508,41 @@ export default function OpsDashboard() {
       title: 'Graphics jobs flagged for review',
       detail: flagged.slice(0, 3).map(j => j.part_number || j.title).filter(Boolean).join(' · '),
     });
-    const unpaid = count(unpaidRes);
-    if (unpaid > 0) queue.push({
+    const unpaid = count(unpaidRes, 'unpaid');
+    if (unpaid > 0 && moneyOk) queue.push({
       key: 'unpaid', count: unpaid, tone: 'warn', path: '/tracking',
       title: 'Vehicles invoiced, awaiting payment', detail: 'From in-shop tracking',
     });
     const neverInvoiced = neverInvoicedRes.status === 'fulfilled' ? (neverInvoicedRes.value as number) || 0 : 0;
-    if (neverInvoiced > 0) queue.push({
+    if (neverInvoiced > 0 && moneyOk) queue.push({
       key: 'never-invoiced', count: neverInvoiced, tone: 'err', path: deepLinks.neverInvoicedQueue(),
       title: 'Completed vehicles never invoiced',
       detail: 'Done or shipped in the last 180 days with no invoice recorded — the queue says what each one needs',
     });
-    const quietLeads = count(quietLeadsRes);
+    const quietLeads = count(quietLeadsRes, 'quiet leads');
     if (quietLeads > 0) queue.push({
-      key: 'quiet-leads', count: quietLeads, tone: 'blue', path: '/admin/prospects',
+      key: 'quiet-leads', count: quietLeads, tone: 'blue', path: deepLinks.quietLeads(),
       title: 'Quiet leads worth a nurture touch',
-      detail: 'Active records untouched for 30+ days — touch, park as Nurture, or mark Lost',
+      detail: 'Active records untouched for 30+ days — the triage queue does all three from the row',
     });
-    const readyPickup = count(readyPickupRes);
+    const readyPickup = count(readyPickupRes, 'ready for pickup');
     if (readyPickup > 0) queue.push({
       key: 'ready-pickup', count: readyPickup, tone: 'warn', path: '/tracking',
       title: 'Ready for pickup, no booking yet',
       detail: 'Complete vehicles in the lot — the nudge cron mails the booking link; call the stragglers',
     });
-    const cniPhotos = count(cniPhotosRes);
-    if (cniPhotos > 0) queue.push({
-      key: 'cniphotos', count: cniPhotos, tone: 'blue', path: '/admin/cni',
-      title: 'CNI photos to review', detail: 'Network installer submissions',
-    });
-    const pendingUsers = count(usersRes);
+    const pendingUsers = count(usersRes, 'users');
     if (pendingUsers > 0 && hasFeature('user_management')) queue.push({
       key: 'users', count: pendingUsers, tone: 'blue', path: '/admin/users',
       title: `User${pendingUsers !== 1 ? 's' : ''} waiting for approval`, detail: 'New account requests',
     });
-    const unpricedPay = count(unpricedRes);
+    const unpricedPay = count(unpricedRes, 'unpriced work');
     if (unpricedPay > 0) queue.push({
       key: 'unpriced', count: unpricedPay, tone: 'warn', path: '/admin/pay-rates',
       title: 'Pay credits without a dollar amount',
       detail: 'Someone worked; nobody priced it yet',
     });
-    const apSubmitted = count(apSubmittedRes);
+    const apSubmitted = count(apSubmittedRes, 'A/P submitted');
     if (apSubmitted > 0) queue.push({
       key: 'ap', count: apSubmitted, tone: 'warn', path: '/admin/ap',
       title: 'Vendor payments awaiting approval', detail: 'CNI invoices submitted for payment',
@@ -531,32 +554,32 @@ export default function OpsDashboard() {
       return ref > 0 && ref < quietCutoff;
     };
     const quietQuotes =
-      rows(sentEstRes).filter(e => quoteQuiet(e.sent_for_approval_at || e.updated_at, e.last_followup_at)).length +
-      rows(sentWrapRes).filter(w => quoteQuiet(w.sent_at, w.last_followup_at)).length;
+      rows(sentEstRes, 'sent estimates').filter(e => quoteQuiet(e.sent_for_approval_at || e.updated_at, e.last_followup_at)).length +
+      rows(sentWrapRes, 'sent wrap quotes').filter(w => quoteQuiet(w.sent_at, w.last_followup_at)).length;
     if (quietQuotes > 0) queue.push({
       key: 'quotes', count: quietQuotes, tone: 'warn', path: '/quotes',
       title: 'Quotes needing a follow-up', detail: 'Sent 5+ days ago with no answer',
     });
-    const staleProofs = count(staleProofRes);
+    const staleProofs = count(staleProofRes, 'stale proofs');
     if (staleProofs > 0) queue.push({
       key: 'proofs', count: staleProofs, tone: 'warn', path: '/graphics',
       title: 'Proofs stuck with customers 3+ days', detail: 'Production blocked on approval',
     });
     // Scans stuck waiting on a PO (part requires one, none matched yet).
-    const waitingPo = rows(scansRes).filter(s =>
+    const waitingPo = rows(scansRes, 'scans').filter(s =>
       !s.po_id && !s.exported_at && poRequired[s.part_number || ''] !== false
     ).length;
     if (waitingPo > 0) queue.push({
       key: 'waitingpo', count: waitingPo, tone: 'blue', path: '/admin/scans',
       title: 'Scans waiting on a PO', detail: 'Auto-matcher retries as POs import',
     });
-    const health = val(healthRes) as any;
+    const health = val(healthRes, 'system health') as any;
     const badJobs = (health?.checks || []).filter((c: any) => c.status === 'error' || c.status === 'stale').length;
     if (badJobs > 0 && hasFeature('system_health')) queue.push({
       key: 'health', count: badJobs, tone: 'err', path: '/admin/system-health',
       title: 'Background jobs down', detail: 'Syncs or crons stale/erroring',
     });
-    const atRisk = val(atRiskRes) as any;
+    const atRisk = val(atRiskRes, 'at-risk jobs') as any;
     const atRiskCount = (atRisk?.flagged || []).length;
     if (atRiskCount > 0) queue.push({
       key: 'atrisk', count: atRiskCount, tone: 'warn', path: '/admin/reports/at-risk',
@@ -564,12 +587,12 @@ export default function OpsDashboard() {
     });
 
     // ── Lanes ──
-    const shopRows = rows(shopRes);
-    const cniRows = rows(cniRes);
+    const shopRows = rows(shopRes, 'shop');
+    const cniRows = rows(cniRes, 'cni');
 
     // ── Schedule ──
     const schedule: ScheduleItem[] = [];
-    for (const g of rows(schedGfxRes)) {
+    for (const g of rows(schedGfxRes, 'sched gfx')) {
       if (['installed', 'picked_up', 'cancelled'].includes(g.status || '')) continue;
       schedule.push({
         id: g.id, date: g.scheduled_install_date, type: 'graphics',
@@ -577,23 +600,23 @@ export default function OpsDashboard() {
         subtitle: `${g.customer || ''}${g.quantity > 1 ? ` · ${g.quantity} units` : ''}`.trim(),
       });
     }
-    for (const u of rows(schedUpfitRes)) {
+    for (const u of rows(schedUpfitRes, 'sched upfit')) {
       schedule.push({
         id: u.id, date: u.scheduled_upfit_date, type: 'upfit',
         title: [u.vehicle_year, u.vehicle_make, u.vehicle_model].filter(Boolean).join(' ') || u.vin,
         subtitle: u.customer_name || '',
       });
     }
-    for (const c of rows(schedCniRes)) {
+    for (const c of rows(schedCniRes, 'sched cni')) {
       schedule.push({ id: c.id, date: c.deadline, type: 'cni', title: c.title || 'CNI job', subtitle: c.customer_name || '' });
     }
-    for (const e of rows(schedEventsRes)) {
+    for (const e of rows(schedEventsRes, 'sched events')) {
       schedule.push({ id: e.id, date: e.event_date, type: 'event', title: e.title || 'Calendar event', subtitle: e.description || '' });
     }
     schedule.sort((a, b) => a.date.localeCompare(b.date));
 
     // ── Messages ──
-    const msgRows = rows(msgRes);
+    const msgRows = rows(msgRes, 'messages');
     let senderNames: Record<string, string> = {};
     if (msgRows.length > 0) {
       const { data: profs } = await supabase.from('profiles').select('id, full_name')
@@ -602,6 +625,7 @@ export default function OpsDashboard() {
     }
 
     setData({
+      unavailable: [...new Set(failed)],
       invoiced,
       readyToInvoice: {
         jobs: doneJobs.length, batches: batchKeys.size,
@@ -635,20 +659,20 @@ export default function OpsDashboard() {
         unpaid,
       },
       schedule: schedule.slice(0, 7),
-      now: { scansToday: count(scansTodayRes), scansWeek: count(scansWeekRes), inShop: shopRows.length },
+      now: { scansToday: count(scansTodayRes, 'scans today'), scansWeek: count(scansWeekRes, 'scans this week'), inShop: shopRows.length },
       messages: msgRows.map((m: any) => ({
         id: m.id, sender: senderNames[m.sender_id] || 'Unknown',
         body: m.body || '', ago: timeAgo(m.created_at),
       })),
-      unread: rows(unreadRes).map((n: any) => ({
+      unread: rows(unreadRes, 'notifications').map((n: any) => ({
         id: n.id, title: n.title || 'Notification', body: n.body || '',
         url: n.url || null, ago: timeAgo(n.created_at),
       })),
       sales: {
         stages: stageAgg, wonValue,
-        topCustomers: rows(custRes).map((c: any) => ({ name: c.company_name, ytd: Number(c.ytd_spend) || 0, nsId: c.netsuite_id ? String(c.netsuite_id) : null })),
+        topCustomers: rows(custRes, 'top customers').map((c: any) => ({ name: c.company_name, ytd: Number(c.ytd_spend) || 0, nsId: c.netsuite_id ? String(c.netsuite_id) : null })),
         openQuotes: { count: openQuoteCount, value: openQuoteValue },
-        estimatesWeek: count(estRes),
+        estimatesWeek: count(estRes, 'estimates this week'),
         forecast,
         today: chiToday,
       },
@@ -746,7 +770,10 @@ export default function OpsDashboard() {
     </div>
   );
 
-  const kpis = (
+  // Every tile in this row is money or billing — invoiced dollars, the
+  // invoicing queue, PO backlog, pipeline — so the row goes as a unit for a
+  // viewer the money rule excludes (src/lib/money-visibility.ts).
+  const kpis = !canSeeMoney ? null : (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '10px', marginBottom: '12px' }}>
       <button onClick={() => router.push('/invoices?tab=sent')} style={{ ...card, textAlign: 'left', padding: '14px 16px 12px', cursor: 'pointer' }}>
         <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.7px', color: 'var(--text-muted)' }}>
@@ -799,15 +826,26 @@ export default function OpsDashboard() {
     <div style={card}>
       <div style={cardHead}>
         <h2 style={headTitle}>Needs attention</h2>
-        <span style={{ fontSize: '11px', fontWeight: 700, color: d.queue.length > 0 ? 'var(--warning)' : 'var(--success)' }}>
-          {d.queue.length > 0 ? `${d.queue.length} item${d.queue.length !== 1 ? 's' : ''}` : 'All clear'}
+        <span style={{ fontSize: '11px', fontWeight: 700, color: d.queue.length > 0 ? 'var(--warning)' : d.unavailable.length > 0 ? 'var(--text-muted)' : 'var(--success)' }}>
+          {d.queue.length > 0
+            ? `${d.queue.length} item${d.queue.length !== 1 ? 's' : ''}`
+            : d.unavailable.length > 0 ? "Can't tell" : 'All clear'}
         </span>
       </div>
       <div style={{ borderTop: '1px solid var(--border)' }}>
         {d.queue.length === 0 && (
-          <div style={{ padding: '20px 16px', textAlign: 'center', fontSize: '13px', fontWeight: 700, color: 'var(--success)' }}>
-            Nothing needs you — all caught up.
-          </div>
+          d.unavailable.length > 0 ? (
+            <div style={{ padding: '20px 16px', textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>
+              <div style={{ fontWeight: 700, color: 'var(--warning)' }}>Can&rsquo;t tell what needs you</div>
+              <div style={{ marginTop: '4px' }}>
+                The checks behind this list didn&rsquo;t load, so an empty list here means nothing.
+              </div>
+            </div>
+          ) : (
+            <div style={{ padding: '20px 16px', textAlign: 'center', fontSize: '13px', fontWeight: 700, color: 'var(--success)' }}>
+              Nothing needs you — all caught up.
+            </div>
+          )
         )}
         {d.queue.filter(q => canOpen(q.path)).map(q => (
           <button key={q.key} onClick={() => go(q.path)} style={{
@@ -832,11 +870,14 @@ export default function OpsDashboard() {
   );
 
   const stageDefs = [
-    { n: d.poBacklog.count, l: 'POs open', m: `${fmtK(d.poBacklog.remaining)} remaining`, color: '#60a5fa', path: '/admin/pos' },
+    // The COUNT of open POs is work in motion; the dollars remaining are money.
+    { n: d.poBacklog.count, l: 'POs open', m: canSeeMoney ? `${fmtK(d.poBacklog.remaining)} remaining` : 'in flight', color: '#60a5fa', path: '/admin/pos' },
     { n: d.stages.received, l: 'Received', m: `${d.stages.dueThisWeek} due this week`, color: '#a78bfa', path: '/graphics' },
     { n: d.stages.inProduction, l: 'In production', m: d.stages.rush > 0 ? `${d.stages.rush} rush` : 'no rush jobs', color: 'var(--warning)', path: '/graphics' },
     { n: d.stages.readyShipped, l: 'Ready / shipped', m: 'awaiting install or pickup', color: 'var(--success)', path: '/graphics' },
-    { n: d.stages.toInvoice, l: 'To invoice', m: `${d.readyToInvoice.batches} scan batches too`, color: 'var(--orange)', path: '/invoices' },
+    ...(canSeeMoney
+      ? [{ n: d.stages.toInvoice, l: 'To invoice', m: `${d.readyToInvoice.batches} scan batches too`, color: 'var(--orange)', path: '/invoices' }]
+      : []),
   ];
   const maxStage = Math.max(1, ...stageDefs.map(s => s.n));
 
@@ -1132,12 +1173,36 @@ export default function OpsDashboard() {
     </div>
   );
 
-  const leftColumn = preset === 'sales'
+  const leftColumnAll = preset === 'sales'
     ? [salesBand, needsAttention, workInMotion, upfitGlance]
     : [needsAttention, workInMotion, upfitGlance, salesBand];
+  // Pipeline value, closing forecast, won value, customer YTD spend — all money.
+  const leftColumn = canSeeMoney ? leftColumnAll : leftColumnAll.filter(el => el !== salesBand);
 
   return (
     <div>
+      {/* Every figure below is read live. When a source doesn't answer, say so
+          at the top: the tiles cannot each carry their own caveat, and a $0
+          backlog reads exactly like a real one. */}
+      {d.unavailable.length > 0 && (
+        <div role="status" style={{
+          border: '1px solid var(--warning)', borderRadius: '8px', padding: '10px 14px',
+          marginBottom: '14px', fontSize: '13px', background: 'var(--surface)',
+          display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap',
+        }}>
+          <span style={{ fontWeight: 800, color: 'var(--warning)' }}>These numbers are incomplete.</span>
+          <span style={{ color: 'var(--text-muted)', flex: 1, minWidth: '220px' }}>
+            Couldn&rsquo;t load {d.unavailable.slice(0, 4).join(', ')}
+            {d.unavailable.length > 4 ? ` and ${d.unavailable.length - 4} more` : ''}. Counts shown are
+            at least this high, not exactly this high.
+          </span>
+          <button onClick={() => { setLoading(true); loadAll(); }} style={{
+            border: '1px solid var(--border)', borderRadius: '6px', padding: '5px 12px',
+            fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'var(--bg)', color: 'var(--text-primary)',
+          }}>Retry</button>
+        </div>
+      )}
+
       {/* Page head */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '12px', marginBottom: '14px', flexWrap: 'wrap' }}>
         <div>
@@ -1145,9 +1210,11 @@ export default function OpsDashboard() {
             {today.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
           </div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
-            {d.queue.length > 0 ? `${d.queue.length} item${d.queue.length !== 1 ? 's' : ''} need attention` : 'Nothing needs attention'}
+            {d.queue.length > 0
+              ? `${d.queue.length} item${d.queue.length !== 1 ? 's' : ''} need attention`
+              : d.unavailable.length > 0 ? 'Some checks didn\u2019t load' : 'Nothing needs attention'}
             {' · '}{d.lanes.gfxActive + d.lanes.shopActive + d.lanes.cniOpen} jobs in motion
-            {d.stages.toInvoice > 0 ? ` · ${d.stages.toInvoice} ready to invoice` : ''}
+            {canSeeMoney && d.stages.toInvoice > 0 ? ` · ${d.stages.toInvoice} ready to invoice` : ''}
           </div>
         </div>
         <div style={{ display: 'flex', gap: '6px' }}>

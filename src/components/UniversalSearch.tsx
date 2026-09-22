@@ -1,15 +1,28 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { pathFor, PopoutType } from '@/components/Popout';
 import { useAuth } from '@/components/AuthProvider';
 import { estimateHeadlineNumber, estimateAltNumber } from '@/lib/estimate-number';
+import {
+  quickActionsFor, buildRecent, pushRecent, readRecents, clearRecents, visibleRecents,
+  type QuickAction, type RecentRecord, type PaletteAccess,
+} from '@/lib/command-palette';
+import BriefMeSheet, { type BriefTarget } from '@/components/BriefMeSheet';
 
 interface UniversalSearchProps {
   open: boolean;
   onClose: () => void;
 }
+
+/** Group labels for the recents strip — the strip shows what KIND a row is,
+ *  since "Acme" alone doesn't say whether it's the customer or their PO. */
+const KIND_LABEL: Record<string, string> = {
+  invoices: 'Invoice', purchase_orders: 'PO', vehicles: 'Vehicle',
+  graphics_jobs: 'Graphics', estimates: 'Estimate', parts: 'Part',
+  customers: 'Customer', quotes: 'Quote', messages: 'Message',
+};
 
 const GROUP_CONFIG: Record<string, { label: string; icon: string; color: string }> = {
   invoices: { label: 'Invoices', icon: '', color: '#34d399' },
@@ -56,7 +69,10 @@ function statusColor(status: string): string {
   return 'var(--text-body)';
 }
 
-function renderResult(group: string, item: any, onSelect: (group: string, item: any) => void, onLogCall?: (item: any) => void) {
+// `showMoney` is threaded in rather than read from a hook: this is a plain
+// function, and search results are the one place every entity in the app
+// surfaces at once — a PO total leaking here would undo every other gate.
+function renderResult(group: string, item: any, onSelect: (group: string, item: any) => void, showMoney: boolean) {
   // Tapping a result pops out the shared detail view instead of navigating away.
   const select = () => onSelect(group, item);
 
@@ -88,7 +104,7 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
               <span style={titleStyle}>PO #{item.po_number}</span>
               <span style={{ ...statusBadge, color: statusColor(item.status) }}>{item.status}</span>
             </div>
-            {totalValue > 0 && <span style={valueStyle}>{formatCurrency(totalValue)}</span>}
+            {showMoney && totalValue > 0 && <span style={valueStyle}>{formatCurrency(totalValue)}</span>}
           </div>
           <div style={subtitleStyle}>
             {item.customer}{lineCount > 0 ? ` · ${lineCount} items` : ''}{item.ordered_date ? ` · ${formatDate(item.ordered_date)}` : ''}
@@ -133,7 +149,7 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
             <span style={titleStyle}>{estimateHeadlineNumber(item) || 'Estimate'}</span>
             <div>
               <span style={{ ...statusBadge, color: statusColor(item.status) }}>{item.status}</span>
-              {item.total > 0 && <span style={valueStyle}>{formatCurrency(item.total)}</span>}
+              {showMoney && item.total > 0 && <span style={valueStyle}>{formatCurrency(item.total)}</span>}
             </div>
           </div>
           <div style={subtitleStyle}>
@@ -147,7 +163,7 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
         <button key={item.id} onClick={select} style={resultBtnStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
             <span style={titleStyle}>{item.part_number}</span>
-            {item.price > 0 && <span style={valueStyle}>{formatCurrency(item.price)}</span>}
+            {showMoney && item.price > 0 && <span style={valueStyle}>{formatCurrency(item.price)}</span>}
           </div>
           <div style={subtitleStyle}>
             {[item.end_customer, item.vehicle_type, item.graphic_package].filter(Boolean).join(' · ') || item.display_name || ''}
@@ -156,26 +172,18 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
       );
 
     case 'customers':
+      // Log call moved into the shared quick-action strip below the row
+      // (R6-13). It used to render on EVERY customer hit, including the
+      // `ns-<internalId>` NetSuite-mirror rows a phone search folds in —
+      // and /api/prospects/log-call validates a uuid, so on those it could
+      // only ever fail. The strip asks quickActionsFor, which skips them.
       return (
-        <div key={item.id} style={{ display: 'flex', alignItems: 'stretch', gap: '6px' }}>
-          <button onClick={select} style={{ ...resultBtnStyle, flex: 1 }}>
-            <span style={titleStyle}>{item.company_name}</span>
-            <div style={subtitleStyle}>
-              {[item.contact_name, item.email, item.phone].filter(Boolean).join(' · ')}
-            </div>
-          </button>
-          {onLogCall && (
-            <button
-              onClick={() => onLogCall(item)}
-              title="Log a call against this record without leaving the search"
-              style={{
-                flex: '0 0 auto', padding: '0 12px', borderRadius: '8px', cursor: 'pointer',
-                background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)',
-                color: '#60a5fa', fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap',
-              }}
-            >Log call</button>
-          )}
-        </div>
+        <button key={item.id} onClick={select} style={resultBtnStyle}>
+          <span style={titleStyle}>{item.company_name}</span>
+          <div style={subtitleStyle}>
+            {[item.contact_name, item.email, item.phone].filter(Boolean).join(' · ')}
+          </div>
+        </button>
       );
 
     case 'messages':
@@ -195,7 +203,7 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
             <span style={titleStyle}>{item.quote_number}</span>
             <div>
               <span style={{ ...statusBadge, color: statusColor(item.status) }}>{item.status}</span>
-              {item.total_price > 0 && <span style={valueStyle}>{formatCurrency(item.total_price)}</span>}
+              {showMoney && item.total_price > 0 && <span style={valueStyle}>{formatCurrency(item.total_price)}</span>}
             </div>
           </div>
           <div style={subtitleStyle}>{item.customer_name}{item.vehicle_description ? ` · ${item.vehicle_description}` : ''}</div>
@@ -208,11 +216,16 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
 }
 
 // Styles
+// The separating border lives on the row WRAPPER (see the results map), not
+// here: a result and its quick-action strip are one block, and a line between
+// them would read as the actions belonging to the next record.
 const resultBtnStyle: React.CSSProperties = {
   width: '100%', textAlign: 'left', padding: '10px 14px',
-  background: 'transparent', border: 'none', borderBottom: '1px solid rgba(var(--border-rgb),0.5)',
+  background: 'transparent', border: 'none',
   cursor: 'pointer', display: 'block',
 };
+
+const rowDivider = '1px solid rgba(var(--border-rgb),0.5)';
 
 const titleStyle: React.CSSProperties = {
   fontSize: '13px', fontWeight: 700, color: 'var(--text-body)',
@@ -230,9 +243,33 @@ const valueStyle: React.CSSProperties = {
   fontSize: '12px', fontWeight: 700, color: '#60a5fa', marginLeft: '8px',
 };
 
+// Quick-action strip under a result. Sits inside the row's bottom border so
+// the actions read as belonging to the record above them.
+const actionRowStyle: React.CSSProperties = {
+  display: 'flex', flexWrap: 'wrap', gap: '6px',
+  padding: '0 14px 10px', marginTop: '-4px',
+};
+
+const actionChipStyle: React.CSSProperties = {
+  padding: '5px 11px', borderRadius: '8px', cursor: 'pointer',
+  background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)',
+  color: '#60a5fa', fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap',
+  minHeight: '30px',
+};
+
 export default function UniversalSearch({ open, onClose }: UniversalSearchProps) {
   const router = useRouter();
-  const { isAdmin, isSales, hasFeature } = useAuth();
+  const {
+    isAdmin, isSales, hasFeature, canSeeMoney,
+    isGraphicsProduction, isInstaller, isShopTech, isFieldTech,
+  } = useAuth();
+  // What this viewer can actually reach. Quick actions and the recents strip
+  // are both filtered through it — an action that 403s or a recent whose page
+  // now bounces to /home is a dead click, which is the whole failure mode a
+  // launcher has to avoid.
+  const access: PaletteAccess = useMemo(() => ({
+    isAdmin, isSales, isGraphicsProduction, isInstaller, isShopTech, isFieldTech, hasFeature,
+  }), [isAdmin, isSales, isGraphicsProduction, isInstaller, isShopTech, isFieldTech, hasFeature]);
   // A "View all" link only renders when the viewer can open its list page —
   // the gated destinations bounce to /home and discard the search otherwise.
   const canViewAll = (group: string): boolean => {
@@ -299,9 +336,46 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
   // and an "Open full page" button — which was a wasted tap now that every
   // entity here has a real page; customers already skipped it for that reason.
   const openDetail = useCallback((group: string, item: any) => {
+    const path = pathFor(group as PopoutType, item);
+    // Remember it for the recents strip (R6-13). Device-local, never sent
+    // anywhere; buildRecent refuses anything it can't name or reach.
+    pushRecent(buildRecent(group, item, path));
     onClose();
-    router.push(pathFor(group as PopoutType, item));
+    router.push(path);
   }, [onClose, router]);
+
+  // Pre-call rundown, over the search — the caller-ID hit and the brief on
+  // the same screen is the whole point (R6-13).
+  const [briefFor, setBriefFor] = useState<BriefTarget | null>(null);
+
+  // Run one quick action. Links close the palette first (the destination is a
+  // page); PDFs are API routes, so they open in their own tab and leave the
+  // palette where it was; the log-call and brief sheets never navigate.
+  const runAction = useCallback((a: QuickAction, item: any) => {
+    if (a.kind === 'log_call') { openLogCall(item); return; }
+    if (a.kind === 'brief') {
+      // The customers group folds in NetSuite-mirror rows under an
+      // `ns-<internalId>` pseudo id; the brief route takes either key, so
+      // hand it whichever this row actually has.
+      const isMirror = String(item.id || '').startsWith('ns-');
+      setBriefFor({
+        prospectId: isMirror ? null : (item.id || null),
+        netsuiteId: item.netsuite_id ? String(item.netsuite_id) : null,
+        name: item.company_name || null,
+      });
+      return;
+    }
+    if (a.kind === 'external') { window.open(a.url, '_blank', 'noopener,noreferrer'); return; }
+    onClose();
+    router.push(a.url);
+  }, [onClose, router, openLogCall]);
+
+  // ── Recently opened (R6-13) ───────────────────────────────────────────
+  // Read once per open rather than on every render: the list only changes
+  // when this palette opens something, and localStorage reads throw in
+  // private mode. Kept per device, never uploaded.
+  const [recents, setRecents] = useState<RecentRecord[]>([]);
+  const shownRecents = useMemo(() => visibleRecents(recents, access), [recents, access]);
 
   // Focus input when opened
   useEffect(() => {
@@ -311,6 +385,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
       setQuery('');
       setResults({});
       setTotals({});
+      setRecents(readRecents());
     }
   }, [open]);
 
@@ -416,9 +491,58 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
             </div>
           )}
 
+          {/* Before you type: what you last opened from here, so the palette
+              is a way back to the record you were working on and not only a
+              way to find a new one. Filtered by access on the way out — a
+              record you opened while you held a feature stops being offered
+              once you don't. Direct messages are never recorded (their text
+              would sit in a shared tablet's storage). */}
+          {!searching && query.length < 2 && shownRecents.length > 0 && (
+            <div>
+              <div style={{
+                padding: '10px 14px 6px', display: 'flex', alignItems: 'center', gap: '6px',
+                borderBottom: '1px solid rgba(var(--border-rgb),0.3)',
+              }}>
+                <span style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  Recently opened
+                </span>
+                <button
+                  onClick={() => { clearRecents(); setRecents([]); }}
+                  style={{
+                    marginLeft: 'auto', background: 'transparent', border: 'none',
+                    color: 'var(--text-muted)', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                    padding: '2px 4px',
+                  }}
+                >Clear</button>
+              </div>
+              {shownRecents.map(r => (
+                <button
+                  key={`${r.kind}:${r.id}`}
+                  onClick={() => {
+                    // Re-stamp so the list orders by last open, not first.
+                    pushRecent({ ...r, at: Date.now() });
+                    onClose();
+                    router.push(r.url);
+                  }}
+                  style={{ ...resultBtnStyle, borderBottom: rowDivider }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: '8px' }}>
+                    <span style={titleStyle}>{r.label}</span>
+                    <span style={{ ...subtitleStyle, fontSize: '10px', fontWeight: 700, whiteSpace: 'nowrap', marginTop: 0 }}>
+                      {KIND_LABEL[r.kind] || r.kind}
+                    </span>
+                  </div>
+                  {r.sub && <div style={subtitleStyle}>{r.sub}</div>}
+                </button>
+              ))}
+            </div>
+          )}
+
           {!searching && query.length < 2 && (
-            <div style={{ padding: '40px 20px', textAlign: 'center' }}>
-              <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-label)' }}>Search everything</div>
+            <div style={{ padding: shownRecents.length > 0 ? '20px' : '40px 20px', textAlign: 'center' }}>
+              {shownRecents.length === 0 && (
+                <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-label)' }}>Search everything</div>
+              )}
               <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>POs, invoices, vehicles, graphics jobs, estimates, parts, customers, messages, quotes</div>
             </div>
           )}
@@ -461,8 +585,27 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
                   )}
                 </div>
 
-                {/* Group results */}
-                {items.map((item: any) => renderResult(group, item, openDetail, group === 'customers' ? openLogCall : undefined))}
+                {/* Group results, each with the quick actions its type
+                    actually supports for this viewer (R6-13). A group with
+                    no real action — a customer PO has no receive flow to
+                    link to — simply renders no strip. */}
+                {items.map((item: any) => {
+                  const actions = quickActionsFor(group, item, access);
+                  return (
+                    <div key={`row-${item.id}`} style={{ borderBottom: rowDivider }}>
+                      {renderResult(group, item, openDetail, canSeeMoney)}
+                      {actions.length > 0 && (
+                        <div style={actionRowStyle}>
+                          {actions.map(a => (
+                            <button key={a.key} title={a.title} onClick={() => runAction(a, item)} style={actionChipStyle}>
+                              {a.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             );
           })}
@@ -559,6 +702,8 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
           </div>
         </div>
       )}
+
+      {briefFor && <BriefMeSheet target={briefFor} onClose={() => setBriefFor(null)} />}
 
     </div>
   );

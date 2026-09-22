@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
+import ConnectionsPanel from '@/components/ConnectionsPanel';
+import UsagePanel from '@/components/UsagePanel';
 
 interface HealthCheck {
   syncType: string;
@@ -13,6 +15,81 @@ interface HealthCheck {
   lastRunAt: string | null;
   ageMinutes: number | null;
   problem: string | null;
+}
+
+type RunHistoryState =
+  | { state: 'loading' }
+  | { state: 'error'; message: string }
+  | {
+      state: 'ready';
+      runs: { finishedAt: string; durationMs: number | null; outcome: 'ok' | 'error'; records: number | null; error: string | null }[];
+      errorStreak: number;
+      medianDurationMs: number | null;
+      runsWithoutDuration: number;
+      runsWithoutRecords: number;
+      note: string;
+    };
+
+/**
+ * The last 30 runs of one job (R6-13). Two things it refuses to imply: a
+ * run with no duration renders as "—", never as an instant one, and the
+ * panel repeats that only runs which finished reporting are here — a short
+ * history is not proof the job has been idle.
+ */
+function RunHistoryPanel({ history }: { history: RunHistoryState | undefined }) {
+  const muted: React.CSSProperties = { fontSize: '11px', color: 'var(--text-muted)' };
+  if (!history || history.state === 'loading') {
+    return <div style={{ ...muted, marginTop: '10px' }}>Loading run history…</div>;
+  }
+  if (history.state === 'error') {
+    return <div style={{ ...muted, marginTop: '10px' }}>Could not load run history: {history.message}</div>;
+  }
+  if (history.runs.length === 0) {
+    return (
+      <div style={{ ...muted, marginTop: '10px' }}>
+        No recorded runs yet. The flight recorder only sees runs from when it was switched on.
+      </div>
+    );
+  }
+
+  const max = Math.max(...history.runs.map(r => r.durationMs ?? 0), 1);
+  return (
+    <div style={{ marginTop: '10px', borderTop: '1px solid var(--border)', paddingTop: '10px' }}>
+      <div style={{ ...muted, marginBottom: '6px' }}>
+        {history.errorStreak > 0 && (
+          <span style={{ color: '#ef4444', fontWeight: 800 }}>
+            {history.errorStreak} failure{history.errorStreak === 1 ? '' : 's'} in a row ·{' '}
+          </span>
+        )}
+        Median {history.medianDurationMs == null ? 'unknown' : `${Math.round(history.medianDurationMs / 1000)}s`} over{' '}
+        {history.runs.length} run{history.runs.length === 1 ? '' : 's'}
+        {history.runsWithoutDuration > 0 && ` · ${history.runsWithoutDuration} reported no duration`}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '38px', marginBottom: '6px' }}>
+        {[...history.runs].reverse().map((r, i) => (
+          <div
+            key={i}
+            title={`${new Date(r.finishedAt).toLocaleString()} · ${r.outcome}${r.durationMs == null ? ' · duration unknown' : ` · ${Math.round(r.durationMs / 1000)}s`}${r.records == null ? ' · records not reported' : ` · ${r.records} records`}${r.error ? ` · ${r.error}` : ''}`}
+            style={{
+              flex: 1,
+              minWidth: '3px',
+              // A run with no duration gets a flat marker, not a zero bar —
+              // "we don't know" must not look like "instant".
+              height: r.durationMs == null ? '3px' : `${Math.max(3, (r.durationMs / max) * 38)}px`,
+              background: r.outcome === 'error' ? '#ef4444' : r.durationMs == null ? 'var(--border)' : '#22c55e',
+              borderRadius: '2px',
+            }}
+          />
+        ))}
+      </div>
+      <div style={{ ...muted, fontSize: '10px', lineHeight: 1.5 }}>{history.note}</div>
+      {history.runs.filter(r => r.error).slice(0, 3).map((r, i) => (
+        <div key={i} style={{ fontSize: '10px', color: '#ef4444', marginTop: '3px' }}>
+          {new Date(r.finishedAt).toLocaleString()} — {r.error}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 interface EmailLogRow {
@@ -71,6 +148,26 @@ export default function SystemHealthPage() {
   const { isAdmin, hasRole, hasFeature, loading: authLoading } = useAuth();
 
   const [checks, setChecks] = useState<HealthCheck[]>([]);
+  // Flight recorder (R6-13): last 30 runs per job, fetched on expand.
+  const [openRuns, setOpenRuns] = useState<string | null>(null);
+  const [runs, setRuns] = useState<Record<string, RunHistoryState>>({});
+
+  const toggleRuns = useCallback(async (syncType: string) => {
+    setOpenRuns(prev => (prev === syncType ? null : syncType));
+    setRuns(prev => (prev[syncType] ? prev : { ...prev, [syncType]: { state: 'loading' } }));
+    if (runs[syncType]) return;   // already fetched; expanding again is free
+    try {
+      const res = await apiFetch(`/api/system-health/runs?job=${encodeURIComponent(syncType)}`);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRuns(prev => ({ ...prev, [syncType]: { state: 'error', message: json.error || 'request failed' } }));
+        return;
+      }
+      setRuns(prev => ({ ...prev, [syncType]: { state: 'ready', ...json } }));
+    } catch (e: any) {
+      setRuns(prev => ({ ...prev, [syncType]: { state: 'error', message: e?.message || 'request failed' } }));
+    }
+  }, [runs]);
   const [emails, setEmails] = useState<EmailLogRow[]>([]);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   // The resolve action lives on the month-close route, which admits
@@ -85,6 +182,15 @@ export default function SystemHealthPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [flashedEmailId, setFlashedEmailId] = useState<string | null>(null);
+  // The Connections tab probes NetSuite and the three RESTlets live, so it
+  // mounts (and therefore fetches) only when someone selects it.
+  // ?tab= (deepLinks.systemHealthUsage) lands on the Usage tab directly;
+  // anything else, or nothing, is the Jobs tab as before.
+  type Tab = 'jobs' | 'connections' | 'usage';
+  const [tab, setTab] = useState<Tab>(() => {
+    const t = searchParams.get('tab');
+    return t === 'usage' || t === 'connections' ? t : 'jobs';
+  });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -161,17 +267,34 @@ export default function SystemHealthPage() {
         <div>
           <div style={{ fontSize: '20px', fontWeight: 800 }}>System Health</div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            Background jobs and syncs. A watcher runs every 30 minutes and pushes an alert to admins when anything here goes stale or errors.
-            {externalPingConfigured && (
+            Background jobs and syncs, and whether every outside connection the app depends on is actually configured.
+            {tab === 'jobs' && externalPingConfigured && (
               <span style={{ color: '#22c55e', fontWeight: 600 }}> External dead-man&apos;s switch armed — if the scheduler itself dies, the outside monitor emails admins.</span>
             )}
           </div>
         </div>
-        <button onClick={load} disabled={loading} style={{ padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-          {loading ? 'Checking…' : '↻ Refresh'}
-        </button>
+        {tab === 'jobs' && (
+          <button onClick={load} disabled={loading} style={{ padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+            {loading ? 'Checking…' : '↻ Refresh'}
+          </button>
+        )}
       </div>
 
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '14px', flexWrap: 'wrap' }}>
+        {([['jobs', 'Jobs & email'], ['connections', 'Connections'], ['usage', 'Usage & errors']] as const).map(([key, label]) => (
+          <button key={key} onClick={() => setTab(key)} style={{
+            padding: '7px 14px', borderRadius: '999px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+            background: tab === key ? 'rgba(96,165,250,0.12)' : 'var(--card)',
+            border: `1px solid ${tab === key ? 'rgba(96,165,250,0.45)' : 'var(--border)'}`,
+            color: tab === key ? '#60a5fa' : 'var(--text-muted)',
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {tab === 'connections' && <ConnectionsPanel />}
+      {tab === 'usage' && <UsagePanel />}
+
+      {tab === 'jobs' && (<>
       {writeProbe && !writeProbe.ok && (
         <div style={{ padding: '10px 14px', borderRadius: '8px', marginBottom: '12px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', fontSize: '12px', fontWeight: 600 }}>
           Heartbeat writes to the database are failing — the jobs may be running fine, but every &quot;last run&quot; below is frozen at its last landed write, so the statuses can&apos;t be trusted until this is fixed. Error: {writeProbe.error || 'unknown'}
@@ -203,17 +326,29 @@ export default function SystemHealthPage() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
         {checks.map(c => {
           const s = STATUS_STYLE[c.status];
+          const open = openRuns === c.syncType;
           return (
-            <div key={c.syncType} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 14px', borderRadius: '10px', background: 'var(--card)', border: `1px solid ${c.status === 'ok' ? 'var(--border)' : s.color + '44'}` }}>
-              <span style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '6px', background: s.bg, color: s.color, whiteSpace: 'nowrap' }}>{s.label}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{c.label}</div>
-                {c.problem && <div style={{ fontSize: '11px', color: s.color, marginTop: '2px' }}>{c.problem}</div>}
+            <div key={c.syncType} style={{ padding: '12px 14px', borderRadius: '10px', background: 'var(--card)', border: `1px solid ${c.status === 'ok' ? 'var(--border)' : s.color + '44'}` }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '6px', background: s.bg, color: s.color, whiteSpace: 'nowrap' }}>{s.label}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{c.label}</div>
+                  {c.problem && <div style={{ fontSize: '11px', color: s.color, marginTop: '2px' }}>{c.problem}</div>}
+                </div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  Last run {fmtAge(c.ageMinutes)}<br />
+                  every {c.intervalMinutes >= 60 ? `${c.intervalMinutes / 60}h` : `${c.intervalMinutes} min`}
+                </div>
+                {/* Flight recorder (R6-13) — the run history behind this row. */}
+                <button
+                  type="button"
+                  onClick={() => toggleRuns(c.syncType)}
+                  style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '11px', fontWeight: 800, cursor: 'pointer', padding: '2px 4px', whiteSpace: 'nowrap' }}
+                >
+                  {open ? '▾ Runs' : '▸ Runs'}
+                </button>
               </div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                Last run {fmtAge(c.ageMinutes)}<br />
-                every {c.intervalMinutes >= 60 ? `${c.intervalMinutes / 60}h` : `${c.intervalMinutes} min`}
-              </div>
+              {open && <RunHistoryPanel history={runs[c.syncType]} />}
             </div>
           );
         })}
@@ -304,6 +439,7 @@ export default function SystemHealthPage() {
           </div>
         );
       })()}
+      </>)}
     </div>
   );
 }

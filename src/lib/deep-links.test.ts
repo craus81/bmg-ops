@@ -14,6 +14,15 @@ describe('deepLinks.pickList / vehicleLinkFor', () => {
     expect(deepLinks.inboxThread('t-1')).toBe('/admin/inbox?thread=t-1');
   });
 
+  // Invites and password resets are magic links: the session is only
+  // exchanged in /auth/callback, so a redirectTo aimed straight at a page
+  // delivers an unexchanged code and strands the recipient on /login.
+  it('authCallback routes an auth redirect through the session exchange', () => {
+    expect(deepLinks.authCallback('/home')).toBe('/auth/callback?next=%2Fhome');
+    expect(deepLinks.authCallback('/cni/onboarding'))
+      .toBe('/auth/callback?next=%2Fcni%2Fonboarding');
+  });
+
   it('vehicleLinkFor carries the visit into the pick-list fallback', () => {
     // External installer: no in_shop/fleet_checkin feature → pick-list, pinned.
     expect(vehicleLinkFor(['installer'], 'ci-123', '1FTBW3XM5PKA00001'))
@@ -58,8 +67,52 @@ describe('deepLinks.pdfViewer', () => {
   });
 });
 
+// Migration 314: imported ledger documents are served by an app route, not
+// from R2's public domain — so the viewer must accept the builder's output.
+describe('deepLinks.ledgerDocument', () => {
+  it('points at the record-scoped bytes route', () => {
+    expect(deepLinks.ledgerDocument('11111111-2222-3333-4444-555555555555'))
+      .toBe('/api/ledger/documents/11111111-2222-3333-4444-555555555555');
+  });
+
+  it('is a src the PDF viewer will frame', () => {
+    const src = deepLinks.ledgerDocument('11111111-2222-3333-4444-555555555555');
+    expect(allowedPdfSrc(src, 'https://go.bmgfleet.com')).toBe(src);
+    const url = deepLinks.pdfViewer(src, { name: 'Invoice 1042.pdf' });
+    expect(new URLSearchParams(url.split('?')[1]).get('src')).toBe(src);
+    expect(allowedPdfSrc(url, 'https://go.bmgfleet.com')).toBe(url);
+  });
+});
+
+describe('deepLinks.ledgerAdmin', () => {
+  it('is the bare page with no options', () => {
+    expect(deepLinks.ledgerAdmin()).toBe('/admin/ledger');
+  });
+
+  it('emits ONLY the params it was given', () => {
+    expect(deepLinks.ledgerAdmin({ tab: 'review' })).toBe('/admin/ledger?tab=review');
+    expect(deepLinks.ledgerAdmin({ run: 'run-1' })).toBe('/admin/ledger?run=run-1');
+    expect(deepLinks.ledgerAdmin({ qboAuth: 'success' })).toBe('/admin/ledger?qboAuth=success');
+    expect(deepLinks.ledgerAdmin({ qboAuth: 'error', reason: 'state_mismatch' }))
+      .toBe('/admin/ledger?qboAuth=error&reason=state_mismatch');
+  });
+
+  it('drops a null run rather than emitting run=null', () => {
+    expect(deepLinks.ledgerAdmin({ run: null, tab: 'import' })).toBe('/admin/ledger?tab=import');
+  });
+});
+
+describe('deepLinks.ledgerCustomerReview', () => {
+  it('lands on the queue, and on ONE row when an id is in scope', () => {
+    // A notification about a specific customer must never link to the bare
+    // list while the row id is known.
+    expect(deepLinks.ledgerCustomerReview()).toBe('/admin/ledger?tab=review');
+    expect(deepLinks.ledgerCustomerReview('lc-1')).toBe('/admin/ledger?tab=review&customer=lc-1');
+  });
+});
+
 describe('allowedPdfSrc', () => {
-  const ORIGIN = 'https://ops.bmgfleet.com';
+  const ORIGIN = 'https://go.bmgfleet.com';
   const FILE_HOST = 'https://files.example.com';
   afterEach(() => { delete process.env.NEXT_PUBLIC_R2_PUBLIC_URL; });
 
@@ -80,8 +133,21 @@ describe('allowedPdfSrc', () => {
     expect(allowedPdfSrc('https://evil.example.com/x.pdf', ORIGIN)).toBe(null);
     expect(allowedPdfSrc('javascript:alert(1)', ORIGIN)).toBe(null);
     expect(allowedPdfSrc('data:text/html,<h1>hi', ORIGIN)).toBe(null);
-    expect(allowedPdfSrc('http://ops.bmgfleet.com/x.pdf', ORIGIN)).toBe(null);
+    expect(allowedPdfSrc('http://go.bmgfleet.com/x.pdf', ORIGIN)).toBe(null);
     expect(allowedPdfSrc(null, ORIGIN)).toBe(null);
     expect(allowedPdfSrc('', ORIGIN)).toBe(null);
+  });
+});
+
+// R7-4: the Usage tab is the landing for anything about client errors /
+// slow routes / abandoned forms; the builder must carry the filter so a
+// click lands on the row, not the tab.
+describe('deepLinks.systemHealthUsage', () => {
+  it('opens the usage tab with optional filters', () => {
+    expect(deepLinks.systemHealthUsage()).toBe('/admin/system-health?tab=usage');
+    expect(deepLinks.systemHealthUsage({ kind: 'error', page: '/vehicles/:vin' }))
+      .toBe('/admin/system-health?tab=usage&kind=error&page=%2Fvehicles%2F%3Avin');
+    expect(deepLinks.systemHealthUsage({ form: 'vehicle_checkin', days: 30 }))
+      .toBe('/admin/system-health?tab=usage&form=vehicle_checkin&days=30');
   });
 });

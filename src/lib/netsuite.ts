@@ -85,6 +85,24 @@ const isRetryableStatus = (status: number) => status === 429 || status >= 500;
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 /**
+ * NetSuite's SuiteCloud concurrency governor rejecting us because too many
+ * of our own requests are in flight at once — NOT a permission or data
+ * problem, and the same request succeeds moments later.
+ *
+ * It arrives in two different shapes depending on the endpoint: SuiteQL
+ * answers 429 with "Concurrent request limit exceeded", RESTlets answer
+ * **400** with an SSS_REQUEST_LIMIT_EXCEEDED body. The status alone is
+ * therefore not enough to recognise it — a plain 400 is normally a
+ * permanent error we must not retry — so match the body too.
+ */
+const isConcurrencyError = (status: number, body: string) =>
+  status === 429 || /SSS_REQUEST_LIMIT_EXCEEDED|Concurrent request limit/i.test(body);
+
+/** Attempts for a concurrency rejection, over and above any caller retries. */
+const CONCURRENCY_RETRIES = 3;
+const CONCURRENCY_BASE_DELAY_MS = 700;
+
+/**
  * Execute a SuiteQL query against NetSuite
  */
 export async function suiteqlQuery(query: string, limit: number = 1000, offset: number = 0, opts?: SuiteqlOptions): Promise<any> {
@@ -122,6 +140,15 @@ export async function suiteqlQuery(query: string, limit: number = 1000, offset: 
       await sleep(baseDelay * 2 ** attempt);
       continue;
     }
+    // A concurrency rejection is retried even when the caller asked for no
+    // retries: it says nothing about the query, only that we asked too much
+    // at once, and an interactive read that gives up here shows the user a
+    // raw NetSuite error for something that would have worked a second
+    // later. SuiteQL is a read, so replaying it is free.
+    if (isConcurrencyError(response.status, text) && attempt < Math.max(retries, CONCURRENCY_RETRIES)) {
+      await sleep(CONCURRENCY_BASE_DELAY_MS * 2 ** attempt);
+      continue;
+    }
     throw Object.assign(new Error(`NetSuite SuiteQL error (${response.status}): ${text}`), { status: response.status });
   }
 }
@@ -150,13 +177,20 @@ export async function suiteqlQueryAll(query: string, pageSize: number = 1000, op
 }
 
 /**
- * Call a NetSuite RESTlet
+ * Call a NetSuite RESTlet.
+ *
+ * `opts.timeoutMs` bounds the call with an AbortSignal. Without one a RESTlet
+ * that hangs holds the caller open until the platform kills the whole
+ * function — which for a budgeted background job (the ledger mirror's PDF
+ * phase) means losing the run's cursor to a single slow render. Interactive
+ * callers keep the previous behaviour by passing nothing.
  */
 export async function callRestlet(
   restletUrl: string,
   method: string = 'GET',
   params?: Record<string, string>,
-  jsonData?: any
+  jsonData?: any,
+  opts?: { timeoutMs?: number }
 ): Promise<any> {
   const config = getConfig();
   const { oauth, token } = createOAuth(config);
@@ -170,30 +204,44 @@ export async function callRestlet(
   }
 
   const fullUrl = url.toString();
-  const authHeader = getAuthHeader(oauth, token, { url: fullUrl, method: method.toUpperCase() });
+  const verb = method.toUpperCase();
 
-  const headers: Record<string, string> = {
-    'Authorization': authHeader,
-    'Content-Type': 'application/json',
-  };
+  // Concurrency rejections are retried for GET only. A GET is a read and
+  // replaying it is free; a POST may have created a record even when the
+  // response never reached us, and re-sending it is how you mint duplicates
+  // (see the create-customer note further down this file).
+  const retries = verb === 'GET' ? CONCURRENCY_RETRIES : 0;
 
-  const fetchOptions: RequestInit = {
-    method: method.toUpperCase(),
-    headers,
-  };
+  for (let attempt = 0; ; attempt++) {
+    // Signed per attempt: the OAuth nonce/timestamp must be fresh.
+    const authHeader = getAuthHeader(oauth, token, { url: fullUrl, method: verb });
 
-  if (method.toUpperCase() === 'POST' && jsonData) {
-    fetchOptions.body = JSON.stringify(jsonData);
-  }
+    const headers: Record<string, string> = {
+      'Authorization': authHeader,
+      'Content-Type': 'application/json',
+    };
 
-  const response = await fetch(fullUrl, fetchOptions);
+    const fetchOptions: RequestInit = {
+      method: verb,
+      headers,
+      ...(opts?.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}),
+    };
 
-  if (!response.ok) {
+    if (verb === 'POST' && jsonData) {
+      fetchOptions.body = JSON.stringify(jsonData);
+    }
+
+    const response = await fetch(fullUrl, fetchOptions);
+
+    if (response.ok) return response.json();
+
     const text = await response.text();
+    if (attempt < retries && isConcurrencyError(response.status, text)) {
+      await sleep(CONCURRENCY_BASE_DELAY_MS * 2 ** attempt);
+      continue;
+    }
     throw new Error(`NetSuite RESTlet error (${response.status}): ${text}`);
   }
-
-  return response.json();
 }
 
 // ─── Sales Order Specific Functions ────────────────────────────
@@ -486,6 +534,8 @@ export async function createCustomerOrLead(payload: {
   email?: string;
   phone?: string;
   address?: string;
+  /** NetSuite's second address line — suite / unit. */
+  address2?: string;
   city?: string;
   state?: string;
   zip?: string;
@@ -534,7 +584,7 @@ export async function createCustomerOrLead(payload: {
   if (website) body.url = website;
 
   // Default address
-  if (payload.address || payload.city || payload.state || payload.zip) {
+  if (payload.address || payload.address2 || payload.city || payload.state || payload.zip) {
     body.addressBook = {
       items: [
         {
@@ -542,6 +592,7 @@ export async function createCustomerOrLead(payload: {
           defaultShipping: true,
           addressBookAddress: {
             addr1: payload.address || '',
+            addr2: payload.address2 || '',
             city: payload.city || '',
             state: payload.state || '',
             zip: payload.zip || '',
@@ -1235,6 +1286,223 @@ export async function deactivateCustomer(customerId: string): Promise<{ success:
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** The address fields a Customer Record edit can carry. */
+export interface CustomerAddressFields {
+  address?: string | null;
+  address2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+}
+
+/** Everything the Customer Record's Edit panel can push to NetSuite. */
+export interface CustomerUpdateFields extends CustomerAddressFields {
+  companyName?: string;
+  email?: string | null;
+  phone?: string | null;
+  website?: string | null;
+}
+
+const CUSTOMER_ADDRESS_KEYS = ['address', 'address2', 'city', 'state', 'zip'] as const;
+
+/**
+ * One authenticated call against a customer record. GET reads it, PATCH
+ * writes it; both share the 25s timeout and the error unwrapping every
+ * other write in this file uses. A 204 (what PATCH answers with) has no
+ * body, which is a success and not a parse failure.
+ */
+async function customerRecordCall(
+  path: string,
+  method: 'GET' | 'PATCH',
+  body?: unknown,
+): Promise<{ ok: true; data: any } | { ok: false; error: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/customer/${path}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method,
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { ok: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+
+    const text = await response.text();
+    return { ok: true, data: text ? JSON.parse(text) : {} };
+  } catch (e: any) {
+    const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';
+    return { ok: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The address sub-record on an addressBook line. REST has spelled this key
+ * three ways across versions and this account's exact casing is only
+ * observable against the live account, so read all three and write the
+ * documented one (`addressBookAddress` — what createCustomerOrLead already
+ * sends successfully here).
+ */
+function addressBookLineAddress(item: any): any {
+  return item?.addressBookAddress || item?.addressbookAddress || item?.addressbookaddress || {};
+}
+
+/**
+ * Update an existing NetSuite customer — the write-back behind the Customer
+ * Record's Edit panel.
+ *
+ * Scalar fields are a plain PATCH. The ADDRESS is not a field: NetSuite keeps
+ * addresses in the `addressBook` sublist, so editing one means naming the
+ * right line. This reads the record first, finds the default-billing line,
+ * and patches THAT line by id. Two things it deliberately does not do:
+ *
+ *  - No `?replace=addressBook`. Replace drops every other address on the
+ *    customer — shipping, alternate sites — and a record with one corrected
+ *    billing address and no shipping address is worse than the one we
+ *    started with. Merging by id leaves the rest alone.
+ *  - No guessing. NetSuite APPENDS an addressBook item sent without an id,
+ *    so a customer with several addresses and no clear billing one gets a
+ *    refusal rather than a silent second address. Mark the default in
+ *    NetSuite and try again.
+ *
+ * `country` rides along only when the customer has no address at all and
+ * this call is creating the first one; on an existing line it is left out
+ * so a non-US customer keeps its country.
+ *
+ * Fail closed: the caller must not write its local copy unless this
+ * returns success, or FleetSuite ends up showing an address NetSuite
+ * never accepted.
+ */
+export async function updateCustomer(
+  customerId: string,
+  fields: CustomerUpdateFields,
+): Promise<{ success: boolean; error?: string; address?: 'updated' | 'created' }> {
+  const body: any = {};
+
+  if (fields.companyName !== undefined) {
+    const name = fields.companyName.trim();
+    if (!name) return { success: false, error: 'A customer needs a company name.' };
+    body.companyName = name;
+  }
+
+  // Validated here rather than at NetSuite's door: a malformed address or
+  // phone comes back as a generic 400 that fails the WHOLE save, so the
+  // person editing a street address would be told nothing useful about the
+  // email they also touched. The create path drops bad values silently —
+  // that is right for a scan-populated create and wrong for a human edit,
+  // where dropping it looks exactly like saving it.
+  if (fields.email !== undefined) {
+    const email = (fields.email || '').trim();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return { success: false, error: `"${email}" doesn't look like an email address.` };
+    }
+    body.email = email;
+  }
+
+  if (fields.phone !== undefined) {
+    const phone = (fields.phone || '').trim();
+    if (phone && phone.replace(/\D/g, '').length < 7) {
+      return { success: false, error: `"${phone}" is too short to be a phone number.` };
+    }
+    body.phone = phone;
+  }
+
+  if (fields.website !== undefined) {
+    body.url = normalizeWebsiteUrl(fields.website) || '';
+  }
+
+  const wantsAddress = CUSTOMER_ADDRESS_KEYS.some(k => fields[k] !== undefined);
+  let addressOutcome: 'updated' | 'created' | undefined;
+
+  if (wantsAddress) {
+    const read = await customerRecordCall(`${customerId}?expandSubResources=true`, 'GET');
+    if (!read.ok) {
+      return { success: false, error: `Could not read this customer's addresses from NetSuite — ${read.error}` };
+    }
+
+    const items: any[] = read.data?.addressBook?.items || [];
+    const billing = items.filter(i => i?.defaultBilling === true || i?.defaultBilling === 'T');
+
+    let target: any = null;
+    if (billing.length === 1) {
+      target = billing[0];
+    } else if (billing.length > 1) {
+      return {
+        success: false,
+        error: `This customer has ${billing.length} addresses marked default billing in NetSuite. Sort that out there first — FleetSuite won't guess which one you meant.`,
+      };
+    } else if (items.length === 1) {
+      target = items[0];
+    } else if (items.length > 1) {
+      return {
+        success: false,
+        error: `This customer has ${items.length} addresses in NetSuite and none is marked default billing. Mark the billing one there first — FleetSuite won't guess which one you meant.`,
+      };
+    }
+
+    const existing = target ? addressBookLineAddress(target) : {};
+    // Unsent parts keep what NetSuite already has: a caller editing only the
+    // zip must not blank the street.
+    const addr: any = {
+      addr1: fields.address !== undefined ? (fields.address || '') : (existing.addr1 || ''),
+      addr2: fields.address2 !== undefined ? (fields.address2 || '') : (existing.addr2 || ''),
+      city: fields.city !== undefined ? (fields.city || '') : (existing.city || ''),
+      state: fields.state !== undefined ? (fields.state || '') : (existing.state || ''),
+      zip: fields.zip !== undefined ? (fields.zip || '') : (existing.zip || ''),
+    };
+
+    if (target) {
+      const lineId = target.id ?? target.internalId;
+      if (lineId === undefined || lineId === null || lineId === '') {
+        // Without a line id a PATCH would append instead of replace, which
+        // is the one outcome this function exists to avoid.
+        return {
+          success: false,
+          error: "NetSuite returned this customer's address without an id, so FleetSuite can't tell which line to change. Edit it in NetSuite this once.",
+        };
+      }
+      body.addressBook = { items: [{ id: String(lineId), addressBookAddress: addr }] };
+      addressOutcome = 'updated';
+    } else {
+      body.addressBook = {
+        items: [{
+          defaultBilling: true,
+          defaultShipping: true,
+          addressBookAddress: { ...addr, country: { id: 'US' } },
+        }],
+      };
+      addressOutcome = 'created';
+    }
+  }
+
+  if (Object.keys(body).length === 0) return { success: true };
+
+  const res = await customerRecordCall(String(customerId), 'PATCH', body);
+  if (!res.ok) return { success: false, error: res.error };
+
+  return { success: true, address: addressOutcome };
 }
 
 /**
@@ -2003,6 +2271,40 @@ export async function findSubsidiary(name: string): Promise<{ id: string; name: 
 }
 
 /**
+ * The currency internal id to put on a vendor bill, or undefined to let
+ * NetSuite derive it.
+ *
+ * NetSuite validates a bill's currency against the VENDOR's currency list,
+ * not just the account's, so a constant can't work: id 1 (USD) is accepted
+ * for most installers and rejected as "Invalid Field Value 1 for the
+ * following field: currency" for a vendor whose record doesn't carry it.
+ * Read the vendor's own currency instead — the integration role CAN SuiteQL
+ * `vendor` (unlike `account`/`subsidiary`).
+ *
+ * Returns undefined when nothing resolves, which omits the field and leaves
+ * NetSuite to derive it exactly as it did before this lookup existed. A
+ * vendor with no usable currency then fails with "Please enter value(s) for:
+ * Currency" — the honest error, fixable only on the vendor record.
+ */
+async function resolveVendorCurrency(vendorId: string | number): Promise<string | undefined> {
+  const envId = process.env.NETSUITE_CURRENCY_ID;
+  if (envId) return envId.toString();
+
+  // Interpolated into SuiteQL, so only ever a bare number.
+  const id = vendorId.toString().trim();
+  if (!/^\d+$/.test(id)) return undefined;
+
+  try {
+    const result = await suiteqlQuery(`SELECT currency FROM vendor WHERE id = ${id}`);
+    const currency = result?.items?.[0]?.currency;
+    return currency ? currency.toString() : undefined;
+  } catch {
+    // Non-critical — fall through to letting NetSuite derive the currency.
+    return undefined;
+  }
+}
+
+/**
  * Create a Vendor Bill in NetSuite for an installer payout.
  * Uses the REST Record API: POST /services/rest/record/v1/vendorBill
  * Books a single expense line (the payout total) to the given GL account.
@@ -2027,8 +2329,13 @@ export async function createVendorBill(payload: {
   // doesn't auto-number bills, so always send one. Location is HEADER only
   // (one location per bill); a line-level location triggers a 500 unless
   // per-line locations are on, so keep the line minimal: account + amount.
+  // Currency is sent only when we could read one off the vendor (or it was
+  // configured); never a guess — see resolveVendorCurrency.
+  const currencyId = await resolveVendorCurrency(payload.vendorId);
+
   const body: any = {
     entity: { id: payload.vendorId },
+    ...(currencyId ? { currency: { id: currencyId } } : {}),
     ...(payload.referenceNo ? { tranId: payload.referenceNo } : {}),
     ...(payload.subsidiaryId ? { subsidiary: { id: payload.subsidiaryId } } : {}),
     ...(payload.locationId ? { location: { id: payload.locationId } } : {}),
@@ -2058,9 +2365,17 @@ export async function createVendorBill(payload: {
     if (!response.ok) {
       const text = await response.text();
       console.error('NetSuite create vendor bill error:', text, '\nrequest body:', JSON.stringify(body));
+      // A currency complaint is always the vendor record, never the bill:
+      // NetSuite validates the currency against the vendor's own list, so
+      // neither retrying nor changing what we send here can fix it. Say so,
+      // because the raw message ("Please enter value(s) for: Currency")
+      // sends people looking in the wrong place.
+      const currencyHint = /currency/i.test(text)
+        ? ` — NetSuite won't accept a currency for vendor ${payload.vendorId}. Open that vendor in NetSuite and set its primary currency (Financial tab); the bill can't be created until the vendor record carries one.`
+        : '';
       // Include the exact body we sent so an opaque UNEXPECTED_ERROR can be
       // diagnosed against what NetSuite actually received.
-      return { success: false, error: `NetSuite error (${response.status}): ${text} | sent: ${JSON.stringify(body)}` };
+      return { success: false, error: `NetSuite error (${response.status}): ${text}${currencyHint} | sent: ${JSON.stringify(body)}` };
     }
 
     // The created record's id comes back in the Location header (and/or body).
@@ -2828,13 +3143,21 @@ export async function getCollectionsFromRestlet(from: string, to: string): Promi
 
 /**
  * Fetch a transaction PDF from the NetSuite RESTlet.
- * Supports: salesOrder, invoice, estimate (matches the RESTlet's query
- * params — estimate requires the updated scripts/netsuite-pdf-restlet.js
- * to be redeployed in NetSuite).
+ *
+ * Supports: salesOrder, invoice, estimate, creditMemo (matches the RESTlet's
+ * query params). `estimate` and `creditMemo` each require the deployed
+ * scripts/netsuite-pdf-restlet.js to be new enough — an older File Cabinet
+ * copy answers with its missing-parameter error rather than a PDF, which is
+ * why the ledger mirror gates credit memos on the RESTlet version probe
+ * (docs/netsuite-ledger-grants.md) instead of just trying.
+ *
+ * `opts.timeoutMs` bounds the call; a large PDF render is the one RESTlet
+ * request that can genuinely sit for tens of seconds.
  */
 export async function getNetSuitePdf(
-  type: 'salesOrder' | 'invoice' | 'estimate',
-  recordId: string
+  type: 'salesOrder' | 'invoice' | 'estimate' | 'creditMemo',
+  recordId: string,
+  opts?: { timeoutMs?: number }
 ): Promise<{
   success: boolean;
   pdfBase64?: string;
@@ -2847,8 +3170,14 @@ export async function getNetSuitePdf(
   }
 
   try {
-    const paramKey = type === 'invoice' ? 'invoiceId' : type === 'estimate' ? 'estimateId' : 'salesOrderId';
-    const result = await callRestlet(restletUrl, 'GET', { [paramKey]: recordId });
+    const paramKey = type === 'invoice'
+      ? 'invoiceId'
+      : type === 'estimate'
+        ? 'estimateId'
+        : type === 'creditMemo'
+          ? 'creditMemoId'
+          : 'salesOrderId';
+    const result = await callRestlet(restletUrl, 'GET', { [paramKey]: recordId }, undefined, opts);
 
     if (result?.success && result?.pdfBase64) {
       let pdf64 = result.pdfBase64;
@@ -2860,7 +3189,13 @@ export async function getNetSuitePdf(
         pdf64 = Buffer.from(pdf64, 'base64').toString('utf-8');
       }
 
-      const prefix = type === 'invoice' ? 'Invoice' : type === 'estimate' ? 'Quote' : 'SalesOrder';
+      const prefix = type === 'invoice'
+        ? 'Invoice'
+        : type === 'estimate'
+          ? 'Quote'
+          : type === 'creditMemo'
+            ? 'CreditMemo'
+            : 'SalesOrder';
       return {
         success: true,
         pdfBase64: pdf64,

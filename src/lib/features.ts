@@ -43,9 +43,21 @@ export const FEATURES = {
   system_health: 'System Health',
   ai_instructions: 'AI Instructions',
   financials: 'Financials (Executive)',
+  ledger: 'Ledger (QuickBooks & NetSuite history)',
 } as const;
 
 export type FeatureKey = keyof typeof FEATURES;
+
+// Roles that belong to internal BMG staff. Excludes 'customer' accounts,
+// external CNI 'installer' accounts, and 'executive' — the same set
+// requireStaff() gates the company-wide routes on, and the DB's
+// is_internal_staff() allowlist (migration 224). It lives here rather than in
+// api-auth.ts so CLIENT components can ask the same question without pulling
+// server-only code into the bundle: a surface whose API is staff-only (the
+// universal search) must not render for an account the API will 403.
+export const INTERNAL_STAFF_ROLES: string[] = [
+  'admin', 'super_admin', 'sales', 'graphics_production', 'shop_tech', 'field_tech', 'finance',
+];
 
 // Owner-level pages: super admins only by default. Regular admins don't see
 // these, but can be granted individual ones via per-user feature overrides.
@@ -73,8 +85,14 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
   // are @mentioned in project notes — their notification deep links land on
   // /upfit, so they must hold its key (found by the gate audit: task-assignment
   // pushes bounced every non-admin/sales assignee once /upfit was gated).
+  // estimates REMOVED (owner decision 2026-09-17): the estimates page is a
+  // quoting page — line prices, totals, margin, the customer send. Graphics
+  // production needs the job, not what it was quoted at, and the pieces they
+  // genuinely used (proof files attached to an estimate) are managed from the
+  // graphics job record, not here. An individual who needs it back can be
+  // granted it with a per-user feature override.
   graphics_production: [
-    'home', 'in_shop', 'graphics', 'estimates',
+    'home', 'in_shop', 'graphics',
     'messages', 'customers', 'parts_catalog', 'schedule', 'upfit_projects',
   ],
 
@@ -100,14 +118,14 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
   // being paid — without admin's user management or data tools.
   finance: [
     'home', 'messages', 'reports', 'vendor_payments', 'customers',
-    'credit_applications',
+    'credit_applications', 'ledger',
   ],
 
   // Leadership: the Home dashboard's Financials tab and nothing else — no
   // settings, user management, or ops tooling. `financials` is otherwise
   // super-admin-only, so this explicit grant is what lets an executive see it.
   executive: [
-    'home', 'financials',
+    'home', 'financials', 'ledger',
   ],
 
   customer: ['home'],

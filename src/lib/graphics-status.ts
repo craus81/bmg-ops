@@ -32,6 +32,44 @@ export const GRAPHICS_PIPELINE: GraphicsJobStatus[] = [
   'packing', 'ready', 'ready_to_pickup', 'shipped', 'picked_up', 'installed',
 ];
 
+/**
+ * Statuses where the job is done being worked. They archive off the active
+ * board, stop counting as overdue, and drop out of the admin work order —
+ * a job nobody can work isn't "next".
+ */
+export const GRAPHICS_FINISHED_STATUSES: GraphicsJobStatus[] = ['shipped', 'picked_up', 'installed', 'cancelled'];
+
+export function isFinishedStatus(status: GraphicsJobStatus): boolean {
+  return GRAPHICS_FINISHED_STATUSES.includes(status);
+}
+
+/**
+ * Statuses the graphics board treats as live work — the "Active" tab.
+ * Everything else has either finished or never started.
+ */
+export const GRAPHICS_ACTIVE_STATUSES: GraphicsJobStatus[] = [
+  'flagged', 'received', 'designing', 'revision', 'printing',
+  'outgassing', 'cutting', 'packing', 'ready', 'ready_to_pickup',
+];
+
+/** What the board's status tabs / per-status select can be set to. */
+export type GraphicsStatusScope = GraphicsJobStatus | 'all' | 'active';
+
+/**
+ * Is this job inside the board's current status scope?
+ *
+ * Shared on purpose, because the tab COUNTS and the table's own filter drifted
+ * apart once already: "★ My Jobs (23)" sat over a table of 6, because the count
+ * took every loaded job assigned to you while the table was still scoped to
+ * Active — and a shipped job stays assigned to whoever ran it. Any count that
+ * labels a tab has to ask the same question the table asks.
+ */
+export function inStatusScope(status: GraphicsJobStatus, scope: GraphicsStatusScope): boolean {
+  if (scope === 'all') return true;
+  if (scope === 'active') return GRAPHICS_ACTIVE_STATUSES.includes(status);
+  return status === scope;
+}
+
 /** Off-pipeline states: reachable from anywhere, leavable to anywhere. */
 export const GRAPHICS_SIDE_STATES: GraphicsJobStatus[] = ['flagged', 'revision', 'cancelled'];
 

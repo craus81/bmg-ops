@@ -32,7 +32,10 @@ export default function GraphicsMaterialsCard({ job, autoPrompt, onAutoPromptHan
   onAutoPromptHandled?: () => void;
 }) {
   const supabase = createClient();
-  const { user } = useAuth();
+  // Square footage is the production record; what the film cost is money
+  // (src/lib/money-visibility.ts) and this card sits on the job page every
+  // designer and print tech opens.
+  const { user, canSeeMoney } = useAuth();
   const dialog = useDialog();
 
   const [rows, setRows] = useState<MaterialRow[]>([]);
@@ -88,7 +91,9 @@ export default function GraphicsMaterialsCard({ job, autoPrompt, onAutoPromptHan
     const prior = data?.[0];
     if (prior && Number(prior.quantity_sqft) > 0) {
       const rate = Number(prior.cost) / Number(prior.quantity_sqft);
-      setRateHint(`${name.trim()} last logged at ${fmtMoney(rate)}/ft² → ~${fmtMoney(rate * sqftNum)} for ${sqftNum} ft²`);
+      setRateHint(canSeeMoney
+        ? `${name.trim()} last logged at ${fmtMoney(rate)}/ft² → ~${fmtMoney(rate * sqftNum)} for ${sqftNum} ft²`
+        : `${name.trim()} last logged for ${sqftNum} ft²`);
     } else {
       setRateHint(null);
     }
@@ -121,7 +126,7 @@ export default function GraphicsMaterialsCard({ job, autoPrompt, onAutoPromptHan
   };
 
   const remove = async (row: MaterialRow) => {
-    if (!(await dialog.confirm(`Remove ${row.material_name}${row.cost != null ? ` (${fmtMoney(Number(row.cost))})` : ''} from this job's material log?`, { destructive: true, confirmLabel: 'Remove' }))) return;
+    if (!(await dialog.confirm(`Remove ${row.material_name}${canSeeMoney && row.cost != null ? ` (${fmtMoney(Number(row.cost))})` : ''} from this job's material log?`, { destructive: true, confirmLabel: 'Remove' }))) return;
     await supabase.from('graphics_job_materials').delete().eq('id', row.id);
     await load();
   };
@@ -141,7 +146,7 @@ export default function GraphicsMaterialsCard({ job, autoPrompt, onAutoPromptHan
     <div style={{ marginBottom: '10px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={labelStyle}>
-          Material Used{rows.length > 0 ? ` — ${totalSqft > 0 ? `${totalSqft.toFixed(0)} ft² · ` : ''}${fmtMoney(totalCost)}` : ''}
+          Material Used{rows.length > 0 ? ` — ${totalSqft > 0 ? `${totalSqft.toFixed(0)} ft²` : ''}${canSeeMoney ? `${totalSqft > 0 ? ' · ' : ''}${fmtMoney(totalCost)}` : ''}` : ''}
         </div>
         <button onClick={() => openModal()} style={{ fontSize: '10px', fontWeight: 700, color: '#34d399', background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.25)', borderRadius: '6px', padding: '3px 8px', cursor: 'pointer' }}>
           + Log Material
@@ -160,7 +165,7 @@ export default function GraphicsMaterialsCard({ job, autoPrompt, onAutoPromptHan
               <span style={{ flex: 1 }} />
               {r.quantity_sqft != null && <span style={{ color: 'var(--text-label)' }}>{Number(r.quantity_sqft).toFixed(0)} ft²</span>}
               {r.linear_feet != null && <span style={{ color: 'var(--text-label)' }}>{Number(r.linear_feet).toFixed(0)} lin ft</span>}
-              <span style={{ fontWeight: 700, color: '#f472b6' }}>{r.cost != null ? fmtMoney(Number(r.cost)) : '—'}</span>
+              <span style={{ fontWeight: 700, color: '#f472b6' }}>{canSeeMoney && r.cost != null ? fmtMoney(Number(r.cost)) : '—'}</span>
               <button onClick={() => remove(r)} style={{ background: 'transparent', border: 'none', color: '#f87171', fontSize: '12px', cursor: 'pointer', padding: '0 2px' }}>×</button>
             </div>
           ))}

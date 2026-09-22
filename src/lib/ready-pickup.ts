@@ -6,8 +6,13 @@ import { fetchAllRows } from './fetch-all';
  * only covers SHIPPED vehicles — a completed vehicle whose customer never
  * comes sits in the lot indefinitely with no aging view and no follow-up.
  * This ranks complete-but-not-shipped vehicles by days since completion
- * and decides which get an automated reminder (with the booking link) and
- * which escalate to the sales rep.
+ * and decides which need chasing and which escalate to the sales rep.
+ *
+ * The policy is unchanged since these reminders stopped sending themselves
+ * (2026-09-14) — it now decides when to PROMPT a human rather than when to
+ * email. `lastNudgeAt` (fleet_checkins.pickup_nudge_sent_at) is written by
+ * both the prompt and the staff send, so either one buys the same week of
+ * quiet.
  */
 
 export interface ReadyVehicle {
@@ -32,14 +37,15 @@ export interface NudgePlan {
 /** Reminders repeat weekly, not daily. */
 const REPEAT_DAYS = 7;
 /** Vehicles ready longer than this predate the feature (or are data
- *  debris) — surface them in the queue but never auto-email a customer
- *  about a van that's been sitting for months. */
+ *  debris) — surface them in the queue but never chase a customer about a
+ *  van that's been sitting for months. */
 const MAX_NUDGE_AGE_DAYS = 60;
 
 /**
- * Pure nudge policy: first reminder at nudgeDays after completion, weekly
+ * Pure nudge policy: first chase at nudgeDays after completion, weekly
  * repeats, one-time sales-rep escalation at 2× nudgeDays. Booked vehicles
- * and vehicles with no booking token are left alone.
+ * are left alone; so are vehicles with no booking token, whose chase has
+ * no link to offer (the escalation still covers them).
  */
 export function decideNudges(vehicles: ReadyVehicle[], nudgeDays: number, nowMs: number): NudgePlan {
   const nudges: ReadyVehicle[] = [];

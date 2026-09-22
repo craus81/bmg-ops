@@ -33,7 +33,7 @@ export default function CniInstallersPage() {
   const [loading, setLoading] = useState(true);
   // R5-12: computed 90-day scorecards by user_id — replaces the hand-typed
   // jobs_completed counter (nothing increments it) as the roster's number.
-  const [scorecards, setScorecards] = useState<Record<string, { jobsCompleted: number; onTimeRate: number | null; photoFirstPassRate: number | null; vehiclesCompleted: number; prev: { jobsCompleted: number } }>>({});
+  const [scorecards, setScorecards] = useState<Record<string, { jobsCompleted: number; onTimeRate: number | null; vehiclesCompleted: number; prev: { jobsCompleted: number } }>>({});
   useEffect(() => {
     if (authLoading || !hasFeature('cni_admin')) return;
     fetch('/api/cni/scorecards')
@@ -417,7 +417,6 @@ export default function CniInstallersPage() {
                       style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>
                       {s.jobsCompleted} job{s.jobsCompleted !== 1 ? 's' : ''} · {s.vehiclesCompleted} veh (90d)
                       {s.onTimeRate != null ? ` · ${s.onTimeRate}% on time` : ''}
-                      {s.photoFirstPassRate != null ? ` · ${s.photoFirstPassRate}% photo pass` : ''}
                     </span>
                   );
                 })()}
