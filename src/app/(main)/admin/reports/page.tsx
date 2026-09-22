@@ -29,6 +29,13 @@ const REPORTS: ReportLink[] = [
     source: 'NetSuite',
   },
   {
+    title: 'Quoted Tax Shortfall',
+    blurb: 'Estimates whose saved tax is below what the tax math gives today — the fallout from the item-level Taxable checkbox that used to drop ordinary parts out of the tax base. Bucketed by what each one needs: a conversation if the customer already signed, a re-save if it hasn’t gone out yet.',
+    href: '/admin/reports/quoted-tax-gap',
+    source: 'FleetSuite',
+    visibility: 'admin',
+  },
+  {
     title: 'NetSuite Duplicate IDs',
     blurb: 'Which NetSuite-id money columns hold duplicated ids \u2014 the rows blocking migration 264\u2019s unique indexes. Clean them here, redeploy, and the indexes build themselves.',
     href: '/admin/reports/netsuite-dupes',

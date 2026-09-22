@@ -436,6 +436,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/reports/invoice-reconciliation/route.ts': admin(),
   'src/app/api/reports/invoiced-summary/route.ts': staff(),
   'src/app/api/reports/netsuite-dupes/route.ts': admin(),
+  'src/app/api/reports/quoted-tax-gap/route.ts': admin(),
   'src/app/api/reports/invoices-list/route.ts': staff(),
   'src/app/api/reports/sales-by-customer-detail/route.ts': staff(),
   'src/app/api/reports/on-time/route.ts': role(),

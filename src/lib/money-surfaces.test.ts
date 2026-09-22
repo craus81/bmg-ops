@@ -60,6 +60,7 @@ const ALLOWED: Record<string, string> = {
   'src/app/(main)/admin/reports/never-invoiced/page.tsx': 'reports',
   'src/app/(main)/admin/reports/order-book/page.tsx': 'reports',
   'src/app/(main)/admin/reports/quoted-margin/page.tsx': 'reports',
+  'src/app/(main)/admin/reports/quoted-tax-gap/page.tsx': 'reports; the page itself bounces non-admins and its API is requireAdmin',
   'src/app/(main)/admin/reports/sales-by-customer-detail/page.tsx': 'reports',
   'src/app/(main)/admin/reports/sales-performance/page.tsx': 'reports',
   'src/app/(main)/admin/reports/vehicle-margin/page.tsx': 'reports',
