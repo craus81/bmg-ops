@@ -50,6 +50,11 @@ const text = (v: unknown): boolean => typeof v === 'string' && v.trim().length >
  * "confirmed non-taxable" (migration 252). Treating either NULL as a value
  * would report a gap as covered, which is the whole failure mode this
  * dashboard exists to catch.
+ *
+ * Taxability is now a reference field only — quotes tax every non-labor
+ * line and read nothing from it (see the note atop src/lib/estimate-totals.ts,
+ * Sep 2026). Its bar is kept as a mirror of how complete NetSuite's own item
+ * records are; nothing about a quote changes when it is filled in.
  */
 export const CATALOG_ATTRIBUTES: CatalogAttribute[] = [
   {
@@ -91,10 +96,10 @@ export const CATALOG_ATTRIBUTES: CatalogAttribute[] = [
     fixHint: 'Author them in /admin/part-dimensions.',
   },
   {
-    key: 'taxability', label: 'Taxability',
-    why: 'Unknown taxability makes an estimate’s tax line a guess.',
+    key: 'taxability', label: 'Taxability (reference)',
+    why: 'Mirrors NetSuite’s item Taxable box. Quotes no longer price off it — every non-labor line is taxed — so a gap here costs nothing today.',
     isSet: p => p.is_taxable !== null && p.is_taxable !== undefined,
-    fixHint: 'Set it on /parts — false is an answer, blank is not.',
+    fixHint: 'Fix it in NetSuite on the item record; the parts sync mirrors it.',
   },
   {
     key: 'product_url', label: 'Product URL',

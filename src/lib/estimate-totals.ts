@@ -3,14 +3,24 @@
  * calculation can be characterization-tested in isolation.
  *
  * Behavior notes (intentional, matches production):
- *  - Tax applies to parts/materials only, never labor.
- *  - A line whose item NetSuite marks non-taxable (`taxable === false`,
- *    resolved by the caller from netsuite_parts.is_taxable, migration 252)
- *    is excluded from the tax base too. Freight is the case that surfaced
- *    it: FleetSuite taxed it, NetSuite did not, so the signed quote came
- *    out above the invoice. ONLY an explicit false excludes — undefined or
- *    null (unknown, custom lines, un-synced items) stays taxable, so the
- *    figure can never silently drop below what it is today.
+ *  - Tax applies to parts/materials only, never labor. EVERY non-labor
+ *    line is taxed; a tax-exempt CUSTOMER is the only thing that zeroes it
+ *    (the estimate's own checkbox).
+ *  - Per-ITEM taxability was tried and removed. Migration 252 excluded any
+ *    line whose NetSuite item had the Taxable box unticked, because on
+ *    EST942 Freight was non-taxable there and FleetSuite taxed it, putting
+ *    the signed quote $11.94 above the invoice. In practice that checkbox
+ *    is not maintained in this account: a Sep 2026 quote came out with
+ *    $6,848.61 of ordinary parts excluded and $175 of FREIGHT as the only
+ *    taxed line — the exact inverse of the case it was built for — while
+ *    NetSuite's own invoice taxed all of it. An unmaintained flag that
+ *    silently shrinks the tax base under-quotes tax on a document the
+ *    customer SIGNS, which is the expensive direction to be wrong in; a
+ *    quote that is a few dollars high is corrected at invoicing.
+ *    `netsuite_parts.is_taxable` is still mirrored for reference, but
+ *    nothing reads it for money. If per-line taxability is ever wanted
+ *    again it has to come from the customer's NetSuite tax code, which is
+ *    what actually decides this, not from the item record.
  *  - Per-line labor is labor_hours × quantity, matching the builder UI —
  *    a line's labor_hours is per unit, so two brackets take twice the labor.
  *    (Changed Aug 2026 with sign-off: the server used to ignore quantity,
@@ -70,12 +80,11 @@ export function computeTotals(
   const autoLaborHours = lines.reduce((sum: number, l: any) => sum + (parseFloat(l.labor_hours || 0) * qtyOf(l)), 0);
   const effectiveLaborHours = laborHoursOverride !== null && laborHoursOverride !== undefined ? laborHoursOverride : autoLaborHours;
   const laborTotal = effectiveLaborHours * laborRate;
-  // Parts/materials only (never labor), minus anything NetSuite says is
-  // non-taxable — and taxed line by line, each rounded to cents, exactly as
-  // NetSuite books it. The line amount here is the FLEET amount (qty × units)
-  // because that is the quantity the sales order will carry.
+  // Parts/materials only (never labor), taxed line by line, each rounded to
+  // cents, exactly as NetSuite books it. The line amount here is the FLEET
+  // amount (qty × units) because that is the quantity the sales order will
+  // carry. No per-item exclusion — see the note at the top of this file.
   const taxAmount = taxExempt ? 0 : lines.reduce((sum: number, l: any) => {
-    if (l.taxable === false) return sum;
     const lineAmount = qtyOf(l) * parseFloat(l.unit_price || 0);
     return sum + roundCentsHalfEven(lineAmount * taxRate);
   }, 0);
