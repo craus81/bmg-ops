@@ -297,6 +297,60 @@ const STATUS_LABELS: Record<string, string> = {
   pushed: 'Pushed to NS',
 };
 
+/**
+ * What the list actually shows on a row, which is NOT `estimates.status`.
+ *
+ * The stored status never learns about the sales order: convert-to-so writes
+ * netsuite_so_id and leaves status on 'accepted', so an estimate converted
+ * weeks ago read identically to one the customer approved a minute ago —
+ * the SO number was grey metadata next to the date. Owner ask (2026-09-21):
+ * an approved estimate that has become a sales order is the signal that
+ * parts can be ordered, so it has to be the thing you see.
+ *
+ * Two derived states sit in front of the stored status. Both are computed
+ * from columns the list already loads — nothing is written, and no NetSuite
+ * call is involved.
+ */
+function estimateDisplayStatus(est: Estimate): { key: string; label: string; color: string; title?: string } {
+  // An SO exists: good to order parts. Checked first so a linked-but-
+  // unapproved estimate (link-so's repair path) still reads as sold.
+  if (est.netsuite_so_id) {
+    return {
+      key: 'sales_order',
+      label: `SO #${est.netsuite_so_number || est.netsuite_so_id}`,
+      color: '#22c55e',
+      title: 'Converted to a NetSuite sales order — good to order parts',
+    };
+  }
+  // Approved with no SO: the work nobody has converted yet. Same predicate
+  // the save/convert gates use — customer_approved is the real acceptance
+  // signal, status 'accepted' covers estimates approved by phone or PO.
+  if (est.customer_approved || est.status === 'accepted') {
+    return {
+      key: 'needs_so',
+      label: 'Needs sales order',
+      color: '#f59e0b',
+      title: 'Approved by the customer but not converted yet — open it and use Convert to Sales Order',
+    };
+  }
+  return {
+    key: est.status,
+    label: STATUS_LABELS[est.status] || est.status,
+    color: STATUS_COLORS[est.status] || '#6b7280',
+  };
+}
+
+/** Filter chips, in pipeline order. 'all' is the default. */
+const LIST_FILTERS: { key: string; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'draft', label: 'Draft' },
+  { key: 'sent', label: 'Sent' },
+  { key: 'pushed', label: 'Pushed to NS' },
+  { key: 'needs_so', label: 'Needs sales order' },
+  { key: 'sales_order', label: 'Sales orders' },
+  { key: 'rejected', label: 'Rejected' },
+];
+
 function genKey() {
   return Math.random().toString(36).substring(2, 10);
 }
@@ -320,6 +374,8 @@ export default function EstimatesPage() {
   const [estimates, setEstimates] = useState<Estimate[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  /** One of LIST_FILTERS' keys — matched against estimateDisplayStatus. */
+  const [statusFilter, setStatusFilter] = useState('all');
   // Deep link: ?q=<term> (universal search "View all") prefills the list search.
   useEffect(() => {
     const q = searchParams.get('q');
@@ -3067,7 +3123,7 @@ export default function EstimatesPage() {
 
   // ═══════════ LIST VIEW ═══════════
   if (view === 'list') {
-    const filteredEstimates = estimates.filter(e => {
+    const searchedEstimates = estimates.filter(e => {
       if (!search) return true;
       const s = search.toLowerCase();
       return (
@@ -3078,6 +3134,16 @@ export default function EstimatesPage() {
         e.unit_number?.toLowerCase().includes(s)
       );
     });
+    // Counts come off the searched set, so a chip's number always matches
+    // what clicking it shows.
+    const filterCounts = searchedEstimates.reduce<Record<string, number>>((acc, e) => {
+      const key = estimateDisplayStatus(e).key;
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    const filteredEstimates = statusFilter === 'all'
+      ? searchedEstimates
+      : searchedEstimates.filter(e => estimateDisplayStatus(e).key === statusFilter);
 
     return (
       <div>
@@ -3095,17 +3161,47 @@ export default function EstimatesPage() {
           placeholder="Search estimates..."
           value={search}
           onChange={e => setSearch(e.target.value)}
-          style={{ ...inputStyle, marginBottom: '12px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}
+          style={{ ...inputStyle, marginBottom: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}
         />
+
+        {/* Pipeline filter. "Needs sales order" is the one that earns its
+            keep: approved work waiting on a conversion nobody has done. */}
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
+          {LIST_FILTERS.map(f => {
+            const count = f.key === 'all' ? searchedEstimates.length : (filterCounts[f.key] || 0);
+            const active = statusFilter === f.key;
+            // Keep a chip you're standing on, even at zero, so the list
+            // doesn't explain its own emptiness by vanishing.
+            if (count === 0 && !active && f.key !== 'all') return null;
+            return (
+              <button
+                key={f.key}
+                onClick={() => setStatusFilter(f.key)}
+                style={{
+                  padding: '5px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 700,
+                  cursor: 'pointer', whiteSpace: 'nowrap',
+                  background: active ? 'rgba(238,49,32,0.12)' : 'var(--subtle-bg)',
+                  border: `1px solid ${active ? 'rgba(238,49,32,0.4)' : 'var(--border)'}`,
+                  color: active ? theme.orange : 'var(--text-label)',
+                }}
+              >
+                {f.label} {count}
+              </button>
+            );
+          })}
+        </div>
 
         {filteredEstimates.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-label)', fontSize: '13px' }}>
-            {search ? 'No matching estimates.' : 'No estimates yet. Create one to get started.'}
+            {statusFilter !== 'all' ? 'Nothing in this state right now.'
+              : search ? 'No matching estimates.'
+              : 'No estimates yet. Create one to get started.'}
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {filteredEstimates.map(est => {
-              const statusColor = STATUS_COLORS[est.status] || '#6b7280';
+              const display = estimateDisplayStatus(est);
+              const statusColor = display.color;
               return (
                 <button
                   key={est.id}
@@ -3130,7 +3226,8 @@ export default function EstimatesPage() {
                         <span style={{ color: 'var(--text-body)', fontWeight: 700 }}>{fmt(est.grand_total)}</span>
                         <span>{new Date(est.created_at).toLocaleDateString()}</span>
                         {estimateAltNumber(est) && <span style={{ color: '#a78bfa' }} title="FleetSuite's own estimate number — NetSuite's is the one shown first">FS: {estimateAltNumber(est)}</span>}
-                        {est.netsuite_so_number && <span style={{ color: '#22c55e' }}>SO: {est.netsuite_so_number}</span>}
+                        {/* The SO number moved to the status pill — showing it
+                            here too put it on the row twice. */}
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
@@ -3216,12 +3313,12 @@ export default function EstimatesPage() {
                           </div>
                         );
                       })()}
-                      <div style={{
+                      <div title={display.title} style={{
                         padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                         background: `${statusColor}18`, border: `1px solid ${statusColor}44`,
                         color: statusColor, whiteSpace: 'nowrap',
                       }}>
-                        {STATUS_LABELS[est.status] || est.status}
+                        {display.label}
                       </div>
                       {isAdmin && (
                         <button
