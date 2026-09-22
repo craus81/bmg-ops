@@ -52,6 +52,65 @@ interface Part {
   avg_install_cost: number | null;
 }
 
+type StockState = 'reserved' | 'available' | 'waiting' | 'short' | 'unknown';
+
+interface StockPartRow {
+  item_number: string;
+  description: string | null;
+  needed: number;
+  allocated: number;
+  free: number;
+  usable: number;
+  on_hand: number;
+  on_order: number;
+  short: number;
+  state: StockState;
+  allocatable: number;
+  pos: { tranid: string | null; vendor_name: string | null; eta_date: string | null; remaining: number }[];
+  uncatalogued: boolean;
+}
+
+interface StockReadiness {
+  vehicleCount: number;
+  stockSource: 'live' | 'mirror';
+  parts: StockPartRow[];
+  skippedNonStock: number;
+  summary: {
+    covered: number; onOrder: number; short: number; unknown: number;
+    verdict: 'reserved' | 'ready' | 'waiting' | 'short' | 'unknown';
+    lastEta: string | null;
+  };
+}
+
+/** One tone per verdict, plus the neutral one for "nobody has asked yet". */
+const STOCK_TONE: Record<StockState | StockReadiness['summary']['verdict'] | 'idle', { fg: string; bg: string; border: string }> = {
+  idle: { fg: 'var(--text-label)', bg: 'transparent', border: 'var(--border)' },
+  reserved: { fg: '#22c55e', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.25)' },
+  ready: { fg: '#22c55e', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.25)' },
+  available: { fg: '#22c55e', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.25)' },
+  waiting: { fg: '#60a5fa', bg: 'rgba(96,165,250,0.08)', border: 'rgba(96,165,250,0.25)' },
+  short: { fg: '#f87171', bg: 'rgba(248,113,113,0.08)', border: 'rgba(248,113,113,0.28)' },
+  unknown: { fg: '#fbbf24', bg: 'rgba(251,191,36,0.08)', border: 'rgba(251,191,36,0.25)' },
+};
+
+const stockEta = (d: string | null) =>
+  d ? new Date(`${d.slice(0, 10)}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' }) : null;
+
+/** The banner sentence. Says what to do about it, not just what it is. */
+function stockVerdictText(stock: StockReadiness): string {
+  const { verdict, short, onOrder, lastEta } = stock.summary;
+  const eta = stockEta(lastEta);
+  if (verdict === 'short') {
+    return `${short} part${short === 1 ? '' : 's'} not in stock and not on order — someone has to buy ${short === 1 ? 'it' : 'them'}`;
+  }
+  if (verdict === 'waiting') {
+    return `${onOrder} part${onOrder === 1 ? '' : 's'} still on order${eta ? ` — ETA ${eta}` : ''}`;
+  }
+  if (verdict === 'reserved') return 'Every part is held for this quote';
+  if (verdict === 'unknown') return 'Nothing on this estimate is in the parts catalog, so nothing could be checked';
+  return 'Everything is in stock — reserve it so another job can’t take it first';
+}
+
 interface LineItem {
   key: string; // local key for React
   part_id: string | null;
@@ -413,6 +472,15 @@ export default function EstimatesPage() {
   const [taxExempt, setTaxExempt] = useState(false);
   /** Identical vehicles this line set covers (R6-9). 1 = an ordinary estimate. */
   const [vehicleCount, setVehicleCount] = useState(1);
+
+  // ── Stock check (R6: "can we actually build what we just quoted?") ──
+  // Answered against the current lines, not the last save — see the
+  // /api/estimates/parts-readiness route for why that is the honest input.
+  const [stock, setStock] = useState<StockReadiness | null>(null);
+  const [stockKey, setStockKey] = useState<string | null>(null);
+  const [stockLoading, setStockLoading] = useState(false);
+  const [stockErr, setStockErr] = useState<string | null>(null);
+  const [stockBusy, setStockBusy] = useState<string | null>(null);
   // Counter-offer workbench (R6-9): what this revision changed against the
   // document it supersedes. Derived server-side on open, never stored.
   // Paste-to-estimate (R6-9). The grid is a PROPOSAL — nothing reaches the
@@ -1495,6 +1563,96 @@ export default function EstimatesPage() {
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- the item line-up is the only real input; the client is stable
   }, [lineItemKey]);
+
+  // ── Stock check ──
+  // The signature is what the answer was computed FOR: item numbers,
+  // quantities and the vehicle count. Anything else about a line (price,
+  // description, order) can't change whether the parts are on the shelf, so
+  // it must not mark a perfectly good answer stale.
+  const stockSignature = `${units}|${lines
+    .map(l => `${String(l.item_number || '').trim().toUpperCase()}:${l.quantity}`)
+    .filter(x => !x.startsWith(':'))
+    .sort()
+    .join(',')}`;
+  const stockStale = stock != null && stockKey !== stockSignature;
+  const stockLines = () => lines.map(l => ({ item_number: l.item_number, quantity: l.quantity }));
+  const stockByItem = new Map((stock?.parts || []).map(r => [r.item_number, r]));
+
+  const applyStock = (data: StockReadiness, signature: string) => {
+    setStock(data);
+    setStockKey(signature);
+    setStockErr(null);
+  };
+
+  const checkStock = async () => {
+    const signature = stockSignature;
+    setStockLoading(true);
+    setStockErr(null);
+    try {
+      const res = await fetch('/api/estimates/parts-readiness', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ estimateId: editingId, vehicleCount: units, lines: stockLines() }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setStockErr(data.error || 'Stock check failed'); return; }
+      applyStock(data, signature);
+    } catch (e: any) {
+      setStockErr(e?.message || 'Stock check failed');
+    } finally {
+      setStockLoading(false);
+    }
+  };
+
+  /** Reserve / release. `item` is null for the whole-estimate actions. */
+  const holdStock = async (
+    action: 'set' | 'allocate_all' | 'release_all',
+    item?: string,
+    quantity?: number,
+  ) => {
+    if (!editingId) { setStockErr('Save the estimate first — a hold has to belong to something.'); return; }
+    const signature = stockSignature;
+    setStockBusy(item || action);
+    setStockErr(null);
+    try {
+      const res = await fetch('/api/estimates/allocations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action, estimateId: editingId, vehicleCount: units, lines: stockLines(),
+          ...(action === 'set' ? { itemNumber: item, quantity } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setStockErr(data.error || 'Could not change the hold'); return; }
+      applyStock(data, signature);
+    } catch (e: any) {
+      setStockErr(e?.message || 'Could not change the hold');
+    } finally {
+      setStockBusy(null);
+    }
+  };
+
+  // Check once when an existing estimate is opened, so the answer is already
+  // there when someone goes looking for it. Not on every edit: the check asks
+  // NetSuite for live quantities, and firing that per keystroke would be
+  // rude to the account and slower than the typing. Edits mark it stale
+  // instead, and the banner says so.
+  const stockAutoRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (view !== 'builder' || !editingId || lines.length === 0) return;
+    if (stockAutoRef.current === editingId) return;
+    stockAutoRef.current = editingId;
+    void checkStock();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one shot per opened estimate
+  }, [view, editingId, lines.length]);
+
+  useEffect(() => {
+    // A different estimate (or a new one) gets a clean slate, never the
+    // previous estimate's verdict sitting under its lines.
+    setStock(null); setStockKey(null); setStockErr(null);
+    stockAutoRef.current = null;
+  }, [editingId]);
 
   // ── Margin (internal only — never on the customer-facing quote) ──
   // True cost per line = NetSuite part cost + avg installer cost. Lines with
@@ -3823,6 +3981,87 @@ export default function EstimatesPage() {
           )}
         </div>
 
+        {/* ── STOCK CHECK ──
+            "Do we have everything for this order?" answered without leaving
+            the estimate. Read-only until someone chooses to hold the parts:
+            a hold counts against free stock for every other job and quote,
+            so it is never automatic. */}
+        {lines.length > 0 && (
+          <div style={{
+            marginBottom: '8px', padding: '8px 10px', borderRadius: '8px',
+            border: `1px solid ${STOCK_TONE[stock && !stockStale ? stock.summary.verdict : 'idle'].border}`,
+            background: STOCK_TONE[stock && !stockStale ? stock.summary.verdict : 'idle'].bg,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <div style={{ flex: 1, minWidth: '200px', fontSize: '11px', fontWeight: 700, color: STOCK_TONE[stock && !stockStale ? stock.summary.verdict : 'idle'].fg }}>
+                {stockLoading ? 'Checking stock…'
+                  : !stock ? 'Stock not checked yet'
+                    : stockStale ? 'Lines changed since the last check'
+                      : stockVerdictText(stock)}
+              </div>
+              <button
+                type="button"
+                onClick={checkStock}
+                disabled={stockLoading}
+                title="Check on-hand stock, what other jobs and quotes have reserved, and what's on order"
+                style={{
+                  padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 800,
+                  border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)',
+                  cursor: stockLoading ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+                }}
+              >
+                {stock && !stockStale ? 'Re-check' : 'Check stock'}
+              </button>
+              {stock && !stockStale && editingId && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => holdStock('allocate_all')}
+                    disabled={stockBusy != null || !stock.parts.some(r => r.allocatable > 0)}
+                    title="Hold every part that's free right now, so another job or quote can't take it first"
+                    style={{
+                      padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 800,
+                      border: '1px solid rgba(34,197,94,0.35)', background: 'rgba(34,197,94,0.1)', color: '#22c55e',
+                      cursor: stockBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+                      opacity: stock.parts.some(r => r.allocatable > 0) ? 1 : 0.4,
+                    }}
+                  >
+                    {stockBusy === 'allocate_all' ? 'Holding…' : 'Reserve available'}
+                  </button>
+                  {stock.parts.some(r => r.allocated > 0) && (
+                    <button
+                      type="button"
+                      onClick={() => holdStock('release_all')}
+                      disabled={stockBusy != null}
+                      title="Give every part this quote is holding back to the pool"
+                      style={{
+                        padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 800,
+                        border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-muted)',
+                        cursor: stockBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {stockBusy === 'release_all' ? 'Releasing…' : 'Release all'}
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+
+            {stock && !stockStale && (
+              <div style={{ marginTop: '4px', fontSize: '9px', color: 'var(--text-label)' }}>
+                {stock.stockSource === 'mirror' && 'NetSuite didn’t answer — these are the last sync’s figures. '}
+                {stock.summary.unknown > 0 && `${stock.summary.unknown} line${stock.summary.unknown === 1 ? '' : 's'} not in the parts catalog, so ${stock.summary.unknown === 1 ? 'it wasn’t' : 'they weren’t'} checked. `}
+                {units > 1 && `Quantities are ×${units} for the fleet. `}
+                {!editingId && 'Save the estimate to hold parts for it.'}
+              </div>
+            )}
+
+            {stockErr && (
+              <div style={{ marginTop: '4px', fontSize: '10px', fontWeight: 700, color: '#f87171' }}>{stockErr}</div>
+            )}
+          </div>
+        )}
+
         {/* Part search + visual catalog browser (N4-A) */}
         {(
           <div style={{ position: 'relative', marginBottom: '8px', display: 'flex', gap: '8px' }}>
@@ -4132,6 +4371,63 @@ export default function EstimatesPage() {
                     ≡
                   </div>
                 </div>
+
+                {/* Per-line stock, once someone has asked. One slim line
+                    rather than a column: the grid collapses to stacked cells
+                    on a phone, and a sixth column there is unreadable. */}
+                {(() => {
+                  if (!stock || stockStale) return null;
+                  const key = String(line.item_number || '').trim().toUpperCase();
+                  const row = key ? stockByItem.get(key) : undefined;
+                  if (!row) return null;
+                  const tone = STOCK_TONE[row.state];
+                  const eta = stockEta(row.pos.map(po => po.eta_date).filter(Boolean).sort().pop() || null);
+                  const text =
+                    row.state === 'unknown' ? 'Not in the parts catalog — stock unknown'
+                      : row.state === 'reserved' ? `Held for this quote — ${row.allocated} of ${row.needed}`
+                        : row.state === 'available' ? `In stock — ${row.free} free, ${row.needed} needed`
+                          : row.state === 'waiting' ? `${row.needed - row.usable} on order${eta ? `, ETA ${eta}` : ', no ETA yet'}${row.pos[0]?.tranid ? ` (${row.pos[0].tranid})` : ''}`
+                            : `Short ${row.short} — ${row.free} free${row.on_order > 0 ? `, ${row.on_order} on order` : ', none on order'}`;
+                  return (
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
+                      padding: '3px 8px', marginBottom: '4px', borderRadius: '6px',
+                      background: tone.bg, border: `1px solid ${tone.border}`,
+                    }}>
+                      <span style={{ fontSize: '10px', fontWeight: 700, color: tone.fg }}>{text}</span>
+                      {editingId && row.allocatable > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => holdStock('set', row.item_number, row.allocated + row.allocatable)}
+                          disabled={stockBusy != null}
+                          title="Hold these on the shelf for this quote"
+                          style={{
+                            padding: '2px 7px', borderRadius: '5px', fontSize: '9px', fontWeight: 800,
+                            border: '1px solid rgba(34,197,94,0.35)', background: 'rgba(34,197,94,0.1)',
+                            color: '#22c55e', cursor: stockBusy ? 'wait' : 'pointer',
+                          }}
+                        >
+                          {stockBusy === row.item_number ? 'Holding…' : `Reserve ${row.allocatable}`}
+                        </button>
+                      )}
+                      {editingId && row.allocated > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => holdStock('set', row.item_number, 0)}
+                          disabled={stockBusy != null}
+                          title="Give these back to the pool"
+                          style={{
+                            padding: '2px 7px', borderRadius: '5px', fontSize: '9px', fontWeight: 800,
+                            border: '1px solid var(--border)', background: 'var(--card)',
+                            color: 'var(--text-muted)', cursor: stockBusy ? 'wait' : 'pointer',
+                          }}
+                        >
+                          Release
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* NetSuite item id required — a line without one silently
                     drops off the pushed Estimate. Force a catalog match here

@@ -6,7 +6,8 @@ import { fetchAllRows } from '@/lib/fetch-all';
 /**
  * The part-level math the shop runs on: for an upfit project's sales order,
  * per part — needed (live SO lines) vs reserved-for-this-job vs free stock
- * (NetSuite available minus every project's reservations) vs on order
+ * (NetSuite available minus every hold, jobs' and quotes' alike — see
+ * estimate-readiness.ts for the quoting side) vs on order
  * (synced open vendor-PO lines). Allocation lives in FleetSuite
  * (part_allocations), so two jobs can't count the same shelf stock; the
  * NetSuite "available" figure already nets out NetSuite-side commitments,
@@ -367,7 +368,12 @@ export async function computePartsReadinessBoard(
   const allocByProject = new Map<string, Map<string, number>>();
   for (const a of allocations || []) {
     const qty = Number(a.quantity) || 0;
+    // The pool total counts every hold, whoever owns it — a quote's hold
+    // (migration 320) spends the same shelf as a job's. Only the per-project
+    // split is project-only, so estimate rows are skipped there rather than
+    // piling into a bucket keyed on null.
     allocTotal.set(a.item_number, (allocTotal.get(a.item_number) || 0) + qty);
+    if (!a.project_id) continue;
     const m = allocByProject.get(a.project_id) || new Map<string, number>();
     m.set(a.item_number, (m.get(a.item_number) || 0) + qty);
     allocByProject.set(a.project_id, m);
