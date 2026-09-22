@@ -21,29 +21,60 @@ and why this needs a human in NetSuite rather than a deploy.
 
 ## 1. Re-upload the script
 
-1. In NetSuite: **Documents → Files → File Cabinet**, find the existing
-   `bmg-financials-restlet.js` (usually under SuiteScripts).
-2. Upload the repo's current `scripts/netsuite-financials-restlet.js` **over
-   it** (Edit → replace file, keep the same name/path). The existing Script
-   record and deployment pick up the new code automatically — no new Script
-   record, no new deployment, and `NETSUITE_FINANCIALS_RESTLET_URL` does not
-   change.
+**Find the file through the Script record, not by name.** The File Cabinet
+copy is NOT reliably called `bmg-financials-restlet.js` — that name is this
+repo's suggestion (see the setup comment in the script itself), not what the
+account actually holds, and hunting for it has wasted real time.
+
+1. **Customization → Scripting → Scripts**. Find the financials RESTlet in
+   the list (Type = RESTlet; the name is whatever it was created as — in this
+   account the scripts are named things like "BMG Fleet PDF Generator" and
+   "Fleetsuite parts sync1"). Open it: the **Script File** field names the
+   real file and links straight to it.
+2. Click through to that file, **Edit**, and upload the repo's current
+   `scripts/netsuite-financials-restlet.js` over it, keeping the same name
+   and path. The Script record and deployment pick up the new code
+   automatically — no new Script record, no new deployment, and
+   `NETSUITE_FINANCIALS_RESTLET_URL` does not change.
+
+If two Script records share one file, replacing the file updates both. That
+is fine and expected: they were already running identical code.
 
 ## 2. Grant the RESTlet role transaction search
 
-The deployment's role already has **Lists → Accounts: View** (that's what
-made the balances mode work). The two new modes run transaction searches, so
-add to that same role (Setup → Users/Roles → Manage Roles → the RESTlet
-deployment's role):
+The role is **the one the API token authenticates as** — in this account,
+`Custom System Administrator 3` (Setup → Users/Roles → Access Tokens names it
+on the token row; Manage Roles is where you edit it). Every call the app makes
+— SuiteQL and all three RESTlets — goes through one token pair, so there is
+one role to grant on, not one per RESTlet. (Caveat: a Script Deployment's
+*Execute As Role* field can override this. It is not set that way here — the
+grants below demonstrably changed the numbers.)
+
+It already has **Lists → Accounts: View** (that's what made the balances mode
+work). The new modes run transaction searches, so add:
 
 - **Transactions → Find Transaction: View**
-- **View** on the posting transaction types the P&L sums — at minimum:
-  Invoice, Credit Memo, Journal Entry, Bill, Bill Credit, Check, Credit Card,
-  Customer Payment, Customer Deposit. (Full = fine; the RESTlet only reads.)
+- **View on EVERY transaction type.** Tick the whole Transactions list. This
+  is safe — the RESTlet only reads — and a shorter list is how this went
+  wrong twice.
 
-If a probe below returns a permission error, the error text names the
-missing piece — grant it and re-run the probe. Nothing needs to change on
-the SuiteQL integration role.
+**Why the whole list, and why a shorter one fails silently.** The search
+filters by *account* type, not transaction type (`incomeStatement()` in the
+script), so it needs to see every transaction that posts to a P&L account. A
+type the role cannot view is simply **left out of the sum** — no error, no
+warning, just a total that is too small, which makes gross margin and net
+income look better than they are. Proven on Aug 2026: the nine types this
+document used to list gave 81.83% gross margin against NetSuite's 56.99%
+(COGS short by $84,566.65 — accounts 58000 and 52000, fed by **Item
+Fulfillment** and **Inventory Adjustment**, neither of which was listed).
+Adding those two got to 58.43%; still $4,914.65 short from at least one more
+type. View on everything landed on 56.99% exactly.
+
+Note "Bill Credit" may not appear in the Transactions list at all in this
+account. That is fine and was never the problem.
+
+If a probe below returns a permission error, the error text names the missing
+piece — grant it and re-run the probe.
 
 ## 3. Set the payroll account group (Vercel env)
 
@@ -72,12 +103,22 @@ Open the Financials tab as a super_admin or executive:
   scripts/netsuite-financials-restlet.js"* — that message coming from the
   **stale-deployment guard**, not a guess: an old deployment answers the
   balances shape and the app refuses to render it as a $0 P&L.
-- After steps 1–2, the band renders Last month (closed) with MTD
-  directional subs. Sanity-check the closed month against NetSuite's own
-  **Reports → Financial → Income Statement** for the same month: Revenue and
-  Gross margin should match to the dollar; if the signs look inverted
-  anywhere, screenshot it — the app normalizes orientation per account-type
-  bucket and a mismatch means an account classified unusually.
+- After steps 1–2, the band renders the selected period (Last month by
+  default, closed). **Reconcile it — this step is not optional**, because a
+  missing transaction permission produces plausible-looking numbers rather
+  than an error. Run NetSuite's own **Reports → Financial → Income
+  Statement** for the same closed month and compare.
+
+  That report prints no gross-profit subtotal, so derive it: Total Income −
+  Total Cost Of Sales. Revenue, Total Expense and Gross margin should each
+  match to the dollar.
+
+  **Read the pattern of any mismatch.** Revenue, Total Expense and Payroll
+  matching while gross margin does NOT is the signature of a transaction type
+  the role cannot see — go back to step 2, not to the code. Signs inverted
+  somewhere is a different thing: screenshot it, since the app normalizes
+  orientation per account-type bucket and a mismatch there means an account
+  is classified unusually.
 - After step 3, the Payroll tile shows dollars and Labor % populates.
 
 ## Rollback

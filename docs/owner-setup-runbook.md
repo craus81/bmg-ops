@@ -50,13 +50,16 @@ The P&L band shipped in #851 and has been waiting on this since. Full
 runbook with verification and rollback: **`docs/pnl-restlet-deploy.md`**.
 Short form:
 
-1. **Documents → Files → File Cabinet**, find `bmg-financials-restlet.js`
-   (usually under SuiteScripts).
-2. Upload the repo's current `scripts/netsuite-financials-restlet.js` **over
-   it** — Edit → replace file, same name and path. The existing Script
-   record and deployment pick up the new code automatically. No new script
-   record, no new deployment, and `NETSUITE_FINANCIALS_RESTLET_URL` does not
-   change.
+1. **Customization → Scripting → Scripts**, find the financials RESTlet and
+   open it — the **Script File** field names the real File Cabinet file and
+   links to it. Do NOT search the File Cabinet for
+   `bmg-financials-restlet.js`; that name is this repo's suggestion, not
+   necessarily what the account holds.
+2. Click through to the file, Edit → replace file with the repo's current
+   `scripts/netsuite-financials-restlet.js`, same name and path. The existing
+   Script record and deployment pick up the new code automatically. No new
+   script record, no new deployment, and `NETSUITE_FINANCIALS_RESTLET_URL`
+   does not change.
 
 Until this is done the Financials tab says "P&L unavailable" and names the
 doc, rather than guessing. P&L metric snapshots only start accruing after
@@ -71,17 +74,24 @@ code older than this app expects" instead of looking fine.
 
 ### 1b. Grant the RESTlet's role transaction search
 
-Same role as the deployment (Setup → Users/Roles → Manage Roles). It already
-has Lists → Accounts: View. The two new modes run transaction searches, so
-add:
+The role is the one the API token authenticates as — here
+`Custom System Administrator 3` (Setup → Users/Roles → Manage Roles). Every
+call the app makes, SuiteQL and all three RESTlets, uses one token pair and
+therefore one role. It already has Lists → Accounts: View. The P&L modes run
+transaction searches, so add:
 
 - **Transactions → Find Transaction: View**
-- **View** on the posting types the P&L sums, at minimum: Invoice, Credit
-  Memo, Journal Entry, Bill, Bill Credit, Check, Credit Card, Customer
-  Payment, Customer Deposit. (Full is fine — the RESTlet only reads.)
+- **View on every transaction type** — tick the whole Transactions list.
+
+Do not shorten that list. The search filters by account type, not
+transaction type, so a type the role cannot view is dropped from the sum
+**silently** — gross margin and net income come out flattering rather than
+wrong-looking. A nine-type list gave 81.83% gross margin against NetSuite's
+real 56.99%. Details and the reconciliation step:
+`docs/pnl-restlet-deploy.md` §2 and §4.
 
 If a probe returns a permission error, the error text names the missing
-piece. Nothing changes on the SuiteQL integration role.
+piece.
 
 ### 1c. Confirm the labor item resolves
 
