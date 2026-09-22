@@ -83,6 +83,12 @@ function relativeTime(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
+// A zero-row UPDATE is RLS saying no (migration 247 admits admin,
+// super_admin and graphics_production). Say so, and name who can fix it.
+const refusedSaveMessage = (what: string) =>
+  `${what} did not save: your account is not allowed to change graphics jobs. `
+  + 'Ask an admin to check your role in Admin → Users.';
+
 // Everything ships UPS — tracking numbers link straight to their site.
 const upsTrackingUrl = (trackingNumber: string) =>
   `https://www.ups.com/track?tracknum=${encodeURIComponent(trackingNumber.trim())}`;
@@ -153,6 +159,9 @@ export default function GraphicsJobRecordPage() {
   const [pendingStatus, setPendingStatus] = useState<GraphicsJobStatus | null>(null);
   const [statusComment, setStatusComment] = useState('');
   const [shipTracking, setShipTracking] = useState('');
+  // A slow save left the dialog sitting there with a live Confirm, which
+  // read as "didn't take" and invited repeat clicks.
+  const [statusSaving, setStatusSaving] = useState(false);
   // Auto-open the materials modal when a job leaves printing with nothing logged.
   const [materialPrompt, setMaterialPrompt] = useState(false);
 
@@ -355,11 +364,16 @@ export default function GraphicsJobRecordPage() {
   };
 
   const confirmStatusChange = async () => {
-    if (!pendingStatus) return;
+    if (!pendingStatus || statusSaving) return;
     const ship = pendingStatus === 'shipped'
       ? { tracking: shipTracking.trim() || undefined }
       : undefined;
-    await changeStatus(pendingStatus, statusComment.trim() || undefined, ship);
+    setStatusSaving(true);
+    try {
+      await changeStatus(pendingStatus, statusComment.trim() || undefined, ship);
+    } finally {
+      setStatusSaving(false);
+    }
     setPendingStatus(null);
     setStatusComment('');
   };
@@ -489,12 +503,22 @@ export default function GraphicsJobRecordPage() {
     // can work. Re-ranking it is an admin action, same as ranking it was.
     if (isFinishedStatus(newStatus) && job.work_rank != null) shipFields.work_rank = null;
 
-    const { error } = await supabase
+    // .select() matters: RLS refuses an UPDATE by matching zero rows, not by
+    // erroring (migration 247). Without it a refused change repainted the
+    // chip, logged the transition and fired the notifications while the job
+    // stayed put — a legacy 'production' account lost three weeks of Shipped
+    // moves that way, invisible to everyone filtering the board.
+    const { data: updated, error } = await supabase
       .from('graphics_jobs')
       .update({ status: newStatus, updated_at: new Date().toISOString(), ...shipFields })
-      .eq('id', job.id);
+      .eq('id', job.id)
+      .select('id');
     if (error) {
       await dialog.alert('Status change failed: ' + error.message);
+      return;
+    }
+    if (!updated || updated.length === 0) {
+      await dialog.alert(refusedSaveMessage('The status change'));
       return;
     }
 
@@ -650,12 +674,17 @@ export default function GraphicsJobRecordPage() {
       scheduled_install_date: picked.scheduled_install_date && picked.scheduled_install_date !== 'N/A' ? picked.scheduled_install_date : null,
       updated_at: new Date().toISOString(),
     };
-    const { error } = await supabase
+    // Same zero-row refusal as a status change: a tracking number typed into
+    // Edit Job vanished the same way.
+    const { data: updated, error } = await supabase
       .from('graphics_jobs')
       .update(sanitized)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id');
 
-    if (!error) {
+    if (!error && (!updated || updated.length === 0)) {
+      await dialog.alert(refusedSaveMessage('Your edits'));
+    } else if (!error) {
       // Notify teammates newly @mentioned in the notes field this save.
       const prevNotes = job.notes || '';
       if ((edit.notes || '') !== prevNotes) {
@@ -1991,14 +2020,16 @@ export default function GraphicsJobRecordPage() {
               </button>
               <button
                 onClick={confirmStatusChange}
+                disabled={statusSaving}
                 style={{
                   flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
                   background: GRAPHICS_STATUS_COLORS[pendingStatus] + '22',
                   border: `1px solid ${GRAPHICS_STATUS_COLORS[pendingStatus]}55`,
-                  color: GRAPHICS_STATUS_COLORS[pendingStatus], cursor: 'pointer',
+                  color: GRAPHICS_STATUS_COLORS[pendingStatus],
+                  cursor: statusSaving ? 'default' : 'pointer', opacity: statusSaving ? 0.6 : 1,
                 }}
               >
-                Confirm
+                {statusSaving ? 'Saving…' : 'Confirm'}
               </button>
             </div>
           </div>
