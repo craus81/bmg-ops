@@ -36,6 +36,26 @@ import ShopArrivals from '@/components/ShopArrivals';
 
 type FilterStatus = VehicleTrackingStatus | 'all' | 'stuck';
 
+/** "Invoiced" pill beside the status badge, once the vehicle's SO is billed
+ *  (in NetSuite or by FleetSuite's completion flow). Same shape as
+ *  StatusBadge's small size so the two sit together. */
+function InvoicedBadge({ invoiceNumber, showNumber = false }: { invoiceNumber: string | null; showNumber?: boolean }) {
+  if (!invoiceNumber) return null;
+  return (
+    <span
+      title={`Invoice #${invoiceNumber}`}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: '4px',
+        padding: '3px 8px', borderRadius: '8px',
+        background: 'rgba(167,139,250,0.12)', border: '1px solid rgba(167,139,250,0.45)', color: '#a78bfa',
+        fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap',
+      }}
+    >
+      ✓ Invoiced{showNumber ? ` #${invoiceNumber}` : ''}
+    </span>
+  );
+}
+
 export default function TrackingPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -127,7 +147,21 @@ export default function TrackingPage() {
   // it's basically dead paper — the record shows the invoice in its place.
   // undefined = not looked up yet; [] = looked up, nothing billed.
   const [soInvoices, setSoInvoices] = useState<Record<string, { id: string; tranid: string }[]>>({});
+  // Why a lookup failed, keyed the same way — shown on the record so a
+  // NetSuite error never passes for "not invoiced yet".
+  const [soInvoiceErrors, setSoInvoiceErrors] = useState<Record<string, string>>({});
   const soInvoiceFetchRef = useRef<Set<string>>(new Set());
+  /** The vehicle's invoice: its stamped number, else the first invoice a
+   *  live lookup found on one of its linked SOs. */
+  const vehicleInvoiceNumber = (vehicle: FleetCheckin): string | null => {
+    const stamped = String((vehicle as any).invoice_number || '').trim();
+    if (stamped) return stamped;
+    for (const so of vehicleSalesOrders[vehicle.id] || []) {
+      const first = soInvoices[so.netsuite_sales_order_id]?.[0];
+      if (first) return first.tranid;
+    }
+    return null;
+  };
   // Emailing one of those invoices — the shared screen, same as the
   // completion modal's ✉ once an SO is billed.
   const [emailInvoiceTarget, setEmailInvoiceTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
@@ -407,26 +441,42 @@ export default function TrackingPage() {
 
   // When a vehicle record opens, look up invoices billed from its linked
   // SOs (live from NetSuite — covers invoices created there directly and
-  // ones FleetSuite raised, with no sync lag). One lookup per SO id.
+  // ones FleetSuite raised, with no sync lag). One lookup per SO id, one at
+  // a time. A fully billed SO is stamped onto the vehicle server-side, so
+  // the Invoiced badge appears here without waiting for the sync.
+  const lookUpSoInvoices = async (checkinId: string, soIds: string[]) => {
+    for (const soId of soIds) {
+      if (!soId || soInvoiceFetchRef.current.has(soId)) continue;
+      soInvoiceFetchRef.current.add(soId);
+      setSoInvoiceErrors(prev => {
+        if (!(soId in prev)) return prev;
+        const next = { ...prev };
+        delete next[soId];
+        return next;
+      });
+      try {
+        const res = await fetch(`/api/netsuite/so-invoices?soId=${encodeURIComponent(soId)}&checkinId=${encodeURIComponent(checkinId)}`);
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data || !Array.isArray(data.invoices)) {
+          throw new Error(data?.error || `HTTP ${res.status}`);
+        }
+        setSoInvoices(prev => ({ ...prev, [soId]: data.invoices }));
+        if (data.vehicle?.invoiceNumber) {
+          setVehicles(prev => prev.map(v => v.id === checkinId && !(v as any).invoice_number
+            ? { ...v, invoice_number: data.vehicle.invoiceNumber, date_invoiced: data.vehicle.dateInvoiced } as any
+            : v));
+        }
+      } catch (err: any) {
+        // Allow a retry (the Retry link, or the next time a record opens).
+        soInvoiceFetchRef.current.delete(soId);
+        setSoInvoiceErrors(prev => ({ ...prev, [soId]: err?.message || 'Lookup failed' }));
+      }
+    }
+  };
   useEffect(() => {
     if (!expandedId) return;
     const linked = vehicleSalesOrders[expandedId] || [];
-    for (const so of linked) {
-      const soId = so.netsuite_sales_order_id;
-      if (!soId || soInvoiceFetchRef.current.has(soId)) continue;
-      soInvoiceFetchRef.current.add(soId);
-      fetch(`/api/netsuite/so-invoices?soId=${encodeURIComponent(soId)}`)
-        .then(res => res.ok ? res.json() : null)
-        .then(data => {
-          if (data && Array.isArray(data.invoices)) {
-            setSoInvoices(prev => ({ ...prev, [soId]: data.invoices }));
-          } else {
-            // Lookup failed — allow a retry the next time a record opens.
-            soInvoiceFetchRef.current.delete(soId);
-          }
-        })
-        .catch(() => { soInvoiceFetchRef.current.delete(soId); });
-    }
+    lookUpSoInvoices(expandedId, linked.map(so => so.netsuite_sales_order_id));
   // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed lookups; ref dedupes
   }, [expandedId, vehicleSalesOrders]);
 
@@ -1783,6 +1833,11 @@ export default function TrackingPage() {
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: '8px' }}>
                       <StatusBadge status={status} />
+                      {vehicleInvoiceNumber(vehicle) && (
+                        <div style={{ marginTop: '4px' }}>
+                          <InvoicedBadge invoiceNumber={vehicleInvoiceNumber(vehicle)} />
+                        </div>
+                      )}
                       <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
                         {timeAgo(vehicle.updated_at)}
                       </div>
@@ -1868,7 +1923,11 @@ export default function TrackingPage() {
                           <div style={{ fontSize: '11px', fontFamily: 'monospace', color: 'var(--text-muted)' }}>{vehicle.vin}</div>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                          <StatusBadge status={status} />
+                          {/* Stacked, so a narrow screen keeps room for the name. */}
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                            <StatusBadge status={status} />
+                            <InvoicedBadge invoiceNumber={vehicleInvoiceNumber(vehicle)} showNumber />
+                          </div>
                           <button
                             onClick={() => setExpandedId(null)}
                             aria-label="Close"
@@ -2674,11 +2733,25 @@ export default function TrackingPage() {
                                         ))}
                                       </>
                                     ) : (
-                                      <NetSuitePdf
-                                        type="salesOrder"
-                                        recordId={so.netsuite_sales_order_id}
-                                        recordNumber={so.sales_order_number || so.netsuite_sales_order_id}
-                                      />
+                                      <>
+                                        <NetSuitePdf
+                                          type="salesOrder"
+                                          recordId={so.netsuite_sales_order_id}
+                                          recordNumber={so.sales_order_number || so.netsuite_sales_order_id}
+                                        />
+                                        {soInvoiceErrors[so.netsuite_sales_order_id] && (
+                                          <div
+                                            title={soInvoiceErrors[so.netsuite_sales_order_id]}
+                                            style={{ marginTop: '4px', fontSize: '10px', color: 'var(--warning, #f59e0b)', display: 'flex', gap: '6px', alignItems: 'center' }}
+                                          >
+                                            <span>Couldn&apos;t check NetSuite for an invoice on this SO.</span>
+                                            <button
+                                              onClick={() => lookUpSoInvoices(vehicle.id, [so.netsuite_sales_order_id])}
+                                              style={{ padding: 0, fontSize: '10px', fontWeight: 700, background: 'transparent', border: 'none', color: 'var(--accent, #60a5fa)', cursor: 'pointer', textDecoration: 'underline' }}
+                                            >Retry</button>
+                                          </div>
+                                        )}
+                                      </>
                                     )}
                                     {isAdmin && (
                                       <button
