@@ -867,11 +867,15 @@ export default function EstimatesPage() {
   // Distinct ids still focus (deps include searchParams), so clicking a
   // second estimate's notification from the bell works.
   const handledEstimateId = useRef<string | null>(null);
+  // Opened from the Quotes page (&from=quotes): the builder's back buttons
+  // return to that row there rather than to the Estimates list.
+  const [returnToQuotesFor, setReturnToQuotesFor] = useState<string | null>(null);
   useEffect(() => {
     if (loading) return;
     const estId = searchParams.get('id');
     if (estId && handledEstimateId.current !== estId) {
       handledEstimateId.current = estId;
+      setReturnToQuotesFor(searchParams.get('from') === 'quotes' ? estId : null);
       const focus = (est: any) => {
         openEstimate(est);
         // A mention on the Internal Notes field (&note=field) scroll-flashes
@@ -3475,6 +3479,15 @@ export default function EstimatesPage() {
   // Same headline/alt pair the list uses (src/lib/estimate-number.ts):
   // NetSuite's number once it exists, FleetSuite's beside it.
   const editingNumber = editingId ? estimateHeadlineNumber(editingEst) : '';
+  const backToQuotes = !!editingId && returnToQuotesFor === editingId;
+  const leaveBuilder = () => {
+    if (backToQuotes) {
+      setReturnToQuotesFor(null);
+      router.push(deepLinks.quoteFollowUps('estimate', editingId!));
+      return;
+    }
+    setView('list');
+  };
   const editingAltNumber = editingId ? estimateAltNumber(editingEst) : null;
 
   return (
@@ -3482,10 +3495,10 @@ export default function EstimatesPage() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
         <button
-          onClick={() => { setView('list'); }}
+          onClick={leaveBuilder}
           style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}
         >
-          ← Back to Estimates
+          {backToQuotes ? '← Back to Quotes' : '← Back to Estimates'}
         </button>
         {editingId && editingNumber ? (
           <div style={{ textAlign: 'right', minWidth: 0 }}>
@@ -4967,7 +4980,7 @@ export default function EstimatesPage() {
             {saving ? 'Saving...' : (editingId ? 'Save Changes' : 'Save Draft')}
           </button>
           <button
-            onClick={() => { setView('list'); }}
+            onClick={leaveBuilder}
             style={{
               padding: '12px 20px', borderRadius: '10px',
               background: 'transparent', border: '1px solid var(--border)',
