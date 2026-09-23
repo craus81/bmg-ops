@@ -44,16 +44,35 @@ export function isFinishedStatus(status: GraphicsJobStatus): boolean {
 }
 
 /**
+ * Graphics' part is done and the job is waiting on someone else: an
+ * installer (Ready to Install) or the customer (Ready for Pickup). These
+ * leave the Active tab for their own "Ready" tab (owner decision,
+ * 2026-09-23 — a board full of finished-but-uninstalled jobs buried the
+ * work still on the floor) and drop out of the work order, but they are
+ * not archived: someone still has to close them out.
+ */
+export const GRAPHICS_AWAITING_STATUSES: GraphicsJobStatus[] = ['ready', 'ready_to_pickup'];
+
+/**
  * Statuses the graphics board treats as live work — the "Active" tab.
- * Everything else has either finished or never started.
+ * Everything else is waiting on someone outside graphics or has finished.
  */
 export const GRAPHICS_ACTIVE_STATUSES: GraphicsJobStatus[] = [
   'flagged', 'received', 'designing', 'revision', 'printing',
-  'outgassing', 'cutting', 'packing', 'ready', 'ready_to_pickup',
+  'outgassing', 'cutting', 'packing',
 ];
 
+/**
+ * Is this job off the graphics floor — waiting on install/pickup or finished?
+ * Such a job has nothing left for graphics to do, so it holds no slot in the
+ * admin work order.
+ */
+export function isOffTheFloor(status: GraphicsJobStatus): boolean {
+  return GRAPHICS_AWAITING_STATUSES.includes(status) || isFinishedStatus(status);
+}
+
 /** What the board's status tabs / per-status select can be set to. */
-export type GraphicsStatusScope = GraphicsJobStatus | 'all' | 'active';
+export type GraphicsStatusScope = GraphicsJobStatus | 'all' | 'active' | 'awaiting';
 
 /**
  * Is this job inside the board's current status scope?
@@ -67,6 +86,7 @@ export type GraphicsStatusScope = GraphicsJobStatus | 'all' | 'active';
 export function inStatusScope(status: GraphicsJobStatus, scope: GraphicsStatusScope): boolean {
   if (scope === 'all') return true;
   if (scope === 'active') return GRAPHICS_ACTIVE_STATUSES.includes(status);
+  if (scope === 'awaiting') return GRAPHICS_AWAITING_STATUSES.includes(status);
   return status === scope;
 }
 

@@ -28,6 +28,11 @@ describe('rankedQueue', () => {
     const jobs = [job('a', 1, 'installed'), job('b', 2), job('c', 3, 'cancelled'), job('d', 4, 'shipped')];
     expect(rankedQueue(jobs).map(j => j.id)).toEqual(['b']);
   });
+
+  it('drops jobs waiting on install or pickup — graphics has nothing left to do', () => {
+    const jobs = [job('a', 1, 'ready'), job('b', 2), job('c', 3, 'ready_to_pickup')];
+    expect(rankedQueue(jobs).map(j => j.id)).toEqual(['b']);
+  });
 });
 
 describe('workOrderPositions', () => {

@@ -48,7 +48,7 @@ import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
   GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
 } from '@/lib/types';
-import { requiresReason, proofGateApplies, isFinishedStatus } from '@/lib/graphics-status';
+import { requiresReason, proofGateApplies, isOffTheFloor } from '@/lib/graphics-status';
 
 // ── Date helpers (same behavior as the board — avoid UTC shift) ──────────
 function parseLocalDate(dateStr: string | null | undefined): Date | null {
@@ -438,7 +438,7 @@ export default function GraphicsJobRecordPage() {
   };
 
   useEffect(() => {
-    if (!job || job.work_rank == null || isFinishedStatus(job.status)) { setWorkRank(null); return; }
+    if (!job || job.work_rank == null || isOffTheFloor(job.status)) { setWorkRank(null); return; }
     const jobId = job.id;
     (async () => {
       const { data } = await supabase
@@ -448,7 +448,7 @@ export default function GraphicsJobRecordPage() {
         .order('work_rank')
         .order('id');
       const rows = (data || []) as { id: string; status: GraphicsJobStatus; work_rank: number | null }[];
-      const queue = rows.filter(r => !isFinishedStatus(r.status));
+      const queue = rows.filter(r => !isOffTheFloor(r.status));
       const at = queue.findIndex(r => r.id === jobId);
       setWorkRank(at >= 0 ? { position: at + 1, total: queue.length } : null);
     })();
@@ -498,10 +498,11 @@ export default function GraphicsJobRecordPage() {
 
     const shipFields: Partial<GraphicsJob> = {};
     if (ship?.tracking) shipFields.tracking_number = ship.tracking;
-    // A finished job leaves the work order on its own — leaving it ranked
-    // would burn a slot at the top of the designer's list on a job nobody
-    // can work. Re-ranking it is an admin action, same as ranking it was.
-    if (isFinishedStatus(newStatus) && job.work_rank != null) shipFields.work_rank = null;
+    // A job leaving the floor (ready, shipped…) leaves the work order on its
+    // own — leaving it ranked would burn a slot at the top of the designer's
+    // list on a job nobody can work. Re-ranking it is an admin action, same
+    // as ranking it was.
+    if (isOffTheFloor(newStatus) && job.work_rank != null) shipFields.work_rank = null;
 
     // .select() matters: RLS refuses an UPDATE by matching zero rows, not by
     // erroring (migration 247). Without it a refused change repainted the

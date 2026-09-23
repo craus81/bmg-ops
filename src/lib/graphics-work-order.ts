@@ -12,7 +12,7 @@
  * asserted in a unit test.
  */
 
-import { isFinishedStatus } from './graphics-status';
+import { isOffTheFloor } from './graphics-status';
 import type { GraphicsJobStatus } from './types';
 
 /** The only fields the queue rules care about. */
@@ -31,13 +31,14 @@ export interface DatedJob {
 /**
  * Ranked jobs someone can still work, in queue order.
  *
- * Finished jobs are dropped rather than trusted: a job that shipped between
- * reorders keeps whatever rank it had, and it should not hold a slot on the
- * designer's list until an admin next opens the board.
+ * Jobs off the floor (ready, shipped, installed…) are dropped rather than
+ * trusted: a job that went ready between reorders keeps whatever rank it had,
+ * and it should not hold a slot on the designer's list until an admin next
+ * opens the board.
  */
 export function rankedQueue<T extends RankableJob>(jobs: T[]): T[] {
   return jobs
-    .filter(j => j.work_rank != null && !isFinishedStatus(j.status))
+    .filter(j => j.work_rank != null && !isOffTheFloor(j.status))
     .sort((a, b) => (a.work_rank as number) - (b.work_rank as number));
 }
 
@@ -69,6 +70,6 @@ export function compareByDueDate(a: DatedJob, b: DatedJob): number {
 /** Active jobs that aren't on the list yet, offered soonest-due first. */
 export function unrankedPool<T extends RankableJob & DatedJob>(jobs: T[], rankedIds: Set<string>): T[] {
   return jobs
-    .filter(j => !isFinishedStatus(j.status) && !rankedIds.has(j.id))
+    .filter(j => !isOffTheFloor(j.status) && !rankedIds.has(j.id))
     .sort(compareByDueDate);
 }

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { deepLinks } from '@/lib/deep-links';
 
 interface ReadyVehicle {
   id: string;
@@ -31,6 +32,19 @@ interface ReadyVehicle {
   stale: boolean;
 }
 
+/** A ready graphics job no vehicle check-in points at (see the route). */
+interface UnmatchedJob {
+  id: string;
+  jobNumber: string | null;
+  title: string | null;
+  partNumber: string | null;
+  customer: string | null;
+  installLocation: string | null;
+  scheduledInstallDate: string | null;
+  daysInReady: number | null;
+  stale: boolean;
+}
+
 export default function ReadyForInstallPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -38,6 +52,7 @@ export default function ReadyForInstallPage() {
   const supabase = createClient();
 
   const [vehicles, setVehicles] = useState<ReadyVehicle[]>([]);
+  const [unmatchedJobs, setUnmatchedJobs] = useState<UnmatchedJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'mine' | 'all'>('mine');
   // ?job=<graphics job id> deep link ("Graphics ready" notifications):
@@ -53,11 +68,13 @@ export default function ReadyForInstallPage() {
     const res = await fetch(`/api/installer/ready-for-install${q}`);
     if (!res.ok) {
       setVehicles([]);
+      setUnmatchedJobs([]);
       setLoading(false);
       return;
     }
     const data = await res.json();
     setVehicles(data.vehicles || []);
+    setUnmatchedJobs(data.unmatchedJobs || []);
     setLoading(false);
   }, [filter]);
 
@@ -84,9 +101,13 @@ export default function ReadyForInstallPage() {
     const jobId = searchParams?.get('job');
     if (!jobId || loading || handledJobRef.current === jobId) return;
     const matches = vehicles.filter(v => v.graphicsJob.id === jobId);
-    if (matches.length === 0) {
-      // The linked job's vehicles may all be assigned to someone else —
-      // widen from the default "mine" filter, but only once per job id.
+    const anchorId = matches.length > 0
+      ? `rfi-${matches[0].id}`
+      : unmatchedJobs.some(j => j.id === jobId) ? `rfi-job-${jobId}` : null;
+    if (!anchorId) {
+      // The linked job's vehicles may all be assigned to someone else, or it
+      // has no vehicle at all (those only list under All) — widen from the
+      // default "mine" filter, but only once per job id.
       if (filter === 'mine' && widenedForRef.current !== jobId) {
         widenedForRef.current = jobId;
         setFilter('all');
@@ -96,11 +117,11 @@ export default function ReadyForInstallPage() {
     handledJobRef.current = jobId;
     setHighlightJobId(jobId);
     requestAnimationFrame(() => {
-      document.getElementById(`rfi-${matches[0].id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      document.getElementById(anchorId)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
     const t = setTimeout(() => setHighlightJobId(null), 4000);
     return () => clearTimeout(t);
-  }, [searchParams, loading, vehicles, filter]);
+  }, [searchParams, loading, vehicles, unmatchedJobs, filter]);
 
   const startEditDate = (v: ReadyVehicle) => {
     setEditingDateId(v.id);
@@ -184,13 +205,15 @@ export default function ReadyForInstallPage() {
         ))}
       </div>
 
-      {vehicles.length === 0 ? (
+      {vehicles.length === 0 && unmatchedJobs.length > 0 ? null : vehicles.length === 0 ? (
         <div style={{
           padding: '30px', textAlign: 'center', borderRadius: '14px',
           background: 'var(--card)', border: '1px solid var(--border)',
         }}>
           <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-            No vehicles are ready to install right now.
+            {filter === 'mine'
+              ? 'None of your vehicles are ready to install. Graphics with no vehicle yet are under All Vehicles.'
+              : 'No vehicles are ready to install right now.'}
           </div>
         </div>
       ) : (
@@ -342,6 +365,74 @@ export default function ReadyForInstallPage() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Graphics jobs that are ready but have no vehicle checked in — field
+          and other-location installs, or a shop vehicle not here yet. They
+          left the graphics board's Active tab; this is where installers see
+          them. No one is assigned yet, so they only list under All. */}
+      {unmatchedJobs.length > 0 && (
+        <div style={{ marginTop: vehicles.length > 0 ? '24px' : 0 }}>
+          <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '2px' }}>
+            Graphics ready, no vehicle yet ({unmatchedJobs.length})
+          </div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+            Mark the job Installed on its record once it's on.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {unmatchedJobs.map(j => (
+              <button
+                key={j.id}
+                id={`rfi-job-${j.id}`}
+                onClick={() => router.push(deepLinks.graphicsJob(j.id))}
+                style={{
+                  width: '100%',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  display: 'block',
+                  background: j.stale ? 'var(--danger-bg, #fef2f2)' : 'var(--card)',
+                  border: highlightJobId === j.id
+                    ? '2px solid var(--accent, #2563eb)'
+                    : `1px solid ${j.stale ? 'var(--danger, #ef4444)' : 'var(--border)'}`,
+                  borderRadius: '14px',
+                  padding: '14px',
+                  transition: 'border-color 0.3s',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '2px' }}>
+                      {j.customer || 'Unknown customer'}
+                    </div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                      {j.title || j.partNumber || j.jobNumber || 'Graphics job'}
+                      {j.jobNumber && (j.title || j.partNumber) ? ` · ${j.jobNumber}` : ''}
+                    </div>
+                  </div>
+                  {j.stale && (
+                    <div style={{
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      color: 'var(--danger, #ef4444)',
+                      padding: '2px 8px',
+                      borderRadius: '8px',
+                      background: 'rgba(239, 68, 68, 0.1)',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {j.daysInReady}d ready
+                    </div>
+                  )}
+                </div>
+                <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                  Install at: <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{j.installLocation || 'Not set'}</span>
+                  {' · '}Date: <span style={{ fontWeight: 700, color: j.scheduledInstallDate ? 'var(--text-primary)' : 'var(--warning, #f59e0b)' }}>
+                    {formatDate(j.scheduledInstallDate) || 'Not scheduled'}
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>

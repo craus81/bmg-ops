@@ -22,7 +22,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
-import { isFinishedStatus } from '@/lib/graphics-status';
+import { isOffTheFloor } from '@/lib/graphics-status';
 import { rankedQueue, unrankedPool } from '@/lib/graphics-work-order';
 import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS,
@@ -51,9 +51,9 @@ export default function GraphicsWorkOrderModal({ jobs, profiles = [], onClose }:
   /** Called once on close — the board reloads so the new ranks land in the table. */
   onClose: (changed: boolean) => void;
 }) {
-  // Only jobs someone can still work belong on the list. A finished job that
-  // is somehow still ranked is dropped here and cleared by the next save.
-  const workable = useMemo(() => jobs.filter(j => !isFinishedStatus(j.status)), [jobs]);
+  // Only jobs someone can still work belong on the list. A job off the floor
+  // that is somehow still ranked is dropped here and cleared by the next save.
+  const workable = useMemo(() => jobs.filter(j => !isOffTheFloor(j.status)), [jobs]);
   const byId = useMemo(() => new Map(workable.map(j => [j.id, j])), [workable]);
 
   // Seeded once: after this the server's response is the source of truth, so
