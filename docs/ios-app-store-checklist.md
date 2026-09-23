@@ -17,7 +17,7 @@ Facts to check against, not to re-decide:
 | Bundle ID | `com.bmgfleet.fleetsuite` | `capacitor.config.ts`, `ios/App/App.xcodeproj/project.pbxproj` (both build configs), `ios/App/App/Info.plist` |
 | App name | BMG FleetSuite | `capacitor.config.ts`, `Info.plist` (`CFBundleDisplayName`) |
 | Deployment target | iOS 15.0 | `project.pbxproj` |
-| Signing style | Automatic, **no team set** | `project.pbxproj` (`CODE_SIGN_STYLE = Automatic`, no `DEVELOPMENT_TEAM`) |
+| Signing style | Automatic, team `RU67C5K44J` (Craig's individual account) | `project.pbxproj` (`CODE_SIGN_STYLE = Automatic`, `DEVELOPMENT_TEAM` in both App configs) |
 | Version / build | 1.0 / 1 | `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION` |
 | Push environment | `development` | `ios/App/App/App.entitlements` (`aps-environment`) |
 | Associated domain | `applinks:go.bmgfleet.com` | `App.entitlements` |
@@ -46,9 +46,10 @@ APNs sending is already wired server-side (`src/lib/apns.ts`) and reads
 1. `npx cap sync ios`, then open `ios/App/App.xcodeproj` in Xcode.
 2. Target **App** → Signing & Capabilities:
    - tick *Automatically manage signing*,
-   - pick the BMG team — this writes `DEVELOPMENT_TEAM` into
-     `project.pbxproj`; **commit that change**, it is the one signing value
-     the repo is missing.
+   - the team should already read `RU67C5K44J` — `DEVELOPMENT_TEAM` is
+     committed in `project.pbxproj`. If the account ever moves to a BMG
+     organization membership, the Team ID changes: update it here, in the
+     AASA file (step 6) and in `APNS_TEAM_ID`.
    - confirm the bundle identifier reads `com.bmgfleet.fleetsuite` for both
      Debug and Release.
 3. Let Xcode create the development certificate and provisioning profile. If
@@ -114,8 +115,10 @@ silently dropped.
 
 ## 6. Universal links (needed before deep links open in the app)
 
-`App.entitlements` claims `applinks:go.bmgfleet.com`, but nothing serves the
-matching file — so today those links open in Safari, not the app.
+`App.entitlements` claims `applinks:go.bmgfleet.com`, and
+`public/.well-known/apple-app-site-association` (served with a JSON content
+type by `vercel.json`) names `RU67C5K44J.com.bmgfleet.fleetsuite` for every
+path. The steps below are what that file has to keep satisfying.
 
 1. Serve `/.well-known/apple-app-site-association` from the site (no file
    extension, `Content-Type: application/json`, no redirect), containing the
