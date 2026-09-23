@@ -936,6 +936,7 @@ export default function GraphicsPage() {
     customer: j => j.customer?.toLowerCase() || null,
     // Unassigned sorts last in either direction, like every other blank.
     assignee: j => assigneesOf(j).map(personName).sort()[0]?.toLowerCase() || null,
+    enteredBy: j => j.created_by ? personName(j.created_by).toLowerCase() : null,
     po: j => j.po_number || null,
     qty: j => j.quantity,
     priority: j => PRIORITY_RANK[j.priority] ?? 1,
@@ -1369,12 +1370,13 @@ export default function GraphicsPage() {
         return (
           <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
             <div className="responsive-table">
-              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '960px' }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '1060px' }}>
                 <thead><tr>
                   <SortableTh label="#" sortKey="rank" sort={sort} onToggle={toggle} style={{ ...thStyle, width: '44px' }} />
                   <SortableTh label="Title" sortKey="title" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="Customer" sortKey="customer" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="Assignee" sortKey="assignee" sort={sort} onToggle={toggle} style={thStyle} />
+                  <SortableTh label="Entered by" sortKey="enteredBy" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="PO #" sortKey="po" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="Qty" sortKey="qty" sort={sort} onToggle={toggle} align="right" style={thStyle} />
                   <SortableTh label="Priority" sortKey="priority" sort={sort} onToggle={toggle} defaultDir="desc" style={thStyle} />
@@ -1521,6 +1523,14 @@ export default function GraphicsPage() {
                               </span>
                             );
                           })()}
+                        </td>
+                        {/* Who created the job. Jobs made by the PO email
+                            import or the AI assistant never recorded a
+                            person, so they read as a dash. */}
+                        <td style={{ ...tdStyle, maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {job.created_by
+                            ? <span style={{ color: 'var(--text-secondary)' }}>{personName(job.created_by)}</span>
+                            : <span style={{ color: 'var(--text-muted)' }}>—</span>}
                         </td>
                         <td style={tdStyle}>
                           {job.po_number
