@@ -37,6 +37,7 @@ import NumberInput from '@/components/NumberInput';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
 import { estimateHeadlineNumber, estimateAltNumber, estimateNumberMatches } from '@/lib/estimate-number';
 import { useFormTelemetry } from '@/lib/use-form-telemetry';
+import { uploadRecordFile } from '@/lib/record-file-upload';
 
 interface Part {
   id: string;
@@ -2115,27 +2116,14 @@ export default function EstimatesPage() {
     }
   };
 
-  // Browser → R2 via presigned PUT (the file never passes through the API
-  // route, which caps at ~4.5MB on Vercel), then a record call that saves
-  // the metadata row. The returned id is what checks the file on for the
-  // send in progress.
+  // Presign → direct PUT to R2 → record, with the same-origin fallback and
+  // step-specific errors in uploadRecordFile. The returned id is what
+  // checks the file on for the send in progress.
   const uploadEstimateFile = async (estimateId: string, file: File): Promise<{ id?: string; error?: string }> => {
-    const contentType = file.type || 'application/octet-stream';
-    const post = (payload: any) => fetch(`/api/estimates/${estimateId}/files`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-    }).then(r => r.json());
-    try {
-      const presign = await post({ action: 'presign', fileName: file.name, contentType, size: file.size });
-      if (!presign.success) return { error: presign.error || 'Could not start the upload' };
-      const put = await fetch(presign.uploadUrl, { method: 'PUT', headers: { 'Content-Type': contentType }, body: file });
-      if (!put.ok) return { error: `Upload failed (HTTP ${put.status})` };
-      const rec = await post({ action: 'record', path: presign.path, fileName: file.name, contentType, size: file.size });
-      if (!rec.success || !rec.file) return { error: rec.error || 'Failed to save the file record' };
-      setEstimateFiles(prev => [fileToAttachment(rec.file), ...prev]);
-      return { id: rec.file.id };
-    } catch {
-      return { error: 'Network error — please try again.' };
-    }
+    const res = await uploadRecordFile(`/api/estimates/${estimateId}/files`, {}, file);
+    if (res.error || !res.file) return { error: res.error || 'Upload failed' };
+    setEstimateFiles(prev => [fileToAttachment(res.file), ...prev]);
+    return { id: res.file.id };
   };
 
   const removeEstimateFile = async (estimateId: string, fileId: string): Promise<{ ok: boolean }> => {

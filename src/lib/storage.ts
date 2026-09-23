@@ -53,13 +53,13 @@ async function authHeader(): Promise<Record<string, string>> {
 
 // Stay safely under Vercel's ~4.5MB request body cap when falling back to
 // the same-origin /api/storage upload route.
-const SERVER_UPLOAD_LIMIT = 4 * 1024 * 1024;
+export const SERVER_UPLOAD_LIMIT = 4 * 1024 * 1024;
 
 // PUT via XHR instead of fetch: fetch has no request-body progress events,
 // so a 200MB .psd upload looks frozen until it finishes. Rejects with a
 // TypeError on network failure, matching fetch, so callers' fallback logic
 // treats both transports the same.
-function xhrPut(
+export function xhrPut(
   url: string,
   body: File | Blob | ArrayBuffer,
   contentType: string,
