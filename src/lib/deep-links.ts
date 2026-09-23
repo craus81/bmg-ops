@@ -40,9 +40,11 @@ export const deepLinks = {
   upfitProject: (projectId: string, opts?: { noteId?: string | null; taskId?: string | null }) =>
     `/upfit?id=${projectId}${opts?.noteId ? `&note=${opts.noteId}` : ''}${opts?.taskId ? `&task=${opts.taskId}` : ''}`,
   /** Estimates page — opens the estimate in the builder view; flashNotes
-   *  scroll-flashes the Internal Notes field (estimate-note mentions). */
-  estimate: (estimateId: string, opts?: { flashNotes?: boolean }) =>
-    `/estimates?id=${estimateId}${opts?.flashNotes ? '&note=field' : ''}`,
+   *  scroll-flashes the Internal Notes field (estimate-note mentions).
+   *  from: 'quotes' makes the builder's back button return to that row on
+   *  the Quotes page instead of the Estimates list. */
+  estimate: (estimateId: string, opts?: { flashNotes?: boolean; from?: 'quotes' }) =>
+    `/estimates?id=${estimateId}${opts?.flashNotes ? '&note=field' : ''}${opts?.from ? `&from=${opts.from}` : ''}`,
   /** Estimates page — opens the builder on a fresh estimate, optionally
    *  pre-selecting a customer (local customers.id) or a CRM lead
    *  (prospects.id, for records not yet promoted to NetSuite). The straight
@@ -62,8 +64,10 @@ export const deepLinks = {
   /** Parts page — opens the part's record: switches to its catalog tab,
    *  expands the row, scrolls to it, and highlights it (page reads ?part=). */
   part: (partId: string) => `/parts?part=${partId}`,
-  /** Wrap-quote list — opens that quote (page reads ?id=). */
-  wrapQuote: (quoteId: string) => `/admin/wrap-quote?id=${quoteId}`,
+  /** Wrap-quote list — opens that quote (page reads ?id=). from: 'quotes'
+   *  makes closing it return to that row on the Quotes page. */
+  wrapQuote: (quoteId: string, opts?: { from?: 'quotes' }) =>
+    `/admin/wrap-quote?id=${quoteId}${opts?.from ? `&from=${opts.from}` : ''}`,
   /** The FleetSuite copy of an estimate as PDF bytes (server-rendered — the
    *  same file the customer is emailed). Feed it to `pdfViewer`, never link
    *  a tab straight at it. */

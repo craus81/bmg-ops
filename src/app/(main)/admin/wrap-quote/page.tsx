@@ -554,11 +554,15 @@ export default function WrapQuotePage() {
   // consumed out of the URL and the ref cleared, so clicking the same
   // notification again re-opens the quote (it used to be a dead click).
   const handledQuoteId = useRef<string | null>(null);
+  // Opened from the Quotes page (&from=quotes): closing this quote goes back
+  // to its row there. Kept here because the ?id= is consumed out of the URL.
+  const [returnToQuotesFor, setReturnToQuotesFor] = useState<string | null>(null);
   useEffect(() => {
     const qid = searchParams.get('id');
     if (!qid) { handledQuoteId.current = null; return; }
     if (history.length === 0 || handledQuoteId.current === qid) return;
     handledQuoteId.current = qid;
+    setReturnToQuotesFor(searchParams.get('from') === 'quotes' ? qid : null);
     const consume = () => router.replace('/admin/wrap-quote', { scroll: false });
     const q = history.find(h => h.id === qid);
     if (q) {
@@ -579,6 +583,13 @@ export default function WrapQuotePage() {
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: deep-link once after load
   }, [history, searchParams]);
+
+  const closeViewQuote = () => {
+    const back = viewQuote && returnToQuotesFor === viewQuote.id ? viewQuote.id : null;
+    setViewQuote(null);
+    setReturnToQuotesFor(null);
+    if (back) router.push(deepLinks.quoteFollowUps('wrap', back));
+  };
 
   // Open the NetSuite estimate PDF in a new tab (the browser's PDF viewer
   // covers viewing and printing).
@@ -1979,6 +1990,7 @@ export default function WrapQuotePage() {
     }
     setSendInclude({ pricing: true, lineItems: true, diagram: true, netsuitePdf: false });
     setViewQuote(null);
+    setReturnToQuotesFor(null);
     setTab('quote');
   };
 
@@ -3737,7 +3749,7 @@ export default function WrapQuotePage() {
       })()}
 
       {viewQuote && (
-        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={() => setViewQuote(null)}>
+        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={closeViewQuote}>
           <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '640px', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto' }}>
             {quotePreview(viewQuote)}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px', marginTop: '8px' }}>
@@ -3755,7 +3767,7 @@ export default function WrapQuotePage() {
                   NetSuite PDF
                 </button>
               )}
-              <button onClick={() => setViewQuote(null)} style={btnStyle('#94a3b8', 'var(--card)')}>Close</button>
+              <button onClick={closeViewQuote} style={btnStyle('#94a3b8', 'var(--card)')}>{returnToQuotesFor === viewQuote.id ? '← Back to Quotes' : 'Close'}</button>
             </div>
           </div>
         </div>

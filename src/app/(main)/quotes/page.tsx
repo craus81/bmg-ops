@@ -421,7 +421,7 @@ export default function QuotesPage() {
                       </button>
                     </>
                   )}
-                  <button onClick={() => router.push(item.type === 'estimate' ? deepLinks.estimate(item.id) : deepLinks.wrapQuote(item.id))} style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}>
+                  <button onClick={() => router.push(item.type === 'estimate' ? deepLinks.estimate(item.id, { from: 'quotes' }) : deepLinks.wrapQuote(item.id, { from: 'quotes' }))} style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}>
                     Open →
                   </button>
                 </div>
