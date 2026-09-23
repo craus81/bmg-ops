@@ -26,7 +26,8 @@ export async function GET(req: NextRequest) {
   const status = (STATUSES as string[]).includes(raw) ? (raw as QuoteListStatus) : 'all';
   try {
     const items = await loadQuoteListItems(service, status);
-    return NextResponse.json({ items });
+    // Live pipeline state: never stored by the browser, Cloudflare or Vercel.
+    return NextResponse.json({ items }, { headers: { 'Cache-Control': 'private, no-store, max-age=0' } });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
