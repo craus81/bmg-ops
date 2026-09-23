@@ -161,6 +161,8 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/calendar/sync-event/route.ts': staff(),
   'src/app/api/calendar/sync-graphics/route.ts': staff(),
   'src/app/api/calendar/sync-upfit/route.ts': staff(),
+  'src/app/api/siri/key/route.ts': feature('schedule'),
+  'src/app/api/siri/calendar-event/route.ts': token('iPhone Siri intent, no session: the per-device Siri key (only its hash stored in siri_keys, revoked on sign-out) is the credential, and authenticateSiriKey re-checks on every call that its owner is approved, not deactivated and still holds the schedule feature; the only write is one calendar_events row owned by that user', 'authenticateSiriKey('),
   'src/app/api/checkins/condition/route.ts': staff(),
   'src/app/api/checkins/route.ts': staff(),
   'src/app/api/cni/add-completed-vin/route.ts': admin(),

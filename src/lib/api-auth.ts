@@ -169,11 +169,7 @@ export async function requireAuth(req: NextRequest): Promise<AuthResult> {
       .eq('id', user.id)
       .single();
 
-    // Reject pending/denied accounts AND soft-deleted (deactivated) ones. The
-    // Users page tells admins a deactivated account "will no longer be able to
-    // log in", but nothing enforced that — a deactivated user with a live
-    // session (or who simply logs back in) kept full role access until now.
-    if (!profile || profile.status !== 'approved' || profile.deactivated === true) {
+    if (!isActiveProfile(profile)) {
       return { user, profile, error: NextResponse.json({ error: 'Forbidden: account not approved' }, { status: 403 }) };
     }
 
@@ -181,6 +177,20 @@ export async function requireAuth(req: NextRequest): Promise<AuthResult> {
   } catch {
     return { user: null, error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
   }
+}
+
+/**
+ * Approved and not deactivated — the account check requireAuth applies to
+ * every session, shared with credentials that aren't sessions (the iPhone
+ * app's Siri keys, src/lib/siri-keys.ts).
+ *
+ * Rejects pending/denied accounts AND soft-deleted (deactivated) ones. The
+ * Users page tells admins a deactivated account "will no longer be able to
+ * log in", but nothing enforced that — a deactivated user with a live
+ * session (or who simply logs back in) kept full role access until now.
+ */
+export function isActiveProfile(profile: any): boolean {
+  return !!profile && profile.status === 'approved' && profile.deactivated !== true;
 }
 
 /**
@@ -292,23 +302,32 @@ export async function requireFeature(req: NextRequest, key: FeatureKey): Promise
   const auth = await requireAuth(req);
   if (auth.error) return auth;
 
+  if (!(await profileHasFeature(auth.user.id, auth.profile, key))) {
+    return { user: auth.user, profile: auth.profile, error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) };
+  }
+
+  return auth;
+}
+
+/**
+ * Does this user's EFFECTIVE feature set (role defaults + their
+ * user_feature_overrides rows) include `key`? The check behind
+ * requireFeature, shared with credentials that aren't sessions (the iPhone
+ * app's Siri keys, src/lib/siri-keys.ts). `profile` needs role/roles.
+ */
+export async function profileHasFeature(userId: string, profile: any, key: FeatureKey): Promise<boolean> {
   const service = createClient(supabaseUrl, supabaseServiceKey);
   const { data: overrides } = await service
     .from('user_feature_overrides')
     .select('feature, granted')
-    .eq('user_id', auth.user.id);
+    .eq('user_id', userId);
 
   // Normalize the legacy 'production' role to 'graphics_production' so the
   // server resolves the same feature set the client does (AuthProvider does
   // this normalization); without it a 'production'-role account would resolve
   // to zero features here while the UI shows it the graphics set.
-  const roles = profileRoles(auth.profile).map(r => (r === 'production' ? 'graphics_production' : r));
-  const features = resolveFeatures(roles, overrides || []);
-  if (!features.has(key)) {
-    return { user: auth.user, profile: auth.profile, error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) };
-  }
-
-  return auth;
+  const roles = profileRoles(profile).map(r => (r === 'production' ? 'graphics_production' : r));
+  return resolveFeatures(roles, overrides || []).has(key);
 }
 
 /**

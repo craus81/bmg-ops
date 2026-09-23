@@ -11,6 +11,7 @@ import { isPaletteChord, shortcutLabel } from '@/lib/command-palette';
 import { INTERNAL_STAFF_ROLES } from '@/lib/features';
 import { Search as SearchIcon } from 'lucide-react';
 import HelpButton from '@/components/HelpButton';
+import { forgetSiriKey } from '@/lib/siri-bridge';
 
 interface HeaderProps {
   activePartNumber?: string;
@@ -286,6 +287,8 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
     if (!switchEmail.trim() || !switchPassword.trim()) return;
     setSwitching(true);
     setSwitchError('');
+    // Same as signOut: the outgoing user's iPhone Siri key goes with them.
+    await forgetSiriKey();
     await supabase.auth.signOut();
     const { error } = await supabase.auth.signInWithPassword({
       email: switchEmail.trim(),

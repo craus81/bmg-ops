@@ -7,6 +7,7 @@ import type { User } from '@supabase/supabase-js';
 import type { Profile } from '@/lib/types';
 import { resolveFeatures, isAdminRole, type FeatureKey } from '@/lib/features';
 import { canSeeMoney as moneyVisibleTo } from '@/lib/money-visibility';
+import { forgetSiriKey } from '@/lib/siri-bridge';
 
 interface AuthContextType {
   user: User | null;
@@ -202,6 +203,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = async () => {
+    // iPhone app: revoke this device's Siri key while the session can still
+    // authorize it (no-op on the web).
+    await forgetSiriKey();
     await supabase.auth.signOut();
     setUser(null);
     setProfile(null);

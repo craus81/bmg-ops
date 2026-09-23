@@ -12,6 +12,7 @@ import BottomNav from '@/components/BottomNav';
 import AiChat from '@/components/AiChat';
 import DeepLinkHandler from '@/components/DeepLinkHandler';
 import NativePushHandler from '@/components/NativePushHandler';
+import NativeSiriKey from '@/components/NativeSiriKey';
 import UsageTelemetry from '@/components/UsageTelemetry';
 
 function PendingScreen() {
@@ -117,6 +118,7 @@ export default function ClientProviders({ children }: { children: React.ReactNod
             <DialogProvider>
               <DeepLinkHandler />
               <NativePushHandler />
+              <NativeSiriKey />
               <UsageTelemetry />
               <AppShell>{children}</AppShell>
             </DialogProvider>
