@@ -10,7 +10,7 @@
  * Rows open in their own builder — /estimates or /admin/wrap-quote.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -130,13 +130,29 @@ export default function QuotesPage() {
   const [logRemindAt, setLogRemindAt] = useState('');
   const [logSaving, setLogSaving] = useState(false);
 
+  // A failed reload used to keep the old list on screen with no word said,
+  // so a quote already marked Won still looked Waiting and its buttons
+  // kept firing into the "only sent quotes can be marked" refusal. Say so
+  // instead. Only the latest request may write: the list can be asked for
+  // twice in a row, and an older answer landing last would put stale rows
+  // back.
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const loadSeq = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     setLoading(true);
+    let error: string | null = null;
     try {
       const res = await fetch('/api/quotes?status=all');
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (seq !== loadSeq.current) return;
       if (res.ok) setItems(data.items || []);
-    } catch { /* empty list signals it */ }
+      else error = data.error || `the server answered ${res.status}`;
+    } catch (e: any) {
+      if (seq !== loadSeq.current) return;
+      error = e?.message || 'network error';
+    }
+    setLoadError(error);
     setLoading(false);
   }, []);
 
@@ -169,8 +185,21 @@ export default function QuotesPage() {
         body: JSON.stringify({ type: item.type, id: item.id, action }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.success) await dialog.alert(data.error || 'Action failed');
-      else await load();
+      if (!res.ok || !data.success) {
+        await dialog.alert(data.error || 'Action failed');
+        // Usually refused because the quote already moved on (marked by
+        // someone else, or an earlier click that did land) — reload so the
+        // row shows where it really is instead of offering the same buttons.
+        load();
+      } else {
+        // Move the row now. Waiting for the full-list reload left the old
+        // row sitting in Waiting with live buttons, which read as "nothing
+        // happened" and invited a second click.
+        const status = action === 'mark_accepted' ? 'accepted' : 'rejected';
+        const now = new Date().toISOString();
+        setItems(prev => prev.map(i => (i.type === item.type && i.id === item.id ? { ...i, status, decidedAt: now } : i)));
+        load();
+      }
     } catch (e: any) {
       await dialog.alert(e.message || 'Action failed');
     }
@@ -291,6 +320,14 @@ export default function QuotesPage() {
         </label>
       </div>
 
+      {loadError && !loading && (
+        <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '10px 14px', marginBottom: '10px', borderRadius: '10px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', fontSize: '12px', fontWeight: 700 }}>
+          <span style={{ flex: 1 }}>Couldn&apos;t refresh the quotes list ({loadError}). What&apos;s shown may be out of date.</span>
+          <button onClick={() => load()} style={{ padding: '5px 12px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: '1px solid rgba(239,68,68,0.4)', color: '#ef4444', cursor: 'pointer' }}>
+            Retry
+          </button>
+        </div>
+      )}
       {loading && <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)', fontSize: '13px' }}>Loading…</div>}
       {!loading && visible.length === 0 && (
         <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>
