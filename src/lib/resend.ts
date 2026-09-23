@@ -65,6 +65,7 @@ async function logEmailSend(
   sourceId: string | null,
   meta?: EmailMeta,
   html?: string,
+  copies?: string[],
 ): Promise<void> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -87,6 +88,9 @@ async function logEmailSend(
       source_id: ok ? sourceId : null,
       kind: meta?.kind || 'other',
       recipients: Array.isArray(to) ? to : [to],
+      // CC and BCC — a bounce event doesn't say which address bounced, so
+      // the alert needs everyone who was on the email.
+      copy_recipients: copies && copies.length > 0 ? copies : null,
       subject,
       sent_by: meta?.sentBy || null,
       context_url: meta?.contextUrl || null,
@@ -232,7 +236,8 @@ export async function sendEmailDetailed(
     result = { ok: false, id: null };
   }
 
-  await logEmailSend(to, subject, result.ok, result.id, meta, htmlBody);
+  const copies = [...effectiveCc, ...(effectiveBcc ? (Array.isArray(effectiveBcc) ? effectiveBcc : [effectiveBcc]) : [])];
+  await logEmailSend(to, subject, result.ok, result.id, meta, htmlBody, copies);
   return result;
 }
 

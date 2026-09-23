@@ -462,6 +462,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         .update({
           approval_email_id: ok ? resendId : null,
           approval_email_to: emailList,
+          // Everyone else on the email (CC, BCC) — the bounce webhook can't
+          // tell which address bounced, so the alert must know them all.
+          approval_email_copies: [...(body.cc || []), ...(bcc || [])],
           approval_email_status: ok ? 'sent' : 'failed',
           approval_email_detail: ok ? null : 'The email could not be handed to the delivery service',
           approval_email_updated_at: new Date().toISOString(),
