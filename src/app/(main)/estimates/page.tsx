@@ -38,7 +38,7 @@ import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNe
 import { estimateHeadlineNumber, estimateAltNumber, estimateNumberMatches } from '@/lib/estimate-number';
 import { useFormTelemetry } from '@/lib/use-form-telemetry';
 import { uploadRecordFile } from '@/lib/record-file-upload';
-import { bounceNextStep } from '@/lib/email-bounce';
+import { bounceNextStep, bounceIsAmbiguous, recipientsLabel } from '@/lib/email-bounce';
 
 interface Part {
   id: string;
@@ -250,6 +250,8 @@ interface Estimate {
   approval_email_status: string | null;
   approval_email_detail: string | null;
   approval_email_to: string[] | null;
+  /** Migration 324: CC/BCC on that email — a bounce may be theirs, not the customer's. */
+  approval_email_copies?: string[] | null;
   approval_email_updated_at: string | null;
   // Follow-up state (quote-followups queue) — surfaced on sent rows so
   // chasing happens from here without a trip to /admin/quote-followups.
@@ -3384,7 +3386,9 @@ export default function EstimatesPage() {
                         );
                       })()}
                       {['bounced', 'failed', 'complained'].includes(est.approval_email_status || '') && (
-                        <div title={`The approval email did not reach the customer${est.approval_email_detail ? ` — ${est.approval_email_detail}` : ''}. ${bounceNextStep(est.approval_email_status || '', est.approval_email_detail)}`} style={{
+                        <div title={bounceIsAmbiguous(est.approval_email_status || '', est.approval_email_to, est.approval_email_copies)
+                          ? `The approval email bounced for one of its recipients: ${recipientsLabel(est.approval_email_to, est.approval_email_copies)}${est.approval_email_detail ? ` — ${est.approval_email_detail}` : ''}. ${bounceNextStep(est.approval_email_status || '', est.approval_email_detail, { ambiguous: true })}`
+                          : `The approval email did not reach the customer${est.approval_email_detail ? ` — ${est.approval_email_detail}` : ''}. ${bounceNextStep(est.approval_email_status || '', est.approval_email_detail)}`} style={{
                           padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                           background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)',
                           color: '#ef4444', whiteSpace: 'nowrap',
@@ -5097,7 +5101,11 @@ export default function EstimatesPage() {
           const meta = bad
             ? {
                 color: '#ef4444', bg: 'rgba(239,68,68,0.08)', border: 'rgba(239,68,68,0.25)',
-                text: `⚠ Approval email ${st === 'complained' ? 'marked as spam' : st === 'failed' ? 'failed' : 'bounced'}${to ? ` (${to})` : ''} — the customer did not get it.${est.approval_email_detail ? ` ${est.approval_email_detail}.` : ''} ${bounceNextStep(st, est.approval_email_detail)}`,
+                text: bounceIsAmbiguous(st, est.approval_email_to, est.approval_email_copies)
+                  // Resend's bounce event doesn't say which address failed —
+                  // with a CC on the email it may not be the customer's.
+                  ? `⚠ Approval email ${st === 'complained' ? 'marked as spam' : 'bounced'} for one of its recipients: ${recipientsLabel(est.approval_email_to, est.approval_email_copies)}.${est.approval_email_detail ? ` ${est.approval_email_detail}.` : ''} ${bounceNextStep(st, est.approval_email_detail, { ambiguous: true })}`
+                  : `⚠ Approval email ${st === 'complained' ? 'marked as spam' : st === 'failed' ? 'failed' : 'bounced'}${to ? ` (${to})` : ''} — the customer did not get it.${est.approval_email_detail ? ` ${est.approval_email_detail}.` : ''} ${bounceNextStep(st, est.approval_email_detail)}`,
               }
             : st === 'delivered'
               ? { color: '#22c55e', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.2)', text: `✓ Approval email delivered${to ? ` to ${to}` : ''}` }

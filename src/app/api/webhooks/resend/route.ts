@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { financeUserIds } from '@/lib/ap';
-import { bounceDetail, bounceNextStep } from '@/lib/email-bounce';
+import { bounceDetail, bounceNextStep, bounceIsAmbiguous, recipientsLabel } from '@/lib/email-bounce';
 
 export const dynamic = 'force-dynamic';
 
@@ -151,7 +151,7 @@ export async function POST(req: NextRequest) {
     // realistically one match per message id) ──
     const { data: estRows } = await service
       .from('estimates')
-      .select('id, estimate_number, customer_name, customer_id, created_by, sent_for_approval_by, approval_email_status, approval_email_to')
+      .select('id, estimate_number, customer_name, customer_id, created_by, sent_for_approval_by, approval_email_status, approval_email_to, approval_email_copies')
       .eq('approval_email_id', emailId);
 
     const estToUpdate = (estRows || []).filter(r => (STATUS_RANK[status] ?? 0) >= (STATUS_RANK[r.approval_email_status] ?? 0));
@@ -195,7 +195,11 @@ export async function POST(req: NextRequest) {
         await notifyMany(Array.from(targetIds), {
           type: 'estimate_email_bounced',
           title: `⚠ Estimate email ${status}: #${est.estimate_number}`,
-          body: `The approval email to ${(est.approval_email_to || []).join(', ') || 'the customer'}${est.customer_name ? ` (${est.customer_name})` : ''} ${status === 'complained' ? 'was marked as spam' : status}. ${detail ? `Reason: ${detail}. ` : ''}${bounceNextStep(status, detail)}`,
+          body: bounceIsAmbiguous(status, est.approval_email_to, est.approval_email_copies)
+            // Several addresses on the email and Resend doesn't say which one
+            // failed — often a CC'd teammate, not the customer.
+            ? `The approval email${est.customer_name ? ` for ${est.customer_name}` : ''} ${status === 'complained' ? 'was marked as spam by' : 'bounced for'} one of its recipients: ${recipientsLabel(est.approval_email_to, est.approval_email_copies)}. ${detail ? `Reason: ${detail}. ` : ''}${bounceNextStep(status, detail, { ambiguous: true })}`
+            : `The approval email to ${(est.approval_email_to || []).join(', ') || 'the customer'}${est.customer_name ? ` (${est.customer_name})` : ''} ${status === 'complained' ? 'was marked as spam' : status}. ${detail ? `Reason: ${detail}. ` : ''}${bounceNextStep(status, detail)}`,
           url: deepLinks.estimate(est.id),
           channels: ['in_app', 'push'],
           // Delivery-failure alarm — the sender must learn their email died.
@@ -208,7 +212,7 @@ export async function POST(req: NextRequest) {
     // this matches ALL emails — the two specialized flows above included) ──
     const { data: logRows } = await service
       .from('email_log')
-      .select('id, kind, recipients, subject, sent_by, context_url, delivery_status')
+      .select('id, kind, recipients, copy_recipients, subject, sent_by, context_url, delivery_status')
       .eq('source_id', emailId);
 
     const logToUpdate = (logRows || []).filter(r => (STATUS_RANK[status] ?? 0) >= (STATUS_RANK[r.delivery_status] ?? 0));
@@ -258,7 +262,9 @@ export async function POST(req: NextRequest) {
         await notifyMany([row.sent_by], {
           type: 'email_bounced',
           title: `⚠ ${KIND_LABELS[row.kind] || 'Email'} ${status === 'complained' ? 'marked as spam' : status}`,
-          body: `Your email to ${(row.recipients || []).join(', ') || 'the recipient'}${row.subject ? ` (“${row.subject}”)` : ''} ${status === 'complained' ? 'was marked as spam' : status}. ${detail ? `Reason: ${detail}. ` : ''}They did not receive it. ${bounceNextStep(status, detail)}`,
+          body: bounceIsAmbiguous(status, row.recipients, row.copy_recipients)
+            ? `Your email${row.subject ? ` “${row.subject}”` : ''} ${status === 'complained' ? 'was marked as spam by' : 'bounced for'} one of its recipients: ${recipientsLabel(row.recipients, row.copy_recipients)}. ${detail ? `Reason: ${detail}. ` : ''}${bounceNextStep(status, detail, { ambiguous: true })}`
+            : `Your email to ${(row.recipients || []).join(', ') || 'the recipient'}${row.subject ? ` (“${row.subject}”)` : ''} ${status === 'complained' ? 'was marked as spam' : status}. ${detail ? `Reason: ${detail}. ` : ''}They did not receive it. ${bounceNextStep(status, detail)}`,
           url: row.context_url || deepLinks.emailDelivery(row.id),
           channels: ['in_app', 'push'],
           // Delivery-failure alarm — the sender must learn their email died.
