@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
       title,
       event_date: date,
       event_time: time ?? null,
-      event_type: 'meeting',
+      event_type: 'event',
       user_id: auth.userId,
     })
     .select('id, title, description, event_date, event_time, google_event_id, source')

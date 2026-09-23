@@ -63,6 +63,30 @@ const TYPE_LABELS: Record<string, string> = {
   pickup: 'Pickup',
 };
 
+/** What New Event's Type can file a hand-made event under — the filter
+ *  chips minus Google (that one means "came from Google Calendar"). Stored
+ *  in calendar_events.event_type; 'sales' is the Sales chip, whose board
+ *  type is 'reminder'. */
+const EVENT_CATEGORIES: { value: string; label: string }[] = [
+  { value: 'event', label: 'Event' },
+  { value: 'graphics', label: 'Graphics' },
+  { value: 'upfit', label: 'Upfit' },
+  { value: 'pickup', label: 'Pickup' },
+  { value: 'cni', label: 'CNI' },
+  { value: 'sales', label: 'Sales' },
+];
+
+/** Board type for a calendar_events row. Legacy types (meeting, call, …)
+ *  were never shown anywhere, so they read as plain "Event". */
+const boardTypeFor = (m: { source?: string | null; event_type?: string | null }): CalendarEvent['type'] => {
+  if (m.source === 'google') return 'google';
+  switch (m.event_type) {
+    case 'graphics': case 'upfit': case 'pickup': case 'cni': return m.event_type;
+    case 'sales': return 'reminder';
+    default: return 'manual';
+  }
+};
+
 export default function SchedulePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -84,7 +108,7 @@ export default function SchedulePage() {
 
   // Manual event creation
   const [showCreate, setShowCreate] = useState(false);
-  const [createForm, setCreateForm] = useState({ title: '', description: '', event_date: '', event_time: '', event_type: 'meeting' as string, prospect_id: '' });
+  const [createForm, setCreateForm] = useState({ title: '', description: '', event_date: '', event_time: '', event_type: 'event' as string, prospect_id: '' });
   const [creating, setCreating] = useState(false);
 
   // Date helpers
@@ -299,8 +323,8 @@ export default function SchedulePage() {
       (manual || []).forEach((m: any) => allEvents.push({
         id: `man-${m.id}`, title: m.title, subtitle: m.description,
         date: m.event_date, time: m.event_time,
-        type: m.source === 'google' ? 'google' : 'manual',
-        color: m.source === 'google' ? TYPE_COLORS.google : TYPE_COLORS.manual,
+        type: boardTypeFor(m),
+        color: TYPE_COLORS[boardTypeFor(m)],
         cardId: m.id,
         noteCount: m.calendar_event_notes?.[0]?.count || 0,
         fileCount: m.calendar_event_files?.[0]?.count || 0,
@@ -336,7 +360,7 @@ export default function SchedulePage() {
         body: JSON.stringify({ eventId: created.id }),
       }).catch(() => {});
     }
-    setCreateForm({ title: '', description: '', event_date: '', event_time: '', event_type: 'meeting', prospect_id: '' });
+    setCreateForm({ title: '', description: '', event_date: '', event_time: '', event_type: 'event', prospect_id: '' });
     setShowCreate(false);
     setCreating(false);
     loadEvents();
@@ -352,7 +376,7 @@ export default function SchedulePage() {
 
   // Inline edit of the event itself (title/date/time/description) — saved
   // edits push back to Google when the event lives there too.
-  const [cardEdit, setCardEdit] = useState<{ title: string; event_date: string; event_time: string; description: string } | null>(null);
+  const [cardEdit, setCardEdit] = useState<{ title: string; event_date: string; event_time: string; description: string; event_type: string } | null>(null);
 
   const openCard = async (cardId: string) => {
     const [{ data: ev }, { data: notes }, { data: files }] = await Promise.all([
@@ -377,6 +401,8 @@ export default function SchedulePage() {
         event_date: cardEdit.event_date,
         event_time: cardEdit.event_time || null,
         description: cardEdit.description.trim() || null,
+        // Google imports keep their stored type; only app events refile.
+        ...(cardEvent.source !== 'google' && { event_type: cardEdit.event_type }),
       };
       const { error } = await supabase.from('calendar_events').update(updates).eq('id', cardEvent.id);
       if (error) { await dialog.alert(`Save failed: ${error.message}`); return; }
@@ -688,9 +714,9 @@ export default function SchedulePage() {
               )}
               <span style={{
                 fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', whiteSpace: 'nowrap',
-                background: `${cardEvent.source === 'google' ? TYPE_COLORS.google : TYPE_COLORS.manual}18`,
-                color: cardEvent.source === 'google' ? TYPE_COLORS.google : TYPE_COLORS.manual,
-              }}>{cardEvent.source === 'google' ? 'From Google Calendar' : 'FleetSuite event'}</span>
+                background: `${TYPE_COLORS[boardTypeFor(cardEvent)]}18`,
+                color: TYPE_COLORS[boardTypeFor(cardEvent)],
+              }}>{cardEvent.source === 'google' ? 'From Google Calendar' : boardTypeFor(cardEvent) === 'manual' ? 'FleetSuite event' : TYPE_LABELS[boardTypeFor(cardEvent)]}</span>
             </div>
             {cardEdit ? (
               <div style={{ marginBottom: '12px' }}>
@@ -707,6 +733,16 @@ export default function SchedulePage() {
                     onChange={e => setCardEdit({ ...cardEdit, event_time: e.target.value })}
                     style={{ padding: '8px 10px', borderRadius: '8px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-body)' }}
                   />
+                  {/* Google imports always file under Google; only app events pick a category. */}
+                  {cardEvent.source !== 'google' && (
+                    <select
+                      value={cardEdit.event_type}
+                      onChange={e => setCardEdit({ ...cardEdit, event_type: e.target.value })}
+                      style={{ padding: '8px 10px', borderRadius: '8px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-body)' }}
+                    >
+                      {EVENT_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                    </select>
+                  )}
                 </div>
                 <textarea
                   value={cardEdit.description}
@@ -731,7 +767,7 @@ export default function SchedulePage() {
                     {cardEvent.event_time ? ` · ${fmt12h(cardEvent.event_time)}` : ''}
                   </span>
                   <button
-                    onClick={() => setCardEdit({ title: cardEvent.title || '', event_date: cardEvent.event_date || '', event_time: cardEvent.event_time ? cardEvent.event_time.slice(0, 5) : '', description: cardEvent.description || '' })}
+                    onClick={() => setCardEdit({ title: cardEvent.title || '', event_date: cardEvent.event_date || '', event_time: cardEvent.event_time ? cardEvent.event_time.slice(0, 5) : '', description: cardEvent.description || '', event_type: EVENT_CATEGORIES.some(c => c.value === cardEvent.event_type) ? cardEvent.event_type : 'event' })}
                     style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '5px', background: 'var(--subtle-bg)', color: '#60a5fa', border: `1px solid ${theme.border}`, cursor: 'pointer' }}
                   >✎ Edit</button>
                 </div>
@@ -848,11 +884,7 @@ export default function SchedulePage() {
                   width: '100%', padding: '10px', borderRadius: '8px', fontSize: '13px',
                   border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)',
                 }}>
-                  <option value="meeting">Meeting</option>
-                  <option value="call">Call</option>
-                  <option value="reminder">Reminder</option>
-                  <option value="deadline">Deadline</option>
-                  <option value="other">Other</option>
+                  {EVENT_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                 </select>
               </div>
               <div>
