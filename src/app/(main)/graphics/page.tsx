@@ -26,7 +26,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import { roundChip, summarizeRounds } from '@/lib/proof-rounds';
-import { isFinishedStatus, inStatusScope, GRAPHICS_ACTIVE_STATUSES } from '@/lib/graphics-status';
+import { isFinishedStatus, inStatusScope, GRAPHICS_ACTIVE_STATUSES, GRAPHICS_AWAITING_STATUSES } from '@/lib/graphics-status';
 import { workOrderPositions, compareByDueDate } from '@/lib/graphics-work-order';
 import GraphicsWorkOrderModal from '@/components/GraphicsWorkOrderModal';
 import AssignmentPicker from '@/components/AssignmentPicker';
@@ -51,7 +51,7 @@ import {
   GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
 } from '@/lib/types';
 
-type FilterStatus = GraphicsJobStatus | 'all' | 'active';
+type FilterStatus = GraphicsJobStatus | 'all' | 'active' | 'awaiting';
 type FilterCategory = GraphicsJobCategory | 'all';
 type MetricFilter = 'overdue' | 'dueWeek' | 'stuck';
 
@@ -946,6 +946,7 @@ export default function GraphicsPage() {
   // Tab counts (hide flagged from non-admins)
   const visibleJobs = isAdmin ? jobs : jobs.filter(j => j.status !== 'flagged');
   const activeCount = visibleJobs.filter(j => GRAPHICS_ACTIVE_STATUSES.includes(j.status)).length;
+  const awaitingCount = visibleJobs.filter(j => GRAPHICS_AWAITING_STATUSES.includes(j.status)).length;
   // Scoped to the status showing, or the tab lies: an unscoped count read
   // "My Jobs (23)" over a table of 6, the other 17 being jobs that shipped
   // and stayed assigned. A tab's number is a promise about its own rows.
@@ -985,7 +986,7 @@ export default function GraphicsPage() {
   };
 
   // Whether the popover's per-status select (not the tabs) is narrowing
-  const statusSelectActive = filterStatus !== 'active' && filterStatus !== 'all';
+  const statusSelectActive = filterStatus !== 'active' && filterStatus !== 'awaiting' && filterStatus !== 'all';
 
   const toggleArchived = () => {
     const next = !showArchived;
@@ -1192,7 +1193,7 @@ export default function GraphicsPage() {
         </div>
       )}
 
-      {/* Toolbar: Active / My Jobs / All tabs + search + Filter popover.
+      {/* Toolbar: Active / Ready / My Jobs / All tabs + search + Filter popover.
           "My Jobs" used to be a chip buried in the Filter popover, where the
           people it was built for never found it — it's a tab now. */}
       <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1207,6 +1208,22 @@ export default function GraphicsPage() {
           }}
         >
           Active ({activeCount})
+        </button>
+        {/* Graphics' part is done — waiting on an installer or the customer.
+            Off Active so the floor's own work isn't buried under it, but not
+            archived: someone still has to mark it installed / picked up. */}
+        <button
+          onClick={() => { setFilterStatus('awaiting'); setMyJobsOnly(false); setMetricFilter(null); }}
+          title="Ready to Install and Ready for Pickup — graphics is done, waiting on the install or the customer"
+          style={{
+            padding: '7px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+            background: !myJobsOnly && filterStatus === 'awaiting' ? 'rgba(14,165,233,0.15)' : 'var(--subtle-bg)',
+            border: `1px solid ${!myJobsOnly && filterStatus === 'awaiting' ? 'rgba(14,165,233,0.5)' : 'var(--border)'}`,
+            color: !myJobsOnly && filterStatus === 'awaiting' ? '#0ea5e9' : 'var(--text-label)',
+            whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
+          }}
+        >
+          Ready ({awaitingCount})
         </button>
         <button
           onClick={() => { setMyJobsOnly(v => !v); setMetricFilter(null); }}

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   classifyTransition, requiresReason, proofGateApplies,
-  inStatusScope, GRAPHICS_ACTIVE_STATUSES, GRAPHICS_FINISHED_STATUSES,
+  inStatusScope, isOffTheFloor, GRAPHICS_ACTIVE_STATUSES, GRAPHICS_AWAITING_STATUSES, GRAPHICS_FINISHED_STATUSES,
   GRAPHICS_PIPELINE, GRAPHICS_SIDE_STATES,
 } from './graphics-status';
 import { GRAPHICS_STATUS_ORDER } from './types';
@@ -87,7 +87,16 @@ describe('inStatusScope', () => {
   it('keeps live work under the Active tab', () => {
     expect(inStatusScope('designing', 'active')).toBe(true);
     expect(inStatusScope('printing', 'active')).toBe(true);
-    expect(inStatusScope('ready_to_pickup', 'active')).toBe(true);
+    expect(inStatusScope('packing', 'active')).toBe(true);
+  });
+
+  it('moves jobs waiting on install or pickup to the Ready tab', () => {
+    expect(inStatusScope('ready', 'active')).toBe(false);
+    expect(inStatusScope('ready_to_pickup', 'active')).toBe(false);
+    expect(inStatusScope('ready', 'awaiting')).toBe(true);
+    expect(inStatusScope('ready_to_pickup', 'awaiting')).toBe(true);
+    expect(inStatusScope('packing', 'awaiting')).toBe(false);
+    expect(inStatusScope('shipped', 'awaiting')).toBe(false);
   });
 
   it('drops a job that has left the floor from the Active tab', () => {
@@ -106,14 +115,22 @@ describe('inStatusScope', () => {
     expect(inStatusScope('shipped', 'shipped')).toBe(true);
   });
 
-  it('sorts every status into exactly one of active or finished', () => {
-    // A new status that lands in neither list would vanish from the Active
-    // tab AND keep its work-order slot forever. Adding one means choosing.
+  it('sorts every status into exactly one of active, awaiting or finished', () => {
+    // A new status that lands in no list would vanish from every tab but All
+    // AND keep its work-order slot forever. Adding one means choosing.
     for (const status of GRAPHICS_STATUS_ORDER) {
-      const active = GRAPHICS_ACTIVE_STATUSES.includes(status);
-      const finished = GRAPHICS_FINISHED_STATUSES.includes(status);
-      expect(active || finished, `${status} is in neither list`).toBe(true);
-      expect(active && finished, `${status} is in both lists`).toBe(false);
+      const lists = [
+        GRAPHICS_ACTIVE_STATUSES.includes(status),
+        GRAPHICS_AWAITING_STATUSES.includes(status),
+        GRAPHICS_FINISHED_STATUSES.includes(status),
+      ].filter(Boolean).length;
+      expect(lists, `${status} is in ${lists} lists`).toBe(1);
+    }
+  });
+
+  it('takes everything not on the Active tab off the floor', () => {
+    for (const status of GRAPHICS_STATUS_ORDER) {
+      expect(isOffTheFloor(status), status).toBe(!GRAPHICS_ACTIVE_STATUSES.includes(status));
     }
   });
 });

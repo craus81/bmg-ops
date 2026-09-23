@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { GRAPHICS_FINISHED_STATUSES } from '@/lib/graphics-status';
+import { isOffTheFloor } from '@/lib/graphics-status';
 import type { GraphicsJobStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -31,9 +31,9 @@ const Schema = z.object({
  * actually landed — the caller re-syncs from it rather than from its own
  * optimistic copy.
  *
- * Finished jobs (shipped/picked up/installed/cancelled) are dropped on the
- * way in: a job nobody can work is not "next", and leaving it ranked would
- * burn a slot on the designer's list.
+ * Jobs off the floor (ready/ready for pickup, and finished ones) are
+ * dropped on the way in: a job nobody in graphics can work is not "next",
+ * and leaving it ranked would burn a slot on the designer's list.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);
@@ -70,11 +70,11 @@ export async function POST(req: NextRequest) {
   const byId = new Map(rows.map(r => [r.id, r]));
   const workable = (id: string) => {
     const row = byId.get(id);
-    return !!row && !GRAPHICS_FINISHED_STATUSES.includes(row.status);
+    return !!row && !isOffTheFloor(row.status);
   };
 
   // Drop ids that don't exist (deleted out from under the open modal) and
-  // ones that finished while it sat open.
+  // ones that left the floor while it sat open.
   const finalOrder = requested.filter(workable);
   const rankOf = new Map(finalOrder.map((id, i) => [id, i + 1]));
 

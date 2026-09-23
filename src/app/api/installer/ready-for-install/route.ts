@@ -19,9 +19,16 @@ const supabase = createClient(
  *           AND matched_graphics_job_id IS NOT NULL
  *           AND matched graphics job status IN (ready, shipped)
  *
+ * Also returns `unmatchedJobs`: graphics jobs in 'ready' that no vehicle
+ * check-in points at — field, other-location and CNI installs, or a shop
+ * vehicle that hasn't arrived. Those left the graphics board's Active tab
+ * (owner decision, 2026-09-23) and this is the installers' view of them.
+ * Nobody is assigned to install them yet, so they come back only without
+ * `mine=1`.
+ *
  * Query params:
  *   mine=1    -> only vehicles assigned to the current user (via fleet_checkins.assigned_to
- *               or via job_assignments[job_type=scanned_vehicle]).
+ *               or via job_assignments[job_type=scanned_vehicle]); no unmatchedJobs.
  */
 export async function GET(req: NextRequest) {
   const auth = await requireAuth(req);
@@ -58,8 +65,13 @@ export async function GET(req: NextRequest) {
   if (checkinsErr) {
     return NextResponse.json({ error: checkinsErr.message }, { status: 500 });
   }
+  const unmatchedJobs = mineOnly ? [] : await loadUnmatchedReadyJobs();
+  if (unmatchedJobs === null) {
+    return NextResponse.json({ error: 'Could not read ready graphics jobs' }, { status: 500 });
+  }
+
   if (!checkins || checkins.length === 0) {
-    return NextResponse.json({ vehicles: [] });
+    return NextResponse.json({ vehicles: [], unmatchedJobs });
   }
 
   // 2. Load the graphics jobs and filter to ready/shipped
@@ -138,5 +150,55 @@ export async function GET(req: NextRequest) {
       };
     });
 
-  return NextResponse.json({ vehicles, count: vehicles.length });
+  return NextResponse.json({ vehicles, count: vehicles.length, unmatchedJobs });
+}
+
+const daysSince = (iso: string | null, now: number): number | null =>
+  iso ? Math.floor((now - new Date(iso).getTime()) / (1000 * 60 * 60 * 24)) : null;
+
+/**
+ * Ready graphics jobs with no vehicle check-in matched to them. A check-in in
+ * ANY state counts as matched — a job whose vehicle already left belongs to
+ * that vehicle, not to "no vehicle yet". Null on a read error.
+ */
+async function loadUnmatchedReadyJobs() {
+  const { data: jobs, error } = await supabase
+    .from('graphics_jobs')
+    .select('id, job_number, title, part_number, customer, install_location, scheduled_install_date, updated_at')
+    .eq('status', 'ready')
+    .order('scheduled_install_date', { ascending: true, nullsFirst: false })
+    .order('id');
+  if (error) return null;
+  if (!jobs || jobs.length === 0) return [];
+
+  const matched = new Set<string>();
+  const ids = jobs.map(j => j.id);
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data: rows, error: matchErr } = await supabase
+      .from('fleet_checkins')
+      .select('matched_graphics_job_id')
+      .in('matched_graphics_job_id', ids.slice(i, i + 200));
+    if (matchErr) return null;
+    for (const r of rows || []) if (r.matched_graphics_job_id) matched.add(r.matched_graphics_job_id);
+  }
+
+  const now = Date.now();
+  return jobs
+    .filter(j => !matched.has(j.id))
+    .map(j => {
+      const daysInReady = daysSince(j.updated_at, now);
+      return {
+        id: j.id,
+        jobNumber: j.job_number,
+        title: j.title,
+        partNumber: j.part_number,
+        customer: j.customer,
+        installLocation: j.install_location,
+        // 'N/A' is a legacy placeholder some jobs carry, not a date.
+        scheduledInstallDate: j.scheduled_install_date && j.scheduled_install_date !== 'N/A'
+          ? j.scheduled_install_date.slice(0, 10) : null,
+        daysInReady,
+        stale: daysInReady !== null && daysInReady > 7,
+      };
+    });
 }
