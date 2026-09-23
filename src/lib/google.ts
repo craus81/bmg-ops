@@ -361,6 +361,31 @@ export async function syncCalendarEvent(params: {
 }
 
 /**
+ * Push a FleetSuite calendar_events row to the shared Google calendar and
+ * store the Google event id back on it, so later edits update instead of
+ * duplicating. Shared by the schedule page's save (/api/calendar/sync-event)
+ * and Siri's (/api/siri/calendar-event). Null when Google refused.
+ */
+export async function pushCalendarEventToGoogle(
+  supabase: SupabaseClient,
+  row: { id: string; title: string; description: string | null; event_date: string; google_event_id: string | null; source: string | null },
+): Promise<string | null> {
+  const googleId = await syncCalendarEvent({
+    eventId: row.google_event_id,
+    title: row.title,
+    date: row.event_date,
+    description: row.description || '',
+    // App-created events get grape (distinct from graphics 6 / upfit 9);
+    // events a human made on Google keep whatever color they chose.
+    colorId: row.source === 'google' ? null : '3',
+  });
+  if (googleId && googleId !== row.google_event_id) {
+    await supabase.from('calendar_events').update({ google_event_id: googleId }).eq('id', row.id);
+  }
+  return googleId;
+}
+
+/**
  * Incremental pull from the shared calendar. Pass the syncToken from the
  * previous run to get only what changed since (including deletions);
  * pass null for a bootstrap sweep of the last ~60 days onward. When

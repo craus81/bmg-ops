@@ -51,5 +51,12 @@
 	<string>FleetSuite needs camera access to scan VIN barcodes and take vehicle photos.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>FleetSuite needs photo library access to upload vehicle photos.</string>
+	<key>INAlternativeAppNames</key>
+	<array>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>FleetSuite</string>
+		</dict>
+	</array>
 </dict>
 </plist>

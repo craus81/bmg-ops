@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { syncCalendarEvent, deleteCalendarEvent } from '@/lib/google';
+import { pushCalendarEventToGoogle, deleteCalendarEvent } from '@/lib/google';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,18 +54,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, action: 'removed' });
     }
 
-    const googleId = await syncCalendarEvent({
-      eventId: row.google_event_id,
-      title: row.title,
-      date: row.event_date,
-      description: row.description || '',
-      // App-created events get grape (distinct from graphics 6 / upfit 9);
-      // events a human made on Google keep whatever color they chose.
-      colorId: row.source === 'google' ? null : '3',
-    });
-    if (googleId && googleId !== row.google_event_id) {
-      await supabase.from('calendar_events').update({ google_event_id: googleId }).eq('id', row.id);
-    }
+    const googleId = await pushCalendarEventToGoogle(supabase, row);
     return NextResponse.json({ success: !!googleId, googleEventId: googleId });
   } catch (err: any) {
     console.error('calendar/sync-event error:', err);

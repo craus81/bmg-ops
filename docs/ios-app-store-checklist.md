@@ -1,9 +1,9 @@
 # Shipping the FleetSuite iOS wrapper
 
-What still has to happen on a Mac before `ios/` is installable on a device,
-and before the Siri App Intent for calendar entries can be built at all.
-Everything here needs Xcode and an Apple Developer account — none of it can
-be done from a build container or from this repo alone.
+What has to happen on a Mac to build `ios/`, install it on a device and ship
+it through TestFlight, plus how the Siri command (step 7) fits together. The
+Mac steps need Xcode and an Apple Developer account — none of them can be
+done from a build container or from this repo alone.
 
 Read it top to bottom the first time: several steps set values the later
 ones depend on.
@@ -16,9 +16,9 @@ Facts to check against, not to re-decide:
 | --- | --- | --- |
 | Bundle ID | `com.bmgfleet.fleetsuite` | `capacitor.config.ts`, `ios/App/App.xcodeproj/project.pbxproj` (both build configs), `ios/App/App/Info.plist` |
 | App name | BMG FleetSuite | `capacitor.config.ts`, `Info.plist` (`CFBundleDisplayName`) |
-| Deployment target | iOS 15.0 | `project.pbxproj` |
+| Deployment target | iOS 16.0 (App Intents, which Siri needs, start there) | `project.pbxproj` |
 | Signing style | Automatic, team `RU67C5K44J` (Craig's individual account) | `project.pbxproj` (`CODE_SIGN_STYLE = Automatic`, `DEVELOPMENT_TEAM` in both App configs) |
-| Version / build | 1.0 / 1 | `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION` |
+| Version / build | 1.0 / 2 | `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION` |
 | Push environment | `development` | `ios/App/App/App.entitlements` (`aps-environment`) |
 | Associated domain | `applinks:go.bmgfleet.com` | `App.entitlements` |
 | Privacy strings | Camera + photo library present | `Info.plist` (`NSCameraUsageDescription`, `NSPhotoLibraryUsageDescription`) |
@@ -132,24 +132,58 @@ path. The steps below are what that file has to keep satisfying.
    `bmg-ops.vercel.app` — serve the AASA file from that host, not from the
    old one.
 
-## 7. Then, and only then: the Siri App Intent
+## 7. Siri: add a calendar entry without opening the app
 
-The calendar-by-voice feature is blocked on everything above — an App Intent
-ships inside a signed, installed app; there is nothing to attach it to until
-the wrapper builds and installs.
+"Hey Siri, add a calendar entry in BMG FleetSuite" ("…in FleetSuite" works
+too, via `INAlternativeAppNames` in `Info.plist`). Siri asks for the title
+and the day and time, then saves the entry to the FleetSuite schedule as a
+Meeting owned by whoever asked, and pushes it to the shared Google calendar
+exactly as the Schedule page's New Event does. The app never opens. The
+phone must be unlocked (`authenticationPolicy = .requiresAuthentication`),
+because the entry lands on the company schedule.
 
-When the above is done, the shape of the work is:
+**How Siri signs in.** The intent runs without the web view, so it can't use
+the Supabase session. Instead each iPhone gets its own Siri key:
 
-- a Swift `AppIntent` in the App target (iOS 16+; the deployment target is
-  15.0, so either raise it or mark the intent `@available(iOS 16, *)`),
-- an `AppShortcutsProvider` so the phrase is offered without the user
-  setting anything up,
-- parameters for the calendar entry (title, date/time, and whichever of
-  vehicle / job / customer the entry needs),
-- a Capacitor plugin bridge, or a direct call from the intent to the
-  FleetSuite calendar API, plus a way for the intent to authenticate as the
-  signed-in user,
-- the intent's own privacy string if it reads anything from EventKit.
+1. After sign-in, `NativeSiriKey` (`src/components/NativeSiriKey.tsx`, via
+   `src/lib/siri-bridge.ts`) asks `POST /api/siri/key` for a key and hands it
+   to the app's own `SiriKey` plugin (`ios/App/App/SiriKeyPlugin.swift`,
+   registered in `MainViewController.swift`, which `Main.storyboard` uses in
+   place of `CAPBridgeViewController`). The plugin keeps it in the Keychain
+   (`SiriKeyStore.swift`: this device only, so it never syncs to iCloud
+   Keychain or moves to a new phone with a backup).
+2. The server stores only the key's SHA-256 (`siri_keys`, migration 322).
+3. Signing out or switching user clears the key from the phone and revokes
+   it (`DELETE /api/siri/key`).
+4. `POST /api/siri/calendar-event` checks the key on every call
+   (`authenticateSiriKey` in `src/lib/siri-keys.ts`): the owner must still be
+   approved, not deactivated, and hold the Schedule feature. A 401 makes the
+   phone drop its key; the next time the app opens it gets a new one.
 
-Write it against the existing calendar-pull cron and calendar API rather
-than inventing a second write path.
+Anyone with the Schedule feature gets it once they have opened build 2 or
+later while signed in. Older builds have no `SiriKey` plugin, so the web
+app's calls fail quietly and nothing changes.
+
+**Changing it later.**
+
+- What the server does with an entry (event type, fields, Google push,
+  validation): `src/app/api/siri/calendar-event/route.ts`. It ships with the
+  website; no new app build.
+- What Siri asks for, the phrases, or what it says back:
+  `ios/App/App/AddCalendarEntryIntent.swift`. Needs a new build through
+  step 5.
+- Another voice command, for example adding a note: a second `AppIntent`
+  next to this one, added to the same `FleetSuiteShortcuts` provider (an app
+  can only have one), calling its own `/api/siri/...` route that starts
+  with `authenticateSiriKey`.
+
+App Intents need iOS 16, hence the deployment target. The spoken phrases
+(`FleetSuiteShortcuts`) need iOS 17; on iOS 16 the action is still in the
+Shortcuts app, just not offered as a Siri phrase.
+
+**If Siri doesn't recognize the phrase:** open the app once after installing
+(that is also what gives the phone its key), then check that the Shortcuts
+app lists *Add Calendar Entry* under BMG FleetSuite. If it's listed there and
+runs from Shortcuts but not by voice, add the Siri capability (Signing &
+Capabilities → + Capability → Siri) and rebuild. Apple says App Shortcuts
+don't need it, but it's the next thing to rule out.
