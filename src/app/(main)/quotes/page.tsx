@@ -143,7 +143,11 @@ export default function QuotesPage() {
     setLoading(true);
     let error: string | null = null;
     try {
-      const res = await fetch('/api/quotes?status=all');
+      // Stamped and no-store: a marked quote kept coming back as Waiting
+      // because the list answer was an old copy. A fresh URL is one no cache
+      // can have seen, whatever sits between here and the server (the route
+      // reads only `status`, so `t` is inert).
+      const res = await fetch(`/api/quotes?status=all&t=${Date.now()}`, { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       if (seq !== loadSeq.current) return;
       if (res.ok) setItems(data.items || []);
