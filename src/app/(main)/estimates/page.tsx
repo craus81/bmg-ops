@@ -37,6 +37,8 @@ import NumberInput from '@/components/NumberInput';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
 import { estimateHeadlineNumber, estimateAltNumber, estimateNumberMatches } from '@/lib/estimate-number';
 import { useFormTelemetry } from '@/lib/use-form-telemetry';
+import { uploadRecordFile } from '@/lib/record-file-upload';
+import { bounceNextStep } from '@/lib/email-bounce';
 
 interface Part {
   id: string;
@@ -2115,27 +2117,14 @@ export default function EstimatesPage() {
     }
   };
 
-  // Browser → R2 via presigned PUT (the file never passes through the API
-  // route, which caps at ~4.5MB on Vercel), then a record call that saves
-  // the metadata row. The returned id is what checks the file on for the
-  // send in progress.
+  // Presign → direct PUT to R2 → record, with the same-origin fallback and
+  // step-specific errors in uploadRecordFile. The returned id is what
+  // checks the file on for the send in progress.
   const uploadEstimateFile = async (estimateId: string, file: File): Promise<{ id?: string; error?: string }> => {
-    const contentType = file.type || 'application/octet-stream';
-    const post = (payload: any) => fetch(`/api/estimates/${estimateId}/files`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-    }).then(r => r.json());
-    try {
-      const presign = await post({ action: 'presign', fileName: file.name, contentType, size: file.size });
-      if (!presign.success) return { error: presign.error || 'Could not start the upload' };
-      const put = await fetch(presign.uploadUrl, { method: 'PUT', headers: { 'Content-Type': contentType }, body: file });
-      if (!put.ok) return { error: `Upload failed (HTTP ${put.status})` };
-      const rec = await post({ action: 'record', path: presign.path, fileName: file.name, contentType, size: file.size });
-      if (!rec.success || !rec.file) return { error: rec.error || 'Failed to save the file record' };
-      setEstimateFiles(prev => [fileToAttachment(rec.file), ...prev]);
-      return { id: rec.file.id };
-    } catch {
-      return { error: 'Network error — please try again.' };
-    }
+    const res = await uploadRecordFile(`/api/estimates/${estimateId}/files`, {}, file);
+    if (res.error || !res.file) return { error: res.error || 'Upload failed' };
+    setEstimateFiles(prev => [fileToAttachment(res.file), ...prev]);
+    return { id: res.file.id };
   };
 
   const removeEstimateFile = async (estimateId: string, fileId: string): Promise<{ ok: boolean }> => {
@@ -3395,7 +3384,7 @@ export default function EstimatesPage() {
                         );
                       })()}
                       {['bounced', 'failed', 'complained'].includes(est.approval_email_status || '') && (
-                        <div title={`The approval email did not reach the customer${est.approval_email_detail ? ` — ${est.approval_email_detail}` : ''}. Open the estimate to resend.`} style={{
+                        <div title={`The approval email did not reach the customer${est.approval_email_detail ? ` — ${est.approval_email_detail}` : ''}. ${bounceNextStep(est.approval_email_status || '', est.approval_email_detail)}`} style={{
                           padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                           background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)',
                           color: '#ef4444', whiteSpace: 'nowrap',
@@ -5108,7 +5097,7 @@ export default function EstimatesPage() {
           const meta = bad
             ? {
                 color: '#ef4444', bg: 'rgba(239,68,68,0.08)', border: 'rgba(239,68,68,0.25)',
-                text: `⚠ Approval email ${st === 'complained' ? 'marked as spam' : st === 'failed' ? 'failed' : 'bounced'}${to ? ` (${to})` : ''} — the customer did not get it.${est.approval_email_detail ? ` ${est.approval_email_detail}.` : ''} Fix the address and resend.`,
+                text: `⚠ Approval email ${st === 'complained' ? 'marked as spam' : st === 'failed' ? 'failed' : 'bounced'}${to ? ` (${to})` : ''} — the customer did not get it.${est.approval_email_detail ? ` ${est.approval_email_detail}.` : ''} ${bounceNextStep(st, est.approval_email_detail)}`,
               }
             : st === 'delivered'
               ? { color: '#22c55e', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.2)', text: `✓ Approval email delivered${to ? ` to ${to}` : ''}` }

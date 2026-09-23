@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
-import { r2PresignPut, r2PresignGet, r2Delete, r2PublicUrl } from '@/lib/r2';
+import { ensureR2Cors, r2Upload, r2PresignPut, r2PresignGet, r2Delete, r2PublicUrl } from '@/lib/r2';
+import { readRecordFileBody, ROUTE_UPLOAD_MAX_BYTES } from '@/lib/record-file-route';
 import { MAX_ATTACHMENT_BYTES, attachmentLimitMb } from '@/lib/email-attachments';
 import { ESTIMATE_FILE_PREFIX } from '@/lib/estimate-attachments';
 
@@ -61,12 +62,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const estimateId = params.id;
   if (!UUID_RE.test(estimateId)) return NextResponse.json({ error: 'Invalid estimate id' }, { status: 400 });
 
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
-  }
+  const parsed = await readRecordFileBody(req);
+  if (!parsed) return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+  const { body, file } = parsed;
 
   const fileName = safeFileName(String(body?.fileName || ''));
   const contentType = String(body?.contentType || 'application/octet-stream').slice(0, 100);
@@ -83,8 +81,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   if (body.action === 'presign') {
     const path = `${estimateId}/${Date.now()}-${fileName}`;
+    // The PUT that follows is a cross-origin browser request; heal the
+    // bucket's CORS rules first, as /api/storage/presign does.
+    await ensureR2Cors();
     const { url } = await r2PresignPut(ESTIMATE_FILE_PREFIX, path, contentType);
     return NextResponse.json({ success: true, uploadUrl: url, path });
+  }
+
+  // Fallback when the browser's direct PUT to R2 fails (see
+  // src/lib/record-file-upload.ts): the file comes through here instead.
+  if (body.action === 'upload') {
+    if (!file) return NextResponse.json({ error: 'No file received' }, { status: 400 });
+    if (file.size > ROUTE_UPLOAD_MAX_BYTES) {
+      return NextResponse.json({ error: 'File is too large to upload through FleetSuite' }, { status: 413 });
+    }
+    const path = `${estimateId}/${Date.now()}-${fileName}`;
+    const up = await r2Upload(ESTIMATE_FILE_PREFIX, path, file, contentType);
+    if (!up.success) return NextResponse.json({ error: `Storage upload failed: ${up.error || 'unknown error'}` }, { status: 502 });
+    return NextResponse.json({ success: true, path });
   }
 
   if (body.action === 'record') {
