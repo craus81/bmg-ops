@@ -10,6 +10,7 @@ import { syncInventoryQuantities } from '@/lib/inventory-sync';
 import { syncVendorBillPayments, syncPayoutBillPayments } from '@/lib/vendor-bill-sync';
 import { syncArInvoicePayments } from '@/lib/ar-payment-sync';
 import { closeConvertedEstimates } from '@/lib/estimate-close-sync';
+import { syncVehicleInvoices } from '@/lib/so-invoices';
 import { recordHeartbeat } from '@/lib/system-health';
 import { syncVendors } from '@/lib/vendor-master';
 
@@ -476,6 +477,21 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     console.error('[cron] Payout bill payment sweep error:', err.message);
     results.payoutBills = { error: err.message };
+  }
+
+  // ═══════════ 3d2. VEHICLE INVOICED SWEEP ═══════════
+  // A vehicle's SO billed in NetSuite (the Bill button) left the vehicle
+  // looking un-invoiced — only FleetSuite's own completion flow stamped it.
+  // Stamp those here so the board's Invoiced badge, the unpaid tile and the
+  // AR payment sweep (next step, same run) see them. Batched link-table
+  // reads, one at a time, capped per run.
+  try {
+    results.vehicleInvoices = await syncVehicleInvoices(supabase, {
+      deadline: Math.min(startedAt + 100_000, Date.now() + 15_000),
+    });
+  } catch (err: any) {
+    console.error('[cron] Vehicle invoiced sweep error:', err.message);
+    results.vehicleInvoices = { error: err.message };
   }
 
   // ═══════════ 3e. AR (CUSTOMER) PAYMENT SWEEP ═══════════
