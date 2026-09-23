@@ -51,6 +51,7 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import { samePerson } from '@/lib/primary-contact';
 import NumberInput from '@/components/NumberInput';
 import BriefMeSheet from '@/components/BriefMeSheet';
+import { uploadRecordFile } from '@/lib/record-file-upload';
 
 interface Prospect {
   id: string;
@@ -1273,16 +1274,8 @@ export default function CustomerRecordPage() {
     if (!prospect || uploading) return;
     setUploading(true);
     try {
-      const type = f.type || 'application/octet-stream';
-      const post = (payload: any) => fetch('/api/prospects/files', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-      }).then(r => r.json());
-      const presign = await post({ action: 'presign', prospectId: prospect.id, fileName: f.name, contentType: type, size: f.size });
-      if (!presign.success) throw new Error(presign.error || 'Could not start the upload');
-      const put = await fetch(presign.uploadUrl, { method: 'PUT', headers: { 'Content-Type': type }, body: f });
-      if (!put.ok) throw new Error(`Upload failed (HTTP ${put.status})`);
-      const rec = await post({ action: 'record', prospectId: prospect.id, path: presign.path, fileName: f.name, contentType: type, size: f.size });
-      if (!rec.success) throw new Error(rec.error || 'Failed to save the file record');
+      const rec = await uploadRecordFile('/api/prospects/files', { prospectId: prospect.id }, f);
+      if (rec.error || !rec.file) throw new Error(rec.error || 'Upload failed');
       setFiles(prev => [rec.file, ...(prev || [])]);
     } catch (err: any) {
       await dialog.alert(`Could not upload ${f.name}: ${err?.message || 'unknown error'}`);

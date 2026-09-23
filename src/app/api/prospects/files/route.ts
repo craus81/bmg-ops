@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
-import { r2PresignPut, r2PresignGet, r2Delete, r2PublicUrl } from '@/lib/r2';
+import { ensureR2Cors, r2Upload, r2PresignPut, r2PresignGet, r2Delete, r2PublicUrl } from '@/lib/r2';
+import { readRecordFileBody, ROUTE_UPLOAD_MAX_BYTES } from '@/lib/record-file-route';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,12 +49,9 @@ export async function POST(req: NextRequest) {
   const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
-  }
+  const parsed = await readRecordFileBody(req);
+  if (!parsed) return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+  const { body, file } = parsed;
 
   const prospectId = String(body?.prospectId || '');
   if (!UUID_RE.test(prospectId)) return NextResponse.json({ error: 'prospectId required' }, { status: 400 });
@@ -68,8 +66,24 @@ export async function POST(req: NextRequest) {
 
   if (body.action === 'presign') {
     const path = `${prospectId}/${Date.now()}-${fileName}`;
+    // The PUT that follows is a cross-origin browser request; heal the
+    // bucket's CORS rules first, as /api/storage/presign does.
+    await ensureR2Cors();
     const { url } = await r2PresignPut('prospect-files', path, contentType);
     return NextResponse.json({ success: true, uploadUrl: url, path });
+  }
+
+  // Fallback when the browser's direct PUT to R2 fails (see
+  // src/lib/record-file-upload.ts): the file comes through here instead.
+  if (body.action === 'upload') {
+    if (!file) return NextResponse.json({ error: 'No file received' }, { status: 400 });
+    if (file.size > ROUTE_UPLOAD_MAX_BYTES) {
+      return NextResponse.json({ error: 'File is too large to upload through FleetSuite' }, { status: 413 });
+    }
+    const path = `${prospectId}/${Date.now()}-${fileName}`;
+    const up = await r2Upload('prospect-files', path, file, contentType);
+    if (!up.success) return NextResponse.json({ error: `Storage upload failed: ${up.error || 'unknown error'}` }, { status: 502 });
+    return NextResponse.json({ success: true, path });
   }
 
   if (body.action === 'record') {

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useDialog } from '@/components/DialogProvider';
+import { uploadRecordFile } from '@/lib/record-file-upload';
 
 interface Defaults {
   delivery_instructions: string | null;
@@ -75,16 +76,8 @@ export default function CustomerDefaultsEditor({ initial, customerId, customerNa
     if (!customerId || uploading) return;
     setUploading(true);
     try {
-      const type = f.type || 'application/octet-stream';
-      const post = (payload: any) => fetch('/api/customers/files', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-      }).then(r => r.json());
-      const presign = await post({ action: 'presign', customerId, fileName: f.name, contentType: type, size: f.size });
-      if (!presign.success) throw new Error(presign.error || 'Could not start the upload');
-      const put = await fetch(presign.uploadUrl, { method: 'PUT', headers: { 'Content-Type': type }, body: f });
-      if (!put.ok) throw new Error(`Upload failed (HTTP ${put.status})`);
-      const rec = await post({ action: 'record', customerId, path: presign.path, fileName: f.name, contentType: type, size: f.size, category: 'tax_exempt_cert' });
-      if (!rec.success) throw new Error(rec.error || 'Failed to save the file record');
+      const rec = await uploadRecordFile('/api/customers/files', { customerId }, f, { category: 'tax_exempt_cert' });
+      if (rec.error || !rec.file) throw new Error(rec.error || 'Upload failed');
       setCerts(prev => [rec.file, ...(prev || [])]);
       if (!taxExempt) setTaxExempt(true); // uploading a cert implies exemption
     } catch (err: any) {
