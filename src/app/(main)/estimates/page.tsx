@@ -38,6 +38,7 @@ import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNe
 import { estimateHeadlineNumber, estimateAltNumber, estimateNumberMatches } from '@/lib/estimate-number';
 import { useFormTelemetry } from '@/lib/use-form-telemetry';
 import { uploadRecordFile } from '@/lib/record-file-upload';
+import { bounceNextStep } from '@/lib/email-bounce';
 
 interface Part {
   id: string;
@@ -3383,7 +3384,7 @@ export default function EstimatesPage() {
                         );
                       })()}
                       {['bounced', 'failed', 'complained'].includes(est.approval_email_status || '') && (
-                        <div title={`The approval email did not reach the customer${est.approval_email_detail ? ` — ${est.approval_email_detail}` : ''}. Open the estimate to resend.`} style={{
+                        <div title={`The approval email did not reach the customer${est.approval_email_detail ? ` — ${est.approval_email_detail}` : ''}. ${bounceNextStep(est.approval_email_status || '', est.approval_email_detail)}`} style={{
                           padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                           background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)',
                           color: '#ef4444', whiteSpace: 'nowrap',
@@ -5096,7 +5097,7 @@ export default function EstimatesPage() {
           const meta = bad
             ? {
                 color: '#ef4444', bg: 'rgba(239,68,68,0.08)', border: 'rgba(239,68,68,0.25)',
-                text: `⚠ Approval email ${st === 'complained' ? 'marked as spam' : st === 'failed' ? 'failed' : 'bounced'}${to ? ` (${to})` : ''} — the customer did not get it.${est.approval_email_detail ? ` ${est.approval_email_detail}.` : ''} Fix the address and resend.`,
+                text: `⚠ Approval email ${st === 'complained' ? 'marked as spam' : st === 'failed' ? 'failed' : 'bounced'}${to ? ` (${to})` : ''} — the customer did not get it.${est.approval_email_detail ? ` ${est.approval_email_detail}.` : ''} ${bounceNextStep(st, est.approval_email_detail)}`,
               }
             : st === 'delivered'
               ? { color: '#22c55e', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.2)', text: `✓ Approval email delivered${to ? ` to ${to}` : ''}` }
