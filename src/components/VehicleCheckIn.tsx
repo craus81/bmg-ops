@@ -49,6 +49,17 @@ function StepIndicator({ current }: { current: number }) {
 // Extracted from the old /fleet page so it can live at the top of the
 // In-Shop page (and anywhere else). onCheckedIn fires after a successful
 // save so the host page can refresh its vehicle list.
+// Dropbox terms for a proof search, most specific first: the first two
+// words with the vehicle model, the term itself, then the first two words.
+// "St Charles Plumbing and Electric" + Canyon → "St Charles Canyon", the
+// full name, "St Charles".
+function dropboxTermsFor(term: string, model?: string | null): string[] {
+  const words = term.replace(/[.,&]/g, ' ').split(/\s+/).filter(Boolean);
+  if (words.length <= 2) return model ? [`${words.join(' ')} ${model}`, term] : [term];
+  const short = words.slice(0, 2).join(' ');
+  return model ? [`${short} ${model}`, term, short] : [term, short];
+}
+
 export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => void }) {
   const { user, canSeeMoney } = useAuth();
   const router = useRouter();
@@ -560,7 +571,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
     if (first?.customer_name) {
       setProofSearch(first.customer_name);
       loadProofs(first.customer_name);
-      searchDropbox(first.customer_name);
+      searchDropbox(dropboxTermsFor(first.customer_name, vehicleData?.vehicle?.model));
     } else {
       setProofSearch('');
       loadProofs('');
@@ -578,21 +589,43 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   };
 
   // ─── Dropbox Proof Search ─────────────────────────────────
-  const searchDropbox = async (term: string) => {
-    if (!term || term.length < 2) return;
+  // Runs each term as its own Dropbox search and merges the hits, earlier
+  // terms first. Proof files are often named for a sister business or end
+  // user ("St. Charles Kitchens and Bath Canyon" for St Charles Plumbing and
+  // Electric), so the full customer name alone misses them.
+  const searchDropbox = async (terms: string[]) => {
+    const unique = Array.from(new Set(terms.map(t => t.trim()).filter(t => t.length >= 2)));
+    if (unique.length === 0) return;
     setDbxSearching(true);
     setDbxResults([]);
     try {
-      const res = await fetch(`/api/dropbox/search?q=${encodeURIComponent(term)}`);
-      const data = await res.json();
-      if (data.connected === false) {
+      const responses = await Promise.all(unique.map(async (term) => {
+        const res = await fetch(`/api/dropbox/search?q=${encodeURIComponent(term)}`);
+        return res.json().catch(() => ({}));
+      }));
+      if (responses.some(d => d.connected === false)) {
         setDbxConnected(false);
       } else {
         setDbxConnected(true);
-        setDbxResults(data.results || []);
+        const seen = new Set<string>();
+        const merged: typeof dbxResults = [];
+        for (const d of responses) {
+          for (const file of (d.results || []) as typeof dbxResults) {
+            if (seen.has(file.id)) continue;
+            seen.add(file.id);
+            merged.push(file);
+          }
+        }
+        setDbxResults(merged);
       }
     } catch { /* ignore */ }
     setDbxSearching(false);
+  };
+
+  // One search box covers both the app's proofs and Dropbox.
+  const runProofSearch = (term: string) => {
+    loadProofs(term);
+    if (term) searchDropbox(dropboxTermsFor(term, vehicleData?.vehicle?.model));
   };
 
   // ─── Step 3: Proof Selection ───────────────────────────────
@@ -1873,9 +1906,9 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
             type="text"
             value={proofSearch}
             onChange={(e) => setProofSearch(e.target.value)}
-            placeholder="Search by end user name (e.g. Jerry Kelly)"
+            placeholder="Search app + Dropbox (e.g. Jerry Kelly)"
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && proofSearch.trim()) loadProofs(proofSearch.trim());
+              if (e.key === 'Enter' && proofSearch.trim()) runProofSearch(proofSearch.trim());
             }}
             style={{
               flex: 1, padding: '10px 12px', borderRadius: '10px',
@@ -1884,7 +1917,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
             }}
           />
           <button
-            onClick={() => loadProofs(proofSearch.trim())}
+            onClick={() => runProofSearch(proofSearch.trim())}
             style={{
               padding: '10px 14px', borderRadius: '10px', fontWeight: 700, fontSize: '13px',
               background: theme.navy, color: '#fff', border: 'none', whiteSpace: 'nowrap',
@@ -1949,7 +1982,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
         )}
         {selectedOrder?.customer_name && proofSearch && proofSearch !== selectedOrder.customer_name && (
           <button
-            onClick={() => { setProofSearch(''); loadProofs(selectedOrder.customer_name); }}
+            onClick={() => { setProofSearch(selectedOrder.customer_name); runProofSearch(selectedOrder.customer_name); }}
             style={{
               marginBottom: '10px', padding: '6px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 600,
               background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textMuted,
@@ -1995,7 +2028,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
             border: `1px solid ${theme.border}`, borderRadius: '10px',
             color: theme.textMuted, fontSize: '13px', marginBottom: '12px',
           }}>
-            No proofs found in app. Try searching Dropbox below.
+            No proofs found in the app. Dropbox matches are below.
           </div>
         )}
 
@@ -2058,26 +2091,8 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
               ))}
             </div>
           ) : (
-            <div style={{ display: 'flex', gap: '6px' }}>
-              <input
-                value={proofSearch}
-                onChange={(e) => setProofSearch(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && proofSearch.trim()) searchDropbox(proofSearch.trim()); }}
-                placeholder="Search Dropbox by customer..."
-                style={{
-                  flex: 1, padding: '8px 10px', borderRadius: '8px', fontSize: '12px',
-                  border: `1px solid ${theme.border}`, background: theme.bg, color: theme.textPrimary,
-                }}
-              />
-              <button
-                onClick={() => searchDropbox(proofSearch.trim())}
-                disabled={!proofSearch.trim()}
-                style={{
-                  padding: '8px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-                  background: '#0061fe', color: '#fff', border: 'none',
-                  opacity: !proofSearch.trim() ? 0.5 : 1, cursor: 'pointer',
-                }}
-              >Search</button>
+            <div style={{ fontSize: '12px', color: theme.textMuted, textAlign: 'center', padding: '8px 0' }}>
+              {dbxConnected === true ? 'No Dropbox matches. Try another name in the search box above.' : 'Search above to look in Dropbox.'}
             </div>
           )}
         </div>
