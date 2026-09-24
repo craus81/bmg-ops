@@ -37,12 +37,14 @@ interface AuthContextType {
    *  look identical to a revoked account. */
   profileError: boolean;
   retryProfile: () => Promise<void>;
+  /** Save this user's bottom-bar tabs (null = back to the role default). */
+  saveNavTabs: (ids: string[] | null) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
   user: null, profile: null, isAdmin: false, isProduction: false, isGraphicsProduction: false, isSales: false, isCustomer: false, isInstaller: false, isFieldTech: false, isShopTech: false, canSeeMoney: false, hasRole: () => false, hasFeature: () => false, loading: true, signOut: async () => {},
   viewAsRole: null, setViewAsRole: () => {}, isActualAdmin: false,
-  profileError: false, retryProfile: async () => {},
+  profileError: false, retryProfile: async () => {}, saveNavTabs: async () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -114,6 +116,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     retryInFlight.current = true;
     try { await loadProfileAndOverrides(user.id); } catch { /* profileError is already set */ }
     finally { retryInFlight.current = false; }
+  };
+
+  // Own-row write through profiles_update_own; nav_tabs is not a guarded
+  // privilege column (migration 233), so no server route is needed.
+  const saveNavTabs = async (ids: string[] | null) => {
+    if (!user) return;
+    const value = ids && ids.length > 0 ? ids : null;
+    const { error } = await supabase.from('profiles').update({ nav_tabs: value }).eq('id', user.id);
+    if (error) throw new Error(error.message);
+    setProfile(p => (p ? { ...p, nav_tabs: value } : p));
   };
 
   // Self-healing. A shop tablet whose wifi drops usually gets it back in
@@ -253,7 +265,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const authResolving = loading || profileError;
 
   return (
-    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isGraphicsProduction, isSales, isCustomer, isInstaller, isFieldTech, isShopTech, canSeeMoney, hasRole, hasFeature, loading: authResolving, signOut, viewAsRole, setViewAsRole, isActualAdmin, profileError, retryProfile }}>
+    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isGraphicsProduction, isSales, isCustomer, isInstaller, isFieldTech, isShopTech, canSeeMoney, hasRole, hasFeature, loading: authResolving, signOut, viewAsRole, setViewAsRole, isActualAdmin, profileError, retryProfile, saveNavTabs }}>
       {profileError && (
         <div role="alert" style={{
           position: 'sticky', top: 0, zIndex: 60, padding: '9px 14px',
