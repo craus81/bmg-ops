@@ -19,6 +19,10 @@
  */
 
 export const deepLinks = {
+  /** One @mention: the full note, who wrote it, and an Open button when the
+   *  recipient can open the note's record. Every mention notification lands
+   *  here, so nobody is left with only the excerpt. */
+  mention: (mentionId: string) => `/mentions/${mentionId}`,
   /** Dedicated PO record page. */
   po: (poId: string) => `/admin/pos/${poId}`,
   /** Dedicated graphics job record page. */
