@@ -14,6 +14,7 @@ import VinScanner from '@/components/VinScanner';
 import PhotoSession from '@/components/PhotoSession';
 import { theme } from '@/lib/theme';
 import { storage } from '@/lib/storage';
+import { toJpegIfHeic } from '@/lib/heic';
 import { firstGraphicsMatch } from '@/lib/graphics-detection';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import type { NetsuiteSalesOrder, GraphicsProof, FleetCheckin, VehicleTrackingStatus } from '@/lib/types';
@@ -844,7 +845,9 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
     const uploadedPaths: { path: string; kind: 'before' | 'damage' }[] = [];
     let uploadsFailed = 0;
     for (let i = 0; i < allStaged.length; i++) {
-      const { file, kind } = allStaged[i];
+      const { kind } = allStaged[i];
+      // iPhone HEIC → JPEG so the photo shows in every browser, not just Safari.
+      const file = await toJpegIfHeic(allStaged[i].file);
       const rawExt = file.name.split('.').pop()?.toLowerCase() || 'jpg';
       const ext = /^[a-z0-9]{1,8}$/.test(rawExt) ? rawExt : 'jpg';
       const path = `${checkinId}/checkin-${kind === 'damage' ? 'damage-' : ''}${Date.now()}-${i}.${ext}`;

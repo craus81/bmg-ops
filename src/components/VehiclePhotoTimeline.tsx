@@ -1,13 +1,14 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 import { createClient } from '@/lib/supabase-browser';
+import { isHeicName, heicBlobToJpeg } from '@/lib/heic';
 import ProofThumbnail from '@/components/ProofThumbnail';
 
 // Files a browser <img> can actually render. Design files are often .ai /
 // .psd / .eps — those get a labeled file tile instead of a broken image.
-const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'avif', 'bmp', 'heic']);
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'avif', 'bmp', 'heic', 'heif']);
 const fileExt = (item: { storagePath: string; fileName: string | null }) =>
   ((item.fileName || item.storagePath).split('.').pop() || '').toLowerCase();
 const isRenderableImage = (item: { storagePath: string; fileName: string | null }) =>
@@ -70,11 +71,17 @@ const ALL_CATEGORIES: PhotoCategory[] = ['before', 'during', 'completion', 'dama
 export default function VehiclePhotoTimeline({ vin, variant = 'internal', refreshKey, visit }: Props) {
   const supabase = createClient();
   const [items, setItems] = useState<TimelineItem[]>([]);
-  // Per-tile load fallback: R2 first (where uploads live), then legacy
-  // Supabase storage (some photos were uploaded there by the pick-list
-  // page's old raw-storage path), then a labeled file tile instead of the
-  // browser's broken-image glyph.
-  const [srcState, setSrcState] = useState<Record<string, 'legacy' | 'failed'>>({});
+  // Per-tile load fallback: R2 first (where uploads live); for a HEIC the
+  // browser can't draw (anything but Safari), a JPEG decoded in the
+  // browser; then legacy Supabase storage (some photos were uploaded there
+  // by the pick-list page's old raw-storage path); then a labeled file tile
+  // instead of the browser's broken-image glyph.
+  const [srcState, setSrcState] = useState<Record<string, 'converting' | 'converted' | 'legacy' | 'failed'>>({});
+  const [convertedUrls, setConvertedUrls] = useState<Record<string, string>>({});
+  const objectUrls = useRef<string[]>([]);
+  // The tile and the lightbox can both fail in one tick; decode once.
+  const inFlight = useRef(new Set<string>());
+  useEffect(() => () => { objectUrls.current.forEach(u => URL.revokeObjectURL(u)); }, []);
   const failedIds = useMemo(() => new Set(Object.keys(srcState).filter(id => srcState[id] === 'failed')), [srcState]);
   const [loading, setLoading] = useState(true);
   const [selectedCats, setSelectedCats] = useState<Set<PhotoCategory>>(() => new Set(ALL_CATEGORIES));
@@ -110,15 +117,42 @@ export default function VehiclePhotoTimeline({ vin, variant = 'internal', refres
     storage.from(item.bucket).getPublicUrl(item.storagePath).data.publicUrl, []);
 
   const imgSrc = useCallback((item: TimelineItem) =>
-    srcState[item.id] === 'legacy'
-      ? supabase.storage.from(item.bucket).getPublicUrl(item.storagePath).data.publicUrl
-      : fullUrl(item),
+    srcState[item.id] === 'converted' && convertedUrls[item.id]
+      ? convertedUrls[item.id]
+      : srcState[item.id] === 'legacy'
+        ? supabase.storage.from(item.bucket).getPublicUrl(item.storagePath).data.publicUrl
+        : fullUrl(item),
   // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
-  [srcState, fullUrl]);
+  [srcState, convertedUrls, fullUrl]);
 
-  const onImgError = useCallback((id: string) => {
-    setSrcState(prev => ({ ...prev, [id]: prev[id] === 'legacy' ? 'failed' : 'legacy' }));
-  }, []);
+  const convertHeic = useCallback(async (item: TimelineItem) => {
+    try {
+      const res = await fetch(fullUrl(item));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // The <img> already proved this browser can't decode it natively.
+      const jpeg = await heicBlobToJpeg(await res.blob(), { tryNative: false });
+      const url = URL.createObjectURL(jpeg);
+      objectUrls.current.push(url);
+      setConvertedUrls(prev => ({ ...prev, [item.id]: url }));
+      setSrcState(prev => ({ ...prev, [item.id]: 'converted' }));
+    } catch (err) {
+      console.warn('[photo timeline] HEIC conversion failed:', item.storagePath, err);
+      setSrcState(prev => ({ ...prev, [item.id]: 'legacy' }));
+    }
+  }, [fullUrl]);
+
+  const onImgError = useCallback((item: TimelineItem) => {
+    const state = srcState[item.id];
+    if (state === 'converting' || state === 'failed') return;
+    if (!state && isHeicName(item.fileName || item.storagePath)) {
+      if (inFlight.current.has(item.id)) return;
+      inFlight.current.add(item.id);
+      setSrcState(prev => ({ ...prev, [item.id]: 'converting' }));
+      void convertHeic(item);
+      return;
+    }
+    setSrcState(prev => ({ ...prev, [item.id]: prev[item.id] === 'legacy' || prev[item.id] === 'converted' ? 'failed' : 'legacy' }));
+  }, [srcState, convertHeic]);
 
   const visibleItems = useMemo(
     () => items.filter(i => selectedCats.has(i.category)),
@@ -242,12 +276,20 @@ export default function VehiclePhotoTimeline({ vin, variant = 'internal', refres
                       }}>
                         <ProofThumbnail pdfUrl={fullUrl(item)} label="PDF" thumbSize={100} />
                       </div>
+                    ) : srcState[item.id] === 'converting' ? (
+                      <div style={{
+                        position: 'absolute', inset: 0,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: 'var(--subtle-bg, #f8fafc)', color: 'var(--text-muted)', fontSize: '11px',
+                      }}>
+                        Loading…
+                      </div>
                     ) : isRenderableImage(item) && !failedIds.has(item.id) ? (
                       <img
                         src={imgSrc(item)}
                         loading="lazy"
                         alt={item.caption || CATEGORY_LABELS[item.category]}
-                        onError={() => onImgError(item.id)}
+                        onError={() => onImgError(item)}
                         style={{
                           position: 'absolute', inset: 0,
                           width: '100%', height: '100%', objectFit: 'cover',
@@ -314,6 +356,7 @@ export default function VehiclePhotoTimeline({ vin, variant = 'internal', refres
                   <img
                     src={url}
                     alt={item.caption || 'photo'}
+                    onError={() => onImgError(item)}
                     onClick={e => e.stopPropagation()}
                     style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: '8px' }}
                   />
