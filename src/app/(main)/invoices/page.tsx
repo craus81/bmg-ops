@@ -32,6 +32,9 @@ import { customerRequiresPo, loadBillableCustomers } from '@/lib/billable-custom
 import { PartNumberLink } from '@/components/PartLabel';
 import { type EmailedInfo, fetchEmailedByNumber, isBadDelivery } from '@/lib/invoice-emails';
 import { InvoiceEmailedBadge } from '@/components/InvoiceEmailedBadge';
+import QuickBooksRecordModal from '@/components/QuickBooksRecordModal';
+import { deepLinks } from '@/lib/deep-links';
+import { HISTORY_MIN_QUERY, historySearchTerms, type HistoryRow } from '@/lib/ledger/history';
 
 type HubTab = 'graphics' | 'scans' | 'sent';
 
@@ -67,7 +70,7 @@ interface ScanGroup {
 }
 
 interface SentInvoice {
-  source: 'Graphics' | 'Scans' | 'NetSuite';
+  source: 'Graphics' | 'Scans' | 'NetSuite' | 'QuickBooks';
   customer: string;
   invoiceNumber: string;
   invoiceId?: string;
@@ -77,6 +80,9 @@ interface SentInvoice {
   /** NetSuite payment status; null when unknown (local-only rows). */
   status?: 'open' | 'paid' | null;
   amount?: number | null;
+  /** QuickBooks history only (src/lib/ledger/history.ts): read-only, so no
+   *  email or NetSuite PDF — it opens its own record window instead. */
+  qbo?: { id: string; pdfDocumentId: string | null; statusWord: string; matchedLine: string | null };
 }
 
 interface InvoiceVehiclesResult {
@@ -87,7 +93,7 @@ interface InvoiceVehiclesResult {
 export default function InvoicingHubPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, profile, isAdmin, isSales, hasRole, hasFeature } = useAuth();
+  const { user, profile, isAdmin, isSales, hasRole, hasFeature, canSeeMoney } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
 
@@ -117,6 +123,13 @@ export default function InvoicingHubPage() {
   const [nsError, setNsError] = useState<string | null>(null);
   // Invoice number currently being opened as a PDF (per-row spinner text).
   const [openingPdf, setOpeningPdf] = useState<string | null>(null);
+  // QuickBooks invoices from before the cutover that match the search. They
+  // predate every date window above, so a search is how they join the list;
+  // the server matches number, customer, PO, memo and every line's words.
+  const [qbMatches, setQbMatches] = useState<{ rows: HistoryRow[]; hasMore: boolean; q: string } | null>(null);
+  const [qbSearching, setQbSearching] = useState(false);
+  const [qbOpenId, setQbOpenId] = useState<string | null>(null);
+  const QB_SEARCH_LIMIT = 100;
 
   const viewInvoicePdf = async (inv: SentInvoice) => {
     if (!inv.invoiceId || openingPdf) return;
@@ -160,6 +173,31 @@ export default function InvoicingHubPage() {
     })();
     return () => { cancelled = true; };
   }, [tab, sentRange]);
+
+  useEffect(() => {
+    const q = historySearchTerms(search).join(' ');
+    if (tab !== 'sent' || !canSeeMoney || q.length < HISTORY_MIN_QUERY) {
+      setQbMatches(null);
+      setQbSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setQbSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ q, types: 'invoice,sales_receipt,credit_memo,refund_receipt', limit: String(QB_SEARCH_LIMIT) });
+        const res = await fetch(`/api/ledger/history?${params.toString()}`);
+        const body = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        setQbMatches(res.ok && body.success ? { rows: body.rows || [], hasMore: !!body.hasMore, q } : null);
+      } catch {
+        if (!cancelled) setQbMatches(null);
+      }
+      if (!cancelled) setQbSearching(false);
+    }, 350);
+    return () => { cancelled = true; clearTimeout(timer); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- QB_SEARCH_LIMIT is a constant
+  }, [tab, search, canSeeMoney]);
 
   // Deep link: /invoices?tab=sent|scans|graphics (used by the dashboard KPI).
   useEffect(() => {
@@ -465,6 +503,22 @@ export default function InvoicingHubPage() {
         || r.invoiceNumber.toLowerCase().includes(q)
         || (r.po || '').toLowerCase().includes(q);
     });
+    // QuickBooks matches skip the window and the text filter: they are all
+    // older than any window, and the server already matched them, often on
+    // a line's words that this client-side filter can't see.
+    for (const h of qbMatches?.rows || []) {
+      filtered.push({
+        source: 'QuickBooks',
+        customer: h.customerName,
+        invoiceNumber: h.number,
+        po: h.po || undefined,
+        date: h.date,
+        dueDate: h.dueDate,
+        status: null,
+        amount: h.total,
+        qbo: { id: h.id, pdfDocumentId: h.pdfDocumentId, statusWord: h.status, matchedLine: h.matchedLine },
+      });
+    }
     const byCustomer: Record<string, SentInvoice[]> = {};
     for (const r of filtered) {
       if (!byCustomer[r.customer]) byCustomer[r.customer] = [];
@@ -472,7 +526,7 @@ export default function InvoicingHubPage() {
     }
     return Object.entries(byCustomer).sort(([, a], [, b]) =>
       (b[0].date || '').localeCompare(a[0].date || ''));
-  }, [sentInvoices, search, sentRange]);
+  }, [sentInvoices, search, sentRange, qbMatches]);
 
   // ── Actions ──
   const toggleGroup = (key: string) => {
@@ -800,6 +854,7 @@ export default function InvoicingHubPage() {
               }}>{r.label}</button>
             ))}
             {nsLoading && <span style={{ fontSize: '10px', color: 'var(--text-muted)', alignSelf: 'center' }}>Loading NetSuite invoices…</span>}
+            {qbSearching && <span style={{ fontSize: '10px', color: 'var(--text-muted)', alignSelf: 'center' }}>Searching QuickBooks history…</span>}
             <span style={{ flex: 1 }} />
             <button
               onClick={backfillEmailHistory}
@@ -821,9 +876,16 @@ export default function InvoicingHubPage() {
             </div>
           )}
 
+          {qbMatches && qbMatches.rows.length > 0 && (
+            <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginBottom: '8px', lineHeight: 1.5 }}>
+              Also showing {qbMatches.rows.length}{qbMatches.hasMore ? '+' : ''} older QuickBooks invoice{qbMatches.rows.length === 1 ? '' : 's'} matching &ldquo;{qbMatches.q}&rdquo;, including matches on line descriptions.
+              {qbMatches.hasMore && ` Only the newest ${QB_SEARCH_LIMIT} are shown; add a word to narrow it.`}
+            </div>
+          )}
+
           {sentByCustomer.length === 0 ? (
             <div style={{ ...card, textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px', padding: '28px' }}>
-              No invoices in this date range.
+              {search.trim() ? 'No invoices match this search.' : 'No invoices in this date range.'}
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -831,24 +893,43 @@ export default function InvoicingHubPage() {
                 <div key={customer} style={card}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', marginBottom: '8px', flexWrap: 'wrap' }}>
                     <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{customer}</div>
-                    <button
-                      onClick={() => setEmailTarget({
-                        customerName: customer,
-                        invoices: invs.map(r => ({ invoiceId: r.invoiceId, invoiceNumber: r.invoiceNumber, po: r.po })),
-                      })}
-                      style={smallBtn('#60a5fa', 'rgba(59,130,246,0.08)', 'rgba(59,130,246,0.25)')}
-                    >Email {invs.length} Invoice{invs.length !== 1 ? 's' : ''}</button>
+                    {(() => {
+                      // QuickBooks history is read-only: never part of a send.
+                      const sendable = invs.filter(r => !r.qbo);
+                      if (sendable.length === 0) return null;
+                      return (
+                        <button
+                          onClick={() => setEmailTarget({
+                            customerName: customer,
+                            invoices: sendable.map(r => ({ invoiceId: r.invoiceId, invoiceNumber: r.invoiceNumber, po: r.po })),
+                          })}
+                          style={smallBtn('#60a5fa', 'rgba(59,130,246,0.08)', 'rgba(59,130,246,0.25)')}
+                        >Email {sendable.length} Invoice{sendable.length !== 1 ? 's' : ''}</button>
+                      );
+                    })()}
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                     {invs.map((r, i) => (
                       <div key={`${r.invoiceNumber}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', padding: '4px 0', borderTop: i > 0 ? '1px solid var(--border)' : 'none', flexWrap: 'wrap' }}>
                         <span style={{
                           fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '5px',
-                          background: r.source === 'Graphics' ? 'rgba(34,197,94,0.12)' : r.source === 'Scans' ? 'rgba(251,191,36,0.12)' : 'rgba(96,165,250,0.12)',
-                          color: r.source === 'Graphics' ? '#22c55e' : r.source === 'Scans' ? '#fbbf24' : '#60a5fa',
+                          background: r.source === 'Graphics' ? 'rgba(34,197,94,0.12)' : r.source === 'Scans' ? 'rgba(251,191,36,0.12)' : r.source === 'QuickBooks' ? 'rgba(44,160,28,0.14)' : 'rgba(96,165,250,0.12)',
+                          color: r.source === 'Graphics' ? '#22c55e' : r.source === 'Scans' ? '#fbbf24' : r.source === 'QuickBooks' ? '#2ca01c' : '#60a5fa',
                         }}>{r.source}</span>
-                        <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>#{r.invoiceNumber}</span>
-                        <InvoiceEmailedBadge info={emailedByNumber[r.invoiceNumber]} />
+                        {r.qbo ? (
+                          <button onClick={() => setQbOpenId(r.qbo!.id)} title="Open the QuickBooks record: its lines, PDF and attachments"
+                            style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 'inherit', fontWeight: 700, color: 'var(--text-primary)' }}>
+                            #{r.invoiceNumber}
+                          </button>
+                        ) : (
+                          <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>#{r.invoiceNumber}</span>
+                        )}
+                        {!r.qbo && <InvoiceEmailedBadge info={emailedByNumber[r.invoiceNumber]} />}
+                        {r.qbo && (
+                          <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px', background: r.qbo.statusWord === 'Paid' ? 'var(--success-bg)' : 'var(--subtle-bg)', color: r.qbo.statusWord === 'Paid' ? 'var(--success)' : 'var(--text-muted)' }}>
+                            {r.qbo.statusWord.toUpperCase()}
+                          </span>
+                        )}
                         {(() => {
                           if (r.status === 'paid') {
                             return <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px', background: 'var(--success-bg)', color: 'var(--success)' }}>PAID</span>;
@@ -870,7 +951,27 @@ export default function InvoicingHubPage() {
                             ${r.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                           </span>
                         )}
+                        {r.qbo?.matchedLine && (
+                          <span style={{ color: 'var(--text-muted)', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%', flexBasis: '100%', order: 10 }}>
+                            {r.qbo.matchedLine}
+                          </span>
+                        )}
                         <span style={{ flex: 1 }} />
+                        {r.qbo && (
+                          <>
+                            {r.qbo.pdfDocumentId && (
+                              <a
+                                href={deepLinks.pdfViewer(deepLinks.ledgerDocument(r.qbo.pdfDocumentId), { name: `${r.invoiceNumber}.pdf`, back: '/invoices?tab=sent', backLabel: 'Back to invoices' })}
+                                target="_blank" rel="noopener noreferrer"
+                                title="Open the PDF stored from QuickBooks"
+                                style={{ color: '#60a5fa', fontSize: '11px', fontWeight: 700, padding: '2px 4px', textDecoration: 'none' }}
+                              >PDF</a>
+                            )}
+                            <button onClick={() => setQbOpenId(r.qbo!.id)}
+                              style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer', padding: '2px 6px' }}
+                            >Open</button>
+                          </>
+                        )}
                         {r.invoiceId && (
                           <button
                             onClick={() => viewInvoicePdf(r)}
@@ -879,7 +980,7 @@ export default function InvoicingHubPage() {
                             style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: openingPdf ? 'wait' : 'pointer', padding: '2px 4px' }}
                           >{openingPdf === r.invoiceNumber ? 'Opening…' : 'PDF'}</button>
                         )}
-                        {(() => {
+                        {!r.qbo && (() => {
                           const bad = isBadDelivery(emailedByNumber[r.invoiceNumber]?.delivery_status);
                           return (
                             <button
@@ -943,6 +1044,15 @@ export default function InvoicingHubPage() {
               });
             }
           }}
+        />
+      )}
+
+      {qbOpenId && (
+        <QuickBooksRecordModal
+          recordId={qbOpenId}
+          onClose={() => setQbOpenId(null)}
+          backHref="/invoices?tab=sent"
+          backLabel="Back to invoices"
         />
       )}
 

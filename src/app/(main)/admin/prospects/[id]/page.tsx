@@ -51,6 +51,8 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import { samePerson } from '@/lib/primary-contact';
 import NumberInput from '@/components/NumberInput';
 import BriefMeSheet from '@/components/BriefMeSheet';
+import QuickBooksRecordModal from '@/components/QuickBooksRecordModal';
+import type { HistoryRow } from '@/lib/ledger/history';
 import { uploadRecordFile } from '@/lib/record-file-upload';
 
 interface Prospect {
@@ -211,6 +213,9 @@ interface Txn {
   /** Set only for the three types NetSuite will render a PDF for. */
   nsPdfType: CustDocument['type'] | null;
   origin: TxnOrigin | null;
+  /** Imported from QuickBooks (before the cutover): read-only, never in a
+   *  balance, opens its own record window (src/lib/ledger/history.ts). */
+  qbo: { id: string; pdfDocumentId: string | null } | null;
 }
 
 const TXN_FILTERS = [
@@ -251,7 +256,7 @@ const TXN_SORT_COLS = {
   due: (t: Txn) => t.dueDate,
   status: (t: Txn) => STATUS_RANK[t.statusNorm],
   amount: (t: Txn) => t.total,
-  source: (t: Txn) => (t.origin ? 0 : 1),
+  source: (t: Txn) => (t.origin ? 0 : t.qbo ? 2 : 1),
 };
 
 const OPP_STAGES: Record<string, string> = { lead: 'Lead', quoted: 'Quoted', negotiating: 'Negotiating', won: 'Won', lost: 'Lost' };
@@ -301,7 +306,7 @@ function Kpi({ label, value, sub }: { label: string; value: string; sub?: string
 export default function CustomerRecordPage() {
   const router = useRouter();
   const params = useParams();
-  const { user, profile, isAdmin, hasFeature, loading: authLoading } = useAuth();
+  const { user, profile, isAdmin, hasFeature, canSeeMoney, loading: authLoading } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
 
@@ -337,6 +342,12 @@ export default function CustomerRecordPage() {
   const [billSaving, setBillSaving] = useState(false);
 
   const [docs, setDocs] = useState<CustDocument[] | null>(null);
+  // QuickBooks history linked to this customer (pre-cutover, read-only).
+  const [qbRows, setQbRows] = useState<HistoryRow[] | null>(null);
+  const [qbHasMore, setQbHasMore] = useState(false);
+  const [qbLoading, setQbLoading] = useState(false);
+  const [qbError, setQbError] = useState<string | null>(null);
+  const [qbOpenId, setQbOpenId] = useState<string | null>(null);
   const [docsHasMore, setDocsHasMore] = useState(false);
   const [docsLoading, setDocsLoading] = useState(false);
   const [docsError, setDocsError] = useState<string | null>(null);
@@ -1259,6 +1270,7 @@ export default function CustomerRecordPage() {
       loadNsProfile(nsId);
     }
     loadQuotesAndEstimates(p?.company_name || cust?.company_name || null, nsId);
+    if (cust && canSeeMoney) loadQbHistory(cust.id, false);
     if (p) loadFiles(p.id);
   };
 
@@ -1490,6 +1502,26 @@ export default function CustomerRecordPage() {
     setDocsLoading(false);
   };
 
+  // QuickBooks history linked to this customer. Only rows before the cutover
+  // come back, so the NetSuite copy of the overlap never shows twice.
+  const QB_PAGE_SIZE = 200;
+  const loadQbHistory = async (customerId: string, append: boolean) => {
+    if (qbLoading) return;
+    setQbLoading(true);
+    setQbError(null);
+    try {
+      const offset = append ? (qbRows?.length || 0) : 0;
+      const res = await fetch(`/api/ledger/history?customerId=${customerId}&limit=${QB_PAGE_SIZE}&offset=${offset}`);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.success) throw new Error(body.error || `HTTP ${res.status}`);
+      setQbRows(prev => (append ? [...(prev || []), ...(body.rows || [])] : (body.rows || [])));
+      setQbHasMore(!!body.hasMore);
+    } catch (err: any) {
+      setQbError(err?.message || 'Could not load QuickBooks history');
+    }
+    setQbLoading(false);
+  };
+
   // NetSuite's own PDF for a transaction (the document of record).
   const viewPdf = async (t: Txn) => {
     if (!t.nsId || !t.nsPdfType) return;
@@ -1506,7 +1538,7 @@ export default function CustomerRecordPage() {
   // number: the email screen keys the PDF lookup, the already-sent check and
   // the invoice_emails log on the invoice NUMBER. Sales orders, estimates
   // and payments in the same list have their own flows.
-  const emailableTxns = (list: Txn[]) => list.filter(t => t.kind === 'invoice' && !!t.number);
+  const emailableTxns = (list: Txn[]) => list.filter(t => t.kind === 'invoice' && !!t.number && !t.qbo);
   const asEmailable = (t: Txn): EmailableInvoice => ({
     invoiceId: t.nsId || undefined,
     invoiceNumber: t.number,
@@ -1822,7 +1854,7 @@ export default function CustomerRecordPage() {
         kind: d.type, typeLabel: d.typeLabel, number: d.number,
         date: d.date, dueDate: d.dueDate, status: d.status, statusNorm: d.statusNorm,
         daysPastDue: d.daysPastDue, total: d.total,
-        nsId: d.id, nsPdfType: d.type, origin,
+        nsId: d.id, nsPdfType: d.type, origin, qbo: null,
       });
     }
     // FleetSuite quotes that no loaded NetSuite document accounts for —
@@ -1840,6 +1872,7 @@ export default function CustomerRecordPage() {
           kind: 'estimate', id: e.id, number: e.estimate_number,
           url: deepLinks.estimate(e.id), pdfUrl: deepLinks.estimatePdf(e.id),
         },
+        qbo: null,
       });
     }
     for (const q of wrapQuotes || []) {
@@ -1855,6 +1888,7 @@ export default function CustomerRecordPage() {
           kind: 'wrapQuote', id: q.id, number: q.quote_number,
           url: deepLinks.wrapQuote(q.id), pdfUrl: deepLinks.wrapQuotePdf(q.id),
         },
+        qbo: null,
       });
     }
     // Payments received + credit memos. NetSuite's PDF RESTlet only renders
@@ -1865,11 +1899,27 @@ export default function CustomerRecordPage() {
         kind: p.type, typeLabel: p.type === 'credit' ? 'Credit' : 'Payment',
         number: p.tranid, date: p.date, dueDate: null,
         status: p.memo || '', statusNorm: 'other', daysPastDue: 0, total: p.amount,
-        nsId: p.id, nsPdfType: null, origin: null,
+        nsId: p.id, nsPdfType: null, origin: null, qbo: null,
+      });
+    }
+    // QuickBooks history. Its status is a word, never an open amount, so
+    // nothing here reaches the open balance or the Open/Past due chips.
+    for (const r of qbRows || []) {
+      const kind: TxnKind =
+        r.docType === 'estimate' ? 'estimate'
+        : r.docType === 'credit_memo' || r.docType === 'refund_receipt' ? 'credit'
+        : 'invoice';
+      rows.push({
+        key: `qb-${r.id}`,
+        kind, typeLabel: r.typeLabel, number: r.number,
+        date: r.date, dueDate: r.dueDate,
+        status: r.status, statusNorm: r.paid ? 'paid' : 'other', daysPastDue: 0, total: r.total,
+        nsId: null, nsPdfType: null, origin: null,
+        qbo: { id: r.id, pdfDocumentId: r.pdfDocumentId },
       });
     }
     return rows;
-  }, [docs, payments, estimatesList, wrapQuotes, originByNsDoc]);
+  }, [docs, payments, estimatesList, wrapQuotes, originByNsDoc, qbRows]);
 
   // Transactions: filter chips + search narrow the loaded set; headers sort it.
   const filteredTxns = useMemo(() => {
@@ -2774,7 +2824,7 @@ export default function CustomerRecordPage() {
       {(prospect?.netsuite_id || customer || txns.length > 0) && (
         <div style={card}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '6px' }}>
-            <div style={{ ...eyebrow, marginBottom: 0 }}>Transactions {txns.length > 0 ? `· ${txns.length}${docsHasMore ? '+' : ''}` : ''}</div>
+            <div style={{ ...eyebrow, marginBottom: 0 }}>Transactions {txns.length > 0 ? `· ${txns.length}${docsHasMore || qbHasMore ? '+' : ''}` : ''}</div>
             {openBalance !== null && stInvoices && stInvoices.length > 0 && (
               <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
                 · open balance <strong style={{ color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{usd2(openBalance)}</strong> ({stInvoices.length} invoice{stInvoices.length === 1 ? '' : 's'})
@@ -2873,7 +2923,11 @@ export default function CustomerRecordPage() {
                         <td style={docTd}>
                           <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', display: 'inline-block', minWidth: '76px', textAlign: 'center', background: TXN_BADGE[t.kind].bg, color: TXN_BADGE[t.kind].color }}>{t.typeLabel}</span>
                         </td>
-                        <td style={{ ...docTd, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{t.number}</td>
+                        <td style={{ ...docTd, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
+                          {t.qbo ? (
+                            <button onClick={() => setQbOpenId(t.qbo!.id)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 'inherit', fontWeight: 700, color: 'var(--text-primary)' }}>{t.number}</button>
+                          ) : t.number}
+                        </td>
                         <td style={{ ...docTd, whiteSpace: 'nowrap' }}>
                           {/* Built in FleetSuite? The link opens THAT record —
                               the estimate, wrap quote or graphics job — not the
@@ -2885,6 +2939,14 @@ export default function CustomerRecordPage() {
                               style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '11.5px', fontWeight: 700, color: '#60a5fa' }}
                             >
                               {t.origin.number} ›
+                            </button>
+                          ) : t.qbo ? (
+                            <button
+                              onClick={() => setQbOpenId(t.qbo!.id)}
+                              title="Open the QuickBooks record: its lines, PDF and attachments"
+                              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '11.5px', fontWeight: 700, color: '#2ca01c' }}
+                            >
+                              QuickBooks ›
                             </button>
                           ) : (
                             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>NetSuite</span>
@@ -2913,7 +2975,7 @@ export default function CustomerRecordPage() {
                             )}
                             {/* Email just this invoice — same screen as the
                                 selection action above, scoped to one row. */}
-                            {t.kind === 'invoice' && t.number && (
+                            {t.kind === 'invoice' && t.number && !t.qbo && (
                               <button
                                 onClick={() => setEmailInvoiceTarget({ customerName: name, invoices: [asEmailable(t)] })}
                                 title={`Email invoice #${t.number} to ${name}`}
@@ -2936,6 +2998,20 @@ export default function CustomerRecordPage() {
                                 FleetSuite PDF
                               </a>
                             )}
+                            {t.qbo?.pdfDocumentId && (
+                              <a
+                                href={deepLinks.pdfViewer(deepLinks.ledgerDocument(t.qbo.pdfDocumentId), {
+                                  name: `${t.number}.pdf`,
+                                  back: deepLinks.prospect(String(params?.id || '')),
+                                  backLabel: 'Back to customer',
+                                })}
+                                target="_blank" rel="noopener noreferrer"
+                                title="Open the PDF stored from QuickBooks"
+                                style={{ ...btnSm, padding: '4px 10px' }}
+                              >
+                                QuickBooks PDF
+                              </a>
+                            )}
                           </span>
                         </td>
                       </tr>
@@ -2950,7 +3026,21 @@ export default function CustomerRecordPage() {
               {docsLoading ? 'Loading…' : 'Load more history'}
             </button>
           )}
+          {qbError && <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', padding: '8px 0 0' }}>QuickBooks history unavailable: {qbError}</div>}
+          {customer && qbHasMore && (
+            <button onClick={() => loadQbHistory(customer.id, true)} disabled={qbLoading} style={{ ...btnSm, marginTop: '10px', marginLeft: docs && docsHasMore ? '8px' : 0 }}>
+              {qbLoading ? 'Loading…' : 'Load older QuickBooks history'}
+            </button>
+          )}
         </div>
+      )}
+      {qbOpenId && (
+        <QuickBooksRecordModal
+          recordId={qbOpenId}
+          onClose={() => setQbOpenId(null)}
+          backHref={deepLinks.prospect(String(params?.id || ''))}
+          backLabel="Back to customer"
+        />
       )}
 
       {/* Edit record */}

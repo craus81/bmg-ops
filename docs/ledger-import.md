@@ -135,6 +135,30 @@ not touch the job's last-synced timestamp.
 | System Health → Jobs | The daily sync's heartbeat (the one-off bulk import is deliberately NOT a monitored job) |
 | System Health → Connections | The QuickBooks connection and the PDF storage gate |
 
+## 9. Where the history shows in FleetSuite
+
+Owner decision (2026-09-24): no separate "old" area. QuickBooks sales documents
+join the lists people already use, tagged **QuickBooks**, so a build from years
+ago can be found and repeated. Rules (enforced in `src/lib/ledger/history.ts`):
+
+- Only rows dated before the cutover. From the cutover on, NetSuite is the
+  record and the QuickBooks copy would show the same job twice.
+- Never in a balance: AR, aging, statements and totals ignore them. Status is a
+  word ("Paid", "Unpaid in QuickBooks"), never an open amount.
+- Read-only: no email, push, payment or NetSuite PDF. A row opens its QuickBooks
+  record window (lines, stored PDF, attachments).
+- Under a customer only once matched in the review queue (section 4). Search
+  finds them either way.
+
+Where: the customer page's **Transactions** (invoices, estimates, credits), and
+the Invoices page **Sent** tab, where a search of 3+ characters also brings in
+matching QuickBooks invoices, including matches on line descriptions.
+
+Access: the money wall (sales, admin, finance, executive), so estimators can
+find past builds. `GET /api/ledger/documents/[id]` lets sales open only a
+document attached to one of these sales records; bills, payments, journals and
+reports stay with the ledger readers (finance, executive, admins).
+
 ## Rollback
 
 Nothing here is destructive: a sync never deletes a row, it tombstones it.
