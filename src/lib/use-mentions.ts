@@ -32,7 +32,10 @@ export interface Mention {
 // already pointing at the record is trusted as-is.
 export function mentionUrl(m: Mention): string | null {
   // No stored url: the rebuilt link is the only way to land on the record.
-  if (!m.context_url) return mentionSourceUrl(m.source_type, m.source_id);
+  // '/home' was stored for recipients the old route judged unable to open
+  // the record — it is not the record, so rebuild (the mention screen
+  // decides whether to offer it).
+  if (!m.context_url || m.context_url === '/home') return mentionSourceUrl(m.source_type, m.source_id);
   // A query string, or a bare path that embeds the record id (e.g.
   // /graphics/<id>, /installer/jobs/<id>), already deep-links — keep it.
   // CNI chat urls in particular differ by portal (admin vs installer), so
