@@ -514,3 +514,18 @@ button {
 @media print {
   .palette-fab { display: none !important; }
 }
+
+/* ── No zoom-on-focus on touch screens ──────────────────────────────────
+   iOS zooms the page in when a field whose text is under 16px gets focus,
+   and never zooms back out. In the iPhone app it's worse: Capacitor turns
+   pinch off as soon as any zoom starts, so the user is stuck with a page
+   wider than the screen. Most fields here set a smaller font inline, so
+   !important is needed to win over the inline style. Touch-only, so desktop
+   fields keep their compact size. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
