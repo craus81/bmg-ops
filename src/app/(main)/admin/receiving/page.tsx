@@ -22,6 +22,8 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import { isOpenPoStatus } from '@/lib/incoming-parts';
 import { theme } from '@/lib/theme';
 import { useFormTelemetry } from '@/lib/use-form-telemetry';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import { deepLinks } from '@/lib/deep-links';
 
 interface PoRow {
   id: string;
@@ -199,6 +201,16 @@ export default function ReceivingPage() {
       const body = await res.json().catch(() => ({}));
       if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
       formTel.markSubmitted();
+      const sentNote = notes[po.id]?.trim();
+      if (sentNote) {
+        reportMentions({
+          text: sentNote,
+          sourceType: 'receiving_note',
+          sourceId: po.id,
+          contextLabel: `Receiving — PO ${po.tranid || ''}${po.vendor_name ? ` · ${po.vendor_name}` : ''}`,
+          contextUrl: deepLinks.receiving(po.id),
+        });
+      }
       setBanner(body.nsStatus === 'posted'
         ? { tone: 'green', text: `✓ Item receipt ${body.receiptNumber || body.receiptId || ''} posted to NetSuite for PO ${po.tranid || ''}.` }
         : { tone: 'amber', text: `Recorded here, but the NetSuite item receipt could not be posted (${body.nsError || 'unknown error'}). It's on the manual worklist below — key it into NetSuite, then mark it done.` });
@@ -462,8 +474,8 @@ export default function ReceivingPage() {
                     style={{ padding: '5px 10px', borderRadius: '7px', background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textSecondary, fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
                     Everything arrived
                   </button>
-                  <input value={notes[po.id] || ''} onChange={e => setNotes(prev => ({ ...prev, [po.id]: e.target.value }))}
-                    placeholder="Note (packing slip #, damage, short ship…)"
+                  <MentionTextArea value={notes[po.id] || ''} onChange={v => setNotes(prev => ({ ...prev, [po.id]: v }))}
+                    placeholder="Note (packing slip #, damage, short ship…; @ tags a teammate)"
                     style={{ flex: 1, minWidth: '180px', padding: '6px 10px', borderRadius: '7px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-body)' }} />
                   <button onClick={() => receive(po)} disabled={busyPo !== null || !anyInput}
                     style={{ padding: '6px 14px', borderRadius: '7px', background: anyInput ? 'rgba(74,222,128,0.12)' : 'var(--subtle-bg)', border: `1px solid ${anyInput ? 'rgba(74,222,128,0.4)' : theme.border}`, color: anyInput ? '#4ade80' : theme.textMuted, fontSize: '11px', fontWeight: 800, cursor: anyInput ? 'pointer' : 'not-allowed' }}>

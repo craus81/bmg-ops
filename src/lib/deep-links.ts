@@ -418,6 +418,18 @@ export function mentionSourceUrl(
       return deepLinks.atRiskCustomer(sourceId);
     case 'cni_internal_note':
       return deepLinks.cniInstaller(sourceId);
+    case 'prospect_note':
+      return deepLinks.prospect(sourceId);
+    case 'wrap_quote_note':
+      return deepLinks.wrapQuote(sourceId);
+    case 'credit_app_note':
+      return deepLinks.creditApplication(sourceId);
+    case 'receiving_note':
+      return deepLinks.receiving(sourceId);
+    case 'vendor_invoice_note':
+      return deepLinks.apInvoice(sourceId);
+    case 'purchase_request_note':
+      return deepLinks.purchaseRequests(sourceId);
     // cni_job_message mentions are resolved per recipient by the mentions
     // route (cniJobLinkFor — the chat serves two portals from different
     // URLs); this admin-side fallback covers legacy inbox rows and rows

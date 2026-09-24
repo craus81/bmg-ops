@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { deepLinks } from '@/lib/deep-links';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -2142,6 +2143,15 @@ export default function WrapQuotePage() {
         await dialog.alert('Failed to log follow-up: ' + (data.error || 'Unknown error'));
       } else {
         const nowIso = new Date().toISOString();
+        if (fuNote.trim()) {
+          reportMentions({
+            text: fuNote.trim(),
+            sourceType: 'wrap_quote_note',
+            sourceId: followupNoteFor.id,
+            contextLabel: `${followupNoteFor.quote_number}${followupNoteFor.customer?.name ? ` — ${followupNoteFor.customer.name}` : ''}`,
+            contextUrl: deepLinks.quoteFollowUps('wrap', followupNoteFor.id),
+          });
+        }
         setHistory(prev => prev.map(q => q.id === followupNoteFor.id ? { ...q, last_followup_at: nowIso } : q));
         setFollowupNoteFor(null);
         setFuNote('');
@@ -4263,10 +4273,10 @@ export default function WrapQuotePage() {
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>
               {followupNoteFor.customer?.name || 'No customer'} · ${fmt(followupNoteFor.total)}
             </div>
-            <textarea
+            <MentionTextArea
               value={fuNote}
-              onChange={e => setFuNote(e.target.value)}
-              placeholder="What did the customer say? (e.g. vehicles arrive in September)"
+              onChange={v => setFuNote(v.slice(0, 2000))}
+              placeholder="What did the customer say? (e.g. vehicles arrive in September) — @ tags a teammate"
               rows={3}
               style={{
                 width: '100%', padding: '10px', borderRadius: '10px', boxSizing: 'border-box',

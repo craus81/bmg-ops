@@ -44,6 +44,19 @@ describe('canOpenMentionUrl', () => {
     expect(can('/upfit?project=abc', ['shop_tech'])).toBe(true);
   });
 
+  it('matches the prospect, quote, credit, purchasing and AP gates', () => {
+    expect(can('/admin/prospects/abc', ['sales'])).toBe(true);
+    expect(can('/admin/prospects/abc', ['shop_tech'])).toBe(false);
+    expect(can('/quotes?item=wrap-abc', ['graphics_production'])).toBe(false);
+    expect(can('/admin/wrap-quote?id=abc', ['graphics_production'])).toBe(true);
+    expect(can('/admin/wrap-quote?id=abc', ['field_tech'])).toBe(false);
+    expect(can('/admin/credit-applications?app=abc', ['finance'])).toBe(true);
+    expect(can('/admin/receiving?po=abc', ['shop_tech'])).toBe(true);
+    expect(can('/admin/receiving?po=abc', ['graphics_production'])).toBe(false);
+    expect(can('/admin/ap?invoice=abc', ['finance'])).toBe(true);
+    expect(can('/admin/ap?invoice=abc', ['sales'])).toBe(false);
+  });
+
   it('treats ungated pages as openable', () => {
     expect(can('/installer/jobs/abc', ['installer'])).toBe(true);
   });

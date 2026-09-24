@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import { deepLinks } from '@/lib/deep-links';
 
 interface EditableInvoice {
   id: string;
@@ -98,6 +100,18 @@ export default function EditVendorInvoiceModal({ invoice, onClose, onSaved }: Pr
       if (!res.ok || !data.success) {
         setError(data.error || 'Save failed');
       } else {
+        const savedNotes = notes.trim();
+        if (savedNotes) {
+          const num = invoiceNumber.trim();
+          reportMentions({
+            text: savedNotes,
+            sourceType: 'vendor_invoice_note',
+            sourceId: invoice.id,
+            contextLabel: `${vendorName.trim()}${num ? ` invoice #${num}` : ' invoice'}`,
+            contextUrl: deepLinks.apInvoice(invoice.id),
+            previousText: invoice.notes || '',
+          });
+        }
         onSaved();
       }
     } catch (e: any) {
@@ -180,10 +194,10 @@ export default function EditVendorInvoiceModal({ invoice, onClose, onSaved }: Pr
             </select>
           </label>
 
-          <label>
+          <div>
             <div style={label}>Notes</div>
-            <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} style={{ ...field, resize: 'vertical' }} />
-          </label>
+            <MentionTextArea value={notes} onChange={setNotes} placeholder="Internal notes — @ tags a teammate" rows={2} style={{ ...field, resize: 'vertical' }} />
+          </div>
 
           {error && (
             <div style={{ padding: '10px 12px', borderRadius: '8px', background: 'color-mix(in srgb, #ef4444 8%, var(--card))', border: '1px solid #ef4444', fontSize: '12px', color: '#ef4444' }}>{error}</div>

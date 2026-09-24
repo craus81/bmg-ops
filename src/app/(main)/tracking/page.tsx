@@ -327,6 +327,18 @@ export default function TrackingPage() {
       await dialog.alert('Failed to save notes: ' + error.message);
       return;
     }
+    const saved = vehicles.find(x => x.id === id);
+    // Single edited column: skip people already tagged in the previous version.
+    if (draft) {
+      reportMentions({
+        text: draft,
+        sourceType: 'vehicle_note',
+        sourceId: id,
+        contextLabel: saved ? `${vehicleTitle(saved)} — ${saved.customer_name || 'vehicle'}` : 'In-Shop vehicle',
+        contextUrl: deepLinks.vehicle(id),
+        previousText: saved?.notes || '',
+      });
+    }
     setVehicles(prev => prev.map(v => v.id === id ? { ...v, notes: draft || null } as any : v));
     setNotesEdits(prev => { const next = { ...prev }; delete next[id]; return next; });
     setUpdateSuccess('Notes saved');
@@ -1260,6 +1272,17 @@ export default function TrackingPage() {
         return;
       }
 
+      const sentNote = statusNote.trim();
+      if (sentNote) {
+        const v = vehicles.find(x => x.id === vehicleId);
+        reportMentions({
+          text: sentNote,
+          sourceType: 'vehicle_note',
+          sourceId: vehicleId,
+          contextLabel: v ? `${vehicleTitle(v)} — ${v.customer_name || 'vehicle'}` : 'In-Shop vehicle',
+          contextUrl: deepLinks.vehicle(vehicleId),
+        });
+      }
       setStatusNote('');
       setUpdateSuccess(`Updated to ${VEHICLE_STATUS_LABELS[newStatus]}`);
       setTimeout(() => setUpdateSuccess(null), 2000);
@@ -1279,7 +1302,7 @@ export default function TrackingPage() {
     }
     setUpdatingId(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [statusNote, expandedId, profile]);
+  }, [statusNote, expandedId, profile, vehicles]);
 
   // Graphics install lane (migration 085) — runs in parallel to the upfit
   // pipeline driven by updateStatus above. Independent state machine, but
@@ -1303,6 +1326,17 @@ export default function TrackingPage() {
         await dialog.alert('Graphics install update failed: ' + (data.error || 'Unknown error'));
         setUpdatingId(null);
         return;
+      }
+      const sentNote = statusNote.trim();
+      if (sentNote) {
+        const v = vehicles.find(x => x.id === vehicleId);
+        reportMentions({
+          text: sentNote,
+          sourceType: 'vehicle_note',
+          sourceId: vehicleId,
+          contextLabel: v ? `${vehicleTitle(v)} — ${v.customer_name || 'vehicle'}` : 'In-Shop vehicle',
+          contextUrl: deepLinks.vehicle(vehicleId),
+        });
       }
       setStatusNote('');
       setUpdateSuccess(`Graphics: ${GRAPHICS_INSTALL_LABELS[newStatus]}`);
@@ -2065,18 +2099,18 @@ export default function TrackingPage() {
                         </div>
 
                         {/* Note input */}
-                        <input
-                          type="text"
-                          value={statusNote}
-                          onChange={(e) => setStatusNote(e.target.value)}
-                          onClick={(e) => e.stopPropagation()}
-                          placeholder="Add a note with the status change..."
-                          style={{
-                            width: '100%', padding: '8px 10px', borderRadius: '8px', marginTop: '8px',
-                            border: '1px solid var(--border)', background: 'var(--input-bg)',
-                            color: 'var(--text-primary)', fontSize: '12px', boxSizing: 'border-box',
-                          }}
-                        />
+                        <div onClick={(e) => e.stopPropagation()}>
+                          <MentionTextArea
+                            value={statusNote}
+                            onChange={setStatusNote}
+                            placeholder="Add a note with the status change... (@ tags a teammate)"
+                            style={{
+                              width: '100%', padding: '8px 10px', borderRadius: '8px', marginTop: '8px',
+                              border: '1px solid var(--border)', background: 'var(--input-bg)',
+                              color: 'var(--text-primary)', fontSize: '12px', boxSizing: 'border-box',
+                            }}
+                          />
+                        </div>
 
                         {/* Action buttons: Run Completion Process + Message Customer */}
                         <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
@@ -2328,11 +2362,11 @@ export default function TrackingPage() {
                               >+ Add Notes</button>
                         ) : (
                           <div onClick={(e) => e.stopPropagation()}>
-                            <textarea
+                            <MentionTextArea
                               value={notesEdits[vehicle.id]}
-                              onChange={(e) => setNotesEdits(prev => ({ ...prev, [vehicle.id]: e.target.value }))}
+                              onChange={(v) => setNotesEdits(prev => ({ ...prev, [vehicle.id]: v }))}
                               rows={3}
-                              placeholder="Notes about this vehicle…"
+                              placeholder="Notes about this vehicle… (@ tags a teammate)"
                               style={{
                                 width: '100%', padding: '8px 10px', borderRadius: '8px', boxSizing: 'border-box',
                                 border: '1px solid var(--border)', background: 'var(--input-bg)',

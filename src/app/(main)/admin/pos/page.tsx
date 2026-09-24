@@ -24,6 +24,7 @@ import { PART_FIELDS, partToCatalogItem, findOrCreateManualPart } from '@/lib/pa
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
 import NumberInput from '@/components/NumberInput';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 
 interface ImportLine extends ParsedPOLine {
   catalog_match: CatalogItem | null;
@@ -493,7 +494,8 @@ export default function POsPage() {
   const [pendingNoteSaving, setPendingNoteSaving] = useState<string | null>(null);
   const savePendingNote = async (id: string) => {
     const draft = pendingNoteDraft[id] ?? '';
-    const current = pendingPOs.find(p => p.id === id)?.review_note ?? '';
+    const pending = pendingPOs.find(p => p.id === id);
+    const current = pending?.review_note ?? '';
     if (draft === current) return;
     setPendingNoteSaving(id);
     try {
@@ -504,6 +506,20 @@ export default function POsPage() {
       });
       if (res.ok) {
         setPendingPOs(prev => prev.map(p => p.id === id ? { ...p, review_note: draft.trim() || null } : p));
+        // Not a PO yet (still an email in the import queue), so no record
+        // id — the mention links back to this entry in the pending queue.
+        if (pending?.message_id && draft.trim()) {
+          const poNum = pending.raw_extraction?.po_number || pending.po_number;
+          const cust = pending.raw_extraction?.customer;
+          reportMentions({
+            text: draft.trim(),
+            sourceType: 'po_note',
+            sourceId: null,
+            contextLabel: `Pending PO${poNum ? ` #${poNum}` : ''}${cust ? ` · ${cust}` : ''}`,
+            contextUrl: deepLinks.poPendingReview(pending.message_id),
+            previousText: current,
+          });
+        }
       }
     } catch { /* left in the draft for a retry on next blur */ }
     setPendingNoteSaving(null);
@@ -1030,6 +1046,15 @@ export default function POsPage() {
       .single();
 
     if (!po || error) { await dialog.alert('Error: ' + error?.message); return null; }
+    if (po.notes) {
+      reportMentions({
+        text: po.notes,
+        sourceType: 'po_note',
+        sourceId: po.id,
+        contextLabel: `PO #${po.po_number}${customer ? ` · ${customer}` : ''}`,
+        contextUrl: deepLinks.po(po.id),
+      });
+    }
 
     const { data: items } = await supabase
       .from('po_line_items')
@@ -2249,18 +2274,21 @@ export default function POsPage() {
                       >Dismiss</button>
                     </div>
                   </div>
-                  {/* Reviewer note — why this hasn't been imported yet. Saved on blur. */}
-                  <input
-                    value={pendingNoteDraft[p.id] ?? p.review_note ?? ''}
-                    onChange={e => setPendingNoteDraft(prev => ({ ...prev, [p.id]: e.target.value }))}
-                    onBlur={() => savePendingNote(p.id)}
-                    placeholder="Note — why not imported yet (waiting on revised PDF, pricing question…)"
-                    style={{
-                      width: '100%', marginTop: '8px', padding: '6px 8px', borderRadius: '6px',
-                      border: '1px solid var(--border)', background: 'var(--subtle-bg)',
-                      color: 'var(--text-body)', fontSize: '11px',
-                    }}
-                  />
+                  {/* Reviewer note — why this hasn't been imported yet. Saved on
+                      blur (the wrapper catches the textarea's bubbling blur;
+                      picking an @name keeps focus, so it doesn't save early). */}
+                  <div onBlur={() => savePendingNote(p.id)} style={{ marginTop: '8px' }}>
+                    <MentionTextArea
+                      value={pendingNoteDraft[p.id] ?? p.review_note ?? ''}
+                      onChange={v => setPendingNoteDraft(prev => ({ ...prev, [p.id]: v.slice(0, 2000) }))}
+                      placeholder="Note — why not imported yet (waiting on revised PDF, pricing question…) — @ tags a teammate"
+                      style={{
+                        width: '100%', padding: '6px 8px', borderRadius: '6px',
+                        border: '1px solid var(--border)', background: 'var(--subtle-bg)',
+                        color: 'var(--text-body)', fontSize: '11px',
+                      }}
+                    />
+                  </div>
                   {pendingNoteSaving === p.id && (
                     <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>Saving…</div>
                   )}
@@ -3157,10 +3185,10 @@ export default function POsPage() {
           </div>
           <div style={{ marginBottom: '8px' }}>
             <label style={labelStyle}>Notes</label>
-            <textarea
+            <MentionTextArea
               value={form.notes}
-              onChange={e => setForm({ ...form, notes: e.target.value })}
-              placeholder="Internal notes about this PO"
+              onChange={v => setForm({ ...form, notes: v })}
+              placeholder="Internal notes about this PO — @ tags a teammate"
               rows={2}
               style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
             />
