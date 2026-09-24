@@ -400,11 +400,20 @@ export default function TrackingPage() {
 
   // Deep link from check-in page/search: switch to whichever tab actually
   // shows the vehicle (shipped and archived hide from "All"), expand it,
-  // and scroll it into view.
+  // and scroll it into view. One-shot: once handled, ?vehicle=/&note= come
+  // off the URL. Left in place, every loadVehicles() (status changes flip
+  // `loading`) re-ran this, so marking a linked vehicle shipped jumped the
+  // list to the Shipped tab instead of staying on On Ground.
   useEffect(() => {
     if (loading) return;
     const vehicleId = searchParams.get('vehicle');
     if (!vehicleId) return;
+    const noteId = searchParams.get('note');
+    const rest = new URLSearchParams(searchParams.toString());
+    rest.delete('vehicle');
+    rest.delete('note');
+    const qs = rest.toString();
+    router.replace(qs ? `/tracking?${qs}` : '/tracking', { scroll: false });
     const focus = (target: FleetCheckin) => {
       setShowArchived(!!(target as any).archived_at);
       setFilterStatus(target.status === 'shipped' ? 'shipped' : 'all');
@@ -416,7 +425,6 @@ export default function TrackingPage() {
       loadNotes(vehicleId);
       // A mention deep link (&note=<id>) scroll-flashes that note inside the
       // detail modal once it loads; otherwise center the vehicle card.
-      const noteId = searchParams.get('note');
       if (noteId) {
         flashNote(`vnote-${noteId}`);
       } else {
@@ -1399,6 +1407,17 @@ export default function TrackingPage() {
     return acc;
   }, {});
   const groupKeys = Object.keys(grouped).sort((a, b) => a === 'Unassigned' ? 1 : b === 'Unassigned' ? -1 : a.localeCompare(b));
+
+  // The detail modal renders inside its vehicle's card, so when the vehicle
+  // leaves the current tab (marked shipped on On Ground) the modal vanishes
+  // with it — but expandedId stayed set, so the body scroll lock above never
+  // released and the page froze. Close it whenever its card isn't shown.
+  const expandedCard = expandedId ? filtered.find(v => v.id === expandedId) : undefined;
+  const expandedHidden = !!expandedId && !loading && (!expandedCard
+    || collapsedGroups.has(expandedCard.customer_name || expandedCard.sales_order_number || 'Unassigned'));
+  useEffect(() => {
+    if (expandedHidden) setExpandedId(null);
+  }, [expandedHidden]);
 
   const toggleGroup = (key: string) => {
     setCollapsedGroups(prev => {
