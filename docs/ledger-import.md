@@ -154,6 +154,13 @@ Where: the customer page's **Transactions** (invoices, estimates, credits), and
 the Invoices page **Sent** tab, where a search of 3+ characters also brings in
 matching QuickBooks invoices, including matches on line descriptions.
 
+**Copy to new estimate** (record window, for invoices, estimates and sales
+receipts): opens the estimate builder for the linked customer with the old
+lines in the paste-to-estimate review grid (`src/lib/quickbooks-estimate-copy.ts`).
+Prices are today's catalog prices, never the old ones, which ride in each
+line's text; unmatched lines stay custom lines to price; nothing is added
+until the rep ticks it.
+
 Access: the money wall (sales, admin, finance, executive), so estimators can
 find past builds. `GET /api/ledger/documents/[id]` lets sales open only a
 document attached to one of these sales records; bills, payments, journals and
