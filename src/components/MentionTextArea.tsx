@@ -39,7 +39,7 @@ export async function reportMentions(input: {
 }
 
 export default function MentionTextArea({
-  value, onChange, placeholder, rows = 1, style, onKeyDown,
+  value, onChange, placeholder, rows = 1, style, onKeyDown, autoFocus,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -47,6 +47,7 @@ export default function MentionTextArea({
   rows?: number;
   style?: React.CSSProperties;
   onKeyDown?: (e: React.KeyboardEvent) => void;
+  autoFocus?: boolean;
 }) {
   const supabase = createClient();
   const [staff, setStaff] = useState<StaffOption[]>(staffCache || []);
@@ -135,6 +136,7 @@ export default function MentionTextArea({
         onBlur={() => setTimeout(() => setDropdown([]), 200)}
         placeholder={placeholder}
         rows={rows}
+        autoFocus={autoFocus}
         style={{ fontFamily: 'inherit', width: '100%', boxSizing: 'border-box', overflowX: 'hidden', ...style, flex: undefined, resize: 'none' }}
       />
       {dropdown.length > 0 && (
