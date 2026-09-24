@@ -157,21 +157,12 @@ export async function POST(req: NextRequest) {
     body: excerpt,
   };
 
-  // A mention always emails the person unless THEY turned it off
-  // (notification_preferences.email_mentions, migration 254 — opt-out,
-  // default true; no preferences row means email). In-app + push always
-  // fire. The channels used to be hard-coded to in-app + push, so someone
-  // not in the app never learned they'd been pulled into a job.
-  const emailOff = new Set<string>();
-  const { data: prefRows } = await service
-    .from('notification_preferences')
-    .select('user_id, email_mentions')
-    .in('user_id', [...mentionedIds]);
-  for (const p of prefRows || []) {
-    if (p.email_mentions === false) emailOff.add(String(p.user_id));
-  }
-  const withEmail: ('in_app' | 'push' | 'email')[] = ['in_app', 'push', 'email'];
-  const withoutEmail: ('in_app' | 'push')[] = ['in_app', 'push'];
+  // Channels resolve per person in notify(): in-app + push by default
+  // (push is their choice in Settings), and email unless they turned off
+  // "Email me when I'm mentioned" (notification_preferences.email_mentions,
+  // migration 254). Before the 'mention' registry row existed, this type
+  // failed open to in-app + push and the email never actually sent.
+  const channels: ('in_app' | 'push' | 'email')[] = ['in_app', 'push', 'email'];
 
   // Each person's notification opens their own mention screen (full note +
   // an Open button when they can reach the record). If the inbox row failed
@@ -179,7 +170,7 @@ export async function POST(req: NextRequest) {
   await Promise.allSettled([...mentionedIds].map(id => {
     const mentionId = mentionIdFor.get(id);
     const url = mentionId ? deepLinks.mention(mentionId) : (recipientUrls.get(id) || '/home');
-    return notify({ ...payload, userId: id, url, channels: emailOff.has(id) ? withoutEmail : withEmail });
+    return notify({ ...payload, userId: id, url, channels });
   }));
 
   return NextResponse.json({ mentioned: mentionedIds.size });
