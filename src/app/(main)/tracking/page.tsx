@@ -10,6 +10,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 import { storage, resolveStoredFileUrl } from '@/lib/storage';
+import { toJpegIfHeic } from '@/lib/heic';
 import { fetchAllRows } from '@/lib/fetch-all';
 import StatusBadge from '@/components/StatusBadge';
 import AssignmentPicker from '@/components/AssignmentPicker';
@@ -823,9 +824,10 @@ export default function TrackingPage() {
     setPhotosLoading(prev => ({ ...prev, [vehicleId]: false }));
   };
 
-  const uploadPhoto = async (vehicleId: string, file: File) => {
+  const uploadPhoto = async (vehicleId: string, picked: File) => {
     setPhotoUploading(true);
     try {
+      const file = await toJpegIfHeic(picked);
       const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
       const path = `${vehicleId}/${Date.now()}.${ext}`;
       const { error: uploadErr } = await storage.from('photos').upload(path, file, { contentType: file.type });

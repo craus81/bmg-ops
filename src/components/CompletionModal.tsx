@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { storage, storageDownloadUrl } from '@/lib/storage';
+import { toJpegIfHeic } from '@/lib/heic';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import ProofThumbnail from '@/components/ProofThumbnail';
@@ -360,7 +361,7 @@ export default function CompletionModal({
     let uploadedAny = false;
     try {
       for (let idx = 0; idx < files.length; idx++) {
-        const file = files[idx];
+        const file = await toJpegIfHeic(files[idx]);
         const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
         const path = `vehicles/${vehicleId}/completion-${Date.now()}-${idx}.${ext}`;
         const { error: upErr } = await storage.from(PHOTO_BUCKET).upload(path, file, { contentType: file.type });

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 import { storage, storageDownloadUrl } from '@/lib/storage';
+import { toJpegIfHeic } from '@/lib/heic';
 import {
   blockedFromChecking, lineState, packProgress, quantityFlag, type PackItem,
 } from '@/lib/pack-checklist';
@@ -77,10 +78,11 @@ export default function GraphicsPackChecklist({ jobId, jobNumber }: Props) {
     } finally { setBusyId(null); }
   };
 
-  const attachPhoto = async (item: PackItem, file: File) => {
+  const attachPhoto = async (item: PackItem, picked: File) => {
     setBusyId(item.id);
     setMsg(null);
     try {
+      const file = await toJpegIfHeic(picked);
       const safe = file.name.replace(/[^\w.\-]+/g, '_');
       const path = `pack/${jobId}/${item.id}/${Date.now()}-${safe}`;
       const { error } = await storage.from('photos').upload(path, file, { contentType: file.type });

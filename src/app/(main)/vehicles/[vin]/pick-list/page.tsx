@@ -14,6 +14,7 @@ import { openOrCreateVehicleThread } from '@/lib/customer-thread';
 import { deepLinks } from '@/lib/deep-links';
 import { hoursNote, summarizeTaskHours } from '@/lib/so-line-tasks';
 import { storage, storageDownloadUrl } from '@/lib/storage';
+import { toJpegIfHeic } from '@/lib/heic';
 import ConditionReportCard from '@/components/ConditionReportCard';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 
@@ -436,10 +437,11 @@ export default function VehiclePickListPage() {
     }
   };
 
-  const uploadPhoto = async (type: 'before' | 'completion', file: File, caption?: string) => {
+  const uploadPhoto = async (type: 'before' | 'completion', picked: File, caption?: string) => {
     if (!vehicle || !user) return;
     setUploadingPhotoType(type);
     try {
+      const file = await toJpegIfHeic(picked);
       const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
       const path = `vehicles/${vehicle.id}/${type}-${Date.now()}.${ext}`;
       // Photos live in R2 — upload through the shim like the completion

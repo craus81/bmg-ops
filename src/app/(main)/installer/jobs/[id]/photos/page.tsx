@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { DropZone } from '@/components/DropZone';
 import PhotoSession from '@/components/PhotoSession';
 import { storageDownloadUrl } from '@/lib/storage';
+import { toJpegIfHeic } from '@/lib/heic';
 
 // storage_path carries either the full R2 key ('photos/cni-photos/…') or a
 // bucket-relative path (legacy fallback rows) — same splitting as the admin
@@ -112,7 +113,7 @@ export default function InstallerPhotoUploadPage() {
 
     try {
       for (let i = 0; i < files.length; i++) {
-        const file = files[i];
+        const file = await toJpegIfHeic(files[i]);
         const ext = file.name.split('.').pop() || 'jpg';
         const path = `cni-photos/${job.id}/${selectedVin || 'general'}/${Date.now()}-${i}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
 
