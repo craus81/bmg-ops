@@ -3,6 +3,9 @@
 import { useState, useEffect } from 'react';
 import { useDialog } from '@/components/DialogProvider';
 import { uploadRecordFile } from '@/lib/record-file-upload';
+import { createClient } from '@/lib/supabase-browser';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import { deepLinks } from '@/lib/deep-links';
 
 interface Defaults {
   delivery_instructions: string | null;
@@ -99,6 +102,7 @@ export default function CustomerDefaultsEditor({ initial, customerId, customerNa
   };
 
   const save = async () => {
+    const previousNotes = initial?.internal_notes || '';
     await onSave({
       delivery_instructions: delivery || null,
       billing_contact_name: billingName || null,
@@ -109,6 +113,29 @@ export default function CustomerDefaultsEditor({ initial, customerId, customerNa
       tax_exempt_cert_number: certNumber.trim() || null,
       tax_exempt_expires_at: certExpiry || null,
     });
+    // onSave doesn't report success (the host alerts on failure), so read
+    // the row back and only send @mentions once the note is really stored.
+    if (customerId && internalNotes.includes('@') && internalNotes !== previousNotes) {
+      const { data } = await createClient()
+        .from('customers')
+        .select('internal_notes, netsuite_id')
+        .eq('id', customerId)
+        .maybeSingle();
+      if (data && (data.internal_notes || '') === internalNotes) {
+        reportMentions({
+          text: internalNotes,
+          previousText: previousNotes,
+          sourceType: 'customer_note',
+          sourceId: customerId,
+          contextLabel: `Customer notes — ${customerName}`,
+          // The customer record shows internal notes for every customer;
+          // the at-risk report only lists at-risk ones.
+          contextUrl: data.netsuite_id
+            ? deepLinks.customerByNetsuiteId(data.netsuite_id)
+            : deepLinks.atRiskCustomer(customerId),
+        });
+      }
+    }
   };
 
   return (
@@ -161,15 +188,16 @@ export default function CustomerDefaultsEditor({ initial, customerId, customerNa
               <input value={apEmail} onChange={e => setApEmail(e.target.value)} style={inputCss} />
             </label>
           </div>
-          <label>
+          <div>
             <div style={labelCss}>Internal notes</div>
-            <textarea
+            <MentionTextArea
               value={internalNotes}
-              onChange={e => setInternalNotes(e.target.value)}
+              onChange={setInternalNotes}
+              placeholder="Staff-only — @ tags a teammate"
               rows={2}
               style={{ ...inputCss, fontFamily: 'inherit', resize: 'vertical' }}
             />
-          </label>
+          </div>
 
           {/* ── Tax exemption (E5) ── */}
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: '12px', marginTop: '2px' }}>

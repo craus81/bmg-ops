@@ -40,6 +40,7 @@ import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInv
 import PhoneInput from '@/components/PhoneInput';
 import { exportProspectPDF } from '@/lib/prospect-pdf';
 import { deepLinks } from '@/lib/deep-links';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { LEAD_SOURCES, OPP_TYPES } from '@/lib/lead-sources';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import { usd2 } from '@/lib/financials-print';
@@ -487,6 +488,24 @@ export default function CustomerRecordPage() {
   const [actText, setActText] = useState('');
   const [actSaving, setActSaving] = useState(false);
 
+  // @mentions in any note on this record land back on this record page.
+  // sourceId is the CRM row (prospect_note) when one exists; a mirror-only
+  // customer has none, so it reports null with the ns-<id> page link.
+  const reportRecordMentions = (text: string, previousText?: string) => {
+    const url = prospect
+      ? deepLinks.prospect(prospect.id)
+      : customer?.netsuite_id ? deepLinks.customerByNetsuiteId(customer.netsuite_id) : null;
+    if (!url) return;
+    reportMentions({
+      text,
+      sourceType: 'prospect_note',
+      sourceId: prospect?.id ?? null,
+      contextLabel: prospect?.company_name || customer?.company_name || 'Customer record',
+      contextUrl: url,
+      ...(previousText !== undefined ? { previousText } : {}),
+    });
+  };
+
   const logActivity = async () => {
     const text = actText.trim();
     if (!text || !prospect || actSaving) return;
@@ -504,6 +523,7 @@ export default function CustomerRecordPage() {
     }
     setActivities(prev => [{ ...(data as Activity), creator_name: profile?.full_name || null }, ...prev]);
     setActText('');
+    reportRecordMentions(text);
     // Owner decision 2026-09-07 (R3-16a): human notes sync to NetSuite. A
     // linked record pushes the fresh entry (and any unsynced backlog) right
     // away; unlinked records push at promotion. Fire-and-forget — the sync
@@ -604,6 +624,7 @@ export default function CustomerRecordPage() {
         await dialog.alert(`Could not save: ${body?.error || `HTTP ${res.status}`}`);
         return;
       }
+      reportRecordMentions(patch.notes || '', prospect.notes || '');
       setProspect(prev => (prev ? { ...prev, ...patch } : prev));
       setEditOpen(false);
     } catch (err: any) {
@@ -852,6 +873,7 @@ export default function CustomerRecordPage() {
       await supabase.from('customers').update({ internal_notes: merged }).eq('id', customer.id);
       setCustomer(prev => (prev ? { ...prev, internal_notes: merged } : prev));
     }
+    reportRecordMentions(note);
     setCustomer(prev => (prev ? { ...prev, ...patch } : prev));
     if (choice) {
       setParentRef({ id: choice.id, netsuite_id: choice.netsuite_id, company_name: choice.company_name, source: 'manual' });
@@ -986,6 +1008,7 @@ export default function CustomerRecordPage() {
     const { error } = await supabase.from('customers').update(patch).eq('id', customer.id);
     setBillSaving(false);
     if (error) { await dialog.alert(`Could not save billing: ${error.message}`); return; }
+    reportRecordMentions(patch.billing_notes || '', customer.billing_notes || '');
     setCustomer(prev => (prev ? { ...prev, ...patch } : prev));
     setBillDirty(false);
   };
@@ -1039,6 +1062,7 @@ export default function CustomerRecordPage() {
       }
       : o)));
     setLostPromptFor(null);
+    if (lost?.note.trim()) reportRecordMentions(lost.note.trim());
     logAuto('status_change', `${opp.title}: ${OPP_STAGES[opp.stage] || opp.stage} → ${OPP_STAGES[newStage] || newStage}${lost ? ` (${LOST_REASONS[lost.reason] || lost.reason}${lost.note.trim() ? ` — ${lost.note.trim()}` : ''})` : ''}`);
   };
 
@@ -2261,9 +2285,9 @@ export default function CustomerRecordPage() {
                   <input style={cInput} placeholder="Portal name (e.g. Masterack, Bogle) *" value={billForm.portal}
                     onChange={e => { setBillForm(f => ({ ...f, portal: e.target.value })); setBillDirty(true); }} />
                 )}
-                <textarea style={{ ...cInput, resize: 'vertical', fontFamily: 'inherit' }} rows={2}
-                  placeholder="Billing notes — portal URL, required fields, cadence…"
-                  value={billForm.notes} onChange={e => { setBillForm(f => ({ ...f, notes: e.target.value })); setBillDirty(true); }} />
+                <MentionTextArea style={{ ...cInput, resize: 'vertical', fontFamily: 'inherit' }} rows={2}
+                  placeholder="Billing notes — portal URL, required fields, cadence… — @ tags a teammate"
+                  value={billForm.notes} onChange={v => { setBillForm(f => ({ ...f, notes: v })); setBillDirty(true); }} />
                 {billForm.workflow === 'po_portal' && (
                   <div style={{ fontSize: '10.5px', color: '#fbbf24' }}>
                     Invoice emails for this customer will warn staff to submit in the portal instead.
@@ -2561,8 +2585,8 @@ export default function CustomerRecordPage() {
                       style={{ padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}>
                       {Object.entries(LOST_REASONS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                     </select>
-                    <input value={lostPromptFor.note} onChange={e => setLostPromptFor(p => (p ? { ...p, note: e.target.value } : p))}
-                      placeholder="Optional note (who / what happened)"
+                    <MentionTextArea value={lostPromptFor.note} onChange={v => setLostPromptFor(p => (p ? { ...p, note: v } : p))}
+                      placeholder="Optional note (who / what happened) — @ tags a teammate"
                       style={{ flex: 1, minWidth: '160px', padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }} />
                     <button onClick={() => setOppStage(o, 'lost', { reason: lostPromptFor.reason, note: lostPromptFor.note })}
                       style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.35)', color: '#ef4444' }}>
@@ -2683,11 +2707,11 @@ export default function CustomerRecordPage() {
                   ))}
                 </div>
                 <div style={{ display: 'flex', gap: '6px' }}>
-                  <input
+                  <MentionTextArea
                     value={actText}
-                    onChange={e => setActText(e.target.value)}
+                    onChange={setActText}
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); logActivity(); } }}
-                    placeholder={actType === 'call' ? 'What was said on the call…' : actType === 'email' ? 'What the email covered…' : actType === 'meeting' ? 'What the meeting covered…' : 'Add a note…'}
+                    placeholder={`${actType === 'call' ? 'What was said on the call…' : actType === 'email' ? 'What the email covered…' : actType === 'meeting' ? 'What the meeting covered…' : 'Add a note…'} — @ tags a teammate`}
                     style={{ flex: 1, minWidth: 0, padding: '8px 10px', borderRadius: '8px', fontSize: '12px', background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
                   />
                   <button onClick={logActivity} disabled={actSaving || !actText.trim()} style={{
@@ -3002,7 +3026,9 @@ export default function CustomerRecordPage() {
                   </div>
                 )}
               </div>
-              <textarea style={{ ...cInput, gridColumn: '1 / -1', resize: 'vertical' }} rows={3} placeholder="Notes" value={editForm.notes} onChange={e => setEditForm({ ...editForm, notes: e.target.value })} />
+              <div style={{ gridColumn: '1 / -1' }}>
+                <MentionTextArea style={{ ...cInput, resize: 'vertical' }} rows={3} placeholder="Notes — @ tags a teammate" value={editForm.notes} onChange={v => setEditForm({ ...editForm, notes: v })} />
+              </div>
             </div>
             <div style={{ display: 'flex', gap: '6px', marginTop: '14px' }}>
               <button onClick={deleteRecord} disabled={editSaving} title="Delete this record and everything attached to it" style={{
@@ -3190,8 +3216,8 @@ export default function CustomerRecordPage() {
                 ))}
               </div>
             )}
-            <textarea rows={2} placeholder="Why is this account moving? (required — logged on the record) *"
-              value={parentNote} onChange={e => setParentNote(e.target.value)}
+            <MentionTextArea rows={2} placeholder="Why is this account moving? (required — logged on the record) * — @ tags a teammate"
+              value={parentNote} onChange={setParentNote}
               style={{ ...cInput, resize: 'vertical', fontFamily: 'inherit', marginBottom: '10px' }} />
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               <button onClick={() => saveParent(false)} disabled={parentSaving || !parentChoice || !parentNote.trim()} style={{

@@ -474,6 +474,16 @@ export default function PoRecordPage() {
     if (error) { await dialog.alert(`Could not save: ${error.message}`); return; }
     setPo(prev => (prev ? { ...prev, ...update } : prev));
     setEditingPo(false);
+    if (update.notes) {
+      reportMentions({
+        text: update.notes,
+        sourceType: 'po_note',
+        sourceId: po.id,
+        contextLabel: `PO #${update.po_number}${customer ? ` · ${customer}` : ''}`,
+        contextUrl: deepLinks.po(po.id),
+        previousText: po.notes || '',
+      });
+    }
   };
 
   const closePO = async () => {
@@ -1271,7 +1281,7 @@ export default function PoRecordPage() {
           </div>
           <div style={{ marginTop: '8px' }}>
             <label style={labelStyle}>Notes</label>
-            <textarea value={editPoForm.notes} onChange={e => setEditPoForm({ ...editPoForm, notes: e.target.value })} rows={2} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
+            <MentionTextArea value={editPoForm.notes} onChange={v => setEditPoForm({ ...editPoForm, notes: v })} placeholder="Internal notes — @ tags a teammate" rows={2} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
           </div>
           <div style={{ marginTop: '8px' }}>
             <ShipToFields

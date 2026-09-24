@@ -26,6 +26,12 @@ export function canOpenMentionUrl(
   if (under('/admin/pos')) return admin;
   if (under('/admin/reports/at-risk')) return admin || roles.includes('sales');
   if (under('/admin/cni')) return hasFeature('cni_admin');
+  if (under('/admin/prospects')) return admin || hasFeature('prospects');
+  if (under('/admin/leads') || under('/quotes')) return admin || roles.includes('sales');
+  if (under('/admin/wrap-quote')) return admin || roles.includes('sales') || roles.includes('graphics_production');
+  if (under('/admin/credit-applications')) return hasFeature('credit_applications');
+  if (under('/admin/receiving') || under('/admin/purchasing')) return hasFeature('parts_ordering');
+  if (under('/admin/ap')) return admin || roles.includes('finance');
   if (under('/admin/schedule')) return hasFeature('schedule');
   if (under('/estimates')) return hasFeature('estimates');
   if (under('/tracking')) return hasFeature('in_shop') || hasFeature('fleet_checkin');
