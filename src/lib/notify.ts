@@ -189,15 +189,9 @@ async function getPreferredChannels(userId: string, type: string): Promise<Notif
     .eq('user_id', userId)
     .maybeSingle();
 
-  if (type === 'message') {
-    // Direct messages keep their own switch: in-app is unconditional (they
-    // appear in the chat either way) and email is opt-in.
-    const channels: NotifyChannel[] = ['in_app'];
-    if (prefs?.email_messages) channels.push('email');
-    return channels;
-  }
-
-  // Everything else resolves through the registry (R6-13). What this
+  // Every type resolves through the registry (R6-13) — direct messages and
+  // mentions too: their in-app/email rules live there as fixedChannels,
+  // with push the user's choice. What this
   // replaced was a substring match — type.includes('new'),
   // type.includes('ready') — which governed three of the ~64 types the app
   // sends, silenced cni_photos_ready from a graphics toggle, and let the
