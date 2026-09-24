@@ -534,6 +534,18 @@ export default function GraphicsJobRecordPage() {
         : [gateNote, note].filter(Boolean).join(' · ')) || null,
     });
 
+    // The status-change comment is the note box the floor uses most — tag a
+    // teammate here the same as in "Add a note".
+    if (note?.trim()) {
+      reportMentions({
+        text: note.trim(),
+        sourceType: 'graphics_note',
+        sourceId: job.id,
+        contextLabel: job.title || job.job_number || 'Graphics job',
+        contextUrl: deepLinks.graphicsJob(job.id),
+      });
+    }
+
     // Tracking number gets its own note row so it's findable in the history
     // independent of the status-change comment.
     if (ship?.tracking && ship.tracking !== job.tracking_number) {
@@ -1996,11 +2008,11 @@ export default function GraphicsJobRecordPage() {
                 />
               </div>
             )}
-            <textarea
+            <MentionTextArea
               autoFocus
               value={statusComment}
-              onChange={e => setStatusComment(e.target.value)}
-              placeholder={pendingStatus === 'shipped' ? 'Shipping notes (optional)...' : 'Add a comment (optional)...'}
+              onChange={setStatusComment}
+              placeholder={pendingStatus === 'shipped' ? 'Shipping notes (optional)... @name to tag' : 'Add a comment (optional)... @name to tag'}
               style={{
                 width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px',
                 background: 'var(--input-bg)', border: '1px solid var(--border)',
