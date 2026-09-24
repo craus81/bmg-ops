@@ -34,6 +34,8 @@ Drive the QuickBooks ledger import.
                            attachments_fetch,reports,repair,finalize
   --budget 240000          ms of work per call (default 45000, max 240000)
   --max-loops N            stop after N chunks (default 500)
+  --reports-from YYYY      first year of report snapshots (import); default is
+                           the year of the earliest imported QuickBooks entry
   --confirm <host>         required for import / resume / probe-r2; must equal
                            the APP_URL host, so a production run cannot be
                            started by muscle memory
@@ -62,6 +64,7 @@ function parseArgs(argv) {
     else if (a === '--budget') out.budget = Number(next());
     else if (a === '--max-loops') out.maxLoops = Number(next());
     else if (a === '--confirm') out.confirm = next();
+    else if (a === '--reports-from') out.reportsFrom = next();
     else { console.error(`Unknown option ${a}`); process.exit(2); }
   }
   return out;
@@ -183,6 +186,7 @@ async function main() {
   if (mode === 'import') {
     if (args.dryRunId) payload.dryRunId = args.dryRunId;
     if (args.phases) payload.phases = args.phases;
+    if (args.reportsFrom) payload.reportsFrom = args.reportsFrom;
   }
   if (mode === 'resume') {
     if (!args.run) { console.error('--mode resume needs --run <uuid>'); return 2; }
