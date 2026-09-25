@@ -325,9 +325,13 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/knowledge/upload/route.ts': admin(),
   // The only way bytes leave the R2 `ledger` prefix (migration 314): that
   // prefix is denied on the generic storage routes, so this record-scoped
-  // reader IS the wall. requireRole admits finance + executive (admins and
-  // super admins auto-pass) — the ledger reader tier.
-  'src/app/api/ledger/documents/[id]/route.ts': role(),
+  // reader IS the wall. The ledger reader tier opens any document; the rest
+  // of the money wall only one on a pre-cutover QuickBooks sales document.
+  'src/app/api/ledger/documents/[id]/route.ts': { kind: 'money', contains: ['requireMoney(', 'isHistoryDocumentParent('] },
+  // QuickBooks sales history merged into FleetSuite's lists (2026-09-24):
+  // money wall, so estimators can find past builds.
+  'src/app/api/ledger/history/route.ts': money(),
+  'src/app/api/ledger/history/[id]/route.ts': money(),
   'src/app/api/mentions/route.ts': staff(),
   'src/app/api/messages/send-sms/route.ts': authScoped('sender is forced to the authenticated caller and must be a participant of the conversation being notified', 'participant'),
   'src/app/api/messages/sms-webhook/route.ts': webhook('inbound SMS from the provider; the signature is verified and mismatches are rejected', 'verifyWebhookSignature'),

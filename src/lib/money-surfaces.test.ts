@@ -42,6 +42,7 @@ const ALLOWED: Record<string, string> = {
   'src/components/AddToEstimateModal.tsx': 'opens only from the estimate builder',
   'src/components/PartCatalogBrowser.tsx': 'used by the estimate builder and part_admin, both money-walled',
   'src/components/GraphicsInvoiceReviewModal.tsx': 'rendered only behind canSeeMoney on the graphics board and record',
+  'src/components/QuickBooksRecordModal.tsx': 'loads from /api/ledger/history/[id], which is requireMoney; its openers only fetch history when canSeeMoney',
   'src/components/FinancialsDashboard.tsx': 'financials — super_admin/executive only',
 
   // ── CNI admin console ──
