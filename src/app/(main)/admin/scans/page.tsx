@@ -197,6 +197,11 @@ export default function AdminScansPage() {
   const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; po?: string | null; invoiceId?: string; invoiceNumber?: string; vehicleCount: number; status: string; error?: string }[]; summary: { success: number; errors: number } } | null>(null);
   // Email-invoices flow lives in the shared EmailInvoicesModal.
   const [emailTarget, setEmailTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
+  // Invoices-tab picks, by invoice number. Emailing a selection that spans
+  // customers queues one modal per customer (each send goes to one
+  // customer's contacts); closing a modal opens the next.
+  const [selectedInvoices, setSelectedInvoices] = useState<Set<string>>(new Set());
+  const [emailQueue, setEmailQueue] = useState<{ customerName: string; invoices: EmailableInvoice[] }[]>([]);
   // invoice_number → latest customer email + send history (invoice_emails),
   // so the Invoices tab and archived groups show whether/when each invoice
   // went out — same source the Invoicing hub's badges read.
@@ -647,6 +652,38 @@ export default function AdminScansPage() {
     }
     return [...byNumber.values()];
   })();
+  const invoiceSearch = search.trim().toLowerCase();
+  const visibleInvoiceRows = invoiceRows.filter(r =>
+    !invoiceSearch
+    || r.invoiceNumber.toLowerCase().includes(invoiceSearch)
+    || r.customer.toLowerCase().includes(invoiceSearch)
+    || r.pos.some(p => p.toLowerCase().includes(invoiceSearch)));
+
+  const toggleInvoices = (numbers: string[]) => {
+    setSelectedInvoices(prev => {
+      const n = new Set(prev);
+      if (numbers.every(x => n.has(x))) numbers.forEach(x => n.delete(x));
+      else numbers.forEach(x => n.add(x));
+      return n;
+    });
+  };
+
+  const emailSelectedInvoices = () => {
+    const byCustomer = new Map<string, EmailableInvoice[]>();
+    for (const r of invoiceRows) {
+      if (!selectedInvoices.has(r.invoiceNumber)) continue;
+      const list = byCustomer.get(r.customer);
+      const inv = { invoiceNumber: r.invoiceNumber, po: r.pos[0] };
+      if (list) list.push(inv); else byCustomer.set(r.customer, [inv]);
+    }
+    const targets = [...byCustomer.entries()].map(([customerName, invoices]) => ({
+      customerName,
+      invoices: invoices.sort((a, b) => compareInvoice(a.invoiceNumber, b.invoiceNumber)),
+    }));
+    if (targets.length === 0) return;
+    setEmailTarget(targets[0]);
+    setEmailQueue(targets.slice(1));
+  };
 
   const toggleSelectGroup = (ids: string[]) => {
     setSelectedScans(prev => {
@@ -1439,7 +1476,7 @@ export default function AdminScansPage() {
           { id: 'bulk' as ViewTab, label: 'Bulk Upload' },
           { id: 'vendor' as ViewTab, label: 'Vendor Invoices' },
         ]).map(t => (
-          <button key={t.id} onClick={() => { setTab(t.id); setSelectedScans(new Set()); setExpandedGroups(new Set()); }} style={{
+          <button key={t.id} onClick={() => { setTab(t.id); setSelectedScans(new Set()); setSelectedInvoices(new Set()); setExpandedGroups(new Set()); }} style={{
             padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
             background: tab === t.id ? 'var(--tab-active-bg)' : 'transparent',
             border: tab === t.id ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
@@ -1594,7 +1631,37 @@ export default function AdminScansPage() {
       )}
 
       {/* Actions */}
-      {tab !== 'vendor' && <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
+      {tab === 'invoices' && <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
+        {(() => {
+          const allVisibleSelected = visibleInvoiceRows.length > 0 && visibleInvoiceRows.every(r => selectedInvoices.has(r.invoiceNumber));
+          return (
+            <button
+              onClick={() => setSelectedInvoices(allVisibleSelected ? new Set() : new Set(visibleInvoiceRows.map(r => r.invoiceNumber)))}
+              style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)', cursor: 'pointer' }}
+            >
+              {allVisibleSelected ? 'Deselect All' : `Select All (${visibleInvoiceRows.length})`}
+            </button>
+          );
+        })()}
+        {selectedInvoices.size > 0 && (() => {
+          const customerCount = new Set(invoiceRows.filter(r => selectedInvoices.has(r.invoiceNumber)).map(r => r.customer)).size;
+          return (
+            <>
+              <button
+                onClick={emailSelectedInvoices}
+                title={customerCount > 1 ? `Opens one email per customer (${customerCount} customers)` : undefined}
+                style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', cursor: 'pointer' }}
+              >
+                Email {selectedInvoices.size} Selected{customerCount > 1 ? ` (${customerCount} customers)` : ''}
+              </button>
+              <button onClick={() => setSelectedInvoices(new Set())} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                Clear
+              </button>
+            </>
+          );
+        })()}
+      </div>}
+      {tab !== 'vendor' && tab !== 'invoices' && <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
         <button onClick={selectAllVisible} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
           {selectedScans.size === tabScans.length && tabScans.length > 0 ? 'Deselect All' : `Select All (${tabScans.length})`}
         </button>
@@ -1702,10 +1769,14 @@ export default function AdminScansPage() {
       {/* Email invoices modal (shared component, same flow as the Invoicing hub) */}
       {emailTarget && (
         <EmailInvoicesModal
+          key={emailTarget.customerName}
           customerName={emailTarget.customerName}
           invoices={emailTarget.invoices}
           onClose={() => {
-            setEmailTarget(null);
+            // Selection spanning customers: move on to the next one's email.
+            const [next, ...rest] = emailQueue;
+            setEmailTarget(next || null);
+            setEmailQueue(rest);
             // Refresh the ✉ emailed badges — a send may have just happened.
             refreshEmailedInvoices([...scans, ...archivedScans]);
           }}
@@ -2644,12 +2715,7 @@ export default function AdminScansPage() {
           invoice number, grouped by customer, with whether/when it was
           emailed and one-click (re)send. */}
       {tab === 'invoices' && (() => {
-        const q = search.trim().toLowerCase();
-        const filtered = invoiceRows.filter(r =>
-          !q
-          || r.invoiceNumber.toLowerCase().includes(q)
-          || r.customer.toLowerCase().includes(q)
-          || r.pos.some(p => p.toLowerCase().includes(q)));
+        const filtered = visibleInvoiceRows;
         const byCustomer = new Map<string, InvoiceListRow[]>();
         for (const r of filtered) {
           const list = byCustomer.get(r.customer);
@@ -2673,10 +2739,15 @@ export default function AdminScansPage() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 {customers.map(customer => {
                   const rows = byCustomer.get(customer)!;
+                  const rowNumbers = rows.map(r => r.invoiceNumber);
+                  const allRowsSelected = rowNumbers.every(n => selectedInvoices.has(n));
                   return (
                     <div key={customer} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '10px', padding: '10px 14px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', marginBottom: '8px', flexWrap: 'wrap' }}>
-                        <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{customer}</div>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)', cursor: 'pointer' }}>
+                          <input type="checkbox" checked={allRowsSelected} onChange={() => toggleInvoices(rowNumbers)} style={{ width: '14px', height: '14px', flexShrink: 0 }} />
+                          {customer}
+                        </label>
                         <button
                           onClick={() => setEmailTarget({
                             customerName: customer,
@@ -2688,6 +2759,7 @@ export default function AdminScansPage() {
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                         {rows.map((r, i) => (
                           <div key={r.invoiceNumber} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', padding: '4px 0', borderTop: i > 0 ? '1px solid var(--border)' : 'none', flexWrap: 'wrap' }}>
+                            <input type="checkbox" checked={selectedInvoices.has(r.invoiceNumber)} onChange={() => toggleInvoices([r.invoiceNumber])} style={{ width: '14px', height: '14px', flexShrink: 0 }} />
                             <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>#{r.invoiceNumber}</span>
                             <InvoiceEmailedBadge info={emailedByNumber[r.invoiceNumber]} showUnsent />
                             <span style={{
