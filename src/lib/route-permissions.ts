@@ -477,6 +477,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/shifts/route.ts': authScoped('time clock for techs AND external installers; CNI job membership checked via canActOnCniJob, field/shop contexts FIELD_ROLES-gated in-route', 'canActOnCniJob'),
   'src/app/api/shop-inbound/arrival/route.ts': staff(),
   'src/app/api/shop-inbound/route.ts': staff(),
+  'src/app/api/sent-emails/[id]/route.ts': staff(),
   'src/app/api/shop-week/route.ts': staff(),
   'src/app/api/signed-documents/route.ts': featureDynamic('requireFeature(req, spec.feature)', 'gated per record type on the record\'s own feature key (estimates / graphics)'),
   // R3-22: all three storage routes tier the caller via storageAccessOf —
