@@ -19,6 +19,10 @@
  */
 
 export const deepLinks = {
+  /** One @mention: the full note, who wrote it, and an Open button when the
+   *  recipient can open the note's record. Every mention notification lands
+   *  here, so nobody is left with only the excerpt. */
+  mention: (mentionId: string) => `/mentions/${mentionId}`,
   /** Dedicated PO record page. */
   po: (poId: string) => `/admin/pos/${poId}`,
   /** Dedicated graphics job record page. */
@@ -414,6 +418,18 @@ export function mentionSourceUrl(
       return deepLinks.atRiskCustomer(sourceId);
     case 'cni_internal_note':
       return deepLinks.cniInstaller(sourceId);
+    case 'prospect_note':
+      return deepLinks.prospect(sourceId);
+    case 'wrap_quote_note':
+      return deepLinks.wrapQuote(sourceId);
+    case 'credit_app_note':
+      return deepLinks.creditApplication(sourceId);
+    case 'receiving_note':
+      return deepLinks.receiving(sourceId);
+    case 'vendor_invoice_note':
+      return deepLinks.apInvoice(sourceId);
+    case 'purchase_request_note':
+      return deepLinks.purchaseRequests(sourceId);
     // cni_job_message mentions are resolved per recipient by the mentions
     // route (cniJobLinkFor — the chat serves two portals from different
     // URLs); this admin-side fallback covers legacy inbox rows and rows

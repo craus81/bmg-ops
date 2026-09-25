@@ -6,11 +6,13 @@ import { useAuth } from '@/components/AuthProvider';
 import { useTheme } from '@/components/ThemeProvider';
 import TextSizeToggle from '@/components/TextSizeToggle';
 import { apiFetch } from '@/lib/api-client';
+import { useNavTabs } from '@/components/useNavTabs';
 
 export default function MorePage() {
   const router = useRouter();
   const { isAdmin, isSales, isGraphicsProduction, hasRole, hasFeature, profile, signOut } = useAuth();
   const { mode, setMode, resolvedTheme } = useTheme();
+  const { customerOnly } = useNavTabs();
   // R3-20 gave the Purchasing/Receiving rows count badges; R6-13 moved
   // every count behind one role-filtered endpoint so no two surfaces can
   // report a different number for the same queue.
@@ -122,6 +124,7 @@ export default function MorePage() {
       items: [
         { title: 'Sent Emails', sub: 'Every email you’ve sent from FleetSuite — with delivery status', path: '/sent-emails', show: true },
         { title: 'Settings', sub: 'Password, email signature, alerts & notifications', path: '/settings', show: true },
+        { title: 'Customize Bottom Bar', sub: 'Pick which tabs sit in your bottom bar, and their order', path: '/more/bottom-bar', show: !customerOnly },
       ],
     },
   ];

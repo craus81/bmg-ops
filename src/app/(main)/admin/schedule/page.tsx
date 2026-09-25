@@ -359,6 +359,16 @@ export default function SchedulePage() {
         method: 'POST',
         body: JSON.stringify({ eventId: created.id }),
       }).catch(() => {});
+      const desc = createForm.description.trim();
+      if (desc) {
+        reportMentions({
+          text: desc,
+          sourceType: 'calendar_event_note',
+          sourceId: created.id,
+          contextLabel: `Schedule — ${createForm.title.trim()}`,
+          contextUrl: deepLinks.scheduleCard(created.id),
+        });
+      }
     }
     setCreateForm({ title: '', description: '', event_date: '', event_time: '', event_type: 'event', prospect_id: '' });
     setShowCreate(false);
@@ -412,6 +422,17 @@ export default function SchedulePage() {
         method: 'POST',
         body: JSON.stringify({ eventId: cardEvent.id }),
       }).catch(() => {});
+      // Edited-in-place description: skip people tagged in the previous version.
+      if (updates.description) {
+        reportMentions({
+          text: updates.description,
+          previousText: cardEvent.description || '',
+          sourceType: 'calendar_event_note',
+          sourceId: cardEvent.id,
+          contextLabel: `Schedule — ${updates.title}`,
+          contextUrl: deepLinks.scheduleCard(cardEvent.id),
+        });
+      }
       setCardEvent({ ...cardEvent, ...updates });
       setCardEdit(null);
       loadEvents();
@@ -744,10 +765,10 @@ export default function SchedulePage() {
                     </select>
                   )}
                 </div>
-                <textarea
+                <MentionTextArea
                   value={cardEdit.description}
-                  onChange={e => setCardEdit({ ...cardEdit, description: e.target.value })}
-                  placeholder="Description"
+                  onChange={v => setCardEdit({ ...cardEdit, description: v })}
+                  placeholder="Description (@ tags a teammate)"
                   rows={3}
                   style={{ width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: '8px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-body)', resize: 'vertical', fontFamily: 'inherit', marginBottom: '8px' }}
                 />
@@ -889,7 +910,7 @@ export default function SchedulePage() {
               </div>
               <div>
                 <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Notes</div>
-                <textarea value={createForm.description} onChange={e => setCreateForm(f => ({ ...f, description: e.target.value }))} placeholder="Details..." style={{
+                <MentionTextArea value={createForm.description} onChange={v => setCreateForm(f => ({ ...f, description: v }))} placeholder="Details... (@ tags a teammate)" style={{
                   width: '100%', padding: '10px', borderRadius: '8px', fontSize: '13px', minHeight: '60px', resize: 'vertical',
                   border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)',
                 }} />

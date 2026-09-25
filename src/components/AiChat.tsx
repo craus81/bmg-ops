@@ -5,6 +5,8 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { getTextZoom } from '@/lib/text-size';
+import { AI_CHAT_STATE_EVENT, AI_CHAT_TOGGLE_EVENT } from '@/lib/ai-chat-events';
+import { useNavTabs } from '@/components/useNavTabs';
 
 // Keep the prompt + history under a sane token budget by only sending
 // the most recent N exchanges to the model. The full transcript still
@@ -310,6 +312,26 @@ export default function AiChat() {
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // With AI in the user's bottom bar (the default) the tab opens the panel
+  // and the floating bubble is hidden — it sat over page content on phones
+  // (2026-09-24, "it's in the way on the iOS app"). Someone who removes the
+  // AI tab from their bar gets the bubble back so they keep a way in.
+  const { aiInBar } = useNavTabs();
+
+  useEffect(() => {
+    const onToggle = () => {
+      setIsOpen(open => {
+        if (!open) setTimeout(() => inputRef.current?.focus(), 100);
+        return !open;
+      });
+    };
+    window.addEventListener(AI_CHAT_TOGGLE_EVENT, onToggle);
+    return () => window.removeEventListener(AI_CHAT_TOGGLE_EVENT, onToggle);
+  }, []);
+
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent(AI_CHAT_STATE_EVENT, { detail: { open: isOpen } }));
+  }, [isOpen]);
 
   // Hydrate the conversation from Supabase the first time the chat is
   // opened. RLS scopes the rows to the current user automatically.
@@ -486,7 +508,7 @@ export default function AiChat() {
   return (
     <>
       {/* Floating mascot button */}
-      {!isOpen && (
+      {!isOpen && !aiInBar && (
         <div
           onMouseDown={e => { handleDragStart(e.clientX, e.clientY); const onMove = (ev: MouseEvent) => handleDragMove(ev.clientX, ev.clientY); const onUp = () => { handleDragEnd(); window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); }; window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp); }}
           onTouchStart={e => { const t = e.touches[0]; handleDragStart(t.clientX, t.clientY); }}

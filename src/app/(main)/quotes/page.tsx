@@ -15,6 +15,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { deepLinks } from '@/lib/deep-links';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
 import { expiryLabel, type ExpiryState } from '@/lib/quote-expiry';
 import { viewLabel, type ViewSummary } from '@/lib/quote-views';
@@ -229,6 +230,17 @@ export default function QuotesPage() {
       if (!res.ok || !data.success) {
         await dialog.alert(data.error || 'Failed to log the follow-up');
       } else {
+        // The follow-up log renders on this page's row, so the mention lands
+        // there (quoteFollowUps scroll-flashes the exact quote).
+        if (logNote.trim()) {
+          reportMentions({
+            text: logNote.trim(),
+            sourceType: logTarget.type === 'wrap' ? 'wrap_quote_note' : 'estimate_note',
+            sourceId: logTarget.id,
+            contextLabel: `${logTarget.number}${logTarget.customer ? ` — ${logTarget.customer}` : ''}`,
+            contextUrl: deepLinks.quoteFollowUps(logTarget.type, logTarget.id),
+          });
+        }
         setLogTarget(null);
         setLogNote('');
         setLogRemindAt('');
@@ -470,11 +482,11 @@ export default function QuotesPage() {
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
               {logTarget.number} — {logTarget.customer} · {fmtMoney(logTarget.total)}
             </div>
-            <textarea
+            <MentionTextArea
               autoFocus
               value={logNote}
-              onChange={e => setLogNote(e.target.value)}
-              placeholder="What did the customer say? (e.g. vehicles arrive in September)"
+              onChange={v => setLogNote(v.slice(0, 2000))}
+              placeholder="What did the customer say? (e.g. vehicles arrive in September) — @ tags a teammate"
               style={{
                 width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px',
                 background: 'var(--input-bg)', border: '1px solid var(--border)',

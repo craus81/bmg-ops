@@ -1189,6 +1189,8 @@ export default function SettingsPage() {
           overrides={prefs.type_channels}
           accountInApp={prefs.notify_in_app}
           accountEmail={prefs.notify_email}
+          emailMessages={prefs.email_messages}
+          emailMentions={prefs.email_mentions ?? true}
           onChange={next => setPrefs({ ...prefs, type_channels: next })}
         />
       </div>

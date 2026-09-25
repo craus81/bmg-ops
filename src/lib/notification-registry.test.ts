@@ -97,6 +97,30 @@ describe('registry shape', () => {
   });
 });
 
+describe('direct messages and mentions', () => {
+  it('lets push be switched on or off for both, and defaults it on', () => {
+    for (const type of ['message', 'mention']) {
+      expect(getNotificationType(type)!.alwaysOn).toBeFalsy();
+      expect(channelsForType(type, null)).toContain('push');
+      expect(channelsForType(type, { notify_in_app: true, type_channels: { [type]: [] } })).not.toContain('push');
+    }
+  });
+
+  it('keeps direct-message in-app unconditional and email on its own switch', () => {
+    expect(channelsForType('message', { notify_in_app: true, type_channels: { message: [] } })).toEqual(['in_app']);
+    expect(channelsForType('message', { notify_in_app: true, email_messages: true })).toEqual(['in_app', 'push', 'email']);
+    expect(channelsForType('message', { notify_in_app: true, notify_email: true, type_channels: { message: ['email'] } }))
+      .toEqual(['in_app']); // a matrix override can't turn message email on
+  });
+
+  it('emails a mention unless the person turned "Email me when I\'m mentioned" off', () => {
+    expect(channelsForType('mention', null)).toEqual(['in_app', 'push', 'email']);
+    expect(channelsForType('mention', { notify_in_app: true, notify_email: false })).toEqual(['in_app', 'push', 'email']);
+    expect(channelsForType('mention', { notify_in_app: true, email_mentions: false })).toEqual(['in_app', 'push']);
+    expect(channelsForType('mention', { notify_in_app: true, type_channels: { mention: ['in_app'] } })).toEqual(['in_app', 'email']);
+  });
+});
+
 describe('channelsForType', () => {
   const prefsOn = { notify_in_app: true, notify_email: true };
   const prefsInAppOnly = { notify_in_app: true, notify_email: false };

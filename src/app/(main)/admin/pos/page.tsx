@@ -24,6 +24,9 @@ import { PART_FIELDS, partToCatalogItem, findOrCreateManualPart } from '@/lib/pa
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
 import NumberInput from '@/components/NumberInput';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import PartNumberAutocomplete, { lastPoLabel, type LastPoPrice, type PickedPartHit } from '@/components/PartNumberAutocomplete';
+import { pickPrice } from '@/lib/part-suggest';
 
 interface ImportLine extends ParsedPOLine {
   catalog_match: CatalogItem | null;
@@ -181,6 +184,10 @@ export default function POsPage() {
   // Staging form for adding a line while building a new PO — mirrors the
   // existing-PO "+ Add Line" form (catalog prefill + free-text fallback).
   const [createLineForm, setCreateLineForm] = useState({ part_number: '', quantity: '1', unit_price: '' });
+  // Customer's last PO price per staged part (upper-cased part number) —
+  // kept apart from lineItems, which are inserted as-is.
+  const [createLastPo, setCreateLastPo] = useState<Record<string, LastPoPrice>>({});
+  const [creatingPo, setCreatingPo] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [poSearch, setPoSearch] = useState('');
   // Deep link: ?q=<term> (universal search "View all") prefills the list search.
@@ -493,7 +500,8 @@ export default function POsPage() {
   const [pendingNoteSaving, setPendingNoteSaving] = useState<string | null>(null);
   const savePendingNote = async (id: string) => {
     const draft = pendingNoteDraft[id] ?? '';
-    const current = pendingPOs.find(p => p.id === id)?.review_note ?? '';
+    const pending = pendingPOs.find(p => p.id === id);
+    const current = pending?.review_note ?? '';
     if (draft === current) return;
     setPendingNoteSaving(id);
     try {
@@ -504,6 +512,20 @@ export default function POsPage() {
       });
       if (res.ok) {
         setPendingPOs(prev => prev.map(p => p.id === id ? { ...p, review_note: draft.trim() || null } : p));
+        // Not a PO yet (still an email in the import queue), so no record
+        // id — the mention links back to this entry in the pending queue.
+        if (pending?.message_id && draft.trim()) {
+          const poNum = pending.raw_extraction?.po_number || pending.po_number;
+          const cust = pending.raw_extraction?.customer;
+          reportMentions({
+            text: draft.trim(),
+            sourceType: 'po_note',
+            sourceId: null,
+            contextLabel: `Pending PO${poNum ? ` #${poNum}` : ''}${cust ? ` · ${cust}` : ''}`,
+            contextUrl: deepLinks.poPendingReview(pending.message_id),
+            previousText: current,
+          });
+        }
       }
     } catch { /* left in the draft for a retry on next blur */ }
     setPendingNoteSaving(null);
@@ -985,28 +1007,61 @@ export default function POsPage() {
     setShowImport(false);
   };
 
-  // Quick-pick from the catalog dropdown when building a new PO: prefill the
-  // part number and price so the user can adjust qty/price before adding.
-  const pickCreateLinePart = (catId: string) => {
-    const item = catalog.find((c) => c.id === catId);
-    if (!item) return;
-    setCreateLineForm((prev) => ({ ...prev, part_number: item.part_number, unit_price: item.price.toString() }));
-  };
-
-  // Stage a line for the new PO. Mirrors the existing-PO "+ Add Line" form:
-  // catalog parts link part_id; free-typed parts stage with part_id null.
-  const addCreateLine = async () => {
-    const partNum = createLineForm.part_number.trim();
-    if (!partNum) { await dialog.alert('Enter or pick a part number'); return; }
+  // Picking a suggestion adds it to the new PO straight away at the parts
+  // list sell price (the customer's last PO price when the list has none);
+  // the staged row's price stays editable.
+  const pickCreatePart = (hit: PickedPartHit) => {
     const qty = parseInt(createLineForm.quantity) || 1;
-    const price = parseFloat(createLineForm.unit_price) || 0;
-    const catalogMatch = catalog.find((c) => c.part_number.toUpperCase() === partNum.toUpperCase());
-    setLineItems((prev) => [...prev, { part_id: catalogMatch?.id || null, part_number: partNum, quantity: qty, unit_price: price }]);
+    setLineItems((prev) => [...prev, { part_id: hit.id, part_number: hit.item_number, quantity: qty, unit_price: pickPrice(hit.sales_price, hit.lastPo) }]);
+    const lastPo = hit.lastPo;
+    if (lastPo) setCreateLastPo((prev) => ({ ...prev, [hit.item_number.toUpperCase()]: lastPo }));
     setCreateLineForm({ part_number: '', quantity: '1', unit_price: '' });
   };
 
+  // The line typed into Add Part but not added yet (null when the box is
+  // empty). Free-typed parts link part_id when the number is in the catalog.
+  const pendingCreateLine = () => {
+    const partNum = createLineForm.part_number.trim();
+    if (!partNum) return null;
+    const qty = parseInt(createLineForm.quantity) || 1;
+    const price = parseFloat(createLineForm.unit_price) || 0;
+    const catalogMatch = catalog.find((c) => c.part_number.toUpperCase() === partNum.toUpperCase());
+    return { part_id: catalogMatch?.id || null, part_number: partNum, quantity: qty, unit_price: price };
+  };
+
+  const addCreateLine = async () => {
+    const line = pendingCreateLine();
+    if (!line) { await dialog.alert('Enter or pick a part number'); return; }
+    setLineItems((prev) => [...prev, line]);
+    setCreateLineForm({ part_number: '', quantity: '1', unit_price: '' });
+  };
+
+  // Why Create PO can't run yet ('' = ready). Shown under the buttons.
+  const createPoMissing = !form.po_number.trim()
+    ? 'Add a PO number'
+    : !form.customer.trim()
+      ? 'Pick a customer'
+      : lineItems.length === 0 && !createLineForm.part_number.trim()
+        ? 'Add at least one part'
+        : '';
+
   const handleCreate = async () => {
-    if (!form.po_number || !form.customer || lineItems.length === 0 || !user) return null;
+    // A part still sitting in the Add Part box counts — it used to be
+    // silently left off (and kept the buttons gray on its own).
+    const pending = pendingCreateLine();
+    const lines = pending ? [...lineItems, pending] : lineItems;
+    if (!form.po_number.trim() || !form.customer.trim() || lines.length === 0 || creatingPo) return null;
+    if (!user) { await dialog.alert('Still loading your account — try again in a moment.'); return null; }
+    setCreatingPo(true);
+    try {
+      return await insertNewPo(lines);
+    } finally {
+      setCreatingPo(false);
+    }
+  };
+
+  const insertNewPo = async (lines: typeof lineItems) => {
+    if (!user) return null;
     const hasShipTo = Object.values(createShipTo).some(v => (v || '').toString().trim());
     // The customer picker already resolves as the user types/picks/creates;
     // only fall back to re-resolving here for free text that was typed
@@ -1030,16 +1085,26 @@ export default function POsPage() {
       .single();
 
     if (!po || error) { await dialog.alert('Error: ' + error?.message); return null; }
+    if (po.notes) {
+      reportMentions({
+        text: po.notes,
+        sourceType: 'po_note',
+        sourceId: po.id,
+        contextLabel: `PO #${po.po_number}${customer ? ` · ${customer}` : ''}`,
+        contextUrl: deepLinks.po(po.id),
+      });
+    }
 
     const { data: items } = await supabase
       .from('po_line_items')
-      .insert(lineItems.map((li) => ({ po_id: po.id, ...li })))
+      .insert(lines.map((li) => ({ po_id: po.id, ...li })))
       .select();
 
     setPos((prev) => [{ ...po, line_items: (items as POLineItem[]) || [] }, ...prev]);
     setForm({ po_number: '', customer: 'Masterack', customer_netsuite_id: null, ordered_date: '', requested_delivery_date: '', notes: '' });
     setLineItems([]);
     setCreateLineForm({ part_number: '', quantity: '1', unit_price: '' });
+    setCreateLastPo({});
     setCreateShipToId('');
     setCreateShipTo({});
     setShowCreate(false);
@@ -2249,18 +2314,21 @@ export default function POsPage() {
                       >Dismiss</button>
                     </div>
                   </div>
-                  {/* Reviewer note — why this hasn't been imported yet. Saved on blur. */}
-                  <input
-                    value={pendingNoteDraft[p.id] ?? p.review_note ?? ''}
-                    onChange={e => setPendingNoteDraft(prev => ({ ...prev, [p.id]: e.target.value }))}
-                    onBlur={() => savePendingNote(p.id)}
-                    placeholder="Note — why not imported yet (waiting on revised PDF, pricing question…)"
-                    style={{
-                      width: '100%', marginTop: '8px', padding: '6px 8px', borderRadius: '6px',
-                      border: '1px solid var(--border)', background: 'var(--subtle-bg)',
-                      color: 'var(--text-body)', fontSize: '11px',
-                    }}
-                  />
+                  {/* Reviewer note — why this hasn't been imported yet. Saved on
+                      blur (the wrapper catches the textarea's bubbling blur;
+                      picking an @name keeps focus, so it doesn't save early). */}
+                  <div onBlur={() => savePendingNote(p.id)} style={{ marginTop: '8px' }}>
+                    <MentionTextArea
+                      value={pendingNoteDraft[p.id] ?? p.review_note ?? ''}
+                      onChange={v => setPendingNoteDraft(prev => ({ ...prev, [p.id]: v.slice(0, 2000) }))}
+                      placeholder="Note — why not imported yet (waiting on revised PDF, pricing question…) — @ tags a teammate"
+                      style={{
+                        width: '100%', padding: '6px 8px', borderRadius: '6px',
+                        border: '1px solid var(--border)', background: 'var(--subtle-bg)',
+                        color: 'var(--text-body)', fontSize: '11px',
+                      }}
+                    />
+                  </div>
                   {pendingNoteSaving === p.id && (
                     <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>Saving…</div>
                   )}
@@ -3157,10 +3225,10 @@ export default function POsPage() {
           </div>
           <div style={{ marginBottom: '8px' }}>
             <label style={labelStyle}>Notes</label>
-            <textarea
+            <MentionTextArea
               value={form.notes}
-              onChange={e => setForm({ ...form, notes: e.target.value })}
-              placeholder="Internal notes about this PO"
+              onChange={v => setForm({ ...form, notes: v })}
+              placeholder="Internal notes about this PO — @ tags a teammate"
               rows={2}
               style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
             />
@@ -3168,14 +3236,16 @@ export default function POsPage() {
           <div style={{ marginBottom: '8px' }}>
             <label style={labelStyle}>Add Part</label>
             <div style={{ marginBottom: '6px' }}>
-              <CatalogPartSearch catalog={catalog} customer={form.customer} onPick={(c) => pickCreateLinePart(c.id)} />
+              <PartNumberAutocomplete
+                value={createLineForm.part_number}
+                onChange={(text) => setCreateLineForm((prev) => ({ ...prev, part_number: text }))}
+                onPick={pickCreatePart}
+                onEnter={() => { if (createLineForm.part_number.trim()) addCreateLine(); }}
+                customer={form.customer}
+                placeholder="Type a part number or name…"
+                style={{ ...inputStyle, fontWeight: 700 }}
+              />
             </div>
-            <input
-              value={createLineForm.part_number}
-              onChange={(e) => setCreateLineForm({ ...createLineForm, part_number: e.target.value })}
-              placeholder="Type or pick a part number…"
-              style={{ ...inputStyle, marginBottom: '6px', fontWeight: 700 }}
-            />
             <div style={{ display: 'flex', gap: '6px', alignItems: 'end' }}>
               <div style={{ flex: 1 }}>
                 <label style={{ ...labelStyle, fontSize: '9px' }}>Qty</label>
@@ -3199,8 +3269,35 @@ export default function POsPage() {
             <div style={{ marginBottom: '8px' }}>
               {lineItems.map((li, i) => (
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
-                  <div style={{ flex: 1, fontSize: '13px', fontWeight: 700 }}>{li.part_number}</div>
-                  <div style={{ fontSize: '12px', color: 'var(--text-label)' }}>{fmt(li.unit_price)}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '13px', fontWeight: 700 }}>{li.part_number}</div>
+                    {(() => {
+                      const lp = createLastPo[li.part_number.toUpperCase()];
+                      if (!lp) return null;
+                      return lp.price === li.unit_price ? (
+                        <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>{lastPoLabel(lp)}</div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setLineItems((prev) => prev.map((item, j) => j === i ? { ...item, unit_price: lp.price } : item))}
+                          title="Use this customer's last PO price"
+                          style={{ fontSize: '10px', color: '#60a5fa', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}
+                        >
+                          {lastPoLabel(lp)} · Use
+                        </button>
+                      );
+                    })()}
+                  </div>
+                  <NumberInput
+                    step="0.01"
+                    aria-label="Unit price"
+                    value={li.unit_price}
+                    onChange={(e) => {
+                      const price = parseFloat(e.target.value) || 0;
+                      setLineItems((prev) => prev.map((item, j) => j === i ? { ...item, unit_price: price } : item));
+                    }}
+                    style={{ ...inputStyle, width: '90px', textAlign: 'right' }}
+                  />
                   <NumberInput
                     value={li.quantity}
                     onChange={(e) => {
@@ -3222,28 +3319,35 @@ export default function POsPage() {
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
               onClick={handleCreate}
-              disabled={!form.po_number || lineItems.length === 0}
+              disabled={!!createPoMissing || creatingPo}
               style={{
                 flex: 1, padding: '12px', borderRadius: '10px', background: '#22c55e',
                 color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none',
-                opacity: form.po_number && lineItems.length > 0 ? 1 : 0.4,
+                opacity: !createPoMissing && !creatingPo ? 1 : 0.4,
               }}
             >
-              Create PO
+              {creatingPo ? 'Creating…' : 'Create PO'}
             </button>
             <button
               onClick={handleCreateAndGraphics}
-              disabled={!form.po_number || lineItems.length === 0}
+              disabled={!!createPoMissing || creatingPo}
               title="Save the PO and jump straight into the graphics-job form with the customer and PO# prefilled"
               style={{
                 flex: 1, padding: '12px', borderRadius: '10px', background: '#a78bfa',
                 color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none',
-                opacity: form.po_number && lineItems.length > 0 ? 1 : 0.4,
+                opacity: !createPoMissing && !creatingPo ? 1 : 0.4,
               }}
             >
               Create PO + Graphics Job
             </button>
           </div>
+          {createPoMissing ? (
+            <div style={{ marginTop: '6px', fontSize: '11px', color: '#fbbf24', textAlign: 'center' }}>{createPoMissing} to create the PO.</div>
+          ) : createLineForm.part_number.trim() ? (
+            <div style={{ marginTop: '6px', fontSize: '11px', color: 'var(--text-label)', textAlign: 'center' }}>
+              {createLineForm.part_number.trim()} will be added when you create the PO.
+            </div>
+          ) : null}
         </div>
       )}
 
@@ -3421,72 +3525,6 @@ export default function POsPage() {
 
 const labelStyle: React.CSSProperties = { display: 'block', fontSize: '10px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' };
 const inputStyle: React.CSSProperties = { width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '13px' };
-
-// Inline search/autocomplete over the loaded catalog. Replaces the long
-// part-number dropdown: type to filter, click a hit to fill the line's part
-// number + price. The plain-text part-number field below stays as the
-// fallback for parts that aren't in the catalog.
-function CatalogPartSearch({
-  catalog,
-  customer,
-  onPick,
-  inputStyle: inputStyleProp,
-}: {
-  catalog: CatalogItem[];
-  customer: string;
-  onPick: (item: CatalogItem) => void;
-  inputStyle?: React.CSSProperties;
-}) {
-  const [query, setQuery] = useState('');
-  // Part numbers visually conflate O/0; normalize both sides (mirrors PartPicker).
-  const norm = (s: string) => (s || '').toLowerCase().replace(/o/g, '0');
-  const q = query.trim();
-  const matches = q
-    ? (() => {
-        const n = norm(q);
-        return catalog
-          .filter((c) => c.customer === customer || !c.customer)
-          .filter((c) =>
-            norm(c.part_number).includes(n) ||
-            norm(c.graphic_package || '').includes(n) ||
-            norm(c.end_customer || '').includes(n)
-          )
-          .slice(0, 20);
-      })()
-    : [];
-  return (
-    <div>
-      <input
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search catalog by part #, package, or customer…"
-        style={inputStyleProp || inputStyle}
-      />
-      {matches.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '6px', maxHeight: '220px', overflowY: 'auto' }}>
-          {matches.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              onClick={() => { onPick(c); setQuery(''); }}
-              style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px',
-                padding: '8px 10px', borderRadius: '8px', textAlign: 'left', width: '100%',
-                background: 'var(--input-bg)', border: '1px solid var(--border)', cursor: 'pointer',
-              }}
-            >
-              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>
-                {c.part_number}
-                <span style={{ fontWeight: 400, color: 'var(--text-label)' }}> — {c.graphic_package || c.end_customer}</span>
-              </span>
-              <span style={{ fontSize: '11px', color: 'var(--text-label)', flexShrink: 0 }}>${c.price}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function ShipToPicker({
   label,

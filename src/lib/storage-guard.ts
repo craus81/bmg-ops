@@ -51,7 +51,8 @@ export const ALLOWED_STORAGE_PREFIXES = new Set<string>([
 //                      is NOT listed here, so leaving `ledger` off this list
 //                      would hand every approved account the whole document
 //                      store. Its bytes are served only by the record-scoped
-//                      GET /api/ledger/documents/[id] (finance/executive).
+//                      GET /api/ledger/documents/[id] (ledger readers; sales
+//                      only for pre-cutover QuickBooks sales documents).
 const DENIED_STORAGE_PREFIXES = new Set<string>(['signed-documents', 'ledger']);
 
 // Top-level prefixes are lowercase kebab tokens (photos, graphics-proofs, …).

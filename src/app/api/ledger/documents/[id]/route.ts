@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
-import { requireRole } from '@/lib/api-auth';
+import { getProfileRoles, requireMoney } from '@/lib/api-auth';
+import { isHistoryDocumentParent, isLedgerReader } from '@/lib/ledger/history';
 import { r2Get, r2PresignGet } from '@/lib/r2';
 import { LEDGER_R2_PREFIX, isSafeLedgerStoragePath, ledgerDocumentHeaders } from '@/lib/ledger/storage';
 
@@ -16,10 +17,12 @@ export const maxDuration = 60;
  * The `ledger` prefix is denied on the generic /api/storage routes
  * (src/lib/storage-guard.ts), so there is no "staff can read any non-denied
  * prefix" path into the QuickBooks/NetSuite history: every read is
- * record-scoped and role-gated here. `requireRole(req, ['finance',
- * 'executive'])` is the ledger reader tier — admins and super admins
- * auto-pass inside requireRole, executive is listed because requireStaff
- * excludes it, and finance is listed because requireFinancials excludes it.
+ * record-scoped and role-gated here. The ledger reader tier (finance,
+ * executive, admin, super admin) opens any stored document. Since
+ * 2026-09-24 the rest of the money wall (sales) may open a document too, but
+ * ONLY one attached to a pre-cutover QuickBooks sales document the history
+ * lists show them (src/lib/ledger/history.ts) — so estimators can see a past
+ * build's PDF while bills, payments and journals stay with the readers.
  *
  * Nothing here ever mints or persists a public URL: the default response
  * streams the object with `Cache-Control: private, no-store`, and
@@ -36,8 +39,9 @@ export const maxDuration = 60;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireRole(req, ['finance', 'executive']);
+  const auth = await requireMoney(req);
   if (auth.error) return auth.error;
+  const reader = isLedgerReader(getProfileRoles(auth.profile));
 
   const id = (params.id || '').trim();
   if (!UUID_RE.test(id)) return NextResponse.json({ error: 'Bad id' }, { status: 400 });
@@ -45,7 +49,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const service = createServiceClient();
   const { data: row, error } = await service
     .from('ledger_documents')
-    .select('id, file_name, content_type, storage_path, status, size_bytes')
+    .select('id, file_name, content_type, storage_path, status, size_bytes, entity_table, entity_row_id')
     .eq('id', id)
     .maybeSingle();
 
@@ -62,6 +66,19 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   }
 
   if (!row) return NextResponse.json({ error: 'Document not found' }, { status: 404 });
+
+  // Outside the reader tier, a document that isn't a history sales
+  // document's answers exactly like a missing one: no hint that it exists.
+  if (!reader) {
+    let allowed = false;
+    try {
+      allowed = await isHistoryDocumentParent(service, row.entity_table ?? null, row.entity_row_id ?? null);
+    } catch (err) {
+      console.error('ledger document scope check failed:', err);
+      return NextResponse.json({ error: 'Could not check access to the document' }, { status: 500 });
+    }
+    if (!allowed) return NextResponse.json({ error: 'Document not found' }, { status: 404 });
+  }
 
   const storagePath = row.storage_path ? String(row.storage_path) : '';
   if (row.status !== 'stored' || !storagePath) {

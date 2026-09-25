@@ -10,6 +10,8 @@ import {
   type QuickAction, type RecentRecord, type PaletteAccess,
 } from '@/lib/command-palette';
 import BriefMeSheet, { type BriefTarget } from '@/components/BriefMeSheet';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import { deepLinks } from '@/lib/deep-links';
 
 interface UniversalSearchProps {
   open: boolean;
@@ -323,6 +325,14 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
       });
       const body = await res.json();
       if (!res.ok) { setCallMsg(body?.error || 'Could not log the call.'); return; }
+      // The call lands on the prospect's activity feed — tag from there.
+      reportMentions({
+        text: [callForm.summary.trim(), callForm.details.trim()].filter(Boolean).join('\n'),
+        sourceType: 'prospect_note',
+        sourceId: callFor.id,
+        contextLabel: callFor.company_name || 'Customer record',
+        contextUrl: deepLinks.prospect(callFor.id),
+      });
       setCallMsg('saved');
     } catch (e: any) {
       setCallMsg(e?.message || 'Could not log the call.');
@@ -664,12 +674,11 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
                   maxLength={300}
                   style={{ width: '100%', boxSizing: 'border-box', padding: '10px', borderRadius: '9px', fontSize: '13px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', marginBottom: '8px' }}
                 />
-                <textarea
+                <MentionTextArea
                   value={callForm.details}
-                  onChange={e => setCallForm(f => ({ ...f, details: e.target.value }))}
-                  placeholder="Details (optional)"
+                  onChange={v => setCallForm(f => ({ ...f, details: v.slice(0, 2000) }))}
+                  placeholder="Details (optional) — @ tags a teammate"
                   rows={3}
-                  maxLength={2000}
                   style={{ width: '100%', boxSizing: 'border-box', padding: '10px', borderRadius: '9px', fontSize: '13px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', resize: 'vertical', fontFamily: 'inherit', marginBottom: '8px' }}
                 />
                 <div style={{ marginBottom: '12px' }}>

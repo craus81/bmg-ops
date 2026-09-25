@@ -40,6 +40,7 @@ import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInv
 import PhoneInput from '@/components/PhoneInput';
 import { exportProspectPDF } from '@/lib/prospect-pdf';
 import { deepLinks } from '@/lib/deep-links';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { LEAD_SOURCES, OPP_TYPES } from '@/lib/lead-sources';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import { usd2 } from '@/lib/financials-print';
@@ -51,6 +52,8 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import { samePerson } from '@/lib/primary-contact';
 import NumberInput from '@/components/NumberInput';
 import BriefMeSheet from '@/components/BriefMeSheet';
+import QuickBooksRecordModal from '@/components/QuickBooksRecordModal';
+import type { HistoryRow } from '@/lib/ledger/history';
 import { uploadRecordFile } from '@/lib/record-file-upload';
 
 interface Prospect {
@@ -211,6 +214,9 @@ interface Txn {
   /** Set only for the three types NetSuite will render a PDF for. */
   nsPdfType: CustDocument['type'] | null;
   origin: TxnOrigin | null;
+  /** Imported from QuickBooks (before the cutover): read-only, never in a
+   *  balance, opens its own record window (src/lib/ledger/history.ts). */
+  qbo: { id: string; pdfDocumentId: string | null } | null;
 }
 
 const TXN_FILTERS = [
@@ -251,7 +257,7 @@ const TXN_SORT_COLS = {
   due: (t: Txn) => t.dueDate,
   status: (t: Txn) => STATUS_RANK[t.statusNorm],
   amount: (t: Txn) => t.total,
-  source: (t: Txn) => (t.origin ? 0 : 1),
+  source: (t: Txn) => (t.origin ? 0 : t.qbo ? 2 : 1),
 };
 
 const OPP_STAGES: Record<string, string> = { lead: 'Lead', quoted: 'Quoted', negotiating: 'Negotiating', won: 'Won', lost: 'Lost' };
@@ -301,7 +307,7 @@ function Kpi({ label, value, sub }: { label: string; value: string; sub?: string
 export default function CustomerRecordPage() {
   const router = useRouter();
   const params = useParams();
-  const { user, profile, isAdmin, hasFeature, loading: authLoading } = useAuth();
+  const { user, profile, isAdmin, hasFeature, canSeeMoney, loading: authLoading } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
 
@@ -337,6 +343,12 @@ export default function CustomerRecordPage() {
   const [billSaving, setBillSaving] = useState(false);
 
   const [docs, setDocs] = useState<CustDocument[] | null>(null);
+  // QuickBooks history linked to this customer (pre-cutover, read-only).
+  const [qbRows, setQbRows] = useState<HistoryRow[] | null>(null);
+  const [qbHasMore, setQbHasMore] = useState(false);
+  const [qbLoading, setQbLoading] = useState(false);
+  const [qbError, setQbError] = useState<string | null>(null);
+  const [qbOpenId, setQbOpenId] = useState<string | null>(null);
   const [docsHasMore, setDocsHasMore] = useState(false);
   const [docsLoading, setDocsLoading] = useState(false);
   const [docsError, setDocsError] = useState<string | null>(null);
@@ -487,6 +499,24 @@ export default function CustomerRecordPage() {
   const [actText, setActText] = useState('');
   const [actSaving, setActSaving] = useState(false);
 
+  // @mentions in any note on this record land back on this record page.
+  // sourceId is the CRM row (prospect_note) when one exists; a mirror-only
+  // customer has none, so it reports null with the ns-<id> page link.
+  const reportRecordMentions = (text: string, previousText?: string) => {
+    const url = prospect
+      ? deepLinks.prospect(prospect.id)
+      : customer?.netsuite_id ? deepLinks.customerByNetsuiteId(customer.netsuite_id) : null;
+    if (!url) return;
+    reportMentions({
+      text,
+      sourceType: 'prospect_note',
+      sourceId: prospect?.id ?? null,
+      contextLabel: prospect?.company_name || customer?.company_name || 'Customer record',
+      contextUrl: url,
+      ...(previousText !== undefined ? { previousText } : {}),
+    });
+  };
+
   const logActivity = async () => {
     const text = actText.trim();
     if (!text || !prospect || actSaving) return;
@@ -504,6 +534,7 @@ export default function CustomerRecordPage() {
     }
     setActivities(prev => [{ ...(data as Activity), creator_name: profile?.full_name || null }, ...prev]);
     setActText('');
+    reportRecordMentions(text);
     // Owner decision 2026-09-07 (R3-16a): human notes sync to NetSuite. A
     // linked record pushes the fresh entry (and any unsynced backlog) right
     // away; unlinked records push at promotion. Fire-and-forget — the sync
@@ -604,6 +635,7 @@ export default function CustomerRecordPage() {
         await dialog.alert(`Could not save: ${body?.error || `HTTP ${res.status}`}`);
         return;
       }
+      reportRecordMentions(patch.notes || '', prospect.notes || '');
       setProspect(prev => (prev ? { ...prev, ...patch } : prev));
       setEditOpen(false);
     } catch (err: any) {
@@ -852,6 +884,7 @@ export default function CustomerRecordPage() {
       await supabase.from('customers').update({ internal_notes: merged }).eq('id', customer.id);
       setCustomer(prev => (prev ? { ...prev, internal_notes: merged } : prev));
     }
+    reportRecordMentions(note);
     setCustomer(prev => (prev ? { ...prev, ...patch } : prev));
     if (choice) {
       setParentRef({ id: choice.id, netsuite_id: choice.netsuite_id, company_name: choice.company_name, source: 'manual' });
@@ -986,6 +1019,7 @@ export default function CustomerRecordPage() {
     const { error } = await supabase.from('customers').update(patch).eq('id', customer.id);
     setBillSaving(false);
     if (error) { await dialog.alert(`Could not save billing: ${error.message}`); return; }
+    reportRecordMentions(patch.billing_notes || '', customer.billing_notes || '');
     setCustomer(prev => (prev ? { ...prev, ...patch } : prev));
     setBillDirty(false);
   };
@@ -1039,6 +1073,7 @@ export default function CustomerRecordPage() {
       }
       : o)));
     setLostPromptFor(null);
+    if (lost?.note.trim()) reportRecordMentions(lost.note.trim());
     logAuto('status_change', `${opp.title}: ${OPP_STAGES[opp.stage] || opp.stage} → ${OPP_STAGES[newStage] || newStage}${lost ? ` (${LOST_REASONS[lost.reason] || lost.reason}${lost.note.trim() ? ` — ${lost.note.trim()}` : ''})` : ''}`);
   };
 
@@ -1259,6 +1294,7 @@ export default function CustomerRecordPage() {
       loadNsProfile(nsId);
     }
     loadQuotesAndEstimates(p?.company_name || cust?.company_name || null, nsId);
+    if (cust && canSeeMoney) loadQbHistory(cust.id, false);
     if (p) loadFiles(p.id);
   };
 
@@ -1490,6 +1526,26 @@ export default function CustomerRecordPage() {
     setDocsLoading(false);
   };
 
+  // QuickBooks history linked to this customer. Only rows before the cutover
+  // come back, so the NetSuite copy of the overlap never shows twice.
+  const QB_PAGE_SIZE = 200;
+  const loadQbHistory = async (customerId: string, append: boolean) => {
+    if (qbLoading) return;
+    setQbLoading(true);
+    setQbError(null);
+    try {
+      const offset = append ? (qbRows?.length || 0) : 0;
+      const res = await fetch(`/api/ledger/history?customerId=${customerId}&limit=${QB_PAGE_SIZE}&offset=${offset}`);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.success) throw new Error(body.error || `HTTP ${res.status}`);
+      setQbRows(prev => (append ? [...(prev || []), ...(body.rows || [])] : (body.rows || [])));
+      setQbHasMore(!!body.hasMore);
+    } catch (err: any) {
+      setQbError(err?.message || 'Could not load QuickBooks history');
+    }
+    setQbLoading(false);
+  };
+
   // NetSuite's own PDF for a transaction (the document of record).
   const viewPdf = async (t: Txn) => {
     if (!t.nsId || !t.nsPdfType) return;
@@ -1506,7 +1562,7 @@ export default function CustomerRecordPage() {
   // number: the email screen keys the PDF lookup, the already-sent check and
   // the invoice_emails log on the invoice NUMBER. Sales orders, estimates
   // and payments in the same list have their own flows.
-  const emailableTxns = (list: Txn[]) => list.filter(t => t.kind === 'invoice' && !!t.number);
+  const emailableTxns = (list: Txn[]) => list.filter(t => t.kind === 'invoice' && !!t.number && !t.qbo);
   const asEmailable = (t: Txn): EmailableInvoice => ({
     invoiceId: t.nsId || undefined,
     invoiceNumber: t.number,
@@ -1822,7 +1878,7 @@ export default function CustomerRecordPage() {
         kind: d.type, typeLabel: d.typeLabel, number: d.number,
         date: d.date, dueDate: d.dueDate, status: d.status, statusNorm: d.statusNorm,
         daysPastDue: d.daysPastDue, total: d.total,
-        nsId: d.id, nsPdfType: d.type, origin,
+        nsId: d.id, nsPdfType: d.type, origin, qbo: null,
       });
     }
     // FleetSuite quotes that no loaded NetSuite document accounts for —
@@ -1840,6 +1896,7 @@ export default function CustomerRecordPage() {
           kind: 'estimate', id: e.id, number: e.estimate_number,
           url: deepLinks.estimate(e.id), pdfUrl: deepLinks.estimatePdf(e.id),
         },
+        qbo: null,
       });
     }
     for (const q of wrapQuotes || []) {
@@ -1855,6 +1912,7 @@ export default function CustomerRecordPage() {
           kind: 'wrapQuote', id: q.id, number: q.quote_number,
           url: deepLinks.wrapQuote(q.id), pdfUrl: deepLinks.wrapQuotePdf(q.id),
         },
+        qbo: null,
       });
     }
     // Payments received + credit memos. NetSuite's PDF RESTlet only renders
@@ -1865,11 +1923,27 @@ export default function CustomerRecordPage() {
         kind: p.type, typeLabel: p.type === 'credit' ? 'Credit' : 'Payment',
         number: p.tranid, date: p.date, dueDate: null,
         status: p.memo || '', statusNorm: 'other', daysPastDue: 0, total: p.amount,
-        nsId: p.id, nsPdfType: null, origin: null,
+        nsId: p.id, nsPdfType: null, origin: null, qbo: null,
+      });
+    }
+    // QuickBooks history. Its status is a word, never an open amount, so
+    // nothing here reaches the open balance or the Open/Past due chips.
+    for (const r of qbRows || []) {
+      const kind: TxnKind =
+        r.docType === 'estimate' ? 'estimate'
+        : r.docType === 'credit_memo' || r.docType === 'refund_receipt' ? 'credit'
+        : 'invoice';
+      rows.push({
+        key: `qb-${r.id}`,
+        kind, typeLabel: r.typeLabel, number: r.number,
+        date: r.date, dueDate: r.dueDate,
+        status: r.status, statusNorm: r.paid ? 'paid' : 'other', daysPastDue: 0, total: r.total,
+        nsId: null, nsPdfType: null, origin: null,
+        qbo: { id: r.id, pdfDocumentId: r.pdfDocumentId },
       });
     }
     return rows;
-  }, [docs, payments, estimatesList, wrapQuotes, originByNsDoc]);
+  }, [docs, payments, estimatesList, wrapQuotes, originByNsDoc, qbRows]);
 
   // Transactions: filter chips + search narrow the loaded set; headers sort it.
   const filteredTxns = useMemo(() => {
@@ -2261,9 +2335,9 @@ export default function CustomerRecordPage() {
                   <input style={cInput} placeholder="Portal name (e.g. Masterack, Bogle) *" value={billForm.portal}
                     onChange={e => { setBillForm(f => ({ ...f, portal: e.target.value })); setBillDirty(true); }} />
                 )}
-                <textarea style={{ ...cInput, resize: 'vertical', fontFamily: 'inherit' }} rows={2}
-                  placeholder="Billing notes — portal URL, required fields, cadence…"
-                  value={billForm.notes} onChange={e => { setBillForm(f => ({ ...f, notes: e.target.value })); setBillDirty(true); }} />
+                <MentionTextArea style={{ ...cInput, resize: 'vertical', fontFamily: 'inherit' }} rows={2}
+                  placeholder="Billing notes — portal URL, required fields, cadence… — @ tags a teammate"
+                  value={billForm.notes} onChange={v => { setBillForm(f => ({ ...f, notes: v })); setBillDirty(true); }} />
                 {billForm.workflow === 'po_portal' && (
                   <div style={{ fontSize: '10.5px', color: '#fbbf24' }}>
                     Invoice emails for this customer will warn staff to submit in the portal instead.
@@ -2561,8 +2635,8 @@ export default function CustomerRecordPage() {
                       style={{ padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}>
                       {Object.entries(LOST_REASONS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                     </select>
-                    <input value={lostPromptFor.note} onChange={e => setLostPromptFor(p => (p ? { ...p, note: e.target.value } : p))}
-                      placeholder="Optional note (who / what happened)"
+                    <MentionTextArea value={lostPromptFor.note} onChange={v => setLostPromptFor(p => (p ? { ...p, note: v } : p))}
+                      placeholder="Optional note (who / what happened) — @ tags a teammate"
                       style={{ flex: 1, minWidth: '160px', padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }} />
                     <button onClick={() => setOppStage(o, 'lost', { reason: lostPromptFor.reason, note: lostPromptFor.note })}
                       style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.35)', color: '#ef4444' }}>
@@ -2683,11 +2757,11 @@ export default function CustomerRecordPage() {
                   ))}
                 </div>
                 <div style={{ display: 'flex', gap: '6px' }}>
-                  <input
+                  <MentionTextArea
                     value={actText}
-                    onChange={e => setActText(e.target.value)}
+                    onChange={setActText}
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); logActivity(); } }}
-                    placeholder={actType === 'call' ? 'What was said on the call…' : actType === 'email' ? 'What the email covered…' : actType === 'meeting' ? 'What the meeting covered…' : 'Add a note…'}
+                    placeholder={`${actType === 'call' ? 'What was said on the call…' : actType === 'email' ? 'What the email covered…' : actType === 'meeting' ? 'What the meeting covered…' : 'Add a note…'} — @ tags a teammate`}
                     style={{ flex: 1, minWidth: 0, padding: '8px 10px', borderRadius: '8px', fontSize: '12px', background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
                   />
                   <button onClick={logActivity} disabled={actSaving || !actText.trim()} style={{
@@ -2774,7 +2848,7 @@ export default function CustomerRecordPage() {
       {(prospect?.netsuite_id || customer || txns.length > 0) && (
         <div style={card}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '6px' }}>
-            <div style={{ ...eyebrow, marginBottom: 0 }}>Transactions {txns.length > 0 ? `· ${txns.length}${docsHasMore ? '+' : ''}` : ''}</div>
+            <div style={{ ...eyebrow, marginBottom: 0 }}>Transactions {txns.length > 0 ? `· ${txns.length}${docsHasMore || qbHasMore ? '+' : ''}` : ''}</div>
             {openBalance !== null && stInvoices && stInvoices.length > 0 && (
               <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
                 · open balance <strong style={{ color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{usd2(openBalance)}</strong> ({stInvoices.length} invoice{stInvoices.length === 1 ? '' : 's'})
@@ -2873,7 +2947,11 @@ export default function CustomerRecordPage() {
                         <td style={docTd}>
                           <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', display: 'inline-block', minWidth: '76px', textAlign: 'center', background: TXN_BADGE[t.kind].bg, color: TXN_BADGE[t.kind].color }}>{t.typeLabel}</span>
                         </td>
-                        <td style={{ ...docTd, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{t.number}</td>
+                        <td style={{ ...docTd, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
+                          {t.qbo ? (
+                            <button onClick={() => setQbOpenId(t.qbo!.id)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 'inherit', fontWeight: 700, color: 'var(--text-primary)' }}>{t.number}</button>
+                          ) : t.number}
+                        </td>
                         <td style={{ ...docTd, whiteSpace: 'nowrap' }}>
                           {/* Built in FleetSuite? The link opens THAT record —
                               the estimate, wrap quote or graphics job — not the
@@ -2885,6 +2963,14 @@ export default function CustomerRecordPage() {
                               style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '11.5px', fontWeight: 700, color: '#60a5fa' }}
                             >
                               {t.origin.number} ›
+                            </button>
+                          ) : t.qbo ? (
+                            <button
+                              onClick={() => setQbOpenId(t.qbo!.id)}
+                              title="Open the QuickBooks record: its lines, PDF and attachments"
+                              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '11.5px', fontWeight: 700, color: '#2ca01c' }}
+                            >
+                              QuickBooks ›
                             </button>
                           ) : (
                             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>NetSuite</span>
@@ -2913,7 +2999,7 @@ export default function CustomerRecordPage() {
                             )}
                             {/* Email just this invoice — same screen as the
                                 selection action above, scoped to one row. */}
-                            {t.kind === 'invoice' && t.number && (
+                            {t.kind === 'invoice' && t.number && !t.qbo && (
                               <button
                                 onClick={() => setEmailInvoiceTarget({ customerName: name, invoices: [asEmailable(t)] })}
                                 title={`Email invoice #${t.number} to ${name}`}
@@ -2936,6 +3022,20 @@ export default function CustomerRecordPage() {
                                 FleetSuite PDF
                               </a>
                             )}
+                            {t.qbo?.pdfDocumentId && (
+                              <a
+                                href={deepLinks.pdfViewer(deepLinks.ledgerDocument(t.qbo.pdfDocumentId), {
+                                  name: `${t.number}.pdf`,
+                                  back: deepLinks.prospect(String(params?.id || '')),
+                                  backLabel: 'Back to customer',
+                                })}
+                                target="_blank" rel="noopener noreferrer"
+                                title="Open the PDF stored from QuickBooks"
+                                style={{ ...btnSm, padding: '4px 10px' }}
+                              >
+                                QuickBooks PDF
+                              </a>
+                            )}
                           </span>
                         </td>
                       </tr>
@@ -2950,7 +3050,21 @@ export default function CustomerRecordPage() {
               {docsLoading ? 'Loading…' : 'Load more history'}
             </button>
           )}
+          {qbError && <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', padding: '8px 0 0' }}>QuickBooks history unavailable: {qbError}</div>}
+          {customer && qbHasMore && (
+            <button onClick={() => loadQbHistory(customer.id, true)} disabled={qbLoading} style={{ ...btnSm, marginTop: '10px', marginLeft: docs && docsHasMore ? '8px' : 0 }}>
+              {qbLoading ? 'Loading…' : 'Load older QuickBooks history'}
+            </button>
+          )}
         </div>
+      )}
+      {qbOpenId && (
+        <QuickBooksRecordModal
+          recordId={qbOpenId}
+          onClose={() => setQbOpenId(null)}
+          backHref={deepLinks.prospect(String(params?.id || ''))}
+          backLabel="Back to customer"
+        />
       )}
 
       {/* Edit record */}
@@ -3002,7 +3116,9 @@ export default function CustomerRecordPage() {
                   </div>
                 )}
               </div>
-              <textarea style={{ ...cInput, gridColumn: '1 / -1', resize: 'vertical' }} rows={3} placeholder="Notes" value={editForm.notes} onChange={e => setEditForm({ ...editForm, notes: e.target.value })} />
+              <div style={{ gridColumn: '1 / -1' }}>
+                <MentionTextArea style={{ ...cInput, resize: 'vertical' }} rows={3} placeholder="Notes — @ tags a teammate" value={editForm.notes} onChange={v => setEditForm({ ...editForm, notes: v })} />
+              </div>
             </div>
             <div style={{ display: 'flex', gap: '6px', marginTop: '14px' }}>
               <button onClick={deleteRecord} disabled={editSaving} title="Delete this record and everything attached to it" style={{
@@ -3190,8 +3306,8 @@ export default function CustomerRecordPage() {
                 ))}
               </div>
             )}
-            <textarea rows={2} placeholder="Why is this account moving? (required — logged on the record) *"
-              value={parentNote} onChange={e => setParentNote(e.target.value)}
+            <MentionTextArea rows={2} placeholder="Why is this account moving? (required — logged on the record) * — @ tags a teammate"
+              value={parentNote} onChange={setParentNote}
               style={{ ...cInput, resize: 'vertical', fontFamily: 'inherit', marginBottom: '10px' }} />
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               <button onClick={() => saveParent(false)} disabled={parentSaving || !parentChoice || !parentNote.trim()} style={{

@@ -34,6 +34,9 @@ export interface Profile {
    *  orders, estimates, approvals, billing and vehicles all resolve from
    *  it — so an unset value means the login sees nothing. */
   customer_netsuite_id?: string | null;
+  /** This user's own bottom-bar tab ids, in order (migration 325). NULL =
+   *  the role default. See src/lib/nav-tabs.ts. */
+  nav_tabs?: string[] | null;
 }
 
 export interface CatalogItem {

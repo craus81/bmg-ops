@@ -12,7 +12,8 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useMentions, mentionUrl } from '@/lib/use-mentions';
+import { useMentions } from '@/lib/use-mentions';
+import { deepLinks } from '@/lib/deep-links';
 
 export default function MentionsInbox({ showWhenEmpty = false }: { showWhenEmpty?: boolean }) {
   const router = useRouter();
@@ -52,7 +53,7 @@ export default function MentionsInbox({ showWhenEmpty = false }: { showWhenEmpty
       {visible.map(m => (
         <div
           key={m.id}
-          onClick={() => { markRead(m); const url = mentionUrl(m); if (url) router.push(url); }}
+          onClick={() => { markRead(m); router.push(deepLinks.mention(m.id)); }}
           style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', cursor: 'pointer', opacity: m.read_at ? 0.6 : 1 }}
         >
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
@@ -61,7 +62,7 @@ export default function MentionsInbox({ showWhenEmpty = false }: { showWhenEmpty
             {m.context_label && <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}> · {m.context_label}</span>}
           </div>
           {m.note_excerpt && (
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px', whiteSpace: 'pre-wrap' }}>{m.note_excerpt}</div>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px', whiteSpace: 'pre-wrap', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{m.note_excerpt}</div>
           )}
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '3px' }}>
             {new Date(m.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}

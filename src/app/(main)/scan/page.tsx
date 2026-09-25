@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { queuePhoto, photosForScan, deletePhoto, allQueuedPhotos, countByScan, waitingNote } from '@/lib/offline-photos';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
+import { toJpegIfHeic } from '@/lib/heic';
 import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import VinScanner from '@/components/VinScanner';
@@ -107,8 +108,10 @@ export default function ScanPage() {
   // In-app camera session (PhotoSession): tap once, shoot many, Done.
   const [photoSession, setPhotoSession] = useState(false);
 
-  const uploadScanPhoto = async (file: File) => {
+  const uploadScanPhoto = async (picked: File) => {
     if (photoTargets.length === 0) return;
+    // Before the offline queue too, so a queued photo syncs as JPEG.
+    const file = await toJpegIfHeic(picked);
 
     // R6-10: offline, the scan itself is only a local row — there is no
     // scan_log id to hang a photo off yet. Queue the file in IndexedDB

@@ -1,45 +1,18 @@
 'use client';
 
 import { usePathname, useRouter } from 'next/navigation';
-import { useAuth } from '@/components/AuthProvider';
+import { useEffect, useState } from 'react';
 import { theme } from '@/lib/theme';
-import { ROLE_DEFAULT_FEATURES, type FeatureKey } from '@/lib/features';
+import { AI_TAB_ID, type Tab } from '@/lib/nav-tabs';
+import { AI_CHAT_STATE_EVENT, AI_CHAT_TOGGLE_EVENT } from '@/lib/ai-chat-events';
+import { useNavTabs } from '@/components/useNavTabs';
 import {
   Home, Palette, ClipboardCheck, Warehouse, Users,
   CalendarDays, ScanLine, Clock, FileText, Briefcase,
-  LayoutGrid, Settings, MoreHorizontal, Wrench, Receipt,
+  LayoutGrid, Settings, MoreHorizontal, Wrench, Receipt, Bot,
 } from 'lucide-react';
 
-
-export interface Tab {
-  id: string;
-  path: string;
-  label: string;
-  feature?: FeatureKey;
-  alwaysShow?: boolean;
-  priority: number; // lower = more important, shown first
-}
-
-// All possible tabs with priority — only top MAX_TABS + More will show
-export const allTabs: Tab[] = [
-  { id: 'home', path: '/home', label: 'Home', feature: 'home', priority: 0 },
-  { id: 'upfit', path: '/upfit', label: 'Upfit', feature: 'upfit_projects', priority: 0.5 },
-  { id: 'graphics', path: '/graphics', label: 'Graphics', feature: 'graphics', priority: 1 },
-  { id: 'tracking', path: '/tracking', label: 'In-Shop', feature: 'in_shop', priority: 3 },
-  // POs and Scans go after In-Shop so they slot in on the right of the
-  // existing visible tabs without displacing anything.
-  { id: 'pos', path: '/admin/pos', label: 'POs', feature: 'purchase_orders', priority: 3.2 },
-  { id: 'scans', path: '/admin/scans', label: 'Scans', feature: 'reports', priority: 3.3 },
-  { id: 'prospects', path: '/admin/prospects', label: 'Customers', feature: 'prospects', priority: 3.5 },
-  { id: 'schedule', path: '/admin/schedule', label: 'Schedule', feature: 'schedule', priority: 4 },
-  { id: 'scan', path: '/scan', label: 'Scan', feature: 'scan', priority: 5 },
-  { id: 'estimates', path: '/estimates', label: 'Estimates', feature: 'estimates', priority: 7 },
-  { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', feature: 'cni_portal', priority: 8 },
-  // Customer-only
-  { id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', feature: 'home', priority: 0 },
-];
-
-const TAB_ICONS: Record<string, React.ElementType> = {
+export const TAB_ICONS: Record<string, React.ElementType> = {
   home: Home,
   graphics: Palette,
   fleet: ClipboardCheck,
@@ -53,52 +26,37 @@ const TAB_ICONS: Record<string, React.ElementType> = {
   upfit: Wrench,
   pos: Receipt,
   scans: ScanLine,
+  [AI_TAB_ID]: Bot,
   'customer-dashboard': LayoutGrid,
   more: MoreHorizontal,
   'customer-settings': Settings,
 };
 
-export const MAX_TABS = 7; // + More = 8 total
-
-// Every role that isn't 'customer'. Used to tell a customer-ONLY account
-// (locked to the portal nav) from a staff account that merely also carries
-// the customer role.
-const STAFF_ROLES = Object.keys(ROLE_DEFAULT_FEATURES).filter(r => r !== 'customer');
-
 export default function BottomNav() {
   const pathname = usePathname();
   const router = useRouter();
-  const { hasFeature, isCustomer, hasRole } = useAuth();
+  // Which tabs, in which order: the user's saved choice or the role default
+  // (src/lib/nav-tabs.ts, More → Customize Bottom Bar).
+  const { tabs: chosen, customerOnly } = useNavTabs();
+  const tabs = [...chosen];
 
-  // The portal nav (My Jobs + Settings) is for customer-ONLY accounts. An
-  // admin/staff profile that also has the customer role (e.g. linked to a
-  // NetSuite customer to use the portal) keeps the full staff nav —
-  // 'customer' must not veto every other tab.
-  const customerOnly = isCustomer && !STAFF_ROLES.some(r => hasRole(r));
-
-  // Filter by feature access
-  let visibleTabs = allTabs.filter(tab => {
-    if (!tab.feature) return true;
-    if (tab.id === 'customer-dashboard') return customerOnly;
-    if (customerOnly && tab.id !== 'customer-dashboard') return false;
-    // Check-In merged into In-Shop: either feature grants the In-Shop tab
-    // (a user with only fleet_checkin still needs a way to the panel).
-    if (tab.id === 'tracking') return hasFeature('in_shop') || hasFeature('fleet_checkin');
-    return hasFeature(tab.feature);
-  });
-
-  // Sort by priority, take top MAX_TABS
-  visibleTabs.sort((a, b) => a.priority - b.priority);
-  const tabs = visibleTabs.slice(0, MAX_TABS);
+  // The AI tab has no page; it highlights while the chat panel is open.
+  const [aiOpen, setAiOpen] = useState(false);
+  useEffect(() => {
+    const onState = (e: Event) => setAiOpen(!!(e as CustomEvent<{ open: boolean }>).detail?.open);
+    window.addEventListener(AI_CHAT_STATE_EVENT, onState);
+    return () => window.removeEventListener(AI_CHAT_STATE_EVENT, onState);
+  }, []);
 
   // Always add More at the end (unless customer-only)
   if (!customerOnly) {
-    tabs.push({ id: 'more', path: '/more', label: 'More', alwaysShow: true, priority: 99 });
+    tabs.push({ id: 'more', path: '/more', label: 'More', priority: 99 });
   } else {
-    tabs.push({ id: 'customer-settings', path: '/settings', label: 'Settings', alwaysShow: true, priority: 99 });
+    tabs.push({ id: 'customer-settings', path: '/settings', label: 'Settings', priority: 99 });
   }
 
   const isActive = (tab: Tab) => {
+    if (tab.id === AI_TAB_ID) return aiOpen;
     if (tab.path === '/home') return pathname === '/home';
     if (tab.path === '/scan') return pathname === '/scan';
     if (tab.path === '/fleet') return pathname === '/fleet';
@@ -131,7 +89,9 @@ export default function BottomNav() {
           <button
             key={tab.id}
             className={active ? undefined : 'bottom-nav-tab'}
-            onClick={() => router.push(tab.path)}
+            onClick={() => tab.id === AI_TAB_ID
+              ? window.dispatchEvent(new Event(AI_CHAT_TOGGLE_EVENT))
+              : router.push(tab.path)}
             style={{
               flex: 1, padding: '6px 2px', display: 'flex',
               flexDirection: 'column',
