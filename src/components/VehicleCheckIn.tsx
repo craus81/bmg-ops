@@ -21,6 +21,7 @@ import type { NetsuiteSalesOrder, GraphicsProof, FleetCheckin, VehicleTrackingSt
 import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS } from '@/lib/types';
 import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
+import ProofViewer from '@/components/ProofViewer';
 import { useFormTelemetry } from '@/lib/use-form-telemetry';
 
 // ─── Step indicator ────────────────────────────────────────────
@@ -103,6 +104,8 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   const [proofs, setProofs] = useState<GraphicsProof[]>([]);
   const [proofLoading, setProofLoading] = useState(false);
   const [selectedProof, setSelectedProof] = useState<GraphicsProof | null>(null);
+  // Full-screen proof viewer: an app/uploaded proof by URL, or a Dropbox file by path.
+  const [viewingProof, setViewingProof] = useState<{ url?: string | null; name: string; dropboxPath?: string } | null>(null);
   const [proofSearch, setProofSearch] = useState('');
   const [uploadingProof, setUploadingProof] = useState(false);
   const uploadProofInputRef = useRef<HTMLInputElement>(null);
@@ -1971,6 +1974,16 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
               </div>
             </div>
             <button
+              onClick={() => setViewingProof(dbxSelected && !selectedProof
+                ? { name: dbxSelected.name, dropboxPath: dbxSelected.path }
+                : { url: uploadedProofUrl || (selectedProof ? storage.from('graphics-proofs').getPublicUrl(selectedProof.storage_path).data.publicUrl : null), name: selectedProof?.file_name || 'Proof' })}
+              style={{
+                padding: '6px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                background: 'transparent', border: `1px solid ${theme.border}`,
+                color: theme.textPrimary, cursor: 'pointer', flexShrink: 0,
+              }}
+            >View</button>
+            <button
               onClick={removeSelectedProof}
               style={{
                 padding: '6px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
@@ -1979,6 +1992,14 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
               }}
             >Remove</button>
           </div>
+        )}
+        {viewingProof && (
+          <ProofViewer
+            url={viewingProof.url}
+            filename={viewingProof.name}
+            dropboxPath={viewingProof.dropboxPath}
+            onClose={() => setViewingProof(null)}
+          />
         )}
         {selectedOrder?.customer_name && proofSearch && proofSearch !== selectedOrder.customer_name && (
           <button
@@ -2057,7 +2078,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
             </div>
           ) : dbxSelected ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(0,97,254,0.06)', border: '1px solid rgba(0,97,254,0.2)' }}>
-              <ProofThumbnail dropboxPath={dbxSelected.path} label={dbxSelected.name} thumbSize={48} expandedSize={280} />
+              <ProofThumbnail dropboxPath={dbxSelected.path} label={dbxSelected.name} thumbSize={48} expandedSize={280} onOpen={() => setViewingProof({ name: dbxSelected.name, dropboxPath: dbxSelected.path })} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textPrimary }}>{dbxSelected.name}</div>
                 <div style={{ fontSize: '10px', color: theme.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dbxSelected.path}</div>
@@ -2079,7 +2100,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
                     background: theme.card, border: `1px solid ${theme.border}`,
                   }}
                 >
-                  <ProofThumbnail dropboxPath={file.path} label={file.name} thumbSize={48} expandedSize={280} />
+                  <ProofThumbnail dropboxPath={file.path} label={file.name} thumbSize={48} expandedSize={280} onOpen={() => setViewingProof({ name: file.name, dropboxPath: file.path })} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</div>
                     <div style={{ fontSize: '10px', color: theme.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

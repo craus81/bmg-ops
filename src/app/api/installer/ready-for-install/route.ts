@@ -55,6 +55,9 @@ export async function GET(req: NextRequest) {
       scheduled_upfit_date,
       assigned_to,
       matched_graphics_job_id,
+      proof_url,
+      proof_filename,
+      proof_dropbox_path,
       created_at
     `)
     .in('status', ['received', 'in_progress'])
@@ -136,6 +139,9 @@ export async function GET(req: NextRequest) {
         notes: c.notes,
         scheduledUpfitDate: c.scheduled_upfit_date,
         assignedTo: c.assigned_to,
+        proofUrl: c.proof_url,
+        proofFilename: c.proof_filename,
+        proofDropboxPath: c.proof_dropbox_path,
         graphicsJob: {
           id: g.id,
           jobNumber: g.job_number,

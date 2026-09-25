@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { queuePhoto, photosForScan, deletePhoto, allQueuedPhotos, countByScan, waitingNote } from '@/lib/offline-photos';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
+import ProofViewer from '@/components/ProofViewer';
 import { toJpegIfHeic } from '@/lib/heic';
 import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
@@ -157,7 +158,7 @@ export default function ScanPage() {
 
   // Part files/proofs
   const [partProofs, setPartProofs] = useState<{ file_name: string; storage_path: string; bucket: 'graphics-proofs' | 'proofs' }[]>([]);
-  const [showProof, setShowProof] = useState<string | null>(null);
+  const [showProof, setShowProof] = useState<{ url: string; name: string } | null>(null);
 
   // Offline
   const [isOffline, setIsOffline] = useState(false);
@@ -1218,7 +1219,7 @@ export default function ScanPage() {
           {partProofs.length > 0 && (
             <div style={{ display: 'flex', gap: '4px', marginBottom: '10px', flexWrap: 'wrap' }}>
               {partProofs.map((pf, i) => (
-                <button key={i} onClick={() => setShowProof(storage.from(pf.bucket).getPublicUrl(pf.storage_path).data.publicUrl)} style={{
+                <button key={i} onClick={() => setShowProof({ url: storage.from(pf.bucket).getPublicUrl(pf.storage_path).data.publicUrl, name: pf.file_name })} style={{
                   padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                   background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)',
                   color: '#60a5fa', cursor: 'pointer',
@@ -1229,17 +1230,7 @@ export default function ScanPage() {
 
           {/* Proof viewer modal */}
           {showProof && (
-            <div onClick={() => setShowProof(null)} style={{
-              position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.9)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px',
-            }}>
-              <button onClick={() => setShowProof(null)} style={{ position: 'absolute', top: '12px', right: '16px', padding: '8px 14px', borderRadius: '10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', fontSize: '12px', fontWeight: 700, zIndex: 210 }}>✕ Close</button>
-              {showProof.toLowerCase().includes('.pdf') ? (
-                <iframe src={showProof} style={{ width: '100%', maxWidth: '600px', height: 'calc(80vh / var(--ts))', borderRadius: '8px', border: 'none' }} />
-              ) : (
-                <img src={showProof} alt="Proof" style={{ maxWidth: '100%', maxHeight: 'calc(90vh / var(--ts))', objectFit: 'contain', borderRadius: '8px' }} onClick={e => e.stopPropagation()} />
-              )}
-            </div>
+            <ProofViewer url={showProof.url} filename={showProof.name} onClose={() => setShowProof(null)} />
           )}
 
           {/* Camera / Text toggle (the RFID flow has its own inside the component) */}
