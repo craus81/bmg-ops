@@ -398,6 +398,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/pos/delete/route.ts': admin(),
   'src/app/api/pos/extract-ship-to/route.ts': admin(),
   'src/app/api/pos/invoice-open/route.ts': admin(),
+  'src/app/api/pos/match-invoice-item/route.ts': admin(),
   'src/app/api/pos/send-confirmation/route.ts': admin(),
   'src/app/api/pos/sync-invoices/route.ts': admin(),
   'src/app/api/pos/verify-invoices/route.ts': admin(),

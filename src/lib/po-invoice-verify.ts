@@ -9,6 +9,25 @@ export interface PoInvoiceLineCheck {
   ordered: number;
   invoiced: number;
   status: 'ok' | 'over' | 'under' | 'extra';
+  /** Invoice items an admin matched onto this PO line, counted in `invoiced`. */
+  matched?: MatchedInvoiceItem[];
+}
+
+/** A po_invoice_item_matches row as the check reads it. */
+export interface InvoiceItemMatch {
+  invoice_item: string;
+  po_line_item_id: string;
+  note?: string | null;
+  matched_by_name?: string | null;
+  matched_at?: string | null;
+}
+
+export interface MatchedInvoiceItem {
+  invoice_item: string;
+  qty: number;
+  note: string | null;
+  matched_by_name: string | null;
+  matched_at: string | null;
 }
 
 export interface PoInvoiceVerifyResult {
@@ -67,6 +86,43 @@ export function distributeInstalled(
 }
 
 /**
+ * Apply admin matches (po_invoice_item_matches) to a PO's invoiced-per-item
+ * totals: each matched invoice item's quantity moves onto the matched PO
+ * line's part key, so it counts against that line instead of reading as
+ * 'extra'. Matches whose line is gone or whose item isn't invoiced are
+ * ignored. Returns new totals plus, per part key, what was moved in (for the
+ * PO page to show "matched by").
+ */
+export function applyInvoiceItemMatches(
+  invoiced: Map<string, number>,
+  matches: InvoiceItemMatch[],
+  lines: { id: string; part_number: string }[],
+): { invoiced: Map<string, number>; matchedInto: Map<string, MatchedInvoiceItem[]> } {
+  const out = new Map(invoiced);
+  const matchedInto = new Map<string, MatchedInvoiceItem[]>();
+  for (const m of matches) {
+    const item = normPart(m.invoice_item);
+    const line = lines.find(l => l.id === m.po_line_item_id);
+    if (!item || !line) continue;
+    const target = normPart(line.part_number);
+    const qty = out.get(item) || 0;
+    if (!target || target === item || qty === 0) continue;
+    out.delete(item);
+    out.set(target, (out.get(target) || 0) + qty);
+    const list = matchedInto.get(target) || [];
+    list.push({
+      invoice_item: item,
+      qty,
+      note: m.note ?? null,
+      matched_by_name: m.matched_by_name ?? null,
+      matched_at: m.matched_at ?? null,
+    });
+    matchedInto.set(target, list);
+  }
+  return { invoiced: out, matchedInto };
+}
+
+/**
  * Per-item billed quantities for a set of NetSuite invoices, straight from
  * transactionline: invoice id -> normPart(item) -> quantity. Invoice item
  * lines carry negative quantities in SuiteQL, hence the sign flip on read.
@@ -121,10 +177,20 @@ export async function getPoBilledByPart(service: SupabaseClient, poId: string): 
   const byInvoice = await fetchInvoiceItemQuantities(
     (links || []).map(l => String(l.netsuite_invoice_id || '')),
   );
-  const billedByPart = new Map<string, number>();
+  const rawBilled = new Map<string, number>();
   for (const byItem of byInvoice.values()) {
-    for (const [item, qty] of byItem) billedByPart.set(item, (billedByPart.get(item) || 0) + qty);
+    for (const [item, qty] of byItem) rawBilled.set(item, (rawBilled.get(item) || 0) + qty);
   }
+  // Admin matches move an invoice item onto the PO line it billed — the same
+  // remap the verify sweep applies, so the overbill gate and the badge agree.
+  const { data: matchRows } = await service
+    .from('po_invoice_item_matches')
+    .select('invoice_item, po_line_item_id, po_line_items(id, part_number)')
+    .eq('purchase_order_id', poId);
+  const matchLines = (matchRows || [])
+    .map((r: any) => (Array.isArray(r.po_line_items) ? r.po_line_items[0] : r.po_line_items))
+    .filter(Boolean) as { id: string; part_number: string }[];
+  const { invoiced: billedByPart } = applyInvoiceItemMatches(rawBilled, (matchRows || []) as InvoiceItemMatch[], matchLines);
   const invoiceNumbers = (links || [])
     .map(l => l.netsuite_invoice_number)
     .filter(Boolean) as string[];
@@ -215,7 +281,7 @@ export async function verifyPoInvoiceQuantities(service: SupabaseClient, poIds?:
   const { data: pos, error: posErr } = await fetchAllRows<any>((from, to) => {
     let query = service
       .from('purchase_orders')
-      .select('id, po_number, status, invoice_check_status, po_line_items(id, part_number, quantity, installed), po_invoices(netsuite_invoice_id)')
+      .select('id, po_number, status, invoice_check_status, po_line_items(id, part_number, quantity, installed), po_invoices(netsuite_invoice_id), po_invoice_item_matches(invoice_item, po_line_item_id, note, matched_by_name, matched_at)')
       .neq('status', 'cancelled');
     // Scoped mode: recheck just these POs (the per-PO "Recheck billing"
     // button) instead of sweeping the whole book.
@@ -253,17 +319,25 @@ export async function verifyPoInvoiceQuantities(service: SupabaseClient, poIds?:
     // Invoiced quantity per part across all of this PO's invoices. Invoices
     // whose lines we couldn't fetch are left out of the math rather than
     // counted as zero-billed.
-    const invoiced = new Map<string, number>();
+    const rawInvoiced = new Map<string, number>();
     let invoicesCounted = 0;
     for (const inv of (po.po_invoices || []) as { netsuite_invoice_id: string }[]) {
       const byItem = invoiceItemQty.get(String(inv.netsuite_invoice_id || '').trim());
       if (!byItem) continue;
       invoicesCounted++;
       for (const [item, qty] of byItem) {
-        invoiced.set(item, (invoiced.get(item) || 0) + qty);
+        rawInvoiced.set(item, (rawInvoiced.get(item) || 0) + qty);
       }
     }
     if (invoicesCounted === 0) continue;
+
+    // Admin matches: an invoice item with no matching part number (a PO that
+    // only carries an SO#, say) counts against the PO line it was matched to.
+    const { invoiced, matchedInto } = applyInvoiceItemMatches(
+      rawInvoiced,
+      (po.po_invoice_item_matches || []) as InvoiceItemMatch[],
+      (po.po_line_items || []) as { id: string; part_number: string }[],
+    );
 
     const lines: PoInvoiceLineCheck[] = [];
     const problems: string[] = [];
@@ -271,7 +345,8 @@ export async function verifyPoInvoiceQuantities(service: SupabaseClient, poIds?:
       const inv = invoiced.get(key) || 0;
       const status: PoInvoiceLineCheck['status'] =
         inv > ord.qty ? 'over' : inv < ord.qty ? 'under' : 'ok';
-      lines.push({ part_number: ord.part, ordered: ord.qty, invoiced: inv, status });
+      const matched = matchedInto.get(key);
+      lines.push({ part_number: ord.part, ordered: ord.qty, invoiced: inv, status, ...(matched ? { matched } : {}) });
       if (status === 'over') {
         problems.push(`${ord.part}: invoiced ${inv} of ${ord.qty} ordered — over-billed`);
       } else if (status === 'under' && po.status === 'complete') {
