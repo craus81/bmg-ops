@@ -33,6 +33,8 @@ import { deepLinks } from '@/lib/deep-links';
 import type { PurchaseOrder, POLineItem, PoLocation, GraphicsJobStatus } from '@/lib/types';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import NumberInput from '@/components/NumberInput';
+import PartNumberAutocomplete, { lastPoLabel, type LastPoPrice } from '@/components/PartNumberAutocomplete';
+import { pickPrice } from '@/lib/part-suggest';
 import { isAdminRole } from '@/lib/features';
 
 type ShipTo = NonNullable<PurchaseOrder['ship_to']>;
@@ -118,69 +120,6 @@ const th: React.CSSProperties = { fontSize: '10px', fontWeight: 800, textTransfo
 const td: React.CSSProperties = { fontSize: '12.5px', color: 'var(--text-secondary)', padding: '7px 8px', borderBottom: '1px solid var(--border)', verticalAlign: 'middle' };
 const num: React.CSSProperties = { textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' };
 
-// Debounced server-side part search (netsuite_parts is unbounded — never
-// load it whole client-side; a limited ilike query sidesteps the 1000-row
-// PostgREST cap entirely). Pick a hit to prefill part number + price.
-interface PartHit { id: string; item_number: string; display_name: string | null; sales_price: number | null }
-function PartSearchInput({ onPick }: { onPick: (p: PartHit) => void }) {
-  const supabase = createClient();
-  const [q, setQ] = useState('');
-  const [hits, setHits] = useState<PartHit[]>([]);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    // Strip PostgREST .or() syntax chars so free text can't break the filter.
-    const query = q.trim().replace(/[,%_()]/g, ' ').replace(/\s+/g, ' ').trim();
-    if (query.length < 2) { setHits([]); return; }
-    debounceRef.current = setTimeout(async () => {
-      const { data } = await supabase
-        .from('netsuite_parts')
-        .select('id, item_number, display_name, sales_price')
-        .eq('is_active', true)
-        .or(`item_number.ilike.%${query}%,display_name.ilike.%${query}%`)
-        .order('item_number')
-        .limit(15);
-      setHits((data as PartHit[]) || []);
-    }, 250);
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is stable across renders
-  }, [q]);
-
-  return (
-    <div>
-      <input
-        value={q}
-        onChange={e => setQ(e.target.value)}
-        placeholder="Search catalog by part # or name…"
-        style={inputStyle}
-      />
-      {hits.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '6px', maxHeight: '200px', overflowY: 'auto' }}>
-          {hits.map(h => (
-            <button
-              key={h.id}
-              type="button"
-              onClick={() => { onPick(h); setQ(''); setHits([]); }}
-              style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px',
-                padding: '7px 9px', borderRadius: '8px', textAlign: 'left', width: '100%',
-                background: 'var(--input-bg)', border: '1px solid var(--border)', cursor: 'pointer',
-              }}
-            >
-              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                {h.item_number}
-                {h.display_name && <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}> — {h.display_name}</span>}
-              </span>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', flexShrink: 0 }}>{fmt(Number(h.sales_price) || 0)}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // Inline equivalent of the PO list's local ShipToPicker: pick a saved
 // location or type a one-off address, with a save-as-location shortcut.
 function ShipToFields({
@@ -263,6 +202,8 @@ export default function PoRecordPage() {
   const [editLineForm, setEditLineForm] = useState({ part_number: '', quantity: '', unit_price: '', installed: '' });
   const [addLineOpen, setAddLineOpen] = useState(false);
   const [addLineForm, setAddLineForm] = useState({ part_number: '', quantity: '1', unit_price: '' });
+  // Customer's last PO price for the part picked into the add-line form.
+  const [addLineLastPo, setAddLineLastPo] = useState<LastPoPrice | null>(null);
   const [addingLine, setAddingLine] = useState(false);
 
   // ── Notes ────────────────────────────────────────────────────────────────
@@ -582,6 +523,7 @@ export default function PoRecordPage() {
     // Keep the form open with cleared fields so several parts can be added
     // back-to-back. Done closes it.
     setAddLineForm({ part_number: '', quantity: '1', unit_price: '' });
+    setAddLineLastPo(null);
   };
 
   const deleteLine = async (li: POLineItem) => {
@@ -1436,12 +1378,33 @@ export default function PoRecordPage() {
         {addLineOpen && (
           <div style={{ marginTop: '10px', padding: '10px', borderRadius: '10px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
             <div style={{ marginBottom: '6px' }}>
-              <label style={labelStyle}>Search Catalog</label>
-              <PartSearchInput onPick={p => setAddLineForm(prev => ({ ...prev, part_number: p.item_number, unit_price: String(Number(p.sales_price) || 0) }))} />
-            </div>
-            <div style={{ marginBottom: '6px' }}>
               <label style={labelStyle}>Part Number</label>
-              <input value={addLineForm.part_number} onChange={e => setAddLineForm({ ...addLineForm, part_number: e.target.value })} placeholder="Type or pick a part…" style={{ ...inputStyle, fontWeight: 700 }} />
+              <PartNumberAutocomplete
+                value={addLineForm.part_number}
+                onChange={text => { setAddLineForm(prev => ({ ...prev, part_number: text })); setAddLineLastPo(null); }}
+                onPick={h => {
+                  setAddLineForm(prev => ({ ...prev, part_number: h.item_number, unit_price: String(pickPrice(h.sales_price, h.lastPo)) }));
+                  setAddLineLastPo(h.lastPo || null);
+                }}
+                onEnter={() => { if (addLineForm.part_number.trim()) saveAddLine(); }}
+                customer={po.customer || ''}
+                excludePoId={po.id}
+                placeholder="Type a part number or name…"
+                style={{ ...inputStyle, fontWeight: 700 }}
+              />
+              {addLineLastPo && (
+                String(addLineLastPo.price) === addLineForm.unit_price ? (
+                  <div style={{ marginTop: '4px', fontSize: '10px', color: 'var(--text-muted)' }}>{lastPoLabel(addLineLastPo)}</div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setAddLineForm(prev => ({ ...prev, unit_price: String(addLineLastPo.price) }))}
+                    style={{ marginTop: '4px', fontSize: '10px', color: '#60a5fa', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+                  >
+                    {lastPoLabel(addLineLastPo)} · Use
+                  </button>
+                )
+              )}
             </div>
             <div style={{ display: 'flex', gap: '6px', alignItems: 'end' }}>
               <div style={{ flex: 1 }}>
