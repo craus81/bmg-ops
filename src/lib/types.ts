@@ -94,7 +94,14 @@ export interface PurchaseOrder {
     checked_at: string;
     invoice_count: number;
     problems: string[];
-    lines: { part_number: string; ordered: number; invoiced: number; status: 'ok' | 'over' | 'under' | 'extra' }[];
+    lines: {
+      part_number: string;
+      ordered: number;
+      invoiced: number;
+      status: 'ok' | 'over' | 'under' | 'extra';
+      /** Invoice items an admin matched onto this line (migrations/327). */
+      matched?: { invoice_item: string; qty: number; note: string | null; matched_by_name: string | null; matched_at: string | null }[];
+    }[];
   } | null;
 }
 

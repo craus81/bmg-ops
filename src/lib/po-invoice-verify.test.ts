@@ -7,7 +7,7 @@ vi.mock('@/lib/po-billing-notify', () => ({
   notifyPoBillingAttention: async () => 0,
 }));
 
-import { distributeInstalled, normPart, computeOverbillProblems } from './po-invoice-verify';
+import { distributeInstalled, normPart, computeOverbillProblems, applyInvoiceItemMatches } from './po-invoice-verify';
 
 // distributeInstalled is the single source of truth for how a part's consumed
 // quantity is spread across its PO lines. Both the invoice-open route (immediate
@@ -160,5 +160,46 @@ describe('computeOverbillProblems', () => {
 
   it('reports nothing with no PO overlap at all', () => {
     expect(computeOverbillProblems(lines, new Map(), [{ partNumber: '02T278', quantity: 10 }])).toEqual([]);
+  });
+});
+
+describe('applyInvoiceItemMatches', () => {
+  const lines = [
+    { id: 'l1', part_number: 'SO1234' },
+    { id: 'l2', part_number: 'RM-100' },
+  ];
+
+  it('moves a matched invoice item onto the PO line it billed', () => {
+    const invoiced = new Map([['INSTALL LABOR CUSTOMER SUPPLIED PARTS', 22]]);
+    const { invoiced: out, matchedInto } = applyInvoiceItemMatches(invoiced, [
+      { invoice_item: 'install labor customer supplied parts', po_line_item_id: 'l1', note: 'billed under labor item', matched_by_name: 'Craig' },
+    ], lines);
+    expect(out.get('SO1234')).toBe(22);
+    expect(out.has('INSTALL LABOR CUSTOMER SUPPLIED PARTS')).toBe(false);
+    expect(matchedInto.get('SO1234')).toEqual([
+      { invoice_item: 'INSTALL LABOR CUSTOMER SUPPLIED PARTS', qty: 22, note: 'billed under labor item', matched_by_name: 'Craig', matched_at: null },
+    ]);
+  });
+
+  it('adds to what the line already billed under its own part number', () => {
+    const invoiced = new Map([['RM-100', 2], ['LABOR', 3]]);
+    const { invoiced: out } = applyInvoiceItemMatches(invoiced, [{ invoice_item: 'LABOR', po_line_item_id: 'l2' }], lines);
+    expect(out.get('RM-100')).toBe(5);
+  });
+
+  it('ignores matches whose line is gone or whose item was not invoiced', () => {
+    const invoiced = new Map([['LABOR', 3]]);
+    const { invoiced: out, matchedInto } = applyInvoiceItemMatches(invoiced, [
+      { invoice_item: 'LABOR', po_line_item_id: 'deleted-line' },
+      { invoice_item: 'FREIGHT', po_line_item_id: 'l1' },
+    ], lines);
+    expect(out).toEqual(new Map([['LABOR', 3]]));
+    expect(matchedInto.size).toBe(0);
+  });
+
+  it('does not mutate the input map', () => {
+    const invoiced = new Map([['LABOR', 3]]);
+    applyInvoiceItemMatches(invoiced, [{ invoice_item: 'LABOR', po_line_item_id: 'l1' }], lines);
+    expect(invoiced.get('LABOR')).toBe(3);
   });
 });

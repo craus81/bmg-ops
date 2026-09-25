@@ -227,6 +227,11 @@ export default function PoRecordPage() {
 
   // ── Invoices ─────────────────────────────────────────────────────────────
   const [rechecking, setRechecking] = useState(false);
+  // Manual invoice-line match (billing check "not on this PO" rows)
+  const [matchingItem, setMatchingItem] = useState<string | null>(null);
+  const [matchLineId, setMatchLineId] = useState('');
+  const [matchNote, setMatchNote] = useState('');
+  const [savingMatch, setSavingMatch] = useState(false);
 
   // ── NetSuite sales order (ported from the PO list's expanded card) ───────
   const [creatingSO, setCreatingSO] = useState(false);
@@ -743,6 +748,35 @@ export default function PoRecordPage() {
       await dialog.alert(`Recheck failed: ${err?.message || 'network error'}`);
     }
     setRechecking(false);
+  };
+
+  // ── Manual invoice-line match: count an invoice item the billing check
+  // couldn't pair (no shared part number) against a chosen PO line, or undo
+  // it (lineId null). Admin-only and audit-logged server-side.
+  const saveInvoiceMatch = async (invoiceItem: string, lineId: string | null) => {
+    if (!po || savingMatch) return;
+    if (!lineId && !(await dialog.confirm(`Remove the match for ${invoiceItem}? It will show as "not on this PO" again.`, { confirmLabel: 'Remove match' }))) return;
+    setSavingMatch(true);
+    try {
+      const res = await fetch('/api/pos/match-invoice-item', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ poId: po.id, invoiceItem, poLineItemId: lineId, note: lineId ? matchNote.trim() || undefined : undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        await dialog.alert(`Could not save the match: ${data.error || `request failed (${res.status})`}`);
+      } else {
+        if (data.po) setPo(shapePo(data.po));
+        if (data.recheckError) await dialog.alert(`Match saved, but the billing recheck failed: ${data.recheckError}. Use Recheck billing to try again.`);
+        setMatchingItem(null);
+        setMatchLineId('');
+        setMatchNote('');
+      }
+    } catch (err: any) {
+      await dialog.alert(`Could not save the match: ${err?.message || 'network error'}`);
+    }
+    setSavingMatch(false);
   };
 
   // ── NetSuite sales order (same endpoint as the list's expanded card) ─────
@@ -1557,17 +1591,82 @@ export default function PoRecordPage() {
               {(check.lines || [])
                 .filter(l => l.status === 'over' || l.status === 'extra' || (l.status === 'under' && po.status === 'complete'))
                 .map((l, i) => (
-                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '11px', padding: '2px 0', color: 'var(--text-secondary)' }}>
-                    <span style={{ fontWeight: 700 }}>{l.part_number}</span>
-                    <span style={{ color: l.status === 'under' ? '#fbbf24' : '#f87171', fontWeight: 600 }}>
-                      {l.status === 'extra'
-                        ? `invoiced ${l.invoiced} — not on this PO`
-                        : `invoiced ${l.invoiced} of ${l.ordered} ordered${l.status === 'over' ? ' — over-billed' : ''}`}
-                    </span>
+                  <div key={i} style={{ padding: '2px 0' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      <span style={{ fontWeight: 700 }}>{l.part_number}</span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ color: l.status === 'under' ? '#fbbf24' : '#f87171', fontWeight: 600 }}>
+                          {l.status === 'extra'
+                            ? `invoiced ${l.invoiced} — not on this PO`
+                            : `invoiced ${l.invoiced} of ${l.ordered} ordered${l.status === 'over' ? ' — over-billed' : ''}`}
+                        </span>
+                        {l.status === 'extra' && matchingItem !== l.part_number && po.line_items.length > 0 && (
+                          <button
+                            onClick={() => { setMatchingItem(l.part_number); setMatchLineId(sortedLines.length === 1 ? sortedLines[0].id : ''); setMatchNote(''); }}
+                            title="The invoice billed this under a different item name. Count it against a line on this PO."
+                            style={{ ...btnSm, padding: '3px 8px', fontSize: '10px', color: '#34d399' }}
+                          >
+                            Match to PO line
+                          </button>
+                        )}
+                      </span>
+                    </div>
+                    {l.status === 'extra' && matchingItem === l.part_number && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', marginTop: '6px' }}>
+                        <select
+                          value={matchLineId}
+                          onChange={e => setMatchLineId(e.target.value)}
+                          style={{ ...inputStyle, flex: '1 1 180px', width: 'auto', minWidth: 0 }}
+                        >
+                          <option value="">Count {l.invoiced} against…</option>
+                          {sortedLines.map(li => (
+                            <option key={li.id} value={li.id}>{li.part_number} (qty {li.quantity}){li.description ? ` — ${li.description}` : ''}</option>
+                          ))}
+                        </select>
+                        <input
+                          value={matchNote}
+                          onChange={e => setMatchNote(e.target.value)}
+                          placeholder="Note (optional)"
+                          maxLength={500}
+                          style={{ ...inputStyle, flex: '1 1 140px', width: 'auto', minWidth: 0 }}
+                        />
+                        <button
+                          onClick={() => saveInvoiceMatch(l.part_number, matchLineId)}
+                          disabled={!matchLineId || savingMatch}
+                          style={{ ...btnSm, color: '#34d399', opacity: !matchLineId || savingMatch ? 0.6 : 1 }}
+                        >
+                          {savingMatch ? 'Saving…' : 'Save match'}
+                        </button>
+                        <button onClick={() => setMatchingItem(null)} disabled={savingMatch} style={btnSm}>Cancel</button>
+                      </div>
+                    )}
                   </div>
                 ))}
             </div>
           )
+        )}
+
+        {/* Invoice items an admin matched onto a PO line by hand */}
+        {check && (check.lines || []).some(l => (l.matched || []).length > 0) && (
+          <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            {(check.lines || []).flatMap(l => (l.matched || []).map(m => (
+              <div key={`${l.part_number}-${m.invoice_item}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', fontSize: '10px', color: 'var(--text-muted)' }}>
+                <span style={{ minWidth: 0 }}>
+                  🔗 <b style={{ color: 'var(--text-secondary)' }}>{m.invoice_item}</b> ({m.qty}) counted as <b style={{ color: 'var(--text-secondary)' }}>{l.part_number}</b>
+                  {m.matched_by_name ? ` · matched by ${m.matched_by_name}` : ''}
+                  {m.matched_at ? ` ${new Date(m.matched_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}` : ''}
+                  {m.note ? ` · “${m.note}”` : ''}
+                </span>
+                <button
+                  onClick={() => saveInvoiceMatch(m.invoice_item, null)}
+                  disabled={savingMatch}
+                  style={{ ...btnSm, padding: '2px 8px', fontSize: '10px' }}
+                >
+                  Undo
+                </button>
+              </div>
+            )))}
+          </div>
         )}
       </div>
 
