@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { matchScansToOpenPos } from './scan-match';
+import { matchScansToOpenPos, assignScanToPoLine } from './scan-match';
 
 // The rule these lock down (field ask, 2026-09-21: "when matching PO's the
 // location has to match"): the same part is ordered per plant, so an install
@@ -32,6 +32,7 @@ function fakeService(db: FakeDb, opts: { failWorkLocations?: boolean } = {}) {
       in(col: string, vals: any[]) { rows = rows.filter(r => vals.includes(r[col])); return chain; },
       not() { return chain; },
       order() { return chain; },
+      maybeSingle() { return Promise.resolve({ data: rows[0] ?? null, error: null }); },
       range(from: number, to: number) {
         return Promise.resolve({ data: rows.slice(from, to + 1), error: null });
       },
@@ -50,10 +51,25 @@ function fakeService(db: FakeDb, opts: { failWorkLocations?: boolean } = {}) {
     from(table: keyof FakeDb) {
       return {
         select: (..._a: any[]) => builder(table).select(),
+        // update().eq() applies at once (it is awaited directly); a further
+        // .is() narrows it and .select() returns the rows it touched — the
+        // conditional claim assignScanToPoLine makes.
         update: (patch: any) => ({
           eq: (col: string, val: any) => {
-            for (const row of db[table]) if (row[col] === val) Object.assign(row, patch);
-            return Promise.resolve({ data: null, error: null });
+            const filters: [string, any][] = [[col, val]];
+            const apply = () => {
+              const hit = db[table].filter(r => filters.every(([c, v]) => (r[c] ?? null) === v));
+              for (const row of hit) Object.assign(row, patch);
+              return hit.map(r => ({ id: r.id }));
+            };
+            let applied: any[] | null = null;
+            const run = () => (applied ??= apply());
+            const q: any = {
+              is(c: string, v: any) { filters.push([c, v]); return q; },
+              select() { return Promise.resolve({ data: run(), error: null }); },
+              then(resolve: any, reject: any) { run(); return Promise.resolve({ data: null, error: null }).then(resolve, reject); },
+            };
+            return q;
           },
           select: () => Promise.resolve({ data: null, error: null }),
         }),
@@ -79,20 +95,28 @@ describe('matchScansToOpenPos — location is a requirement', () => {
   it('leaves a scan unmatched rather than consuming another plant\'s PO', async () => {
     const db = baseDb();
     db.scan_logs = [
-      { id: 's1', part_number: '06S646', location_name: 'Masterack - Kansas City', exported_at: null, po_id: null, archived_at: null },
+      { id: 's1', vin: '1FTBR1C80PKA12345', part_number: '06S646', location_name: 'Masterack - Kansas City', exported_at: null, po_id: null, archived_at: null },
     ];
     db.purchase_orders = [
       { id: 'po-w', po_number: 'PO-WENT', status: 'open', ship_to: { city: 'Wentzville' } },
     ];
-    db.po_line_items = [{ id: 'l1', po_id: 'po-w', part_number: '06S646', quantity: 5, installed: 0 }];
+    db.po_line_items = [{ id: 'l1', po_id: 'po-w', part_number: '06S646', quantity: 5, installed: 2 }];
 
     const res = await matchScansToOpenPos(fakeService(db));
 
     expect(res.matched).toBe(0);
     expect(res.skippedForLocation).toBe(1);
+    // Spelled out, so the office can see which truck and which POs.
+    expect(res.heldForLocation).toEqual([{
+      scanId: 's1',
+      vin: '1FTBR1C80PKA12345',
+      partNumber: '06S646',
+      locationName: 'Masterack - Kansas City',
+      candidates: [{ poId: 'po-w', poNumber: 'PO-WENT', lineId: 'l1', shipTo: 'Wentzville', remaining: 3 }],
+    }]);
     expect(db.scan_logs[0].po_id).toBeNull();
     // The Wentzville PO must not have burned a unit on a Kansas City install.
-    expect(db.po_line_items[0].installed).toBe(0);
+    expect(db.po_line_items[0].installed).toBe(2);
   });
 
   it('picks this location\'s PO when both plants have one open', async () => {
@@ -206,5 +230,66 @@ describe('matchScansToOpenPos — location is a requirement', () => {
     expect(db.scan_logs.find(s => s.id === 's1')!.po_number).toBe('PO-KC-A');
     expect(db.scan_logs.find(s => s.id === 's2')!.po_number).toBe('PO-KC-B');
     expect(db.po_line_items.find(l => l.id === 'l-w')!.installed).toBe(0);
+  });
+});
+
+describe('assignScanToPoLine — "Assign anyway" on a held scan', () => {
+  const heldDb = () => {
+    const db = baseDb();
+    db.scan_logs = [
+      { id: 's1', part_number: '06s646 ', location_name: 'Masterack - Kansas City', po_id: null, archived_at: null },
+    ];
+    db.purchase_orders = [
+      { id: 'po-w', po_number: 'PO-WENT', status: 'open', ship_to: { city: 'Wentzville' } },
+    ];
+    db.po_line_items = [
+      { id: 'l1', po_id: 'po-w', part_number: '06S646', quantity: 2, installed: 1 },
+      { id: 'l2', po_id: 'po-w', part_number: 'OTHER', quantity: 5, installed: 0 },
+    ];
+    return db;
+  };
+
+  it('books the scan to the line and uses one of its units', async () => {
+    const db = heldDb();
+    const res = await assignScanToPoLine(fakeService(db), 's1', 'l1');
+
+    expect(res).toEqual({ ok: true, poId: 'po-w', poNumber: 'PO-WENT' });
+    expect(db.scan_logs[0]).toMatchObject({ po_id: 'po-w', po_number: 'PO-WENT', po_line_item_id: 'l1' });
+    expect(db.po_line_items[0].installed).toBe(2);
+  });
+
+  it('refuses a scan that has matched since the panel opened', async () => {
+    const db = heldDb();
+    db.scan_logs[0].po_id = 'po-other';
+    const res = await assignScanToPoLine(fakeService(db), 's1', 'l1');
+
+    expect(res).toMatchObject({ ok: false, status: 409 });
+    expect(db.po_line_items[0].installed).toBe(1);
+  });
+
+  it('refuses a line for a different part', async () => {
+    const db = heldDb();
+    const res = await assignScanToPoLine(fakeService(db), 's1', 'l2');
+
+    expect(res).toMatchObject({ ok: false, status: 409 });
+    expect(db.scan_logs[0].po_id).toBeNull();
+  });
+
+  it('refuses a line with nothing left', async () => {
+    const db = heldDb();
+    db.po_line_items[0].installed = 2;
+    const res = await assignScanToPoLine(fakeService(db), 's1', 'l1');
+
+    expect(res).toMatchObject({ ok: false, status: 409 });
+    expect(db.scan_logs[0].po_id).toBeNull();
+  });
+
+  it('refuses a PO that is no longer open', async () => {
+    const db = heldDb();
+    db.purchase_orders[0].status = 'complete';
+    const res = await assignScanToPoLine(fakeService(db), 's1', 'l1');
+
+    expect(res).toMatchObject({ ok: false, status: 409 });
+    expect(db.po_line_items[0].installed).toBe(1);
   });
 });

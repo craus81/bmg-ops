@@ -14,6 +14,7 @@ import { theme } from '@/lib/theme';
 import { locationBillingOverride } from '@/lib/scan-billing';
 import { shipToCityLabel } from '@/lib/graphics-job-from-po';
 import { sameCity } from '@/lib/plant-location';
+import type { HeldScan, HeldCandidate } from '@/lib/scan-match';
 import { findExistingScanVins, sameVehicleVin, vinTail, fetchScansMatchingVins, pickScanForLine } from '@/lib/vin-match';
 import { scanLifecycle } from '@/lib/scan-state';
 import { customerRequiresPo, loadBillableCustomers, matchesBillableCustomer, DEFAULT_BILLABLE_CUSTOMERS, type BillableCustomer } from '@/lib/billable-customers';
@@ -93,6 +94,11 @@ export default function AdminScansPage() {
   const [selectedScans, setSelectedScans] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
   const [matching, setMatching] = useState(false);
+  // Scans the last "Match to POs" run held back because every open PO for
+  // their part ships to another plant, with those POs — shown in a panel so
+  // the office can see why and assign one anyway.
+  const [heldReview, setHeldReview] = useState<{ summary: string; held: HeldScan[] } | null>(null);
+  const [assigningLine, setAssigningLine] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   // Part requires_po_match lookup
   const [poRequired, setPoRequired] = useState<Record<string, boolean>>({});
@@ -666,18 +672,53 @@ export default function AdminScansPage() {
     try {
       const res = await fetch('/api/scans/match-po', { method: 'POST' });
       const data = await res.json();
+      const summary = `Matched ${data.matched} of ${data.total} unmatched scans`;
       // Scans whose part IS on an open PO, just not one shipping to where the
       // work was done. Worth calling out: they look identical to "no PO yet"
-      // on the board, but the fix is a PO for that plant, not waiting.
-      const held = data.skippedForLocation
-        ? `\n\n${data.skippedForLocation} left unmatched — the part is on an open PO, but not one for that location.`
-        : '';
-      await dialog.alert(`Matched ${data.matched} of ${data.total} unmatched scans${held}`);
+      // on the board, but the fix is a PO for that plant, not waiting — so
+      // they get a panel naming each one and the POs it was kept off.
+      const held: HeldScan[] = data.heldForLocation || [];
+      if (held.length > 0) setHeldReview({ summary, held });
+      else await dialog.alert(summary);
       await loadAll();
     } catch {
       await dialog.alert('Match failed');
     }
     setMatching(false);
+  };
+
+  // "Assign anyway" on a held scan: books it to another plant's PO line on
+  // purpose, after saying what that costs.
+  const assignHeldScan = async (scan: HeldScan, c: HeldCandidate) => {
+    const where = c.shipTo || 'no ship-to';
+    const ok = await dialog.confirm(
+      `Put VIN ${scan.vin || '(no VIN)'} on PO #${c.poNumber || '—'} (${where})?\n\n` +
+      `This scan was done at ${scan.locationName || 'an unknown location'}. It will use one of that PO's units, ` +
+      `and the invoice may book to ${where}'s location.`,
+      { title: 'Assign to a different location\'s PO?', confirmLabel: 'Assign anyway' },
+    );
+    if (!ok) return;
+    setAssigningLine(c.lineId);
+    try {
+      const res = await fetch('/api/scans/assign-po', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scanId: scan.scanId, lineId: c.lineId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        await dialog.alert(`Couldn't assign it: ${data.error || 'Unknown error'}`);
+        return;
+      }
+      setHeldReview(prev => {
+        if (!prev) return prev;
+        const held = prev.held.filter(h => h.scanId !== scan.scanId);
+        return held.length > 0 ? { ...prev, held } : null;
+      });
+      await loadAll();
+    } finally {
+      setAssigningLine(null);
+    }
   };
 
   // Build and download a CSV of the given scans. Shared by the workflow
@@ -2024,6 +2065,46 @@ export default function AdminScansPage() {
 
       {/* Worksheet Review Modal — per-page sections (each page is its own
           worksheet with its own part numbers, customer, and VIN list). */}
+      {heldReview && (
+        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={() => setHeldReview(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '14px', padding: '18px', width: '100%', maxWidth: '520px', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto', boxShadow: '0 8px 30px rgba(0,0,0,0.3)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
+              <div>
+                <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>{heldReview.summary}</div>
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px', lineHeight: 1.45 }}>
+                  {heldReview.held.length} left unmatched — the part is on an open PO, but not one for that location.
+                  Add a PO for that location, fix the scan&apos;s location if it&apos;s wrong, or assign it anyway.
+                </div>
+              </div>
+              <button onClick={() => setHeldReview(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
+            </div>
+            {heldReview.held.map(h => (
+              <div key={h.scanId} style={{ marginTop: '10px', padding: '12px', border: '1px solid var(--border)', borderRadius: '10px', background: 'var(--subtle-bg)' }}>
+                <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)', fontFamily: 'monospace', wordBreak: 'break-all' }}>{h.vin || 'No VIN'}</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '3px' }}>
+                  Part {h.partNumber || '—'} · done at {h.locationName || 'no location'}
+                </div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginTop: '10px', marginBottom: '4px' }}>Open POs with this part</div>
+                {h.candidates.map(c => (
+                  <div key={c.lineId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '6px 0', borderTop: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: '12px', color: 'var(--text-primary)', minWidth: 0 }}>
+                      PO #{c.poNumber || '—'} · {c.shipTo || 'no ship-to'}
+                      <span style={{ color: 'var(--text-muted)' }}> · {c.remaining} left</span>
+                    </div>
+                    <button
+                      onClick={() => assignHeldScan(h, c)}
+                      disabled={assigningLine !== null}
+                      style={{ flexShrink: 0, padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', cursor: assigningLine !== null ? 'default' : 'pointer', opacity: assigningLine !== null && assigningLine !== c.lineId ? 0.5 : 1 }}
+                    >{assigningLine === c.lineId ? 'Assigning…' : 'Assign anyway'}</button>
+                  </div>
+                ))}
+              </div>
+            ))}
+            <button onClick={() => setHeldReview(null)} style={{ width: '100%', marginTop: '14px', padding: '11px', borderRadius: '10px', background: 'var(--navy)', color: '#fff', fontSize: '13px', fontWeight: 800, border: 'none', cursor: 'pointer' }}>Done</button>
+          </div>
+        </div>
+      )}
+
       {worksheetReview && (() => {
         const totalSelected = worksheetReview.pages.reduce((s, pg) => s + pg.rows.filter(r => r.include).length, 0);
         const totalRows = worksheetReview.pages.reduce((s, pg) => s + pg.rows.length, 0);

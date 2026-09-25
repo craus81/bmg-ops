@@ -31,6 +31,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { compareShipToLocation, normLocationText } from '@/lib/plant-location';
+import { shipToCityLabel } from '@/lib/graphics-job-from-po';
 
 function normalizePart(p: string | null | undefined): string {
   return (p || '').trim().toUpperCase();
@@ -101,10 +102,34 @@ export interface MatchResult {
    * just not this location's".
    */
   skippedForLocation: number;
+  /**
+   * The same held scans, spelled out: which truck and part, where the work
+   * was done, and the open PO lines that had the part but ship elsewhere.
+   * "1 left unmatched" alone gave the office nothing to act on.
+   */
+  heldForLocation: HeldScan[];
+}
+
+/** An open PO line a held scan was refused because it ships to another plant. */
+export interface HeldCandidate {
+  poId: string;
+  poNumber: string | null;
+  lineId: string;
+  /** Where the PO ships, as the PO picker spells it ('' when the PO has no ship-to). */
+  shipTo: string;
+  remaining: number;
+}
+
+export interface HeldScan {
+  scanId: string;
+  vin: string | null;
+  partNumber: string | null;
+  locationName: string | null;
+  candidates: HeldCandidate[];
 }
 
 /** Nothing matched, nothing skipped — the shape every early return needs. */
-const EMPTY_RESULT: MatchResult = { matched: 0, total: 0, skippedForLocation: 0 };
+const EMPTY_RESULT: MatchResult = { matched: 0, total: 0, skippedForLocation: 0, heldForLocation: [] };
 
 /**
  * Recompute open ↔ complete for the given POs: a PO is complete (fulfilled)
@@ -172,11 +197,11 @@ export async function matchScansToOpenPos(
   // read left scans past the cap permanently unmatchable (Round 3 CRITICAL,
   // R3-1). Scoped calls (scanIds) stay small but ride the same path.
   const { data: unmatched, error: unmatchedErr } = await fetchAllRows<{
-    id: string; part_number: string | null; location_name: string | null; exported_at: string | null;
+    id: string; vin: string | null; part_number: string | null; location_name: string | null; exported_at: string | null;
   }>((from, to) => {
     let query = service
       .from('scan_logs')
-      .select('id, part_number, location_name, exported_at')
+      .select('id, vin, part_number, location_name, exported_at')
       .is('po_id', null)
       .is('archived_at', null);
     if (scanIds && scanIds.length > 0) query = query.in('id', scanIds);
@@ -215,7 +240,7 @@ export async function matchScansToOpenPos(
   const lines = allLines;
 
   let matched = 0;
-  let skippedForLocation = 0;
+  const heldForLocation: HeldScan[] = [];
   const touchedPoIds: string[] = [];
 
   for (const scan of unmatched) {
@@ -238,7 +263,22 @@ export async function matchScansToOpenPos(
     // scan unmatched is the point: it shows as waiting on a PO until this
     // location's PO arrives, instead of silently eating another plant's.
     if (eligible.length === 0) {
-      skippedForLocation++;
+      heldForLocation.push({
+        scanId: scan.id,
+        vin: scan.vin,
+        partNumber: scan.part_number,
+        locationName: scan.location_name,
+        candidates: openLines.map(l => {
+          const po = poById.get(l.po_id);
+          return {
+            poId: l.po_id,
+            poNumber: po?.po_number ?? null,
+            lineId: l.id,
+            shipTo: shipToCityLabel(po?.ship_to),
+            remaining: (l.quantity || 0) - (l.installed || 0),
+          };
+        }),
+      });
       continue;
     }
 
@@ -267,5 +307,80 @@ export async function matchScansToOpenPos(
   // so it moves off the open list automatically.
   await recomputePoFulfillment(service, touchedPoIds);
 
-  return { matched, total: unmatched.length, skippedForLocation };
+  return { matched, total: unmatched.length, skippedForLocation: heldForLocation.length, heldForLocation };
+}
+
+export type AssignResult =
+  | { ok: true; poId: string; poNumber: string | null }
+  | { ok: false; status: number; error: string };
+
+/**
+ * Put one held scan on a PO line the matcher refused for location — the
+ * "Assign anyway" button on the match results. The office's call to make:
+ * the scan might have been logged at the wrong location, or the other
+ * plant's PO really is covering this install.
+ *
+ * Unlike the bulk editor's PO dropdown, this books the unit the way the
+ * matcher would: it bumps the line's installed count and re-checks the PO's
+ * fulfilment, so the PO's remaining capacity stays honest.
+ *
+ * Refuses anything that isn't still the situation the button was shown for:
+ * a scan that has since matched or been archived, a line whose part isn't
+ * the scan's, a line with nothing left, or a PO that is no longer open.
+ */
+export async function assignScanToPoLine(
+  service: SupabaseClient,
+  scanId: string,
+  lineId: string,
+): Promise<AssignResult> {
+  const { data: scan, error: scanErr } = await service
+    .from('scan_logs')
+    .select('id, part_number, po_id, archived_at')
+    .eq('id', scanId)
+    .maybeSingle();
+  if (scanErr) return { ok: false, status: 500, error: 'Could not read the scan' };
+  if (!scan) return { ok: false, status: 404, error: 'Scan not found' };
+  if (scan.po_id) return { ok: false, status: 409, error: 'This scan is already on a PO' };
+  if (scan.archived_at) return { ok: false, status: 409, error: 'This scan is archived' };
+
+  const { data: line, error: lineErr } = await service
+    .from('po_line_items')
+    .select('id, po_id, part_number, quantity, installed')
+    .eq('id', lineId)
+    .maybeSingle();
+  if (lineErr) return { ok: false, status: 500, error: 'Could not read the PO line' };
+  if (!line) return { ok: false, status: 404, error: 'PO line not found' };
+  if (normalizePart(line.part_number) !== normalizePart(scan.part_number)) {
+    return { ok: false, status: 409, error: "That PO line is for a different part" };
+  }
+  if ((line.installed || 0) >= (line.quantity || 0)) {
+    return { ok: false, status: 409, error: 'That PO line has no units left' };
+  }
+
+  const { data: po, error: poErr } = await service
+    .from('purchase_orders')
+    .select('id, po_number, status')
+    .eq('id', line.po_id)
+    .maybeSingle();
+  if (poErr) return { ok: false, status: 500, error: 'Could not read the PO' };
+  if (!po || po.status !== 'open') return { ok: false, status: 409, error: 'That PO is no longer open' };
+
+  // Only claim the scan if it's still unmatched, so two clicks (or a sweep
+  // running at the same moment) can't book it — and the line — twice.
+  const { data: claimed, error: claimErr } = await service
+    .from('scan_logs')
+    .update({ po_id: po.id, po_number: po.po_number, po_line_item_id: line.id })
+    .eq('id', scan.id)
+    .is('po_id', null)
+    .select('id');
+  if (claimErr) return { ok: false, status: 500, error: 'Could not update the scan' };
+  if (!claimed || claimed.length === 0) return { ok: false, status: 409, error: 'This scan is already on a PO' };
+
+  await service.from('po_line_items').update({
+    installed: (line.installed || 0) + 1,
+  }).eq('id', line.id);
+
+  await recomputePoFulfillment(service, [po.id]);
+
+  return { ok: true, poId: po.id, poNumber: po.po_number };
 }
