@@ -5,6 +5,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { deepLinks } from '@/lib/deep-links';
+import { resolveStoredFileUrl } from '@/lib/storage';
+import ProofViewer from '@/components/ProofViewer';
 
 interface ReadyVehicle {
   id: string;
@@ -19,6 +21,9 @@ interface ReadyVehicle {
   notes: string | null;
   scheduledUpfitDate: string | null;
   assignedTo: string | null;
+  proofUrl: string | null;
+  proofFilename: string | null;
+  proofDropboxPath: string | null;
   graphicsJob: {
     id: string;
     jobNumber: string | null;
@@ -61,6 +66,7 @@ export default function ReadyForInstallPage() {
   const [editingDateId, setEditingDateId] = useState<string | null>(null);
   const [pendingDate, setPendingDate] = useState<string>('');
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [proofFor, setProofFor] = useState<ReadyVehicle | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -279,6 +285,25 @@ export default function ReadyForInstallPage() {
                 </div>
               </button>
 
+              {(v.proofUrl || v.proofDropboxPath) && (
+                <button
+                  onClick={() => setProofFor(v)}
+                  style={{
+                    marginTop: '10px',
+                    padding: '8px 12px',
+                    fontSize: '13px',
+                    fontWeight: 700,
+                    borderRadius: '8px',
+                    border: '1px solid rgba(34,197,94,0.3)',
+                    background: 'rgba(34,197,94,0.08)',
+                    color: '#22c55e',
+                    cursor: 'pointer',
+                  }}
+                >
+                  View Proof
+                </button>
+              )}
+
               {/* Inline scheduling */}
               <div style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Install date:</span>
@@ -434,6 +459,15 @@ export default function ReadyForInstallPage() {
             ))}
           </div>
         </div>
+      )}
+
+      {proofFor && (
+        <ProofViewer
+          url={resolveStoredFileUrl(proofFor.proofUrl)}
+          filename={proofFor.proofFilename}
+          dropboxPath={proofFor.proofDropboxPath}
+          onClose={() => setProofFor(null)}
+        />
       )}
     </div>
   );

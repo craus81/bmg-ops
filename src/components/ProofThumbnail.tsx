@@ -17,6 +17,8 @@ interface ProofThumbnailProps {
   thumbSize?: number;
   /** Expanded preview size in px (default 300) */
   expandedSize?: number;
+  /** When set, a tap calls this (e.g. to open ProofViewer) instead of growing inline. */
+  onOpen?: () => void;
 }
 
 /**
@@ -32,6 +34,7 @@ export default function ProofThumbnail({
   label = 'PDF',
   thumbSize = 60,
   expandedSize = 300,
+  onOpen,
 }: ProofThumbnailProps) {
   const [expanded, setExpanded] = useState(false);
   const [imgSrc, setImgSrc] = useState<string | null>(null);
@@ -103,7 +106,7 @@ export default function ProofThumbnail({
 
   return (
     <div
-      onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+      onClick={(e) => { e.stopPropagation(); if (onOpen) onOpen(); else setExpanded(!expanded); }}
       style={{ cursor: 'pointer', flexShrink: 0, position: 'relative' }}
     >
       {loading ? (

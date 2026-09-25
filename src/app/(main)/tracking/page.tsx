@@ -24,6 +24,7 @@ import NetSuitePdf from '@/components/NetSuitePdf';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import { openNetSuiteInvoicePdfByNumber } from '@/lib/netsuite-pdf-client';
 import ProofThumbnail from '@/components/ProofThumbnail';
+import ProofViewer from '@/components/ProofViewer';
 import CompletionModal from '@/components/CompletionModal';
 import PhotoSession from '@/components/PhotoSession';
 import { useDialog } from '@/components/DialogProvider';
@@ -258,6 +259,7 @@ export default function TrackingPage() {
 
   // Dropbox proof search state
   const [dbxSearchOpen, setDbxSearchOpen] = useState<string | null>(null); // vehicleId
+  const [proofViewerFor, setProofViewerFor] = useState<string | null>(null); // vehicleId
   const [dbxSearchTerm, setDbxSearchTerm] = useState('');
   const [dbxResults, setDbxResults] = useState<{ id: string; name: string; path: string; size: number; modified: string; folder: string }[]>([]);
   const [dbxSearching, setDbxSearching] = useState(false);
@@ -2975,23 +2977,24 @@ export default function TrackingPage() {
                           onFiles={(files) => uploadProofForVehicle(vehicle.id, files[0])}
                           accept="image/*,application/pdf,.eps,.ai,.psd"
                           multiple={false}
-                          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)' }}>
+                          style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)' }}>
                           <ProofThumbnail
                             pdfUrl={resolveStoredFileUrl((vehicle as any).proof_url)!}
                             dropboxPath={(vehicle as any).proof_dropbox_path || undefined}
                             label={(vehicle as any).proof_filename || 'Proof'}
                             thumbSize={48}
                             expandedSize={300}
+                            onOpen={() => setProofViewerFor(vehicle.id)}
                           />
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <a
-                              href={resolveStoredFileUrl((vehicle as any).proof_url)!}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              style={{ fontSize: '12px', fontWeight: 700, color: '#22c55e', textDecoration: 'none' }}
+                          <div style={{ flex: '1 1 140px', minWidth: 0 }}>
+                            <button
+                              type="button"
+                              onClick={() => setProofViewerFor(vehicle.id)}
+                              style={{ display: 'block', maxWidth: '100%', padding: 0, background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '12px', fontWeight: 700, color: '#22c55e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                             >
                               {(vehicle as any).proof_filename || 'View Proof'}
-                            </a>
+                            </button>
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Tap to view full screen or print</div>
                             {(vehicle as any).proof_dropbox_path && (
                               <div style={{ fontSize: '10px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 Dropbox: {(vehicle as any).proof_dropbox_path}
@@ -3029,6 +3032,14 @@ export default function TrackingPage() {
                               style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'transparent', border: '1px solid rgba(248,113,113,0.3)', color: '#f87171', cursor: 'pointer' }}
                             >Remove</button>
                           </div>
+                          {proofViewerFor === vehicle.id && (
+                            <ProofViewer
+                              url={resolveStoredFileUrl((vehicle as any).proof_url)}
+                              filename={(vehicle as any).proof_filename}
+                              dropboxPath={(vehicle as any).proof_dropbox_path}
+                              onClose={() => setProofViewerFor(null)}
+                            />
+                          )}
                         </DropZone>
                       ) : dbxSearchOpen === vehicle.id ? (
                         <div style={{ padding: '12px', borderRadius: '10px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
