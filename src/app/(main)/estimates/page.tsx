@@ -494,6 +494,9 @@ export default function EstimatesPage() {
     truncated: { found: number; shown: number } | null;
   } | null>(null);
   const [draftPicked, setDraftPicked] = useState<Set<number>>(new Set());
+  // Set when the grid holds an old QuickBooks record's lines (Copy to new
+  // estimate) rather than a pasted request: same grid, different wording.
+  const [draftFromQbo, setDraftFromQbo] = useState<{ number: string; typeLabel: string; date: string } | null>(null);
 
   const [revisionDiff, setRevisionDiff] = useState<{ diff: EstimateDiff | null; original: { estimateNumber: string; rejectionReason: string | null } | null } | null>(null);
   const [laborRate, setLaborRate] = useState(DEFAULT_LABOR_RATE);
@@ -911,7 +914,7 @@ export default function EstimatesPage() {
     if (loading || handledNewParam.current) return;
     if (searchParams.get('new') !== '1' || searchParams.get('id')) return;
     handledNewParam.current = true;
-    (async () => {
+    const applyPick = async () => {
       // Resolve who the link names BEFORE touching the builder, so the
       // restore prompt below can name them.
       const custId = searchParams.get('customer');
@@ -969,6 +972,14 @@ export default function EstimatesPage() {
       setProspectId(pick.prospectId);
       setCustomerName(pick.name);
       setCustomerNsId(pick.nsId);
+    };
+    (async () => {
+      await applyPick();
+      // &qbo=<ledger id> (Copy to new estimate on a QuickBooks record): the
+      // old lines arrive as the review grid, AFTER the builder is settled so
+      // an accept lands on the estimate the rep is looking at.
+      const qbo = searchParams.get('qbo');
+      if (qbo) await loadQuickBooksDraft(qbo);
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: apply once after load
   }, [loading, searchParams]);
@@ -1318,6 +1329,39 @@ export default function EstimatesPage() {
     partSearchRef.current?.focus();
   };
 
+  // ── Copy from a QuickBooks record ─────────────────────────────────────
+  // Same review grid as paste-to-estimate, filled from an old QuickBooks
+  // record's lines (src/lib/quickbooks-estimate-copy.ts). Prices are today's
+  // catalog; the old quantity and price are in each line's text.
+  const loadQuickBooksDraft = async (recordId: string) => {
+    setDraftText('');
+    setDraftResult(null);
+    setDraftError(null);
+    setDraftFromQbo(null);
+    setDraftOpen(true);
+    setDraftBusy(true);
+    try {
+      const res = await fetch('/api/estimates/draft-from-quickbooks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recordId }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setDraftError(data.error || 'Could not copy that QuickBooks record'); return; }
+      setDraftFromQbo({ number: data.source?.number || '', typeLabel: data.source?.typeLabel || 'Record', date: data.source?.date || '' });
+      setDraftResult(data);
+      setDraftPicked(new Set(
+        (data.lines as DraftLine[])
+          .map((l, i) => (l.confidence === 'exact' || l.confidence === 'strong' ? i : -1))
+          .filter(i => i >= 0),
+      ));
+    } catch (e: any) {
+      setDraftError(e?.message || 'Network error');
+    } finally {
+      setDraftBusy(false);
+    }
+  };
+
   // ── Paste-to-estimate (R6-9) ──────────────────────────────────────────
   const runDraft = async () => {
     if (draftBusy || draftText.trim().length < 10) return;
@@ -1368,7 +1412,7 @@ export default function EstimatesPage() {
         unit_price: l.unitPrice ?? 0,
         labor_hours: l.laborHours ?? null,
         is_custom: !p,
-        notes: p ? undefined : `From the request: "${l.request.raw}"`,
+        notes: p ? undefined : `${draftFromQbo ? 'From QuickBooks' : 'From the request'}: "${l.request.raw}"`,
         purchase_price: (p as any)?.purchase_price ?? null,
         avg_install_cost: (p as any)?.avg_install_cost ?? null,
       });
@@ -1383,6 +1427,7 @@ export default function EstimatesPage() {
     setDraftText('');
     setDraftResult(null);
     setDraftPicked(new Set());
+    setDraftFromQbo(null);
   };
 
   // ── Packages (N4-B): explode a kit template into ordinary lines ──
@@ -4069,7 +4114,7 @@ export default function EstimatesPage() {
             </button>
             <button
               type="button"
-              onClick={() => { setDraftError(null); setDraftResult(null); setDraftOpen(true); }}
+              onClick={() => { setDraftError(null); setDraftResult(null); setDraftFromQbo(null); setDraftOpen(true); }}
               title="Paste an RFQ email and get a reviewable grid of candidate lines. Nothing is added until you accept it."
               style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.3)', background: 'rgba(167,139,250,0.08)', color: '#a78bfa', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
             >
@@ -5203,13 +5248,19 @@ export default function EstimatesPage() {
               style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '16px', width: '100%', maxWidth: '720px', maxHeight: 'calc(88vh / var(--ts))', overflowY: 'auto' }}
             >
               <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>
-                Draft from text
+                {draftFromQbo
+                  ? `Copy from QuickBooks ${draftFromQbo.typeLabel.toLowerCase()} #${draftFromQbo.number}`
+                  : draftBusy && !draftText ? 'Copying from QuickBooks…' : 'Draft from text'}
               </div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px', lineHeight: 1.5 }}>
-                Paste the customer&rsquo;s request. Prices always come from the catalog, never from the reading —
-                anything without a catalog match stays a custom line for you to price.
+                {draftFromQbo || (draftBusy && !draftText)
+                  ? <>Each line of the old record, matched to today&rsquo;s catalog. Prices are today&rsquo;s catalog prices, not the old ones
+                    (those are in each line&rsquo;s text). Anything without a catalog match stays a custom line for you to price.</>
+                  : <>Paste the customer&rsquo;s request. Prices always come from the catalog, never from the reading —
+                    anything without a catalog match stays a custom line for you to price.</>}
               </div>
 
+              {!draftFromQbo && !(draftBusy && !draftText) && (<>
               <textarea
                 value={draftText}
                 onChange={e => setDraftText(e.target.value)}
@@ -5239,6 +5290,7 @@ export default function EstimatesPage() {
                   Cancel
                 </button>
               </div>
+              </>)}
 
               {draftError && (
                 <div style={{ marginTop: '10px', padding: '10px 12px', borderRadius: '8px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px' }}>
@@ -5249,7 +5301,7 @@ export default function EstimatesPage() {
               {draftResult && (
                 <div style={{ marginTop: '12px' }}>
                   <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '2px' }}>
-                    {draftResult.summary.total} request{draftResult.summary.total === 1 ? '' : 's'} read
+                    {draftResult.summary.total} {draftFromQbo ? 'line' : 'request'}{draftResult.summary.total === 1 ? '' : 's'} read
                     {draftResult.vehicleCount && draftResult.vehicleCount > 1 && <> · {draftResult.vehicleCount} vehicles</>}
                   </div>
                   <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px', lineHeight: 1.6 }}>
@@ -5258,7 +5310,7 @@ export default function EstimatesPage() {
                     {draftResult.summary.missingPrice > 0 && <> · {draftResult.summary.missingPrice} matched a part with no catalog price</>}
                     {draftResult.truncated && (
                       <div style={{ color: 'var(--error)', fontWeight: 700 }}>
-                        Only the first {draftResult.truncated.shown} of {draftResult.truncated.found} requests are shown — add the rest by hand.
+                        Only the first {draftResult.truncated.shown} of {draftResult.truncated.found} {draftFromQbo ? 'lines' : 'requests'} are shown — add the rest by hand.
                       </div>
                     )}
                   </div>
@@ -5291,7 +5343,7 @@ export default function EstimatesPage() {
                               </span>
                             </div>
                             <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px', lineHeight: 1.5 }}>
-                              They wrote: &ldquo;{l.request.raw}&rdquo; · {l.signal}
+                              {draftFromQbo ? 'QuickBooks had' : 'They wrote'}: &ldquo;{l.request.raw}&rdquo; · {l.signal}
                             </div>
                             <div style={{ fontSize: '10px', marginTop: '2px' }}>
                               <span style={{ color: l.request.quantity == null ? '#fbbf24' : 'var(--text-muted)' }}>

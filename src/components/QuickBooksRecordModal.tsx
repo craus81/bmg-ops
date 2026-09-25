@@ -6,11 +6,14 @@
  * search). Read-only by design (src/lib/ledger/history.ts): the lines are the
  * point, so a build done years ago can be read off and repeated, and the
  * stored QuickBooks PDF and attachments open through the ledger document
- * route. Nothing here emails, pushes or records a payment.
+ * route. Nothing here emails, pushes or records a payment. "Copy to new
+ * estimate" opens the builder with these lines in its review grid, priced
+ * from today's catalog (src/lib/quickbooks-estimate-copy.ts).
  */
 
 import { useEffect, useState } from 'react';
 import { deepLinks } from '@/lib/deep-links';
+import { useAuth } from '@/components/AuthProvider';
 import type { HistoryDetail } from '@/lib/ledger/history';
 
 interface Props {
@@ -41,6 +44,7 @@ const td: React.CSSProperties = { fontSize: '12.5px', color: 'var(--text-seconda
 const btn: React.CSSProperties = { padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)', whiteSpace: 'nowrap', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '5px' };
 
 export default function QuickBooksRecordModal({ recordId, onClose, backHref, backLabel }: Props) {
+  const { hasFeature, canSeeMoney } = useAuth();
   const [record, setRecord] = useState<HistoryDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -110,6 +114,14 @@ export default function QuickBooksRecordModal({ recordId, onClose, backHref, bac
                 >Open QuickBooks PDF</a>
               ) : (
                 <span style={{ fontSize: '11.5px', color: 'var(--text-muted)', alignSelf: 'center' }}>No PDF was stored for this record.</span>
+              )}
+              {/* A build is repeated from what was sold, not from a credit. */}
+              {hasFeature('estimates') && canSeeMoney && ['invoice', 'estimate', 'sales_receipt'].includes(record.docType) && lines.some(l => l.kind === 'item') && (
+                <a
+                  href={deepLinks.newEstimate(record.customerId, null, { fromQuickBooks: record.id })}
+                  title="Start a new estimate with these lines, matched to today's catalog and prices. You pick which lines to keep."
+                  style={{ ...btn, background: 'var(--orange)', color: '#fff', border: 'none' }}
+                >Copy to new estimate</a>
               )}
             </div>
 
