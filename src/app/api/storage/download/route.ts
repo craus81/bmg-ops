@@ -15,6 +15,11 @@ export const dynamic = 'force-dynamic';
  * "<timestamp>-<rand>.<ext>" — only a signed URL can rename. Redirecting
  * instead of proxying keeps multi-hundred-MB design files off the
  * serverless response path.
+ *
+ * format=json returns { url } instead of redirecting. The iPhone app uses it:
+ * a link there opens in Safari, which has no FleetSuite session, so the app
+ * fetches the file itself (credentials omitted, so R2's `*` CORS rule
+ * applies) and shows it in-app or hands it to the share sheet.
  */
 export async function GET(req: NextRequest) {
   const auth = await requireAuth(req);
@@ -36,6 +41,9 @@ export async function GET(req: NextRequest) {
       filename: name || path.split('/').pop() || 'file',
       disposition,
     });
+    if (q.get('format') === 'json') {
+      return NextResponse.json({ url }, { headers: { 'Cache-Control': 'no-store' } });
+    }
     return NextResponse.redirect(url, { status: 302, headers: { 'Cache-Control': 'no-store' } });
   } catch (err: any) {
     console.error('Storage download presign error:', err);

@@ -20,6 +20,8 @@ import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { deepLinks } from '@/lib/deep-links';
 import { storage, storageDownloadUrl } from '@/lib/storage';
+import { isNativeApp, isViewableInApp, fetchStoredFile, canShareFiles } from '@/lib/native-files';
+import ProofViewer from '@/components/ProofViewer';
 import { apiFetch } from '@/lib/api-client';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -139,6 +141,10 @@ export default function GraphicsJobRecordPage() {
   const [statusHistory, setStatusHistory] = useState<GraphicsStatusHistory[]>([]);
   const [jobFiles, setJobFiles] = useState<JobFile[]>([]);
   const [poFiles, setPoFiles] = useState<PoFile[]>([]);
+  // iPhone app only: the file shown full screen, and files being gathered for the share sheet.
+  const [viewerFile, setViewerFile] = useState<JobFile | PoFile | null>(null);
+  const [shareSheet, setShareSheet] = useState<{ label: string; files?: File[]; error?: string } | null>(null);
+  const shareRunRef = useRef(0);
   const [assignments, setAssignments] = useState<string[]>([]);
   const [upfit, setUpfit] = useState<UpfitProject | null>(null);
   // Bridge: the CNI job spawned from this graphics job, if one exists.
@@ -815,6 +821,45 @@ export default function GraphicsJobRecordPage() {
   // the raw public URL saves as the randomized storage key.
   const getFileUrl = (f: { storage_path: string; file_name: string }) =>
     storageDownloadUrl('graphics-proofs', f.storage_path, f.file_name);
+
+  // In the iPhone app a file link would open in Safari, which isn't signed in
+  // (and the Download all zip does nothing), so the app fetches files itself.
+  // See src/lib/native-files.ts.
+  const loadJobFile = (f: JobFile | PoFile) =>
+    fetchStoredFile('graphics-proofs', f.storage_path, f.file_name, f.file_type);
+
+  const prepareShare = async (files: (JobFile | PoFile)[], label: string) => {
+    const run = ++shareRunRef.current;
+    setShareSheet({ label });
+    try {
+      const loaded = await Promise.all(files.map(loadJobFile));
+      if (run !== shareRunRef.current) return; // cancelled
+      if (!canShareFiles(loaded)) {
+        setShareSheet({ label, error: "This iPhone can't share these files. Open the job on a computer to download them." });
+        return;
+      }
+      setShareSheet({ label, files: loaded });
+    } catch (e: any) {
+      if (run !== shareRunRef.current) return;
+      setShareSheet({ label, error: `Couldn't download the files: ${e?.message || 'unknown error'}` });
+    }
+  };
+
+  const openFileInApp = (e: React.MouseEvent, f: JobFile | PoFile) => {
+    if (!isNativeApp()) return;
+    e.preventDefault();
+    if (isViewableInApp(f.file_name, f.file_type)) setViewerFile(f);
+    else prepareShare([f], f.file_name);
+  };
+
+  const shareFiles = async () => {
+    const files = shareSheet?.files;
+    if (!files) return;
+    try {
+      await navigator.share({ files });
+    } catch { /* cancelled */ }
+    setShareSheet(null);
+  };
 
   const formatFileSize = (bytes: number | null) => {
     if (!bytes) return '';
@@ -1797,6 +1842,11 @@ export default function GraphicsJobRecordPage() {
             {jobFiles.length > 1 && (
               <a
                 href={`/api/graphics-jobs/${job.id}/download-all`}
+                onClick={(e) => {
+                  if (!isNativeApp()) return;
+                  e.preventDefault();
+                  prepareShare(jobFiles, `${jobFiles.length} files`);
+                }}
                 style={{
                   padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
                   background: 'rgba(96,165,250,0.12)',
@@ -1815,6 +1865,7 @@ export default function GraphicsJobRecordPage() {
                   <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '8px', background: 'var(--subtle-bg)' }}>
                     <a
                       href={getFileUrl(f)}
+                      onClick={(e) => openFileInApp(e, f)}
                       target="_blank"
                       rel="noopener noreferrer"
                       style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
@@ -1841,6 +1892,7 @@ export default function GraphicsJobRecordPage() {
                   <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '8px', background: 'rgba(96,165,250,0.06)', border: '1px dashed rgba(96,165,250,0.3)' }}>
                     <a
                       href={getFileUrl(f)}
+                      onClick={(e) => openFileInApp(e, f)}
                       target="_blank"
                       rel="noopener noreferrer"
                       style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
@@ -2136,6 +2188,44 @@ export default function GraphicsJobRecordPage() {
       {isAdmin && job && <RecordChanges table="graphics_jobs" recordId={job.id} />}
 
       <UploadProgressBar progress={uploadProgress} />
+
+      {viewerFile && (
+        <ProofViewer
+          key={viewerFile.id}
+          loadFile={() => loadJobFile(viewerFile)}
+          filename={viewerFile.file_name}
+          noun="file"
+          onClose={() => setViewerFile(null)}
+        />
+      )}
+
+      {shareSheet && (
+        <div style={{
+          position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 3000,
+          background: 'var(--card)', borderTop: '1px solid var(--border)',
+          boxShadow: '0 -8px 24px rgba(0,0,0,0.3)',
+          padding: '16px 16px calc(16px + env(safe-area-inset-bottom))',
+          display: 'flex', flexDirection: 'column', gap: '12px',
+        }}>
+          <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {shareSheet.error ? shareSheet.error : shareSheet.files ? `Ready: ${shareSheet.label}` : `Downloading ${shareSheet.label}…`}
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {shareSheet.files && (
+              <button
+                type="button"
+                onClick={shareFiles}
+                style={{ flex: 1, padding: '12px', borderRadius: '10px', border: 'none', background: '#2563eb', color: '#fff', fontSize: '15px', fontWeight: 700, cursor: 'pointer' }}
+              >Save or share</button>
+            )}
+            <button
+              type="button"
+              onClick={() => { shareRunRef.current++; setShareSheet(null); }}
+              style={{ flex: shareSheet.files ? 0 : 1, padding: '12px 16px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--subtle-bg)', color: 'var(--text-primary)', fontSize: '15px', fontWeight: 700, cursor: 'pointer' }}
+            >{shareSheet.files || shareSheet.error ? 'Close' : 'Cancel'}</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
