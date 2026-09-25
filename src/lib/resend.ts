@@ -52,6 +52,13 @@ export interface EmailMeta {
   cc?: string[] | null;
 }
 
+/** Email kinds whose body is never stored or shown on Sent Emails — an
+ *  invite's body is a live magic sign-in link for the invitee. */
+const WITHHELD_BODY_KINDS = new Set(['invite']);
+export function isBodyWithheld(kind: string | null | undefined): boolean {
+  return WITHHELD_BODY_KINDS.has(kind || '');
+}
+
 /**
  * Log a send to email_log — the universal delivery record every flow gets
  * for free. Best-effort: a logging failure never fails a send, and without
@@ -96,10 +103,11 @@ async function logEmailSend(
       context_url: meta?.contextUrl || null,
       customer_id: customerId,
       prospect_id: prospectId,
-      // The rendered email, kept for human-composed sends only ("see the
-      // email that was written" on the account history) — automated fan-outs
-      // (digests, crons) would bloat the table for nothing.
-      body_html: meta?.sentBy && html ? html : null,
+      // The rendered email, kept for every send so Sent Emails can show
+      // what actually went out (automatic ones included — PO confirmations,
+      // assignments, mentions). Login invites are the exception: their body
+      // carries a working sign-in link, and email_log is readable by all staff.
+      body_html: html && !isBodyWithheld(meta?.kind) ? html : null,
       // A failed hand-off gets 'failed' immediately — no webhook will ever
       // arrive to say so.
       delivery_status: ok ? 'sent' : 'failed',

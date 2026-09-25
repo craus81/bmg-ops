@@ -6,6 +6,7 @@ import { useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
 import Link from 'next/link';
 
@@ -147,6 +148,18 @@ export default function CreditApplicationsPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Update failed');
+      // Review notes are one edited-in-place column: previousText keeps
+      // people tagged on an earlier save from being pinged again.
+      if (patch.review_notes) {
+        reportMentions({
+          text: patch.review_notes,
+          sourceType: 'credit_app_note',
+          sourceId: detail.id,
+          contextLabel: `Credit application — ${detail.company_name || 'unknown company'}`,
+          contextUrl: deepLinks.creditApplication(detail.id),
+          previousText: detail.review_notes || '',
+        });
+      }
       setDetail((d: any) => d ? { ...d, ...data.application } : d);
       await load();
     } catch (e: any) {
@@ -303,8 +316,8 @@ export default function CreditApplicationsPage() {
                   <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '4px' }}>
                     Review notes {detail.status === 'pending' ? '(required to deny or request more info)' : ''}
                   </div>
-                  <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3}
-                    placeholder="e.g. References verified with two suppliers; approved at Net 30."
+                  <MentionTextArea value={notes} onChange={v => setNotes(v.slice(0, 4000))} rows={3}
+                    placeholder="e.g. References verified with two suppliers; approved at Net 30. — @ tags a teammate"
                     style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text-body)', fontSize: '12px', boxSizing: 'border-box', resize: 'vertical' }} />
                   <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
                     <button disabled={acting} onClick={() => decide('approved')} style={{ flex: 1, minWidth: '120px', padding: '10px', borderRadius: '8px', border: 'none', background: 'var(--success)', color: '#fff', fontWeight: 800, fontSize: '13px', cursor: 'pointer', opacity: acting ? 0.6 : 1 }}>

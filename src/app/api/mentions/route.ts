@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { notifyMany } from '@/lib/notify';
+import { notify } from '@/lib/notify';
 import { mentionSourceUrl, deepLinks, cniJobLinkFor } from '@/lib/deep-links';
 import { resolveFeatures } from '@/lib/features';
 
@@ -93,12 +93,12 @@ export async function POST(req: NextRequest) {
   // '/home' is the last resort only when neither identifies the record.
   const deepUrl = contextUrl || mentionSourceUrl(sourceType, sourceId) || null;
 
-  // The canonical URL can land on a feature-gated page some recipients can't
-  // open (/tracking needs in_shop, /admin/schedule needs schedule, /upfit
-  // needs upfit_projects) — their click would bounce to /home and discard the
-  // record. Resolve per recipient: vehicle notes fall back to the pick-list
-  // (which admits installers/techs by role); otherwise /home, where the
-  // Mentions inbox still shows the excerpt.
+  // Vehicle notes resolve per recipient: people without In-Shop get the
+  // pick-list (which admits installers/techs by role) instead. Every other
+  // gated page (POs, estimates, the at-risk report, schedule, upfit) keeps
+  // its record URL — the mention screen (/mentions/<id>) shows the full note
+  // and only offers "Open" when canOpenMentionUrl says the page will let
+  // this person in, so nobody is bounced to /home with just the excerpt.
   let vehicleVin: string | null = null;
   if (deepUrl?.startsWith('/tracking') && sourceId) {
     const { data: checkin } = await service
@@ -116,17 +116,19 @@ export async function POST(req: NextRequest) {
       return cniJobLinkFor(roles, sourceId);
     }
     if (!deepUrl) return null;
-    const f = resolveFeatures(roles, []);
-    if (deepUrl.startsWith('/tracking') && !f.has('in_shop') && !f.has('fleet_checkin')) {
-      return vehicleVin ? deepLinks.pickList(vehicleVin, sourceId) : '/home';
+    const f = resolveFeatures(roles.map(r => (r === 'production' ? 'graphics_production' : r)), []);
+    if (deepUrl.startsWith('/tracking') && !f.has('in_shop') && !f.has('fleet_checkin') && vehicleVin) {
+      return deepLinks.pickList(vehicleVin, sourceId);
     }
-    if (deepUrl.startsWith('/admin/schedule') && !f.has('schedule')) return '/home';
-    if ((deepUrl === '/upfit' || deepUrl.startsWith('/upfit?')) && !f.has('upfit_projects')) return '/home';
     return deepUrl;
   };
   const recipientUrls = new Map<string, string | null>([...mentionedIds].map(id => [id, urlFor(id)]));
 
-  await service.from('note_mentions').insert(
+  // note_excerpt holds the FULL note (the column predates the mention
+  // screen; it's TEXT and the body is capped at 5000 above) — the inbox
+  // clamps it, /mentions/<id> shows all of it. Only the push/email body
+  // below is the short excerpt.
+  const { data: inserted } = await service.from('note_mentions').insert(
     [...mentionedIds].map(userId => ({
       mentioned_user_id: userId,
       mentioned_by: auth.user!.id,
@@ -134,8 +136,11 @@ export async function POST(req: NextRequest) {
       source_id: sourceId || null,
       context_label: contextLabel || null,
       context_url: recipientUrls.get(userId) ?? null,
-      note_excerpt: excerpt,
+      note_excerpt: text,
     })),
+  ).select('id, mentioned_user_id');
+  const mentionIdFor = new Map<string, string>(
+    (inserted || []).map(r => [String(r.mentioned_user_id), String(r.id)]),
   );
 
   // A mention should always land ON its source record. /home is the last
@@ -152,35 +157,21 @@ export async function POST(req: NextRequest) {
     body: excerpt,
   };
 
-  // A mention always emails the person unless THEY turned it off
-  // (notification_preferences.email_mentions, migration 254 — opt-out,
-  // default true; no preferences row means email). In-app + push always
-  // fire. The channels used to be hard-coded to in-app + push, so someone
-  // not in the app never learned they'd been pulled into a job.
-  const emailOff = new Set<string>();
-  const { data: prefRows } = await service
-    .from('notification_preferences')
-    .select('user_id, email_mentions')
-    .in('user_id', [...mentionedIds]);
-  for (const p of prefRows || []) {
-    if (p.email_mentions === false) emailOff.add(String(p.user_id));
-  }
-  const withEmail: ('in_app' | 'push' | 'email')[] = ['in_app', 'push', 'email'];
-  const withoutEmail: ('in_app' | 'push')[] = ['in_app', 'push'];
+  // Channels resolve per person in notify(): in-app + push by default
+  // (push is their choice in Settings), and email unless they turned off
+  // "Email me when I'm mentioned" (notification_preferences.email_mentions,
+  // migration 254). Before the 'mention' registry row existed, this type
+  // failed open to in-app + push and the email never actually sent.
+  const channels: ('in_app' | 'push' | 'email')[] = ['in_app', 'push', 'email'];
 
-  // Group by destination URL and by email opt-out, so each notifyMany call
-  // carries one url and one channel set.
-  const groups = new Map<string, string[]>();
-  for (const id of mentionedIds) {
-    const url = recipientUrls.get(id) || '/home';
-    const key = `${emailOff.has(id) ? '0' : '1'}|${url}`;
-    groups.set(key, [...(groups.get(key) || []), id]);
-  }
-  for (const [key, ids] of groups) {
-    const email = key.startsWith('1|');
-    const url = key.slice(2);
-    await notifyMany(ids, { ...payload, url, channels: email ? withEmail : withoutEmail });
-  }
+  // Each person's notification opens their own mention screen (full note +
+  // an Open button when they can reach the record). If the inbox row failed
+  // to save, fall back to the record URL, then /home.
+  await Promise.allSettled([...mentionedIds].map(id => {
+    const mentionId = mentionIdFor.get(id);
+    const url = mentionId ? deepLinks.mention(mentionId) : (recipientUrls.get(id) || '/home');
+    return notify({ ...payload, userId: id, url, channels });
+  }));
 
   return NextResponse.json({ mentioned: mentionedIds.size });
 }

@@ -15,6 +15,8 @@
 import { useCallback, useMemo, useState } from 'react';
 import { theme } from '@/lib/theme';
 import { buildBuyList, chunkItems, type BuyListInputRow } from '@/lib/buy-list';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import { deepLinks } from '@/lib/deep-links';
 
 const qty = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
 
@@ -106,6 +108,18 @@ export default function BuyListModal({ rows, onClose, onDone }: Props) {
         const body = await res.json().catch(() => ({}));
         if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
         if (Array.isArray(body.createdIds)) created.push(...body.createdIds);
+      }
+      // One mention for the whole run (not one per request), pinned to the
+      // first request — the same note rides on every one of them.
+      const sentNote = note.trim();
+      if (sentNote && created.length > 0) {
+        reportMentions({
+          text: sentNote,
+          sourceType: 'purchase_request_note',
+          sourceId: created[0],
+          contextLabel: `Buy list — ${created.length} purchase request${created.length !== 1 ? 's' : ''}`,
+          contextUrl: deepLinks.purchaseRequests(created[0]),
+        });
       }
       onDone(created);
     } catch (e: any) {
@@ -242,9 +256,9 @@ export default function BuyListModal({ rows, onClose, onDone }: Props) {
 
         <div style={{ padding: '12px 16px', borderTop: `1px solid ${theme.border}` }}>
           {list.lineCount > 0 && (
-            <input
-              value={note} onChange={e => setNote(e.target.value)} disabled={busy}
-              placeholder="Note on every request (optional)" maxLength={200}
+            <MentionTextArea
+              value={note} onChange={v => { if (!busy) setNote(v.slice(0, 200)); }}
+              placeholder="Note on every request (optional) — @ tags a teammate"
               style={{
                 width: '100%', padding: '7px 9px', fontSize: '12px', marginBottom: '9px',
                 background: theme.inputBg, color: theme.textPrimary,

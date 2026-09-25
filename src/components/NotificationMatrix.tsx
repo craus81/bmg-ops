@@ -27,6 +27,7 @@ import {
   channelsForType,
   parseOverrides,
   type NotifyChannelKey,
+  type NotificationTypeDef,
   type TypeChannelOverrides,
 } from '@/lib/notification-registry';
 
@@ -42,17 +43,28 @@ export interface NotificationMatrixProps {
   /** Account-wide switches, so an inherited row can show what it inherits. */
   accountInApp: boolean;
   accountEmail: boolean;
+  /** The Messages switches, which own email on the direct-message and
+   *  mention rows (their fixedChannels). */
+  emailMessages?: boolean;
+  emailMentions?: boolean;
   onChange: (next: TypeChannelOverrides) => void;
 }
 
-export default function NotificationMatrix({ overrides, accountInApp, accountEmail, onChange }: NotificationMatrixProps) {
+export default function NotificationMatrix({ overrides, accountInApp, accountEmail, emailMessages, emailMentions, onChange }: NotificationMatrixProps) {
   const parsed = useMemo(() => parseOverrides(overrides), [overrides]);
   const groups = useMemo(() => typesByArea(), []);
-  const accountPrefs = { notify_in_app: accountInApp, notify_email: accountEmail, type_channels: parsed };
+  const accountPrefs = {
+    notify_in_app: accountInApp, notify_email: accountEmail, type_channels: parsed,
+    email_messages: emailMessages, email_mentions: emailMentions,
+  };
 
-  const toggle = (type: string, channel: NotifyChannelKey, current: NotifyChannelKey[]) => {
+  const toggle = (def: NotificationTypeDef, channel: NotifyChannelKey, current: NotifyChannelKey[]) => {
+    const type = def.type;
     const has = current.includes(channel);
-    const next = has ? current.filter(c => c !== channel) : [...current, channel];
+    // Only the row's editable channels are stored; fixed ones come from
+    // their own switch.
+    const editable = current.filter(c => !def.fixedChannels?.[c]);
+    const next = has ? editable.filter(c => c !== channel) : [...editable, channel];
     // Writing the key at all converts the row from inherited to explicit —
     // which is what the user just did by touching it.
     onChange({ ...parsed, [type]: next });
@@ -98,21 +110,27 @@ export default function NotificationMatrix({ overrides, accountInApp, accountEma
                           {def.description}
                           {def.audience && <><br /><span style={{ fontStyle: 'italic' }}>Who gets it: {def.audience}</span></>}
                           {def.alwaysOn && <><br /><span style={{ fontStyle: 'italic' }}>{def.alwaysOn}</span></>}
+                          {Object.values(def.fixedChannels || {}).map(f => (
+                            <span key={f!.reason}><br /><span style={{ fontStyle: 'italic' }}>{f!.reason}</span></span>
+                          ))}
                           {!def.alwaysOn && !explicit && <><br /><span style={{ opacity: 0.8 }}>Following your account defaults.</span></>}
                         </div>
                       </td>
-                      {CHANNELS.map(c => (
-                        <td key={c.key} style={cell}>
-                          <input
-                            type="checkbox"
-                            checked={active.includes(c.key)}
-                            disabled={!!def.alwaysOn}
-                            title={def.alwaysOn || undefined}
-                            onChange={() => toggle(def.type, c.key, active)}
-                            style={{ cursor: def.alwaysOn ? 'not-allowed' : 'pointer', opacity: def.alwaysOn ? 0.45 : 1 }}
-                          />
-                        </td>
-                      ))}
+                      {CHANNELS.map(c => {
+                        const lockedReason = def.alwaysOn || def.fixedChannels?.[c.key]?.reason;
+                        return (
+                          <td key={c.key} style={cell}>
+                            <input
+                              type="checkbox"
+                              checked={active.includes(c.key)}
+                              disabled={!!lockedReason}
+                              title={lockedReason || undefined}
+                              onChange={() => toggle(def, c.key, active)}
+                              style={{ cursor: lockedReason ? 'not-allowed' : 'pointer', opacity: lockedReason ? 0.45 : 1 }}
+                            />
+                          </td>
+                        );
+                      })}
                       <td style={{ ...cell, width: '70px' }}>
                         {explicit && !def.alwaysOn && (
                           <button

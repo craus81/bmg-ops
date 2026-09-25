@@ -33,6 +33,8 @@ import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
 import MentionsInbox from '@/components/MentionsInbox';
 import ShopArrivals from '@/components/ShopArrivals';
+import MyWorkList from '@/components/MyWorkList';
+import PersonalListsModal from '@/components/PersonalListsModal';
 
 type FilterStatus = VehicleTrackingStatus | 'all' | 'stuck';
 
@@ -138,6 +140,9 @@ export default function TrackingPage() {
   const [burns, setBurns] = useState<Record<string, { pct: number; tone: 'ok' | 'warn' | 'over'; label: string }>>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [archivingId, setArchivingId] = useState<string | null>(null);
+  // People's Lists (admin) and the My List panel — migration 326.
+  const [showPeopleLists, setShowPeopleLists] = useState(false);
+  const [myListKey, setMyListKey] = useState(0);
   // All NetSuite sales orders linked to each check-in (keyed by checkin id).
   // The first one added is also mirrored into FleetCheckin's legacy columns
   // so other readers — pick list, fleet page, universal search — keep working.
@@ -326,6 +331,18 @@ export default function TrackingPage() {
     if (error) {
       await dialog.alert('Failed to save notes: ' + error.message);
       return;
+    }
+    const saved = vehicles.find(x => x.id === id);
+    // Single edited column: skip people already tagged in the previous version.
+    if (draft) {
+      reportMentions({
+        text: draft,
+        sourceType: 'vehicle_note',
+        sourceId: id,
+        contextLabel: saved ? `${vehicleTitle(saved)} — ${saved.customer_name || 'vehicle'}` : 'In-Shop vehicle',
+        contextUrl: deepLinks.vehicle(id),
+        previousText: saved?.notes || '',
+      });
     }
     setVehicles(prev => prev.map(v => v.id === id ? { ...v, notes: draft || null } as any : v));
     setNotesEdits(prev => { const next = { ...prev }; delete next[id]; return next; });
@@ -1260,6 +1277,17 @@ export default function TrackingPage() {
         return;
       }
 
+      const sentNote = statusNote.trim();
+      if (sentNote) {
+        const v = vehicles.find(x => x.id === vehicleId);
+        reportMentions({
+          text: sentNote,
+          sourceType: 'vehicle_note',
+          sourceId: vehicleId,
+          contextLabel: v ? `${vehicleTitle(v)} — ${v.customer_name || 'vehicle'}` : 'In-Shop vehicle',
+          contextUrl: deepLinks.vehicle(vehicleId),
+        });
+      }
       setStatusNote('');
       setUpdateSuccess(`Updated to ${VEHICLE_STATUS_LABELS[newStatus]}`);
       setTimeout(() => setUpdateSuccess(null), 2000);
@@ -1279,7 +1307,7 @@ export default function TrackingPage() {
     }
     setUpdatingId(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [statusNote, expandedId, profile]);
+  }, [statusNote, expandedId, profile, vehicles]);
 
   // Graphics install lane (migration 085) — runs in parallel to the upfit
   // pipeline driven by updateStatus above. Independent state machine, but
@@ -1303,6 +1331,17 @@ export default function TrackingPage() {
         await dialog.alert('Graphics install update failed: ' + (data.error || 'Unknown error'));
         setUpdatingId(null);
         return;
+      }
+      const sentNote = statusNote.trim();
+      if (sentNote) {
+        const v = vehicles.find(x => x.id === vehicleId);
+        reportMentions({
+          text: sentNote,
+          sourceType: 'vehicle_note',
+          sourceId: vehicleId,
+          contextLabel: v ? `${vehicleTitle(v)} — ${v.customer_name || 'vehicle'}` : 'In-Shop vehicle',
+          contextUrl: deepLinks.vehicle(vehicleId),
+        });
       }
       setStatusNote('');
       setUpdateSuccess(`Graphics: ${GRAPHICS_INSTALL_LABELS[newStatus]}`);
@@ -1483,13 +1522,36 @@ export default function TrackingPage() {
   return (
     <div>
       {/* Page Header */}
-      <div style={{ marginBottom: '16px' }}>
+      <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
         <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>
           In-Shop
         </div>
+        {/* Admin-only: order each person's assigned vehicles (their My List). */}
+        {isAdmin && (
+          <button
+            onClick={() => setShowPeopleLists(true)}
+            title="Set the order each person works their vehicles"
+            style={{ padding: '8px 12px', borderRadius: '10px', background: 'var(--subtle-bg)', color: 'var(--text-secondary)', fontWeight: 800, fontSize: '12px', border: '1px solid var(--border)', cursor: 'pointer', whiteSpace: 'nowrap' }}
+          >
+            ⇅ People&apos;s Lists
+          </button>
+        )}
       </div>
 
+      {showPeopleLists && (
+        <PersonalListsModal
+          type="vehicle"
+          onClose={changed => {
+            setShowPeopleLists(false);
+            if (changed) setMyListKey(k => k + 1);
+          }}
+        />
+      )}
+
       <MentionsInbox />
+
+      {/* The signed-in person's assigned vehicles in their manager's order. */}
+      <MyWorkList type="vehicle" reloadKey={myListKey} />
 
       {/* Arrival schedule — merged from the old Shop Board tab */}
       <ShopArrivals />
@@ -2065,18 +2127,18 @@ export default function TrackingPage() {
                         </div>
 
                         {/* Note input */}
-                        <input
-                          type="text"
-                          value={statusNote}
-                          onChange={(e) => setStatusNote(e.target.value)}
-                          onClick={(e) => e.stopPropagation()}
-                          placeholder="Add a note with the status change..."
-                          style={{
-                            width: '100%', padding: '8px 10px', borderRadius: '8px', marginTop: '8px',
-                            border: '1px solid var(--border)', background: 'var(--input-bg)',
-                            color: 'var(--text-primary)', fontSize: '12px', boxSizing: 'border-box',
-                          }}
-                        />
+                        <div onClick={(e) => e.stopPropagation()}>
+                          <MentionTextArea
+                            value={statusNote}
+                            onChange={setStatusNote}
+                            placeholder="Add a note with the status change... (@ tags a teammate)"
+                            style={{
+                              width: '100%', padding: '8px 10px', borderRadius: '8px', marginTop: '8px',
+                              border: '1px solid var(--border)', background: 'var(--input-bg)',
+                              color: 'var(--text-primary)', fontSize: '12px', boxSizing: 'border-box',
+                            }}
+                          />
+                        </div>
 
                         {/* Action buttons: Run Completion Process + Message Customer */}
                         <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
@@ -2328,11 +2390,11 @@ export default function TrackingPage() {
                               >+ Add Notes</button>
                         ) : (
                           <div onClick={(e) => e.stopPropagation()}>
-                            <textarea
+                            <MentionTextArea
                               value={notesEdits[vehicle.id]}
-                              onChange={(e) => setNotesEdits(prev => ({ ...prev, [vehicle.id]: e.target.value }))}
+                              onChange={(v) => setNotesEdits(prev => ({ ...prev, [vehicle.id]: v }))}
                               rows={3}
-                              placeholder="Notes about this vehicle…"
+                              placeholder="Notes about this vehicle… (@ tags a teammate)"
                               style={{
                                 width: '100%', padding: '8px 10px', borderRadius: '8px', boxSizing: 'border-box',
                                 border: '1px solid var(--border)', background: 'var(--input-bg)',

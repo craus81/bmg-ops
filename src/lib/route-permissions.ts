@@ -320,6 +320,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/installer/ready-for-install/route.ts': authScoped('field installer flow; vehicle status transition validated in-route'),
   'src/app/api/invoices/backfill-emails/route.ts': admin(),
   'src/app/api/jobs/assign/route.ts': staff(),
+  'src/app/api/work-lists/route.ts': authScoped('"My List" read for the caller\'s own assigned jobs (external installers hold vehicle assignments too, so not a staff wall); another person\'s list, the people roster and every save require admin', 'isAdminRole('),
   'src/app/api/knowledge/reprocess/route.ts': admin(),
   'src/app/api/knowledge/upload/route.ts': admin(),
   // The only way bytes leave the R2 `ledger` prefix (migration 314): that
@@ -458,6 +459,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/reports/vendors/route.ts': staff(),
   'src/app/api/scan-worksheet/route.ts': authScoped('installer scan worksheet; external installer accounts are the intended callers'),
   'src/app/api/scans/add-part/route.ts': admin(),
+  'src/app/api/scans/assign-po/route.ts': admin(),
   'src/app/api/scans/bulk-update/route.ts': admin(),
   'src/app/api/scans/delete/route.ts': admin(),
   'src/app/api/scans/log/route.ts': authScoped('external installer companies log field scans by design; the route enforces an internal-staff-or-installer allowlist itself', 'isInternalStaffRole('),
@@ -481,6 +483,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/shifts/route.ts': authScoped('time clock for techs AND external installers; CNI job membership checked via canActOnCniJob, field/shop contexts FIELD_ROLES-gated in-route', 'canActOnCniJob'),
   'src/app/api/shop-inbound/arrival/route.ts': staff(),
   'src/app/api/shop-inbound/route.ts': staff(),
+  'src/app/api/sent-emails/[id]/route.ts': staff(),
   'src/app/api/shop-week/route.ts': staff(),
   'src/app/api/signed-documents/route.ts': featureDynamic('requireFeature(req, spec.feature)', 'gated per record type on the record\'s own feature key (estimates / graphics)'),
   // R3-22: all three storage routes tier the caller via storageAccessOf —
