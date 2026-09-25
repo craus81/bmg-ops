@@ -29,6 +29,9 @@ import { roundChip, summarizeRounds } from '@/lib/proof-rounds';
 import { isFinishedStatus, inStatusScope, GRAPHICS_ACTIVE_STATUSES, GRAPHICS_AWAITING_STATUSES } from '@/lib/graphics-status';
 import { workOrderPositions, compareByDueDate } from '@/lib/graphics-work-order';
 import GraphicsWorkOrderModal from '@/components/GraphicsWorkOrderModal';
+import PersonalListsModal from '@/components/PersonalListsModal';
+import { apiFetch } from '@/lib/api-client';
+import type { WorkListItem } from '@/lib/personal-work-list';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import GraphicsInvoiceReviewModal from '@/components/GraphicsInvoiceReviewModal';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
@@ -123,6 +126,12 @@ export default function GraphicsPage() {
   const [assigneeFilter, setAssigneeFilter] = useState<string>('');
   // Admin work order — the drag-to-rank list behind the "#" column.
   const [showWorkOrder, setShowWorkOrder] = useState(false);
+  // People's Lists (migration 326): an admin orders each person's own jobs.
+  const [showPeopleLists, setShowPeopleLists] = useState(false);
+  const [peopleListsKey, setPeopleListsKey] = useState(0);
+  // One person's list order, id → position. Loaded when the board is showing
+  // one person's jobs: My Jobs (your own list), or an admin's assignee filter.
+  const [personalPositions, setPersonalPositions] = useState<Map<string, number> | null>(null);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -156,6 +165,30 @@ export default function GraphicsPage() {
     [...new Set([j.assigned_to, ...(assigneesByJob[j.id] || [])].filter(Boolean) as string[])];
   const isAssignedTo = (j: GraphicsJob, userId: string) => assigneesOf(j).includes(userId);
   const isMine = (j: GraphicsJob) => !!user?.id && isAssignedTo(j, user.id);
+
+  // Whose list the "#" column follows, if anyone's.
+  const listOwner: string | null = myJobsOnly
+    ? user?.id || null
+    : isAdmin && assigneeFilter && assigneeFilter !== 'unassigned' ? assigneeFilter : null;
+  useEffect(() => {
+    if (!listOwner) { setPersonalPositions(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const qs = listOwner === user?.id ? '' : `&userId=${listOwner}`;
+        const res = await apiFetch(`/api/work-lists?type=graphics${qs}`);
+        if (!res.ok) throw new Error(String(res.status));
+        const body = await res.json();
+        const items: WorkListItem[] = body.items || [];
+        if (!cancelled) setPersonalPositions(new Map(items.map((it, i) => [it.id, i + 1])));
+      } catch {
+        // Fall back to the shared work order rather than an unnumbered board.
+        if (!cancelled) setPersonalPositions(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch only when the person or a saved order changes
+  }, [listOwner, peopleListsKey]);
   const [search, setSearch] = useState('');
   // Deep link: ?q=<term> (universal search "View all") prefills the board search.
   useEffect(() => {
@@ -891,6 +924,11 @@ export default function GraphicsPage() {
   // jobs it can actually see — nobody should open the board to a list that
   // starts at #4.
   const rankPosition = workOrderPositions(jobs);
+  // Showing one person's jobs? Number and sort by THEIR list instead.
+  const listPosition = personalPositions ?? rankPosition;
+  const listLabel = personalPositions
+    ? (listOwner === user?.id ? 'on your list' : `on ${personName(listOwner!)}'s list`)
+    : 'in the work order';
 
   // Filter jobs
   const filteredJobs = jobs.filter(j => {
@@ -931,7 +969,7 @@ export default function GraphicsPage() {
   // preserves that due order in the unranked tail.
   const dueOrdered = [...filteredJobs].sort(compareByDueDate);
   const { sorted, sort, toggle } = useTableSort(dueOrdered, {
-    rank: j => rankPosition.get(j.id) ?? null,
+    rank: j => listPosition.get(j.id) ?? null,
     title: j => j.title?.toLowerCase() || null,
     customer: j => j.customer?.toLowerCase() || null,
     // Unassigned sorts last in either direction, like every other blank.
@@ -1040,9 +1078,9 @@ export default function GraphicsPage() {
       )}
 
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
         <div style={{ fontSize: '22px', fontWeight: 800 }}>Graphics Production</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
           {/* Admin-only: the running order the board sorts by. Everyone else
               reads it in the "#" column. */}
           {isAdmin && (
@@ -1054,6 +1092,15 @@ export default function GraphicsPage() {
               ⇅ Work Order{rankPosition.size > 0 ? ` (${rankPosition.size})` : ''}
             </button>
           )}
+          {isAdmin && (
+            <button
+              onClick={() => setShowPeopleLists(true)}
+              title="Set the order each person works their own jobs"
+              style={{ padding: '8px 12px', borderRadius: '10px', background: 'var(--subtle-bg)', color: 'var(--text-secondary)', fontWeight: 800, fontSize: '12px', border: '1px solid var(--border)', cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              ⇅ People&apos;s Lists
+            </button>
+          )}
           <button
             onClick={() => setShowCreate(true)}
             style={{ padding: '8px 14px', borderRadius: '10px', background: theme.orange, color: '#fff', fontWeight: 800, fontSize: '12px', border: 'none', cursor: 'pointer', boxShadow: '0 2px 8px rgba(238,49,32,0.3)' }}
@@ -1062,6 +1109,17 @@ export default function GraphicsPage() {
           </button>
         </div>
       </div>
+
+      {showPeopleLists && (
+        <PersonalListsModal
+          type="graphics"
+          initialUserId={assigneeFilter && assigneeFilter !== 'unassigned' ? assigneeFilter : null}
+          onClose={changed => {
+            setShowPeopleLists(false);
+            if (changed) setPeopleListsKey(k => k + 1);
+          }}
+        />
+      )}
 
       {showWorkOrder && (
         <GraphicsWorkOrderModal
@@ -1228,7 +1286,7 @@ export default function GraphicsPage() {
         </button>
         <button
           onClick={() => { setMyJobsOnly(v => !v); setMetricFilter(null); }}
-          title="Only jobs assigned to you — directly or through the assignment picker"
+          title="Only jobs assigned to you, in the order your manager set for you"
           style={{
             padding: '7px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
             background: myJobsOnly ? 'rgba(234,179,8,0.18)' : 'var(--subtle-bg)',
@@ -1481,15 +1539,15 @@ export default function GraphicsPage() {
                         title={job.notes ? (job.notes.length > 120 ? job.notes.slice(0, 120) + '...' : job.notes) : undefined}
                       >
                         <td style={{ ...tdStyle, fontVariantNumeric: 'tabular-nums' }}>
-                          {rankPosition.has(job.id)
+                          {listPosition.has(job.id)
                             ? (
                               <span
-                                title={`#${rankPosition.get(job.id)} in the work order${isAdmin ? ' — change it with ⇅ Work Order' : ''}`}
+                                title={`#${listPosition.get(job.id)} ${listLabel}${isAdmin ? (personalPositions ? " — change it with ⇅ People's Lists" : ' — change it with ⇅ Work Order') : ''}`}
                                 style={{
                                   fontSize: '11px', fontWeight: 800,
-                                  color: rankPosition.get(job.id) === 1 ? '#22c55e' : 'var(--text-secondary)',
+                                  color: listPosition.get(job.id) === 1 ? '#22c55e' : 'var(--text-secondary)',
                                 }}
-                              >#{rankPosition.get(job.id)}</span>
+                              >#{listPosition.get(job.id)}</span>
                             )
                             : <span style={{ color: 'var(--text-muted)' }}>—</span>}
                         </td>
