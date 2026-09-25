@@ -16,6 +16,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { touchLabel, type QuietLead } from '@/lib/quiet-leads';
 
 const LOST_REASONS = [
@@ -106,6 +107,19 @@ export default function QuietLeadsPage() {
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'That did not go through');
+      // One mention per save, not one per selected lead: a single lead links
+      // to its record; a bulk action is a digest, so it links to the queue.
+      const noteText = note.trim();
+      if (noteText) {
+        const single = prompt.ids.length === 1 ? leads.find(l => l.id === prompt.ids[0]) : null;
+        reportMentions({
+          text: noteText,
+          sourceType: 'prospect_note',
+          sourceId: single ? single.id : null,
+          contextLabel: single ? single.companyName : `${prompt.ids.length} quiet leads`,
+          contextUrl: single ? deepLinks.prospect(single.id) : deepLinks.quietLeads(days),
+        });
+      }
       setPrompt(null);
       setMsg({ ok: true, text: `${data.updated} lead${data.updated === 1 ? '' : 's'} updated.` });
       await load();
@@ -278,11 +292,11 @@ export default function QuietLeadsPage() {
               <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-label)', display: 'block', marginBottom: '4px' }}>
                 {prompt.action === 'touch' ? 'What was the touch? (required)' : 'Note (optional)'}
               </span>
-              <textarea
+              <MentionTextArea
                 value={note}
-                onChange={e => setNote(e.target.value)}
+                onChange={v => setNote(v.slice(0, 1000))}
                 rows={3}
-                placeholder={prompt.action === 'touch' ? 'Called Dana — asked to revisit in Q4' : ''}
+                placeholder={prompt.action === 'touch' ? 'Called Dana — asked to revisit in Q4 — @ tags a teammate' : '@ tags a teammate'}
                 style={{ width: '100%', padding: '10px 12px', borderRadius: '9px', fontSize: '13px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', resize: 'vertical' }}
               />
             </label>

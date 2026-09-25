@@ -11,13 +11,15 @@
  * out?" beyond the per-estimate banner. This page is that answer: your own
  * sends by default, everyone's on a toggle (it's all business
  * correspondence — useful when covering for a teammate), problems-only
- * filter, and an Open button that deep-links the record each email is
- * about (context_url, built from src/lib/deep-links.ts by the sender).
+ * filter, and an Open button that shows the email as it was sent
+ * (/api/sent-emails/<id>), with Go to record for the record it's about
+ * (context_url, built from src/lib/deep-links.ts by the sender).
  */
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { apiFetch } from '@/lib/api-client';
 import { useAuth } from '@/components/AuthProvider';
 
 interface EmailRow {
@@ -63,6 +65,13 @@ const STATUS_STYLE: Record<string, { label: string; color: string; bg: string }>
   failed: { label: '⚠ Failed', color: '#ef4444', bg: 'rgba(239,68,68,0.1)' },
 };
 
+interface ViewedEmail {
+  row: EmailRow;
+  loading: boolean;
+  body_html: string | null;
+  missing?: 'withheld' | 'not_stored' | 'error';
+}
+
 const PROBLEM_STATUSES = ['bounced', 'complained', 'failed'];
 
 export default function SentEmailsPage() {
@@ -75,6 +84,23 @@ export default function SentEmailsPage() {
   const [loading, setLoading] = useState(true);
   const [scope, setScope] = useState<'mine' | 'all'>('mine');
   const [problemsOnly, setProblemsOnly] = useState(false);
+  const [viewing, setViewing] = useState<ViewedEmail | null>(null);
+
+  const openEmail = async (row: EmailRow) => {
+    setViewing({ row, loading: true, body_html: null });
+    let next: ViewedEmail;
+    try {
+      const res = await apiFetch(`/api/sent-emails/${row.id}`);
+      const data = await res.json();
+      next = res.ok
+        ? { row, loading: false, body_html: data.body_html || null, missing: data.body_html ? undefined : data.missing || 'not_stored' }
+        : { row, loading: false, body_html: null, missing: 'error' };
+    } catch {
+      next = { row, loading: false, body_html: null, missing: 'error' };
+    }
+    // Ignore a late answer for an email the user already closed or swapped.
+    setViewing(v => (v?.row.id === row.id ? next : v));
+  };
 
   useEffect(() => {
     if (authLoading || !user) return;
@@ -167,18 +193,56 @@ export default function SentEmailsPage() {
                         <span title={r.delivery_detail || undefined} style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '5px', color: st.color, background: st.bg }}>{st.label}</span>
                       </td>
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                        {r.context_url && (
-                          <button onClick={() => router.push(r.context_url!)} title="Open the record this email is about" style={{
-                            padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
-                            background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)', color: '#60a5fa',
-                          }}>Open</button>
-                        )}
+                        <button onClick={() => openEmail(r)} title="Show the email as it was sent" style={{
+                          padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                          background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)', color: '#60a5fa',
+                        }}>Open</button>
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Sent-email viewer — same shape as the account history's. */}
+      {viewing && (
+        <div onClick={() => setViewing(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+          <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Sent email"
+            style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '16px', width: 'min(720px, 100%)', maxHeight: 'calc(100vh / var(--ts) - 40px)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>{viewing.row.subject || '(no subject)'}</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', overflowWrap: 'anywhere' }}>
+                  To {(viewing.row.recipients || []).join(', ') || '—'} · {fmtWhen(viewing.row.created_at)} · {(STATUS_STYLE[viewing.row.delivery_status] || STATUS_STYLE.sent).label}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
+                {viewing.row.context_url && (
+                  <button onClick={() => router.push(viewing.row.context_url!)} title="Open the record this email is about" style={{
+                    padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                    background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)', color: '#60a5fa',
+                  }}>Go to record</button>
+                )}
+                <button onClick={() => setViewing(null)} aria-label="Close" style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '16px', cursor: 'pointer', padding: 0 }}>✕</button>
+              </div>
+            </div>
+            {viewing.loading ? (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '24px 0', textAlign: 'center' }}>Loading…</div>
+            ) : viewing.body_html ? (
+              <iframe srcDoc={viewing.body_html} title="Sent email" sandbox="" style={{ width: '100%', flex: 1, minHeight: '360px', border: '1px solid var(--border)', borderRadius: '8px', background: '#f3f4f6' }} />
+            ) : (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '16px 0' }}>
+                {viewing.missing === 'withheld'
+                  ? 'Invite emails aren’t shown here because they contain the person’s sign-in link.'
+                  : viewing.missing === 'error'
+                    ? 'Couldn’t load this email. Try again in a moment.'
+                    : 'The text of this email wasn’t saved, and it’s too old to fetch from the mail service. The subject, recipients and delivery status above are all that was kept.'}
+              </div>
+            )}
           </div>
         </div>
       )}

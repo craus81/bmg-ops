@@ -74,6 +74,14 @@ export interface NotificationTypeDef {
    * you to something you are not in the audience for.
    */
   audience?: string;
+  /**
+   * Channels on an otherwise editable row that the matrix can't toggle,
+   * because something else decides them (a dedicated switch, or the
+   * channel being unconditional). `reason` is shown on the locked cell;
+   * `on` resolves the channel from the preferences row. The matrix only
+   * edits the remaining channels.
+   */
+  fixedChannels?: Partial<Record<NotifyChannelKey, { reason: string; on: (prefs: ChannelPrefsRow | null | undefined) => boolean }>>;
 }
 
 export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
@@ -163,7 +171,19 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'access_request', label: 'Access request', description: 'Someone asked for an account or extra permissions.', area: 'system', defaultChannels: ['in_app', 'push'] },
 
   // ── Messages & mentions ───────────────────────────────────────────────
-  { type: 'message', label: 'Direct message', description: 'Someone messaged you in the app.', area: 'messages', defaultChannels: ['in_app'], alwaysOn: 'In-app always on — messages appear in the chat regardless. Email is the "Email me my messages" switch.' },
+  // Push is the user's choice on both rows (Craig, 2026-09-24: it was
+  // locked off for messages, and mentions had no row at all — which also
+  // meant their email never sent, since an unregistered type fails open to
+  // in-app + push only). Email stays on each one's own Settings switch.
+  { type: 'message', label: 'Direct message', description: 'Someone messaged you in the app.', area: 'messages', defaultChannels: ['in_app', 'push'],
+    fixedChannels: {
+      in_app: { reason: 'Always on: messages appear in the chat regardless.', on: () => true },
+      email: { reason: 'Set by the "Email Notifications" switch under Messages.', on: p => p?.email_messages === true },
+    } },
+  { type: 'mention', label: 'Mentioned in a note', description: 'A teammate @tagged you in a note on a job, vehicle, estimate or PO.', area: 'messages', defaultChannels: ['in_app', 'push'],
+    fixedChannels: {
+      email: { reason: 'Set by the "Email me when I\'m mentioned" switch (on unless you turn it off).', on: p => p?.email_mentions !== false },
+    } },
 ];
 
 const BY_TYPE = new Map(NOTIFICATION_TYPES.map(t => [t.type, t]));
@@ -207,6 +227,9 @@ export interface ChannelPrefsRow {
   notify_in_app?: boolean | null;
   notify_email?: boolean | null;
   type_channels?: unknown;
+  /** Read only by rows with fixedChannels (direct messages, mentions). */
+  email_messages?: boolean | null;
+  email_mentions?: boolean | null;
 }
 
 /**
@@ -232,10 +255,24 @@ export function channelsForType(
   const def = BY_TYPE.get(type);
   if (!def) return fallback;
   if (def.alwaysOn) return def.defaultChannels;
+  const editable = editableChannels(def, prefs);
+  if (!def.fixedChannels) return editable;
+
+  // Fixed channels come from their own switch, never from the matrix.
+  const fixed = def.fixedChannels;
+  return CHANNEL_ORDER.filter(c => {
+    const f = fixed[c];
+    return f ? f.on(prefs) : editable.includes(c);
+  });
+}
+
+const CHANNEL_ORDER: NotifyChannelKey[] = ['in_app', 'push', 'email'];
+
+function editableChannels(def: NotificationTypeDef, prefs: ChannelPrefsRow | null | undefined): NotifyChannelKey[] {
   if (!prefs) return def.defaultChannels;
 
   const overrides = parseOverrides(prefs.type_channels);
-  if (Object.prototype.hasOwnProperty.call(overrides, type)) return overrides[type];
+  if (Object.prototype.hasOwnProperty.call(overrides, def.type)) return overrides[def.type];
 
   const inApp = prefs.notify_in_app !== false;
   const email = prefs.notify_email === true;

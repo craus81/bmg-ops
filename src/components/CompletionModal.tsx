@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { storage, storageDownloadUrl } from '@/lib/storage';
+import { toJpegIfHeic } from '@/lib/heic';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import ProofThumbnail from '@/components/ProofThumbnail';
@@ -11,6 +12,8 @@ import PhotoSession from '@/components/PhotoSession';
 import { estimateHeadlineNumber } from '@/lib/estimate-number';
 import { openNetSuitePdf, openNetSuiteInvoicePdfByNumber } from '@/lib/netsuite-pdf-client';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import { deepLinks } from '@/lib/deep-links';
 
 interface Task {
   id: string;
@@ -251,6 +254,16 @@ export default function CompletionModal({
         return;
       }
       setOverrideFor(null);
+      if (reason) {
+        // The override reason is staff-internal (audit log) — tag teammates.
+        reportMentions({
+          text: reason,
+          sourceType: 'vehicle_note',
+          sourceId: vehicleId,
+          contextLabel: `${vehicleLabel} — ${customerName || 'vehicle'}`,
+          contextUrl: deepLinks.vehicle(vehicleId),
+        });
+      }
       // The fresh SO isn't linked to the check-in yet — link it so the
       // invoice route's ownership check (and the card's SO list) see it.
       await supabase.from('fleet_checkin_sales_orders').upsert({
@@ -348,7 +361,7 @@ export default function CompletionModal({
     let uploadedAny = false;
     try {
       for (let idx = 0; idx < files.length; idx++) {
-        const file = files[idx];
+        const file = await toJpegIfHeic(files[idx]);
         const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
         const path = `vehicles/${vehicleId}/completion-${Date.now()}-${idx}.${ext}`;
         const { error: upErr } = await storage.from(PHOTO_BUCKET).upload(path, file, { contentType: file.type });
@@ -403,6 +416,16 @@ export default function CompletionModal({
       } else if (!res.ok) {
         setError(data.error || 'Submit failed');
       } else {
+        const sentNote = completionNote.trim();
+        if (sentNote) {
+          reportMentions({
+            text: sentNote,
+            sourceType: 'vehicle_note',
+            sourceId: vehicleId,
+            contextLabel: `${vehicleLabel} — ${customerName || 'vehicle'}`,
+            contextUrl: deepLinks.vehicle(vehicleId),
+          });
+        }
         onComplete();
       }
     } catch (e: any) {
@@ -673,11 +696,11 @@ export default function CompletionModal({
           {/* Completion notes */}
           <label>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Completion notes (optional)</div>
-            <textarea
+            <MentionTextArea
               value={completionNote}
-              onChange={e => setCompletionNote(e.target.value)}
+              onChange={setCompletionNote}
               rows={2}
-              placeholder="Anything worth noting for the record"
+              placeholder="Anything worth noting for the record (@ tags a teammate)"
               style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'inherit', resize: 'vertical' }}
             />
           </label>
@@ -805,8 +828,8 @@ export default function CompletionModal({
                       </button>
                       {overrideFor === est.id && (
                         <div style={{ marginTop: '6px', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
-                          <input value={overrideReason} onChange={e => setOverrideReason(e.target.value)}
-                            placeholder="Not customer-approved — record the override reason (e.g. approved by phone)"
+                          <MentionTextArea value={overrideReason} onChange={v => setOverrideReason(v.slice(0, 500))}
+                            placeholder="Not customer-approved — record the override reason (e.g. approved by phone; @ tags a teammate)"
                             style={{ flex: 1, minWidth: '220px', padding: '7px 9px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
                           <button onClick={() => convertAndInvoice(est, overrideReason.trim())}
                             disabled={overrideReason.trim().length < 3 || !!invWorking}

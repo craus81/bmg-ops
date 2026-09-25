@@ -35,6 +35,7 @@ import { DropZone } from '@/components/DropZone';
 import PhoneInput from '@/components/PhoneInput';
 import { downloadXlsx } from '@/lib/xlsx-export';
 import { deepLinks } from '@/lib/deep-links';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { SortableTh, useTableSort, type SortState } from '@/components/ui/SortableTh';
 import NumberInput from '@/components/NumberInput';
@@ -462,6 +463,16 @@ export default function ProspectsPage() {
       return;
     }
     if (!data) { setSaving(false); return; }
+    // The record exists now — tag anyone @mentioned in its intake notes.
+    if (form.notes.trim()) {
+      reportMentions({
+        text: form.notes.trim(),
+        sourceType: 'prospect_note',
+        sourceId: data.id,
+        contextLabel: name,
+        contextUrl: deepLinks.prospect(data.id),
+      });
+    }
     if (form.location_count > 1) {
       await supabase.from('prospect_tags').insert({ prospect_id: data.id, tag: 'multilocation', auto_generated: true });
     }
@@ -862,7 +873,7 @@ export default function ProspectsPage() {
                 </div>
               </div>
             )}
-            <div style={{ gridColumn: '1 / -1' }}><div style={labelStyle}>Notes</div><textarea style={{ ...inputStyle, minHeight: '50px', resize: 'vertical' }} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
+            <div style={{ gridColumn: '1 / -1' }}><div style={labelStyle}>Notes</div><MentionTextArea style={{ ...inputStyle, minHeight: '50px', resize: 'vertical' }} placeholder="@ tags a teammate" value={form.notes} onChange={v => setForm({ ...form, notes: v })} /></div>
           </div>
           {form.record_type !== 'vendor' && (
             <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '12px', color: 'var(--text-secondary)', cursor: 'pointer', marginBottom: '10px' }}>

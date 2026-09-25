@@ -6,7 +6,8 @@ import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import UniversalSearch from '@/components/UniversalSearch';
 import { useFocusTrap } from '@/lib/use-focus-trap';
-import { useMentions, mentionUrl } from '@/lib/use-mentions';
+import { useMentions } from '@/lib/use-mentions';
+import { deepLinks } from '@/lib/deep-links';
 import { isPaletteChord, shortcutLabel } from '@/lib/command-palette';
 import { INTERNAL_STAFF_ROLES } from '@/lib/features';
 import { Search as SearchIcon } from 'lucide-react';
@@ -584,8 +585,7 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
                       onClick={() => {
                         markMentionRead(m);
                         setShowMentions(false);
-                        const url = mentionUrl(m);
-                        if (url) router.push(url);
+                        router.push(deepLinks.mention(m.id));
                       }}
                       style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', cursor: 'pointer', opacity: m.read_at ? 0.6 : 1 }}
                     >

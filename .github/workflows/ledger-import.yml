@@ -58,6 +58,10 @@ on:
         required: false
         default: '500'
         type: string
+      reportsFrom:
+        description: 'First report year YYYY (import; blank = earliest QuickBooks entry)'
+        required: false
+        type: string
 
 # Two drivers on one run would just fight over the lease (the route answers
 # 409), so serialize — and never cancel one mid-chunk.
@@ -94,6 +98,7 @@ jobs:
           PHASES: ${{ inputs.phases }}
           BUDGET: ${{ inputs.budget }}
           MAX_LOOPS: ${{ inputs.maxLoops }}
+          REPORTS_FROM: ${{ inputs.reportsFrom }}
         run: |
           set -euo pipefail
           if [ -z "${APP_URL:-}" ]; then
@@ -107,4 +112,5 @@ jobs:
           if [ -n "${DRY_RUN_ID:-}" ]; then ARGS+=(--dry-run-id "$DRY_RUN_ID"); fi
           if [ -n "${CUTOVER_DATE:-}" ]; then ARGS+=(--date "$CUTOVER_DATE"); fi
           if [ -n "${PHASES:-}" ]; then ARGS+=(--phases "$PHASES"); fi
+          if [ -n "${REPORTS_FROM:-}" ]; then ARGS+=(--reports-from "$REPORTS_FROM"); fi
           node scripts/import-quickbooks.mjs "${ARGS[@]}"

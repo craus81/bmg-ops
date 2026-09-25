@@ -1006,7 +1006,7 @@ async function phaseConnect(s: ChunkState): Promise<boolean> {
     }
 
     const gate = await ledgerPdfsEnabled(s.service);
-    const reportsFrom = Number(s.run.config?.reportsFrom) || new Date().getUTCFullYear() - 1;
+    const reportsFrom = await reportsFromYear(s);
     const plan = estimatePlan(counts, ALL_PHASES, REPORT_PLAN(reportsFrom, new Date().getUTCFullYear()).length);
 
     s.dryRunReport = {
@@ -1948,10 +1948,36 @@ async function failDocument(s: ChunkState, doc: any, message: string): Promise<v
   s.lastErrors.push(`document ${doc.id}: ${message}`);
 }
 
+/**
+ * First year of report snapshots: the run's `reportsFrom` when given, else
+ * the year of the earliest QuickBooks transaction already imported, so the
+ * reports cover the whole history. (The old default, last year, fetched only
+ * the months after the cutover: empty for a company that left QuickBooks.)
+ * Before any transaction is imported (a dry run) it falls back to last year.
+ */
+async function reportsFromYear(s: ChunkState): Promise<number> {
+  const explicit = Number(s.run.config?.reportsFrom);
+  if (explicit) return explicit;
+  const fallback = new Date().getUTCFullYear() - 1;
+  let earliest: string | null = null;
+  for (const table of ['ledger_invoices', 'ledger_bills', 'ledger_journal_entries'] as const) {
+    const { data } = await s.service.from(table)
+      .select('doc_date')
+      .eq('source', 'quickbooks')
+      .order('doc_date', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    const d = (data as { doc_date?: string } | null)?.doc_date;
+    if (d && (!earliest || d < earliest)) earliest = d;
+  }
+  const year = earliest ? Number(earliest.slice(0, 4)) : NaN;
+  return Number.isFinite(year) && year > 1990 ? Math.min(year, fallback) : fallback;
+}
+
 /** Fetch and store the planned report snapshots. */
 async function phaseReports(s: ChunkState): Promise<boolean> {
   if (!s.cursor.reportsMaterialized) {
-    const from = Number(s.run.config?.reportsFrom) || new Date().getUTCFullYear() - 1;
+    const from = await reportsFromYear(s);
     const { errors } = await materializeReportPlan(s.service, REPORT_PLAN(from, new Date().getUTCFullYear()), s.runId);
     for (const e of errors) s.lastErrors.push(`report plan: ${e}`);
     s.cursor.reportsMaterialized = true;

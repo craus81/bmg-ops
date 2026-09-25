@@ -41,6 +41,7 @@
     "dotenv": "^17.3.1",
     "exceljs": "^4.4.0",
     "googleapis": "^171.4.0",
+    "heic-to": "^1.5.2",
     "html5-qrcode": "^2.3.8",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",

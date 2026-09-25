@@ -2296,6 +2296,17 @@ export default function EstimatesPage() {
         await dialog.alert('Failed to log follow-up: ' + (data.error || 'Unknown error'));
       } else {
         const nowIso = new Date().toISOString();
+        // The follow-up log renders on the Quotes page row, so the mention
+        // lands there (quoteFollowUps scroll-flashes the exact estimate).
+        if (fuNote.trim()) {
+          reportMentions({
+            text: fuNote.trim(),
+            sourceType: 'estimate_note',
+            sourceId: followupNoteFor.id,
+            contextLabel: `#${estimateHeadlineNumber(followupNoteFor)}${followupNoteFor.customer_name ? ` — ${followupNoteFor.customer_name}` : ''}`,
+            contextUrl: deepLinks.quoteFollowUps('estimate', followupNoteFor.id),
+          });
+        }
         setEstimates(prev => prev.map(e => e.id === followupNoteFor.id ? { ...e, last_followup_at: nowIso } : e));
         setFollowupNoteFor(null);
         setFuNote('');
@@ -5892,10 +5903,10 @@ export default function EstimatesPage() {
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>
               {followupNoteFor.customer_name || 'No customer'} · {fmt(followupNoteFor.grand_total)}
             </div>
-            <textarea
+            <MentionTextArea
               value={fuNote}
-              onChange={e => setFuNote(e.target.value)}
-              placeholder="What did the customer say? (e.g. vehicles arrive in September)"
+              onChange={v => setFuNote(v.slice(0, 2000))}
+              placeholder="What did the customer say? (e.g. vehicles arrive in September) — @ tags a teammate"
               rows={3}
               style={{
                 width: '100%', padding: '10px', borderRadius: '10px', boxSizing: 'border-box',

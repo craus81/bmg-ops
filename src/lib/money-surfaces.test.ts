@@ -54,6 +54,7 @@ const ALLOWED: Record<string, string> = {
   'src/app/(main)/admin/reports/accounting-package/page.tsx': 'reports',
   'src/app/(main)/admin/reports/at-risk/page.tsx': 'reports',
   'src/app/(main)/admin/reports/cash-outlook/page.tsx': 'reports',
+  'src/app/(main)/admin/reports/financial-history/page.tsx': 'reports; page and API are financials (super_admin/executive)',
   'src/app/(main)/admin/reports/graphics-costs/page.tsx': 'reports; its API is requireMoney',
   'src/app/(main)/admin/reports/installer-costs/page.tsx': 'reports',
   'src/app/(main)/admin/reports/invoice-reconciliation/page.tsx': 'reports',

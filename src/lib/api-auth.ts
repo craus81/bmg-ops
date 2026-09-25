@@ -105,7 +105,11 @@ export function getAccessToken(req: NextRequest): string | null {
 // (2026-09-07) closed.
 
 function profileRoles(profile: any): string[] {
-  return profile?.roles?.length > 0 ? profile.roles : [profile?.role];
+  const raw: string[] = profile?.roles?.length > 0 ? profile.roles : [profile?.role];
+  // Legacy 'production' is graphics_production everywhere else (AuthProvider,
+  // requireFeature below); without this, requireStaff 403'd a 'production'
+  // account, so e.g. its @mentions saved the note but silently tagged no one.
+  return raw.map(r => (r === 'production' ? 'graphics_production' : r));
 }
 
 /**
