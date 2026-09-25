@@ -8,7 +8,7 @@ interface ReportLink {
   title: string;
   blurb: string;
   href: string;
-  source: 'NetSuite' | 'FleetSuite';
+  source: 'NetSuite' | 'FleetSuite' | 'QuickBooks + NetSuite';
   /** Who the destination page actually admits. Omit for anyone who can
    *  reach this index. Listing a report someone will be bounced out of is a
    *  dead click, so the card is hidden instead of explaining itself. */
@@ -40,6 +40,13 @@ const REPORTS: ReportLink[] = [
     blurb: 'Which NetSuite-id money columns hold duplicated ids \u2014 the rows blocking migration 264\u2019s unique indexes. Clean them here, redeploy, and the indexes build themselves.',
     href: '/admin/reports/netsuite-dupes',
     source: 'FleetSuite',
+  },
+  {
+    title: 'Financial History',
+    blurb: 'Revenue, gross profit, expenses and net income for every month on record: QuickBooks before the cutover, NetSuite after, in one series with nothing counted twice. Yearly totals with growth, a monthly chart, and a month-by-year grid for seasonality.',
+    href: '/admin/reports/financial-history',
+    source: 'QuickBooks + NetSuite',
+    visibility: 'financials',
   },
   {
     title: 'Cash Outlook (4 weeks)',

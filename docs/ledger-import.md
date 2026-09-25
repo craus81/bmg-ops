@@ -118,6 +118,18 @@ Reports WRITE financial rows, so they carry the same dry-run/cutover gate as a
 full import — passing the dry run you already read and confirmed satisfies it.
 A `--phases reports` run without one answers `412 needsDryRun`.
 
+Which years: `--reports-from YYYY` (the Action's `reportsFrom` input) when
+given, otherwise the year of the earliest QuickBooks transaction already
+imported, through this year. Until 2026-09-24 the default was "last year",
+which for a company that left QuickBooks fetched only empty post-cutover
+months; the first full import (run 62ee000e) got 2025–2026 only. Re-running
+`--phases reports` adds the missing years and leaves stored ones alone.
+
+The monthly accrual P&Ls feed Reports → **Financial History**
+(`src/lib/financial-history.ts`), which puts QuickBooks months before the
+cutover and NetSuite months from it in one series. NetSuite months are cached
+in the same table under source `netsuite`.
+
 ## 7. Daily sync
 
 09:57 UTC. It renews the QuickBooks token from day one — before the bulk

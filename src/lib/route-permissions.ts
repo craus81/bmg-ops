@@ -451,6 +451,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/reports/month-close/route.ts': role(),
   'src/app/api/reports/throughput/route.ts': role(),
   'src/app/api/reports/cash-outlook/route.ts': financials(),
+  'src/app/api/reports/financial-history/route.ts': financials(),
   'src/app/api/reports/crew-utilization/route.ts': role(),
   'src/app/api/reports/order-book/route.ts': role(),
   'src/app/api/reports/quoted-margin/route.ts': role(),
