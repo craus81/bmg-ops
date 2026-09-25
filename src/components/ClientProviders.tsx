@@ -11,6 +11,7 @@ import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
 import AiChat from '@/components/AiChat';
 import DeepLinkHandler from '@/components/DeepLinkHandler';
+import NativeLinkHandler from '@/components/NativeLinkHandler';
 import NativePushHandler from '@/components/NativePushHandler';
 import NativeSiriKey from '@/components/NativeSiriKey';
 import UsageTelemetry from '@/components/UsageTelemetry';
@@ -117,6 +118,7 @@ export default function ClientProviders({ children }: { children: React.ReactNod
           <PopoutProvider>
             <DialogProvider>
               <DeepLinkHandler />
+              <NativeLinkHandler />
               <NativePushHandler />
               <NativeSiriKey />
               <UsageTelemetry />
