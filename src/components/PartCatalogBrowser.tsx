@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { storage } from '@/lib/storage';
+import { toJpegIfHeic } from '@/lib/heic';
 import { createClient } from '@/lib/supabase-browser';
 import AddToEstimateModal from '@/components/AddToEstimateModal';
 
@@ -314,9 +315,10 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
     }
   };
 
-  const uploadPhoto = async (partId: string, file: File) => {
+  const uploadPhoto = async (partId: string, picked: File) => {
     setBusyPart(partId);
     try {
+      const file = await toJpegIfHeic(picked);
       const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
       const path = `parts/${partId}/manual-${Date.now()}.${ext}`;
       const { error } = await storage.from('photos').upload(path, file, { contentType: file.type });
@@ -337,8 +339,9 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
 
   // Vehicle-card photo: straight to storage + a direct row update — staff
   // RLS on vehicle_platforms allows it, no API route needed.
-  const uploadPlatformPhoto = async (targetId: string, file: File) => {
+  const uploadPlatformPhoto = async (targetId: string, picked: File) => {
     const supabase = createClient();
+    const file = await toJpegIfHeic(picked);
     const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
     const path = `vehicle-platforms/${targetId}/card-${Date.now()}.${ext}`;
     const { error } = await storage.from('photos').upload(path, file, { contentType: file.type });
