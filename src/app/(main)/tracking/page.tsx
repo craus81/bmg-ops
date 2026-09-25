@@ -33,6 +33,8 @@ import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
 import MentionsInbox from '@/components/MentionsInbox';
 import ShopArrivals from '@/components/ShopArrivals';
+import MyWorkList from '@/components/MyWorkList';
+import PersonalListsModal from '@/components/PersonalListsModal';
 
 type FilterStatus = VehicleTrackingStatus | 'all' | 'stuck';
 
@@ -138,6 +140,9 @@ export default function TrackingPage() {
   const [burns, setBurns] = useState<Record<string, { pct: number; tone: 'ok' | 'warn' | 'over'; label: string }>>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [archivingId, setArchivingId] = useState<string | null>(null);
+  // People's Lists (admin) and the My List panel — migration 326.
+  const [showPeopleLists, setShowPeopleLists] = useState(false);
+  const [myListKey, setMyListKey] = useState(0);
   // All NetSuite sales orders linked to each check-in (keyed by checkin id).
   // The first one added is also mirrored into FleetCheckin's legacy columns
   // so other readers — pick list, fleet page, universal search — keep working.
@@ -1517,13 +1522,36 @@ export default function TrackingPage() {
   return (
     <div>
       {/* Page Header */}
-      <div style={{ marginBottom: '16px' }}>
+      <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
         <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>
           In-Shop
         </div>
+        {/* Admin-only: order each person's assigned vehicles (their My List). */}
+        {isAdmin && (
+          <button
+            onClick={() => setShowPeopleLists(true)}
+            title="Set the order each person works their vehicles"
+            style={{ padding: '8px 12px', borderRadius: '10px', background: 'var(--subtle-bg)', color: 'var(--text-secondary)', fontWeight: 800, fontSize: '12px', border: '1px solid var(--border)', cursor: 'pointer', whiteSpace: 'nowrap' }}
+          >
+            ⇅ People&apos;s Lists
+          </button>
+        )}
       </div>
 
+      {showPeopleLists && (
+        <PersonalListsModal
+          type="vehicle"
+          onClose={changed => {
+            setShowPeopleLists(false);
+            if (changed) setMyListKey(k => k + 1);
+          }}
+        />
+      )}
+
       <MentionsInbox />
+
+      {/* The signed-in person's assigned vehicles in their manager's order. */}
+      <MyWorkList type="vehicle" reloadKey={myListKey} />
 
       {/* Arrival schedule — merged from the old Shop Board tab */}
       <ShopArrivals />
