@@ -138,7 +138,7 @@ export default function AdminScansPage() {
   // All Scans tab ordering: newest first, or grouped A→Z by installer company
   // or installer (ties fall back to newest first).
   const [sortBy, setSortBy] = useState<'date' | 'company' | 'installer'>('date');
-  // Date-range filter for the All Scans tab (local YYYY-MM-DD, '' = unbounded)
+  // Date-range filter for every scan-list tab (local YYYY-MM-DD, '' = unbounded)
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const searchParams = useSearchParams();
@@ -523,8 +523,8 @@ export default function AdminScansPage() {
     // Location filter ("No location" matches scans with none recorded).
     if (locationFilter === NO_LOCATION && s.location_name) return false;
     if (locationFilter && locationFilter !== NO_LOCATION && s.location_name !== locationFilter) return false;
-    // Date-range filter (All Scans tab) compares local calendar dates.
-    if (tab === 'all' && (dateFrom || dateTo)) {
+    // Date-range filter compares local calendar dates.
+    if (dateFrom || dateTo) {
       const day = toLocalDateStr(new Date(s.scanned_at));
       if (dateFrom && day < dateFrom) return false;
       if (dateTo && day > dateTo) return false;
@@ -1580,9 +1580,9 @@ export default function AdminScansPage() {
         </div>
       )}
 
-      {/* Date-range filter — All Scans tab only. Filters on when the scan
+      {/* Date-range filter — every scan-list tab. Filters on when the scan
           happened, ignoring what happened to it afterwards. */}
-      {tab === 'all' && (
+      {isScanListTab && (
         <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
           {(() => {
             const today = new Date();
@@ -1610,7 +1610,7 @@ export default function AdminScansPage() {
           <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>–</span>
           <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
             style={{ padding: '4px 8px', borderRadius: '8px', fontSize: '11px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }} />
-          <select
+          {tab === 'all' && <select
             value={sortBy}
             onChange={e => setSortBy(e.target.value as typeof sortBy)}
             style={{
@@ -1623,7 +1623,7 @@ export default function AdminScansPage() {
             <option value="date">Sort: newest first</option>
             <option value="company">Sort: installer company</option>
             <option value="installer">Sort: installer</option>
-          </select>
+          </select>}
           <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', marginLeft: 'auto' }}>
             {tabScans.length} scan{tabScans.length !== 1 ? 's' : ''}{(dateFrom || dateTo) ? ' in range' : ''}
           </span>
@@ -2621,7 +2621,7 @@ export default function AdminScansPage() {
       {/* Empty state */}
       {isScanListTab && tabScans.length === 0 && (
         <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>
-          {tab === 'ready' ? 'No scans ready to export' : tab === 'waiting' ? 'No scans waiting for PO — all matched!' : tab === 'all' ? ((dateFrom || dateTo) ? 'No scans in this date range' : 'No scans yet') : 'No exported scans'}
+          {(dateFrom || dateTo) ? 'No scans in this date range' : tab === 'ready' ? 'No scans ready to export' : tab === 'waiting' ? 'No scans waiting for PO — all matched!' : tab === 'all' ? 'No scans yet' : 'No exported scans'}
         </div>
       )}
 
