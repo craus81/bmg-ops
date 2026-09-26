@@ -2,14 +2,15 @@
 // Uses positional text extraction for accurate column mapping.
 // The PDF engine lives here; the column-mapping logic is in parsePO-core.ts.
 
-import * as pdfjsLib from 'pdfjs-dist';
 import { parsePOFromItems, type ParsedPO, type TItem } from './parsePO-core';
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 
 export type { ParsedPO, ParsedPOLine } from './parsePO-core';
 
 export async function parseMasterackPO(file: File, debug = false): Promise<ParsedPO> {
+  // Loaded on first use: pdfjs needs browser globals (DOMMatrix), so a
+  // top-level import crashed the server render of the POs page.
+  const pdfjsLib = await import('pdfjs-dist');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
