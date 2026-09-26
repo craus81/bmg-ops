@@ -5,8 +5,9 @@
  * Users page's Edit User modal (field ask 2026-08-21: "I wanna be able to
  * change everyone's settings as a super admin... go in and look at their
  * settings"). Mirrors the user's own Settings page for everything stored
- * server-side — notification preferences and the email signature — via
- * /api/admin/user-settings (notification_preferences RLS is own-rows-only,
+ * server-side — notification preferences (including the per-alert grid)
+ * and the email signature — via /api/admin/user-settings
+ * (notification_preferences RLS is own-rows-only,
  * so the browser client can't reach another user's row directly).
  *
  * Device-bound settings (text size, push enrollment) live in each device's
@@ -15,8 +16,10 @@
 
 import { useState, useEffect } from 'react';
 import PhoneInput from '@/components/PhoneInput';
+import NotificationMatrix from '@/components/NotificationMatrix';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_ORDER, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import type { GraphicsJobStatus } from '@/lib/types';
+import { parseOverrides, type TypeChannelOverrides } from '@/lib/notification-registry';
 
 interface Prefs {
   notify_new_job: boolean;
@@ -38,6 +41,8 @@ interface Prefs {
   sms_messages_mode: 'always' | 'unread_only';
   phone_number: string | null;
   custom_statuses: string[] | null;
+  /** Settings → Which alerts reach you: per-type channel overrides. */
+  type_channels: TypeChannelOverrides;
 }
 
 const DEFAULT_PREFS: Prefs = {
@@ -46,6 +51,7 @@ const DEFAULT_PREFS: Prefs = {
   notify_new_po: false, notify_in_app: true, notify_email: false, notify_sms: false,
   sms_messages: false, email_messages: false, email_mentions: true, notify_weekly_brief: true,
   sms_messages_mode: 'always', phone_number: null, custom_statuses: null,
+  type_channels: {},
 };
 
 // Same vocabulary as the user's own Settings page.
@@ -141,6 +147,7 @@ export default function AdminUserSettings({ userId, userName }: { userId: string
             sms_messages_mode: prefs.sms_messages_mode,
             phone_number: prefs.phone_number,
             custom_statuses: prefs.custom_statuses,
+            type_channels: parseOverrides(prefs.type_channels),
           },
         }),
       });
@@ -212,6 +219,16 @@ export default function AdminUserSettings({ userId, userName }: { userId: string
               This user hasn&apos;t saved notification preferences yet — these are the defaults; saving writes them to their account.
             </div>
           )}
+
+          <div style={groupLabel}>Which alerts reach them</div>
+          <NotificationMatrix
+            overrides={prefs.type_channels}
+            accountInApp={prefs.notify_in_app}
+            accountEmail={prefs.notify_email}
+            emailMessages={prefs.email_messages}
+            emailMentions={prefs.email_mentions ?? true}
+            onChange={next => setPrefs(prev => ({ ...prev, type_channels: next }))}
+          />
 
           <div style={groupLabel}>Alerts they can opt into</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
