@@ -65,6 +65,8 @@ const PrefsSchema = z.object({
   sms_messages_mode: z.enum(['always', 'unread_only']).optional(),
   phone_number: z.string().max(40).nullable().optional(),
   custom_statuses: z.array(z.string().max(60)).max(30).nullable().optional(),
+  // Settings → Which alerts reach you: per-type channel overrides.
+  type_channels: z.record(z.string().max(80), z.array(z.enum(['in_app', 'push', 'email'])).max(3)).optional(),
 });
 
 const PutSchema = z.object({
