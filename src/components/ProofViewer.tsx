@@ -55,6 +55,8 @@ export default function ProofViewer({ url, loadFile, filename, noun = 'proof', d
   const [phase, setPhase] = useState<Phase>('loading');
   const [pages, setPages] = useState<string[]>([]);
   const [pageCount, setPageCount] = useState(0);
+  // Set when a later page fails to draw: the pages before it stay on screen.
+  const [cutAt, setCutAt] = useState<number | null>(null);
   const [zoom, setZoom] = useState(1);
   const [printing, setPrinting] = useState(false);
   const blobRef = useRef<Blob | null>(null);
@@ -71,6 +73,7 @@ export default function ProofViewer({ url, loadFile, filename, noun = 'proof', d
 
     const load = async () => {
       setPhase('loading');
+      setCutAt(null);
       try {
         let blob: Blob;
         if (loadFile) {
@@ -110,19 +113,38 @@ export default function ProofViewer({ url, loadFile, filename, noun = 'proof', d
           const targetWidth = Math.min(3000, Math.max(1600, window.innerWidth * (window.devicePixelRatio || 1) * 2));
           const out: string[] = [];
           for (let n = 1; n <= Math.min(pdf.numPages, MAX_PAGES); n++) {
-            const page = await pdf.getPage(n);
-            const base = page.getViewport({ scale: 1 });
-            const viewport = page.getViewport({ scale: targetWidth / base.width });
-            const canvas = document.createElement('canvas');
-            canvas.width = Math.round(viewport.width);
-            canvas.height = Math.round(viewport.height);
-            const ctx = canvas.getContext('2d')!;
-            ctx.fillStyle = '#fff';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            await page.render({ canvasContext: ctx, viewport, canvas } as any).promise;
-            const pageBlob: Blob | null = await new Promise(r => canvas.toBlob(r, 'image/png'));
+            let pageBlob: Blob | null;
+            try {
+              const page = await pdf.getPage(n);
+              const base = page.getViewport({ scale: 1 });
+              const viewport = page.getViewport({ scale: targetWidth / base.width });
+              const canvas = document.createElement('canvas');
+              canvas.width = Math.round(viewport.width);
+              canvas.height = Math.round(viewport.height);
+              const ctx = canvas.getContext('2d');
+              if (!ctx) throw new Error('no canvas context');
+              ctx.fillStyle = '#fff';
+              ctx.fillRect(0, 0, canvas.width, canvas.height);
+              await page.render({ canvasContext: ctx, viewport, canvas } as any).promise;
+              pageBlob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+              // Hand the canvas memory back now: iPhones cap total canvas
+              // memory, and a long PDF would otherwise run out partway.
+              canvas.width = 0;
+              canvas.height = 0;
+              page.cleanup();
+            } catch (e) {
+              // A later page failing keeps the pages already drawn on screen.
+              if (out.length === 0) throw e;
+              console.warn(`Proof page ${n} render failed:`, e);
+              if (!cancelled) setCutAt(out.length);
+              break;
+            }
             if (cancelled) return;
-            if (!pageBlob) continue;
+            if (!pageBlob) {
+              // Out of memory on a later page reads the same as a throw.
+              if (out.length > 0) { setCutAt(out.length); break; }
+              continue;
+            }
             const obj = URL.createObjectURL(pageBlob);
             made.push(obj);
             out.push(obj);
@@ -338,7 +360,7 @@ export default function ProofViewer({ url, loadFile, filename, noun = 'proof', d
           <div style={{ fontSize: '14px', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
           {pageCount > 1 && (
             <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.6)' }}>
-              {pageCount} pages{pageCount > MAX_PAGES ? ` (first ${MAX_PAGES} shown)` : ''}
+              {pageCount} pages{pageCount > (cutAt ?? MAX_PAGES) ? ` (first ${cutAt ?? MAX_PAGES} shown)` : ''}
             </div>
           )}
         </div>
