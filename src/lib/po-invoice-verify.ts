@@ -86,6 +86,44 @@ export function distributeInstalled(
 }
 
 /**
+ * Undoing an admin match: the match's billed units raised the part's lines'
+ * installed (distributeInstalled only raises), and nothing lowers them again,
+ * so a wrongly matched PO would stay 'complete' after Undo. This works out
+ * which lines to put back: a line is lowered only when its installed is
+ * exactly what the matched total filled it to (so a hand edit or a later scan
+ * is left alone), and never below what scans on it or the remaining billing
+ * justify.
+ */
+export function installedAfterUnmatch(
+  partLines: { id: string; quantity: number; installed: number | null }[],
+  totalWithMatch: number,
+  totalWithoutMatch: number,
+  scansByLine: Map<string, number>,
+): { id: string; installed: number }[] {
+  const fill = (total: number) => {
+    const ordered = [...partLines].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const capacity = ordered.reduce((s, l) => s + (l.quantity || 0), 0);
+    let remaining = Math.min(Math.max(total, 0), capacity);
+    const out = new Map<string, number>();
+    for (const l of ordered) {
+      const f = Math.min(remaining, l.quantity || 0);
+      remaining -= f;
+      out.set(l.id, f);
+    }
+    return out;
+  };
+  const withMatch = fill(totalWithMatch);
+  const withoutMatch = fill(totalWithoutMatch);
+  const updates: { id: string; installed: number }[] = [];
+  for (const l of partLines) {
+    const cur = l.installed || 0;
+    const floor = Math.max(withoutMatch.get(l.id) || 0, scansByLine.get(l.id) || 0);
+    if (cur === withMatch.get(l.id) && cur > floor) updates.push({ id: l.id, installed: floor });
+  }
+  return updates;
+}
+
+/**
  * Apply admin matches (po_invoice_item_matches) to a PO's invoiced-per-item
  * totals: each matched invoice item's quantity moves onto the matched PO
  * line's part key, so it counts against that line instead of reading as

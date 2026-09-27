@@ -7,7 +7,7 @@ vi.mock('@/lib/po-billing-notify', () => ({
   notifyPoBillingAttention: async () => 0,
 }));
 
-import { distributeInstalled, normPart, computeOverbillProblems, applyInvoiceItemMatches } from './po-invoice-verify';
+import { distributeInstalled, normPart, computeOverbillProblems, applyInvoiceItemMatches, installedAfterUnmatch } from './po-invoice-verify';
 
 // distributeInstalled is the single source of truth for how a part's consumed
 // quantity is spread across its PO lines. Both the invoice-open route (immediate
@@ -201,5 +201,27 @@ describe('applyInvoiceItemMatches', () => {
     const invoiced = new Map([['LABOR', 3]]);
     applyInvoiceItemMatches(invoiced, [{ invoice_item: 'LABOR', po_line_item_id: 'l1' }], lines);
     expect(invoiced.get('LABOR')).toBe(3);
+  });
+});
+
+describe('installedAfterUnmatch', () => {
+  it('puts back what a wrong match filled, so the PO can reopen', () => {
+    // SO123 x4, nothing installed; LABOR x4 matched onto it raised it to 4.
+    expect(installedAfterUnmatch([line('so', 4, 4)], 4, 0, new Map())).toEqual([{ id: 'so', installed: 0 }]);
+  });
+
+  it('keeps units that scans or remaining billing justify', () => {
+    const scans = new Map([['a', 1]]);
+    // 2 billed directly + 3 via the match filled a=4, b=1.
+    const lines = [line('a', 4, 4), line('b', 4, 1)];
+    expect(installedAfterUnmatch(lines, 5, 2, scans)).toEqual([
+      { id: 'a', installed: 2 },
+      { id: 'b', installed: 0 },
+    ]);
+  });
+
+  it('leaves a line alone when its count no longer matches what the match set', () => {
+    // Hand-edited to 3 after the match filled it to 4.
+    expect(installedAfterUnmatch([line('so', 4, 3)], 4, 0, new Map())).toEqual([]);
   });
 });

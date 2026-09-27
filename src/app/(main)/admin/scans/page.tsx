@@ -545,6 +545,18 @@ export default function AdminScansPage() {
       [s.vehicle_year, s.vehicle_make, s.vehicle_model].filter(Boolean).join(' ').toLowerCase().includes(q);
   });
 
+  // Narrowing the list drops the selection that's no longer shown — the bulk
+  // buttons act on every selected id, so a Select All followed by a narrower
+  // date range would otherwise invoice, archive or delete hidden scans.
+  useEffect(() => {
+    const visible = new Set(tabScans.map(s => s.id));
+    setSelectedScans(prev => {
+      const kept = new Set([...prev].filter(id => visible.has(id)));
+      return kept.size === prev.size ? prev : kept;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateFrom, dateTo, search, sourceFilter, installerFilter, scannerFilter, companyFilter, locationFilter]);
+
   // Sort — All Scans tab only (the other tabs group by customer/part).
   // Company/installer sorts run A→Z with newest-first inside equal keys;
   // unattributed rows sink to the bottom.

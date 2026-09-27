@@ -3,7 +3,9 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
-import { normPart, verifyPoInvoiceQuantities } from '@/lib/po-invoice-verify';
+import { getPoBilledByPart, installedAfterUnmatch, normPart, verifyPoInvoiceQuantities } from '@/lib/po-invoice-verify';
+import { recomputePoFulfillment } from '@/lib/scan-match';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,7 +40,7 @@ export async function POST(req: NextRequest) {
 
   const { data: po } = await service
     .from('purchase_orders')
-    .select('id, po_number, po_line_items(id, part_number)')
+    .select('id, po_number, po_line_items(id, part_number, quantity, installed)')
     .eq('id', poId)
     .maybeSingle();
   if (!po) return NextResponse.json({ error: 'PO not found' }, { status: 404 });
@@ -89,6 +91,19 @@ export async function POST(req: NextRequest) {
     });
   } else {
     if (!existing) return NextResponse.json({ error: 'No match to remove' }, { status: 404 });
+    // What the part was billed with the match, read before it goes, so the
+    // installed counts the match raised can be put back afterwards.
+    const matchedLine = ((po as any).po_line_items || []).find((l: any) => l.id === existing.po_line_item_id);
+    const partKey = matchedLine ? normPart(matchedLine.part_number) : '';
+    let billedWithMatch: number | null = null;
+    if (partKey) {
+      try {
+        billedWithMatch = (await getPoBilledByPart(service, poId)).billedByPart.get(partKey) || 0;
+      } catch (err) {
+        console.error('match-invoice-item: could not read billing before undo:', err);
+      }
+    }
+
     const { error } = await service
       .from('po_invoice_item_matches')
       .delete()
@@ -103,6 +118,34 @@ export async function POST(req: NextRequest) {
       action: 'invoice_item_unmatched',
       detail: { po_number: po.po_number, invoice_item: invoiceItem, removed: existing },
     });
+
+    if (partKey && billedWithMatch !== null) {
+      try {
+        const billedWithout = (await getPoBilledByPart(service, poId)).billedByPart.get(partKey) || 0;
+        const partLines = ((po as any).po_line_items || []).filter((l: any) => normPart(l.part_number) === partKey);
+        const { data: scans, error: scanErr } = await fetchAllRows<{ po_line_item_id: string }>((from, to) =>
+          service
+            .from('scan_logs')
+            .select('po_line_item_id')
+            .in('po_line_item_id', partLines.map((l: any) => l.id))
+            .order('id')
+            .range(from, to),
+        );
+        if (scanErr) throw scanErr;
+        const scansByLine = new Map<string, number>();
+        for (const sc of scans || []) {
+          scansByLine.set(sc.po_line_item_id, (scansByLine.get(sc.po_line_item_id) || 0) + 1);
+        }
+        const updates = installedAfterUnmatch(partLines, billedWithMatch, billedWithout, scansByLine);
+        for (const u of updates) {
+          await service.from('po_line_items').update({ installed: u.installed }).eq('id', u.id);
+        }
+        // A PO the match had filled goes back to open.
+        if (updates.length > 0) await recomputePoFulfillment(service, [poId]);
+      } catch (err) {
+        console.error('match-invoice-item: could not restore installed after undo:', err);
+      }
+    }
   }
 
   try {
