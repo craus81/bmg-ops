@@ -61,6 +61,29 @@ export function recipientsLabel(to?: string[] | null, copies?: string[] | null):
     .filter(Boolean).join(' ');
 }
 
+/** BMG's own mail domain — anyone on it is staff, never the customer. */
+const STAFF_DOMAIN = 'bmgfleet.com';
+
+/**
+ * A temporary bounce on an email with a BMG teammate on it is almost always
+ * that teammate's out-of-office: Google delivers the email, then the
+ * vacation auto-reply goes back to the sending address and Resend logs it
+ * as a Transient bounce under their address (Valarie, 2026-09-28 — she and
+ * everyone else had the email). Resend doesn't say which recipient it was,
+ * so these stay on the email log (Sent Emails) but raise no alert and
+ * don't mark the estimate or invoice as bounced. Permanent bounces, failed
+ * hand-offs and spam complaints always alert.
+ */
+export function isQuietStaffBounce(
+  status: string,
+  detail: string | null | undefined,
+  to?: string[] | null,
+  copies?: string[] | null,
+): boolean {
+  if (status !== 'bounced' || !isTemporaryBounce(detail)) return false;
+  return allRecipients(to, copies).some(a => a.toLowerCase().endsWith(`@${STAFF_DOMAIN}`));
+}
+
 /** One sentence telling the sender what to do about a failed delivery. */
 export function bounceNextStep(
   status: string,

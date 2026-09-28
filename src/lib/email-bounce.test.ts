@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bounceDetail, isTemporaryBounce, bounceNextStep, bounceIsAmbiguous, recipientsLabel, allRecipients } from './email-bounce';
+import { bounceDetail, isTemporaryBounce, bounceNextStep, bounceIsAmbiguous, recipientsLabel, allRecipients, isQuietStaffBounce } from './email-bounce';
 
 const GENERAL = "The recipient's email provider sent a general bounce message.";
 
@@ -67,5 +67,27 @@ describe('several recipients — Resend does not say which one bounced', () => {
       .toBe('tstewart@sunsetford.com (copied: vfleahman@bmgfleet.com, cgeorge@bmgfleet.com)');
     expect(recipientsLabel(to, ['tstewart@sunsetford.com'])).toBe('tstewart@sunsetford.com');
     expect(allRecipients([' a@x.com '], ['A@x.com', 'b@y.com'])).toEqual(['a@x.com', 'b@y.com']);
+  });
+});
+
+describe('teammate out-of-office — the 2026-09-28 Valarie vacation reply', () => {
+  const to = ['tstewart@sunsetford.com'];
+  const copies = ['VFleahman@bmgfleet.com', 'cgeorge@bmgfleet.com'];
+
+  it('stays quiet on a temporary bounce when staff were on the email', () => {
+    expect(isQuietStaffBounce('bounced', `Transient (General): ${GENERAL}`, to, copies)).toBe(true);
+    expect(isQuietStaffBounce('bounced', 'Undetermined: x', ['vfleahman@bmgfleet.com'], null)).toBe(true);
+  });
+
+  it('still alerts on permanent bounces, failures and complaints', () => {
+    expect(isQuietStaffBounce('bounced', 'Permanent (General): No such user', to, copies)).toBe(false);
+    expect(isQuietStaffBounce('bounced', null, to, copies)).toBe(false);
+    expect(isQuietStaffBounce('failed', `Transient: ${GENERAL}`, to, copies)).toBe(false);
+    expect(isQuietStaffBounce('complained', `Transient: ${GENERAL}`, to, copies)).toBe(false);
+  });
+
+  it('still alerts when no teammate was on the email', () => {
+    expect(isQuietStaffBounce('bounced', `Transient (General): ${GENERAL}`, to, null)).toBe(false);
+    expect(isQuietStaffBounce('bounced', `Transient: ${GENERAL}`, ['ops@notbmgfleet.com'], null)).toBe(false);
   });
 });
