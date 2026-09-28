@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase-browser';
+import { isNativeApp } from '@/lib/native-files';
 
 // Same-origin path validator — defends the post-login redirect against
 // open-redirect abuse (e.g. /login?next=//evil.com).
@@ -23,6 +24,7 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [nextPath, setNextPath] = useState<string>('/home');
+  const [inApp, setInApp] = useState(false);
   const supabase = createClient();
 
   useEffect(() => {
@@ -30,6 +32,15 @@ export default function LoginPage() {
       const raw = new URL(window.location.href).searchParams.get('next');
       setNextPath(safeNextPath(raw));
     } catch {}
+  }, []);
+
+  // The phone apps offer no sign-up: Apple requires in-app account deletion
+  // from any app that creates accounts (guideline 5.1.1(v)), and FleetSuite
+  // accounts are made by admins anyway. Request Access stays on the web.
+  useEffect(() => {
+    if (!isNativeApp()) return;
+    setInApp(true);
+    setMode(m => (m === 'signup' ? 'password' : m));
   }, []);
 
   useEffect(() => {
@@ -119,6 +130,7 @@ export default function LoginPage() {
 
   const labelStyle: React.CSSProperties = { display: 'block', fontSize: '11px', fontWeight: 700, color: 'var(--login-label, rgba(255,255,255,0.45))', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '8px' };
   const inputStyle: React.CSSProperties = { width: '100%', padding: '14px 18px', borderRadius: '12px', border: '1px solid var(--login-input-border, rgba(255,255,255,0.1))', background: 'var(--login-input-bg, rgba(255,255,255,0.06))', color: 'var(--login-text, #fff)', fontSize: '16px', marginBottom: '12px' };
+  const footerLinkStyle: React.CSSProperties = { color: 'inherit', textDecoration: 'underline' };
 
   return (
     <div style={{
@@ -138,7 +150,7 @@ export default function LoginPage() {
             { id: 'password' as const, label: 'Sign In' },
             { id: 'magic' as const, label: 'Magic Link' },
             { id: 'signup' as const, label: 'Request Access' },
-          ]).map((m) => (
+          ]).filter((m) => !(inApp && m.id === 'signup')).map((m) => (
             <button key={m.id} onClick={() => { setMode(m.id); setError(''); setSignupDone(false); setResetSent(false); }} style={{
               flex: 1, padding: '10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
               background: mode === m.id ? 'var(--login-tab-active-bg, rgba(255,255,255,0.1))' : 'transparent',
@@ -248,6 +260,15 @@ export default function LoginPage() {
             )}
           </form>
         )}
+
+        <div style={{ textAlign: 'center', marginTop: '28px', fontSize: '12px', lineHeight: '1.6', color: 'var(--login-text-muted, rgba(255,255,255,0.4))' }}>
+          {inApp && <div style={{ marginBottom: '8px' }}>Need an account? Ask a BMG admin.</div>}
+          {/* A new tab, which the phone apps hand to the browser: a page opened
+              inside the app itself would have no way back to sign-in. */}
+          <a href="/privacy" target="_blank" rel="noopener noreferrer" style={footerLinkStyle}>Privacy Policy</a>
+          <span aria-hidden="true"> · </span>
+          <a href="/support" target="_blank" rel="noopener noreferrer" style={footerLinkStyle}>Support</a>
+        </div>
       </div>
     </div>
   );
