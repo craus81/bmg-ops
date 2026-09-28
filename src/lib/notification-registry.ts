@@ -82,6 +82,14 @@ export interface NotificationTypeDef {
    * edits the remaining channels.
    */
   fixedChannels?: Partial<Record<NotifyChannelKey, { reason: string; on: (prefs: ChannelPrefsRow | null | undefined) => boolean }>>;
+  /**
+   * Email this type the moment it happens. Every other type's EMAIL copy
+   * waits for the afternoon staff digest (src/lib/staff-email-digest.ts) —
+   * in-app and push are never delayed. Kept for things someone is waiting
+   * on right now, delivery failures, and alerts that are already a digest.
+   * (Craig, 2026-09-28: one-email-per-event ran out Resend's daily cap.)
+   */
+  emailNow?: true;
 }
 
 export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
@@ -93,7 +101,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'at_risk_account', label: 'Account at risk', description: 'A customer that used to order regularly has gone quiet.', area: 'sales', defaultChannels: ['in_app', 'push'] },
   { type: 'estimate_converted', label: 'Estimate became an order', description: 'A customer-approved estimate turned into a sales order.', area: 'sales', defaultChannels: ['in_app', 'push'] },
   { type: 'below_floor_send', label: 'Quote sent below the margin floor', description: 'An estimate went out under the floor, with the reason given.', area: 'sales', defaultChannels: ['in_app', 'push'], audience: 'Owners only — super admins are the targeted audience for floor breaches.' },
-  { type: 'estimate_review_requested', label: 'Estimate sent to you for review', description: 'A rep asked you to check an estimate before it goes to the customer. Nothing has gone out yet.', area: 'sales', defaultChannels: ['in_app', 'push', 'email'] },
+  { type: 'estimate_review_requested', label: 'Estimate sent to you for review', description: 'A rep asked you to check an estimate before it goes to the customer. Nothing has gone out yet.', area: 'sales', defaultChannels: ['in_app', 'push', 'email'], emailNow: true },
   { type: 'estimate_review_update', label: 'Your estimate\'s review came back', description: 'The teammate reviewing your estimate approved it, sent it back with changes, or passed it to someone else.', area: 'sales', defaultChannels: ['in_app', 'push', 'email'] },
   { type: 'approval_relink_requested', label: 'Customer asked for a fresh link', description: 'A customer found their approval link expired and requested a new one.', area: 'sales', defaultChannels: ['in_app', 'push'] },
   { type: 'credit_app_submitted', label: 'Credit application submitted', description: 'A customer completed the credit application.', area: 'sales', defaultChannels: ['in_app', 'push', 'email'] },
@@ -121,7 +129,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'shift_auto_closed', label: 'Shift closed automatically', description: 'A shift was left open and the nightly sweep closed it.', area: 'floor', defaultChannels: ['in_app'] },
   { type: 'labor_burn', label: 'Labor over the quoted hours', description: 'A job has burned past the hours it was quoted at.', area: 'floor', defaultChannels: ['in_app', 'push'] },
   { type: 'condition_acknowledged', label: 'Condition report acknowledged', description: 'The customer confirmed the vehicle condition at drop-off.', area: 'floor', defaultChannels: ['in_app'] },
-  { type: 'condition_disputed', label: 'Condition report disputed', description: 'The customer disagreed with the recorded condition — read this one.', area: 'floor', defaultChannels: ['in_app', 'push', 'email'] },
+  { type: 'condition_disputed', label: 'Condition report disputed', description: 'The customer disagreed with the recorded condition — read this one.', area: 'floor', defaultChannels: ['in_app', 'push', 'email'], emailNow: true },
 
   // ── Purchasing & receiving ────────────────────────────────────────────
   { type: 'purchase_request', label: 'Parts requested', description: 'Someone raised a purchase request for parts.', area: 'purchasing', defaultChannels: ['in_app', 'push'] },
@@ -138,9 +146,9 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'ap_approved', label: 'Bill approved', description: 'A vendor bill cleared approval.', area: 'money', defaultChannels: ['in_app'] },
   { type: 'ap_decision', label: 'Bill decision recorded', description: 'A bill was approved or rejected, with the reason.', area: 'money', defaultChannels: ['in_app'] },
   { type: 'ap_paid', label: 'Bill paid', description: 'A vendor bill was marked paid.', area: 'money', defaultChannels: ['in_app'] },
-  { type: 'email_bounced', label: 'Customer email bounced', description: 'A message to a customer could not be delivered.', area: 'money', defaultChannels: ['in_app', 'push'] },
-  { type: 'invoice_email_bounced', label: 'Invoice email bounced', description: 'An invoice never reached the customer — they are not going to pay it.', area: 'money', defaultChannels: ['in_app', 'push', 'email'] },
-  { type: 'estimate_email_bounced', label: 'Estimate email bounced', description: 'An estimate never reached the customer.', area: 'money', defaultChannels: ['in_app', 'push'] },
+  { type: 'email_bounced', label: 'Customer email bounced', description: 'A message to a customer could not be delivered.', area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true },
+  { type: 'invoice_email_bounced', label: 'Invoice email bounced', description: 'An invoice never reached the customer — they are not going to pay it.', area: 'money', defaultChannels: ['in_app', 'push', 'email'], emailNow: true },
+  { type: 'estimate_email_bounced', label: 'Estimate email bounced', description: 'An estimate never reached the customer.', area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true },
 
   // ── Contract installers (CNI) ─────────────────────────────────────────
   { type: 'cni_job_invite', label: 'Job invitation', description: 'An installer company was invited to bid on a job.', area: 'cni', defaultChannels: ['in_app', 'push'] },
@@ -160,22 +168,22 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'cni_payout', label: 'Installer payout update', description: 'A payout was batched, billed or paid.', area: 'cni', defaultChannels: ['in_app', 'push'] },
 
   // ── Digests & briefings ───────────────────────────────────────────────
-  { type: 'owner_brief', label: "Monday owner's brief", description: 'The weekly money-and-operations summary.', area: 'digests', defaultChannels: ['in_app', 'email'], audience: 'Super admins and executives only, minus anyone who opted out in Settings.' },
-  { type: 'exceptions_digest', label: 'Weekly exceptions digest', description: 'Overrides, waivers and exceptions from the past week.', area: 'digests', defaultChannels: ['in_app', 'email'] },
-  { type: 'promised_back_digest', label: 'Promised-back digest', description: 'Vehicles due back, and the ones already late.', area: 'digests', defaultChannels: ['in_app', 'push'] },
-  { type: 'customer_digest_ready', label: 'Customer updates ready to send', description: 'Subscribed customers have a week of vehicle activity worth a note. Nothing goes to them automatically — this is the prompt to send it.', area: 'digests', defaultChannels: ['in_app', 'email'], audience: 'Admins and super admins.' },
+  { type: 'owner_brief', label: "Monday owner's brief", description: 'The weekly money-and-operations summary.', area: 'digests', defaultChannels: ['in_app', 'email'], emailNow: true, audience: 'Super admins and executives only, minus anyone who opted out in Settings.' },
+  { type: 'exceptions_digest', label: 'Weekly exceptions digest', description: 'Overrides, waivers and exceptions from the past week.', area: 'digests', defaultChannels: ['in_app', 'email'], emailNow: true },
+  { type: 'promised_back_digest', label: 'Promised-back digest', description: 'Vehicles due back, and the ones already late.', area: 'digests', defaultChannels: ['in_app', 'push'], emailNow: true },
+  { type: 'customer_digest_ready', label: 'Customer updates ready to send', description: 'Subscribed customers have a week of vehicle activity worth a note. Nothing goes to them automatically — this is the prompt to send it.', area: 'digests', defaultChannels: ['in_app', 'email'], emailNow: true, audience: 'Admins and super admins.' },
 
   // ── System & health ───────────────────────────────────────────────────
-  { type: 'system_health', label: 'System health alert', description: 'A background job, integration or probe reported a problem.', area: 'system', defaultChannels: ['in_app', 'push', 'email'] },
+  { type: 'system_health', label: 'System health alert', description: 'A background job, integration or probe reported a problem.', area: 'system', defaultChannels: ['in_app', 'push', 'email'], emailNow: true },
   { type: 'ledger_import', label: 'Ledger import update', description: 'A QuickBooks/NetSuite history import finished, needs review, or failed.', area: 'system', defaultChannels: ['in_app', 'push'], audience: 'Super admins and anyone granted System Health.' },
-  { type: 'access_request', label: 'Access request', description: 'Someone asked for an account or extra permissions.', area: 'system', defaultChannels: ['in_app', 'push'] },
+  { type: 'access_request', label: 'Access request', description: 'Someone asked for an account or extra permissions.', area: 'system', defaultChannels: ['in_app', 'push'], emailNow: true },
 
   // ── Messages & mentions ───────────────────────────────────────────────
   // Push is the user's choice on both rows (Craig, 2026-09-24: it was
   // locked off for messages, and mentions had no row at all — which also
   // meant their email never sent, since an unregistered type fails open to
   // in-app + push only). Email stays on each one's own Settings switch.
-  { type: 'message', label: 'Direct message', description: 'Someone messaged you in the app.', area: 'messages', defaultChannels: ['in_app', 'push'],
+  { type: 'message', label: 'Direct message', description: 'Someone messaged you in the app.', area: 'messages', defaultChannels: ['in_app', 'push'], emailNow: true,
     fixedChannels: {
       in_app: { reason: 'Always on: messages appear in the chat regardless.', on: () => true },
       email: { reason: 'Set by the "Email Notifications" switch under Messages.', on: p => p?.email_messages === true },
@@ -190,6 +198,14 @@ const BY_TYPE = new Map(NOTIFICATION_TYPES.map(t => [t.type, t]));
 
 export function getNotificationType(type: string): NotificationTypeDef | undefined {
   return BY_TYPE.get(type);
+}
+
+/** True when this type's email goes out immediately rather than in the
+ *  afternoon staff digest. Unregistered types send immediately (fail open,
+ *  same reasoning as channelsForType). */
+export function emailsImmediately(type: string): boolean {
+  const def = BY_TYPE.get(type);
+  return !def || def.emailNow === true;
 }
 
 export function isRegistered(type: string): boolean {

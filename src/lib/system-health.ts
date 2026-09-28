@@ -53,6 +53,7 @@ export const HEALTH_MONITORS: HealthMonitor[] = [
   { syncType: 'owner_brief', label: "Monday owner's brief", intervalMinutes: 10080 },
   { syncType: 'deal_forecast_check', label: 'Weekly deal-forecast sweep', intervalMinutes: 10080 },
   { syncType: 'graphics_reminders', label: 'Graphics job reminder digests', intervalMinutes: 1440 },
+  { syncType: 'staff_email_digest', label: 'Daily staff email digest', intervalMinutes: 1440 },
   { syncType: 'pickup_nudges', label: 'Ready-for-pickup nudge sweep', intervalMinutes: 1440 },
   { syncType: 'heartbeat_sentinel', label: 'Daily business-pulse sentinel', intervalMinutes: 1440 },
   { syncType: 'so_matchmaker', label: 'Nightly orphan sales-order matchmaker', intervalMinutes: 1440 },

@@ -113,6 +113,11 @@ export default function NotificationMatrix({ overrides, accountInApp, accountEma
                           {Object.values(def.fixedChannels || {}).map(f => (
                             <span key={f!.reason}><br /><span style={{ fontStyle: 'italic' }}>{f!.reason}</span></span>
                           ))}
+                          {active.includes('email') && (
+                            <><br /><span style={{ fontStyle: 'italic' }}>
+                              {def.emailNow ? 'Email arrives right away.' : 'Email comes in your afternoon daily summary.'}
+                            </span></>
+                          )}
                           {!def.alwaysOn && !explicit && <><br /><span style={{ opacity: 0.8 }}>Following your account defaults.</span></>}
                         </div>
                       </td>

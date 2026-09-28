@@ -117,6 +117,10 @@
       "schedule": "8 8 * * *"
     },
     {
+      "path": "/api/cron/staff-email-digest",
+      "schedule": "31 21 * * *"
+    },
+    {
       "path": "/api/cron/client-events-purge",
       "schedule": "41 4 * * *"
     }

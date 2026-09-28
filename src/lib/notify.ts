@@ -3,7 +3,7 @@ import { sendSMS } from '@/lib/twilio';
 import { sendEmail, buildNotificationEmail } from '@/lib/resend';
 import { apnsConfigured, sendApnsNotification } from '@/lib/apns';
 import webpush from 'web-push';
-import { channelsForType, isRegistered } from './notification-registry';
+import { channelsForType, isRegistered, emailsImmediately } from './notification-registry';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -389,8 +389,43 @@ async function sendViaApns(payload: NotifyPayload): Promise<boolean> {
   }
 }
 
+/**
+ * Whether this alert's email waits for the afternoon staff digest instead of
+ * going out now. Never for: types marked emailNow in the registry; forced
+ * sends (un-silenceable alarms and external audiences like CNI installers,
+ * who don't read a staff digest); and emails that are themselves a reply
+ * path (emailReplyTo — replying must reach the customer while it matters)
+ * or carry a chat message.
+ */
+export function shouldDigestEmail(payload: Pick<NotifyPayload, 'type' | 'forceChannels' | 'emailReplyTo' | 'messageContext'>): boolean {
+  if (payload.forceChannels) return false;
+  if (payload.messageContext) return false;
+  const replyTo = payload.emailReplyTo;
+  if (replyTo && (typeof replyTo === 'string' ? replyTo.trim() : replyTo.length > 0)) return false;
+  return !emailsImmediately(payload.type);
+}
+
+async function queueDigestEmail(payload: NotifyPayload): Promise<boolean> {
+  const { error } = await supabase.from('staff_email_digest_queue').insert({
+    user_id: payload.userId,
+    type: payload.type,
+    title: payload.title,
+    body: payload.body || null,
+    url: payload.url || null,
+  });
+  if (error) console.error('queueDigestEmail insert failed:', error.message);
+  return !error;
+}
+
 async function sendViaEmail(payload: NotifyPayload): Promise<boolean> {
   try {
+    if (shouldDigestEmail(payload)) {
+      // Queued rather than sent — one summary per person each afternoon
+      // (src/app/api/cron/staff-email-digest). If the queue write fails,
+      // fall through and send now rather than lose the email.
+      if (await queueDigestEmail(payload)) return true;
+    }
+
     // Get user's email
     const { data: profile } = await supabase
       .from('profiles')
