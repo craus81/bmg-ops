@@ -9,7 +9,7 @@ vi.mock('@/lib/resend', () => ({ sendEmail: vi.fn(), buildNotificationEmail: vi.
 vi.mock('@/lib/apns', () => ({ apnsConfigured: () => false, sendApnsNotification: vi.fn() }));
 vi.mock('web-push', () => ({ default: { setVapidDetails: vi.fn(), sendNotification: vi.fn() } }));
 
-import { intersectChannels, ALWAYS_ALL_CHANNELS, type NotifyChannel } from './notify';
+import { intersectChannels, ALWAYS_ALL_CHANNELS, shouldDigestEmail, type NotifyChannel } from './notify';
 
 // R3-4: explicit `channels` on a notify payload are the event's CEILING —
 // the user's preferences narrow them, never widen them — and only
@@ -38,5 +38,29 @@ describe('ALWAYS_ALL_CHANNELS', () => {
     // The rejection alert email is the reply path back to the customer's
     // change request — it must reliably exist.
     expect(ALWAYS_ALL_CHANNELS.has('estimate_rejected')).toBe(true);
+  });
+});
+
+// Daily staff digest (2026-09-28): non-urgent alert emails queue for one
+// afternoon summary; urgent types, forced alarms and reply-path emails
+// still send immediately.
+describe('shouldDigestEmail', () => {
+  it('batches a routine alert', () => {
+    expect(shouldDigestEmail({ type: 'vehicle_complete' })).toBe(true);
+    expect(shouldDigestEmail({ type: 'mention' })).toBe(true);
+  });
+
+  it('sends emailNow types immediately', () => {
+    expect(shouldDigestEmail({ type: 'estimate_review_requested' })).toBe(false);
+    expect(shouldDigestEmail({ type: 'invoice_email_bounced' })).toBe(false);
+  });
+
+  it('sends forced alarms and reply-path emails immediately', () => {
+    expect(shouldDigestEmail({ type: 'vehicle_complete', forceChannels: true })).toBe(false);
+    expect(shouldDigestEmail({ type: 'vehicle_complete', emailReplyTo: ['c@example.com'] })).toBe(false);
+  });
+
+  it('sends unregistered types immediately (fail open)', () => {
+    expect(shouldDigestEmail({ type: 'not_a_registered_type' })).toBe(false);
   });
 });

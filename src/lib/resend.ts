@@ -325,6 +325,54 @@ export function buildNotificationEmail(
 }
 
 /**
+ * The daily staff digest (src/app/api/cron/staff-email-digest): every
+ * non-urgent alert a person got today, one row each, linking to its record.
+ * Same dark shell as buildNotificationEmail.
+ */
+export function buildStaffDigestEmail(
+  items: Array<{ title: string; body: string | null; url: string | null }>,
+  appUrl: string,
+  moreCount = 0,
+): string {
+  const rows = items.map(i => {
+    const title = escapeHtml(i.title);
+    const titleHtml = i.url
+      ? `<a href="${appUrl}${i.url}" style="color:#f5f8fc;text-decoration:none;">${title}</a>`
+      : title;
+    return `
+        <div style="padding:12px 0;border-bottom:1px solid #1e2d3d;">
+          <div style="font-size:14px;font-weight:700;color:#f5f8fc;">${titleHtml}</div>${i.body ? `
+          <div style="font-size:13px;color:#8899aa;line-height:1.5;margin-top:4px;">${escapeHtml(i.body)}</div>` : ''}${i.url ? `
+          <div style="margin-top:6px;"><a href="${appUrl}${i.url}" style="font-size:12px;font-weight:700;color:#3b82f6;text-decoration:none;">Open in App →</a></div>` : ''}
+        </div>`;
+  }).join('');
+  const more = moreCount > 0
+    ? `<div style="margin-top:12px;font-size:13px;color:#8899aa;">…and ${moreCount} more. Open the bell in the app to see everything.</div>`
+    : '';
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#0a1018;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <div style="max-width:560px;margin:0 auto;padding:24px;">
+    <div style="background:#141e2b;border:1px solid #1e2d3d;border-radius:16px;overflow:hidden;">
+      <div style="background:linear-gradient(135deg,#0f1923,#1a2a3d);padding:20px 24px;border-bottom:1px solid #1e2d3d;">
+        <div style="font-size:11px;font-weight:800;color:#ee3120;letter-spacing:1.5px;text-transform:uppercase;">BMG Fleet</div>
+      </div>
+      <div style="padding:24px;">
+        <div style="font-size:16px;font-weight:800;color:#f5f8fc;margin-bottom:4px;">Today's alerts</div>
+        <div style="font-size:13px;color:#8899aa;">You already got each of these in the app. Here they are in one place.</div>${rows}${more}
+      </div>
+      <div style="padding:16px 24px;border-top:1px solid #1e2d3d;text-align:center;">
+        <div style="font-size:10px;color:#e8f0f8;">You received this because of your notification settings in BMG Fleet. Urgent alerts still email right away.</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+/**
  * Weekly customer digest: multi-section summary of the customer's vehicles
  * (in progress / completed / invoiced). Light theme — customers print and
  * forward these.

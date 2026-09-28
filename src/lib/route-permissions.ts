@@ -244,6 +244,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cron/field-shift-sweep/route.ts': cron('requireAdmin('),
   'src/app/api/cron/shop-shift-sweep/route.ts': cron('requireAdmin('),
   'src/app/api/cron/stale-purchase-requests/route.ts': cron('requireAdmin('),
+  'src/app/api/cron/staff-email-digest/route.ts': cron('requireAdmin('),
   'src/app/api/cron/stuck-vehicle-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/weekly-customer-digest/route.ts': cron('requireAdmin('),
   'src/app/api/customer-threads/[id]/messages/route.ts': staff(),
