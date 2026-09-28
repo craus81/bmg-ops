@@ -51,7 +51,7 @@ export async function POST(request: Request) {
     const [vehicleResult, profileResult] = await Promise.all([
       serviceSupabase
         .from('fleet_checkins')
-        .select('id, status, vin, customer_name, vehicle_year, vehicle_make, vehicle_model, assigned_to, matched_graphics_job_id, graphics_install_status, qc_completed_at, customer_portal_token')
+        .select('id, status, vin, customer_name, vehicle_year, vehicle_make, vehicle_model, assigned_to, matched_graphics_job_id, graphics_install_status, qc_completed_at, customer_portal_token, source_estimate_id')
         .eq('id', vehicleId)
         .single(),
       serviceSupabase.from('profiles').select('id, full_name, role, roles').eq('id', user.id).single(),
@@ -272,71 +272,75 @@ async function instantiateChecklist(vehicleId: string, hasGraphics: boolean) {
   }
 }
 
-async function notifyCompletion(vehicle: any, actorName: string) {
-  const vehicleLabel = [vehicle.vehicle_year, vehicle.vehicle_make, vehicle.vehicle_model]
-    .filter(Boolean)
-    .join(' ') || `VIN ${vehicle.vin?.slice(-8) || ''}`;
-  const customerName = vehicle.customer_name || 'customer';
-
-  // Shop team: admins + any assigned installers
-  const targetUserIds = new Set<string>();
-  const [adminsRes, assignmentsRes] = await Promise.all([
-    serviceSupabase.from('profiles').select('id').in('role', ['admin', 'super_admin']).eq('status', 'approved'),
+/**
+ * Who hears about a vehicle finishing or shipping: the people on it — the
+ * vehicle's assignee, anyone assigned to it, and the sales rep (the source
+ * estimate's creator, same rule as the pickup nudges). The admins are only
+ * the fallback when nobody is on the vehicle, so somebody is always on the
+ * hook without every admin getting every vehicle. This used to go to ALL
+ * admins, twice on complete and again on shipped — ~3 emails per admin per
+ * vehicle, which is what ran Resend's daily cap out (2026-09-28).
+ */
+async function vehicleAlertTargets(vehicle: any): Promise<string[]> {
+  const targets = new Set<string>();
+  if (vehicle.assigned_to) targets.add(vehicle.assigned_to);
+  const [assignmentsRes, estimateRes] = await Promise.all([
     serviceSupabase
       .from('job_assignments')
       .select('user_id')
       .eq('job_type', 'scanned_vehicle')
       .eq('job_id', vehicle.id),
+    vehicle.source_estimate_id
+      ? serviceSupabase.from('estimates').select('created_by').eq('id', vehicle.source_estimate_id).maybeSingle()
+      : Promise.resolve({ data: null }),
   ]);
-  for (const a of adminsRes.data || []) targetUserIds.add(a.id);
-  for (const a of assignmentsRes.data || []) targetUserIds.add(a.user_id);
-  if (vehicle.assigned_to) targetUserIds.add(vehicle.assigned_to);
+  for (const a of assignmentsRes.data || []) if (a.user_id) targets.add(a.user_id);
+  const repId = (estimateRes.data as any)?.created_by;
+  if (repId) targets.add(repId);
+  if (targets.size > 0) return [...targets];
 
-  if (targetUserIds.size > 0) {
-    await notifyMany(Array.from(targetUserIds), {
-      type: 'vehicle_complete',
-      title: `Install complete: ${vehicleLabel}`,
-      body: `${actorName} marked ${vehicleLabel} (${customerName}) complete. VIN ${vehicle.vin}.`,
-      url: deepLinks.pickList(vehicle.vin, vehicle.id),
-    });
-  }
-
-  // The customer is NOT emailed here. This used to send "your vehicle is
-  // ready" (with the booking link and the review ask) the instant anyone
-  // moved the status — owner decision 2026-09-14 made every customer-facing
-  // send a person's decision. So we prompt instead: whoever completed it,
-  // plus the admins, get a notification whose whole job is to get the email
-  // sent from the vehicle's Email Customer button
-  // (/api/vehicle-tracking/notify-customer, kind 'ready' — the same content,
-  // review ask included, now with a preview and editable recipients).
-  if (!vehicle.customer_name) return;
-  await promptCustomerEmail(vehicle, {
-    title: `Tell ${customerName}: ${vehicleLabel} is ready`,
-    body: `${actorName} marked ${vehicleLabel} complete and nothing has gone to the customer.`
-      + ' Open the vehicle and use Email Customer to send them the pickup booking link.',
-  });
-}
-
-/**
- * Ask a human to send the customer email this route used to send itself.
- * Goes to the vehicle's assignee and the admins — somebody is always on
- * the hook, so a finished vehicle can't sit there un-announced.
- */
-async function promptCustomerEmail(vehicle: any, msg: { title: string; body: string }) {
-  const targets = new Set<string>();
-  if (vehicle.assigned_to) targets.add(vehicle.assigned_to);
   const { data: admins } = await serviceSupabase
     .from('profiles').select('id')
     .or('role.in.(admin,super_admin),roles.cs.{admin},roles.cs.{super_admin}')
     .eq('status', 'approved');
-  for (const a of admins || []) targets.add(a.id);
-  if (targets.size === 0) return;
-  await notifyMany([...targets], {
+  return (admins || []).map((a: any) => String(a.id));
+}
+
+function vehicleLabelOf(vehicle: any): string {
+  return [vehicle.vehicle_year, vehicle.vehicle_make, vehicle.vehicle_model]
+    .filter(Boolean)
+    .join(' ') || `VIN ${vehicle.vin?.slice(-8) || ''}`;
+}
+
+/**
+ * ONE alert per completion. It used to be two — "Install complete" plus a
+ * separate "Tell <customer>" prompt — so it now carries both jobs: the news,
+ * and (when there's a customer) the prompt to send the email.
+ *
+ * The customer is NOT emailed here. This used to send "your vehicle is
+ * ready" (with the booking link and the review ask) the instant anyone
+ * moved the status — owner decision 2026-09-14 made every customer-facing
+ * send a person's decision. So the alert's job is to get the email sent
+ * from the vehicle's Email Customer button
+ * (/api/vehicle-tracking/notify-customer, kind 'ready' — the same content,
+ * review ask included, now with a preview and editable recipients).
+ */
+async function notifyCompletion(vehicle: any, actorName: string) {
+  const vehicleLabel = vehicleLabelOf(vehicle);
+  const targets = await vehicleAlertTargets(vehicle);
+  if (targets.length === 0) return;
+
+  const hasCustomer = !!vehicle.customer_name;
+  await notifyMany(targets, {
     type: 'vehicle_complete',
-    title: msg.title,
-    body: msg.body,
+    title: hasCustomer
+      ? `Install complete: ${vehicleLabel} — tell ${vehicle.customer_name}`
+      : `Install complete: ${vehicleLabel}`,
+    body: `${actorName} marked ${vehicleLabel}${hasCustomer ? ` (${vehicle.customer_name})` : ''} complete. VIN ${vehicle.vin}.`
+      + (hasCustomer
+        ? ' Nothing has gone to the customer: open the vehicle and use Email Customer to send them the pickup booking link.'
+        : ''),
     url: deepLinks.vehicle(vehicle.id),
-    channels: ['in_app', 'push', 'email'],
   });
 }
 
@@ -348,12 +352,14 @@ async function promptCustomerEmail(vehicle: any, msg: { title: string; body: str
  */
 async function notifyShipped(vehicle: any) {
   if (!vehicle.customer_name) return;
-  const vehicleLabel = [vehicle.vehicle_year, vehicle.vehicle_make, vehicle.vehicle_model]
-    .filter(Boolean)
-    .join(' ') || `VIN ${vehicle.vin?.slice(-8) || ''}`;
-  await promptCustomerEmail(vehicle, {
+  const vehicleLabel = vehicleLabelOf(vehicle);
+  const targets = await vehicleAlertTargets(vehicle);
+  if (targets.length === 0) return;
+  await notifyMany(targets, {
+    type: 'vehicle_complete',
     title: `Tell ${vehicle.customer_name}: ${vehicleLabel} has shipped`,
     body: `${vehicleLabel} was marked shipped and nothing has gone to the customer.`
       + ' Open the vehicle and use Email Customer to let them know it is on its way.',
+    url: deepLinks.vehicle(vehicle.id),
   });
 }
