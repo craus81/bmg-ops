@@ -85,7 +85,7 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
       const w = Math.min(160, (props.width / props.height) * h);
       // 'FAST' (deflate) keeps embedded images from ballooning the file.
       doc.addImage(logo.dataUrl, logo.format, margin, y - 12, w, h, undefined, 'FAST');
-      y += h - 2;
+      y += h + 8; // clear gap between the logo and the estimate number
     } catch { /* unreadable logo — fall through to the text letterhead */ }
   }
 
