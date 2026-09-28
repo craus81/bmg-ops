@@ -1,0 +1,131 @@
+name: Android app build
+
+# Builds the Google Play bundle (.aab) for the FleetSuite Android app.
+#
+# - Run it by hand: Actions → "Android app build" → Run workflow. Only people
+#   with write access to the repo can start it. The signed .aab lands under
+#   the run's Artifacts, ready to upload in Play Console.
+# - Pull requests that touch android/ build an UNSIGNED bundle, just to prove
+#   the project still compiles. No secrets are used on PRs.
+#
+# Secrets (Settings → Secrets and variables → Actions):
+#   ANDROID_UPLOAD_KEYSTORE_BASE64    the Play upload key (.p12/.jks), base64
+#   ANDROID_UPLOAD_KEYSTORE_PASSWORD  its password
+#   ANDROID_UPLOAD_KEY_ALIAS          optional, defaults to "upload"
+#   GOOGLE_SERVICES_JSON              optional until Android push is wired up:
+#                                     the Firebase google-services.json contents
+#
+# The app loads https://go.bmgfleet.com live, so a new build is only needed
+# for native changes (plugins, icons, permissions), not for app features.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'Version shown to users (e.g. 1.0, 1.1)'
+        required: true
+        default: '1.0'
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'capacitor.config.ts'
+      - '.github/workflows/android-release.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Android bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SIGNED: ${{ github.event_name == 'workflow_dispatch' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - run: npm ci
+
+      # Generates capacitor.config.json and the plugin Gradle files. There are
+      # no bundled web assets (server.url points at the live site), so the
+      # "webDir does not exist" warning is expected.
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Add Firebase config
+        if: env.SIGNED == 'true'
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
+            echo "google-services.json added"
+          else
+            echo "::warning::GOOGLE_SERVICES_JSON is not set. This build has no Firebase, so push notifications will not work."
+          fi
+
+      - name: Restore upload key
+        if: env.SIGNED == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS || 'upload' }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::error::ANDROID_UPLOAD_KEYSTORE_BASE64 and ANDROID_UPLOAD_KEYSTORE_PASSWORD secrets are required."
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload-key"
+          # Fail here with a clear message if the file or password is wrong,
+          # rather than deep inside Gradle.
+          keytool -list -keystore "$RUNNER_TEMP/upload-key" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" > /dev/null
+          {
+            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/upload-key"
+            echo "ANDROID_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "ANDROID_KEY_ALIAS=$KEY_ALIAS"
+          } >> "$GITHUB_ENV"
+
+      - name: Build bundle
+        working-directory: android
+        env:
+          # Play rejects an upload whose versionCode isn't higher than the last,
+          # so each run of this workflow gets the next number.
+          ANDROID_VERSION_CODE: ${{ github.run_number }}
+          ANDROID_VERSION_NAME: ${{ inputs.version_name || '1.0' }}
+        run: ./gradlew --no-daemon bundleRelease
+
+      - name: Check signature
+        if: env.SIGNED == 'true'
+        run: |
+          jarsigner -verify android/app/build/outputs/bundle/release/app-release.aab > /dev/null
+          keytool -printcert -jarfile android/app/build/outputs/bundle/release/app-release.aab | grep -E 'SHA256:' | head -1
+
+      - name: Name the bundle
+        if: env.SIGNED == 'true'
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/bundle/release/app-release.aab \
+            "out/fleetsuite-${{ inputs.version_name }}-build${{ github.run_number }}.aab"
+
+      - uses: actions/upload-artifact@v4
+        if: env.SIGNED == 'true'
+        with:
+          name: fleetsuite-android-build${{ github.run_number }}
+          path: out/*.aab
+          retention-days: 14
+          if-no-files-found: error
