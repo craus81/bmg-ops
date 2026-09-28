@@ -171,7 +171,8 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
     head,
     body: bodyRows,
     styles: { fontSize: 9, cellPadding: 5, valign: 'top' },
-    headStyles: { fillColor: [37, 99, 235], fontSize: 8.5 },
+    // BMG logo red (#EE4023), not a stock blue.
+    headStyles: { fillColor: [238, 64, 35], textColor: 255, fontSize: 8.5 },
     columnStyles: {
       ...(hasPhotos ? { 0: { cellWidth: PHOTO + 10 } } : {}),
       [col(1)]: { halign: 'right', cellWidth: 40 },
@@ -179,6 +180,8 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
       [col(3)]: { halign: 'right', cellWidth: 70 },
     },
     didParseCell: (hook) => {
+      // Qty/Rate/Total headings sit over their right-aligned numbers.
+      if (hook.section === 'head' && hook.column.index >= col(1)) hook.cell.styles.halign = 'right';
       if (hook.section !== 'body') return;
       const line = lines[hook.row.index];
       if (hasPhotos && line?.image) hook.cell.styles.minCellHeight = PHOTO + 10;
@@ -231,13 +234,17 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
   }
   totals.push(['Total', money(est.grand_total), true]);
 
-  ensureRoom(totals.length * 15 + 10);
+  ensureRoom(totals.length * 15 + 26);
   const valueX = pageW - margin;
   const labelX = pageW - margin - 84;
   for (const [label, value, bold] of totals) {
     if (bold) {
+      // Breathing room on both sides of the rule so the bold Total
+      // doesn't sit on it.
+      cursorY += 6;
       doc.setDrawColor(209, 213, 219).setLineWidth(1.2);
       doc.line(pageW - margin - 240, cursorY - 9, pageW - margin, cursorY - 9);
+      cursorY += 10;
       doc.setFontSize(11.5).setFont('helvetica', 'bold');
     } else {
       doc.setFontSize(9.5).setFont('helvetica', 'normal');
