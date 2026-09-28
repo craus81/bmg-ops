@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { financeUserIds } from '@/lib/ap';
-import { bounceDetail, bounceNextStep, bounceIsAmbiguous, recipientsLabel } from '@/lib/email-bounce';
+import { bounceDetail, bounceNextStep, bounceIsAmbiguous, recipientsLabel, isQuietStaffBounce } from '@/lib/email-bounce';
 
 export const dynamic = 'force-dynamic';
 
@@ -111,7 +111,11 @@ export async function POST(req: NextRequest) {
       .select('id, invoice_number, customer_name, recipients, delivery_status')
       .eq('source_id', emailId);
 
-    const toUpdate = (rows || []).filter(r => (STATUS_RANK[status] ?? 0) >= (STATUS_RANK[r.delivery_status] ?? 0));
+    // A teammate's out-of-office (isQuietStaffBounce) is not the customer
+    // bouncing — leave the invoice row's status alone and send no alert.
+    const toUpdate = (rows || []).filter(r =>
+      (STATUS_RANK[status] ?? 0) >= (STATUS_RANK[r.delivery_status] ?? 0)
+      && !isQuietStaffBounce(status, detail, r.recipients));
     if (toUpdate.length > 0) {
       await service
         .from('invoice_emails')
@@ -154,7 +158,9 @@ export async function POST(req: NextRequest) {
       .select('id, estimate_number, customer_name, customer_id, created_by, sent_for_approval_by, approval_email_status, approval_email_to, approval_email_copies')
       .eq('approval_email_id', emailId);
 
-    const estToUpdate = (estRows || []).filter(r => (STATUS_RANK[status] ?? 0) >= (STATUS_RANK[r.approval_email_status] ?? 0));
+    const estToUpdate = (estRows || []).filter(r =>
+      (STATUS_RANK[status] ?? 0) >= (STATUS_RANK[r.approval_email_status] ?? 0)
+      && !isQuietStaffBounce(status, detail, r.approval_email_to, r.approval_email_copies));
     if (estToUpdate.length > 0) {
       await service
         .from('estimates')
@@ -237,7 +243,8 @@ export async function POST(req: NextRequest) {
         .eq('external_provider_sid', emailId)
         .eq('channel', 'email')
         .neq('delivery_status', 'failed');
-    } else if (badStates.includes(status)) {
+    } else if (badStates.includes(status)
+      && !(logRows || []).some(r => isQuietStaffBounce(status, detail, r.recipients, r.copy_recipients))) {
       await service.from('customer_messages')
         .update({ delivery_status: 'failed' })
         .eq('external_provider_sid', emailId)
@@ -258,7 +265,10 @@ export async function POST(req: NextRequest) {
         pickup_notice: 'Pickup notice email', staff_notification: 'Notification email',
         invite: 'Invite email', other: 'Email',
       };
-      for (const row of logToUpdate.filter(r => r.sent_by && !badStates.includes(r.delivery_status))) {
+      // The log row still records the bounce (Sent Emails shows it); only
+      // the alert is skipped for a teammate's out-of-office.
+      for (const row of logToUpdate.filter(r => r.sent_by && !badStates.includes(r.delivery_status)
+        && !isQuietStaffBounce(status, detail, r.recipients, r.copy_recipients))) {
         await notifyMany([row.sent_by], {
           type: 'email_bounced',
           title: `⚠ ${KIND_LABELS[row.kind] || 'Email'} ${status === 'complained' ? 'marked as spam' : status}`,
