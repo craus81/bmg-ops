@@ -58,5 +58,7 @@
 			<string>FleetSuite</string>
 		</dict>
 	</array>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

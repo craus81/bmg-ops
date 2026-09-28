@@ -1,9 +1,9 @@
 # Shipping the FleetSuite iOS wrapper
 
 What has to happen on a Mac to build `ios/`, install it on a device and ship
-it through TestFlight, plus how the Siri command (step 7) fits together. The
-Mac steps need Xcode and an Apple Developer account — none of them can be
-done from a build container or from this repo alone.
+it through TestFlight or the App Store, plus how the Siri command (step 7)
+fits together. The Mac steps need Xcode and an Apple Developer account —
+none of them can be done from a build container or from this repo alone.
 
 Read it top to bottom the first time: several steps set values the later
 ones depend on.
@@ -18,7 +18,9 @@ Facts to check against, not to re-decide:
 | App name | BMG FleetSuite | `capacitor.config.ts`, `Info.plist` (`CFBundleDisplayName`) |
 | Deployment target | iOS 16.0 (App Intents, which Siri needs, start there) | `project.pbxproj` |
 | Signing style | Automatic, team `RU67C5K44J` (Craig's individual account) | `project.pbxproj` (`CODE_SIGN_STYLE = Automatic`, `DEVELOPMENT_TEAM` in both App configs) |
-| Version / build | 1.0 / 2 | `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION` |
+| Version / build | 1.0 / 3 | `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION` |
+| Devices | iPhone only, so App Store Connect asks for no iPad screenshots (iPads can still run it as an iPhone app) | `project.pbxproj` (`TARGETED_DEVICE_FAMILY = 1`) |
+| Export compliance | Answered in the build (HTTPS only), so uploads don't stop at Missing Compliance | `Info.plist` (`ITSAppUsesNonExemptEncryption` = NO) |
 | Push environment | `development` | `ios/App/App/App.entitlements` (`aps-environment`) |
 | Associated domain | `applinks:go.bmgfleet.com` | `App.entitlements` |
 | Privacy strings | Camera + photo library present | `Info.plist` (`NSCameraUsageDescription`, `NSPhotoLibraryUsageDescription`) |
@@ -88,20 +90,38 @@ silently dropped.
 3. **App Privacy** questionnaire — this app collects account identifiers and
    photos/camera content; answer it against what FleetSuite actually stores,
    not a template.
-4. Decide distribution now, because it changes what review expects:
-   - **Custom App / Unlisted** (recommended for an internal tool): Apple
-     Business Manager distribution, no public listing, far lighter review.
-   - **Public App Store**: needs screenshots, a description, a support URL,
-     a privacy policy URL, and a demo account for the reviewer.
+4. Decide distribution now, because it changes what review expects.
+   **Chosen 2026-09-28: an Unlisted App Store app**, so staff can install it
+   on their personal phones from a link, without TestFlight.
+   - **Unlisted App Store app**: normal App Review, but the app never shows
+     up in search or charts; anyone with its link can install it. The
+     Account Holder asks for it with Apple's unlisted-app request form
+     (linked from developer.apple.com/support/unlisted-app-distribution)
+     *before* submitting for review. Once approved, it stays unlisted.
+   - **Custom App** through Apple Business Manager: private to BMG's own
+     Apple Business Manager account, which BMG would need to set up.
+   - **Public App Store**: anyone can find it.
 
-> **Flag before you submit publicly.** `capacitor.config.ts` points
-> `server.url` at `https://go.bmgfleet.com`, so the app is a web view over
-> a live site with no bundled web assets. App Review rejects that shape under
-> guideline 4.2 ("minimum functionality") with some regularity. Custom App
-> distribution through Apple Business Manager avoids the argument entirely
-> and is the right fit for a staff tool. If it does go public, expect to
-> either bundle the web build or make the native-only features (push,
-> camera, calendar, Siri) the visible point of the app.
+   Unlisted and public both need screenshots, a description, a support URL,
+   a privacy policy URL, and a demo account for the reviewer. What's in
+   place for that:
+   - Support URL `https://go.bmgfleet.com/support` and privacy policy
+     `https://go.bmgfleet.com/privacy`, both public. The sign-in screen links
+     to both.
+   - No sign-up in the app. The sign-in screen hides Request Access inside
+     the app, because Apple requires in-app account deletion from any app
+     that can create accounts (guideline 5.1.1(v)). The web keeps it.
+   - The reviewer's demo account is an ordinary login an admin creates.
+     Field Tech fits: it has the Schedule the Siri demo needs and shows no
+     prices. Keep it active, because Apple signs in again for every update.
+
+> **Flag before you submit.** `capacitor.config.ts` points `server.url` at
+> `https://go.bmgfleet.com`, so the app is a web view over a live site with
+> no bundled web assets. App Review rejects that shape under guideline 4.2
+> ("minimum functionality") with some regularity, and an unlisted app gets
+> the same review as a public one. Lead the review notes with what only the
+> app does: Siri, push notifications and the camera. If it's rejected
+> anyway, the options are bundling the web build or Custom App distribution.
 
 ## 5. Archive and upload
 
