@@ -28,6 +28,7 @@ import NetsuiteVendorSearch from '@/components/NetsuiteVendorSearch';
 import PartsDemandTab from '@/components/PartsDemandTab';
 import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
+import { trackingUrl } from '@/lib/tracking-url';
 
 interface RequestRow {
   id: string;
@@ -46,8 +47,16 @@ interface RequestRow {
   created_at: string;
   upfit_projects?: { id: string; project_name: string | null; netsuite_so_number: string | null } | null;
   requester?: { full_name: string | null } | null;
-  /** Joined only on the ?id= single-row lookup, for rows already ordered. */
-  ordered_po?: { tranid: string | null; vendor_name: string | null } | null;
+  /** Joined on the ?id= single-row lookup and the On order list. ETA,
+   *  carrier and tracking are written onto the PO by the Parts Mail scan. */
+  ordered_po?: {
+    id?: string; tranid: string | null; vendor_name: string | null;
+    status?: string | null; status_label?: string | null; trandate?: string | null;
+    eta_date?: string | null; tracking_number?: string | null; carrier?: string | null;
+  } | null;
+  ordered_at?: string | null;
+  /** 'auto' = matched to a PO found in NetSuite (migration 331). */
+  ordered_match?: string | null;
 }
 
 const UNASSIGNED = 'No vendor — assign one';
@@ -106,14 +115,59 @@ export default function PurchasingQueuePage() {
   const [creatingPo, setCreatingPo] = useState<string | null>(null);
   const [lastPo, setLastPo] = useState<{ number: string; url: string | null; mirrored: boolean; stamped: boolean } | null>(null);
 
+  const [onOrder, setOnOrder] = useState<RequestRow[]>([]);
+  const [matching, setMatching] = useState(false);
+  const [matchNotice, setMatchNotice] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     try {
-      const res = await fetch('/api/purchase-requests?status=pending');
+      const [res, ordRes] = await Promise.all([
+        fetch('/api/purchase-requests?status=pending'),
+        fetch('/api/purchase-requests?view=on_order'),
+      ]);
       const body = await res.json().catch(() => ({}));
       if (res.ok && body.success) setRequests(body.requests || []);
+      const ordBody = await ordRes.json().catch(() => ({}));
+      if (ordRes.ok && ordBody.success) setOnOrder(ordBody.requests || []);
     } catch { /* the empty state below says so */ }
     setLoading(false);
   }, []);
+
+  // Runs the same request → NetSuite PO match the syncs run.
+  const matchNow = async () => {
+    setMatching(true);
+    setMatchNotice(null);
+    try {
+      const res = await fetch('/api/purchase-requests/match-pos', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setMatchNotice(body.matched > 0
+        ? `Marked ${body.matched} request${body.matched !== 1 ? 's' : ''} ordered from NetSuite POs${body.split > 0 ? ` (${body.split} only partly covered — the rest stays in the queue)` : ''}.`
+        : 'No NetSuite PO covers any pending request yet.');
+      await load();
+    } catch (e: any) {
+      await dialog.alert(`Couldn’t check NetSuite POs: ${e?.message || 'unknown error'}`);
+    } finally {
+      setMatching(false);
+    }
+  };
+
+  const unmatch = async (r: RequestRow) => {
+    if (!(await dialog.confirm(`Put ${r.quantity}× ${r.item_number} back in the queue? It won’t be matched to PO ${r.ordered_po?.tranid || ''} again.`, { confirmLabel: 'Undo match' }))) return;
+    setBusyId(r.id);
+    try {
+      const res = await fetch('/api/purchase-requests/unmatch', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: r.id }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      await load();
+    } catch (e: any) {
+      await dialog.alert(`Undo failed: ${e?.message || 'unknown error'}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   useEffect(() => { load(); }, [load]);
 
@@ -125,7 +179,7 @@ export default function PurchasingQueuePage() {
     const req = searchParams.get('req');
     if (!req) return;
     flashedRef.current = true;
-    if (requests.some(r => r.id === req)) {
+    if (requests.some(r => r.id === req) || onOrder.some(r => r.id === req)) {
       setFlashId(req);
       setTimeout(() => {
         document.getElementById(`preq-${req}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -147,7 +201,7 @@ export default function PurchasingQueuePage() {
         }
       } catch { /* banner is best-effort */ }
     })();
-  }, [loading, requests, searchParams]);
+  }, [loading, requests, onOrder, searchParams]);
 
   // ?reqs=a,b,c — the batch form. Flashes every row that's still pending
   // and scrolls to the first; ids that already left the queue are simply
@@ -391,7 +445,18 @@ export default function PurchasingQueuePage() {
         {isAdmin
           ? ' Pick the NetSuite vendor on a group and create the PO right here — readiness cards flip to “on order” immediately.'
           : ' An admin turns a vendor group into a NetSuite PO; readiness cards flip to “on order” once it’s placed.'}
+        {' '}A PO entered straight in NetSuite for the same part from the same vendor marks the request ordered on its own after the next sync.
       </div>
+
+      {isAdmin && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '16px' }}>
+          <button onClick={matchNow} disabled={matching}
+            style={{ padding: '6px 12px', borderRadius: '8px', background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textSecondary, fontSize: '11px', fontWeight: 700, cursor: matching ? 'wait' : 'pointer' }}>
+            {matching ? 'Checking NetSuite POs…' : '🔄 Check NetSuite POs now'}
+          </button>
+          {matchNotice && <span style={{ fontSize: '12px', color: 'var(--text-body)' }}>{matchNotice}</span>}
+        </div>
+      )}
 
       {reqNotice && (
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '12px 14px', marginBottom: '16px', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: '12px' }}>
@@ -555,6 +620,92 @@ export default function PurchasingQueuePage() {
           </div>
         );
       })}
+
+      {!loading && onOrder.length > 0 && (
+        <div style={{ marginTop: '26px' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', marginBottom: '8px' }}>
+            <h2 style={{ fontSize: '15px', fontWeight: 800, margin: 0, color: 'var(--text-primary)' }}>On order</h2>
+            <span style={{ fontSize: '11px', color: theme.textMuted }}>{onOrder.length} request{onOrder.length !== 1 ? 's' : ''} · ETA and tracking come from Parts Mail</span>
+          </div>
+          <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '14px', overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <thead>
+                <tr style={{ color: theme.textMuted, textTransform: 'uppercase', fontSize: '9px', letterSpacing: '0.5px' }}>
+                  <th style={{ textAlign: 'left', padding: '8px 14px' }}>Part</th>
+                  <th style={{ textAlign: 'right', padding: '8px 10px' }}>Qty</th>
+                  <th style={{ textAlign: 'left', padding: '8px 10px' }}>For</th>
+                  <th style={{ textAlign: 'left', padding: '8px 10px' }}>PO</th>
+                  <th style={{ textAlign: 'left', padding: '8px 10px' }}>ETA</th>
+                  <th style={{ textAlign: 'left', padding: '8px 10px' }}>Tracking</th>
+                  <th style={{ padding: '8px 14px' }} />
+                </tr>
+              </thead>
+              <tbody>
+                {onOrder.map(r => {
+                  const po = r.ordered_po;
+                  const numbers = (po?.tracking_number || '').split(/[,;\s]+/).filter(Boolean);
+                  return (
+                    <tr key={r.id} id={`preq-${r.id}`} style={{
+                      borderTop: `1px solid ${theme.border}`,
+                      background: flashId === r.id ? 'rgba(96,165,250,0.12)' : 'transparent',
+                      transition: 'background 0.6s',
+                    }}>
+                      <td style={{ padding: '9px 14px' }}>
+                        <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{r.item_number}</div>
+                        {r.description && <div style={{ fontSize: '11px', color: theme.textSecondary }}>{r.description}</div>}
+                      </td>
+                      <td style={{ padding: '9px 10px', textAlign: 'right', fontWeight: 800, color: 'var(--text-primary)' }}>{r.quantity}</td>
+                      <td style={{ padding: '9px 10px' }}>
+                        {r.upfit_projects ? (
+                          <button onClick={() => router.push(deepLinks.upfitProject(r.upfit_projects!.id))}
+                            style={{ background: 'none', border: 'none', padding: 0, color: '#60a5fa', fontSize: '12px', fontWeight: 700, cursor: 'pointer', textAlign: 'left' }}>
+                            {r.upfit_projects.project_name || 'Upfit project'}
+                            {r.upfit_projects.netsuite_so_number ? ` · SO ${r.upfit_projects.netsuite_so_number}` : ''}
+                          </button>
+                        ) : <span style={{ color: theme.textMuted }}>stock</span>}
+                      </td>
+                      <td style={{ padding: '9px 10px' }}>
+                        {po?.id ? (
+                          <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>PO {po.tranid || '—'}</div>
+                        ) : <span style={{ color: theme.textMuted }}>syncing…</span>}
+                        <div style={{ fontSize: '11px', color: theme.textSecondary }}>
+                          {po?.vendor_name || r.vendor_name || ''}
+                          {po?.status_label ? ` · ${po.status_label}` : ''}
+                        </div>
+                        {r.ordered_match === 'auto' && (
+                          <span title="Matched automatically to a PO entered in NetSuite" style={{ fontSize: '9px', fontWeight: 800, padding: '1px 6px', borderRadius: '4px', background: 'rgba(56,189,248,0.12)', border: '1px solid rgba(56,189,248,0.3)', color: '#38bdf8', whiteSpace: 'nowrap' }}>
+                            FROM NETSUITE
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ padding: '9px 10px', color: po?.eta_date ? 'var(--text-body)' : theme.textMuted, whiteSpace: 'nowrap' }}>
+                        {po?.eta_date ? new Date(`${po.eta_date.slice(0, 10)}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' }) : 'not yet'}
+                      </td>
+                      <td style={{ padding: '9px 10px' }}>
+                        {numbers.length > 0 ? numbers.map(n => (
+                          <div key={n}>
+                            <a href={trackingUrl(n, po?.carrier)} target="_blank" rel="noreferrer" style={{ color: '#60a5fa', fontWeight: 700 }}>
+                              {po?.carrier ? `${po.carrier} ` : ''}{n} ↗
+                            </a>
+                          </div>
+                        )) : <span style={{ color: theme.textMuted }}>not yet</span>}
+                      </td>
+                      <td style={{ padding: '9px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        {isAdmin && r.ordered_match === 'auto' && (
+                          <button onClick={() => unmatch(r)} disabled={busyId === r.id} title="Wrong PO — put this request back in the queue"
+                            style={{ padding: '4px 9px', borderRadius: '6px', background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textSecondary, fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}>
+                            Undo
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
       </>)}
     </div>
   );

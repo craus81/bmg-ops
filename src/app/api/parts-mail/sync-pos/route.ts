@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { syncVendorPos } from '@/lib/vendor-po-sync';
+import { autoMatchPurchaseRequests } from '@/lib/purchase-request-po-match';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -24,6 +25,7 @@ export async function POST(req: NextRequest) {
     // table gets backfilled, and `modified` reflects the full PO history —
     // the number that tells a NetSuite-access problem from a save problem.
     const result = await syncVendorPos(service, { fullResync: true });
+    const requestMatch = await autoMatchPurchaseRequests(service);
     const { count } = await service
       .from('netsuite_vendor_pos')
       .select('*', { count: 'exact', head: true });
@@ -33,6 +35,7 @@ export async function POST(req: NextRequest) {
       lines: result.lines,
       modified: result.modified,
       totalPos: count ?? 0,
+      requestsMatched: requestMatch.matched,
     });
   } catch (err: any) {
     return NextResponse.json(

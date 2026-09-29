@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { scanPartsEmails } from '@/lib/parts-email-scan';
+import { autoMatchPurchaseRequests } from '@/lib/purchase-request-po-match';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -26,7 +27,9 @@ export async function GET(req: NextRequest) {
 
   try {
     const result = await scanPartsEmails(supabase);
-    return NextResponse.json({ status: 'ok', ...result });
+    // A PO Parts Mail just linked may cover a pending purchase request.
+    const requestMatch = await autoMatchPurchaseRequests(supabase);
+    return NextResponse.json({ status: 'ok', ...result, requestMatch });
   } catch (err: any) {
     console.error('[cron] Parts email scan error:', err.message);
     return NextResponse.json({ status: 'error', error: err.message }, { status: 500 });
