@@ -124,6 +124,9 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/payroll/route.ts': admin(),
   'src/app/api/admin/review-link/route.ts': admin(),
   'src/app/api/admin/resend-invite/route.ts': admin(),
+  // Default labor sell rate (migration 330): staff read (the builders start
+  // from it); super-admin write, matching the sales tax rate.
+  'src/app/api/admin/labor-rate/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireStaff('] },
   // Reading the company sales tax rate is staff-wide (both quote builders
   // show it); changing it is super-admin only, matching the DB trigger in
   // migration 245.
