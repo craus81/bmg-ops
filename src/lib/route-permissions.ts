@@ -339,6 +339,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/messages/sms-webhook/route.ts': webhook('inbound SMS from the provider; the signature is verified and mismatches are rejected', 'verifyWebhookSignature'),
   'src/app/api/messages/twilio-webhook/route.ts': webhook('inbound Twilio SMS; x-twilio-signature validated, secure by default', 'validateTwilioSignature'),
   'src/app/api/my/earnings/route.ts': authScoped('self-scoped: returns only the caller\'s own earnings rows'),
+  'src/app/api/my/week/route.ts': staff(),
   'src/app/api/netsuite/backfill-invoice-locations/route.ts': admin(),
   'src/app/api/netsuite/contacts/sync/route.ts': staff(),
   'src/app/api/netsuite/create-invoice/route.ts': admin(),

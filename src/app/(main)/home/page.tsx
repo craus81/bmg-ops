@@ -4,6 +4,7 @@ import { useState, useEffect, lazy, Suspense } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import MentionsInbox from '@/components/MentionsInbox';
+import MyHome from '@/components/MyHome';
 
 const OpsDashboard = lazy(() => import('@/components/OpsDashboard'));
 const FinancialsDashboard = lazy(() => import('@/components/FinancialsDashboard'));
@@ -80,22 +81,26 @@ export default function HomePage() {
   // the gated pages bounce back to /home, so an unguarded redirect plus a
   // per-user feature revoke forms an infinite /home ↔ page loop.
   const scanOk = hasFeature('scan');
-  const trackingOk = hasFeature('in_shop') || hasFeature('fleet_checkin');
+  const isTech = isOnlyRole('field_tech') || isOnlyRole('shop_tech');
 
   useEffect(() => {
     if (!role) return;
     // Redirect roles to their dedicated home screens
     if (role === 'customer') { router.replace('/customer/dashboard'); return; }
     if (isOnlyRole('graphics_production')) { router.replace('/graphics'); return; }
-    if ((isOnlyRole('field_tech') || isOnlyRole('installer')) && scanOk) { router.replace('/scan'); return; }
-    if (isOnlyRole('shop_tech') && trackingOk) { router.replace('/tracking?checkin=1'); return; }
+    // Field and shop techs get their own Home ("My week" + "Up next", owner
+    // decision 2026-09-29) with Scan / Check In on top, so they stay here.
+    // Contract installers still land on Scan.
+    if (isOnlyRole('installer') && !isTech && scanOk) { router.replace('/scan'); return; }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run when the effective role changes (including View As)
-  }, [role, isAdmin, scanOk, trackingOk]);
+  }, [role, isAdmin, scanOk, isTech]);
 
   if (role === 'customer') return null;
   if (isOnlyRole('graphics_production')) return null;
-  if ((isOnlyRole('field_tech') || isOnlyRole('installer')) && scanOk) return null;
-  if (isOnlyRole('shop_tech') && trackingOk) return null;
+  // Shop first: its view is the superset (check-ins and completions plus installs).
+  if (isOnlyRole('shop_tech')) return <MyHome role="shop_tech" />;
+  if (isOnlyRole('field_tech')) return <MyHome role="field_tech" />;
+  if (isOnlyRole('installer') && scanOk) return null;
 
   // Admin, Sales, Super Admin, and Executive get the dashboard
   return <AdminDashboard />;
