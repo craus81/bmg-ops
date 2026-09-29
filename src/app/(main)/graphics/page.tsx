@@ -663,7 +663,10 @@ export default function GraphicsPage() {
     const cat = createForm.job_category || 'production';
     const prefix = cat === 'proofing' ? 'PRF' : cat === 'internal' ? 'INT' : cat === 'customer_supplied' ? 'CSG' : 'GFX';
     const jobNumber = await nextJobNumber(supabase, prefix, () => legacyJobNumber.gfx(prefix));
-    const initialStatus: GraphicsJobStatus = cat === 'proofing' ? 'designing' : 'received';
+    // Every category, proofing included, starts at Received (owner decision,
+    // 2026-09-29): the designer moving a proof to Designing is the signal
+    // that someone has actually picked it up.
+    const initialStatus: GraphicsJobStatus = 'received';
     const { data, error } = await supabase
       .from('graphics_jobs')
       .insert({
