@@ -148,6 +148,13 @@ export default function SettingsPage() {
   const [taxSaved, setTaxSaved] = useState(false);
   const [taxError, setTaxError] = useState('');
 
+  // Company default labor rate — what new estimates sell labor at per hour
+  // (migration 330). Super admins only, same posture as the tax rate.
+  const [laborRatePh, setLaborRatePh] = useState<string>('');
+  const [laborRateSaving, setLaborRateSaving] = useState(false);
+  const [laborRateSaved, setLaborRateSaved] = useState(false);
+  const [laborRateError, setLaborRateError] = useState('');
+
   // NetSuite labor item — the ONE item every pushed estimate and sales order
   // bills labor to. Unset means the server picks the best-matching LABOR item
   // in NetSuite; when nothing matches, labor never reaches NetSuite at all,
@@ -191,6 +198,10 @@ export default function SettingsPage() {
     apiFetch('/api/admin/sales-tax')
       .then(r => r.json())
       .then(d => setTaxPct(String(d?.sales_tax_rate_pct ?? FALLBACK_SALES_TAX_RATE_PCT)))
+      .catch(() => {});
+    apiFetch('/api/admin/labor-rate')
+      .then(r => r.json())
+      .then(d => { if (d?.rate != null) setLaborRatePh(String(d.rate)); })
       .catch(() => {});
   }, [isSuperAdmin]);
 
@@ -408,6 +419,32 @@ export default function SettingsPage() {
       setTaxError(e?.message || 'Could not save the sales tax rate.');
     } finally {
       setTaxSaving(false);
+    }
+  };
+
+  const handleSaveLaborRate = async () => {
+    setLaborRateSaving(true);
+    setLaborRateError('');
+    try {
+      const rate = parseFloat(laborRatePh);
+      if (!Number.isFinite(rate) || rate < 0) {
+        setLaborRateError('Enter a dollar amount per hour.');
+        return;
+      }
+      const res = await apiFetch('/api/admin/labor-rate', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rate }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setLaborRateError(data?.error || 'Could not save the labor rate.'); return; }
+      setLaborRatePh(String(data.rate));
+      setLaborRateSaved(true);
+      setTimeout(() => setLaborRateSaved(false), 2500);
+    } catch (e: any) {
+      setLaborRateError(e?.message || 'Could not save the labor rate.');
+    } finally {
+      setLaborRateSaving(false);
     }
   };
 
@@ -820,6 +857,42 @@ export default function SettingsPage() {
             </div>
             {taxError && (
               <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{taxError}</div>
+            )}
+          </div>
+
+          <div style={sectionStyle}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>Default Labor Rate</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
+              The hourly rate every new estimate, graphics estimate, upfit design and AI-built estimate starts
+              with. It can still be changed on an individual estimate. Estimates already saved keep the rate they
+              were quoted at. This is what you charge, not the Shop Labor Cost Rate below.
+            </div>
+            <div style={labelStyle}>Rate ($/hr)</div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input
+                type="number"
+                step={0.01}
+                min={0}
+                max={1000}
+                value={laborRatePh}
+                onChange={e => setLaborRatePh(e.target.value)}
+                style={{ ...inputStyle, width: '120px' }}
+              />
+              <button
+                onClick={handleSaveLaborRate}
+                disabled={laborRateSaving || laborRatePh === ''}
+                style={{
+                  padding: '8px 16px', borderRadius: '8px', border: 'none',
+                  background: laborRateSaved ? '#22c55e' : '#3b82f6', color: '#fff',
+                  fontSize: '12px', fontWeight: 800,
+                  cursor: laborRateSaving ? 'default' : 'pointer', opacity: laborRateSaving ? 0.5 : 1,
+                }}
+              >
+                {laborRateSaving ? 'Saving...' : laborRateSaved ? 'Saved!' : 'Save Rate'}
+              </button>
+            </div>
+            {laborRateError && (
+              <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{laborRateError}</div>
             )}
           </div>
 

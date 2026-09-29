@@ -6,6 +6,7 @@ import { logAudit } from '@/lib/audit';
 import { validateBody, z } from '@/lib/validate';
 import { computeTotals, normalizeVehicleCount } from '@/lib/estimate-totals';
 import { getSalesTaxRate } from '@/lib/sales-tax';
+import { getDefaultLaborRate, toLaborRate } from '@/lib/labor-rate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 
 export const dynamic = 'force-dynamic';
@@ -185,14 +186,19 @@ export async function POST(req: NextRequest) {
     // (quote_settings, migration 245). An estimate that already exists keeps
     // the rate it was quoted at, so re-saving an old draft can't silently
     // reprice a document the customer has already seen.
-    const existingRate = id
-      ? await supabase.from('estimates').select('tax_rate').eq('id', id).maybeSingle()
-          .then(({ data }: any) => (data?.tax_rate != null ? Number(data.tax_rate) : null))
+    const existing = id
+      ? await supabase.from('estimates').select('tax_rate, labor_rate').eq('id', id).maybeSingle()
+          .then(({ data }: any) => data)
       : null;
+    const existingRate = existing?.tax_rate != null ? Number(existing.tax_rate) : null;
     const effectiveTaxRate = existingRate != null && Number.isFinite(existingRate)
       ? existingRate
       : await getSalesTaxRate(supabase);
-    const effectiveLaborRate = parseFloat(String(labor_rate ?? 85));
+    // A caller that names no labor rate gets the estimate's own saved rate,
+    // else the company default (Settings -> Default Labor Rate, migration 330).
+    const effectiveLaborRate = toLaborRate(labor_rate)
+      ?? toLaborRate(existing?.labor_rate)
+      ?? await getDefaultLaborRate(supabase);
     const override = labor_hours_override !== undefined && labor_hours_override !== null
       ? parseFloat(String(labor_hours_override))
       : null;

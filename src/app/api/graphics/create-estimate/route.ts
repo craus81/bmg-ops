@@ -4,6 +4,7 @@ import { requireMoney } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { getSalesTaxRate } from '@/lib/sales-tax';
+import { getDefaultLaborRate } from '@/lib/labor-rate';
 import { partNumberPattern } from '@/lib/part-number';
 
 export const dynamic = 'force-dynamic';
@@ -139,7 +140,8 @@ export async function POST(req: NextRequest) {
     // Compute totals
     const subtotal = lineItems.reduce((sum: number, l: any) => sum + (l.quantity * l.unit_price), 0);
     const autoLaborHours = lineItems.reduce((sum: number, l: any) => sum + l.labor_hours, 0);
-    const laborRate = 120; // default
+    // Company default (Settings → Default Labor Rate, super admin only).
+    const laborRate = await getDefaultLaborRate(supabase);
     const laborTotal = autoLaborHours * laborRate;
     // One company sales tax rate (Settings → Sales Tax, super admin only).
     const taxRate = await getSalesTaxRate(supabase);

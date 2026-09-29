@@ -4,6 +4,7 @@ import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { computeTotals } from '@/lib/estimate-totals';
 import { FALLBACK_SALES_TAX_RATE } from '@/lib/sales-tax';
+import { FALLBACK_LABOR_RATE } from '@/lib/labor-rate';
 import { findItems } from '@/lib/netsuite';
 import { WRAP_VINYL_ITEM, WRAP_LABOR_ITEM, kitLineSplit } from '@/lib/graphics-invoice';
 
@@ -151,7 +152,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       // in for a row saved before tax_rate existed.
       parseFloat(String(estimate.tax_rate ?? FALLBACK_SALES_TAX_RATE)),
       !!estimate.tax_exempt,
-      parseFloat(String(estimate.labor_rate ?? 120)),
+      parseFloat(String(estimate.labor_rate ?? FALLBACK_LABOR_RATE)),
       estimate.labor_hours_override !== null && estimate.labor_hours_override !== undefined
         ? parseFloat(String(estimate.labor_hours_override))
         : null,

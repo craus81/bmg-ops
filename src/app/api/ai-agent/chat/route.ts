@@ -10,6 +10,7 @@ import {
 import { validateBody, z } from '@/lib/validate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { getSalesTaxRate } from '@/lib/sales-tax';
+import { getDefaultLaborRate } from '@/lib/labor-rate';
 import { describePage, pageContextBlock } from '@/lib/page-context';
 import { rankDocs } from '@/lib/text-search';
 
@@ -194,7 +195,7 @@ SUPABASE TABLES (BMG Fleet App)
     - id (uuid), estimate_number (text, e.g. 'EST-2603-0001')
     - customer_id (FK customers), customer_name, customer_netsuite_id
     - title, notes, status ('draft'|'sent'|'accepted'|'rejected'|'pushed')
-    - tax_rate (numeric — the COMPANY rate from quote_settings, not caller-supplied), tax_exempt (boolean), labor_rate (numeric, default $120/hr)
+    - tax_rate (numeric — the COMPANY rate from quote_settings, not caller-supplied), tax_exempt (boolean), labor_rate (numeric, default = the company rate from quote_settings.default_labor_rate)
     - labor_hours (numeric, auto-summed), subtotal, labor_total, tax_amount, grand_total
     - netsuite_estimate_id, netsuite_estimate_number (after push)
     - created_by (FK profiles), created_at, updated_at
@@ -366,7 +367,7 @@ Actions let you modify data in the app. Use them when the user asks you to DO so
      title?: string (estimate title/description),
      notes?: string,
      tax_exempt?: boolean (default false),
-     labor_rate?: number (default $120/hour),
+     labor_rate?: number (omit to use the company default labor rate),
      created_by?: string (user UUID),
      line_items: [
        {
@@ -961,7 +962,8 @@ async function executeAction(action: string, params: Record<string, any>): Promi
         });
       }
 
-      const effectiveLaborRate = Number(labor_rate) || 120;
+      // Omitted → the company default (Settings → Default Labor Rate).
+      const effectiveLaborRate = Number(labor_rate) || await getDefaultLaborRate(supabase);
       // The company sales tax rate, never a rate the model made up: it is set
       // only by a super admin in Settings → Sales Tax.
       const effectiveTaxRate = tax_exempt ? 0 : await getSalesTaxRate(supabase);

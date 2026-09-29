@@ -29,6 +29,7 @@ import CustomerPicker from '@/components/CustomerPicker';
 import { apiFetch } from '@/lib/api-client';
 import { computeTotals } from '@/lib/estimate-totals';
 import { useSalesTaxRate } from '@/lib/use-sales-tax-rate';
+import { useDefaultLaborRate } from '@/lib/use-default-labor-rate';
 import { CompanyLetterhead, fetchCompanyLetterhead } from '@/lib/company-profile';
 import {
   AutoLayoutEntry, InteriorGeometry, LayoutState, TRADES, UndoableLayout,
@@ -86,10 +87,10 @@ const BLANK_META: DesignMeta = {
 type Step = 'home' | 'vehicle' | 'package' | 'design' | 'review';
 
 // Match the estimate API's own defaults so the review totals equal what the
-// draft estimate will say (src/app/api/estimates/route.ts). The tax rate is
-// the company setting (Settings → Sales Tax, super admin only) — read live via
-// useSalesTaxRate so this preview can't quote a stale rate.
-const DEFAULT_LABOR_RATE = 85;
+// draft estimate will say (src/app/api/estimates/route.ts). The tax and labor
+// rates are company settings (Settings → Sales Tax / Default Labor Rate, super
+// admin only) — read live via useSalesTaxRate / useDefaultLaborRate so this
+// preview can't quote a stale rate.
 
 interface SnapshotData { blob: Blob; dataUrl: string; width: number; height: number }
 
@@ -119,6 +120,7 @@ export default function UpfitDesignerPage() {
   const { user, profile, isAdmin, hasFeature, loading: authLoading } = useAuth();
   // Company sales tax rate — read-only here; only Settings → Sales Tax changes it.
   const { taxRate } = useSalesTaxRate();
+  const { laborRate: defaultLaborRate } = useDefaultLaborRate();
   const dialog = useDialog();
   const supabase = useMemo(() => createClient(), []);
 
@@ -668,7 +670,7 @@ export default function UpfitDesignerPage() {
     const linesNow = aggregateLines(latest.current.present);
     const totals = computeTotals(
       linesNow.map(l => ({ quantity: l.quantity, unit_price: l.unit_price, labor_hours: l.labor_hours })),
-      taxRate, false, DEFAULT_LABOR_RATE, null,
+      taxRate, false, defaultLaborRate, null,
     );
     const { exportUpfitDesignPDF } = await import('@/lib/upfit-design-pdf');
     exportUpfitDesignPDF({
@@ -679,7 +681,7 @@ export default function UpfitDesignerPage() {
       lines: linesNow,
       totals,
       taxExempt: false,
-      laborRate: DEFAULT_LABOR_RATE,
+      laborRate: defaultLaborRate,
       letterhead,
     });
   };
@@ -865,7 +867,7 @@ export default function UpfitDesignerPage() {
   if (step === 'review') {
     const totals = computeTotals(
       lines.map(l => ({ quantity: l.quantity, unit_price: l.unit_price, labor_hours: l.labor_hours })),
-      taxRate, false, DEFAULT_LABOR_RATE, null,
+      taxRate, false, defaultLaborRate, null,
     );
     return (
       <div style={{ padding: '16px 0 40px' }}>
@@ -930,7 +932,7 @@ export default function UpfitDesignerPage() {
               )}
               <div style={{ borderTop: '1px solid var(--border)', marginTop: '8px', paddingTop: '8px', fontSize: '12px', color: 'var(--text-primary)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}><span>Parts subtotal</span><span>{money(totals.subtotal)}</span></div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}><span>Labor ({totals.labor_hours} h @ {money(DEFAULT_LABOR_RATE)}/h)</span><span>{money(totals.labor_total)}</span></div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}><span>Labor ({totals.labor_hours} h @ {money(defaultLaborRate)}/h)</span><span>{money(totals.labor_total)}</span></div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}><span>Tax</span><span>{money(totals.tax_amount)}</span></div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: '14px', fontWeight: 800 }}><span>Estimated total</span><span>{money(totals.grand_total)}</span></div>
               </div>

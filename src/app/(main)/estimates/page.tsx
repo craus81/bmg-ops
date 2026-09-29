@@ -33,6 +33,7 @@ import { roundCentsHalfEven, normalizeVehicleCount, perVehicleAmount } from '@/l
 import { deltaLabel, type EstimateDiff } from '@/lib/estimate-diff';
 import { type DraftLine } from '@/lib/paste-to-estimate';
 import { FALLBACK_SALES_TAX_RATE, pctToRate, rateToPct } from '@/lib/sales-tax';
+import { FALLBACK_LABOR_RATE, toLaborRate } from '@/lib/labor-rate';
 import NumberInput from '@/components/NumberInput';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
 import { estimateHeadlineNumber, estimateAltNumber, estimateNumberMatches } from '@/lib/estimate-number';
@@ -339,10 +340,10 @@ type ViewMode = 'list' | 'builder';
 // Settings → Sales Tax, super admin only). Used until that load returns, or
 // if it fails.
 const DEFAULT_TAX_RATE = FALLBACK_SALES_TAX_RATE;
-// Standard shop labor rate for a new estimate (owner decision, 2026-09-03:
-// $115). Editable per estimate; saved estimates keep whatever rate they
-// were quoted at.
-const DEFAULT_LABOR_RATE = 115;
+// Fallback only — the real default is the company setting (quote_settings,
+// Settings → Default Labor Rate, super admin only). Editable per estimate;
+// saved estimates keep whatever rate they were quoted at.
+const DEFAULT_LABOR_RATE = FALLBACK_LABOR_RATE;
 
 const STATUS_COLORS: Record<string, string> = {
   draft: '#60a5fa',
@@ -500,6 +501,8 @@ export default function EstimatesPage() {
 
   const [revisionDiff, setRevisionDiff] = useState<{ diff: EstimateDiff | null; original: { estimateNumber: string; rejectionReason: string | null } | null } | null>(null);
   const [laborRate, setLaborRate] = useState(DEFAULT_LABOR_RATE);
+  // Company default labor rate, read like companyTaxRateRef above.
+  const companyLaborRateRef = useRef(DEFAULT_LABOR_RATE);
   const [laborOverride, setLaborOverride] = useState<number | null>(null);
   const [lines, setLines] = useState<LineItem[]>([]);
   // Margin floor (%) below which a quote gets flagged — admin-set, shared
@@ -1033,7 +1036,7 @@ export default function EstimatesPage() {
   }, [custSearch]);
 
   useEffect(() => {
-    supabase.from('quote_settings').select('margin_floor_pct, sales_tax_rate_pct').eq('id', 1).maybeSingle()
+    supabase.from('quote_settings').select('margin_floor_pct, sales_tax_rate_pct, default_labor_rate').eq('id', 1).maybeSingle()
       .then(({ data }: any) => {
         if (data?.margin_floor_pct != null) setMarginFloor(Number(data.margin_floor_pct));
         if (data?.sales_tax_rate_pct != null) {
@@ -1043,6 +1046,12 @@ export default function EstimatesPage() {
           // Only the estimate being started fresh adopts the current rate;
           // one already loaded from the database keeps its quoted rate.
           setTaxRate(prev => (editingId ? prev : rate));
+        }
+        const labor = toLaborRate(data?.default_labor_rate);
+        if (labor != null) {
+          companyLaborRateRef.current = labor;
+          // Same rule as tax, and leave a rate someone already typed alone.
+          setLaborRate(prev => (editingId || prev !== DEFAULT_LABOR_RATE ? prev : labor));
         }
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
@@ -1142,7 +1151,7 @@ export default function EstimatesPage() {
     setTaxRate(typeof f.taxRate === 'number' ? f.taxRate : companyTaxRateRef.current);
     setTaxExempt(!!f.taxExempt);
     setVehicleCount(normalizeVehicleCount((f as any).vehicleCount));
-    setLaborRate(typeof f.laborRate === 'number' ? f.laborRate : DEFAULT_LABOR_RATE);
+    setLaborRate(typeof f.laborRate === 'number' ? f.laborRate : companyLaborRateRef.current);
     setLaborOverride(typeof f.laborOverride === 'number' ? f.laborOverride : null);
     setLines(Array.isArray(f.lines)
       ? f.lines.map((l: any) => ({ ...l, key: l.key || genKey() }))
@@ -2794,7 +2803,7 @@ export default function EstimatesPage() {
         .then(d => setRevisionDiff(d?.diff ? { diff: d.diff, original: d.original || null } : null))
         .catch(() => {});
     }
-    setLaborRate(est.labor_rate || DEFAULT_LABOR_RATE);
+    setLaborRate(est.labor_rate || companyLaborRateRef.current);
     setLaborOverride(est.labor_hours_override);
     setVin(est.vin || '');
     setUnitNumber(est.unit_number || '');
@@ -3108,7 +3117,7 @@ export default function EstimatesPage() {
     setTaxExempt(false);
     setVehicleCount(1);
     setRevisionDiff(null);
-    setLaborRate(DEFAULT_LABOR_RATE);
+    setLaborRate(companyLaborRateRef.current);
     setLaborOverride(null);
     setLines([]);
     setPartSearch('');

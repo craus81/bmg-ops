@@ -17,6 +17,7 @@ export const EXCEPTION_ACTIONS: string[] = [
   'labor_item_changed',
   'sales_tax_rate_changed',
   'shop_labor_rate_changed',
+  'default_labor_rate_changed',
   'cni_assign_noncompliant',
 ];
 
@@ -33,5 +34,6 @@ export const ACTION_LABELS: Record<string, string> = {
   labor_item_changed: 'NetSuite labor item changed',
   sales_tax_rate_changed: 'sales tax rate changed',
   shop_labor_rate_changed: 'shop labor rate changed',
+  default_labor_rate_changed: 'default labor rate changed',
   cni_assign_noncompliant: 'CNI work given to a non-compliant installer',
 };
