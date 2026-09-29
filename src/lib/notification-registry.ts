@@ -133,6 +133,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
 
   // ── Purchasing & receiving ────────────────────────────────────────────
   { type: 'purchase_request', label: 'Parts requested', description: 'Someone raised a purchase request for parts.', area: 'purchasing', defaultChannels: ['in_app', 'push'] },
+  { type: 'purchase_request_ordered', label: 'Requested parts ordered', description: 'Parts you requested went on a PO (placed from the queue or found in NetSuite).', area: 'purchasing', defaultChannels: ['in_app', 'push'] },
   { type: 'purchase_request_stale', label: 'Purchase request going stale', description: 'A request has waited too long without a PO.', area: 'purchasing', defaultChannels: ['in_app', 'push'] },
   { type: 'po_received', label: 'PO received', description: 'Parts arrived against a purchase order.', area: 'purchasing', defaultChannels: ['in_app', 'push'], audience: 'Users who opted in with "New Purchase Orders".' },
   { type: 'po_eta_changed', label: 'PO delivery date moved', description: 'A vendor changed the promised arrival on an open PO.', area: 'purchasing', defaultChannels: ['in_app', 'push'] },

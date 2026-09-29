@@ -5,7 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { computePartsReadiness } from '@/lib/parts-readiness';
-import { normalizeItemNumber } from '@/lib/vendor-po-sync';
+import { normalizeItemNumber, isOpenPoStatus } from '@/lib/vendor-po-sync';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -49,6 +49,8 @@ const UpdateSchema = z.object({
   cancel: z.boolean().optional().default(false),
 });
 
+const ORDERED_PO_SELECT = 'id, netsuite_id, tranid, vendor_name, status, status_label, trandate, eta_date, tracking_number, carrier';
+
 /** GET /api/purchase-requests?status=pending — the purchasing queue.
  *  ?id=<uuid> instead returns that one request whatever its status (with
  *  its PO, if ordered) — the ?req= deep-link landing needs the row's fate
@@ -65,11 +67,26 @@ export async function GET(req: NextRequest) {
     }
     const { data, error } = await supabase
       .from('purchase_requests')
-      .select('*, upfit_projects(id, project_name, netsuite_so_number), requester:profiles!purchase_requests_requested_by_fkey(full_name), ordered_po:netsuite_vendor_pos(tranid, vendor_name)')
+      .select(`*, upfit_projects(id, project_name, netsuite_so_number), requester:profiles!purchase_requests_requested_by_fkey(full_name), ordered_po:netsuite_vendor_pos(${ORDERED_PO_SELECT})`)
       .eq('id', id)
       .maybeSingle();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ success: true, requests: data ? [data] : [] });
+  }
+
+  // ?view=on_order — requests ordered (by Create PO or matched to a NetSuite
+  // PO) whose PO still has parts to arrive, with the PO's ETA and tracking
+  // from the Parts Mail scan. Drops off once the PO is fully received.
+  if (searchParams.get('view') === 'on_order') {
+    const { data, error } = await supabase
+      .from('purchase_requests')
+      .select(`*, upfit_projects(id, project_name, netsuite_so_number), requester:profiles!purchase_requests_requested_by_fkey(full_name), ordered_po:netsuite_vendor_pos(${ORDERED_PO_SELECT})`)
+      .eq('status', 'ordered')
+      .order('ordered_at', { ascending: false, nullsFirst: false })
+      .limit(500);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    const onOrder = ((data || []) as any[]).filter(r => !r.ordered_po || isOpenPoStatus(r.ordered_po.status));
+    return NextResponse.json({ success: true, requests: onOrder });
   }
 
   const status = searchParams.get('status') || 'pending';

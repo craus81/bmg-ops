@@ -5,6 +5,7 @@ import { requireAdmin } from '@/lib/api-auth';
 import { syncPoInvoices } from '@/lib/po-invoice-sync';
 import { verifyPoInvoiceQuantities } from '@/lib/po-invoice-verify';
 import { syncVendorPos } from '@/lib/vendor-po-sync';
+import { autoMatchPurchaseRequests } from '@/lib/purchase-request-po-match';
 import { syncSalesOrders } from '@/lib/sales-order-sync';
 import { syncInventoryQuantities } from '@/lib/inventory-sync';
 import { syncVendorBillPayments, syncPayoutBillPayments } from '@/lib/vendor-bill-sync';
@@ -416,6 +417,9 @@ export async function GET(req: NextRequest) {
     console.error('[cron] Vendor PO sync error:', err.message);
     results.vendorPos = { error: err.message };
   }
+  // Pending purchase requests whose part was ordered on a PO keyed straight
+  // into NetSuite get marked ordered on it (migration 331). Never throws.
+  results.purchaseRequestMatch = await autoMatchPurchaseRequests(supabase);
 
   // ═══════════ 3b2. SALES ORDER SYNC (N3) ═══════════
   // Customer sales orders — including ones entered directly in NetSuite —
