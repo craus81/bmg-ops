@@ -21,7 +21,9 @@ function DashSpinner() {
 // The ops Dashboard for everyone; a Financials tab appears alongside it only
 // for roles with the `financials` feature (super_admin + executive).
 function AdminDashboard() {
-  const { hasFeature } = useAuth();
+  const { hasFeature, hasRole, isAdmin } = useAuth();
+  // Sales reps get their own week on top of the shared dashboard.
+  const showMyWeek = hasRole('sales') && !isAdmin;
   const showFinancials = hasFeature('financials');
   const showOps = hasFeature('in_shop'); // the ops Dashboard is only meaningful for ops roles
   const bothTabs = showFinancials && showOps;
@@ -44,6 +46,7 @@ function AdminDashboard() {
   return (
     <div>
       <MentionsInbox />
+      {showMyWeek && <MyHome role="sales" embedded />}
       {bothTabs && (
         <div style={{ display: 'flex', gap: '4px', marginBottom: '14px', background: 'var(--card)', borderRadius: '10px', padding: '3px' }}>
           <button onClick={() => setDashTab('dashboard')} style={tabBtn(view === 'dashboard')}>Dashboard</button>
@@ -87,7 +90,6 @@ export default function HomePage() {
     if (!role) return;
     // Redirect roles to their dedicated home screens
     if (role === 'customer') { router.replace('/customer/dashboard'); return; }
-    if (isOnlyRole('graphics_production')) { router.replace('/graphics'); return; }
     // Field and shop techs get their own Home ("My week" + "Up next", owner
     // decision 2026-09-29) with Scan / Check In on top, so they stay here.
     // Contract installers still land on Scan.
@@ -96,7 +98,7 @@ export default function HomePage() {
   }, [role, isAdmin, scanOk, isTech]);
 
   if (role === 'customer') return null;
-  if (isOnlyRole('graphics_production')) return null;
+  if (isOnlyRole('graphics_production')) return <MyHome role="graphics" />;
   // Shop first: its view is the superset (check-ins and completions plus installs).
   if (isOnlyRole('shop_tech')) return <MyHome role="shop_tech" />;
   if (isOnlyRole('field_tech')) return <MyHome role="field_tech" />;
