@@ -9,12 +9,14 @@ export const dynamic = 'force-dynamic';
 const Schema = z
   .object({
     estimateId: z.string().uuid(),
-    mode: z.enum(['create', 'link']),
+    // 'prefill' reads the estimate into New Job form values (no writes);
+    // 'created' finishes a job the form already saved with estimate_id set.
+    mode: z.enum(['create', 'link', 'prefill', 'created']),
     existingJobId: z.string().uuid().optional().nullable(),
     userId: z.string().uuid().optional().nullable(),
   })
-  .refine((d) => d.mode !== 'link' || !!d.existingJobId, {
-    message: 'existingJobId required for link mode',
+  .refine((d) => (d.mode !== 'link' && d.mode !== 'created') || !!d.existingJobId, {
+    message: 'existingJobId required for link/created mode',
     path: ['existingJobId'],
   });
 
@@ -29,14 +31,19 @@ function getSupabase() {
 /**
  * POST /api/graphics/from-estimate
  *
- * Spawn a new graphics job from an estimate (mode='create') OR link an
- * existing standalone graphics job to an estimate (mode='link'). The
+ * The estimate/SO "+ Graphics job" button opens the standard New Job form
+ * (/graphics?new=1&fromEstimate=<id>) rather than creating anything itself,
+ * so a job from an estimate goes through exactly the screen a job from
+ * scratch does. That form calls mode='prefill' for its starting values and,
+ * once the person presses Create, mode='created' to mark the estimate won.
+ * mode='create' (one-click spawn) is kept for older callers; mode='link'
+ * links an existing standalone graphics job to an estimate. The
  * estimate_id link causes the migration-084 trigger to also populate
  * graphics_jobs.upfit_project_id when the estimate is on an upfit project.
  *
  * Body:
- *   { estimateId: string, mode: 'create' | 'link',
- *     existingJobId?: string,    // required for mode='link'
+ *   { estimateId: string, mode: 'create' | 'link' | 'prefill' | 'created',
+ *     existingJobId?: string,    // required for mode='link' / 'created'
  *     userId?: string }
  */
 
@@ -60,6 +67,60 @@ async function markEstimateWon(supabase: any, estimateId: string) {
     .neq('status', 'accepted');
 }
 
+/**
+ * What a graphics job made from this estimate starts with: the graphics-
+ * catalog lines' part numbers and total quantity, a title carrying the VIN
+ * last-6 (K4/K5: the shop says jobs out loud by VIN), and the default
+ * assignee — the first approved graphics_production user (Brian in this
+ * org), or null so the team picks it up from the queue.
+ */
+async function buildEstimateJobPrefill(supabase: any, estimate: any) {
+  const { data: lineRows } = await supabase
+    .from('estimate_line_items')
+    .select('part_id, item_number, description, quantity')
+    .eq('estimate_id', estimate.id);
+
+  const partIds = ((lineRows || []) as any[])
+    .map(l => l.part_id)
+    .filter((id): id is string => !!id);
+
+  let graphicsItemNumbers: string[] = [];
+  let graphicsQuantity = 1;
+
+  if (partIds.length > 0) {
+    const { data: parts } = await supabase
+      .from('netsuite_parts')
+      .select('id, catalog')
+      .in('id', partIds);
+    const graphicsPartIds = new Set(
+      ((parts || []) as any[]).filter(p => p.catalog === 'graphics').map(p => p.id)
+    );
+    const graphicsLines = ((lineRows || []) as any[]).filter(l => l.part_id && graphicsPartIds.has(l.part_id));
+    graphicsItemNumbers = [...new Set(graphicsLines.map(l => l.item_number).filter(Boolean) as string[])];
+    const totalQty = graphicsLines.reduce((sum, l) => sum + (l.quantity || 0), 0);
+    if (totalQty > 0) graphicsQuantity = Math.max(1, totalQty);
+  }
+
+  const { data: defaultAssignee } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('role', 'graphics_production')
+    .eq('status', 'approved')
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  const titleParts = [estimate.title || `Estimate ${estimate.estimate_number}`];
+  if (estimate.vin) titleParts.push(`· ${String(estimate.vin).slice(-6)}`);
+
+  return {
+    title: titleParts.join(' '),
+    partNumbers: graphicsItemNumbers,
+    quantity: graphicsQuantity,
+    defaultAssigneeId: (defaultAssignee?.id as string | undefined) || null,
+  };
+}
+
 export async function POST(req: NextRequest) {
   const auth = await requireStaff(req);
   if (auth.error) return auth.error;
@@ -73,11 +134,41 @@ export async function POST(req: NextRequest) {
 
     const { data: estimate, error: estErr } = await supabase
       .from('estimates')
-      .select('id, estimate_number, customer_id, customer_name, customer_netsuite_id, title, notes, vin')
+      .select('id, estimate_number, customer_id, customer_name, customer_netsuite_id, title, notes, vin, netsuite_so_number')
       .eq('id', estimateId)
       .single();
     if (estErr || !estimate) {
       return NextResponse.json({ error: 'Estimate not found' }, { status: 404 });
+    }
+
+    if (mode === 'prefill') {
+      const prefill = await buildEstimateJobPrefill(supabase, estimate);
+      return NextResponse.json({
+        success: true,
+        prefill: {
+          ...prefill,
+          customer: estimate.customer_name || '',
+          customerNetsuiteId: estimate.customer_netsuite_id || null,
+          notes: estimate.notes || '',
+          soNumber: estimate.netsuite_so_number || '',
+          estimateNumber: estimate.estimate_number,
+        },
+      });
+    }
+
+    if (mode === 'created') {
+      // The New Job form wrote estimate_id on insert; only confirm that the
+      // job really is this estimate's before marking the estimate won.
+      const { data: job } = await supabase
+        .from('graphics_jobs')
+        .select('id, estimate_id')
+        .eq('id', existingJobId)
+        .maybeSingle();
+      if (!job || job.estimate_id !== estimateId) {
+        return NextResponse.json({ error: 'Graphics job is not linked to this estimate' }, { status: 400 });
+      }
+      await markEstimateWon(supabase, estimateId);
+      return NextResponse.json({ success: true, graphicsJobId: job.id, action: 'created' });
     }
 
     if (mode === 'link') {
@@ -124,52 +215,10 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // mode === 'create' — pull the graphics-catalog line items so the new job
-    // arrives with the part numbers and quantity Brian needs to start.
-    const { data: lineRows } = await supabase
-      .from('estimate_line_items')
-      .select('part_id, item_number, description, quantity')
-      .eq('estimate_id', estimateId);
-
-    const partIds = (lineRows || [])
-      .map(l => l.part_id)
-      .filter((id): id is string => !!id);
-
-    let graphicsItemNumbers: string[] = [];
-    let graphicsQuantity = 1;
-
-    if (partIds.length > 0) {
-      const { data: parts } = await supabase
-        .from('netsuite_parts')
-        .select('id, catalog')
-        .in('id', partIds);
-      const graphicsPartIds = new Set(
-        (parts || []).filter(p => p.catalog === 'graphics').map(p => p.id)
-      );
-      const graphicsLines = (lineRows || []).filter(l => l.part_id && graphicsPartIds.has(l.part_id));
-      graphicsItemNumbers = graphicsLines.map(l => l.item_number).filter(Boolean);
-      const totalQty = graphicsLines.reduce((sum, l) => sum + (l.quantity || 0), 0);
-      if (totalQty > 0) graphicsQuantity = Math.max(1, totalQty);
-    }
-
-    // Default assignee: first approved graphics_production user (Brian by
-    // default in this org). Falls back to null — the team can pick up
-    // unassigned jobs from the queue.
-    const { data: defaultAssignee } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('role', 'graphics_production')
-      .eq('status', 'approved')
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-
     const jobNumber = await nextJobNumber(supabase, 'GFX', () => legacyJobNumber.gfx());
-    // K4/K5: the meeting wants VINs in job naming — carry the estimate's VIN
-    // last-6 into the graphics job title so the shop can say the job out loud.
-    const titleParts = [estimate.title || `Estimate ${estimate.estimate_number}`];
-    if (estimate.vin) titleParts.push(`· ${String(estimate.vin).slice(-6)}`);
-    const title = titleParts.join(' ');
+    const prefill = await buildEstimateJobPrefill(supabase, estimate);
+    const { title, quantity: graphicsQuantity, defaultAssigneeId } = prefill;
+    const graphicsItemNumbers = prefill.partNumbers;
 
     const { data: newJob, error: insErr } = await supabase
       .from('graphics_jobs')
@@ -185,7 +234,7 @@ export async function POST(req: NextRequest) {
         priority: 'normal',
         status: 'received',
         estimate_id: estimateId,
-        assigned_to: defaultAssignee?.id || null,
+        assigned_to: defaultAssigneeId,
         created_by: userId || auth.user.id,
       })
       .select('id, job_number')
