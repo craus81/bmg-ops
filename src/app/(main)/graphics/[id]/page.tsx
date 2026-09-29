@@ -39,6 +39,7 @@ import DropboxProofSearch from '@/components/DropboxProofSearch';
 import GraphicsMaterialsCard from '@/components/GraphicsMaterialsCard';
 import GraphicsRollPlan from '@/components/GraphicsRollPlan';
 import GraphicsPackChecklist from '@/components/GraphicsPackChecklist';
+import GraphicsJobVehicleFiles from '@/components/GraphicsJobVehicleFiles';
 import PrintRoomTimer from '@/components/PrintRoomTimer';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { DropZone } from '@/components/DropZone';
@@ -1963,6 +1964,9 @@ export default function GraphicsJobRecordPage() {
           </div>
         </DropZone>
       </div>
+
+      {/* ── From vehicles: linked check-ins' proof + photos ── */}
+      <GraphicsJobVehicleFiles jobId={job.id} cardStyle={card} labelStyle={labelStyle} />
 
       {/* ── Activity / status history + notes ── */}
       <div style={card}>
