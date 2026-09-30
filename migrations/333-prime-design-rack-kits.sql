@@ -3,8 +3,9 @@
 -- Every modular ErgoRack / AluRack from Prime Design's 2026 configurator
 -- (Rev C, pricing effective 7-1-2026): the "PD - Kitted Modular Breakdown"
 -- sheet, plus the six open-bed "-M" racks whose modules are listed only in
--- the price list's overview text. 156 kits. A component listed twice in
--- one kit (CR3-FT-78-M's FEA-0024) is one row with the quantities added.
+-- the price list's overview text. 156 kits. Prime listed FEA-0024 twice
+-- in CR3-FT-78-M; per Craig the clamp side is FEA-0027 (one rotation
+-- feature, one drive shaft), which also makes it sum to Prime's price.
 -- The AluRack ProMaster kits (AR14xx) list FBM-1007-BLK, which is not on
 -- the price list; they use FBM-1072-BLK, the same ProMaster mount the
 -- ErgoRack ProMaster kits list (Craig 2026-09-30).
@@ -426,9 +427,10 @@ INSERT INTO _prime_kit_items VALUES
   ('CR3-FT-78-M', 'FBM-1017-BLK', 'FBM UNIVERSAL 3 CBR 2015+ TRANSIT BLACK', 1, 0),
   ('CR3-FT-78-M', 'CBR-0005', 'CROSSBAR FEATURE INTERLOCK 78 IN FAMILY', 1, 1),
   ('CR3-FT-78-M', 'CBR-0006', 'MIDDLE CROSSBAR FEATURE 78 IN FAMILY', 1, 2),
-  ('CR3-FT-78-M', 'FEA-0024', 'UNIVERSAL ROTATION FEATURE', 2, 3),
-  ('CR3-FT-78-M', 'FEA-0008', '8 FT CLAMP DOWN FEATURE', 1, 4),
-  ('CR3-FT-78-M', 'FEA-0025', 'EXTENDABLE RATCHET HANDLE', 1, 5),
+  ('CR3-FT-78-M', 'FEA-0024', 'UNIVERSAL ROTATION FEATURE', 1, 3),
+  ('CR3-FT-78-M', 'FEA-0027', 'UNIVERSAL DRIVE SHAFT ASSY [6 FT - 8 FT]', 1, 4),
+  ('CR3-FT-78-M', 'FEA-0008', '8 FT CLAMP DOWN FEATURE', 1, 5),
+  ('CR3-FT-78-M', 'FEA-0025', 'EXTENDABLE RATCHET HANDLE', 1, 6),
   ('RR-FT-72-M', 'FBM-1017-BLK', 'FBM UNIVERSAL 3 CBR 2015+ TRANSIT BLACK', 1, 0),
   ('RR-FT-72-M', 'CBR-0007', 'CROSSBAR FEATURE 72 IN FAMILY SET', 1, 1),
   ('RR-FT-72-M', 'FEA-0024', 'UNIVERSAL ROTATION FEATURE', 2, 2),
