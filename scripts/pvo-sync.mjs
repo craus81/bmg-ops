@@ -4,9 +4,9 @@
  * PVO template sync — the nightly, cloud-storage version of pvodownloaderv3.js
  * ===========================================================================
  *
- * Pro Vehicle Outlines caps downloads at 25/day, so this works the same way the
+ * Pro Vehicle Outlines caps downloads at 40/day, so this works the same way the
  * browser script did: index the whole catalog once (browsing costs nothing),
- * then take the next 23 templates in priority order every night. The difference
+ * then take the next 38 templates in priority order every night. The difference
  * is where things live:
  *
  *   files    ->  Cloudflare R2, under vehicle-templates/originals/ and /previews/
@@ -33,7 +33,7 @@
  * ── Options ───────────────────────────────────────────────────────────────
  *   --login          Open a visible browser to sign in, save the session, exit
  *   --rescan         Re-index the PVO catalog before downloading
- *   --limit N        Downloads this run (default 23 — PVO caps at 25, we leave
+ *   --limit N        Downloads this run (default 38 — PVO caps at 40, we leave
  *                    2 spare so you can grab one by hand in a hurry)
  *   --format ai      ai | eps | pdf | cel (default ai)
  *   --seed-existing  Mark catalog entries we already have as downloaded
@@ -61,9 +61,9 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 dotenv.config({ path: join(ROOT, '.env.local') });
 dotenv.config({ path: join(ROOT, '.env') });
 
-// PVO's hard cap is 25/day. We take 23 and leave 2 in reserve so there is
+// PVO's hard cap is 40/day (raised from 25 in 2026-09). We take 38 and leave 2 in reserve so there is
 // always headroom to grab a specific template by hand when a job needs one.
-const DEFAULT_LIMIT = 23;
+const DEFAULT_LIMIT = 38;
 
 // Downloads taken inside this window count against today's batch. 20h rather
 // than 24h so a scheduled run that fires a little earlier than yesterday's

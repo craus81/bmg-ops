@@ -1,10 +1,10 @@
 # Daily Pro Vehicle Outlines template sync — no computer needed.
 #
 # Runs scripts/pvo-sync.mjs, which signs into PVO in headless Chrome (the
-# runner image ships Google Chrome), takes the next 23 templates off the
+# runner image ships Google Chrome), takes the next 38 templates off the
 # pvo_catalog queue, uploads them to R2, adds them to the template library
 # calibrated for the wrap estimator, and emails a summary. PVO caps downloads
-# at 25/day; the script never takes more than 23 inside 20 hours, so a
+# at 40/day; the script never takes more than 38 inside 20 hours, so a
 # re-run or a manual run the same day is harmless.
 #
 # Setup — repository secrets (Settings → Secrets and variables → Actions):
