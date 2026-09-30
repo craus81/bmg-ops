@@ -216,6 +216,13 @@ export default function GraphicsPage() {
   const [prefillPoLink, setPrefillPoLink] = useState<{
     poId: string; poLineItemId: string | null; customerNetsuiteId: string | null; partNumbers: string[];
   } | null>(null);
+  // Set when an estimate / sales order opens the create modal
+  // (?new=1&fromEstimate=<id>). Same idea as prefillPoLink: the form is
+  // prefilled, the person picks the job type and submits as usual, and the
+  // submit writes estimate_id so the estimate's Graphics Jobs panel sees it.
+  const [prefillEstimateLink, setPrefillEstimateLink] = useState<{
+    estimateId: string; estimateNumber: string | null; customerNetsuiteId: string | null;
+  } | null>(null);
   const [awaitingGraphics, setAwaitingGraphics] = useState<any[]>([]);
   // Awaiting-queue entry being linked to an EXISTING job (vs + Create).
   const [linkAwaiting, setLinkAwaiting] = useState<any | null>(null);
@@ -403,7 +410,49 @@ export default function GraphicsPage() {
         setCreateForm(f => ({ ...f, customer, po_number: so || f.po_number }));
         setCustomerSearch(customer);
       }
-      if (checkinId) setPrefillCheckinId(checkinId);
+      if (checkinId) {
+        setPrefillCheckinId(checkinId);
+        // Same smart prefill the Awaiting Graphics queue's "+ Create" runs.
+        loadAwaitingPrefill(checkinId, searchParams.get('vin'));
+      }
+      // From an estimate / sales order: same wizard as a job from scratch
+      // (starts on the job-type step), with the estimate's values filled in.
+      const fromEstimate = searchParams.get('fromEstimate');
+      if (fromEstimate) {
+        (async () => {
+          setPrefillNote('Reading the estimate…');
+          try {
+            const res = await fetch('/api/graphics/from-estimate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ estimateId: fromEstimate, mode: 'prefill' }),
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+            const p = body.prefill;
+            setCreateForm(f => ({
+              ...f,
+              title: p.title || f.title,
+              customer: p.customer || f.customer,
+              part_numbers: p.partNumbers || [],
+              part_number: p.partNumbers?.[0] || f.part_number,
+              quantity: p.quantity || 1,
+              notes: p.notes || f.notes,
+              po_number: p.soNumber || f.po_number,
+            }));
+            if (p.customer) setCustomerSearch(p.customer);
+            if (p.defaultAssigneeId) setCreateAssignees([p.defaultAssigneeId]);
+            setPrefillEstimateLink({
+              estimateId: fromEstimate,
+              estimateNumber: p.estimateNumber || null,
+              customerNetsuiteId: p.customerNetsuiteId || null,
+            });
+            setPrefillNote(`Filled in from ${p.soNumber ? `SO #${p.soNumber} (estimate ${p.estimateNumber})` : `estimate ${p.estimateNumber}`}. Check it over, then create.`);
+          } catch (e: any) {
+            setPrefillNote(`Could not read the estimate (${e?.message || 'unknown error'}) — fill the job in by hand.`);
+          }
+        })();
+      }
       // From a purchase order (the PO page's "+ Graphics Job" buttons):
       // prefill the whole wizard from the PO and jump to the details step —
       // the user reviews/edits and submits; only then is the job created.
@@ -462,7 +511,12 @@ export default function GraphicsPage() {
    * description. Never blocks or clears the form on failure; the note
    * says what happened and the person types the rest.
    */
-  const loadAwaitingPrefill = async (checkinId: string) => {
+  const loadAwaitingPrefill = async (checkinId: string, vin?: string | null) => {
+    // VIN last-6 on the heading, same as jobs made from an estimate.
+    const vinTail = vin ? ` · ${String(vin).trim().slice(-6)}` : '';
+    const vinFallback = (f: { customer: string; po_number: string }) =>
+      vinTail ? [f.customer, f.po_number ? `SO #${f.po_number}` : ''].filter(Boolean).join(' - ') + vinTail : '';
+    if (vinTail) setCreateForm(f => ({ ...f, title: f.title || vinFallback(f) }));
     setPrefillNote('Reading the sales order…');
     try {
       const res = await fetch(`/api/graphics/awaiting-prefill?checkinId=${encodeURIComponent(checkinId)}`);
@@ -478,13 +532,15 @@ export default function GraphicsPage() {
         quantity: p.quantity || 1,
         // Only seed a description the person hasn't already typed into.
         content: f.content || p.content || '',
-        title: f.title || buildGfxJobTitle({
+        // Replace the bare VIN fallback heading set above, but never one
+        // the person typed.
+        title: (f.title && f.title !== vinFallback(f)) ? f.title : buildGfxJobTitle({
           customer: f.customer,
           poNumber: body.soNumber,
           partNumber: p.partNumbers.join(', '),
           description: p.matched[0]?.description || null,
           location: '',
-        }),
+        }) + vinTail,
       }));
     } catch (e: any) {
       setPrefillNote(`Could not read the sales order (${e?.message || 'unknown error'}) — fill the job in by hand.`);
@@ -700,6 +756,11 @@ export default function GraphicsPage() {
           po_line_item_id: prefillPoLink.poLineItemId,
           customer_netsuite_id: prefillPoLink.customerNetsuiteId,
         } : {}),
+        // …and to the source estimate / SO when opened from one.
+        ...(prefillEstimateLink ? {
+          estimate_id: prefillEstimateLink.estimateId,
+          ...(prefillEstimateLink.customerNetsuiteId ? { customer_netsuite_id: prefillEstimateLink.customerNetsuiteId } : {}),
+        } : {}),
       })
       .select()
       .single();
@@ -739,8 +800,18 @@ export default function GraphicsPage() {
         from_status: null,
         to_status: initialStatus,
         changed_by: user?.id,
-        note: `${GRAPHICS_CATEGORY_LABELS[cat]} job created${prefillPoLink && createForm.po_number ? ` from PO #${createForm.po_number}` : ''}`,
+        note: `${GRAPHICS_CATEGORY_LABELS[cat]} job created${prefillPoLink && createForm.po_number ? ` from PO #${createForm.po_number}` : ''}${prefillEstimateLink ? ` from estimate ${prefillEstimateLink.estimateNumber || ''}`.trimEnd() : ''}`,
       });
+
+      // A job from an estimate marks a customer-approved estimate won, same
+      // as the old one-click spawn did.
+      if (prefillEstimateLink) {
+        fetch('/api/graphics/from-estimate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ estimateId: prefillEstimateLink.estimateId, mode: 'created', existingJobId: data.id }),
+        }).catch(() => {});
+      }
 
       // Sync install date to Google Calendar if set
       if (createForm.scheduled_install_date) {
@@ -839,6 +910,7 @@ export default function GraphicsPage() {
       setCreateAssignees([]);
       setCreateFiles([]);
       setPrefillPoLink(null);
+      setPrefillEstimateLink(null);
     }
     setCreating(false);
   };
@@ -1166,7 +1238,7 @@ export default function GraphicsPage() {
                     // the wizard. The form opens immediately either way —
                     // a prefill that can't run is a wizard filled in by
                     // hand, which is exactly today's behaviour.
-                    loadAwaitingPrefill(ci.id);
+                    loadAwaitingPrefill(ci.id, ci.vin);
                   }}
                   style={{
                     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -1718,7 +1790,7 @@ export default function GraphicsPage() {
       {/* ═══════════ CREATE JOB MODAL ═══════════ */}
       {showCreate && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', padding: '0' }}
-          onClick={(e) => { if (e.target === e.currentTarget) { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillNote(null); } }}
+          onClick={(e) => { if (e.target === e.currentTarget) { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillEstimateLink(null); setPrefillNote(null); } }}
         >
           <div style={{ background: 'var(--card)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px 14px 0 0', padding: '18px', paddingBottom: 'calc(18px + env(safe-area-inset-bottom, 0px))', maxWidth: '500px', width: '100%', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
 
@@ -1772,7 +1844,7 @@ export default function GraphicsPage() {
                 </div>
 
                 <button
-                  onClick={() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillNote(null); }}
+                  onClick={() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillEstimateLink(null); setPrefillNote(null); }}
                   style={{ width: '100%', padding: '10px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
                 >
                   Cancel
@@ -2093,7 +2165,7 @@ export default function GraphicsPage() {
                     {creating ? 'Creating...' : !createForm.title.trim() ? 'Enter a title to continue' : `Create ${GRAPHICS_CATEGORY_LABELS[createForm.job_category as GraphicsJobCategory]} Job`}
                   </button>
                   <button
-                    onClick={() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillNote(null); }}
+                    onClick={() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillEstimateLink(null); setPrefillNote(null); }}
                     style={{ width: '100%', padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
                   >
                     Cancel

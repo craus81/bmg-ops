@@ -3064,27 +3064,13 @@ export default function EstimatesPage() {
     }
   };
 
-  const spawnGraphicsJob = async () => {
+  // Opens the standard New Job form on the Graphics board, prefilled from
+  // this estimate / SO — the same screen as a job from scratch. Nothing is
+  // created until the person presses Create there. Unsaved builder edits
+  // are kept by the draft backup on the way out.
+  const spawnGraphicsJob = () => {
     if (!editingId) return;
-    setGraphicsLinking(true);
-    try {
-      const res = await fetch('/api/graphics/from-estimate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ estimateId: editingId, mode: 'create', userId: user?.id }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        await dialog.alert('Failed to spawn graphics job: ' + (data.error || 'Unknown error'));
-        return;
-      }
-      await loadLinkedGraphicsJobs(editingId);
-      const open = await dialog.confirm(`Graphics job ${data.jobNumber} created. Open it now?`);
-      if (open) router.push(`/graphics?id=${data.graphicsJobId}`);
-    } catch {
-      await dialog.alert('Network error — please try again');
-    }
-    setGraphicsLinking(false);
+    router.push(`/graphics?new=1&fromEstimate=${editingId}`);
   };
 
   const searchGraphicsJobs = useCallback(async (q: string) => {
@@ -4794,7 +4780,7 @@ export default function EstimatesPage() {
                   color: '#a78bfa', cursor: graphicsLinking ? 'wait' : 'pointer',
                 }}
               >
-                {graphicsLinking ? '…' : '+ Spawn graphics job'}
+                {graphicsLinking ? '…' : '+ New graphics job'}
               </button>
               <button
                 onClick={() => setShowGraphicsPicker(s => !s)}
@@ -4813,8 +4799,8 @@ export default function EstimatesPage() {
           {/* Empty-state prompt when graphics line is present but nothing is linked */}
           {linkedGraphicsJobs.length === 0 && (
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: showGraphicsPicker ? '8px' : '0' }}>
-              This estimate has graphics work. Spawn a new graphics job for production
-              (auto-assigns to the graphics team) or link to one Brian has already started.
+              This estimate has graphics work. Start a new graphics job (opens the
+              New Job form filled in from this estimate) or link to one Brian has already started.
             </div>
           )}
 
