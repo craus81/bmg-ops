@@ -77,6 +77,7 @@ export const FIELD_LABELS: Record<string, string> = {
   completed_at: 'completed at',
   qc_completed_at: 'QC completed at',
   archived_at: 'archived at',
+  archive_reason: 'archive reason',
   priority: 'priority',
   location: 'location',
   install_location: 'install location',
