@@ -6,6 +6,10 @@
 -- the price list's overview text. 156 kits. A component listed twice in
 -- one kit (CR3-FT-78-M's FEA-0024) is one row with the quantities added.
 --
+-- Prime Design has merged into Ranger Design (Craig 2026-09-30): these parts
+-- are ordered from Ranger, so the kits carry Ranger Design as their vendor.
+-- What a component is ordered from comes from its NetSuite item's vendor.
+--
 -- Insert-only and idempotent: a kit whose part number already exists is
 -- left alone (so later edits in FleetSuite survive a re-run), and members
 -- are only added to kits this migration created. part_id is linked where
@@ -858,7 +862,7 @@ SELECT k.* FROM _prime_kits k
  WHERE NOT EXISTS (SELECT 1 FROM part_kits pk WHERE upper(pk.item_number) = upper(k.item_number));
 
 INSERT INTO part_kits (name, description, item_number, vendor, short_description, active)
-SELECT n.name, n.short_description, n.item_number, 'Prime Design', n.short_description, true
+SELECT n.name, n.short_description, n.item_number, 'Ranger Design', n.short_description, true
   FROM _new_kits n;
 
 INSERT INTO part_kit_items (kit_id, part_id, item_number, description, quantity, sort_order)

@@ -44,6 +44,11 @@ export default function RackKitsPage() {
   const supabase = createClient();
   const [rows, setRows] = useState<RackRow[]>([]);
   const [missingParts, setMissingParts] = useState<{ item_number: string; description: string | null; racks: number }[]>([]);
+  // Prime Design merged into Ranger Design (Craig 2026-09-30): every rack
+  // component is ordered from Ranger. The buy list, purchasing queue and PO
+  // matching all take the vendor from the NetSuite item, so a component
+  // still on Prime (or on no vendor) would be ordered from the wrong place.
+  const [wrongVendor, setWrongVendor] = useState<{ item_number: string; vendor: string | null }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
@@ -112,6 +117,13 @@ export default function RackKitsPage() {
       built.sort((a, b) => (b.build.now - a.build.now) || (b.build.withOnOrder - a.build.withOnOrder)
         || String(a.kit.item_number).localeCompare(String(b.kit.item_number)));
       setRows(built);
+      const offVendor = new Map<string, { item_number: string; vendor: string | null }>();
+      for (const k of kits) {
+        for (const m of k.members) {
+          if (!/ranger/i.test(m.part.vendor || '')) offVendor.set(normItem(m.part.item_number), { item_number: m.part.item_number, vendor: m.part.vendor || null });
+        }
+      }
+      setWrongVendor([...offVendor.values()].sort((a, b) => a.item_number.localeCompare(b.item_number)));
       setMissingParts([...missing.values()].sort((a, b) => b.racks - a.racks || a.item_number.localeCompare(b.item_number)));
     } catch (e: any) {
       setError(e?.message || 'Could not load rack kits');
@@ -158,6 +170,22 @@ export default function RackKitsPage() {
                 <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{m.item_number}</span>
                 {m.description ? ` ${m.description}` : ''}
                 <span style={{ color: 'var(--text-muted)' }}> · in {m.racks} rack{m.racks !== 1 ? 's' : ''}</span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      {wrongVendor.length > 0 && (
+        <details style={{ marginBottom: '12px', background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '10px', padding: '8px 12px' }}>
+          <summary style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 700, color: '#f59e0b' }}>
+            {wrongVendor.length} component{wrongVendor.length !== 1 ? 's' : ''} not set to Ranger Design in NetSuite — reorders go to the item&apos;s vendor, so set {wrongVendor.length !== 1 ? 'them' : 'it'} to Ranger Design
+          </summary>
+          <div style={{ marginTop: '8px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '4px 16px' }}>
+            {wrongVendor.map(w => (
+              <div key={w.item_number} style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{w.item_number}</span>
+                <span style={{ color: 'var(--text-muted)' }}> · vendor: {w.vendor || 'none'}</span>
               </div>
             ))}
           </div>
