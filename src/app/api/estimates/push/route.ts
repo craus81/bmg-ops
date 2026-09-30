@@ -5,6 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { estimateContextMemo } from '@/lib/estimate-document';
 import { resolveLaborItem } from '@/lib/labor-item';
 import { resolveOrPromoteByName } from '@/lib/promote-prospect';
+import { kitTaggedDescription } from '@/lib/estimate-kits';
 
 export const dynamic = 'force-dynamic';
 
@@ -399,7 +400,7 @@ export async function POST(req: NextRequest) {
           itemId: line.netsuite_item_id,
           quantity: line.quantity,
           rate: line.unit_price,
-          description: line.description || undefined,
+          description: kitTaggedDescription(line.description || undefined, line),
         });
         continue;
       }
@@ -416,7 +417,7 @@ export async function POST(req: NextRequest) {
         itemId: customItemId,
         quantity: line.quantity,
         rate: line.unit_price,
-        description: line.notes ? `${label} (${line.notes})` : label,
+        description: kitTaggedDescription(line.notes ? `${label} (${line.notes})` : label, line),
       });
       customLineDescriptions.push(label);
     }

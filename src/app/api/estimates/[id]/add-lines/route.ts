@@ -5,6 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { computeTotals } from '@/lib/estimate-totals';
 import { FALLBACK_SALES_TAX_RATE } from '@/lib/sales-tax';
 import { FALLBACK_LABOR_RATE } from '@/lib/labor-rate';
+import { kitLineColumns, kitLineSchemaFields } from '@/lib/estimate-kits';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,6 +26,7 @@ const LineItemSchema = z.object({
   labor_hours: z.union([z.number(), z.string()]).optional().nullable(),
   is_custom: z.boolean().optional(),
   notes: z.string().max(2000).optional().nullable(),
+  ...kitLineSchemaFields,
 });
 
 const Schema = z.object({ line_items: z.array(LineItemSchema).min(1).max(100) });
@@ -90,6 +92,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         labor_hours: l.labor_hours == null || l.labor_hours === '' ? null : (parseFloat(String(l.labor_hours)) || 0),
         is_custom: !!l.is_custom,
         notes: l.notes || null,
+        ...kitLineColumns(l),
       };
     });
     const { error: insertErr } = await supabase.from('estimate_line_items').insert(lineRows);

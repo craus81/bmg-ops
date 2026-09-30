@@ -8,6 +8,7 @@ import { computeTotals, normalizeVehicleCount } from '@/lib/estimate-totals';
 import { getSalesTaxRate } from '@/lib/sales-tax';
 import { getDefaultLaborRate, toLaborRate } from '@/lib/labor-rate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
+import { kitLineColumns, kitLineSchemaFields } from '@/lib/estimate-kits';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,6 +28,8 @@ const LineItemSchema = z.object({
   // Which wrap quote produced the line (Add Graphics flow) — must survive
   // the builder's save round trip or re-adding an edited quote duplicates.
   wrap_quote_id: z.string().uuid().optional().nullable(),
+  // Rack kit grouping (migration 332) — must survive the save round trip.
+  ...kitLineSchemaFields,
 });
 
 const UpsertEstimateSchema = z.object({
@@ -359,6 +362,7 @@ export async function POST(req: NextRequest) {
           is_custom: !!l.is_custom,
           notes: l.notes || null,
           wrap_quote_id: l.wrap_quote_id || null,
+          ...kitLineColumns(l),
         }));
         // Checked: the delete above already ran, so a discarded insert error
         // left an estimate with ZERO lines and a header still showing the
@@ -474,6 +478,7 @@ export async function POST(req: NextRequest) {
           is_custom: !!l.is_custom,
           notes: l.notes || null,
           wrap_quote_id: l.wrap_quote_id || null,
+          ...kitLineColumns(l),
         }));
         // Checked for the same reason as the update path above.
         const { error: lineErr } = await supabase.from('estimate_line_items').insert(lineRows);

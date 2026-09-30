@@ -18,6 +18,7 @@
 
 import type { EmailSignature } from './email-signature';
 import { normalizeVehicleCount, perVehicleAmount } from './estimate-totals';
+import { toKitDisplayLines } from './estimate-kits';
 import {
   escHtml,
   renderQuoteDocument,
@@ -133,7 +134,19 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
   // which leaves this document byte-identical to what it rendered before.
   const units = normalizeVehicleCount(est.vehicle_count);
   const perVehicle = perVehicleAmount(est.grand_total, est.vehicle_count);
-  const rows: QuoteDocRow[] = lines.map((l: any) => {
+  // Rack kits: one priced rack line, components indented beneath it.
+  const rows: QuoteDocRow[] = toKitDisplayLines(lines).map((l: any) => {
+    if (l.kit_component) {
+      const qty = units > 1 ? `${escHtml(l.quantity)} &times; ${units}` : escHtml(l.quantity);
+      const desc = l.description && l.description !== l.item_number
+        ? ` <span style="color:#6b7280;">${escHtml(l.description)}</span>` : '';
+      return {
+        itemHtml: `<div style="padding-left:18px;font-size:12px;color:#374151;">&#8627; ${escHtml(l.item_number || l.description || 'Part')}${desc}</div>`,
+        qtyHtml: `<span style="font-size:12px;color:#374151;">${qty}</span>`,
+        rateHtml: '',
+        totalHtml: '',
+      };
+    }
     // Fleet estimates (R6-9): quantities are per vehicle, line totals are
     // for the whole order. Showing per-vehicle line totals under a fleet
     // subtotal gives the customer a column that visibly does not add up.
