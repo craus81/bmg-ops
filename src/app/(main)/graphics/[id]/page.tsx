@@ -34,6 +34,7 @@ import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInv
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { PartLabel } from '@/components/PartLabel';
 import { canonicalPartFromCache } from '@/lib/parts-cache';
+import { NotInCatalogAdd } from '@/components/AddToCatalog';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
 import GraphicsMaterialsCard from '@/components/GraphicsMaterialsCard';
 import GraphicsRollPlan from '@/components/GraphicsRollPlan';
@@ -1330,6 +1331,14 @@ export default function GraphicsJobRecordPage() {
                         {parts.map((pn, i) => (
                           <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.2)' }}>
                             {pn}
+                            <NotInCatalogAdd
+                              partNumber={pn}
+                              billableCustomer={edit.customer || null}
+                              onAdded={part => setEdit((prev: any) => prev ? {
+                                ...prev,
+                                part_number: (prev.part_number || '').split(',').map((s: string) => s.trim()).filter(Boolean).map((p: string) => p === pn ? part.item_number : p).join(', '),
+                              } : prev)}
+                            />
                             <span onClick={() => setEdit({ ...edit, part_number: parts.filter((_, j) => j !== i).join(', ') || null })} style={{ cursor: 'pointer', fontSize: '14px', marginLeft: '2px' }}>&times;</span>
                           </span>
                         ))}

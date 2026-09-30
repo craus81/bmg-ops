@@ -8,6 +8,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { PartLabel } from '@/components/PartLabel';
 import { DropZone } from '@/components/DropZone';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
+import { useAddToCatalog, AddToCatalogRow, offerAddToCatalog } from '@/components/AddToCatalog';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import PhoneInput from '@/components/PhoneInput';
 import { theme } from '@/lib/theme';
@@ -77,9 +78,16 @@ const toLocalDateStr = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 export default function AdminScansPage() {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   useRequireFeature('reports');
   const dialog = useDialog();
+  const addToCatalog = useAddToCatalog();
+  // A part just added to the catalog joins the local parts list so every
+  // box on this page matches it straight away.
+  const rememberPart = (part: CreatedPart) => setAllParts(prev => prev.some(p => p.id === part.id) ? prev : [{
+    id: part.id, item_number: part.item_number, display_name: part.display_name,
+    billable_customer: part.billable_customer, vehicle_type: null, graphic_package: null,
+  }, ...prev]);
   const supabase = createClient();
 
   const [scans, setScans] = useState<ScanLog[]>([]);
@@ -2001,7 +2009,8 @@ export default function AdminScansPage() {
                   p.display_name?.toLowerCase().includes(q) ||
                   p.billable_customer?.toLowerCase().includes(q)
                 ).slice(0, 8);
-                if (matches.length === 0) return null;
+                const showAdd = addToCatalog.canAdd && offerAddToCatalog(bulkEditPart, allParts.filter(p => p.item_number.toLowerCase() === q).map(p => p.item_number));
+                if (matches.length === 0 && !showAdd) return null;
                 return (
                   <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '200px', overflowY: 'auto', marginTop: '2px' }}>
                     {matches.map(p => (
@@ -2020,6 +2029,21 @@ export default function AdminScansPage() {
                         {p.display_name && <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{p.display_name}</div>}
                       </button>
                     ))}
+                    {showAdd && (
+                      <AddToCatalogRow
+                        partNumber={bulkEditPart}
+                        fontSize="11px"
+                        onClick={() => addToCatalog.start(bulkEditPart, {
+                          billableCustomer: bulkEditCustomer.trim() || null,
+                          onAdded: part => {
+                            rememberPart(part);
+                            setBulkEditPart(part.item_number);
+                            setBulkEditPartPicked(part);
+                            if (part.billable_customer) setBulkEditCustomer(part.billable_customer);
+                          },
+                        })}
+                      />
+                    )}
                   </div>
                 );
               })()}
@@ -2075,6 +2099,7 @@ export default function AdminScansPage() {
                       .sort((a, b) => Number(b.item_number.toLowerCase() === q) - Number(a.item_number.toLowerCase() === q))
                       .slice(0, 6)
                   : [];
+                const showExtraAdd = addToCatalog.canAdd && offerAddToCatalog(bulkExtraInput, extraMatches.map(p => p.item_number));
                 return (
                   <div style={{ marginTop: '6px' }}>
                     {showOffer && offer && (
@@ -2118,7 +2143,29 @@ export default function AdminScansPage() {
                                     {known.display_name}
                                   </div>
                                 ) : (
-                                  <div style={{ fontSize: '9px', color: '#fbbf24' }}>Not in the parts list. Check the number.</div>
+                                  <div style={{ fontSize: '9px', color: '#fbbf24' }}>
+                                    Not in the parts list. Check the number
+                                    {addToCatalog.canAdd ? (
+                                      <>
+                                        {' or '}
+                                        <button
+                                          onClick={() => addToCatalog.start(row.pn, {
+                                            billableCustomer: bulkEditCustomer.trim() || null,
+                                            onAdded: part => {
+                                              rememberPart(part);
+                                              if (row.extra) {
+                                                setBulkEditExtraParts(prev => prev.map(x => x === row.pn ? part.item_number : x));
+                                              } else {
+                                                setBulkEditPart(part.item_number);
+                                                setBulkEditPartPicked(part);
+                                              }
+                                            },
+                                          })}
+                                          style={{ border: 'none', background: 'transparent', color: '#22c55e', cursor: 'pointer', fontSize: '9px', fontWeight: 700, textDecoration: 'underline', padding: 0 }}
+                                        >add it to the catalog</button>
+                                      </>
+                                    ) : null}.
+                                  </div>
                                 )}
                               </div>
                               {row.extra && (
@@ -2141,7 +2188,7 @@ export default function AdminScansPage() {
                         placeholder={bulkEditExtraParts.length > 0 ? 'Add another part (optional)' : 'Second part number (optional)'}
                         style={{ width: '100%', padding: '7px 8px', borderRadius: '6px', border: `1px dashed ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}
                       />
-                      {extraMatches.length > 0 && (
+                      {(extraMatches.length > 0 || showExtraAdd) && (
                         <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '180px', overflowY: 'auto', marginTop: '2px' }}>
                           {extraMatches.map(p => (
                             <button
@@ -2156,6 +2203,16 @@ export default function AdminScansPage() {
                               {p.display_name && <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{p.display_name}</div>}
                             </button>
                           ))}
+                          {showExtraAdd && (
+                            <AddToCatalogRow
+                              partNumber={bulkExtraInput}
+                              fontSize="11px"
+                              onClick={() => addToCatalog.start(bulkExtraInput, {
+                                billableCustomer: bulkEditCustomer.trim() || null,
+                                onAdded: part => { rememberPart(part); addExtra(part.item_number); },
+                              })}
+                            />
+                          )}
                         </div>
                       )}
                     </div>
@@ -2479,6 +2536,16 @@ export default function AdminScansPage() {
                                   }
                                 } catch { /* fall through to manual add */ }
 
+                                // Admins add it for real (NetSuite + catalog) so it
+                                // can be invoiced; everyone else keeps the manual row.
+                                if (addToCatalog.canAdd) {
+                                  addToCatalog.start(r.partNumber, {
+                                    billableCustomer: pg.header.customer || null,
+                                    onAdded: rememberPart,
+                                  });
+                                  return;
+                                }
+
                                 // Not in NetSuite — guard against duplicates: the
                                 // part may already exist (a manual row, or one not
                                 // in the loaded set). ilike is a case-insensitive
@@ -2655,12 +2722,14 @@ export default function AdminScansPage() {
                           {m.sub && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{m.sub}</div>}
                         </button>
                       ))}
-                      <button onMouseDown={e => e.preventDefault()} onClick={() => setCreateItemFor(bulkPartSearch.trim())} style={{
-                        display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none',
-                        background: 'rgba(34,197,94,0.06)', cursor: 'pointer', fontSize: '12px', fontWeight: 700, color: '#22c55e',
-                      }}>
-                        + Create &quot;{bulkPartSearch.trim()}&quot; in NetSuite
-                      </button>
+                      {isAdmin && (
+                        <button onMouseDown={e => e.preventDefault()} onClick={() => setCreateItemFor(bulkPartSearch.trim())} style={{
+                          display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none',
+                          background: 'rgba(34,197,94,0.06)', cursor: 'pointer', fontSize: '12px', fontWeight: 700, color: '#22c55e',
+                        }}>
+                          + Create &quot;{bulkPartSearch.trim()}&quot; in NetSuite
+                        </button>
+                      )}
                     </div>
                   );
                 })()}
@@ -3253,6 +3322,8 @@ export default function AdminScansPage() {
         })}
       </div>}
 
+      {addToCatalog.modal}
+
       {createItemFor !== null && (
         <CreateNetsuiteItemModal
           initialPartNumber={createItemFor}
@@ -3377,6 +3448,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
 }) {
   const dialog = useDialog();
   const supabase = createClient();
+  const addToCatalog = useAddToCatalog();
 
   const [extracting, setExtracting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -3559,7 +3631,25 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
         if (data.mirrored) setNotice(`${data.part.item_number} found in NetSuite — added to the catalog. It won't be flagged again.`);
         return data.part;
       }
-      setNotice(`"${pn}" isn't in NetSuite items either — check the number, or create it with "+ Create in NetSuite" on the Bulk Upload tab.`);
+      if (addToCatalog.canAdd) {
+        // Not in NetSuite either: open the add-to-catalog form right here
+        // and hand the new part back to whichever box asked.
+        return new Promise(resolve => addToCatalog.start(pn, {
+          onAdded: part => {
+            onPartAdded({
+              id: part.id,
+              item_number: part.item_number,
+              display_name: part.display_name,
+              billable_customer: part.billable_customer,
+              vehicle_type: null,
+              graphic_package: null,
+            });
+            resolve(part);
+          },
+          onCancel: () => resolve(null),
+        }));
+      }
+      setNotice(`"${pn}" isn't in NetSuite items either. Check the number, or ask an admin to add it to the catalog.`);
       return null;
     } catch (err: any) {
       setNotice(`NetSuite item check failed: ${err.message}`);
@@ -4005,6 +4095,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
 
   return (
     <div>
+      {addToCatalog.modal}
       {/* Commit result — the "these VINs were already scanned" alert lives here */}
       {commitResult && (
         <div style={{ padding: '12px 14px', borderRadius: '10px', marginBottom: '12px', background: 'var(--card)', border: `1px solid ${commitResult.failed.length > 0 ? 'rgba(239,68,68,0.3)' : 'rgba(34,197,94,0.3)'}` }}>

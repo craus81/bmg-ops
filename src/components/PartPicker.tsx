@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useAddToCatalog, AddToCatalogRow, offerAddToCatalog } from '@/components/AddToCatalog';
 
 export interface PickedPart {
   part_number: string;
@@ -32,6 +33,7 @@ export default function PartPicker({ value, onChange, inputStyle }: PartPickerPr
   const [parts, setParts] = useState<PartOption[]>([]);
   const [search, setSearch] = useState('');
   const [loadError, setLoadError] = useState('');
+  const addToCatalog = useAddToCatalog();
 
   useEffect(() => {
     let cancelled = false;
@@ -75,6 +77,8 @@ export default function PartPicker({ value, onChange, inputStyle }: PartPickerPr
         ).slice(0, 30);
       })()
     : [];
+
+  const showAdd = addToCatalog.canAdd && parts.length > 0 && offerAddToCatalog(search, parts.map(p => p.item_number));
 
   if (value) {
     return (
@@ -135,6 +139,31 @@ export default function PartPicker({ value, onChange, inputStyle }: PartPickerPr
           ))}
         </div>
       )}
+      {showAdd && (
+        <div style={{ marginTop: '6px', borderRadius: '8px', overflow: 'hidden' }}>
+          <AddToCatalogRow
+            partNumber={search}
+            fontSize="13px"
+            onClick={() => addToCatalog.start(search, {
+              catalog: 'upfit',
+              onAdded: part => {
+                const option: PartOption = {
+                  item_number: part.item_number,
+                  part_number: part.item_number,
+                  part_description: part.display_name,
+                  billable_customer: part.billable_customer,
+                  graphics: part.catalog === 'graphics',
+                };
+                setParts(prev => [...prev.filter(p => p.item_number.toUpperCase() !== part.item_number.toUpperCase()), option]
+                  .sort((a, b) => a.item_number.localeCompare(b.item_number)));
+                onChange({ part_number: option.part_number, part_description: option.part_description, billable_customer: option.billable_customer });
+                setSearch('');
+              },
+            })}
+          />
+        </div>
+      )}
+      {addToCatalog.modal}
     </div>
   );
 }
