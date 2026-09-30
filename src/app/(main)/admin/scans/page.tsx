@@ -58,6 +58,8 @@ interface ScanLog {
   exported_at: string | null;
   exported_by: string | null;
   archived_at: string | null;
+  archived_by?: string | null;
+  archive_reason?: string | null;
   invoice_number?: string | null;
   date_invoiced?: string | null;
   is_paid?: boolean;
@@ -197,6 +199,13 @@ export default function AdminScansPage() {
   const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; po?: string | null; invoiceId?: string; invoiceNumber?: string; vehicleCount: number; status: string; error?: string }[]; summary: { success: number; errors: number } } | null>(null);
   // Email-invoices flow lives in the shared EmailInvoicesModal.
   const [emailTarget, setEmailTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
+  // Archive without invoicing: the scans being archived (snapshotted when the
+  // dialog opens) and the optional reason. Archived tab can narrow to the
+  // scans that were never billed.
+  const [archiveIds, setArchiveIds] = useState<string[] | null>(null);
+  const [archiveReason, setArchiveReason] = useState('');
+  const [archiving, setArchiving] = useState(false);
+  const [archivedUnbilledOnly, setArchivedUnbilledOnly] = useState(false);
   // Invoices-tab picks, by invoice number. Emailing a selection that spans
   // customers queues one modal per customer (each send goes to one
   // customer's contacts); closing a modal opens the next.
@@ -522,6 +531,8 @@ export default function AdminScansPage() {
     if (companyFilter && companyFilter !== BMG_COMPANY && installerCompany !== companyFilter) return false;
     // Location filter ("No location" matches scans with none recorded).
     if (locationFilter === NO_LOCATION && s.location_name) return false;
+    // Archived tab: "Not invoiced only" hides scans that invoicing archived.
+    if (tab === 'archived' && archivedUnbilledOnly && (s.invoice_number || s.date_invoiced)) return false;
     if (locationFilter && locationFilter !== NO_LOCATION && s.location_name !== locationFilter) return false;
     // Date-range filter compares local calendar dates.
     if (dateFrom || dateTo) {
@@ -591,7 +602,11 @@ export default function AdminScansPage() {
       // On the archived tab, include invoice_number in the key so scans invoiced on
       // different invoices don't lump into the same visual sub-group (even if they
       // share the same part · location · PO).
-      const invSuffix = tab === 'archived' && s.invoice_number ? ` · ${s.invoice_number}` : '';
+      // Scans archived without an invoice group by their archive reason.
+      const invSuffix = tab !== 'archived' ? ''
+        : s.invoice_number ? ` · ${s.invoice_number}`
+        : !s.date_invoiced ? ` · Not billed${s.archive_reason ? `: ${s.archive_reason}` : ''}`
+        : '';
       subKey = `${s.part_number || 'No Part'} · ${s.location_name || 'No Location'}${poSuffix}${invSuffix}`;
     }
     if (!acc[customer]) acc[customer] = {};
@@ -838,17 +853,55 @@ export default function AdminScansPage() {
     await downloadScansCsv(tabScans);
   };
 
-  const archiveExported = async () => {
-    const ids = [...selectedScans];
+  // Archive takes scans out of the invoicing queue and the Ready/Waiting
+  // counts without billing them (installer pay still counts the install).
+  // Only live scans are sent: on All Scans the selection can include ones
+  // that are already archived or invoiced.
+  const openArchive = () => {
+    const ids = [...selectedScans].filter(id => scans.some(s => s.id === id));
     if (ids.length === 0) return;
-    await supabase.from('scan_logs').update({ archived_at: new Date().toISOString() }).in('id', ids);
-    loadAll();
+    setArchiveReason('');
+    setArchiveIds(ids);
+  };
+
+  const confirmArchive = async () => {
+    if (!archiveIds || archiveIds.length === 0) return;
+    setArchiving(true);
+    try {
+      const res = await fetch('/api/scans/archive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scanIds: archiveIds, archive: true, reason: archiveReason.trim() || null }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        await dialog.alert(`Archive failed: ${data.error || `HTTP ${res.status}`}`);
+        return;
+      }
+      setArchiveIds(null);
+      setSelectedScans(new Set());
+      loadAll();
+    } finally {
+      setArchiving(false);
+    }
   };
 
   const unarchiveScans = async () => {
     const ids = [...selectedScans];
     if (ids.length === 0) return;
-    await supabase.from('scan_logs').update({ archived_at: null }).in('id', ids);
+    const unbilled = archivedScans.filter(s => selectedScans.has(s.id) && !s.invoice_number && !s.date_invoiced).length;
+    if (unbilled > 0 && !(await dialog.confirm(`Unarchive ${ids.length} scan${ids.length !== 1 ? 's' : ''}? ${unbilled} not yet invoiced will go back into the invoicing queue, and any archive reason is cleared.`, { confirmLabel: 'Unarchive' }))) return;
+    const res = await fetch('/api/scans/archive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scanIds: ids, archive: false }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      await dialog.alert(`Unarchive failed: ${data.error || `HTTP ${res.status}`}`);
+      return;
+    }
+    setSelectedScans(new Set());
     loadAll();
   };
 
@@ -1714,13 +1767,27 @@ export default function AdminScansPage() {
             <button onClick={exportCSV} disabled={exporting} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: 'pointer' }}>
               {exporting ? 'Exporting...' : `Download CSV (${selectedScans.size})`}
             </button>
-            <button onClick={archiveExported} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+            <button onClick={openArchive} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
               Archive {selectedScans.size}
             </button>
             <button onClick={unexportScans} title="Move back to the Ready/Waiting queues — the scans count as uninvoiced work again" style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
               Un-export {selectedScans.size}
             </button>
           </>
+        )}
+        {(tab === 'ready' || tab === 'waiting' || tab === 'all') && selectedScans.size > 0 && (() => {
+          const liveCount = [...selectedScans].filter(id => scans.some(s => s.id === id)).length;
+          if (liveCount === 0) return null;
+          return (
+            <button onClick={openArchive} title="Take these scans out of the invoicing queue without billing them" style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+              Archive {liveCount}
+            </button>
+          );
+        })()}
+        {tab === 'archived' && (
+          <button onClick={() => setArchivedUnbilledOnly(v => !v)} title="Show only scans archived without an invoice" style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: archivedUnbilledOnly ? 'var(--tab-active-bg)' : 'var(--subtle-bg)', border: `1px solid ${archivedUnbilledOnly ? 'var(--tab-active-border)' : 'var(--border)'}`, color: archivedUnbilledOnly ? 'var(--tab-active-color)' : 'var(--text-secondary)', cursor: 'pointer' }}>
+            Not invoiced only
+          </button>
         )}
         {tab === 'archived' && selectedScans.size > 0 && (
           <button onClick={unarchiveScans} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', cursor: 'pointer' }}>
@@ -1784,6 +1851,41 @@ export default function AdminScansPage() {
       )}
 
       {/* Email invoices modal (shared component, same flow as the Invoicing hub) */}
+      {archiveIds && (
+        <div onClick={() => !archiving && setArchiveIds(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: '420px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '18px' }}>
+            <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '6px' }}>
+              Archive {archiveIds.length} scan{archiveIds.length !== 1 ? 's' : ''} without invoicing?
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+              They leave the invoicing queue and Ready/Waiting counts. Installer pay still counts them. You can unarchive from the Archived tab.
+            </div>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>Reason (optional)</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
+              {['Warranty/redo', 'Duplicate', 'No charge', 'Billed elsewhere'].map(r => (
+                <button key={r} onClick={() => setArchiveReason(r)} style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: archiveReason === r ? 'var(--tab-active-bg)' : 'var(--subtle-bg)', border: `1px solid ${archiveReason === r ? 'var(--tab-active-border)' : 'var(--border)'}`, color: archiveReason === r ? 'var(--tab-active-color)' : 'var(--text-secondary)', cursor: 'pointer' }}>
+                  {r}
+                </button>
+              ))}
+            </div>
+            <input
+              value={archiveReason}
+              onChange={(e) => setArchiveReason(e.target.value)}
+              maxLength={500}
+              placeholder="Or type a reason"
+              style={{ width: '100%', padding: '8px 10px', borderRadius: '6px', fontSize: '16px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', boxSizing: 'border-box', marginBottom: '14px' }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <button onClick={() => setArchiveIds(null)} disabled={archiving} style={{ padding: '8px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                Cancel
+              </button>
+              <button onClick={confirmArchive} disabled={archiving} style={{ padding: '8px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.3)', color: '#fbbf24', cursor: 'pointer' }}>
+                {archiving ? 'Archiving...' : 'Archive'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {emailTarget && (
         <EmailInvoicesModal
           key={emailTarget.customerName}
@@ -3006,8 +3108,15 @@ export default function AdminScansPage() {
                             await supabase.from('scan_logs').update({ [field]: value }).in('id', groupIds);
                             setArchivedScans(prev => prev.map(s => groupIds.includes(s.id) ? { ...s, [field]: value } as any : s));
                           };
+                          const notBilled = !invNum && !invDate;
+                          const archivedByNames = [...new Set(groupScans.map(s => s.archived_by).filter(Boolean) as string[])].map(id => profiles[id] || 'Unknown');
                           return (
                             <div style={{ display: 'flex', gap: '6px', alignItems: 'center', padding: '5px 10px', flexWrap: 'wrap' }}>
+                              {notBilled && (
+                                <span title={first.archive_reason || undefined} style={{ fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(148,163,184,0.12)', color: 'var(--text-secondary)' }}>
+                                  Not billed{first.archive_reason ? ` · ${first.archive_reason}` : ''}{archivedByNames.length > 0 ? ` · ${archivedByNames.join(', ')}` : ''}{first.archived_at ? ` · ${new Date(first.archived_at).toLocaleDateString()}` : ''}
+                                </span>
+                              )}
                               <input
                                 value={invNum}
                                 placeholder="Invoice #"
