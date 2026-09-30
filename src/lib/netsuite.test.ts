@@ -4,6 +4,7 @@ import {
   suiteqlQueryAll,
   createSalesOrder,
   createDirectInvoice,
+  describeRejectedItem,
   createInvoiceFromSO,
   fulfillSalesOrder,
   createBillFromPo,
@@ -337,21 +338,32 @@ describe('createDirectInvoice', () => {
     }
   });
 
-  it('adds the subsidiary hint to the cryptic "Invalid Field Value … item" error', async () => {
+  it('leads the cryptic "Invalid Field Value … item" error with the rejected part', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     fetchMock.mockResolvedValueOnce(
-      new Response('Invalid Field Value 55 for the following field: item', { status: 400 })
+      new Response('Invalid Field Value 23596 for the following field: item', { status: 400 })
     );
 
     const result = await createDirectInvoice({
       customerId: 9,
       locationId: '7',
-      lineItems: [{ itemId: '55', quantity: 1, rate: 10 }],
+      lineItems: [
+        { itemId: '23366', quantity: 8, rate: 10, partNumber: '06U127' },
+        { itemId: '23596', quantity: 8, rate: 10, partNumber: '06U357' },
+      ],
     });
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('not assigned to the invoice\'s subsidiary');
+    expect(result.error).toMatch(/^NetSuite rejected 06U357 \(NS item #23596\)\. .*BMG Fleet Installations subsidiary/);
+    expect(result.error).not.toContain('06U127');
+    expect(result.error).toContain('NetSuite error (400): Invalid Field Value 23596');
     consoleSpy.mockRestore();
+  });
+
+  it('names the bare NetSuite id when the rejected line has no part number', () => {
+    expect(describeRejectedItem('Invalid Field Value 55 for the following field: item', [{ itemId: 55 }]))
+      .toMatch(/^NetSuite rejected NS item #55\./);
+    expect(describeRejectedItem('Please enter a value for Amount', [{ itemId: 55 }])).toBe('');
   });
 });
 

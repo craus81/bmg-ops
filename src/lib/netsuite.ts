@@ -1985,6 +1985,24 @@ export async function getItemBasePrices(
 }
 
 /**
+ * NetSuite's "Invalid Field Value <id> for the following field: item" names
+ * only the internal id of the rejected line item, and callers used to append
+ * every matched part after it — so the part listed first read as the culprit.
+ * Name the rejected part up front instead. Returns '' for any other error.
+ */
+export function describeRejectedItem(
+  text: string,
+  lineItems: { itemId: string | number; partNumber?: string }[],
+): string {
+  const match = text.match(/Invalid Field Value\s+(\d+)\s+for the following field:\s*item/i);
+  if (!match) return '';
+  const id = match[1];
+  const partNumber = lineItems.find((li) => String(li.itemId) === id)?.partNumber;
+  const name = partNumber ? `${partNumber} (NS item #${id})` : `NS item #${id}`;
+  return `NetSuite rejected ${name}. This usually means that item is not assigned to the BMG Fleet Installations subsidiary: set its subsidiary in NetSuite and retry.`;
+}
+
+/**
  * Create a standalone Invoice in NetSuite (no SO required)
  * Used for direct invoicing of scanned vehicles without PO/SO flow
  */
@@ -2002,6 +2020,8 @@ export async function createDirectInvoice(payload: {
     quantity: number;
     rate: number;
     description?: string;
+    /** Not sent to NetSuite; only used to name a rejected line in errors. */
+    partNumber?: string;
   }[];
 }): Promise<{
   success: boolean;
@@ -2083,13 +2103,10 @@ export async function createDirectInvoice(payload: {
       const text = await response.text();
       console.error('NetSuite create direct invoice error:', text);
       // "Invalid Field Value <id> for the following field: item" almost always
-      // means the item isn't shared with the invoice's subsidiary. Surface an
-      // actionable hint instead of the raw NetSuite error.
-      const itemSubsidiaryError = /Invalid Field Value\s+\d+\s+for the following field:\s*item/i.test(text);
-      const hint = itemSubsidiaryError
-        ? ' — This usually means the item is not assigned to the invoice\'s subsidiary in NetSuite. Set the item\'s subsidiary to BMG Fleet Installations and retry.'
-        : '';
-      return { success: false, error: `NetSuite error (${response.status}): ${text}${hint}` };
+      // means the item isn't shared with the invoice's subsidiary. Lead with
+      // the rejected part so it isn't lost in the raw NetSuite error.
+      const hint = describeRejectedItem(text, payload.lineItems);
+      return { success: false, error: `${hint ? `${hint} — ` : ''}NetSuite error (${response.status}): ${text}` };
     }
 
     const location = response.headers.get('Location');
@@ -2138,6 +2155,8 @@ export async function createEstimate(payload: {
     quantity: number;
     rate: number;
     description?: string;
+    /** Not sent to NetSuite; only used to name a rejected line in errors. */
+    partNumber?: string;
   }[];
 }): Promise<{
   success: boolean;
@@ -2182,11 +2201,8 @@ export async function createEstimate(payload: {
     if (!response.ok) {
       const text = await response.text();
       console.error('NetSuite create estimate error:', text);
-      const itemSubsidiaryError = /Invalid Field Value\s+\d+\s+for the following field:\s*item/i.test(text);
-      const hint = itemSubsidiaryError
-        ? ' — This usually means the item is not assigned to the estimate\'s subsidiary in NetSuite. Set the item\'s subsidiary and retry.'
-        : '';
-      return { success: false, error: `NetSuite error (${response.status}): ${text}${hint}` };
+      const hint = describeRejectedItem(text, payload.lineItems);
+      return { success: false, error: `${hint ? `${hint} — ` : ''}NetSuite error (${response.status}): ${text}` };
     }
 
     const location = response.headers.get('Location');
