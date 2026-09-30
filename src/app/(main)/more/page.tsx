@@ -87,6 +87,7 @@ export default function MorePage() {
         { title: 'Receiving', sub: badgeFor('manual_receipts') ? `${badgeFor('manual_receipts')} receipt${badgeFor('manual_receipts') !== 1 ? 's' : ''} still need NetSuite entry by hand` : 'Check arriving parts in against vendor POs', path: '/admin/receiving', show: F('parts_ordering'), badge: badgeFor('manual_receipts') },
         { title: 'Parts Catalog', sub: 'Upfit & graphic parts from NetSuite', path: '/parts', show: F('parts_catalog') },
         { title: 'Inventory', sub: 'On hand · allocated to jobs · free · on order, at a glance', path: '/admin/inventory', show: F('parts_catalog') },
+        { title: 'Rack Kits', sub: 'How many of each rack kit we can build from the parts on the shelf', path: '/admin/inventory/rack-kits', show: F('parts_catalog') },
         { title: 'Part Tagging Rules', sub: 'Auto-categorize parts by vendor & name instead of one dropdown at a time', path: '/admin/part-category-rules', show: F('part_admin') },
         { title: 'Part Dimensions', sub: 'Record W×D×H per part so the 3D Upfit Designer can place it', path: '/admin/part-dimensions', show: F('part_admin') },
         { title: 'Vehicle Interiors', sub: 'Cargo geometry per wheelbase/roof — what the 3D designer draws', path: '/admin/vehicle-interiors', show: F('part_admin') },

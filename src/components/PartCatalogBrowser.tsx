@@ -5,6 +5,7 @@ import { storage } from '@/lib/storage';
 import { toJpegIfHeic } from '@/lib/heic';
 import { createClient } from '@/lib/supabase-browser';
 import AddToEstimateModal from '@/components/AddToEstimateModal';
+import { loadKits, normItem, type KitWithMembers } from '@/lib/part-kits';
 
 /**
  * The Ranger-Design-style catalog browser (roadmap N4-A): a faceted,
@@ -59,19 +60,8 @@ export const dimsLabel = (p: Pick<BrowsePart, 'width_in' | 'depth_in' | 'height_
 
 interface Category { id: string; name: string; sort_order: number }
 
-/** A package template (part_kits) with its members resolved to live parts. */
-export interface KitWithMembers {
-  id: string;
-  name: string;
-  description: string | null;
-  vehicle_label: string | null;
-  image_path: string | null;
-  /** Assembly overhead beyond the members' own labor hours. */
-  labor_adder_hours: number;
-  members: { part: BrowsePart; quantity: number }[];
-  totalPrice: number;
-  totalLabor: number;
-}
+// Package / rack kit shape lives with its loader (src/lib/part-kits.ts).
+export type { KitWithMembers };
 
 const money = (v: number | null | undefined) =>
   v || v === 0 ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2 })}` : '—';
@@ -199,44 +189,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
 
   useEffect(() => {
     if (!open || kits !== null) return;
-    const supabase = createClient();
-    (async () => {
-      try {
-        const { data: kitRows } = await supabase
-          .from('part_kits')
-          .select('id, name, description, vehicle_label, image_path, labor_adder_hours, part_kit_items(part_id, quantity, sort_order)')
-          .eq('active', true)
-          .order('name');
-        const rows = kitRows || [];
-        const partIds = [...new Set(rows.flatMap((k: any) => (k.part_kit_items || []).map((i: any) => i.part_id)))];
-        const partsById = new Map<string, BrowsePart>();
-        for (let i = 0; i < partIds.length; i += 200) {
-          const { data: ps } = await supabase
-            .from('netsuite_parts')
-            .select('id, netsuite_id, item_number, display_name, description, marketing_description, catalog, item_type, vendor, sales_price, purchase_price, avg_install_cost, labor_hours, quantity_available, product_category_id, category_source, image_path, width_in, depth_in, height_in, weight_lb, mount_type, dims_source')
-            .in('id', partIds.slice(i, i + 200))
-            .eq('is_active', true);
-          for (const p of ps || []) partsById.set(p.id, p as BrowsePart);
-        }
-        setKits(rows.map((k: any) => {
-          const members = (k.part_kit_items || [])
-            .sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
-            .map((i: any) => ({ part: partsById.get(i.part_id), quantity: Number(i.quantity) || 1 }))
-            .filter((m: any) => m.part);
-          const laborAdder = Number(k.labor_adder_hours) || 0;
-          return {
-            id: k.id, name: k.name, description: k.description, vehicle_label: k.vehicle_label,
-            image_path: k.image_path,
-            labor_adder_hours: laborAdder,
-            members,
-            totalPrice: members.reduce((s: number, m: any) => s + (m.part.sales_price || 0) * m.quantity, 0),
-            totalLabor: members.reduce((s: number, m: any) => s + (m.part.labor_hours || 0) * m.quantity, 0) + laborAdder,
-          };
-        }).filter((k: KitWithMembers) => k.members.length > 0));
-      } catch {
-        setKits([]);
-      }
-    })();
+    loadKits(createClient()).then(setKits).catch(() => setKits([]));
   }, [open, kits]);
 
   const deleteKit = async (kit: KitWithMembers) => {
@@ -610,12 +563,19 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
           })()}
 
           {/* Packages strip — Ranger-style bundles that explode into estimate
-              lines. Hidden while searching so results stay focused. */}
-          {kits && kits.length > 0 && !q.trim() && (
+              lines. While searching it shows the rack kits matching the
+              search instead (there are too many racks to list unasked). */}
+          {(() => {
+            const needle = normItem(q);
+            const stripKits = (kits || []).filter(k => needle
+              ? !!k.item_number && (normItem(k.item_number).includes(needle) || normItem(k.name).includes(needle))
+              : !k.item_number).slice(0, 30);
+            if (stripKits.length === 0) return null;
+            return (
             <div style={{ marginBottom: '14px' }}>
-              <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-muted)', marginBottom: '6px' }}>Packages</div>
+              <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-muted)', marginBottom: '6px' }}>{needle ? 'Rack kits' : 'Packages'}</div>
               <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '4px' }}>
-                {kits.map(k => {
+                {stripKits.map(k => {
                   const photo = k.image_path || k.members.find(m => m.part.image_path)?.part.image_path || null;
                   return (
                     <div key={k.id} style={{ minWidth: '230px', maxWidth: '230px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
@@ -635,9 +595,13 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                         )}
                       </div>
                       <div style={{ padding: '10px', display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
-                        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.3 }}>{k.name}</div>
+                        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.3 }}>
+                          {k.item_number && <span style={{ fontWeight: 800, marginRight: '6px' }}>{k.item_number}</span>}
+                          {k.name}
+                        </div>
                         <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                          {k.vehicle_label ? `${k.vehicle_label} · ` : ''}{k.members.length} part{k.members.length !== 1 ? 's' : ''}
+                          {k.vehicle_label ? `${k.vehicle_label} · ` : ''}{k.members.length + k.missing.length} part{k.members.length + k.missing.length !== 1 ? 's' : ''}
+                          {k.missing.length > 0 ? ` · ${k.missing.length} not in NetSuite` : ''}
                           {k.totalLabor > 0 ? ` · ${k.totalLabor}h labor` : ''}
                         </div>
                         {k.description && (
@@ -652,7 +616,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                               onClick={() => { onAddKit(k); setAddedKits(prev => ({ ...prev, [k.id]: (prev[k.id] || 0) + 1 })); }}
                               style={{ padding: '5px 12px', borderRadius: '8px', border: 'none', background: addedKits[k.id] ? 'rgba(34,197,94,0.15)' : 'var(--accent, #2563eb)', color: addedKits[k.id] ? '#22c55e' : '#fff', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
                             >
-                              {addedKits[k.id] ? `✓ ×${addedKits[k.id]}` : `+ Add ${k.members.length} lines`}
+                              {addedKits[k.id] ? `✓ ×${addedKits[k.id]}` : k.item_number ? '+ Add rack' : `+ Add ${k.members.length} lines`}
                             </button>
                           ) : (
                             <button
@@ -670,7 +634,8 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                 })}
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {!loading && parts.length === 0 && (
             <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>No parts match these filters.</div>

@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { deepLinks } from '@/lib/deep-links';
 import { apiErrorMessage } from '@/lib/api-error-message';
-import type { BrowsePart, KitWithMembers } from '@/components/PartCatalogBrowser';
+import type { BrowsePart } from '@/components/PartCatalogBrowser';
+import { kitEstimateLines, type KitWithMembers } from '@/lib/part-kits';
 import { estimateHeadlineNumber, estimateNumberMatches } from '@/lib/estimate-number';
 
 /**
@@ -109,30 +110,8 @@ export default function AddToEstimateModal({ part, kit, onClose }: {
       }];
     }
     if (!kit) return [];
-    return [
-      ...kit.members.map(m => ({
-        part_id: m.part.id,
-        netsuite_item_id: m.part.netsuite_id,
-        item_number: m.part.item_number,
-        description: m.part.display_name || m.part.marketing_description || m.part.description || m.part.item_number,
-        quantity: m.quantity,
-        unit_price: m.part.sales_price || 0,
-        labor_hours: m.part.labor_hours ?? null,
-        is_custom: false,
-      })),
-      // Package-level assembly overhead as its own visible zero-price line,
-      // same as the builder's package add.
-      ...(kit.labor_adder_hours > 0 ? [{
-        part_id: null,
-        netsuite_item_id: null,
-        item_number: '',
-        description: `${kit.name} — assembly labor`,
-        quantity: 1,
-        unit_price: 0,
-        labor_hours: kit.labor_adder_hours,
-        is_custom: true,
-      }] : []),
-    ];
+    // Same lines the builder adds (rack kits keep their group).
+    return kitEstimateLines(kit);
   };
 
   const addToExisting = async (est: EstimateLite) => {

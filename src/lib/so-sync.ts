@@ -16,6 +16,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQuery } from './netsuite';
 import { resolveLaborItem } from './labor-item';
 import { normalizeVehicleCount } from './estimate-totals';
+import { kitTaggedDescription } from './estimate-kits';
 
 export interface SoLineItem { itemId: string; quantity: number; rate: number; description?: string }
 
@@ -72,9 +73,10 @@ export async function buildSoLineItems(
   for (const li of sorted) {
     if ((parseFloat(li.quantity) || 0) <= 0) continue;
     if (li.netsuite_item_id) {
-      const lineDesc = [li.description, li.notes].filter(Boolean).join(' — ')
+      // Rack kit components say which rack they belong to (estimate-kits).
+      const lineDesc = kitTaggedDescription([li.description, li.notes].filter(Boolean).join(' — ')
         || li.item_number
-        || undefined;
+        || undefined, li);
       soLineItems.push({
         itemId: String(li.netsuite_item_id),
         quantity: parseFloat(li.quantity) * units,
@@ -91,7 +93,7 @@ export async function buildSoLineItems(
     const label = li.item_number
       ? `${li.item_number}${li.description ? ' — ' + li.description : ''}`
       : (li.description || 'Custom item');
-    const fullDesc = li.notes ? `${label} (${li.notes})` : label;
+    const fullDesc = kitTaggedDescription(li.notes ? `${label} (${li.notes})` : label, li);
     soLineItems.push({
       itemId: customItemId,
       quantity: parseFloat(li.quantity) * units,

@@ -16,6 +16,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { vehicleDescription } from './estimate-document';
 import { normalizeVehicleCount, perVehicleAmount } from './estimate-totals';
+import { toKitDisplayLines } from './estimate-kits';
 
 export interface EstimatePdfImage {
   dataUrl: string;
@@ -66,7 +67,9 @@ const PHOTO = 40; // thumbnail edge in pt
 const LINK_LABEL = 'View product';
 
 export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
-  const { estimate: est, lines, company, logo, graphics } = data;
+  const { estimate: est, company, logo, graphics } = data;
+  // Rack kits: one priced rack line, components indented beneath it.
+  const lines = toKitDisplayLines(data.lines);
   // Fleet multi-unit (R6-9, migration 304). 1 on every ordinary estimate,
   // which leaves this PDF byte-identical to what it produced before.
   const units = normalizeVehicleCount((est as any).vehicle_count);
@@ -137,9 +140,14 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
   const tableY = Math.max(leftY, rightY) + 16;
 
   // ── Line table — photo column only when any line has one ───────────────
-  const hasPhotos = lines.some(l => !!l.image);
-  const itemCell = (l: EstimatePdfLine) => {
+  const hasPhotos = lines.some(l => !!l.image && !(l as any).kit_component);
+  const itemCell = (l: EstimatePdfLine & { kit_component?: boolean }) => {
     const label = l.item_number || l.description || 'Item';
+    if (l.kit_component) {
+      // Indented under its rack; plain ASCII (no arrow glyph in helvetica).
+      const desc = l.description && l.description !== label ? `  ${l.description}` : '';
+      return `    - ${label}${desc}`;
+    }
     const parts = [label];
     // Compare against the label, not item_number — a line with no item
     // number uses its description AS the label and must not repeat it.
@@ -156,7 +164,9 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
     // approval page can never disagree about what a line costs.
     const lineTotal = (Number(l.line_total ?? (Number(l.unit_price) || 0) * (Number(l.quantity) || 0)) || 0) * units;
     const qtyCell = units > 1 ? `${l.quantity ?? ''} x ${units}` : String(l.quantity ?? '');
-    const cells = [itemCell(l), qtyCell, money(l.unit_price), money(lineTotal)];
+    const cells = (l as any).kit_component
+      ? [itemCell(l), qtyCell, '', '']
+      : [itemCell(l), qtyCell, money(l.unit_price), money(lineTotal)];
     if (hasPhotos) cells.unshift('');
     return cells;
   });
@@ -184,12 +194,20 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
       if (hook.section === 'head' && hook.column.index >= col(1)) hook.cell.styles.halign = 'right';
       if (hook.section !== 'body') return;
       const line = lines[hook.row.index];
-      if (hasPhotos && line?.image) hook.cell.styles.minCellHeight = PHOTO + 10;
+      if (hasPhotos && line?.image && !(line as any).kit_component) hook.cell.styles.minCellHeight = PHOTO + 10;
+      // Components under a rack read smaller and lighter than priced lines.
+      if ((line as any)?.kit_component) {
+        hook.cell.styles.fontSize = 8;
+        hook.cell.styles.textColor = [75, 85, 99];
+        hook.cell.styles.cellPadding = { top: 2, bottom: 2, left: 5, right: 5 };
+      }
+      if ((line as any)?.kit_header) hook.cell.styles.fontStyle = 'bold';
     },
     didDrawCell: (hook) => {
       if (hook.section !== 'body') return;
       const line = lines[hook.row.index];
-      if (!line) return;
+      // Components under a rack stay one compact text row: no photo, no link.
+      if (!line || (line as any).kit_component) return;
       if (hasPhotos && hook.column.index === 0 && line.image) {
         try {
           doc.addImage(line.image.dataUrl, line.image.format,

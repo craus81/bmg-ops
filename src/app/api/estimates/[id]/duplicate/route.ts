@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { logAudit } from '@/lib/audit';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
+import { kitLineColumns } from '@/lib/estimate-kits';
 
 export const dynamic = 'force-dynamic';
 
@@ -158,6 +159,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         is_custom: !!l.is_custom,
         notes: l.notes ?? null,
         wrap_quote_id: l.wrap_quote_id ?? null,
+        ...kitLineColumns(l),
       }));
       const { error: lineErr } = await supabase.from('estimate_line_items').insert(lineRows);
       if (lineErr) {

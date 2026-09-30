@@ -9,7 +9,9 @@ import { useDialog } from '@/components/DialogProvider';
 import HistoryButton from '@/components/HistoryButton';
 import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
-import PartCatalogBrowser, { type BrowsePart, type KitWithMembers } from '@/components/PartCatalogBrowser';
+import PartCatalogBrowser, { type BrowsePart } from '@/components/PartCatalogBrowser';
+import { kitEstimateLines, loadKits, normItem, type KitLineFields, type KitWithMembers } from '@/lib/part-kits';
+import { gatherKitGroups } from '@/lib/estimate-kits';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import EmailComposeModal, { type EmailComposeAttachment, type EmailComposeContact, type EmailComposeFields } from '@/components/EmailComposeModal';
 import { INTERNAL_STAFF_ROLES } from '@/lib/features';
@@ -114,7 +116,9 @@ function stockVerdictText(stock: StockReadiness): string {
   return 'Everything is in stock — reserve it so another job can’t take it first';
 }
 
-interface LineItem {
+// Kit fields (migration 332): component lines of one rack kit share a
+// kit_group_id and show under the rack's heading.
+interface LineItem extends KitLineFields {
   key: string; // local key for React
   part_id: string | null;
   netsuite_item_id: string | null;
@@ -738,7 +742,7 @@ export default function EstimatesPage() {
     const av = a[estSortCol] ?? 0; const bv = b[estSortCol] ?? 0;
     const cmp = typeof av === 'string' ? av.localeCompare(bv as string) : (av as number) - (bv as number);
     return estSortDir === 'asc' ? cmp : -cmp;
-  }) : lines;
+  }) : gatherKitGroups(lines);
   const [saving, setSaving] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -795,6 +799,10 @@ export default function EstimatesPage() {
   const [partResults, setPartResults] = useState<Part[]>([]);
   const [partSearching, setPartSearching] = useState(false);
   const partSearchRef = useRef<HTMLInputElement>(null);
+  // Rack kits matching the same search box (loaded once, filtered locally —
+  // a few hundred rows at most).
+  const [kitResults, setKitResults] = useState<KitWithMembers[]>([]);
+  const rackKitsRef = useRef<Promise<KitWithMembers[]> | null>(null);
   // "+ New part" without leaving the estimate (admin-only — the create-item
   // API requires the admin role). Launched from the part search dropdown
   // (forLineKey null → lands as a new line) or from a custom line's matcher
@@ -1239,8 +1247,21 @@ export default function EstimatesPage() {
 
   // ── Part search ──
   const searchParts = useCallback(async (q: string) => {
-    if (q.length < 2) { setPartResults([]); return; }
+    if (q.length < 2) { setPartResults([]); setKitResults([]); return; }
     setPartSearching(true);
+    if (!rackKitsRef.current) {
+      rackKitsRef.current = loadKits(supabase)
+        .then(ks => ks.filter(k => k.item_number))
+        .catch(() => { rackKitsRef.current = null; return []; });
+    }
+    const needle = normItem(q);
+    const kits = await rackKitsRef.current;
+    setKitResults(kits
+      .filter(k => normItem(k.item_number).includes(needle) || normItem(k.name).includes(needle))
+      // Exact part number first, then by part number.
+      .sort((a, b) => Number(normItem(b.item_number) === needle) - Number(normItem(a.item_number) === needle)
+        || String(a.item_number).localeCompare(String(b.item_number)))
+      .slice(0, 8));
     const { data } = await supabase
       .from('netsuite_parts')
       .select('id, netsuite_id, item_number, display_name, description, sales_price, labor_hours, catalog, purchase_price, avg_install_cost')
@@ -1439,40 +1460,32 @@ export default function EstimatesPage() {
     setDraftFromQbo(null);
   };
 
-  // ── Packages (N4-B): explode a kit template into ordinary lines ──
-  // Each member arrives as a normal item line, so inventory downstream is
-  // untouched machinery: members commit on SO conversion and decrement on
-  // invoice, exactly like hand-picked parts. The package itself never
-  // reaches NetSuite.
+  // ── Packages (N4-B) and rack kits (migration 332) ──
+  // Each member arrives as a normal priced item line, so inventory
+  // downstream is untouched machinery: members commit on SO conversion and
+  // decrement on invoice, exactly like hand-picked parts. A rack kit's lines
+  // also share a kit group, so the estimate shows them under one priced
+  // rack line; a plain package just explodes.
   const addKitLines = (kit: KitWithMembers) => {
-    const memberLines = kit.members.map(m => ({
-      key: genKey(),
-      part_id: m.part.id,
-      netsuite_item_id: m.part.netsuite_id,
-      item_number: m.part.item_number,
-      description: m.part.display_name || m.part.marketing_description || m.part.description || m.part.item_number,
-      quantity: m.quantity,
-      unit_price: m.part.sales_price || 0,
-      labor_hours: m.part.labor_hours ?? null,
-      is_custom: false,
-      catalog: m.part.catalog || undefined,
-      purchase_price: m.part.purchase_price,
-      avg_install_cost: m.part.avg_install_cost,
+    const added = kitEstimateLines(kit).map(l => ({ ...l, key: genKey() }));
+    setLines(prev => [...prev, ...added]);
+    setPartSearch('');
+    setPartResults([]);
+    setKitResults([]);
+  };
+
+  // Rack kit heading edits: the rack quantity scales every component; the
+  // heading's × removes the whole rack.
+  const setKitQuantity = (groupId: string, qty: number) => {
+    if (!(qty > 0)) return;
+    setLines(prev => prev.map(l => {
+      if (l.kit_group_id !== groupId) return l;
+      const oldQty = Number(l.kit_quantity) > 0 ? Number(l.kit_quantity) : 1;
+      return { ...l, kit_quantity: qty, quantity: Math.round((l.quantity / oldQty) * qty * 10000) / 10000 };
     }));
-    // Package-level assembly overhead rides as its own visible, editable
-    // zero-price line — labor beyond what the member parts carry.
-    const adderLine = kit.labor_adder_hours > 0 ? [{
-      key: genKey(),
-      part_id: null,
-      netsuite_item_id: null,
-      item_number: '',
-      description: `${kit.name} — assembly labor`,
-      quantity: 1,
-      unit_price: 0,
-      labor_hours: kit.labor_adder_hours,
-      is_custom: true,
-    }] : [];
-    setLines(prev => [...prev, ...memberLines, ...adderLine]);
+  };
+  const removeKitGroup = (groupId: string) => {
+    setLines(prev => prev.filter(l => l.kit_group_id !== groupId));
   };
 
   // Reverse direction: this estimate's catalog lines become a reusable
@@ -1737,7 +1750,8 @@ export default function EstimatesPage() {
         vehicle_roof: vehicleRoof,
         vehicle_cab: vehicleCab,
         vehicle_bed: vehicleBed,
-        line_items: lines.map(l => ({
+        // A kit's lines always save together, under the kit's first line.
+        line_items: gatherKitGroups(lines).map(l => ({
           part_id: l.part_id,
           netsuite_item_id: l.netsuite_item_id,
           item_number: l.item_number,
@@ -1748,6 +1762,11 @@ export default function EstimatesPage() {
           is_custom: l.is_custom,
           notes: l.notes || null,
           wrap_quote_id: l.wrap_quote_id || null,
+          kit_group_id: l.kit_group_id || null,
+          kit_id: l.kit_id || null,
+          kit_item_number: l.kit_item_number || null,
+          kit_name: l.kit_name || null,
+          kit_quantity: l.kit_group_id ? (l.kit_quantity || 1) : null,
         })),
         created_by: user?.id,
       };
@@ -2870,6 +2889,11 @@ export default function EstimatesPage() {
       is_custom: l.is_custom || false,
       notes: l.notes || '',
       wrap_quote_id: l.wrap_quote_id || null,
+      kit_group_id: l.kit_group_id || null,
+      kit_id: l.kit_id || null,
+      kit_item_number: l.kit_item_number || null,
+      kit_name: l.kit_name || null,
+      kit_quantity: l.kit_quantity != null ? Number(l.kit_quantity) : null,
       catalog: l.part_id ? infoByPart[l.part_id]?.catalog : undefined,
       purchase_price: l.part_id ? infoByPart[l.part_id]?.purchase_price ?? null : null,
       avg_install_cost: l.part_id ? infoByPart[l.part_id]?.avg_install_cost ?? null : null,
@@ -4156,13 +4180,43 @@ export default function EstimatesPage() {
                 Save as Package
               </button>
             )}
-            {(partResults.length > 0 || (isAdmin && !partSearching && partSearch.trim().length >= 2)) && (
+            {(partResults.length > 0 || kitResults.length > 0 || (isAdmin && !partSearching && partSearch.trim().length >= 2)) && (
               <div style={{
                 position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
                 background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px',
                 boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
                 maxHeight: '250px', overflowY: 'auto', marginTop: '2px',
               }}>
+                {/* Rack kits first: one click adds the rack with its
+                    components beneath it. */}
+                {kitResults.map(k => (
+                  <button
+                    key={`kit-${k.id}`}
+                    onClick={() => addKitLines(k)}
+                    style={{
+                      width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none',
+                      background: 'rgba(96,165,250,0.06)', color: 'var(--text-body)', fontSize: '12px',
+                      cursor: 'pointer', borderBottom: '1px solid var(--border)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                      <div style={{ minWidth: 0 }}>
+                        <span style={{ fontSize: '9px', fontWeight: 800, color: '#60a5fa', border: '1px solid rgba(96,165,250,0.4)', borderRadius: '4px', padding: '0 4px', marginRight: '6px' }}>RACK KIT</span>
+                        <span style={{ fontWeight: 700 }}>{k.item_number}</span>
+                        <span style={{ color: 'var(--text-label)', marginLeft: '8px' }}>{k.name}</span>
+                      </div>
+                      <div style={{ display: 'flex', gap: '10px', flexShrink: 0 }}>
+                        <span style={{ color: '#22c55e', fontWeight: 700 }}>{fmt(k.totalPrice)}</span>
+                        <span style={{ color: 'var(--text-label)', fontSize: '10px' }}>{k.members.length + k.missing.length} parts</span>
+                        {k.missing.length > 0 && (
+                          <span title={`Not in the catalog yet: ${k.missing.map(m => m.item_number).join(', ')}`} style={{ color: '#f59e0b', fontSize: '10px' }}>
+                            {k.missing.length} not in NetSuite
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                ))}
                 {partResults.map(p => (
                   <button
                     key={p.id}
@@ -4199,7 +4253,7 @@ export default function EstimatesPage() {
                       fontWeight: 700, cursor: 'pointer',
                     }}
                   >
-                    ＋ {partResults.length === 0 ? 'No catalog match — create' : 'Not listed? Create'} &ldquo;{partSearch.trim()}&rdquo; as a new part…
+                    ＋ {partResults.length === 0 && kitResults.length === 0 ? 'No catalog match — create' : 'Not listed? Create'} &ldquo;{partSearch.trim()}&rdquo; as a new part…
                   </button>
                 )}
               </div>
@@ -4290,14 +4344,72 @@ export default function EstimatesPage() {
               <div></div>
             </div>
 
-            {sortedLines.map(line => {
+            {sortedLines.map((line, lineIdx) => {
               const unmatched = !line.netsuite_item_id;
+              // Rack kit: its heading goes above the group's first line. A
+              // column sort breaks groups up, so headings show only in
+              // natural order.
+              const kitGroup = !estSortCol ? line.kit_group_id : null;
+              const kitMembers = kitGroup && sortedLines[lineIdx - 1]?.kit_group_id !== kitGroup
+                ? sortedLines.filter(l => l.kit_group_id === kitGroup) : null;
+              const kitQty = Number(line.kit_quantity) > 0 ? Number(line.kit_quantity) : 1;
+              const kitTotal = kitMembers ? kitMembers.reduce((sum, l) => sum + l.quantity * l.unit_price, 0) : 0;
+              const kitLabor = kitMembers ? kitMembers.reduce((sum, l) => sum + (l.labor_hours ?? 0) * l.quantity, 0) : 0;
               return (
               <div
                 key={line.key}
                 data-linekey={line.key}
-                style={draggingKey === line.key ? { background: 'rgba(96,165,250,0.08)', borderRadius: '8px' } : undefined}
+                style={{
+                  ...(draggingKey === line.key ? { background: 'rgba(96,165,250,0.08)', borderRadius: '8px' } : {}),
+                  // Components sit indented under their rack's heading.
+                  ...(kitGroup ? { paddingLeft: '14px', borderLeft: '2px solid rgba(96,165,250,0.35)', marginLeft: '4px' } : {}),
+                }}
               >
+                {kitMembers && (
+                  <div
+                    className="est-line"
+                    style={{ padding: '8px 0 4px', marginLeft: '-14px', paddingLeft: '10px', background: 'rgba(96,165,250,0.06)', borderRadius: '6px' }}
+                  >
+                    <div className="est-c-item" style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <span style={{ fontSize: '8px', fontWeight: 800, color: '#60a5fa', border: '1px solid rgba(96,165,250,0.4)', borderRadius: '4px', padding: '0 3px', marginRight: '4px' }}>KIT</span>
+                      {line.kit_item_number}
+                    </div>
+                    <div className="est-c-desc" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)' }} title="Customers see this line priced, with the parts below listed by quantity only">
+                      {line.kit_name}
+                    </div>
+                    <div className="est-c-qty">
+                      <div className="est-cell-label" style={{ textAlign: 'center' }}>Racks</div>
+                      <NumberInput
+                        style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px', textAlign: 'center', fontWeight: 700 }}
+                        value={kitQty}
+                        onChange={e => setKitQuantity(kitGroup!, parseFloat(e.target.value) || 0)}
+                        min={1}
+                        title="How many of this rack — scales every part below"
+                      />
+                    </div>
+                    <div className="est-c-price" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)', textAlign: 'right' }}>
+                      <div className="est-cell-label">Per rack</div>
+                      {fmt(kitTotal / kitQty)}
+                    </div>
+                    <div className="est-c-total" style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-primary)', textAlign: 'right' }}>
+                      <div className="est-cell-label">Total</div>
+                      {fmt(kitTotal)}
+                    </div>
+                    <div className="est-c-labor" style={{ fontSize: '10px', color: kitLabor > 0 ? '#fbbf24' : 'var(--text-label)', textAlign: 'center' }}>
+                      <div className="est-cell-label">Labor</div>
+                      {kitLabor > 0 ? `${kitLabor.toFixed(1)}h` : '—'}
+                    </div>
+                    <button
+                      className="est-c-x"
+                      onClick={() => removeKitGroup(kitGroup!)}
+                      title="Remove this rack and all its parts"
+                      style={{ background: 'transparent', border: 'none', color: '#f87171', fontSize: '14px', cursor: 'pointer', padding: '2px' }}
+                    >
+                      ×
+                    </button>
+                    <div className="est-c-drag" />
+                  </div>
+                )}
                 <div
                   className="est-line"
                   style={{ padding: '6px 0', borderBottom: unmatched ? 'none' : '1px solid var(--border)' }}

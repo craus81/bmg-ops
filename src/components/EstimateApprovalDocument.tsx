@@ -54,7 +54,21 @@ export default function EstimateApprovalDocument({ estimate: est, lines, graphic
             <div className="appr-num">Rate</div>
             <div className="appr-num">Total</div>
           </div>
-          {lines.map((l: any) => (
+          {lines.map((l: any) => l.kit_component ? (
+            // A rack's component: indented under the rack line, quantity only.
+            // One full-width cell — each line is its own grid, so an empty
+            // rate/total pair would push the quantity under Total.
+            <div
+              key={l.id}
+              style={{ display: 'flex', gap: '12px', alignItems: 'baseline', padding: '2px 0 4px 18px', fontSize: '12px', color: '#475569' }}
+            >
+              <div style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
+                ↳ <span style={{ fontWeight: 600, color: '#334155' }}>{l.item_number || l.description || 'Part'}</span>
+                {l.description && l.description !== l.item_number && <span> {l.description}</span>}
+              </div>
+              <div style={{ whiteSpace: 'nowrap', color: '#64748b' }}>Qty {l.quantity}</div>
+            </div>
+          ) : (
             <div
               key={l.id}
               className="appr-line"

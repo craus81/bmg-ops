@@ -9,6 +9,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import { createClient } from '@/lib/supabase-browser';
 import { useRequireFeature } from '@/components/AuthProvider';
 import { fetchAllRows } from '@/lib/fetch-all';
@@ -128,7 +129,10 @@ export default function InventoryPage() {
   return (
     <div style={{ padding: '16px', maxWidth: '980px', margin: '0 auto' }}>
       <div style={{ marginBottom: '12px' }}>
-        <h1 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>Inventory</h1>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
+          <h1 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>Inventory</h1>
+          <Link href="/admin/inventory/rack-kits" style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa' }}>Rack Kits: what can we build? →</Link>
+        </div>
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
           On hand · allocated to jobs · free · on order — {totals.parts} parts shown, {totals.allocated} allocated, {totals.onOrder} on order
         </div>

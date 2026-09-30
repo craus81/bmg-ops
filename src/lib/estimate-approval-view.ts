@@ -16,6 +16,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { loadEstimateGraphics, loadEstimateProofs, type EstimateProofBlock } from './estimate-graphics';
 import { enrichLinesWithPartAssets } from './estimate-line-parts';
+import { toKitDisplayLines } from './estimate-kits';
 
 /** The estimate fields the customer-facing document is allowed to show. */
 export function publicEstimate(est: any) {
@@ -55,7 +56,9 @@ export function publicEstimate(est: any) {
 
 /** Line fields the document renders, incl. the enriched part assets. */
 export function publicLines(lines: any[]) {
-  return (lines || []).map((l: any) => ({
+  // Rack kits: a synthesized priced rack line, then its components with
+  // quantities only (kit_component rows carry zero money).
+  return toKitDisplayLines(lines || []).map((l: any) => ({
     id: l.id,
     item_number: l.item_number,
     description: l.description,
@@ -65,6 +68,8 @@ export function publicLines(lines: any[]) {
     notes: l.notes,
     image_url: l.part_image_url || null,
     product_url: l.part_product_url || null,
+    kit_header: !!l.kit_header,
+    kit_component: !!l.kit_component,
   }));
 }
 
