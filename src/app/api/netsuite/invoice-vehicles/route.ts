@@ -205,7 +205,7 @@ export async function POST(req: NextRequest) {
         }
 
         // Build invoice line items
-        const lineItems: { itemId: string | number; quantity: number; rate: number; description: string }[] = [];
+        const lineItems: { itemId: string | number; quantity: number; rate: number; description: string; partNumber: string }[] = [];
         const unmatchedParts: string[] = [];
         // Parts that matched a NetSuite item but have no price in the catalog
         // OR in NetSuite itself — billing them would silently send a $0 line
@@ -233,6 +233,7 @@ export async function POST(req: NextRequest) {
             quantity: group.count,
             rate: group.price,
             description: `${group.description} — ${group.count} vehicle${group.count !== 1 ? 's' : ''}`,
+            partNumber: group.display,
           });
         }
 

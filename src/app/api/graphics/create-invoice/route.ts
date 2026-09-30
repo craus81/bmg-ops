@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
 
     // Final invoice lines + the (partNumber, itemId, rate) tuples whose price
     // we may want to backfill into the catalog afterwards.
-    let lineItems: { itemId: string; quantity: number; rate: number; description?: string }[];
+    let lineItems: { itemId: string; quantity: number; rate: number; description?: string; partNumber?: string }[];
     let persistTargets: { partNumber: string; itemId: string; rate: number }[] = [];
     let skippedParts: string[] = [];
 
@@ -113,6 +113,7 @@ export async function POST(req: NextRequest) {
         quantity: l.quantity,
         rate: l.rate,
         description: (l.description || job.title || '').trim() || undefined,
+        partNumber: l.partNumber || undefined,
       }));
       persistTargets = verifiedLines
         .filter((l) => l.partNumber && l.rate > 0)
@@ -186,6 +187,7 @@ export async function POST(req: NextRequest) {
         quantity: job.quantity || 1,
         rate: m.rate,
         description: job.title || m.displayName || m.partNumber,
+        partNumber: m.partNumber,
       }));
       persistTargets = matched
         .filter((m) => priceOverrides[m.partNumber.toUpperCase()] > 0)

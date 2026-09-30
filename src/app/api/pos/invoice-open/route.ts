@@ -135,13 +135,13 @@ export async function POST(req: NextRequest) {
     // across several PO lines at the same price bills as ONE clean invoice
     // line (e.g. 200 + 100 + 101 → 401), while lines of the same part at
     // different prices stay separate so each rate is billed as agreed.
-    const invoiceLines = new Map<string, { itemId: string | number; quantity: number; rate: number; description: string }>();
+    const invoiceLines = new Map<string, { itemId: string | number; quantity: number; rate: number; description: string; partNumber: string }>();
     for (const l of toBill) {
       const itemId = nsItems[l.partNumber.toUpperCase()].id;
       const key = `${itemId}|${l.rate}`;
       const existing = invoiceLines.get(key);
       if (existing) existing.quantity += l.quantity;
-      else invoiceLines.set(key, { itemId, quantity: l.quantity, rate: l.rate, description: l.description });
+      else invoiceLines.set(key, { itemId, quantity: l.quantity, rate: l.rate, description: l.description, partNumber: l.partNumber });
     }
 
     const invoiceResult = await createDirectInvoice({
