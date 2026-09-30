@@ -811,8 +811,17 @@ export default function GraphicsJobRecordPage() {
     // (part-files/…) share their storage object with the source record —
     // only unlink them from the job. The object itself is deleted only for
     // the job's own uploads (graphics-files/…).
+    // A duplicated job shares its source's uploads too, so keep the object
+    // while any other job still lists it.
     if (file.storage_path.startsWith('graphics-files/')) {
-      await storage.from('graphics-proofs').remove([file.storage_path]);
+      const { count, error: countErr } = await supabase
+        .from('graphics_job_files')
+        .select('id', { count: 'exact', head: true })
+        .eq('storage_path', file.storage_path)
+        .neq('id', file.id);
+      if (!countErr && !count) {
+        await storage.from('graphics-proofs').remove([file.storage_path]);
+      }
     }
     await supabase.from('graphics_job_files').delete().eq('id', file.id);
     setJobFiles(prev => prev.filter(f => f.id !== file.id));
@@ -1221,6 +1230,15 @@ export default function GraphicsJobRecordPage() {
                 Discard Edits
               </button>
             </>
+          )}
+          {!edit && (isProduction || isAdmin || isSales) && (
+            <button
+              onClick={() => router.push(deepLinks.graphicsDuplicate(job.id))}
+              title="Start a new job filled in from this one"
+              style={{ padding: '10px 14px', borderRadius: '8px', background: 'rgba(168,85,247,0.08)', border: '1px solid rgba(168,85,247,0.25)', color: '#c084fc', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+            >
+              Duplicate
+            </button>
           )}
           {isAdmin && (
             <button

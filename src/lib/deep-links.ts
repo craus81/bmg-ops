@@ -31,6 +31,8 @@ export const deepLinks = {
    *  a digest of the recipient's OWN jobs: sent to anyone else it lands on
    *  an empty board, which is a dead click with extra steps. */
   graphicsBoard: (opts?: { mine?: boolean }) => `/graphics${opts?.mine ? '?mine=1' : ''}`,
+  /** The graphics board's New Job form, filled in from an existing job (Duplicate). */
+  graphicsDuplicate: (jobId: string) => `/graphics?new=1&copyFrom=${jobId}`,
   /** In-Shop board — opens the vehicle's detail modal (optionally flashing one note). */
   vehicle: (checkinId: string, noteId?: string | null) =>
     `/tracking?vehicle=${checkinId}${noteId ? `&note=${noteId}` : ''}`,
