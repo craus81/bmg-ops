@@ -81,6 +81,23 @@ export interface EstimateReadinessLine {
 /** The placeholder the builder and the SO push both use for a custom line. */
 const PLACEHOLDER = 'FS-CUSTOM';
 
+/**
+ * Items the stock check never looks at, whatever NetSuite calls them. The
+ * graphics lines (Add Graphics' "3M Vinyl" + "Graphics Install Labor", and
+ * removal) are billed work, not shelf stock: vinyl comes off a roll, which
+ * the Roll Plan card checks. Named outright rather than trusting the item
+ * type, because a vinyl item set up as a non-inventory part would otherwise
+ * read "Short 1" on every graphics quote (Craig, 2026-09-30).
+ */
+export const NO_STOCK_CHECK_ITEMS = new Set(['3M VINYL', 'GRAPHICS INSTALL LABOR', 'GRAPHICS REMOVAL']);
+
+/** Normalized keys this estimate's lines contribute to the stock check. */
+export function stockCheckKey(itemNumber: string | null | undefined): string | null {
+  const key = normalizeItemNumber(itemNumber);
+  if (!key || key === PLACEHOLDER || NO_STOCK_CHECK_ITEMS.has(key)) return null;
+  return key;
+}
+
 export async function computeEstimateReadiness(
   service: SupabaseClient,
   input: {
@@ -104,11 +121,25 @@ export async function computeEstimateReadiness(
     uncatalogued: boolean;
   }
   const parts = new Map<string, Working>();
+  // The names as typed, alongside the upper-cased keys. The catalog, PO and
+  // hold tables store NetSuite's own spelling, and `.in()` is case-sensitive,
+  // so looking up only "GRAPHICS INSTALL LABOR" never found "Graphics Install
+  // Labor" and every mixed-case item read "not in the parts catalog".
+  const lookupNames = new Set<string>();
+  let skippedNonStock = 0;
   for (const line of input.lines) {
-    const key = normalizeItemNumber(line.item_number);
-    if (!key || key === PLACEHOLDER) continue;
+    const raw = String(line.item_number || '').trim();
+    const key = stockCheckKey(raw);
+    if (!key) {
+      if (NO_STOCK_CHECK_ITEMS.has(normalizeItemNumber(raw))) skippedNonStock++;
+      continue;
+    }
     const qty = Math.abs(Number(line.quantity) || 0) * units;
     if (qty <= 0) continue;
+    lookupNames.add(key);
+    lookupNames.add(raw);
+    const segs = raw.split(':');
+    lookupNames.add(segs[segs.length - 1].trim());
     const row = parts.get(key) || {
       item_number: key, description: null, needed: 0,
       availPool: 0, allocatedHere: 0, allocatedOthers: 0,
@@ -119,7 +150,7 @@ export async function computeEstimateReadiness(
   }
 
   const empty: EstimateReadiness = {
-    vehicleCount: units, stockSource: 'mirror', parts: [], skippedNonStock: 0,
+    vehicleCount: units, stockSource: 'mirror', parts: [], skippedNonStock,
     summary: { covered: 0, onOrder: 0, short: 0, unknown: 0, verdict: 'ready', lastEta: null },
   };
   if (parts.size === 0) return empty;
@@ -127,8 +158,7 @@ export async function computeEstimateReadiness(
   // ── Catalog: what kind of thing is it, and the mirrored stock figure ──
   // Batched at 200 because `.in()` on a long list is a long URL, and chunked
   // reads are how every other catalog lookup in the app does it.
-  const keys = [...parts.keys()];
-  let skippedNonStock = 0;
+  const keys = [...lookupNames];
   const catalogued = new Set<string>();
   for (let i = 0; i < keys.length; i += 200) {
     const { data: cat } = await service
@@ -201,7 +231,7 @@ export async function computeEstimateReadiness(
     .from('part_allocations')
     .select('project_id, estimate_id, item_number, quantity')
     .eq('status', 'reserved')
-    .in('item_number', [...parts.keys()])
+    .in('item_number', [...lookupNames])
     .order('id')
     .range(from, to));
   for (const a of allocations || []) {
@@ -216,7 +246,7 @@ export async function computeEstimateReadiness(
   const { data: poLines } = await fetchAllRows<any>((from, to) => service
     .from('netsuite_vendor_po_lines')
     .select('item_number, quantity, quantity_received, netsuite_vendor_pos!inner(tranid, vendor_name, trandate, status, status_label, eta_date)')
-    .in('item_number', [...parts.keys()])
+    .in('item_number', [...lookupNames])
     .order('id')
     .range(from, to));
   for (const l of poLines || []) {

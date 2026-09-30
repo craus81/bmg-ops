@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { summarizeEstimateReadiness, type EstimatePartRow } from './estimate-readiness';
+import { summarizeEstimateReadiness, stockCheckKey, type EstimatePartRow } from './estimate-readiness';
 
 const row = (over: Partial<EstimatePartRow>): EstimatePartRow => ({
   item_number: 'PART', description: null, needed: 1, allocated: 0, free: 0,
@@ -68,5 +68,26 @@ describe('summarizeEstimateReadiness', () => {
 
   it('an estimate with no parts at all is not a warning', () => {
     expect(summarizeEstimateReadiness([])).toMatchObject({ verdict: 'ready', unknown: 0 });
+  });
+});
+
+// Graphics lines are billed work, not shelf stock (Craig, 2026-09-30): they
+// must never reach the check, however the line spells the item.
+describe('stockCheckKey', () => {
+  it('skips the graphics items in any case', () => {
+    for (const name of ['3M Vinyl', 'Graphics Install Labor', 'Graphics Removal', 'graphics removal', ' 3M VINYL ']) {
+      expect(stockCheckKey(name)).toBeNull();
+    }
+  });
+
+  it('skips blanks and the custom-line placeholder', () => {
+    expect(stockCheckKey('')).toBeNull();
+    expect(stockCheckKey(null)).toBeNull();
+    expect(stockCheckKey('FS-CUSTOM')).toBeNull();
+  });
+
+  it('keeps real parts, keyed the way the panel looks them up', () => {
+    expect(stockCheckKey('fea-0024')).toBe('FEA-0024');
+    expect(stockCheckKey('Ranger : FBM-1072-BLK')).toBe('FBM-1072-BLK');
   });
 });

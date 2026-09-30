@@ -101,8 +101,17 @@ const STOCK_TONE: Record<StockState | StockReadiness['summary']['verdict'] | 'id
 const stockEta = (d: string | null) =>
   d ? new Date(`${d.slice(0, 10)}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' }) : null;
 
+/** Banner colour: neutral until checked, and when there was nothing to check. */
+function stockToneKey(stock: StockReadiness | null, stale: boolean): keyof typeof STOCK_TONE {
+  if (!stock || stale || stock.parts.length === 0) return 'idle';
+  return stock.summary.verdict;
+}
+
 /** The banner sentence. Says what to do about it, not just what it is. */
 function stockVerdictText(stock: StockReadiness): string {
+  // Labor, graphics and custom lines only — "everything is in stock" would
+  // be a claim about parts nobody looked at.
+  if (stock.parts.length === 0) return 'No stocked parts on this estimate, so there’s nothing to check';
   const { verdict, short, onOrder, lastEta } = stock.summary;
   const eta = stockEta(lastEta);
   if (verdict === 'short') {
@@ -1718,11 +1727,33 @@ export default function EstimatesPage() {
   // save (the Save button, Duplicate's pre-save) — pushToNetSuite/PDF/email/
   // send-for-approval save first and then act on editingId, so a silent jump
   // would point them at the wrong estimate.
-  const saveEstimate = async (status: string = 'draft', opts?: { offerRevision?: boolean }) => {
+  //
+  // Saves run one at a time. The server replaces an estimate's lines by
+  // deleting them and inserting the new set, so two saves that overlap (a
+  // quick double-click, or Save racing Add Graphics / Push) could each
+  // delete and then each insert, leaving every line on the estimate twice
+  // (EST-2609-035, 2026-09-30). A save that starts while another is running
+  // waits for it, then writes to the estimate that save landed on, so a
+  // brand-new estimate's second save updates it instead of creating a copy.
+  const saveQueueRef = useRef<Promise<string | null | undefined> | null>(null);
+  const saveEstimate = (status: string = 'draft', opts?: { offerRevision?: boolean }) => {
+    const prior = saveQueueRef.current;
+    const run = (async () => {
+      const priorId = prior ? await prior.catch(() => null) : null;
+      return saveEstimateNow(priorId || editingId, status, opts);
+    })();
+    saveQueueRef.current = run;
+    // Only an overlapping save should follow the prior one's id; once the
+    // queue is idle, the next save reads editingId as normal.
+    run.finally(() => { if (saveQueueRef.current === run) saveQueueRef.current = null; }).catch(() => {});
+    return run;
+  };
+
+  const saveEstimateNow = async (baseId: string | null, status: string, opts?: { offerRevision?: boolean }) => {
     setSaving(true);
     try {
       const body = {
-        id: editingId || undefined,
+        id: baseId || undefined,
         customer_id: customerId,
         prospect_id: prospectId,
         customer_name: customerName,
@@ -1783,8 +1814,8 @@ export default function EstimatesPage() {
       // copy of the row said, it is frozen now. Fold that in so View/Print,
       // Email PDF, and the draft-restore guard treat it as accepted from
       // here on instead of re-tripping the lock.
-      if (res.status === 409 && data.step === 'accepted_locked' && editingId) {
-        setEstimates(prev => prev.map(e => e.id === editingId && !isContentFrozen(e) ? { ...e, status: 'accepted' } : e));
+      if (res.status === 409 && data.step === 'accepted_locked' && baseId) {
+        setEstimates(prev => prev.map(e => e.id === baseId && !isContentFrozen(e) ? { ...e, status: 'accepted' } : e));
       }
       // Revision lock: the customer signed this document, so its contents are
       // frozen. An admin can still save with a recorded reason — ask for it
@@ -1809,13 +1840,13 @@ export default function EstimatesPage() {
       // the on-screen edits on the fresh draft (R3-17).
       let revisionJumped = false;
       let revisionNotes: string | null = null;
-      if (res.status === 409 && data.step === 'accepted_locked' && !data.canOverride && opts?.offerRevision && editingId) {
+      if (res.status === 409 && data.step === 'accepted_locked' && !data.canOverride && opts?.offerRevision && baseId) {
         const wantsRevision = await dialog.confirm(
           'This estimate was accepted by the customer, so its contents are locked. Duplicate it as a new revision draft with your changes? The signed original stays untouched.',
           { confirmLabel: 'Duplicate as Revision' },
         );
         if (!wantsRevision) { setSaving(false); return undefined; }
-        const dupRes = await fetch(`/api/estimates/${editingId}/duplicate`, { method: 'POST' });
+        const dupRes = await fetch(`/api/estimates/${baseId}/duplicate`, { method: 'POST' });
         const dup = await dupRes.json().catch(() => ({}));
         if (!dupRes.ok || !dup.success) {
           await dialog.alert('Could not create the revision: ' + (dup.error || 'Unknown error'));
@@ -1836,15 +1867,15 @@ export default function EstimatesPage() {
 
       if (data.success) {
         // Both API paths return the row id; on a revision jump it's the NEW
-        // id, and everything below must follow it, not editingId.
-        const savedId = (data.id || editingId) as string;
+        // id, and everything below must follow it, not baseId.
+        const savedId = (data.id || baseId) as string;
         // The just-saved state is the new baseline — retire the local backup
         // ('new' on a first save, which then re-keys under the real id).
-        clearEstimateDraft(editingId);
-        if (savedId !== editingId) clearEstimateDraft(savedId);
+        clearEstimateDraft(baseId);
+        if (savedId !== baseId) clearEstimateDraft(savedId);
         formTel.markSubmitted();
         setDraftSession(s => s + 1);
-        if (!editingId || revisionJumped) setEditingId(savedId);
+        if (!baseId || revisionJumped) setEditingId(savedId);
         // On a revision jump the saved notes carry the provenance line —
         // mirror it into the builder so the next Save doesn't strip it.
         const savedNotes = revisionJumped && revisionNotes !== null ? revisionNotes : internalNotes;
@@ -4040,11 +4071,11 @@ export default function EstimatesPage() {
         {lines.length > 0 && (
           <div style={{
             marginBottom: '8px', padding: '8px 10px', borderRadius: '8px',
-            border: `1px solid ${STOCK_TONE[stock && !stockStale ? stock.summary.verdict : 'idle'].border}`,
-            background: STOCK_TONE[stock && !stockStale ? stock.summary.verdict : 'idle'].bg,
+            border: `1px solid ${STOCK_TONE[stockToneKey(stock, stockStale)].border}`,
+            background: STOCK_TONE[stockToneKey(stock, stockStale)].bg,
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-              <div style={{ flex: 1, minWidth: '200px', fontSize: '11px', fontWeight: 700, color: STOCK_TONE[stock && !stockStale ? stock.summary.verdict : 'idle'].fg }}>
+              <div style={{ flex: 1, minWidth: '200px', fontSize: '11px', fontWeight: 700, color: STOCK_TONE[stockToneKey(stock, stockStale)].fg }}>
                 {stockLoading ? 'Checking stock…'
                   : !stock ? 'Stock not checked yet'
                     : stockStale ? 'Lines changed since the last check'
@@ -4100,7 +4131,7 @@ export default function EstimatesPage() {
 
             {stock && !stockStale && (
               <div style={{ marginTop: '4px', fontSize: '9px', color: 'var(--text-label)' }}>
-                {stock.stockSource === 'mirror' && 'NetSuite didn’t answer — these are the last sync’s figures. '}
+                {stock.stockSource === 'mirror' && stock.parts.length > 0 && 'NetSuite didn’t answer — these are the last sync’s figures. '}
                 {stock.summary.unknown > 0 && `${stock.summary.unknown} line${stock.summary.unknown === 1 ? '' : 's'} not in the parts catalog, so ${stock.summary.unknown === 1 ? 'it wasn’t' : 'they weren’t'} checked. `}
                 {units > 1 && `Quantities are ×${units} for the fleet. `}
                 {!editingId && 'Save the estimate to hold parts for it.'}
