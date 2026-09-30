@@ -989,6 +989,9 @@ export default function AdminScansPage() {
   // matches no PO and prices as nothing.
   const [bulkEditExtraParts, setBulkEditExtraParts] = useState<string[]>([]);
   const [bulkExtraInput, setBulkExtraInput] = useState('');
+  // What the panel held before "split into…" was clicked, so the split can
+  // be shown as done (and undone) instead of the offer staying up forever.
+  const [bulkSplitUndo, setBulkSplitUndo] = useState<{ part: string; extras: string[] } | null>(null);
   const [bulkEditBusy, setBulkEditBusy] = useState(false);
   const [allPOs, setAllPOs] = useState<{ id: string; po_number: string; customer: string; ship_to: any; line_items: { id: string; part_number: string; quantity: number; installed: number }[] }[]>([]);
   /** "0602S029/06S646" typed into one part field → the two parts it means. */
@@ -1027,6 +1030,7 @@ export default function AdminScansPage() {
     setBulkEditIccid(one?.iccid || '');
     setBulkEditExtraParts([]);
     setBulkExtraInput('');
+    setBulkSplitUndo(null);
     setShowBulkEdit(true);
     setEditorSeq(n => n + 1);
   };
@@ -1197,6 +1201,7 @@ export default function AdminScansPage() {
     setBulkEditIccid('');
     setBulkEditExtraParts([]);
     setBulkExtraInput('');
+    setBulkSplitUndo(null);
     loadAll();
   };
 
@@ -1806,10 +1811,16 @@ export default function AdminScansPage() {
             const selectedPartNumbers = [...new Set(selectedScanList.map(s => s.part_number?.toUpperCase()).filter(Boolean))];
             const hasOnePart = selectedPartNumbers.length === 1;
             const selectedPart = hasOnePart ? selectedPartNumbers[0] : null;
+            // The PO list follows the part this apply will leave on the scans:
+            // the one in the Part Number box when it holds a single part (so
+            // after splitting "A/B/C" it searches A, not the combined string),
+            // otherwise the scans' own common part.
+            const typedPoPart = bulkEditPart.trim().toUpperCase();
+            const poPart = typedPoPart && !typedPoPart.includes('/') ? typedPoPart : selectedPart;
 
-            // Filter POs to only those containing the selected part number
-            const matchingPOs = selectedPart
-              ? allPOs.filter(po => po.line_items.some(li => li.part_number.toUpperCase() === selectedPart))
+            // Filter POs to only those containing that part number
+            const matchingPOs = poPart
+              ? allPOs.filter(po => po.line_items.some(li => li.part_number.toUpperCase() === poPart))
               : allPOs;
 
             const single = editorScan;
@@ -1919,13 +1930,32 @@ export default function AdminScansPage() {
                 const typedSplit = splitSlashParts(bulkEditPart);
                 const scannedSplit = splitSlashParts(selectedPart);
                 const offer = typedSplit.length > 1 ? typedSplit : scannedSplit.length > 1 ? scannedSplit : null;
+                const findPart = (pn: string) => allParts.find(p => p.item_number.toUpperCase() === pn.toUpperCase()) || null;
                 const applySplit = (parts: string[]) => {
-                  const first = allParts.find(p => p.item_number.toUpperCase() === parts[0].toUpperCase());
+                  const first = findPart(parts[0]);
+                  setBulkSplitUndo({ part: bulkEditPart, extras: bulkEditExtraParts });
                   setBulkEditPart(first?.item_number || parts[0]);
-                  setBulkEditPartPicked(first || null);
-                  setBulkEditExtraParts(parts.slice(1));
+                  setBulkEditPartPicked(first);
+                  setBulkEditExtraParts(parts.slice(1).map(pn => findPart(pn)?.item_number || pn));
                   setBulkExtraInput('');
                 };
+                const undoSplit = () => {
+                  if (!bulkSplitUndo) return;
+                  setBulkEditPart(bulkSplitUndo.part);
+                  setBulkEditPartPicked(findPart(bulkSplitUndo.part));
+                  setBulkEditExtraParts(bulkSplitUndo.extras);
+                  setBulkSplitUndo(null);
+                };
+                // Once split, the offer only comes back if a new "A/B" is
+                // typed into the Part Number box.
+                const showOffer = !!offer && (typedSplit.length > 1 || !bulkSplitUndo);
+                // Every part each selected VIN will end up with: the one that
+                // stays on the scan, then each extra as its own new line.
+                const mainPart = bulkEditPart.trim() || selectedPart || '';
+                const partRows = [
+                  ...(mainPart ? [{ pn: mainPart, extra: false }] : []),
+                  ...bulkEditExtraParts.map(pn => ({ pn, extra: true })),
+                ];
                 const addExtra = (raw: string) => {
                   const pn = raw.trim();
                   if (!pn) return;
@@ -1933,34 +1963,72 @@ export default function AdminScansPage() {
                   setBulkExtraInput('');
                 };
                 const q = bulkExtraInput.trim().toLowerCase();
+                // The exact match stays in the list, pinned first and ticked, so
+                // typing the full number shows which part it is before adding.
                 const extraMatches = q.length >= 2
-                  ? allParts.filter(p =>
-                      p.item_number.toLowerCase() !== q && (
+                  ? allParts
+                      .filter(p =>
                         p.item_number.toLowerCase().includes(q) ||
-                        p.display_name?.toLowerCase().includes(q)
-                      )).slice(0, 6)
+                        p.display_name?.toLowerCase().includes(q))
+                      .sort((a, b) => Number(b.item_number.toLowerCase() === q) - Number(a.item_number.toLowerCase() === q))
+                      .slice(0, 6)
                   : [];
                 return (
                   <div style={{ marginTop: '6px' }}>
-                    {offer && (
+                    {showOffer && offer && (
                       <button
                         onClick={() => applySplit(offer)}
                         style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 7px', borderRadius: '5px', border: '1px solid rgba(251,191,36,0.3)', background: 'rgba(251,191,36,0.1)', color: '#fbbf24', fontSize: '9px', fontWeight: 700, cursor: 'pointer', marginBottom: '5px' }}
                       >
-                        That is two parts in one field — split into {offer.join(' + ')}
+                        That is {offer.length} parts in one field. Click to split into {offer.join(' + ')}
                       </button>
                     )}
                     {bulkEditExtraParts.length > 0 && (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '5px' }}>
-                        {bulkEditExtraParts.map(pn => (
-                          <span key={pn} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '9px', fontWeight: 700, padding: '3px 6px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e' }}>
-                            + {pn}
-                            <button
-                              onClick={() => setBulkEditExtraParts(prev => prev.filter(x => x !== pn))}
-                              style={{ border: 'none', background: 'transparent', color: '#22c55e', cursor: 'pointer', fontSize: '10px', padding: 0, lineHeight: 1 }}
-                            >✕</button>
+                      <div style={{ padding: '6px 8px', borderRadius: '6px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', marginBottom: '5px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', fontSize: '10px', fontWeight: 700, color: '#22c55e', marginBottom: '4px' }}>
+                          <span>
+                            {bulkSplitUndo && !showOffer ? `Split into ${partRows.length} parts. ` : `${partRows.length} parts. `}
+                            {single ? 'This VIN gets:' : 'Every selected VIN gets:'}
                           </span>
-                        ))}
+                          {bulkSplitUndo && !showOffer && (
+                            <button
+                              onClick={undoSplit}
+                              style={{ border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '9px', fontWeight: 700, textDecoration: 'underline', padding: 0 }}
+                            >Undo split</button>
+                          )}
+                        </div>
+                        {partRows.map((row, idx) => {
+                          const known = findPart(row.pn);
+                          return (
+                            <div key={`${row.pn}-${idx}`} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', padding: '3px 0', borderTop: idx === 0 ? 'none' : '1px solid rgba(34,197,94,0.15)', fontSize: '10px' }}>
+                              <span style={{ color: 'var(--text-muted)', fontWeight: 700, minWidth: '12px' }}>{idx + 1}.</span>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div>
+                                  <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{row.pn}</span>
+                                  <span style={{ color: 'var(--text-muted)', marginLeft: '6px', fontSize: '9px' }}>
+                                    {row.extra ? 'new line, own PO + invoice' : (single ? 'this scan' : 'these scans')}
+                                  </span>
+                                </div>
+                                {known ? (
+                                  <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
+                                    {known.billable_customer && <span style={{ color: '#a78bfa' }}>{known.billable_customer}</span>}
+                                    {known.billable_customer && known.display_name && ' · '}
+                                    {known.display_name}
+                                  </div>
+                                ) : (
+                                  <div style={{ fontSize: '9px', color: '#fbbf24' }}>Not in the parts list. Check the number.</div>
+                                )}
+                              </div>
+                              {row.extra && (
+                                <button
+                                  onClick={() => setBulkEditExtraParts(prev => prev.filter(x => x !== row.pn))}
+                                  title={`Remove ${row.pn}`}
+                                  style={{ border: 'none', background: 'transparent', color: '#22c55e', cursor: 'pointer', fontSize: '11px', padding: 0, lineHeight: 1 }}
+                                >✕</button>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                     <div style={{ position: 'relative' }}>
@@ -1968,7 +2036,7 @@ export default function AdminScansPage() {
                         value={bulkExtraInput}
                         onChange={e => setBulkExtraInput(e.target.value)}
                         onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addExtra(bulkExtraInput); } }}
-                        placeholder="Second part number (optional)"
+                        placeholder={bulkEditExtraParts.length > 0 ? 'Add another part (optional)' : 'Second part number (optional)'}
                         style={{ width: '100%', padding: '7px 8px', borderRadius: '6px', border: `1px dashed ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}
                       />
                       {extraMatches.length > 0 && (
@@ -1978,8 +2046,9 @@ export default function AdminScansPage() {
                               key={p.id}
                               onMouseDown={e => e.preventDefault()}
                               onClick={() => addExtra(p.item_number)}
-                              style={{ display: 'block', width: '100%', padding: '6px 8px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
+                              style={{ display: 'block', width: '100%', padding: '6px 8px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: p.item_number.toLowerCase() === q ? 'rgba(34,197,94,0.08)' : 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
                             >
+                              {p.item_number.toLowerCase() === q && <span style={{ color: '#22c55e', marginRight: '4px' }}>✓</span>}
                               <span style={{ fontWeight: 700 }}>{p.item_number}</span>
                               {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
                               {p.display_name && <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{p.display_name}</div>}
@@ -2052,7 +2121,7 @@ export default function AdminScansPage() {
                 <option value="">{single ? '— No PO —' : '— No change —'}</option>
                 {!single && <option value="__clear__">Clear PO assignment</option>}
                 {poOptions.map(p => {
-                  const matchedLine = selectedPart ? p.line_items.find(li => li.part_number.toUpperCase() === selectedPart) : null;
+                  const matchedLine = poPart ? p.line_items.find(li => li.part_number.toUpperCase() === poPart) : null;
                   const remaining = matchedLine ? matchedLine.quantity - matchedLine.installed : null;
                   // Where the PO ships, spelled out: the same part is ordered
                   // per plant, so PO number and customer alone never said
@@ -2068,8 +2137,8 @@ export default function AdminScansPage() {
                   );
                 })}
               </select>
-              {hasOnePart && matchingPOs.length === 0 && (
-                <div style={{ fontSize: '9px', color: '#fbbf24', marginTop: '3px' }}>No POs found with part {selectedPart}</div>
+              {poPart && matchingPOs.length === 0 && (
+                <div style={{ fontSize: '9px', color: '#fbbf24', marginTop: '3px' }}>No POs found with part {poPart}</div>
               )}
             </div>
           </div>
