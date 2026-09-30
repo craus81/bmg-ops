@@ -1,0 +1,72 @@
+# Daily Pro Vehicle Outlines template sync — no computer needed.
+#
+# Runs scripts/pvo-sync.mjs, which signs into PVO in headless Chrome (the
+# runner image ships Google Chrome), takes the next 38 templates off the
+# pvo_catalog queue, uploads them to R2, adds them to the template library
+# calibrated for the wrap estimator, and emails a summary. PVO caps downloads
+# at 40/day; the script never takes more than 38 inside 20 hours, so a
+# re-run or a manual run the same day is harmless.
+#
+# Setup — repository secrets (Settings → Secrets and variables → Actions):
+#   PVO_EMAIL, PVO_PASSWORD            the PVO login
+#   NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+#   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
+#   RESEND_API_KEY
+#   PVO_SUMMARY_EMAIL                  who gets the daily summary (comma-separated)
+# Optional repository variables: R2_BUCKET_NAME (default fleetsuite),
+# RESEND_FROM_EMAIL, RESEND_FROM_NAME.
+#
+# This repository is public, so its Actions logs are too: the script logs
+# template names and counts only, never the login.
+
+name: pvo-sync
+
+on:
+  schedule:
+    - cron: '23 11 * * *'  # 6:23am Central (daylight time), 5:23am standard
+  workflow_dispatch:
+    inputs:
+      args:
+        description: 'Extra flags, e.g. --rescan or --dry-run'
+        required: false
+        type: string
+
+concurrency:
+  group: pvo-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: Sync PVO templates
+        run: |
+          if [ -z "$PVO_EMAIL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::notice::PVO sync secrets aren't set up yet (see the top of this file) — skipping."
+            exit 0
+          fi
+          node scripts/pvo-sync.mjs $EXTRA_ARGS
+        env:
+          EXTRA_ARGS: ${{ inputs.args }}
+          PVO_EMAIL: ${{ secrets.PVO_EMAIL }}
+          PVO_PASSWORD: ${{ secrets.PVO_PASSWORD }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          PVO_SUMMARY_EMAIL: ${{ secrets.PVO_SUMMARY_EMAIL }}
+          RESEND_FROM_EMAIL: ${{ vars.RESEND_FROM_EMAIL }}
+          RESEND_FROM_NAME: ${{ vars.RESEND_FROM_NAME }}
