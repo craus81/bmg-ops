@@ -9,6 +9,7 @@ import { useDialog } from '@/components/DialogProvider';
 import EmailProofSearch, { type EmailProofFile } from '@/components/EmailProofSearch';
 import DropboxProofSearch, { type DropboxProofFile } from '@/components/DropboxProofSearch';
 import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
+import { useAddToCatalog, offerAddToCatalog } from '@/components/AddToCatalog';
 import { DropZone } from '@/components/DropZone';
 import PartCatalogBrowser from '@/components/PartCatalogBrowser';
 import CatalogHealthPanel from '@/components/CatalogHealthPanel';
@@ -106,6 +107,7 @@ export default function PartsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, isAdmin, isSales, hasFeature, canSeeMoney, loading: authLoading } = useAuth();
+  const addToCatalog = useAddToCatalog();
   // Two facts, two rules (owner decision 2026-09-17). What a part COSTS us —
   // purchase price, margin, average installer cost — is money and stays with
   // sales/admin/finance. What it SELLS for stays wherever ordering needs it:
@@ -1087,6 +1089,20 @@ export default function PartsPage() {
           <div style={{ fontSize: '11px', marginTop: '4px' }}>
             {parts.length === 0 ? 'Hit "Sync Now" to pull parts from NetSuite.' : 'Try different search terms.'}
           </div>
+          {addToCatalog.canAdd && parts.length > 0 && offerAddToCatalog(search, parts.map(p => p.item_number)) && (
+            <button
+              onClick={() => addToCatalog.start(search, {
+                onAdded: created => {
+                  setSyncMessage(`"${created.item_number}" added to the catalog.`);
+                  setTimeout(() => setSyncMessage(''), 8000);
+                  loadParts();
+                },
+              })}
+              style={{ marginTop: '12px', padding: '8px 14px', borderRadius: '8px', border: '1px solid rgba(34,197,94,0.3)', background: 'rgba(34,197,94,0.08)', color: '#22c55e', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+            >
+              ＋ Add &ldquo;{search.trim()}&rdquo; to catalog
+            </button>
+          )}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -1639,6 +1655,8 @@ export default function PartsPage() {
         </div>
       )}
       </>)}
+
+      {addToCatalog.modal}
 
       {/* Create-in-NetSuite modal for a local-only catalog part */}
       {nsCreatePart && (

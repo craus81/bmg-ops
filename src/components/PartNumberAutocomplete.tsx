@@ -6,6 +6,7 @@ import {
   cleanPartQuery, partSearchFilter, rankPartSuggestions, latestPoPrices,
   type PartSuggestion, type LastPoPrice,
 } from '@/lib/part-suggest';
+import { useAddToCatalog, AddToCatalogRow, offerAddToCatalog } from '@/components/AddToCatalog';
 
 export type { LastPoPrice } from '@/lib/part-suggest';
 export interface PickedPartHit extends PartSuggestion {
@@ -30,6 +31,8 @@ export function lastPoLabel(lp: LastPoPrice): string {
  * big to trust a client copy), with the parts list sell price and this
  * customer's last PO price on each row. Free text still works for parts
  * that aren't in the catalog; Enter with no row highlighted calls onEnter.
+ * Admins also get an "Add to catalog" row for a number with no exact match;
+ * the new part comes back through onPick like any other pick.
  */
 export default function PartNumberAutocomplete({
   value,
@@ -61,6 +64,7 @@ export default function PartNumberAutocomplete({
   // until the user types.
   const picked = useRef<string | null>(null);
   const poCache = useRef(new Map<string, Map<string, any>>());
+  const addToCatalog = useAddToCatalog();
 
   useEffect(() => {
     if (picked.current !== null && value === picked.current) return;
@@ -133,6 +137,7 @@ export default function PartNumberAutocomplete({
   };
 
   const showList = open && cleanPartQuery(value) !== '';
+  const showAdd = addToCatalog.canAdd && !loading && offerAddToCatalog(value, hits.map(h => h.item_number));
 
   return (
     <div style={{ position: 'relative' }}>
@@ -157,7 +162,7 @@ export default function PartNumberAutocomplete({
         spellCheck={false}
         style={style}
       />
-      {showList && (hits.length > 0 || loading) && (
+      {showList && (hits.length > 0 || loading || showAdd) && (
         <div
           style={{
             position: 'absolute', left: 0, right: 0, top: '100%', marginTop: '4px', zIndex: 50,
@@ -165,7 +170,7 @@ export default function PartNumberAutocomplete({
             background: 'var(--card)', border: '1px solid var(--border)', boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
           }}
         >
-          {hits.length === 0 && (
+          {hits.length === 0 && loading && (
             <div style={{ padding: '8px 10px', fontSize: '11px', color: 'var(--text-muted)' }}>Searching parts…</div>
           )}
           {hits.map((h, i) => (
@@ -198,8 +203,29 @@ export default function PartNumberAutocomplete({
               </span>
             </button>
           ))}
+          {showAdd && (
+            <AddToCatalogRow
+              partNumber={value}
+              onClick={() => {
+                setOpen(false);
+                addToCatalog.start(value, {
+                  billableCustomer: customer.trim() || null,
+                  catalog: 'upfit',
+                  onAdded: part => pick({
+                    id: part.id,
+                    item_number: part.item_number,
+                    display_name: part.display_name,
+                    sales_price: part.sales_price,
+                    customer: null,
+                    billable_customer: part.billable_customer,
+                  }),
+                });
+              }}
+            />
+          )}
         </div>
       )}
+      {addToCatalog.modal}
     </div>
   );
 }

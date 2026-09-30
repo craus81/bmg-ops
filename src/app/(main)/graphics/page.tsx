@@ -49,6 +49,7 @@ import type { GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsJobVi
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import NumberInput from '@/components/NumberInput';
 import { canonicalPartFromCache } from '@/lib/parts-cache';
+import { NotInCatalogAdd } from '@/components/AddToCatalog';
 import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
   GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
@@ -1889,6 +1890,11 @@ export default function GraphicsPage() {
                         {createForm.part_numbers.map((pn, i) => (
                           <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.2)' }}>
                             {pn}
+                            <NotInCatalogAdd
+                              partNumber={pn}
+                              billableCustomer={createForm.job_category !== 'internal' ? createForm.customer || null : null}
+                              onAdded={part => setCreateForm(f => ({ ...f, part_numbers: f.part_numbers.map(p => p === pn ? part.item_number : p) }))}
+                            />
                             <span onClick={() => setCreateForm(f => ({ ...f, part_numbers: f.part_numbers.filter((_, j) => j !== i) }))} style={{ cursor: 'pointer', fontSize: '14px', marginLeft: '2px' }}>&times;</span>
                           </span>
                         ))}

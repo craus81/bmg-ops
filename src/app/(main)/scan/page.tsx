@@ -16,6 +16,7 @@ import { loadBillableCustomers, findBillableCustomer, matchesBillableCustomer, t
 import { isVerizonRfidPart } from '@/lib/rfid';
 import NumberInput from '@/components/NumberInput';
 import { useFormTelemetry } from '@/lib/use-form-telemetry';
+import { useAddToCatalog, AddToCatalogRow, offerAddToCatalog } from '@/components/AddToCatalog';
 
 interface Part {
   id: string;
@@ -52,6 +53,7 @@ interface ScanEntry {
 
 export default function ScanPage() {
   const { user, isAdmin } = useAuth();
+  const addToCatalog = useAddToCatalog();
   useRequireFeature('scan');
   const supabase = createClient();
   // Usage telemetry (R7-4): keystrokes are NOT the start signal here
@@ -1020,6 +1022,34 @@ export default function ScanPage() {
               })}
             </div>
           )}
+
+          {/* Admins can add a number the catalog doesn't have and pick it. */}
+          {addToCatalog.canAdd && parts.length > 0 && offerAddToCatalog(partSearch, parts.map(p => p.item_number)) && (
+            <div style={{ borderRadius: '10px', overflow: 'hidden', marginBottom: '12px' }}>
+              <AddToCatalogRow
+                partNumber={partSearch}
+                fontSize="13px"
+                onClick={() => addToCatalog.start(partSearch, {
+                  billableCustomer: selectedCustomer?.name || null,
+                  onAdded: created => {
+                    const part: Part = {
+                      id: created.id,
+                      item_number: created.item_number,
+                      display_name: created.display_name,
+                      description: null,
+                      billable_customer: created.billable_customer,
+                      catalog: created.catalog || 'graphics',
+                      source: 'netsuite',
+                    };
+                    setParts(prev => [part, ...prev.filter(p => p.id !== part.id)]);
+                    setSelectedParts(prev => [...prev, part]);
+                    setPartSearch('');
+                  },
+                })}
+              />
+            </div>
+          )}
+          {addToCatalog.modal}
 
           {/* Continue button when parts are selected */}
           {rfidInMulti && (

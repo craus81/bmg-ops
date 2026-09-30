@@ -74,3 +74,16 @@ export function usePartInfo(partNumber: string | null | undefined): PartInfo | n
   }, [partNumber]);
   return info;
 }
+
+/** Resolve a part from the cache (null when the catalog doesn't have it). */
+export async function lookupPartFromCache(partNumber: string): Promise<PartInfo | null> {
+  const pn = partNumber.trim();
+  if (!pn) return null;
+  return (await getCache()).get(pn.toUpperCase()) || null;
+}
+
+/** Add a part just created in this session so lookups find it right away. */
+export async function rememberPartInCache(part: PartInfo): Promise<void> {
+  if (!part.item_number) return;
+  (await getCache()).set(part.item_number.toUpperCase(), part);
+}
