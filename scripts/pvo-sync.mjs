@@ -4,41 +4,50 @@
  * PVO template sync — the nightly, cloud-storage version of pvodownloaderv3.js
  * ===========================================================================
  *
- * Pro Vehicle Outlines caps downloads at 25/day, so this works the same way the
+ * Pro Vehicle Outlines caps downloads at 40/day, so this works the same way the
  * browser script did: index the whole catalog once (browsing costs nothing),
- * then take the next 23 templates in priority order every night. The difference
+ * then take the next 38 templates in priority order every night. The difference
  * is where things live:
  *
  *   files    ->  Cloudflare R2, under vehicle-templates/originals/ and /previews/
  *   index    ->  Supabase: pvo_catalog (the queue) + vehicle_templates (the library)
- *   session  ->  a dedicated Chrome profile in ~/.fleetsuite/pvo-profile
+ *   session  ->  R2 at pvo/session.json (private — outside the WAF allowlist),
+ *                with a local copy in ~/.fleetsuite/pvo-session.json
  *
- * PVO logs in through Salesforce SSO, which can't be scripted with plain fetch,
- * so we drive a real Chrome once by hand and then reuse that session forever.
+ * PVO logs in through Salesforce SSO. With PVO_EMAIL / PVO_PASSWORD set, the
+ * script signs in by itself in headless Chrome whenever the saved session has
+ * lapsed; without them, sign in once by hand with --login.
  *
- * ── Setup (once) ──────────────────────────────────────────────────────────
+ * ── Where it runs ─────────────────────────────────────────────────────────
+ *   Daily from GitHub Actions (.github/workflows/pvo-sync.yml) — no computer
+ *   needed. It can still run on a Mac the old way:
  *   node scripts/pvo-sync.mjs --login      # opens Chrome, you log into PVO
  *   node scripts/pvo-sync.mjs --rescan     # indexes the catalog (no downloads used)
+ *   node scripts/pvo-sync.mjs              # the daily batch
  *
- * ── Every night (launchd runs this) ───────────────────────────────────────
- *   node scripts/pvo-sync.mjs
+ * Every run also: skips downloads already taken in the last 20 hours (so a
+ * doubled run can't blow the cap), re-indexes the catalog weekly to pick up
+ * new templates and fresh download tokens, calibrates each template for the
+ * wrap estimator as it lands, and emails a summary to PVO_SUMMARY_EMAIL.
  *
  * ── Options ───────────────────────────────────────────────────────────────
  *   --login          Open a visible browser to sign in, save the session, exit
  *   --rescan         Re-index the PVO catalog before downloading
- *   --limit N        Downloads this run (default 23 — PVO caps at 25, we leave
+ *   --limit N        Downloads this run (default 38 — PVO caps at 40, we leave
  *                    2 spare so you can grab one by hand in a hurry)
  *   --format ai      ai | eps | pdf | cel (default ai)
  *   --seed-existing  Mark catalog entries we already have as downloaded
  *   --dry-run        Show what would be downloaded, download nothing
  *   --headful        Run the browser visibly (for debugging)
  *
- * Requires in .env.local: NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
+ * Requires (env or .env.local): NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
  * R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME.
+ * Optional: PVO_EMAIL + PVO_PASSWORD (unattended sign-in), RESEND_API_KEY +
+ * PVO_SUMMARY_EMAIL (daily summary; RESEND_FROM_EMAIL / RESEND_FROM_NAME).
  */
 
 import { chromium } from 'playwright-core';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { createClient } from '@supabase/supabase-js';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { fileURLToPath } from 'node:url';
@@ -52,9 +61,19 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 dotenv.config({ path: join(ROOT, '.env.local') });
 dotenv.config({ path: join(ROOT, '.env') });
 
-// PVO's hard cap is 25/day. We take 23 and leave 2 in reserve so there is
+// PVO's hard cap is 40/day (raised from 25 in 2026-09). We take 38 and leave 2 in reserve so there is
 // always headroom to grab a specific template by hand when a job needs one.
-const DEFAULT_LIMIT = 23;
+const DEFAULT_LIMIT = 38;
+
+// Downloads taken inside this window count against today's batch. 20h rather
+// than 24h so a scheduled run that fires a little earlier than yesterday's
+// (GitHub's cron drifts) still gets its full batch, while a second run on the
+// same day finds nothing left to take.
+const BUDGET_WINDOW_HOURS = 20;
+
+// Re-index the catalog this often: picks up templates PVO has added since and
+// refreshes download tokens. Browsing costs no downloads.
+const RESCAN_EVERY_DAYS = 7;
 
 // ── Args ──
 const argv = process.argv.slice(2);
@@ -75,6 +94,16 @@ const PROFILE_DIR = join(homedir(), '.fleetsuite', 'pvo-profile');
 const STATE_FILE = join(homedir(), '.fleetsuite', 'pvo-session.json');
 const PRIORITY_FILE = join(ROOT, 'scripts', 'pvo-priority.txt');
 const R2_PREFIX = 'vehicle-templates';
+// Deliberately outside vehicle-templates/: the files.bmgfleet.com WAF only
+// serves that prefix and photos/parts/, so this key is never public.
+const R2_SESSION_KEY = 'pvo/session.json';
+
+const PVO_EMAIL = process.env.PVO_EMAIL || '';
+const PVO_PASSWORD = process.env.PVO_PASSWORD || '';
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const SUMMARY_TO = (process.env.PVO_SUMMARY_EMAIL || '').split(',').map((e) => e.trim()).filter(Boolean);
+const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'notifications@bmgfleet.com';
+const FROM_NAME = process.env.RESEND_FROM_NAME || 'FleetSuite';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -183,20 +212,41 @@ async function openBrowser({ headed }) {
     viewport: { width: 1400, height: 950 },
   });
   // Chrome drops session cookies when the browser closes, so we keep our own
-  // snapshot and put it back on every run.
-  if (existsSync(STATE_FILE)) {
-    try {
-      const state = JSON.parse(readFileSync(STATE_FILE, 'utf-8'));
-      if (state.cookies?.length) await ctx.addCookies(state.cookies);
-    } catch { /* corrupt snapshot — the login flow will rebuild it */ }
+  // snapshot and put it back on every run. The R2 copy is the one that
+  // matters on GitHub Actions, where every run starts on a fresh machine.
+  const state = (await loadSessionFromR2()) || loadSessionFromFile();
+  if (state?.cookies?.length) {
+    try { await ctx.addCookies(state.cookies); } catch { /* stale shape — sign-in rebuilds it */ }
   }
   return ctx;
 }
 
+function loadSessionFromFile() {
+  if (!existsSync(STATE_FILE)) return null;
+  try { return JSON.parse(readFileSync(STATE_FILE, 'utf-8')); } catch { return null; }
+}
+
+async function loadSessionFromR2() {
+  if (!r2) return null;
+  try {
+    const res = await r2.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: R2_SESSION_KEY }));
+    return JSON.parse(await res.Body.transformToString());
+  } catch { return null; /* first run, or no snapshot yet */ }
+}
+
 async function saveSession(ctx) {
+  const state = JSON.stringify(await ctx.storageState());
   mkdirSync(join(homedir(), '.fleetsuite'), { recursive: true });
-  const state = await ctx.storageState();
-  writeFileSync(STATE_FILE, JSON.stringify(state), { mode: 0o600 });
+  writeFileSync(STATE_FILE, state, { mode: 0o600 });
+  if (r2) {
+    try {
+      await r2.send(new PutObjectCommand({
+        Bucket: R2_BUCKET, Key: R2_SESSION_KEY, Body: state, ContentType: 'application/json',
+      }));
+    } catch (err) {
+      log(`Could not save the PVO session to R2 (${err.message}) — next run signs in again.`);
+    }
+  }
 }
 
 // Logged in == /members returns template cards rather than an SSO redirect.
@@ -206,6 +256,59 @@ async function isLoggedIn(ctx) {
   if (/my\.site\.com|loginsalesforce/i.test(res.url())) return false;
   const html = await res.text();
   return /onclick="[^"]*showPreview\(/.test(html) || /download\('/.test(html);
+}
+
+// Unattended sign-in through PVO's Salesforce login page. Written against the
+// usual Salesforce Experience Cloud forms: one page with username + password,
+// or username first and password on the next step. Playwright's CSS locators
+// pierce open shadow roots, so Lightning login components work too.
+async function autoLogin(ctx, page) {
+  if (!PVO_EMAIL || !PVO_PASSWORD) return false;
+  log('Signing into PVO...');
+  try {
+    await page.goto(`${BASE}/members`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+
+    const userBox = page.locator([
+      'input[type="email"]', 'input[name="username"]', 'input[id*="username" i]',
+      'input[name*="user" i]', 'input[placeholder*="user" i]', 'input[placeholder*="email" i]',
+    ].join(', ')).filter({ visible: true }).first();
+    const passBox = page.locator('input[type="password"]').filter({ visible: true }).first();
+    const submit = page.locator([
+      'button[type="submit"]', 'input[type="submit"]', 'button:has-text("Log In")',
+      'button:has-text("Login")', 'button:has-text("Sign In")', 'button:has-text("Next")',
+      'button:has-text("Continue")',
+    ].join(', ')).filter({ visible: true }).first();
+
+    await userBox.waitFor({ state: 'visible', timeout: 30000 });
+    await userBox.fill(PVO_EMAIL);
+    if (!(await passBox.isVisible().catch(() => false))) {
+      await submit.click();
+      await passBox.waitFor({ state: 'visible', timeout: 30000 });
+    }
+    await passBox.fill(PVO_PASSWORD);
+    await submit.click();
+
+    // SSO bounces through a few redirects before landing back on PVO.
+    const deadline = Date.now() + 90 * 1000;
+    while (Date.now() < deadline) {
+      await sleep(3000);
+      if (await isLoggedIn(ctx)) {
+        await saveSession(ctx);
+        log('Signed in.');
+        return true;
+      }
+    }
+    // Say what the page is asking for (no field values) so a failed run's
+    // log points at the fix: a wrong password vs. a verification code.
+    const body = ((await page.textContent('body').catch(() => '')) || '').replace(/\s+/g, ' ');
+    if (/verif|code|authenticat/i.test(body)) log('PVO asked for a verification code — sign-in needs a person.');
+    else if (/password|invalid|incorrect/i.test(body)) log('PVO rejected the email or password.');
+    else log(`Sign-in did not finish (ended on ${new URL(page.url()).host}).`);
+  } catch (err) {
+    log(`Sign-in failed: ${err.message.split('\n')[0]}`);
+  }
+  return false;
 }
 
 async function doLogin() {
@@ -236,7 +339,8 @@ async function indexCatalog(ctx, page) {
   log('Indexing the PVO catalog (uses no downloads)...');
   const seen = new Map();
 
-  for (let pageNum = 1; pageNum <= 500; pageNum++) {
+  // Stops at the first empty page; the ceiling only guards a runaway loop.
+  for (let pageNum = 1; pageNum <= 3000; pageNum++) {
     const res = await ctx.request.get(`${BASE}/members?page=${pageNum}`, { timeout: 45000 });
     if (!res.ok()) { log(`  page ${pageNum}: HTTP ${res.status()} — skipping`); continue; }
     const html = await res.text();
@@ -262,7 +366,11 @@ async function indexCatalog(ctx, page) {
     }, html);
 
     if (!cards.length) break;
+    const before = seen.size;
     for (const c of cards) if (!seen.has(c.id)) seen.set(c.id, c);
+    // Past the last page some sites repeat the final page instead of going
+    // empty — a page with nothing new means we've seen it all.
+    if (seen.size === before) break;
     if (pageNum % 10 === 0) log(`  page ${pageNum} — ${seen.size} templates so far`);
     await sleep(300);
   }
@@ -356,27 +464,66 @@ function extFromDisposition(res, fallback) {
   return fallback;
 }
 
+// ── Wrap estimator calibration ──
+// The same computeCalibration the ZIP/bulk importers use, loaded straight from
+// the app source (Node 22.18+ strips the TypeScript types). If it can't load,
+// templates still import and calibrate later from the admin backfill.
+let computeCalibration = null;
+let parseScaleFactor = null;
+try {
+  const mod = await import('../src/lib/template-calibration.ts');
+  computeCalibration = mod.computeCalibration;
+  parseScaleFactor = mod.parseScaleFactor;
+} catch (err) {
+  log(`Calibration unavailable (${err.message.split('\n')[0]}) — templates import uncalibrated.`);
+}
+
+function calibrate(vectorBytes, imageBytes) {
+  if (!computeCalibration || !vectorBytes || !imageBytes) return null;
+  try {
+    return computeCalibration(new Uint8Array(vectorBytes), new Uint8Array(imageBytes), parseScaleFactor('1:20')).pxPerIn;
+  } catch { return null; }
+}
+
+// Real downloads inside the budget window. file_format is only set by an
+// actual download — --seed-existing stamps downloaded_at without it.
+async function recentDownloads() {
+  const since = new Date(Date.now() - BUDGET_WINDOW_HOURS * 3600 * 1000).toISOString();
+  const { count, error } = await supabase.from('pvo_catalog')
+    .select('pvo_id', { count: 'exact', head: true })
+    .eq('status', 'downloaded').not('file_format', 'is', null).gte('downloaded_at', since);
+  if (error) throw new Error(`pvo_catalog count failed: ${error.message}`);
+  return count || 0;
+}
+
 // ── The nightly batch ──
 async function runBatch(ctx) {
   const matcher = buildMatcher();
+  const names = [];
+  const failures = [];
+
+  const already = DRY_RUN ? 0 : await recentDownloads();
+  const budget = Math.max(0, LIMIT - already);
+  if (already) log(`${already} downloaded in the last ${BUDGET_WINDOW_HOURS}h — taking ${budget} more this run.`);
+  if (!budget) return { downloaded: 0, failed: 0, capHit: false, skipped: 'already ran today', names, failures };
 
   const queue = await fetchAll('pvo_catalog', 'pvo_id,token,description,make,model,years,year_start,base_name,attempts',
     (q) => q.in('status', ['pending', 'failed']).lt('attempts', 3));
   if (!queue.length) {
     log('Nothing pending — the whole catalog is downloaded.');
-    return { downloaded: 0, failed: 0, capHit: false, pending: 0 };
+    return { downloaded: 0, failed: 0, capHit: false, pending: 0, names, failures };
   }
 
   const ranked = queue
     .map((row, idx) => ({ row, rank: matcher.rank(row.description), idx }))
     .sort((a, b) => (a.rank - b.rank) || (a.idx - b.idx));
   const onList = ranked.filter((r) => r.rank < matcher.count).length;
-  log(`${ranked.length} templates pending (${onList} on the priority list). Taking up to ${LIMIT}.`);
+  log(`${ranked.length} templates pending (${onList} on the priority list). Taking up to ${budget}.`);
 
   let downloaded = 0, failed = 0, capHit = false;
 
   for (const { row, rank } of ranked) {
-    if (downloaded >= LIMIT || capHit) break;
+    if (downloaded >= budget || capHit) break;
 
     const meta = {
       make: row.make || 'Uncategorized',
@@ -439,6 +586,7 @@ async function runBatch(ctx) {
         year: meta.year || null,
         template_image_path: imagePath,
         original_file_path: originalPath,
+        px_per_in: calibrate(vec, img),
         is_active: true,
       }).select('id').single();
       if (insErr) throw new Error(`vehicle_templates insert failed: ${insErr.message}`);
@@ -454,14 +602,15 @@ async function runBatch(ctx) {
       }).eq('pvo_id', row.pvo_id);
 
       downloaded++;
-      log(`${tag}${downloaded}/${LIMIT}  ${base}`);
+      names.push(base);
+      log(`${tag}${downloaded}/${budget}  ${base}`);
     } catch (err) {
       if (err.message === 'SESSION_EXPIRED') {
         log('PVO session expired. Run: node scripts/pvo-sync.mjs --login');
-        await recordRun({ downloaded, failed, capHit, message: 'session expired' });
-        return { downloaded, failed, capHit, sessionExpired: true };
+        return { downloaded, failed, capHit, sessionExpired: true, names, failures };
       }
       failed++;
+      failures.push({ name: base, error: err.message.slice(0, 200) });
       await supabase.from('pvo_catalog').update({
         status: 'failed',
         error: err.message.slice(0, 500),
@@ -475,18 +624,69 @@ async function runBatch(ctx) {
     await sleep(800);
   }
 
-  return { downloaded, failed, capHit, pending: ranked.length - downloaded };
+  return { downloaded, failed, capHit, pending: ranked.length - downloaded, names, failures };
+}
+
+async function lastRunState() {
+  if (!supabase) return {};
+  const { data } = await supabase.from('sync_state')
+    .select('last_result').eq('sync_type', 'pvo_templates').maybeSingle();
+  return data?.last_result || {};
 }
 
 async function recordRun(result) {
   if (!supabase) return;
+  // names/failures go in the email, not the heartbeat row.
+  const { names, failures, ...summary } = result;
   await supabase.from('sync_state').upsert({
     sync_type: 'pvo_templates',
     last_synced_at: new Date().toISOString(),
-    last_result: result,
+    last_result: summary,
     updated_at: new Date().toISOString(),
   }, { onConflict: 'sync_type' });
 }
+
+async function catalogCounts() {
+  const [done, left] = await Promise.all([
+    supabase.from('pvo_catalog').select('pvo_id', { count: 'exact', head: true }).eq('status', 'downloaded'),
+    supabase.from('pvo_catalog').select('pvo_id', { count: 'exact', head: true })
+      .in('status', ['pending', 'failed']).lt('attempts', 3),
+  ]);
+  return { have: done.count || 0, left: left.count || 0 };
+}
+
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// One email a day, whatever happened — a quiet inbox should never be the
+// only sign that the job stopped.
+async function sendSummary({ subject, lines, names = [], failures = [] }) {
+  if (DRY_RUN) return;
+  if (!RESEND_API_KEY || !SUMMARY_TO.length) {
+    log('No RESEND_API_KEY / PVO_SUMMARY_EMAIL — skipping the summary email.');
+    return;
+  }
+  const html = [
+    '<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;font-size:14px;color:#111">',
+    ...lines.map((l) => `<p style="margin:0 0 10px">${esc(l)}</p>`),
+    names.length ? `<p style="margin:16px 0 6px"><b>Downloaded</b></p><ul style="margin:0;padding-left:20px">${names.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : '',
+    failures.length ? `<p style="margin:16px 0 6px"><b>Failed</b> (retried on later runs, up to 3 tries)</p><ul style="margin:0;padding-left:20px">${failures.map((f) => `<li>${esc(f.name)}: ${esc(f.error)}</li>`).join('')}</ul>` : '',
+    '<p style="margin:20px 0 0;color:#666;font-size:12px">Sent by the daily PVO template sync (GitHub Actions → pvo-sync).</p>',
+    '</div>',
+  ].join('');
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: `${FROM_NAME} <${FROM_EMAIL}>`, to: SUMMARY_TO, subject, html }),
+    });
+    if (!res.ok) log(`Summary email failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+    else log('Summary email sent.');
+  } catch (err) {
+    log(`Summary email failed: ${err.message}`);
+  }
+}
+
+const SIGN_IN_HELP = 'Check the PVO_EMAIL and PVO_PASSWORD secrets in GitHub (Settings → Secrets and variables → Actions), then use "Run workflow" on the pvo-sync action to try again.';
 
 // ── Main ──
 async function main() {
@@ -496,33 +696,75 @@ async function main() {
   const page = ctx.pages()[0] || await ctx.newPage();
 
   try {
-    if (!(await isLoggedIn(ctx))) {
-      log('Not signed into PVO. Run: node scripts/pvo-sync.mjs --login');
+    if (!(await isLoggedIn(ctx)) && !(await autoLogin(ctx, page))) {
+      log(PVO_EMAIL
+        ? 'Could not sign into PVO.'
+        : 'Not signed into PVO. Set PVO_EMAIL / PVO_PASSWORD, or run: node scripts/pvo-sync.mjs --login');
       await recordRun({ downloaded: 0, failed: 0, message: 'not signed in' });
+      await sendSummary({
+        subject: 'PVO templates: sign-in failed, nothing downloaded',
+        lines: ['The daily sync could not sign into Pro Vehicle Outlines, so no templates were downloaded today.', SIGN_IN_HELP],
+      });
       process.exitCode = 2;
       return;
     }
 
+    const prev = await lastRunState();
     const { count } = await supabase.from('pvo_catalog').select('pvo_id', { count: 'exact', head: true });
-    const freshIndex = RESCAN || !count;
-    if (freshIndex) await indexCatalog(ctx, page);
+    const indexAge = prev.indexed_at ? Date.now() - Date.parse(prev.indexed_at) : Infinity;
+    const freshIndex = RESCAN || !count || indexAge > RESCAN_EVERY_DAYS * 86400 * 1000;
+    let indexedAt = prev.indexed_at || null;
+    let indexedCount = null;
+    if (freshIndex) {
+      indexedCount = await indexCatalog(ctx, page);
+      indexedAt = new Date().toISOString();
+    }
     if (freshIndex || SEED_EXISTING) await seedExisting();
 
     const result = await runBatch(ctx);
-    await recordRun(result);
+    await recordRun({ ...result, indexed_at: indexedAt });
     await saveSession(ctx);
 
+    const { have, left } = await catalogCounts();
+    const lines = [];
+    if (result.sessionExpired) {
+      lines.push(`The PVO session ran out partway through: ${result.downloaded} downloaded before it stopped.`, SIGN_IN_HELP);
+    } else if (result.skipped) {
+      lines.push(`Nothing downloaded: ${LIMIT} were already taken in the last ${BUDGET_WINDOW_HOURS} hours.`);
+    } else if (result.capHit) {
+      lines.push(`PVO said the daily limit was reached after ${result.downloaded} downloads. The rest continue tomorrow.`);
+    } else {
+      lines.push(`${result.downloaded} template${result.downloaded === 1 ? '' : 's'} downloaded into FleetSuite${result.failed ? `, ${result.failed} failed` : ''}.`);
+    }
+    lines.push(`${have.toLocaleString()} downloaded so far, ${left.toLocaleString()} still to go.`);
+    if (indexedCount != null) lines.push(`Catalog re-indexed this run: ${indexedCount.toLocaleString()} templates on PVO.`);
+    const calibrated = computeCalibration ? 'New templates are calibrated for the wrap estimator automatically.' : 'Calibration was unavailable this run; use the admin backfill to calibrate the new templates.';
+    if (result.downloaded) lines.push(calibrated);
+
+    await sendSummary({
+      subject: result.sessionExpired
+        ? `PVO templates: sign-in lapsed after ${result.downloaded}`
+        : `PVO templates: ${result.downloaded} downloaded, ${left.toLocaleString()} to go`,
+      lines, names: result.names, failures: result.failures,
+    });
+
+    if (result.sessionExpired) process.exitCode = 2;
     if (result.capHit) {
       log(`PVO daily limit reached — ${result.downloaded} downloaded. Continues tomorrow.`);
     } else {
-      log(`Done: ${result.downloaded} downloaded, ${result.failed} failed, ${result.pending ?? 0} still pending.`);
+      log(`Done: ${result.downloaded} downloaded, ${result.failed} failed, ${left} still pending.`);
     }
   } finally {
     await ctx.close();
   }
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error('pvo-sync failed:', err);
-  recordRun({ downloaded: 0, failed: 0, message: err.message }).finally(() => process.exit(1));
+  await recordRun({ downloaded: 0, failed: 0, message: err.message }).catch(() => {});
+  await sendSummary({
+    subject: 'PVO templates: the sync crashed',
+    lines: [`The daily sync stopped with an error: ${err.message}`, 'The GitHub Actions log for the pvo-sync run has the details.'],
+  });
+  process.exit(1);
 });
