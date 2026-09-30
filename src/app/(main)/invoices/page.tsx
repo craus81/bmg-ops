@@ -10,7 +10,8 @@
  *    /api/netsuite/invoice-vehicles bills them (one invoice per group), with
  *    email buttons on the results.
  *  - Sent: recent invoices from both sources, grouped by customer, with
- *    per-invoice and per-customer email actions (shared EmailInvoicesModal).
+ *    per-invoice, per-customer and checkbox-selected email actions (shared
+ *    EmailInvoicesModal; a selection spanning customers opens one per customer).
  *
  * Deep scan management (PO matching, bulk edit, archive) stays on the Scan
  * Log page; job editing stays on the Graphics page. This page is only about
@@ -241,6 +242,12 @@ export default function InvoicingHubPage() {
 
   // ── Email flow (shared) ──
   const [emailTarget, setEmailTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
+  // Invoiced-tab picks, by invoice number. Emailing a selection that spans
+  // customers queues one modal per customer (each send goes to one
+  // customer's contacts); closing a modal opens the next. Same pattern as
+  // Scan Log → Invoices.
+  const [selectedInvoices, setSelectedInvoices] = useState<Set<string>>(new Set());
+  const [emailQueue, setEmailQueue] = useState<{ customerName: string; invoices: EmailableInvoice[] }[]>([]);
 
   // Latest customer email per invoice number (with its delivery state and
   // full send history), so the sent list shows which invoices have already
@@ -618,6 +625,39 @@ export default function InvoicingHubPage() {
     });
   };
 
+  // Rows on the Invoiced tab that can be picked for email: what the current
+  // date range + search show, minus read-only QuickBooks history.
+  const selectableSent = sentByCustomer.flatMap(([, invs]) => invs.filter(r => !r.qbo));
+  const selectedSent = selectableSent.filter(r => selectedInvoices.has(r.invoiceNumber));
+  // "Not emailed" = no send on record, or the last send didn't deliver.
+  const notEmailedSent = selectableSent.filter(r => {
+    const info = emailedByNumber[r.invoiceNumber];
+    return !info || isBadDelivery(info.delivery_status);
+  });
+
+  const toggleInvoices = (numbers: string[]) => {
+    setSelectedInvoices(prev => {
+      const n = new Set(prev);
+      if (numbers.every(x => n.has(x))) numbers.forEach(x => n.delete(x));
+      else numbers.forEach(x => n.add(x));
+      return n;
+    });
+  };
+
+  const emailSelectedInvoices = () => {
+    const targets = sentByCustomer
+      .map(([customerName, invs]) => ({
+        customerName,
+        invoices: invs
+          .filter(r => !r.qbo && selectedInvoices.has(r.invoiceNumber))
+          .map(r => ({ invoiceId: r.invoiceId, invoiceNumber: r.invoiceNumber, po: r.po })),
+      }))
+      .filter(t => t.invoices.length > 0);
+    if (targets.length === 0) return;
+    setEmailTarget(targets[0]);
+    setEmailQueue(targets.slice(1));
+  };
+
   // ── Styles ──
   const card: React.CSSProperties = {
     background: 'var(--card)', border: '1px solid var(--border)',
@@ -870,6 +910,40 @@ export default function InvoicingHubPage() {
             </button>
           </div>
 
+          {selectableSent.length > 0 && (() => {
+            const allSelected = selectableSent.every(r => selectedInvoices.has(r.invoiceNumber));
+            const customerCount = new Set(selectedSent.map(r => r.customer)).size;
+            const barBtn: React.CSSProperties = {
+              padding: '5px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+              background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)',
+            };
+            return (
+              <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <button
+                  onClick={() => setSelectedInvoices(allSelected ? new Set() : new Set(selectableSent.map(r => r.invoiceNumber)))}
+                  style={barBtn}
+                >{allSelected ? 'Deselect All' : `Select All (${selectableSent.length})`}</button>
+                {notEmailedSent.length > 0 && (
+                  <button
+                    onClick={() => setSelectedInvoices(new Set(notEmailedSent.map(r => r.invoiceNumber)))}
+                    title="Select every invoice shown that has never been emailed, or whose last email didn't deliver"
+                    style={barBtn}
+                  >Select Not Emailed ({notEmailedSent.length})</button>
+                )}
+                {selectedSent.length > 0 && (
+                  <>
+                    <button
+                      onClick={emailSelectedInvoices}
+                      title={customerCount > 1 ? `Opens one email per customer (${customerCount} customers)` : undefined}
+                      style={{ ...barBtn, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa' }}
+                    >Email {selectedSent.length} Selected{customerCount > 1 ? ` (${customerCount} customers)` : ''}</button>
+                    <button onClick={() => setSelectedInvoices(new Set())} style={barBtn}>Clear</button>
+                  </>
+                )}
+              </div>
+            );
+          })()}
+
           {nsError && (
             <div style={{ ...card, marginBottom: '10px', padding: '10px 14px', fontSize: '12px', color: 'var(--warning, #fbbf24)', border: '1px solid rgba(251,191,36,0.3)' }}>
               Couldn&apos;t load the full NetSuite invoice list ({nsError}) — showing FleetSuite-created invoices only.
@@ -892,7 +966,18 @@ export default function InvoicingHubPage() {
               {sentByCustomer.map(([customer, invs]) => (
                 <div key={customer} style={card}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', marginBottom: '8px', flexWrap: 'wrap' }}>
-                    <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{customer}</div>
+                    {(() => {
+                      const numbers = invs.filter(r => !r.qbo).map(r => r.invoiceNumber);
+                      if (numbers.length === 0) {
+                        return <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{customer}</div>;
+                      }
+                      return (
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)', cursor: 'pointer' }}>
+                          <input type="checkbox" checked={numbers.every(n => selectedInvoices.has(n))} onChange={() => toggleInvoices(numbers)} style={{ width: '14px', height: '14px', flexShrink: 0 }} />
+                          {customer}
+                        </label>
+                      );
+                    })()}
                     {(() => {
                       // QuickBooks history is read-only: never part of a send.
                       const sendable = invs.filter(r => !r.qbo);
@@ -911,6 +996,9 @@ export default function InvoicingHubPage() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                     {invs.map((r, i) => (
                       <div key={`${r.invoiceNumber}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', padding: '4px 0', borderTop: i > 0 ? '1px solid var(--border)' : 'none', flexWrap: 'wrap' }}>
+                        {r.qbo
+                          ? <span style={{ width: '14px', flexShrink: 0 }} />
+                          : <input type="checkbox" checked={selectedInvoices.has(r.invoiceNumber)} onChange={() => toggleInvoices([r.invoiceNumber])} aria-label={`Select invoice ${r.invoiceNumber}`} style={{ width: '14px', height: '14px', flexShrink: 0 }} />}
                         <span style={{
                           fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '5px',
                           background: r.source === 'Graphics' ? 'rgba(34,197,94,0.12)' : r.source === 'Scans' ? 'rgba(251,191,36,0.12)' : r.source === 'QuickBooks' ? 'rgba(44,160,28,0.14)' : 'rgba(96,165,250,0.12)',
@@ -1059,10 +1147,14 @@ export default function InvoicingHubPage() {
       {/* Shared email modal */}
       {emailTarget && (
         <EmailInvoicesModal
+          key={emailTarget.customerName}
           customerName={emailTarget.customerName}
           invoices={emailTarget.invoices}
           onClose={() => {
-            setEmailTarget(null);
+            // Selection spanning customers: move on to the next one's email.
+            const [next, ...rest] = emailQueue;
+            setEmailTarget(next || null);
+            setEmailQueue(rest);
             // Refresh the ✉ EMAILED badges — a send may have just happened.
             const numbers = [...new Set(sentInvoices.map(r => r.invoiceNumber).filter(Boolean))];
             if (numbers.length > 0) loadEmailedInvoices(numbers);
