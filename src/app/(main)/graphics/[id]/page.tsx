@@ -846,7 +846,7 @@ export default function GraphicsJobRecordPage() {
       const loaded = await Promise.all(files.map(loadJobFile));
       if (run !== shareRunRef.current) return; // cancelled
       if (!canShareFiles(loaded)) {
-        setShareSheet({ label, error: "This iPhone can't share these files. Open the job on a computer to download them." });
+        setShareSheet({ label, error: "This device can't share these files. Open the job on a computer to download them." });
         return;
       }
       setShareSheet({ label, files: loaded });

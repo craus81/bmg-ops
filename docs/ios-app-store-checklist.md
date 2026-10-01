@@ -18,8 +18,8 @@ Facts to check against, not to re-decide:
 | App name | BMG FleetSuite | `capacitor.config.ts`, `Info.plist` (`CFBundleDisplayName`) |
 | Deployment target | iOS 16.0 (App Intents, which Siri needs, start there) | `project.pbxproj` |
 | Signing style | Automatic, team `RU67C5K44J` (Craig's individual account) | `project.pbxproj` (`CODE_SIGN_STYLE = Automatic`, `DEVELOPMENT_TEAM` in both App configs) |
-| Version / build | 1.0 / 3 | `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION` |
-| Devices | iPhone only, so App Store Connect asks for no iPad screenshots (iPads can still run it as an iPhone app) | `project.pbxproj` (`TARGETED_DEVICE_FAMILY = 1`) |
+| Version / build | 1.1 / 5 (1.0 went to App Review as build 4) | `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION` |
+| Devices | iPhone and iPad from 1.1, so App Store Connect needs 13-inch iPad screenshots (step 8). 1.0 was iPhone only. | `project.pbxproj` (`TARGETED_DEVICE_FAMILY = "1,2"`) |
 | Export compliance | Answered in the build (HTTPS only), so uploads don't stop at Missing Compliance | `Info.plist` (`ITSAppUsesNonExemptEncryption` = NO) |
 | Push environment | `development` | `ios/App/App/App.entitlements` (`aps-environment`) |
 | Associated domain | `applinks:go.bmgfleet.com` | `App.entitlements` |
@@ -131,7 +131,10 @@ silently dropped.
    Archive.
 3. Organizer → Distribute App → App Store Connect → Upload.
 4. Wait for processing, then add internal testers in TestFlight. Internal
-   testing needs no review; external testing does.
+   testing needs no review; external testing does. An internal tester must
+   hold the Account Holder, Admin, App Manager, Developer or Marketing role
+   (Customer Support doesn't qualify); give staff **Marketing**, which can't
+   change the app, its pricing or its users.
 
 ## 6. Universal links (needed before deep links open in the app)
 
@@ -207,3 +210,41 @@ app lists *Add Calendar Entry* under BMG FleetSuite. If it's listed there and
 runs from Shortcuts but not by voice, add the Siri capability (Signing &
 Capabilities → + Capability → Siri) and rebuild. Apple says App Shortcuts
 don't need it, but it's the next thing to rule out.
+
+## 8. iPad (version 1.1)
+
+1.0 shipped iPhone only. From 1.1 the app targets iPad too
+(`TARGETED_DEVICE_FAMILY = "1,2"`), so it fills the screen instead of running
+in a phone-sized window.
+
+What makes that work without layout changes:
+
+- `Info.plist` already lists all four `UISupportedInterfaceOrientations~ipad`,
+  which iPad Split View and Slide Over need.
+- `capacitor.config.ts` sets `preferredContentMode: 'mobile'`, so the iPad
+  web view lays the site out at the iPad's real width rather than as a
+  scaled desktop page.
+- The app shell is the same at every width (header, content up to 1200px,
+  bottom bar), and the site's only phone breakpoint is 640px (`globals.css`,
+  for estimate and approval line items). So an iPad gets the layout a
+  computer does, plus the touch rules (`pointer: coarse`: 16px text boxes and
+  the command-palette button). A narrow Split View window drops under 640px
+  and gets the phone versions of those line items.
+- Nothing on the client sniffs the user agent for "iPhone"; native-only
+  behaviour keys off `isNativeApp()` (`src/lib/native-files.ts`), which is
+  true on iPad too.
+
+Shipping it:
+
+1. Run the app on Xcode's **iPad Pro 13-inch** simulator (Product →
+   Destination) and check the main screens in portrait, landscape and Split
+   View.
+2. Take the iPad screenshots there: File → Save Screen gives 2064 × 2752,
+   the 13-inch size App Store Connect requires once an app runs on iPad. If
+   it says "Images can't contain alpha channels", re-export from Preview with
+   Alpha unticked.
+3. Archive and upload build 5 (step 5). Internal TestFlight testers can
+   install it on an iPad as soon as it's processed.
+4. Once 1.0 is released, create version 1.1 in App Store Connect, add the
+   iPad screenshots, choose build 5 and submit it. Unlisted distribution
+   carries over, because Apple applies it to every future version.

@@ -43,7 +43,7 @@ const refuse = (status: number, error: string): SiriAuthResult =>
 export async function authenticateSiriKey(req: NextRequest): Promise<SiriAuthResult> {
   const header = req.headers.get('authorization') || '';
   const key = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
-  const signInAgain = 'Open FleetSuite on this iPhone and sign in, then ask me again.';
+  const signInAgain = 'Open the FleetSuite app and sign in, then ask me again.';
   if (!key.startsWith(KEY_PREFIX)) return refuse(401, signInAgain);
 
   // A failed read is not a bad key: answer 503, not 401, so the phone keeps it.
