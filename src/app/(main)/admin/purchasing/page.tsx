@@ -46,6 +46,8 @@ interface RequestRow {
   source?: string | null;
   created_at: string;
   upfit_projects?: { id: string; project_name: string | null; netsuite_so_number: string | null } | null;
+  /** Raised from an estimate's Request parts button (migration 335). */
+  estimates?: { id: string; estimate_number: string | null; customer_name: string | null } | null;
   requester?: { full_name: string | null } | null;
   /** Joined on the ?id= single-row lookup and the On order list. ETA,
    *  carrier and tracking are written onto the PO by the Parts Mail scan. */
@@ -591,6 +593,12 @@ export default function PurchasingQueuePage() {
                             {r.upfit_projects.project_name || 'Upfit project'}
                             {r.upfit_projects.netsuite_so_number ? ` · SO ${r.upfit_projects.netsuite_so_number}` : ''}
                           </button>
+                        ) : r.estimates ? (
+                          <button onClick={() => router.push(deepLinks.estimate(r.estimates!.id))}
+                            style={{ background: 'none', border: 'none', padding: 0, color: '#60a5fa', fontSize: '12px', fontWeight: 700, cursor: 'pointer', textAlign: 'left' }}>
+                            Estimate {r.estimates.estimate_number || ''}
+                            {r.estimates.customer_name ? ` · ${r.estimates.customer_name}` : ''}
+                          </button>
                         ) : <span style={{ color: theme.textMuted }}>stock</span>}
                       </td>
                       <td style={{ padding: '9px 10px', color: r.needed_by ? 'var(--text-body)' : theme.textMuted }}>{r.needed_by || '—'}</td>
@@ -661,6 +669,12 @@ export default function PurchasingQueuePage() {
                             style={{ background: 'none', border: 'none', padding: 0, color: '#60a5fa', fontSize: '12px', fontWeight: 700, cursor: 'pointer', textAlign: 'left' }}>
                             {r.upfit_projects.project_name || 'Upfit project'}
                             {r.upfit_projects.netsuite_so_number ? ` · SO ${r.upfit_projects.netsuite_so_number}` : ''}
+                          </button>
+                        ) : r.estimates ? (
+                          <button onClick={() => router.push(deepLinks.estimate(r.estimates!.id))}
+                            style={{ background: 'none', border: 'none', padding: 0, color: '#60a5fa', fontSize: '12px', fontWeight: 700, cursor: 'pointer', textAlign: 'left' }}>
+                            Estimate {r.estimates.estimate_number || ''}
+                            {r.estimates.customer_name ? ` · ${r.estimates.customer_name}` : ''}
                           </button>
                         ) : <span style={{ color: theme.textMuted }}>stock</span>}
                       </td>

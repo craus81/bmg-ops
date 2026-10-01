@@ -42,6 +42,7 @@ import { estimateHeadlineNumber, estimateAltNumber, estimateNumberMatches } from
 import { useFormTelemetry } from '@/lib/use-form-telemetry';
 import { uploadRecordFile } from '@/lib/record-file-upload';
 import { bounceNextStep, bounceIsAmbiguous, recipientsLabel } from '@/lib/email-bounce';
+import EstimatePartsRequestModal from '@/components/EstimatePartsRequestModal';
 
 interface Part {
   id: string;
@@ -73,6 +74,11 @@ interface StockPartRow {
   allocatable: number;
   pos: { tranid: string | null; vendor_name: string | null; eta_date: string | null; remaining: number }[];
   uncatalogued: boolean;
+  netsuite_item_id?: string | null;
+  /** Pending purchase requests from this estimate (or its project). */
+  requested: number;
+  /** What Request parts suggests: short (or uncovered, if uncatalogued) less requested. */
+  to_request: number;
 }
 
 interface StockReadiness {
@@ -82,6 +88,8 @@ interface StockReadiness {
   skippedNonStock: number;
   summary: {
     covered: number; onOrder: number; short: number; unknown: number;
+    /** Lines with something still to request. */
+    toRequest: number;
     verdict: 'reserved' | 'ready' | 'waiting' | 'short' | 'unknown';
     lastEta: string | null;
   };
@@ -436,7 +444,7 @@ export default function EstimatesPage() {
   const router = useRouter();
   const { open: openPopout } = usePopout();
   const searchParams = useSearchParams();
-  const { user, isAdmin, isSales, isGraphicsProduction, profile, loading: authLoading } = useAuth();
+  const { user, isAdmin, isSales, isGraphicsProduction, profile, hasFeature, loading: authLoading } = useAuth();
   // The nav tab was feature-gated but the URL itself was open — the exact
   // gated-by-nav-only pattern the role cleanup ended (audit item 9). Same
   // key now guards every /api/estimates route server-side.
@@ -493,6 +501,10 @@ export default function EstimatesPage() {
   const [stockLoading, setStockLoading] = useState(false);
   const [stockErr, setStockErr] = useState<string | null>(null);
   const [stockBusy, setStockBusy] = useState<string | null>(null);
+  // Request parts (Craig, 2026-10-01): the short lines into the Purchasing
+  // queue. `title` set = the prompt offered right after Convert to SO.
+  const [partsRequest, setPartsRequest] = useState<{ parts: StockReadiness['parts']; title?: string } | null>(null);
+  const canRequestParts = hasFeature('parts_ordering');
   // Counter-offer workbench (R6-9): what this revision changed against the
   // document it supersedes. Derived server-side on open, never stored.
   // Paste-to-estimate (R6-9). The grid is a PROPOSAL — nothing reaches the
@@ -1630,7 +1642,7 @@ export default function EstimatesPage() {
     setStockErr(null);
   };
 
-  const checkStock = async () => {
+  const checkStock = async (): Promise<StockReadiness | null> => {
     const signature = stockSignature;
     setStockLoading(true);
     setStockErr(null);
@@ -1641,10 +1653,12 @@ export default function EstimatesPage() {
         body: JSON.stringify({ estimateId: editingId, vehicleCount: units, lines: stockLines() }),
       });
       const data = await res.json();
-      if (!res.ok) { setStockErr(data.error || 'Stock check failed'); return; }
+      if (!res.ok) { setStockErr(data.error || 'Stock check failed'); return null; }
       applyStock(data, signature);
+      return data;
     } catch (e: any) {
       setStockErr(e?.message || 'Stock check failed');
+      return null;
     } finally {
       setStockLoading(false);
     }
@@ -2766,6 +2780,18 @@ export default function EstimatesPage() {
         await dialog.alert(`Sales Order created!\nSO #: ${data.salesOrderNumber || data.salesOrderId}\nLine items: ${data.lineItemCount}${warnings ? '\n\n' + warnings : ''}`);
         // Stay in the estimate so the new SO number is visible in context.
         await loadEstimates(true);
+        // The sale is real now: offer to order whatever is still short, so
+        // nobody finds out at install time that the parts were never bought.
+        if (canRequestParts) {
+          const fresh = await checkStock();
+          const due = fresh?.summary.toRequest || 0;
+          if (fresh && due > 0) {
+            setPartsRequest({
+              parts: fresh.parts,
+              title: `Request the ${due} part${due === 1 ? '' : 's'} that still need ordering?`,
+            });
+          }
+        }
       } else if (data.status === 'already_created') {
         await dialog.alert(data.message);
       } else if (data.status === 'created_unlinked') {
@@ -3579,6 +3605,9 @@ export default function EstimatesPage() {
   // ═══════════ BUILDER VIEW ═══════════
   const editingEst = editingId ? estimates.find(e => e.id === editingId) : null;
   const isPushed = editingEst?.netsuite_estimate_id;
+  // Same "accepted" the content lock uses: signed in the app, or marked
+  // accepted (phone/PO approvals, conversion).
+  const estAccepted = !!(editingEst && ((editingEst as any).customer_approved || editingEst.status === 'accepted'));
   // The number the rep is looking at. The builder used to say only
   // "Editing" — someone on the phone with a customer who asked "which
   // estimate?" had to leave the screen they were editing to find out.
@@ -4079,11 +4108,13 @@ export default function EstimatesPage() {
                 {stockLoading ? 'Checking stock…'
                   : !stock ? 'Stock not checked yet'
                     : stockStale ? 'Lines changed since the last check'
-                      : stockVerdictText(stock)}
+                      : estAccepted && stock.summary.toRequest > 0
+                        ? `Customer accepted — ${stock.summary.toRequest} part${stock.summary.toRequest === 1 ? '' : 's'} still need${stock.summary.toRequest === 1 ? 's' : ''} ordering`
+                        : stockVerdictText(stock)}
               </div>
               <button
                 type="button"
-                onClick={checkStock}
+                onClick={() => { void checkStock(); }}
                 disabled={stockLoading}
                 title="Check on-hand stock, what other jobs and quotes have reserved, and what's on order"
                 style={{
@@ -4094,6 +4125,21 @@ export default function EstimatesPage() {
               >
                 {stock && !stockStale ? 'Re-check' : 'Check stock'}
               </button>
+              {stock && !stockStale && editingId && canRequestParts && stock.summary.toRequest > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setPartsRequest({ parts: stock.parts })}
+                  disabled={stockLoading}
+                  title="Send the short parts to the Purchasing queue, tagged with this estimate"
+                  style={{
+                    padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 800,
+                    border: '1px solid rgba(248,113,113,0.45)', background: 'rgba(248,113,113,0.14)', color: '#f87171',
+                    cursor: 'pointer', whiteSpace: 'nowrap',
+                  }}
+                >
+                  Request parts
+                </button>
+              )}
               {stock && !stockStale && editingId && (
                 <>
                   <button
@@ -4558,13 +4604,14 @@ export default function EstimatesPage() {
                         : row.state === 'available' ? `In stock — ${row.free} free, ${row.needed} needed`
                           : row.state === 'waiting' ? `${row.needed - row.usable} on order${eta ? `, ETA ${eta}` : ', no ETA yet'}${row.pos[0]?.tranid ? ` (${row.pos[0].tranid})` : ''}`
                             : `Short ${row.short} — ${row.free} free${row.on_order > 0 ? `, ${row.on_order} on order` : ', none on order'}`;
+                  const requestedNote = row.requested > 0 ? ` · ${row.requested} requested` : '';
                   return (
                     <div style={{
                       display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
                       padding: '3px 8px', marginBottom: '4px', borderRadius: '6px',
                       background: tone.bg, border: `1px solid ${tone.border}`,
                     }}>
-                      <span style={{ fontSize: '10px', fontWeight: 700, color: tone.fg }}>{text}</span>
+                      <span style={{ fontSize: '10px', fontWeight: 700, color: tone.fg }}>{text}{requestedNote}</span>
                       {editingId && row.allocatable > 0 && (
                         <button
                           type="button"
@@ -6131,6 +6178,24 @@ export default function EstimatesPage() {
           avg_install_cost: p.avg_install_cost,
         })}
       />
+
+      {partsRequest && editingId && (
+        <EstimatePartsRequestModal
+          estimateId={editingId}
+          estimateLabel={`Estimate ${editingNumber}${editingEst?.customer_name ? ` — ${editingEst.customer_name}` : ''}`}
+          accepted={estAccepted}
+          parts={partsRequest.parts}
+          title={partsRequest.title}
+          onClose={() => setPartsRequest(null)}
+          onDone={async count => {
+            setPartsRequest(null);
+            await checkStock();
+            await dialog.alert(count > 0
+              ? `${count} part${count === 1 ? '' : 's'} sent to the Purchasing queue, tagged with this estimate.`
+              : 'Those parts were already in the Purchasing queue for this estimate, so nothing changed.');
+          }}
+        />
+      )}
 
       {/* "+ New part" from the search dropdown or a custom line's matcher:
           creates the item in NetSuite + the local catalog, then lands it on

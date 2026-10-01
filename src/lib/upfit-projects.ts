@@ -46,6 +46,33 @@ export async function ensureUpfitProjectForSo(
   client: SupabaseClient,
   input: EnsureUpfitProjectInput,
 ): Promise<{ id: string; created: boolean } | null> {
+  const project = await findOrCreateProject(client, input);
+  if (project && input.estimateId) await adoptEstimateRequests(client, input.estimateId, project.id);
+  return project;
+}
+
+/**
+ * Parts requested off the estimate before it had a project (migration 335)
+ * now belong to the project too, so its readiness card shows them as
+ * Requested instead of offering to order the same parts again. Never throws.
+ */
+async function adoptEstimateRequests(client: SupabaseClient, estimateId: string, projectId: string) {
+  try {
+    const { error } = await client
+      .from('purchase_requests')
+      .update({ source_project_id: projectId, updated_at: new Date().toISOString() })
+      .eq('source_estimate_id', estimateId)
+      .is('source_project_id', null);
+    if (error) console.warn('estimate purchase requests → project link failed:', error.message);
+  } catch (err) {
+    console.warn('estimate purchase requests → project link failed:', err);
+  }
+}
+
+async function findOrCreateProject(
+  client: SupabaseClient,
+  input: EnsureUpfitProjectInput,
+): Promise<{ id: string; created: boolean } | null> {
   try {
     // 1) The estimate's project, when an estimate is in play.
     if (input.estimateId) {

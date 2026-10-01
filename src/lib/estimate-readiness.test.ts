@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { summarizeEstimateReadiness, stockCheckKey, type EstimatePartRow } from './estimate-readiness';
+import { summarizeEstimateReadiness, stockCheckKey, toRequestQty, type EstimatePartRow } from './estimate-readiness';
 
 const row = (over: Partial<EstimatePartRow>): EstimatePartRow => ({
   item_number: 'PART', description: null, needed: 1, allocated: 0, free: 0,
   usable: 0, on_hand: 0, on_order: 0, short: 0, state: 'available',
   allocatable: 0, pos: [], netsuite_item_id: null, uncatalogued: false,
+  requested: 0, to_request: 0,
   ...over,
 });
 
@@ -89,5 +90,34 @@ describe('stockCheckKey', () => {
   it('keeps real parts, keyed the way the panel looks them up', () => {
     expect(stockCheckKey('fea-0024')).toBe('FEA-0024');
     expect(stockCheckKey('Ranger : FBM-1072-BLK')).toBe('FBM-1072-BLK');
+  });
+});
+
+// What the estimate's Request parts button fills in.
+describe('toRequestQty', () => {
+  it('asks for the shortfall less what is already requested', () => {
+    expect(toRequestQty(row({ state: 'short', short: 12, needed: 12 }))).toBe(12);
+    expect(toRequestQty(row({ state: 'short', short: 12, needed: 12, requested: 5 }))).toBe(7);
+    expect(toRequestQty(row({ state: 'short', short: 3, needed: 3, requested: 3 }))).toBe(0);
+  });
+
+  it('asks for everything still uncovered on a line not in the catalog', () => {
+    expect(toRequestQty(row({ state: 'unknown', uncatalogued: true, needed: 3 }))).toBe(3);
+    expect(toRequestQty(row({ state: 'unknown', uncatalogued: true, needed: 3, on_order: 1, requested: 1 }))).toBe(1);
+    expect(toRequestQty(row({ state: 'unknown', uncatalogued: true, needed: 3, requested: 4 }))).toBe(0);
+  });
+
+  it('asks for nothing on lines that are covered or on order', () => {
+    for (const state of ['available', 'reserved', 'waiting'] as const) {
+      expect(toRequestQty(row({ state, needed: 4, short: 0 }))).toBe(0);
+    }
+  });
+
+  it('counts the lines with something left to request', () => {
+    expect(summarizeEstimateReadiness([
+      row({ item_number: 'A', state: 'short', to_request: 3 }),
+      row({ item_number: 'B', state: 'short', to_request: 0, requested: 3 }),
+      row({ item_number: 'C', state: 'unknown', to_request: 1 }),
+    ]).toRequest).toBe(2);
   });
 });

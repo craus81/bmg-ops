@@ -53,6 +53,11 @@ export interface EstimatePartRow {
   netsuite_item_id: string | null;
   /** True when no catalog row matched, so nothing about it could be checked. */
   uncatalogued: boolean;
+  /** Sitting in PENDING purchase requests raised from this estimate (or its
+   *  upfit project). Display-only, like the project card's figure. */
+  requested: number;
+  /** What the Request parts button suggests: see `toRequestQty`. */
+  to_request: number;
 }
 
 export interface EstimateReadiness {
@@ -68,6 +73,8 @@ export interface EstimateReadiness {
     short: number;
     /** Lines that couldn't be checked at all (not in the catalog). */
     unknown: number;
+    /** Lines with something still to request (`to_request` > 0). */
+    toRequest: number;
     verdict: 'reserved' | 'ready' | 'waiting' | 'short' | 'unknown';
     lastEta: string | null;
   };
@@ -151,7 +158,7 @@ export async function computeEstimateReadiness(
 
   const empty: EstimateReadiness = {
     vehicleCount: units, stockSource: 'mirror', parts: [], skippedNonStock,
-    summary: { covered: 0, onOrder: 0, short: 0, unknown: 0, verdict: 'ready', lastEta: null },
+    summary: { covered: 0, onOrder: 0, short: 0, unknown: 0, toRequest: 0, verdict: 'ready', lastEta: null },
   };
   if (parts.size === 0) return empty;
 
@@ -267,6 +274,31 @@ export async function computeEstimateReadiness(
     });
   }
 
+  // ── Already requested from this estimate ──
+  // Its own rows, plus its project's once converted (the conversion stamps
+  // the project onto them, and asks made from the upfit card carry only the
+  // project). Bounded by this estimate's part list, so no pagination.
+  const requestedByItem = new Map<string, number>();
+  if (input.estimateId) {
+    try {
+      const { data: proj } = await service
+        .from('upfit_projects').select('id').eq('estimate_id', input.estimateId).maybeSingle();
+      const sourceFilter = proj?.id
+        ? `source_estimate_id.eq.${input.estimateId},source_project_id.eq.${proj.id}`
+        : `source_estimate_id.eq.${input.estimateId}`;
+      const { data: reqs } = await service
+        .from('purchase_requests')
+        .select('item_number, quantity')
+        .eq('status', 'pending')
+        .or(sourceFilter)
+        .in('item_number', [...parts.keys()]);
+      for (const r of reqs || []) {
+        const key = normalizeItemNumber(r.item_number);
+        requestedByItem.set(key, (requestedByItem.get(key) || 0) + (Number(r.quantity) || 0));
+      }
+    } catch { /* the banner just won't know what's already asked for */ }
+  }
+
   const rows: EstimatePartRow[] = [...parts.values()].map(w => {
     const m = allocationMath({
       needed: w.needed, availPool: w.availPool,
@@ -274,6 +306,8 @@ export async function computeEstimateReadiness(
       onOrder: w.on_order,
     });
     const uncatalogued = !catalogued.has(w.item_number);
+    const requested = requestedByItem.get(w.item_number) || 0;
+    const state: EstimatePartState = uncatalogued ? 'unknown' : m.state;
     return {
       item_number: w.item_number,
       description: w.description,
@@ -286,11 +320,13 @@ export async function computeEstimateReadiness(
       short: m.short,
       // An uncatalogued line has no stock figure to be short OF — saying so
       // is honest; calling it short would be a guess dressed as a fact.
-      state: uncatalogued ? 'unknown' : m.state,
+      state,
       allocatable: uncatalogued ? 0 : m.allocatable,
       pos: w.pos,
       netsuite_item_id: w.netsuite_item_id,
       uncatalogued,
+      requested,
+      to_request: toRequestQty({ state, short: m.short, needed: w.needed, allocated: w.allocatedHere, on_order: w.on_order, requested }),
     };
   });
 
@@ -304,6 +340,20 @@ export async function computeEstimateReadiness(
     vehicleCount: units, stockSource, parts: rows, skippedNonStock,
     summary: summarizeEstimateReadiness(rows),
   };
+}
+
+/**
+ * How many of a line the Request parts button suggests ordering.
+ *
+ * Short lines: the shortfall less what is already requested. Lines not in
+ * the catalog have no stock figure, so it is everything needed less what is
+ * held, on order or requested: purchasing gets the part number as typed and
+ * works out the rest (Craig, 2026-10-01). Everything else needs nothing.
+ */
+export function toRequestQty(r: Pick<EstimatePartRow, 'state' | 'short' | 'needed' | 'allocated' | 'on_order' | 'requested'>): number {
+  if (r.state === 'short') return Math.max(0, r.short - r.requested);
+  if (r.state === 'unknown') return Math.max(0, r.needed - r.allocated - r.on_order - r.requested);
+  return 0;
 }
 
 /**
@@ -322,6 +372,7 @@ export function summarizeEstimateReadiness(rows: EstimatePartRow[]): EstimateRea
     onOrder: checkable.filter(r => r.state === 'waiting').length,
     short: checkable.filter(r => r.state === 'short').length,
     unknown: rows.length - checkable.length,
+    toRequest: rows.filter(r => r.to_request > 0).length,
     verdict: checkable.length === 0 ? (rows.length > 0 ? 'unknown' : 'ready')
       : checkable.every(r => r.state === 'reserved') ? 'reserved'
         : checkable.every(r => r.state === 'reserved' || r.state === 'available') ? 'ready'
