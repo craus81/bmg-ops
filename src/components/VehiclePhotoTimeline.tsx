@@ -46,6 +46,10 @@ interface Props {
   vin: string;
   variant?: 'internal' | 'customer';
   refreshKey?: number;
+  /** Show only these categories (the graphics job page shows just the
+   *  check-in photos and proofs, not the job's own design files). */
+  only?: PhotoCategory[];
+  emptyText?: string;
 }
 
 const SECTION_ORDER: { key: string; label: string; cats: PhotoCategory[] }[] = [
@@ -68,7 +72,7 @@ const CATEGORY_LABELS: Record<PhotoCategory, string> = {
 
 const ALL_CATEGORIES: PhotoCategory[] = ['before', 'during', 'completion', 'damage', 'proof', 'design_file', 'other'];
 
-export default function VehiclePhotoTimeline({ vin, variant = 'internal', refreshKey, visit }: Props) {
+export default function VehiclePhotoTimeline({ vin, variant = 'internal', refreshKey, visit, only, emptyText }: Props) {
   const supabase = createClient();
   const [items, setItems] = useState<TimelineItem[]>([]);
   // Per-tile load fallback: R2 first (where uploads live); for a HEIC the
@@ -87,6 +91,8 @@ export default function VehiclePhotoTimeline({ vin, variant = 'internal', refres
   const [selectedCats, setSelectedCats] = useState<Set<PhotoCategory>>(() => new Set(ALL_CATEGORIES));
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
 
+  // A string key so an inline `only={[...]}` array doesn't reload every render.
+  const onlyKey = only?.join(',') || '';
   const load = useCallback(async () => {
     setLoading(true);
     const res = await fetch(`/api/vehicles/${encodeURIComponent(vin)}/photos${visit ? `?visit=${encodeURIComponent(visit)}` : ''}`);
@@ -96,9 +102,10 @@ export default function VehiclePhotoTimeline({ vin, variant = 'internal', refres
       return;
     }
     const data = await res.json();
-    setItems((data.items || []) as TimelineItem[]);
+    const all = (data.items || []) as TimelineItem[];
+    setItems(onlyKey ? all.filter(i => onlyKey.split(',').includes(i.category)) : all);
     setLoading(false);
-  }, [vin, visit]);
+  }, [vin, visit, onlyKey]);
 
   useEffect(() => { load(); }, [load, refreshKey]);
 
@@ -198,7 +205,7 @@ export default function VehiclePhotoTimeline({ vin, variant = 'internal', refres
         background: 'var(--card)', border: '1px solid var(--border)',
         color: 'var(--text-muted)', fontSize: '13px',
       }}>
-        No photos or design files for this vehicle yet.
+        {emptyText || 'No photos or design files for this vehicle yet.'}
       </div>
     );
   }
