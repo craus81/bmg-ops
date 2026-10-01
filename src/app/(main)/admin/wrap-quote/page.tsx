@@ -21,14 +21,34 @@ import { CoverageProofPreview, type ProofFilmOption } from '@/components/PhotoCo
 import PhotoProofBoard from '@/components/PhotoProofBoard';
 import {
   allProofBoxes,
+  measureBoxes,
+  nextCoverageColor,
   prepareCoveragePhoto,
   proofLabel,
   renderCoverageProofBlob,
   sanitizePhotoProofs,
   MAX_PHOTO_PROOFS,
+  type CoverageBox,
   type PhotoProof,
+  type ProofLegendRow,
 } from '@/lib/coverage-proof';
-import { sqft } from '@/lib/photo-scale';
+import { pxPerInch, sqft, type PhotoCalibration } from '@/lib/photo-scale';
+import {
+  applyLegendSize,
+  buildProofBoxes,
+  sanitizeProofRead,
+  unplacedLegendRows,
+  usesLegendSize,
+} from '@/lib/proof-sizing';
+import {
+  PROOF_ACCEPT,
+  canvasToJpeg,
+  isProofFile,
+  pageForReader,
+  pagePixels,
+  rasterizeProofFile,
+  releaseCanvas,
+} from '@/lib/proof-pages';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { summarizeAudits, applyCoverageNorm, type TemplateAudit, type AuditSummary } from '@/lib/calibration-audit';
@@ -373,6 +393,19 @@ export default function WrapQuotePage() {
   // labels it "Job" rather than "Vehicle".
   const [photoVehicle, setPhotoVehicle] = useState('');
   const [photoUploading, setPhotoUploading] = useState(false);
+  // ----- Customer proof (photo mode fed by the customer's own layout) -----
+  // The pages of the customer's proof, read by the proof reader and scaled
+  // by the chosen template's wheelbase (src/lib/proof-sizing.ts). Still
+  // photoMode underneath, so pricing, nesting, the quote and the save all
+  // see ordinary photo boxes.
+  const [proofMode, setProofMode] = useState(false);
+  // What the reader is doing right now, or null when idle.
+  const [proofBusy, setProofBusy] = useState<string | null>(null);
+  // What the last read found and didn't, page by page.
+  const [proofNotes, setProofNotes] = useState<string[]>([]);
+  // Wheelbase typed for this quote when the template has none on file (or
+  // the rep knows better) — the ruler every page is measured by.
+  const [proofWheelbaseText, setProofWheelbaseText] = useState('');
   const [tool, setTool] = useState<Tool>('select');
   // Shapes drawn on a 1:20 template. In photo mode `measurements` (below) is
   // derived from the photo boxes instead, so pricing, roll nesting, the line
@@ -738,7 +771,10 @@ export default function WrapQuotePage() {
   const pickTemplate = (t: Template) => {
     setTemplateId(t.id);
     setImgDim(null);
-    resetEstimate();
+    // On a customer proof the vehicle is the ruler, not the drawing: keep
+    // the pages and re-measure them by the new vehicle's wheelbase (a
+    // wheelbase typed for the old vehicle no longer applies).
+    if (proofMode) { setProofWheelbaseText(''); rescaleProofs(wheelbaseOf(t)); } else resetEstimate();
     setTplSearch('');
     setYearFilter((t.year || '').trim());
     setMakeFilter(t.make.trim());
@@ -1389,6 +1425,9 @@ export default function WrapQuotePage() {
     setPhotoMode(false);
     setPhotoProofs([]);
     setPhotoVehicle('');
+    setProofMode(false);
+    setProofNotes([]);
+    setProofWheelbaseText('');
     setSelectedId(null);
     setPendingPair(null);
     setPolyDraft(null);
@@ -1480,8 +1519,11 @@ export default function WrapQuotePage() {
     }
     return {
       quote_number: quoteNumber || legacyJobNumber.wq(),
-      template_id: photoMode ? null : template?.id || null,
-      vehicle_description: photoMode ? (photoVehicle.trim() || null) : template ? templateLabel(template) : null,
+      // A customer-proof quote keeps its template — the vehicle the rep
+      // picked, whose wheelbase the pages were scaled by; a plain photo quote
+      // has none.
+      template_id: photoMode && !proofMode ? null : template?.id || null,
+      vehicle_description: photoMode && !proofMode ? (photoVehicle.trim() || null) : template ? templateLabel(template) : null,
       // Photo proof rides along so reopening the quote restores the backdrop
       // and its boxes; a template quote clears both.
       photo_proofs: photoMode ? photoProofs : [],
@@ -1938,6 +1980,14 @@ export default function WrapQuotePage() {
     setPhotoMode(proofs.length > 0);
     setPhotoProofs(proofs);
     setPhotoVehicle(proofs.length > 0 ? (q.vehicle_description || '') : '');
+    // A quote sized from a customer proof reopens on the Customer Proof
+    // surface, with the wheelbase its pages were scaled by.
+    const fromProof = proofs.some(p => p.source === 'customer_proof');
+    setProofMode(fromProof);
+    setProofNotes([]);
+    const scaledBy = fromProof ? proofs.find(p => p.wheel_line && p.calibration?.line)?.calibration?.line?.inches : null;
+    const tplWb = wheelbaseOf(templates.find(t => t.id === q.template_id) || null);
+    setProofWheelbaseText(scaledBy && scaledBy !== tplWb ? String(scaledBy) : '');
     // Photo quotes derive their measurements from the boxes — keep the drawn
     // array empty so the two can't stack up.
     if (proofs.length > 0) ms.length = 0;
@@ -2090,13 +2140,222 @@ export default function WrapQuotePage() {
     setPhotoProofs(prev => prev.filter(p => p.id !== proof.id));
   };
 
-  // The two drawing surfaces are mutually exclusive: a quote is either
-  // measured on a 1:20 template or drawn on photos, never half of each (the
-  // saved snapshot can only carry one).
-  const switchSurface = async (photo: boolean) => {
-    if (photo === photoMode) return;
-    if (photo && drawnMeasurements.length > 0) {
-      if (!(await dialog.confirm('Switch to photo proofs? The shapes measured on the template will be cleared — photo boxes are measured off the photos instead.'))) return;
+  // ----- Customer proof -----
+  // The customer's own layout as the drawing surface. Each page is read by
+  // the proof reader (which views it shows, its size table, a rough box
+  // round every decal), the wheels on its side view scale it by the chosen
+  // template's wheelbase, and the decals land on the page as ordinary photo
+  // boxes — printed sizes winning over measured ones. See
+  // src/lib/proof-sizing.ts for the method and its limits.
+  const wheelbaseOf = (t: Template | null) => (t?.wheelbase_in && Number(t.wheelbase_in) > 0 ? Number(t.wheelbase_in) : null);
+  const typedWheelbase = parseFloat(proofWheelbaseText);
+  const proofWheelbase: number | null = Number.isFinite(typedWheelbase) && typedWheelbase > 0 ? typedWheelbase : wheelbaseOf(template);
+
+  // Every size-table row read off any page, deduped — a multi-page proof
+  // often prints the same table on each page.
+  const allLegendRows = useMemo<ProofLegendRow[]>(() => {
+    const seen = new Set<string>();
+    const rows: ProofLegendRow[] = [];
+    for (const p of photoProofs) {
+      for (const r of p.legend || []) {
+        const key = `${r.name.trim().toLowerCase()}|${r.width_in ?? ''}|${r.height_in ?? ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push(r);
+      }
+    }
+    return rows;
+  }, [photoProofs]);
+
+  const legendSizeText = (r: { width_in: number | null; height_in: number | null }) => {
+    const f = (n: number) => Number(n.toFixed(1));
+    return r.width_in && r.height_in ? `${f(r.width_in)}" × ${f(r.height_in)}"`
+      : r.width_in ? `${f(r.width_in)}" wide` : r.height_in ? `${f(r.height_in)}" tall` : '';
+  };
+
+  /** Boxes keeping a printed size keep it; the rest follow the page's scale. */
+  const remeasureProofBoxes = (boxes: CoverageBox[], cal: PhotoCalibration | null) =>
+    measureBoxes(boxes.map(b => (usesLegendSize(b) ? applyLegendSize({ ...b }, cal) : b)), cal);
+
+  // Read a proof: every page rendered in the browser, uploaded as the
+  // picture the boxes sit on, read by the proof reader, then measured here.
+  const readProofFiles = async (files: FileList | File[] | null) => {
+    const picked = files ? Array.from(files) : [];
+    if (picked.length === 0) return;
+    const notes: string[] = [];
+    const added: PhotoProof[] = [];
+    let room = MAX_PHOTO_PROOFS - photoProofs.length;
+    if (room <= 0) {
+      await dialog.alert(`A quote can carry ${MAX_PHOTO_PROOFS} pages. Remove one before adding another.`);
+      return;
+    }
+    if (!proofWheelbase) {
+      if (!(await dialog.confirm(template
+        ? 'This template has no wheelbase on file, so only decals with a printed size will be sized until you type the wheelbase. Read the proof anyway?'
+        : 'No vehicle picked yet, so only decals with a printed size will be sized until you pick one. Read the proof anyway?'))) return;
+    }
+    setProofBusy('Opening…');
+    setProofNotes([]);
+    try {
+      for (const file of picked) {
+        if (!isProofFile(file)) { notes.push(`${file.name}: not a PDF or image — skipped.`); continue; }
+        if (room <= 0) { notes.push(`${file.name}: skipped — a quote carries ${MAX_PHOTO_PROOFS} pages.`); continue; }
+        let pages: Awaited<ReturnType<typeof rasterizeProofFile>>;
+        try {
+          pages = await rasterizeProofFile(file, m => setProofBusy(m));
+        } catch (e: any) {
+          notes.push(`${file.name}: couldn't open it (${e?.message || 'unreadable'}).`);
+          continue;
+        }
+        for (const pg of pages) {
+          const tag = pages.length > 1 ? `${file.name} page ${pg.page}` : file.name;
+          try {
+            if (room <= 0) { notes.push(`${tag}: skipped — a quote carries ${MAX_PHOTO_PROOFS} pages.`); continue; }
+            setProofBusy(`Uploading ${tag}…`);
+            const blob = await canvasToJpeg(pg.canvas);
+            const path = `quote-proofs/${Date.now()}-${pg.name.replace(/[^a-zA-Z0-9._-]/g, '_')}-p${pg.page}.jpg`;
+            const { error } = await storage.from('vehicle-templates').upload(path, blob, { contentType: 'image/jpeg' });
+            if (error) throw new Error(`upload failed: ${error.message}`);
+            setProofBusy(`Reading ${tag}… (the AI is looking for the views, the size table and each decal)`);
+            const { base64, mimeType } = await pageForReader(pg.canvas);
+            const res = await apiFetch('/api/wrap-quote/read-proof', { method: 'POST', body: JSON.stringify({ image: base64, mimeType }) });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(json?.error || `the reader failed (${res.status})`);
+            const read = sanitizeProofRead(json?.data);
+            setProofBusy(`Measuring ${tag}…`);
+            // Let the status paint before the pixel work holds the thread.
+            await new Promise(r => setTimeout(r, 30));
+            const built = buildProofBoxes({ img: pagePixels(pg.canvas), read, wheelbaseIn: proofWheelbase, defaultFilmId: defaultFilmId() });
+            const label = read.page_title || (pages.length > 1 ? `${pg.name} — page ${pg.page}` : pg.name);
+            added.push({
+              id: crypto.randomUUID(),
+              path,
+              label,
+              boxes: built.boxes,
+              calibration: built.calibration,
+              diagram_path: null,
+              source: 'customer_proof',
+              legend: built.legend,
+              wheel_line: built.wheels ? { x1: built.wheels.a.x, y1: built.wheels.a.y, x2: built.wheels.b.x, y2: built.wheels.b.y } : null,
+            });
+            room--;
+            for (const n of built.notes) notes.push(`${label}: ${n}`);
+          } catch (e: any) {
+            notes.push(`${tag}: ${e?.message || 'failed'}`);
+          } finally {
+            releaseCanvas(pg.canvas);
+          }
+        }
+      }
+    } finally {
+      setProofBusy(null);
+    }
+    if (added.length > 0) setPhotoProofs(prev => [...prev, ...added]);
+    setProofNotes(notes);
+  };
+
+  // A different vehicle is a different ruler: every page still scaled by its
+  // wheel line is re-measured by the new wheelbase. A line the rep dragged
+  // themselves (a door, a panel) is theirs and stays.
+  const rescaleProofs = (wheelbase: number | null) => {
+    setPhotoProofs(proofs => proofs.map(p => {
+      if (p.source !== 'customer_proof' || !p.wheel_line) return p;
+      const wl = p.wheel_line, line = p.calibration?.line;
+      const onWheels = !line || (line.x1 === wl.x1 && line.y1 === wl.y1 && line.x2 === wl.x2 && line.y2 === wl.y2);
+      if (!onWheels) return p;
+      if (line && line.inches === wheelbase) return p;
+      const cal: PhotoCalibration | null = wheelbase ? { ...(p.calibration || {}), line: { ...wl, inches: wheelbase } } : null;
+      return { ...p, calibration: cal, boxes: remeasureProofBoxes(p.boxes, cal) };
+    }));
+  };
+
+  const commitTypedWheelbase = () => {
+    const n = parseFloat(proofWheelbaseText);
+    if (Number.isFinite(n) && n > 0) rescaleProofs(n);
+    else { setProofWheelbaseText(''); rescaleProofs(wheelbaseOf(template)); }
+  };
+
+  // A size-table row no box is using yet: drop a box of that size onto the
+  // page (between the wheels, if the page has a scale) for the rep to drag
+  // into place.
+  const placeLegendRow = (proof: PhotoProof, row: ProofLegendRow) => {
+    const ppi = pxPerInch(proof.calibration?.line);
+    const w = row.width_in, h = row.height_in;
+    const pxW = ppi && w ? w * ppi : 300;
+    const pxH = ppi && h ? h * ppi : w && h ? 300 * h / w : 150;
+    const line = proof.calibration?.line;
+    const cx = line ? (line.x1 + line.x2) / 2 : 400;
+    const cy = line ? Math.min(line.y1, line.y2) - pxH : 300;
+    const box: CoverageBox = {
+      id: crypto.randomUUID(),
+      label: row.name,
+      color: nextCoverageColor(proof.boxes.length),
+      rect: { x: Math.max(0, cx - pxW / 2), y: Math.max(0, cy - pxH / 2), w: pxW, h: pxH },
+      qty: 1,
+      substrate_id: defaultFilmId(),
+      legend: { row_id: row.id, name: row.name, width_in: w, height_in: h },
+    };
+    applyLegendSize(box, proof.calibration || null);
+    setPhotoProofs(prev => prev.map(p => (p.id === proof.id ? { ...p, boxes: measureBoxes([...p.boxes, box], p.calibration) } : p)));
+  };
+
+  const proofChip = (bg: string, border: string, color: string): React.CSSProperties => ({
+    fontSize: '10px', fontWeight: 700, padding: '4px 8px', borderRadius: '6px', lineHeight: 1.4,
+    background: bg, border: `1px solid ${border}`, color,
+  });
+
+  // Above each page: its scale, and the size-table rows nothing is placed for.
+  const proofPageExtras = (proof: PhotoProof) => {
+    if (proof.source !== 'customer_proof') return null;
+    const ppi = pxPerInch(proof.calibration?.line);
+    const unplaced = unplacedLegendRows(allLegendRows, allProofBoxes(photoProofs));
+    return (
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', marginBottom: '10px' }}>
+        {ppi ? (
+          <span style={proofChip('rgba(34,197,94,0.08)', 'rgba(34,197,94,0.3)', '#22c55e')} title="The distance between the two wheel centres on the side view, set to the vehicle's wheelbase">
+            Scale: wheelbase {proof.calibration!.line!.inches}&quot; · {ppi.toFixed(2)} px/in
+          </span>
+        ) : (
+          <span style={proofChip('rgba(251,191,36,0.08)', 'rgba(251,191,36,0.3)', '#fbbf24')}>
+            No scale on this page — printed sizes still apply. To measure the rest, use Known length from wheel centre to wheel centre{proofWheelbase ? '' : ' after setting the wheelbase'}.
+          </span>
+        )}
+        {unplaced.length > 0 && <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)' }}>Size table also lists:</span>}
+        {unplaced.map(r => (
+          <button key={r.id} onClick={() => placeLegendRow(proof, r)} title="Put a box of this size on this page, then drag it onto the decal" style={{ ...proofChip('rgba(6,182,212,0.08)', 'rgba(6,182,212,0.35)', '#06b6d4'), cursor: 'pointer' }}>
+            + {r.name} {legendSizeText(r)}{r.qty && r.qty > 1 ? ` ×${r.qty}` : ''}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
+  const proofEmptyState = {
+    title: 'Start from the customer\u2019s proof',
+    hint: (
+      <>
+        Drop the proof here — a PDF or a picture; every page is read.{' '}
+        {proofWheelbase
+          ? <>The drawing is measured by the <b>{template ? templateLabel(template) : 'vehicle'}</b> wheelbase ({proofWheelbase}&quot;).</>
+          : <>Pick the vehicle above first so the drawing can be measured.</>}
+        <br />
+        Each decal gets a box you can move, resize, add to or delete. A size printed on the proof wins over the measured one.
+      </>
+    ),
+    choose: 'Choose Proof',
+  };
+
+  // The drawing surfaces are mutually exclusive: a quote is measured on a
+  // 1:20 template, drawn on photos, or sized from the customer's proof —
+  // never half of each (the saved snapshot can only carry one).
+  type Surface = 'template' | 'photo' | 'proof';
+  const surface: Surface = photoMode ? (proofMode ? 'proof' : 'photo') : 'template';
+  const surfaceName = (s: Surface) => (s === 'template' ? 'a vehicle template' : s === 'proof' ? 'a customer proof' : 'photos');
+  const switchSurface = async (target: Surface) => {
+    if (target === surface) return;
+    const toPictures = target !== 'template';
+    if (toPictures && drawnMeasurements.length > 0) {
+      if (!(await dialog.confirm(`Switch to ${surfaceName(target)}? The shapes measured on the template will be cleared — boxes are measured off the ${target === 'proof' ? 'proof' : 'photos'} instead.`))) return;
       setDrawnMeasurements([]);
       setSelectedId(null);
       setPendingPair(null);
@@ -2105,14 +2364,19 @@ export default function WrapQuotePage() {
       setPlacements({});
       setUseRollPricing(false);
     }
-    if (!photo && photoProofs.length > 0) {
+    if (photoProofs.length > 0) {
       const n = allProofBoxes(photoProofs).length;
-      if (!(await dialog.confirm(`Switch back to a vehicle template? The ${photoProofs.length} photo${photoProofs.length === 1 ? '' : 's'}${n > 0 ? ` and the ${n} box${n === 1 ? '' : 'es'} on ${photoProofs.length === 1 ? 'it' : 'them'}` : ''} will be cleared.`))) return;
+      const what = surface === 'proof' ? 'page' : 'photo';
+      if (!(await dialog.confirm(`Switch to ${surfaceName(target)}? The ${photoProofs.length} ${what}${photoProofs.length === 1 ? '' : 's'}${n > 0 ? ` and the ${n} box${n === 1 ? '' : 'es'} on ${photoProofs.length === 1 ? 'it' : 'them'}` : ''} will be cleared.`))) return;
       setPhotoProofs([]);
       setPlacements({});
       setUseRollPricing(false);
     }
-    setPhotoMode(photo);
+    setProofNotes([]);
+    // Plain photos have no template; a proof keeps the vehicle picked for it.
+    if (target === 'photo') setTemplateId('');
+    setPhotoMode(toPictures);
+    setProofMode(target === 'proof');
   };
 
   // ----- History: archive / delete -----
@@ -2873,20 +3137,22 @@ export default function WrapQuotePage() {
           <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Draw on</span>
             {([
-              { photo: false, label: 'Vehicle Template', hint: 'Measure and price coverage over a calibrated 1:20 vehicle outline' },
-              { photo: true, label: 'Photos', hint: 'Draw boxes over photos of the real thing — a vehicle, or a building being signed. Set a scale on each photo and the boxes measure and price themselves' },
+              { surface: 'template' as Surface, label: 'Vehicle Template', hint: 'Measure and price coverage over a calibrated 1:20 vehicle outline' },
+              { surface: 'proof' as Surface, label: 'Customer Proof', hint: 'Upload the customer\u2019s proof (PDF or picture) and pick the vehicle: every decal gets a box, sized by the number printed on the proof or measured off the drawing by the wheelbase' },
+              { surface: 'photo' as Surface, label: 'Photos', hint: 'Draw boxes over photos of the real thing — a vehicle, or a building being signed. Set a scale on each photo and the boxes measure and price themselves' },
             ]).map(o => (
-              <button key={String(o.photo)} onClick={() => switchSurface(o.photo)} title={o.hint} style={{
+              <button key={o.surface} onClick={() => switchSurface(o.surface)} title={o.hint} style={{
                 padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
-                background: photoMode === o.photo ? 'rgba(6,182,212,0.15)' : 'transparent',
-                border: photoMode === o.photo ? '1px solid rgba(6,182,212,0.4)' : '1px solid var(--border)',
-                color: photoMode === o.photo ? '#06b6d4' : 'var(--text-muted)',
+                background: surface === o.surface ? 'rgba(6,182,212,0.15)' : 'transparent',
+                border: surface === o.surface ? '1px solid rgba(6,182,212,0.4)' : '1px solid var(--border)',
+                color: surface === o.surface ? '#06b6d4' : 'var(--text-muted)',
               }}>{o.label}</button>
             ))}
           </div>
 
-          {/* Vehicle selection */}
-          {!photoMode && (
+          {/* Vehicle selection — also on a customer proof, where the vehicle's
+              wheelbase is the ruler the drawing is measured by. */}
+          {(!photoMode || proofMode) && (
           <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
             <select value={yearFilter} onChange={e => { setYearFilter(e.target.value); setTemplateId(''); }} style={{ ...inputStyle, width: '110px' }}>
               <option value="">All years</option>
@@ -2925,7 +3191,7 @@ export default function WrapQuotePage() {
                 </div>
               )}
             </div>
-            <select value={templateId} onChange={e => { setTemplateId(e.target.value); setImgDim(null); resetEstimate(); }} style={{ ...inputStyle, flex: 1, minWidth: '220px' }}>
+            <select value={templateId} onChange={e => { setTemplateId(e.target.value); setImgDim(null); if (proofMode) { setProofWheelbaseText(''); rescaleProofs(wheelbaseOf(templates.find(t => t.id === e.target.value) || null)); } else resetEstimate(); }} style={{ ...inputStyle, flex: 1, minWidth: '220px' }}>
               <option value="">— Select vehicle template —</option>
               {templateOptions.map(t => <option key={t.id} value={t.id}>{templateLabel(t)}{t.template_code ? ` (${t.template_code})` : ''}</option>)}
             </select>
@@ -3383,6 +3649,7 @@ export default function WrapQuotePage() {
 
           {photoMode && (
             <div>
+              {!proofMode && (
               <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
                 <input
                   value={photoVehicle}
@@ -3391,21 +3658,77 @@ export default function WrapQuotePage() {
                   style={{ ...inputStyle, flex: 1, minWidth: '260px' }}
                 />
               </div>
+              )}
+              {proofMode && (
+              <div style={{ marginBottom: '10px' }}>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Wheelbase</span>
+                  <input
+                    type="number" min={1} step={0.5}
+                    value={proofWheelbaseText}
+                    onChange={e => setProofWheelbaseText(e.target.value)}
+                    onBlur={commitTypedWheelbase}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitTypedWheelbase(); } }}
+                    placeholder={wheelbaseOf(template) ? String(wheelbaseOf(template)) : 'inches'}
+                    title={wheelbaseOf(template) ? `From the template: ${wheelbaseOf(template)}". Type a different number to override it for this quote.` : 'This template has no wheelbase on file — type it (inches, wheel centre to wheel centre)'}
+                    style={{ ...inputStyle, width: '90px' }}
+                  />
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                    {proofWheelbase
+                      ? `${proofWheelbase}" between the wheel centres is the ruler every page is measured by${proofWheelbaseText && wheelbaseOf(template) && proofWheelbase !== wheelbaseOf(template) ? ` (template says ${wheelbaseOf(template)}")` : ''}.`
+                      : template ? 'No wheelbase on file for this template — type it to measure the drawing; printed sizes apply either way.'
+                      : 'Pick the vehicle above — its wheelbase is what the drawing is measured by.'}
+                  </span>
+                </div>
+                {proofBusy && (
+                  <div style={{ padding: '8px 12px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.3)', fontSize: '11px', fontWeight: 700, color: '#06b6d4' }}>
+                    ⏳ {proofBusy}
+                  </div>
+                )}
+                {!proofBusy && proofNotes.length > 0 && (
+                  <div style={{ padding: '8px 12px', borderRadius: '8px', background: 'var(--card)', border: `1px solid ${theme.border}`, fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <span style={{ fontSize: '10px', fontWeight: 800, color: 'var(--text-primary)', textTransform: 'uppercase' }}>What the reader found</span>
+                      <button onClick={() => setProofNotes([])} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}>Dismiss</button>
+                    </div>
+                    {proofNotes.map((n, i) => <div key={i}>• {n}</div>)}
+                    <div style={{ marginTop: '4px', fontSize: '10px', color: 'var(--text-muted)' }}>
+                      Check every box against the proof: drag it, resize it from its corner, delete what isn&apos;t a decal, and draw any it missed.
+                    </div>
+                  </div>
+                )}
+              </div>
+              )}
               <PhotoProofBoard
                 proofs={photoProofs}
                 onChange={setPhotoProofs}
                 imageUrl={imageUrl}
-                onAddPhotos={addCoveragePhotos}
+                onAddPhotos={proofMode ? readProofFiles : addCoveragePhotos}
                 onRemovePhoto={removeCoveragePhoto}
-                uploading={photoUploading}
+                uploading={photoUploading || !!proofBusy}
                 films={proofFilms}
                 defaultFilmId={lastFilmId}
                 onPickFilm={setLastFilmId}
+                accept={proofMode ? PROOF_ACCEPT : undefined}
+                emptyState={proofMode ? proofEmptyState : undefined}
+                addLabel={proofMode ? '+ Add proof' : undefined}
+                labelPlaceholder={proofMode ? 'What this page shows — e.g. "Driver side"' : undefined}
+                pageExtras={proofMode ? proofPageExtras : undefined}
+                suggestedLineInches={proofMode ? proofWheelbase : null}
+                lineHint={proofMode
+                  ? (proofWheelbase
+                    ? `Drag from the centre of the front wheel to the centre of the rear wheel — the wheelbase (${proofWheelbase}") fills in. Or drag along anything else on the drawing you know the length of and type it.`
+                    : 'Drag from the centre of one wheel to the centre of the other and type the wheelbase, or drag along anything on the drawing you know the length of.')
+                  : undefined}
               />
               {photoProofs.length > 0 && (
                 <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '12px', marginTop: '10px', flexWrap: 'wrap' }}>
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>
-                    {photoMeasurements.length > 0
+                    {proofMode
+                      ? (photoMeasurements.length > 0
+                        ? `${photoMeasurements.length} decal${photoMeasurements.length === 1 ? '' : 's'} priced (${allProofBoxes(photoProofs).filter(usesLegendSize).length} from the size table) · ${fmt(totals.area)} ft²${allProofBoxes(photoProofs).length > photoMeasurements.length ? ` · ${allProofBoxes(photoProofs).length - photoMeasurements.length} still need a size` : ''}`
+                        : 'No decal has a size yet — set the wheelbase, or type sizes on the boxes.')
+                      : photoMeasurements.length > 0
                       ? `${photoMeasurements.length} measured box${photoMeasurements.length === 1 ? '' : 'es'} · ${fmt(totals.area)} ft² priced like template shapes`
                       : 'Set a scale on each photo to price its boxes — until then they are a picture only.'}
                   </div>

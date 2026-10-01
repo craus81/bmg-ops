@@ -40,6 +40,28 @@ export interface CoverageBox {
   manual?: boolean;
   /** Which calibration produced the numbers, so the screen can say. */
   measured_by?: 'line' | 'plane' | null;
+  /** The size-table row on a customer proof this decal was paired with
+   *  (src/lib/proof-sizing.ts). When the box is `manual` and carries these
+   *  numbers, the printed size is what's being priced. */
+  legend?: BoxLegend | null;
+}
+
+/** A printed size from a proof's size table, attached to the box it sizes. */
+export interface BoxLegend {
+  /** ProofLegendRow.id on the page that listed it, so unplaced rows can be told apart. */
+  row_id: string | null;
+  name: string;
+  width_in: number | null;
+  height_in: number | null;
+}
+
+/** One row of a customer proof's size table, as read off the page. */
+export interface ProofLegendRow {
+  id: string;
+  name: string;
+  width_in: number | null;
+  height_in: number | null;
+  qty: number | null;
 }
 
 export interface PhotoProof {
@@ -54,6 +76,15 @@ export interface PhotoProof {
   calibration?: PhotoCalibration | null;
   /** Flattened photo + boxes, written at save time. */
   diagram_path?: string | null;
+  /** A page of the customer's proof, sized by the proof reader, rather than
+   *  a photo the rep took. Reopening a quote with one restores the Customer
+   *  Proof surface. */
+  source?: 'customer_proof' | null;
+  /** The size table read off this page (customer proofs only). */
+  legend?: ProofLegendRow[] | null;
+  /** Where the proof reader found the two wheel centres, so a change of
+   *  vehicle (wheelbase) can re-scale the page without re-reading it. */
+  wheel_line?: { x1: number; y1: number; x2: number; y2: number } | null;
 }
 
 /** Same palette the estimator gives films, so proofs read like the diagrams. */
@@ -230,9 +261,51 @@ export function sanitizeCoverageBoxes(raw: any): CoverageBox[] {
       area_in2: num(b?.area_in2),
       manual: !!b?.manual,
       measured_by: b?.measured_by === 'line' || b?.measured_by === 'plane' ? b.measured_by : null,
+      legend: sanitizeBoxLegend(b?.legend),
     });
   }
   return boxes;
+}
+
+const posNum = (v: any): number | null => {
+  const n = num(v);
+  return n != null && n > 0 ? n : null;
+};
+
+function sanitizeBoxLegend(raw: any): BoxLegend | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const width_in = posNum(raw.width_in), height_in = posNum(raw.height_in);
+  if (width_in == null && height_in == null) return null;
+  return {
+    row_id: typeof raw.row_id === 'string' && raw.row_id ? raw.row_id : null,
+    name: typeof raw.name === 'string' ? raw.name : '',
+    width_in,
+    height_in,
+  };
+}
+
+function sanitizeWheelLine(raw: any): PhotoProof['wheel_line'] {
+  if (!raw || typeof raw !== 'object') return null;
+  const l = { x1: Number(raw.x1), y1: Number(raw.y1), x2: Number(raw.x2), y2: Number(raw.y2) };
+  return Object.values(l).every(Number.isFinite) ? l : null;
+}
+
+/** Size-table rows survive a round trip only with a name and at least one size. */
+export function sanitizeLegendRows(raw: any): ProofLegendRow[] {
+  if (!Array.isArray(raw)) return [];
+  const rows: ProofLegendRow[] = [];
+  for (const r of raw) {
+    const name = typeof r?.name === 'string' ? r.name.trim() : '';
+    const width_in = posNum(r?.width_in), height_in = posNum(r?.height_in);
+    if (!name || (width_in == null && height_in == null)) continue;
+    const qty = posNum(r?.qty);
+    rows.push({
+      id: typeof r?.id === 'string' && r.id ? r.id : crypto.randomUUID(),
+      name, width_in, height_in,
+      qty: qty ? Math.round(qty) : null,
+    });
+  }
+  return rows;
 }
 
 const sanitizePoint = (p: any) => ({ x: Number(p?.x), y: Number(p?.y) });
@@ -274,6 +347,9 @@ export function sanitizePhotoProofs(raw: any, legacy?: { path?: string | null; b
       boxes: sanitizeCoverageBoxes(p?.boxes),
       calibration: sanitizeCalibration(p?.calibration),
       diagram_path: typeof p?.diagram_path === 'string' ? p.diagram_path : null,
+      source: p?.source === 'customer_proof' ? 'customer_proof' : null,
+      legend: sanitizeLegendRows(p?.legend),
+      wheel_line: sanitizeWheelLine(p?.wheel_line),
     });
     if (proofs.length >= MAX_PHOTO_PROOFS) break;
   }

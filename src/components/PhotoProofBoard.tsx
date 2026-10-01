@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { theme } from '@/lib/theme';
 import { DropZone } from '@/components/DropZone';
 import PhotoCoverageProof, { type ProofFilmOption } from '@/components/PhotoCoverageProof';
@@ -24,10 +24,21 @@ interface Props {
   films: ProofFilmOption[];
   defaultFilmId?: string | null;
   onPickFilm?: (filmId: string | null) => void;
+  /** File types the add controls take; photos by default, PDFs too for a customer proof. */
+  accept?: string;
+  /** Wording for the board before anything is on it. */
+  emptyState?: { title: string; hint: ReactNode; choose: string };
+  addLabel?: string;
+  labelPlaceholder?: string;
+  /** Rendered above the active picture — a customer proof's scale and unplaced size-table rows. */
+  pageExtras?: (proof: PhotoProof, index: number) => ReactNode;
+  suggestedLineInches?: number | null;
+  lineHint?: string | null;
 }
 
 export default function PhotoProofBoard({
   proofs, onChange, imageUrl, onAddPhotos, onRemovePhoto, uploading, films, defaultFilmId, onPickFilm,
+  accept = 'image/*', emptyState, addLabel = '+ Add photo', labelPlaceholder, pageExtras, suggestedLineInches, lineHint,
 }: Props) {
   const [activeId, setActiveId] = useState<string | null>(proofs[0]?.id || null);
   const lastCount = useRef(proofs.length);
@@ -73,9 +84,9 @@ export default function PhotoProofBoard({
         cursor: full || uploading ? 'default' : 'pointer', opacity: full || uploading ? 0.5 : 1,
       }}
     >
-      {uploading ? 'Uploading…' : full ? 'Limit reached' : '+ Add photo'}
+      {uploading ? 'Working…' : full ? 'Limit reached' : addLabel}
       <input
-        type="file" accept="image/*" multiple disabled={full || uploading}
+        type="file" accept={accept} multiple disabled={full || uploading}
         onChange={e => { onAddPhotos(e.target.files); e.target.value = ''; }}
         style={{ display: 'none' }}
       />
@@ -84,22 +95,26 @@ export default function PhotoProofBoard({
 
   if (proofs.length === 0) {
     return (
-      <DropZone accept="image/*" disabled={uploading} onFiles={files => onAddPhotos(files)}>
+      <DropZone accept={accept} disabled={uploading} onFiles={files => onAddPhotos(files)}>
         <div style={{ textAlign: 'center', padding: '36px 16px', border: `1px dashed ${theme.border}`, borderRadius: '12px', background: 'var(--card)' }}>
-          <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>Start from photos</div>
+          <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>{emptyState?.title || 'Start from photos'}</div>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px', lineHeight: 1.6 }}>
-            Drop photos here (or take them on your phone) — a vehicle, a storefront, whatever is being covered,
-            one photo per view.<br />
-            Shoot each face straight on where you can: a square-on photo measures with one known length.
-            Draw boxes over what gets covered, then set a scale on each photo to price them.
+            {emptyState?.hint || (
+              <>
+                Drop photos here (or take them on your phone) — a vehicle, a storefront, whatever is being covered,
+                one photo per view.<br />
+                Shoot each face straight on where you can: a square-on photo measures with one known length.
+                Draw boxes over what gets covered, then set a scale on each photo to price them.
+              </>
+            )}
           </div>
           <label style={{
             display: 'inline-block', padding: '8px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
             background: 'rgba(6,182,212,0.08)', border: '1px solid #06b6d4', color: '#06b6d4',
             cursor: uploading ? 'default' : 'pointer', opacity: uploading ? 0.6 : 1,
           }}>
-            {uploading ? 'Uploading…' : 'Choose Photos'}
-            <input type="file" accept="image/*" multiple disabled={uploading} onChange={e => { onAddPhotos(e.target.files); e.target.value = ''; }} style={{ display: 'none' }} />
+            {uploading ? 'Working…' : (emptyState?.choose || 'Choose Photos')}
+            <input type="file" accept={accept} multiple disabled={uploading} onChange={e => { onAddPhotos(e.target.files); e.target.value = ''; }} style={{ display: 'none' }} />
           </label>
         </div>
       </DropZone>
@@ -109,7 +124,7 @@ export default function PhotoProofBoard({
   return (
     <div>
       {/* Film strip — the order the customer sees them in. */}
-      <DropZone accept="image/*" disabled={uploading || full} onFiles={files => onAddPhotos(files)}>
+      <DropZone accept={accept} disabled={uploading || full} onFiles={files => onAddPhotos(files)}>
         <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '6px', marginBottom: '10px' }}>
           {proofs.map((p, i) => {
             const activeTile = p.id === active?.id;
@@ -159,7 +174,7 @@ export default function PhotoProofBoard({
             <input
               value={active.label}
               onChange={e => patchActive({ label: e.target.value })}
-              placeholder={`What this view is — e.g. "Storefront" or "Driver side" (photo ${activeIndex + 1})`}
+              placeholder={labelPlaceholder || `What this view is — e.g. "Storefront" or "Driver side" (photo ${activeIndex + 1})`}
               style={{
                 flex: 1, minWidth: '220px', padding: '8px 10px', borderRadius: '8px', fontSize: '12px',
                 background: 'var(--input-bg)', border: `1px solid ${theme.border}`, color: 'var(--text-primary)',
@@ -184,6 +199,8 @@ export default function PhotoProofBoard({
             >Remove Photo</button>
           </div>
 
+          {pageExtras?.(active, activeIndex)}
+
           <PhotoCoverageProof
             key={active.id}
             src={imageUrl(active.path)}
@@ -192,6 +209,8 @@ export default function PhotoProofBoard({
             films={films}
             defaultFilmId={defaultFilmId}
             onPickFilm={onPickFilm}
+            suggestedLineInches={suggestedLineInches}
+            lineHint={lineHint}
           />
         </>
       )}

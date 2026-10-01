@@ -7,18 +7,21 @@ import {
   nextCoverageColor,
   boxCaption,
   measureBoxes,
+  type BoxLegend,
   type CoverageBox,
   type PhotoProof,
 } from '@/lib/coverage-proof';
 import {
   calibrationDisagreementPct,
   isCalibrated,
+  measureRect,
   pxPerInch,
   sqft,
   DISAGREEMENT_WARN_PCT,
   type PhotoCalibration,
   type Point,
 } from '@/lib/photo-scale';
+import { applyLegendSize, usesLegendSize } from '@/lib/proof-sizing';
 
 // Draw coverage boxes onto a photo of what's being covered — a vehicle, or a
 // building's storefront, windows and doors — and, once the photo is
@@ -42,6 +45,11 @@ interface Props {
   /** Film given to newly drawn boxes — the last one the user picked. */
   defaultFilmId?: string | null;
   onPickFilm?: (filmId: string | null) => void;
+  /** Length the Known-length tool offers before the user types one — on a
+   *  customer proof, the template's wheelbase. */
+  suggestedLineInches?: number | null;
+  /** What to tell the user to drag the known length along. */
+  lineHint?: string | null;
 }
 
 type Tool = 'box' | 'select' | 'calibrate-line' | 'calibrate-plane';
@@ -111,7 +119,7 @@ export function CoverageProofPreview({ src, boxes, caption }: { src: string; box
   );
 }
 
-export default function PhotoCoverageProof({ src, proof, onChange, films, defaultFilmId, onPickFilm }: Props) {
+export default function PhotoCoverageProof({ src, proof, onChange, films, defaultFilmId, onPickFilm, suggestedLineInches, lineHint }: Props) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [dim, setDim] = useState<{ w: number; h: number } | null>(null);
   const [tool, setTool] = useState<Tool>('box');
@@ -176,6 +184,10 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
 
   const revertToMeasured = (id: string) =>
     onChange({ boxes: measureBoxes(boxes.map(b => (b.id === id ? { ...b, manual: false } : b)), cal) });
+
+  /** Back to the size the customer's proof prints for this decal. */
+  const applySizeTable = (id: string) =>
+    onChange({ boxes: measureBoxes(boxes.map(b => (b.id === id ? applyLegendSize({ ...b }, cal) : b)), cal) });
 
   const remove = (id: string) => {
     writeBoxes(boxes.filter(b => b.id !== id));
@@ -243,6 +255,7 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
     if (drag?.kind === 'calib-line') {
       if (Math.hypot(drag.x2 - drag.x1, drag.y2 - drag.y1) >= MIN_BOX_PX) {
         setLineDraft({ x1: drag.x1, y1: drag.y1, x2: drag.x2, y2: drag.y2 });
+        if (!lineInches && suggestedLineInches && suggestedLineInches > 0) setLineInches(String(suggestedLineInches));
       }
     } else if (drag?.kind === 'draw') {
       const x = Math.min(drag.x1, drag.x2), y = Math.min(drag.y1, drag.y2);
@@ -333,6 +346,56 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
 
   const totalSqft = boxes.reduce((sum, b) => sum + (b.area_in2 ? sqft(b.area_in2) * Math.max(1, b.qty || 1) : 0), 0);
 
+  // ----- Where a box's size came from -----
+  const fmtIn = (n: number) => Number(n.toFixed(1));
+  const legendOf = (b: CoverageBox): BoxLegend | null =>
+    b.legend && (b.legend.width_in || b.legend.height_in) ? b.legend : null;
+  const legendText = (l: BoxLegend) =>
+    l.width_in && l.height_in ? `${fmtIn(l.width_in)}" × ${fmtIn(l.height_in)}"`
+      : l.width_in ? `${fmtIn(l.width_in)}" wide` : `${fmtIn(l.height_in || 0)}" tall`;
+  const sizeTag = (b: CoverageBox): string | null =>
+    usesLegendSize(b) ? 'size table' : b.manual ? 'typed' : b.measured_by ? 'measured' : null;
+  const linkBtn = (label: string, onClick: () => void) => (
+    <button onClick={onClick} style={{ background: 'none', border: 'none', padding: 0, color: '#06b6d4', fontWeight: 700, fontSize: '10px', cursor: 'pointer' }}>{label}</button>
+  );
+  /** The sentence under the size fields: what the numbers are, and the other choice. */
+  const sizeStatus = (b: CoverageBox) => {
+    const l = legendOf(b);
+    const m = measureRect(b.rect, cal);
+    const drawn = m ? `${fmtIn(m.widthIn)}" × ${fmtIn(m.heightIn)}"` : null;
+    if (l && usesLegendSize(b)) {
+      return (
+        <>
+          From the proof&apos;s size table ({legendText(l)}).
+          {drawn && <> The drawing measures {drawn}. {linkBtn('Use the drawing\u2019s measurement instead', () => revertToMeasured(b.id))}</>}
+        </>
+      );
+    }
+    if (b.manual) {
+      return (
+        <>
+          Typed by hand.{' '}
+          {calibrated && linkBtn('Use the photo\u2019s measurement instead', () => revertToMeasured(b.id))}
+          {l && <> {linkBtn(`Use the size table (${legendText(l)})`, () => applySizeTable(b.id))}</>}
+        </>
+      );
+    }
+    const base = b.measured_by === 'plane' ? 'Measured off the photo, perspective corrected.'
+      : b.measured_by === 'line' ? 'Measured off the picture with the known length.'
+      : 'No scale set — type the size, or calibrate the photo above.';
+    return <>{base}{l && <> The size table says {legendText(l)}. {linkBtn('Use the size table', () => applySizeTable(b.id))}</>}</>;
+  };
+  /** Printed size vs drawn size, as a percentage, when both exist. */
+  const legendGapPct = (b: CoverageBox): number | null => {
+    const l = legendOf(b);
+    const m = measureRect(b.rect, cal);
+    if (!l || !m) return null;
+    const gaps: number[] = [];
+    if (l.width_in) gaps.push(Math.abs(m.widthIn / l.width_in - 1) * 100);
+    if (l.height_in) gaps.push(Math.abs(m.heightIn / l.height_in - 1) * 100);
+    return gaps.length ? Math.max(...gaps) : null;
+  };
+
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '250px minmax(0, 1fr)', gap: '12px', alignItems: 'start' }}>
       {/* Tools + scale + box list */}
@@ -387,7 +450,7 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
         {/* Calibration in progress */}
         {tool === 'calibrate-line' && !lineDraft && (
           <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
-            Drag a line along something you know the length of — the front door, a window, a panel — then type that length.
+            {lineHint || 'Drag a line along something you know the length of — the front door, a window, a panel — then type that length.'}
           </div>
         )}
         {lineDraft && (
@@ -459,6 +522,14 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
               {b.label || 'Untitled'}
               {b.area_in2 ? <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}> · {sqft(b.area_in2).toFixed(1)} ft²</span> : null}
             </span>
+            {sizeTag(b) && (
+              <span title={sizeTag(b) === 'size table' ? 'Sized by the number printed on the proof' : sizeTag(b) === 'typed' ? 'Size typed by hand' : 'Measured off the picture'} style={{
+                flexShrink: 0, fontSize: '8px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.04em', padding: '1px 4px', borderRadius: '4px',
+                background: sizeTag(b) === 'size table' ? 'rgba(34,197,94,0.12)' : 'var(--subtle-bg)',
+                border: `1px solid ${sizeTag(b) === 'size table' ? 'rgba(34,197,94,0.35)' : 'var(--border)'}`,
+                color: sizeTag(b) === 'size table' ? '#22c55e' : 'var(--text-muted)',
+              }}>{sizeTag(b)}</span>
+            )}
             <button onClick={e => { e.stopPropagation(); remove(b.id); }} title="Delete" style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
           </div>
         ))}
@@ -495,20 +566,17 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
               </div>
             </div>
             <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '8px', lineHeight: 1.5 }}>
-              {selected.manual ? (
-                <>
-                  Typed by hand.{' '}
-                  {calibrated && (
-                    <button onClick={() => revertToMeasured(selected.id)} style={{ background: 'none', border: 'none', padding: 0, color: '#06b6d4', fontWeight: 700, fontSize: '10px', cursor: 'pointer' }}>
-                      Use the photo&apos;s measurement instead
-                    </button>
-                  )}
-                </>
-              ) : selected.measured_by === 'plane' ? 'Measured off the photo, perspective corrected.'
-                : selected.measured_by === 'line' ? 'Measured off the photo with the known length.'
-                : 'No scale set — type the size, or calibrate the photo above.'}
+              {sizeStatus(selected)}
               {selected.area_in2 ? ` · ${sqft(selected.area_in2).toFixed(2)} ft² each` : ''}
             </div>
+            {(() => {
+              const gap = usesLegendSize(selected) ? legendGapPct(selected) : null;
+              return gap != null && gap > DISAGREEMENT_WARN_PCT ? (
+                <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '8px', lineHeight: 1.5 }}>
+                  ⚠ The drawing is {gap.toFixed(0)}% off the printed size — the proof isn&apos;t drawn to scale here. The printed size is what&apos;s priced unless you switch it above.
+                </div>
+              ) : null;
+            })()}
             {disagreement != null && disagreement > DISAGREEMENT_WARN_PCT && (
               <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '8px', lineHeight: 1.5 }}>
                 ⚠ Your two references disagree by {disagreement.toFixed(0)}% on this box. They&apos;re probably not
