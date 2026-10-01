@@ -279,6 +279,7 @@ export async function autoMatchPurchaseRequests(service: SupabaseClient): Promis
         vendor_name: req.vendor_name,
         vendor_netsuite_id: req.vendor_netsuite_id,
         source_project_id: req.source_project_id,
+        source_estimate_id: req.source_estimate_id ?? null,
         needed_by: req.needed_by,
         note: req.note,
         requested_by: req.requested_by,

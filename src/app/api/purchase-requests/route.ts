@@ -33,6 +33,10 @@ const CreateSchema = z.object({
     netsuiteItemId: z.string().max(40).optional().nullable(),
   })).min(1).max(100),
   projectId: z.string().uuid().optional().nullable(),
+  /** Raised from an estimate's stock banner (migration 335). When the
+   *  estimate already has an upfit project, the request is tied to that
+   *  too, so the project card counts it as requested. */
+  estimateId: z.string().uuid().optional().nullable(),
   neededBy: z.string().max(20).optional().nullable(),
   note: z.string().max(1000).optional().nullable(),
   /** When set, the response carries recomputed readiness for this project —
@@ -67,7 +71,7 @@ export async function GET(req: NextRequest) {
     }
     const { data, error } = await supabase
       .from('purchase_requests')
-      .select(`*, upfit_projects(id, project_name, netsuite_so_number), requester:profiles!purchase_requests_requested_by_fkey(full_name), ordered_po:netsuite_vendor_pos(${ORDERED_PO_SELECT})`)
+      .select(`*, upfit_projects(id, project_name, netsuite_so_number), estimates(id, estimate_number, customer_name), requester:profiles!purchase_requests_requested_by_fkey(full_name), ordered_po:netsuite_vendor_pos(${ORDERED_PO_SELECT})`)
       .eq('id', id)
       .maybeSingle();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -80,7 +84,7 @@ export async function GET(req: NextRequest) {
   if (searchParams.get('view') === 'on_order') {
     const { data, error } = await supabase
       .from('purchase_requests')
-      .select(`*, upfit_projects(id, project_name, netsuite_so_number), requester:profiles!purchase_requests_requested_by_fkey(full_name), ordered_po:netsuite_vendor_pos(${ORDERED_PO_SELECT})`)
+      .select(`*, upfit_projects(id, project_name, netsuite_so_number), estimates(id, estimate_number, customer_name), requester:profiles!purchase_requests_requested_by_fkey(full_name), ordered_po:netsuite_vendor_pos(${ORDERED_PO_SELECT})`)
       .eq('status', 'ordered')
       .order('ordered_at', { ascending: false, nullsFirst: false })
       .limit(500);
@@ -93,7 +97,7 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await supabase
     .from('purchase_requests')
-    .select('*, upfit_projects(id, project_name, netsuite_so_number), requester:profiles!purchase_requests_requested_by_fkey(full_name)')
+    .select('*, upfit_projects(id, project_name, netsuite_so_number), estimates(id, estimate_number, customer_name), requester:profiles!purchase_requests_requested_by_fkey(full_name)')
     .eq('status', status)
     .order('vendor_name', { ascending: true, nullsFirst: true })
     .order('created_at')
@@ -107,6 +111,8 @@ export async function GET(req: NextRequest) {
  * Idempotent per item+project: an existing PENDING request for the same
  * item and project gets its quantity RAISED to the new ask instead of a
  * duplicate row, so double-clicks and re-requests don't inflate the queue.
+ * Estimate requests are the exception: their quantity is the remainder
+ * still uncovered, so it is ADDED to the open row (see below).
  */
 export async function POST(req: NextRequest) {
   const auth = await requireFeature(req, 'parts_ordering');
@@ -115,6 +121,22 @@ export async function POST(req: NextRequest) {
   const parsed = await validateBody(req, CreateSchema);
   if (parsed.error) return parsed.error;
   const body = parsed.data;
+
+  // An estimate's request belongs to its upfit project as well, once it has
+  // one: the conversion carries earlier rows over (ensureUpfitProjectForSo),
+  // and this covers asks made after it.
+  let estimateLabel: string | null = null;
+  if (body.estimateId) {
+    const { data: est } = await supabase
+      .from('estimates').select('id, estimate_number, customer_name').eq('id', body.estimateId).maybeSingle();
+    if (!est) return NextResponse.json({ error: 'Estimate not found' }, { status: 404 });
+    estimateLabel = [`Estimate ${est.estimate_number}`, est.customer_name].filter(Boolean).join(' — ');
+    if (!body.projectId) {
+      const { data: proj } = await supabase
+        .from('upfit_projects').select('id').eq('estimate_id', body.estimateId).maybeSingle();
+      if (proj) body.projectId = proj.id;
+    }
+  }
 
   const itemNumbers = body.items.map(i => normalizeItemNumber(i.itemNumber)).filter(Boolean);
 
@@ -167,15 +189,22 @@ export async function POST(req: NextRequest) {
   // Existing pending rows for idempotence.
   let dupQuery = supabase
     .from('purchase_requests')
-    .select('id, item_number, quantity, source_project_id')
+    .select('id, item_number, quantity, source_project_id, source_estimate_id')
     .eq('status', 'pending')
     .in('item_number', itemNumbers);
   const { data: existing } = await dupQuery;
-  const pendingKey = (item: string, proj: string | null) => `${item}::${proj || ''}`;
-  const pendingByKey = new Map(
+  // Same source = same job: the estimate or its project (either one, since
+  // a converted estimate's rows carry both), else the project, else a
+  // sourceless stock ask.
+  const sameSource = (r: any) => body.estimateId
+    ? r.source_estimate_id === body.estimateId || (!!body.projectId && r.source_project_id === body.projectId)
+    : body.projectId
+      ? r.source_project_id === body.projectId
+      : !r.source_project_id && !r.source_estimate_id;
+  const pendingByItem = new Map(
     (existing || [])
-      .filter((r: any) => (r.source_project_id || null) === (body.projectId || null))
-      .map((r: any) => [pendingKey(normalizeItemNumber(r.item_number), r.source_project_id), r]),
+      .filter(sameSource)
+      .map((r: any) => [normalizeItemNumber(r.item_number), r]),
   );
 
   const created: string[] = [];
@@ -184,11 +213,17 @@ export async function POST(req: NextRequest) {
     const key = normalizeItemNumber(item.itemNumber);
     if (!key) continue;
     const cat = catalog.get(key);
-    const dup: any = pendingByKey.get(pendingKey(key, body.projectId || null));
+    const dup: any = pendingByItem.get(key);
     if (dup) {
-      if (Number(item.quantity) > Number(dup.quantity)) {
+      // The estimate's button asks for what is still uncovered AFTER its
+      // pending requests, so its quantity adds to the open row. Every other
+      // caller sends the whole need, which raises it.
+      const target = body.estimateId
+        ? Number(dup.quantity) + Number(item.quantity)
+        : Number(item.quantity);
+      if (target > Number(dup.quantity)) {
         await supabase.from('purchase_requests')
-          .update({ quantity: item.quantity, updated_at: new Date().toISOString() })
+          .update({ quantity: target, updated_at: new Date().toISOString() })
           .eq('id', dup.id);
         raised.push(key);
       }
@@ -202,6 +237,7 @@ export async function POST(req: NextRequest) {
       vendor_name: cat?.vendor || lastVendor.get(key)?.name || null,
       vendor_netsuite_id: lastVendor.get(key)?.id || null,
       source_project_id: body.projectId || null,
+      source_estimate_id: body.estimateId || null,
       needed_by: body.neededBy || null,
       note: body.note || null,
       requested_by: auth.user.id,
@@ -225,8 +261,8 @@ export async function POST(req: NextRequest) {
         })
         .map((p: any) => p.id);
       if (adminIds.length > 0) {
-        let projectLabel: string | null = null;
-        if (body.projectId) {
+        let projectLabel: string | null = estimateLabel;
+        if (!projectLabel && body.projectId) {
           const { data: proj } = await supabase
             .from('upfit_projects').select('project_name').eq('id', body.projectId).maybeSingle();
           projectLabel = proj?.project_name || null;
