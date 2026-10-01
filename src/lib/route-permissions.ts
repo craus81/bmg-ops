@@ -542,5 +542,6 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/wrap-quote/[id]/pdf/route.ts': staff(),
   'src/app/api/wrap-quote/create-customer/route.ts': staff(),
   'src/app/api/wrap-quote/netsuite/route.ts': staff(),
+  'src/app/api/wrap-quote/read-proof/route.ts': staff(),
   'src/app/api/wrap-quote/send/route.ts': staff(),
 };

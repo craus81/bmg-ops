@@ -166,3 +166,41 @@ describe('proofLabel', () => {
     expect(proofLabel({ id: 'p', path: 'a.jpg', label: '  Rear  ', boxes: [] }, 0)).toBe('Rear');
   });
 });
+
+describe('customer-proof fields', () => {
+  it('keeps a box\'s size-table pairing and drops one with no size', () => {
+    const [kept, bare] = sanitizeCoverageBoxes([
+      { rect: { x: 0, y: 0, w: 4, h: 4 }, legend: { row_id: 'r1', name: 'Door logo', width_in: '24', height_in: 12 } },
+      { rect: { x: 0, y: 0, w: 4, h: 4 }, legend: { row_id: 'r2', name: 'Nothing', width_in: null, height_in: 0 } },
+    ]);
+    expect(kept.legend).toEqual({ row_id: 'r1', name: 'Door logo', width_in: 24, height_in: 12 });
+    expect(bare.legend).toBeNull();
+  });
+
+  it('reopens a proof page as one: its source, size table and wheel line survive', () => {
+    const [p] = sanitizePhotoProofs([{
+      id: 'p1', path: 'quote-proofs/a.jpg', label: 'Driver side', boxes: [],
+      source: 'customer_proof',
+      legend: [
+        { id: 'r1', name: 'Door logo', width_in: 24, height_in: 12, qty: 2 },
+        { id: 'r2', name: '', width_in: 24, height_in: 12 },
+        { id: 'r3', name: 'No size', width_in: null, height_in: null },
+        { name: 'Unit number', width_in: null, height_in: 2 },
+      ],
+      wheel_line: { x1: 1, y1: 2, x2: 300, y2: 2 },
+    }]);
+    expect(p.source).toBe('customer_proof');
+    expect(p.legend).toHaveLength(2);
+    expect(p.legend![0]).toEqual({ id: 'r1', name: 'Door logo', width_in: 24, height_in: 12, qty: 2 });
+    expect(p.legend![1].name).toBe('Unit number');
+    expect(p.legend![1].id).toBeTruthy();
+    expect(p.wheel_line).toEqual({ x1: 1, y1: 2, x2: 300, y2: 2 });
+  });
+
+  it('reads a plain photo as a plain photo', () => {
+    const [p] = sanitizePhotoProofs([{ id: 'p1', path: 'quote-photos/a.jpg', boxes: [], source: 'camera', wheel_line: { x1: 'a' } }]);
+    expect(p.source).toBeNull();
+    expect(p.legend).toEqual([]);
+    expect(p.wheel_line).toBeNull();
+  });
+});
