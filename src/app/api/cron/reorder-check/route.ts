@@ -4,6 +4,7 @@ import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
+import { isShopWeekend, markWeekendSkip } from '@/lib/quiet-weekends';
 import { loadReorderCandidates, computeReorderSuggestion, weeklyVelocity } from '@/lib/reorder';
 import { findLowStock, summarizeStock, type StockPolicy, type StockRoll } from '@/lib/roll-stock';
 import { buildCostHistory, computeDrift, staleCostWorklist, type Buy } from '@/lib/part-cost-book';
@@ -37,6 +38,14 @@ export async function GET(req: NextRequest) {
   if (!isCron) {
     const auth = await requireAdmin(req);
     if (auth.error) return auth.error;
+  }
+
+  // Quiet weekends: this runs late evening shop time, so judge the morning
+  // it lands in. Friday and Saturday nights skip; Sunday night's run
+  // covers the weekend and reaches purchasing Monday morning.
+  if (isCron && isShopWeekend(new Date(Date.now() + 12 * 3_600_000))) {
+    await markWeekendSkip(service, 'reorder_check');
+    return NextResponse.json({ skipped: 'weekend' });
   }
 
   try {

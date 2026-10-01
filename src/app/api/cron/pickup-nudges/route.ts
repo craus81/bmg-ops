@@ -6,6 +6,7 @@ import { loadBookingSettings } from '@/lib/booking';
 import { notify, notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
+import { isShopWeekend, markWeekendSkip } from '@/lib/quiet-weekends';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -36,6 +37,12 @@ export async function GET(req: NextRequest) {
   if (!isCron) {
     const auth = await requireAdmin(req);
     if (auth.error) return auth.error;
+  }
+
+  // Quiet weekends: routine nudges wait for Monday. A manual run still runs.
+  if (isCron && isShopWeekend()) {
+    await markWeekendSkip(service, 'pickup_nudges');
+    return NextResponse.json({ skipped: 'weekend' });
   }
 
   try {
