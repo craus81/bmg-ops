@@ -61,6 +61,12 @@ export interface YearPnl {
   netMarginPct: number | null;
   /** Months with a P&L in this year (fewer than 12 = partial year). */
   months: number;
+  /**
+   * Months with any revenue. A business's first year in the books usually
+   * has twelve stored months but sales in only a few (2011: $60k), and
+   * comparing the next year against it reads as +1969% growth.
+   */
+  salesMonths: number;
   sources: HistorySource[];
   directional: boolean;
 }
@@ -151,6 +157,7 @@ export function yearTotals(months: MonthPnl[]): YearPnl[] {
       grossMarginPct: pct(grossProfit),
       netMarginPct: pct(netIncome),
       months: list.length,
+      salesMonths: list.filter(m => m.income !== 0).length,
       sources: [...new Set(list.map(m => m.source))],
       directional: list.some(m => m.directional),
     };

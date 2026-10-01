@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 import type { FinancialHistory, MonthPnl, YearPnl } from '@/lib/financial-history';
+import type { YearDetail } from '@/lib/financial-history-detail';
 
 /**
  * Financial History: every month's P&L, QuickBooks before the cutover and
@@ -12,6 +13,7 @@ import type { FinancialHistory, MonthPnl, YearPnl } from '@/lib/financial-histor
  * years NetSuite doesn't hold can sit beside the ones it does: yearly
  * totals, a month-by-month chart, and a month-by-year grid for seasonality.
  * Top-level totals only; the two charts of accounts differ below that.
+ * Tapping a year opens its cross-check (YearCrossCheck below).
  */
 
 type Metric = 'income' | 'grossProfit' | 'netIncome';
@@ -91,6 +93,150 @@ function MonthlyChart({ months, metric }: { months: MonthPnl[]; metric: Metric }
   );
 }
 
+/** Rows shown per account section before "Show all". */
+const ACCOUNT_ROWS = 12;
+
+function AccountSections({ source, sections }: YearDetail['accounts'][number]) {
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  return (
+    <div style={{ marginTop: '12px' }}>
+      <div style={{ ...eyebrow, display: 'flex', gap: '6px', alignItems: 'center' }}>By account <SourceDots sources={[source]} /></div>
+      {sections.map(sec => {
+        const all = open[sec.section];
+        const lines = all ? sec.lines : sec.lines.slice(0, ACCOUNT_ROWS);
+        return (
+          <div key={sec.section} style={{ marginBottom: '10px' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, textAlign: 'left' }}>{sec.section}</th>
+                  <th style={th}>{fmtMoney(sec.total)}</th>
+                  <th style={th}>Share</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lines.map(l => (
+                  <tr key={l.label}>
+                    <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal' }}>{l.label}</td>
+                    <td style={{ ...td, color: l.amount < 0 ? '#ef4444' : undefined }}>{fmtMoney(l.amount)}</td>
+                    <td style={{ ...td, color: 'var(--text-muted)' }}>{sec.total ? `${((l.amount / sec.total) * 100).toFixed(1)}%` : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {sec.lines.length > ACCOUNT_ROWS && (
+              <button onClick={() => setOpen(o => ({ ...o, [sec.section]: !all }))}
+                style={{ marginTop: '4px', fontSize: '11px', fontWeight: 700, background: 'none', border: 'none', color: 'var(--accent, #3b82f6)', cursor: 'pointer', padding: 0 }}>
+                {all ? 'Show fewer' : `Show all ${sec.lines.length}`}
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * One year taken apart: each system's revenue and invoices month by month,
+ * QuickBooks' own yearly P&L, and the year by account. Built to trace a
+ * total that looks wrong (owner, 2026-10-01: 2024 at $8.7M).
+ */
+function YearCrossCheck({ year, onClose }: { year: number; onClose: () => void }) {
+  const [detail, setDetail] = useState<YearDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    setDetail(null);
+    setError(null);
+    (async () => {
+      try {
+        const res = await apiFetch(`/api/reports/financial-history/year?year=${year}`);
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Cross-check failed');
+        if (live) setDetail(json as YearDetail);
+      } catch (e: any) {
+        if (live) setError(e.message || 'Cross-check failed');
+      }
+    })();
+    return () => { live = false; };
+  }, [year]);
+
+  const sum = (pick: (m: YearDetail['months'][number]) => number | null) => {
+    const vals = (detail?.months || []).map(pick).filter((n): n is number => n !== null);
+    return vals.length ? vals.reduce((s, n) => s + n, 0) : null;
+  };
+  const totals = detail && {
+    qboPnl: sum(m => m.quickbooksPnl),
+    nsPnl: sum(m => m.netsuitePnl),
+    qboInv: sum(m => m.quickbooksInvoiced),
+    nsInv: sum(m => m.netsuiteInvoiced),
+  };
+  const cell = (n: number | null, used: boolean) => (
+    <td style={{ ...td, fontWeight: used ? 800 : 400, color: n === null ? 'var(--text-muted)' : undefined }}>{n === null ? '—' : fmtMoney(n)}</td>
+  );
+  const qy = detail?.quickbooksYear;
+  const monthsDiffer = qy?.income != null && detail?.quickbooksMonthsIncome != null
+    && Math.abs(qy.income - detail.quickbooksMonthsIncome) >= 1;
+
+  return (
+    <div style={{ ...card, borderColor: 'var(--tab-active-border)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
+        <div style={{ ...eyebrow, marginBottom: 0, marginRight: 'auto' }}>{year} cross-check</div>
+        <button onClick={onClose} style={{ fontSize: '11px', fontWeight: 700, background: 'none', border: '1px solid var(--border)', borderRadius: '999px', padding: '3px 10px', color: 'var(--text-muted)', cursor: 'pointer' }}>Close</button>
+      </div>
+      {error && <div style={{ color: 'var(--danger, #ef4444)' }}>{error}</div>}
+      {!detail && !error && <div style={{ color: 'var(--text-muted)', fontSize: '12.5px' }}>Loading…</div>}
+      {detail && totals && (
+        <>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '8px' }}>
+            Revenue on each system&rsquo;s P&amp;L beside what each system invoiced. Bold is what this report uses.
+            Invoice totals include sales tax, so they should run a little above revenue; a P&amp;L far above its invoices
+            means revenue was booked some other way (journal entries, migrated balances).
+          </div>
+          <div className="responsive-table">
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, textAlign: 'left' }}>Month</th>
+                  <th style={th}>QuickBooks P&amp;L</th>
+                  <th style={th}>NetSuite P&amp;L</th>
+                  <th style={th}>QuickBooks invoiced</th>
+                  <th style={th}>NetSuite invoiced</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detail.months.map((m, i) => (
+                  <tr key={m.month}>
+                    <td style={{ ...td, textAlign: 'left', fontWeight: 700 }}>{MONTHS[i]}</td>
+                    {cell(m.quickbooksPnl, m.used === 'quickbooks')}
+                    {cell(m.netsuitePnl, m.used === 'netsuite')}
+                    {cell(m.quickbooksInvoiced || null, false)}
+                    {cell(m.netsuiteInvoiced || null, false)}
+                  </tr>
+                ))}
+                <tr>
+                  <td style={{ ...td, textAlign: 'left', fontWeight: 800 }}>Total</td>
+                  {cell(totals.qboPnl, true)}
+                  {cell(totals.nsPnl, true)}
+                  {cell(totals.qboInv || null, true)}
+                  {cell(totals.nsInv || null, true)}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <ul style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '8px 0 0', paddingLeft: '18px', lineHeight: 1.5 }}>
+            {qy && <li>QuickBooks&rsquo; own P&amp;L for {year}: revenue {qy.income === null ? '—' : fmtMoney(qy.income)}, net income {qy.netIncome === null ? '—' : fmtMoney(qy.netIncome)}{monthsDiffer ? `. Its months add up to ${fmtMoney(detail.quickbooksMonthsIncome!)} instead.` : '. Its months add up to the same.'}</li>}
+            {detail.netsuiteMonthsMissing.length > 0 && <li>NetSuite months not loaded yet: {detail.netsuiteMonthsMissing.map(m => MONTHS[Number(m.slice(5)) - 1]).join(', ')}.</li>}
+          </ul>
+          {detail.accounts.map(a => <AccountSections key={a.source} {...a} />)}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function FinancialHistoryPage() {
   const { isAdmin, hasFeature, loading: authLoading } = useAuth();
   const router = useRouter();
@@ -99,6 +245,7 @@ export default function FinancialHistoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [metric, setMetric] = useState<Metric>('income');
   const fillRounds = useRef(0);
+  const [openYear, setOpenYear] = useState<number | null>(null);
 
   // Mirrors the route's requireFinancials — super_admin / executive only.
   const allowed = hasFeature('financials');
@@ -141,6 +288,11 @@ export default function FinancialHistoryPage() {
 
   const qboMonths = data?.months.filter(m => m.source === 'quickbooks').length || 0;
   const prevOf = (y: YearPnl) => years.find(p => p.year === y.year - 1);
+  const firstYear = years[0]?.year;
+  // A year counts as full only with twelve months of sales, and the first
+  // year in the books never does: it is when the books started, not a year
+  // the business ran in full (2011's $60k made 2012 read +1969%).
+  const isFull = (y: YearPnl) => y.months === 12 && y.salesMonths === 12 && !y.directional && y.year !== firstYear;
 
   return (
     <div style={{ maxWidth: '1000px' }}>
@@ -191,14 +343,19 @@ export default function FinancialHistoryPage() {
                     const prev = prevOf(y);
                     const partial = y.months < 12 || y.directional;
                     // Growth only compares full years; a partial year against a
-                    // full one reads as a collapse that didn't happen.
-                    const growth = prev && !partial && prev.months === 12 && prev.income
+                    // full one reads as a collapse (or a boom) that didn't happen.
+                    const growth = prev && isFull(y) && isFull(prev) && prev.income
                       ? ((y.income - prev.income) / Math.abs(prev.income)) * 100 : null;
+                    const note = partial ? `${y.months} mo${y.directional ? ', in progress' : ''}`
+                      : y.year === firstYear ? 'first year in the books'
+                      : y.salesMonths < 12 ? `sales in ${y.salesMonths} mo` : null;
+                    const isOpen = openYear === y.year;
                     return (
-                      <tr key={y.year}>
+                      <tr key={y.year} onClick={() => setOpenYear(isOpen ? null : y.year)} title="Tap for this year's cross-check"
+                        style={{ cursor: 'pointer', background: isOpen ? 'var(--tab-active-bg)' : undefined }}>
                         <td style={{ ...td, textAlign: 'left', fontWeight: 800 }}>
                           {y.year}
-                          {partial && <span style={{ fontWeight: 500, color: 'var(--text-muted)', fontSize: '11px' }}> · {y.months} mo{y.directional ? ', in progress' : ''}</span>}
+                          {note && <span style={{ fontWeight: 500, color: 'var(--text-muted)', fontSize: '11px' }}> · {note}</span>}
                         </td>
                         <td style={{ ...td, textAlign: 'left' }}><SourceDots sources={y.sources} /></td>
                         <td style={{ ...td, fontWeight: 700 }}>{fmtMoney(y.income)}</td>
@@ -216,7 +373,10 @@ export default function FinancialHistoryPage() {
                 </tbody>
               </table>
             </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>Tap a year to cross-check it month by month and by account.</div>
           </div>
+
+          {openYear !== null && <YearCrossCheck key={openYear} year={openYear} onClose={() => setOpenYear(null)} />}
 
           <div style={card}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
