@@ -80,6 +80,13 @@ export interface FinancialHistory {
   errors: string[];
 }
 
+/**
+ * The first month the report shows. Owner decision (2026-10-01): history
+ * starts in 2011. QuickBooks holds stray entries dated back to 2000, which
+ * put ten near-empty years at the bottom of the table.
+ */
+export const HISTORY_FROM = '2011-01';
+
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const pad = (n: number) => String(n).padStart(2, '0');
 
@@ -220,7 +227,7 @@ export async function loadFinancialHistory(service: SupabaseClient, opts: { budg
   const months: MonthPnl[] = [];
 
   if (cutoverMonth) {
-    const qbo = await readSnapshots(service, 'quickbooks', `${cutoverMonth}-01`);
+    const qbo = await readSnapshots(service, 'quickbooks', `${cutoverMonth}-01`, `${HISTORY_FROM}-01`);
     const qboMonths = qbo.map(r => qboSummaryToMonth(r.period_start.slice(0, 7), r.summary));
     // Leading months with no activity at all are before the company used
     // QuickBooks, not months with zero sales.
