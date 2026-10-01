@@ -224,6 +224,19 @@ export default function GraphicsPage() {
   const [prefillEstimateLink, setPrefillEstimateLink] = useState<{
     estimateId: string; estimateNumber: string | null; customerNetsuiteId: string | null;
   } | null>(null);
+  // Set when a job page's Duplicate button opens the create modal
+  // (?new=1&copyFrom=<id>). The form is filled from that job; the submit
+  // links the chosen files onto the copy and starts it at the chosen stage.
+  // Status, dates, PO/estimate/invoice links, approvals, assignees and
+  // history are deliberately not copied.
+  const [prefillCopy, setPrefillCopy] = useState<{
+    jobId: string; jobNumber: string | null; customer: string | null; customerNetsuiteId: string | null;
+    files: { id: string; file_name: string; file_type: string | null; file_size: number | null; storage_path: string }[];
+  } | null>(null);
+  const [copyFileIds, setCopyFileIds] = useState<Set<string>>(new Set());
+  const [copyStartStatus, setCopyStartStatus] = useState<GraphicsJobStatus>('received');
+  // Admin-only (the work order is): where the copy goes in the running order.
+  const [copyRankSpot, setCopyRankSpot] = useState<'none' | 'top' | 'bottom'>('none');
   const [awaitingGraphics, setAwaitingGraphics] = useState<any[]>([]);
   // Awaiting-queue entry being linked to an EXISTING job (vs + Create).
   const [linkAwaiting, setLinkAwaiting] = useState<any | null>(null);
@@ -452,6 +465,56 @@ export default function GraphicsPage() {
           } catch (e: any) {
             setPrefillNote(`Could not read the estimate (${e?.message || 'unknown error'}) — fill the job in by hand.`);
           }
+        })();
+      }
+      // From a job page's Duplicate button: fill the form from that job and
+      // go straight to the details step (the job type is copied too).
+      const copyFrom = searchParams.get('copyFrom');
+      if (copyFrom) {
+        (async () => {
+          setPrefillNote('Reading the job…');
+          const [{ data: src, error: srcErr }, { data: srcFiles }] = await Promise.all([
+            supabase.from('graphics_jobs').select('*').eq('id', copyFrom).maybeSingle(),
+            supabase.from('graphics_job_files')
+              .select('id, file_name, file_type, file_size, storage_path')
+              .eq('job_id', copyFrom)
+              .order('uploaded_at', { ascending: true }),
+          ]);
+          if (srcErr || !src) {
+            setPrefillNote(`Could not read the job to copy (${srcErr?.message || 'not found'}). Fill the job in by hand.`);
+            return;
+          }
+          const parts = String(src.part_number || '').split(',').map((x: string) => x.trim()).filter(Boolean);
+          setCreateForm(f => ({
+            ...f,
+            job_category: (src.job_category as GraphicsJobCategory) || 'production',
+            title: `Copy of ${src.title || src.job_number || 'job'}`,
+            part_numbers: parts,
+            part_number: parts[0] || '',
+            partInput: '',
+            customer: src.customer || '',
+            quantity: src.quantity || 1,
+            content: src.content || '',
+            notes: src.notes || '',
+            vinyl_type: src.vinyl_type || '',
+            vinyl_color: src.vinyl_color || '',
+            laminate: src.laminate || '',
+            print_method: src.print_method || '',
+            cut_method: src.cut_method || '',
+            premask: src.premask || '',
+            priority: src.priority || 'normal',
+            install_location: src.install_location || '',
+            ship_to: src.ship_to || '',
+            supplier: src.supplier || '',
+          }));
+          setCustomerSearch(src.customer || '');
+          const files = srcFiles || [];
+          setPrefillCopy({ jobId: src.id, jobNumber: src.job_number || null, customer: src.customer || null, customerNetsuiteId: src.customer_netsuite_id || null, files });
+          setCopyFileIds(new Set(files.map((f: any) => f.id)));
+          setCopyStartStatus('received');
+          setCopyRankSpot('none');
+          setCreateStep('details');
+          setPrefillNote(`Filled in from ${src.job_number || 'the original job'}. Status, dates, PO, assignees and approvals start fresh. Check it over, then create.`);
         })();
       }
       // From a purchase order (the PO page's "+ Graphics Job" buttons):
@@ -723,7 +786,7 @@ export default function GraphicsPage() {
     // Every category, proofing included, starts at Received (owner decision,
     // 2026-09-29): the designer moving a proof to Designing is the signal
     // that someone has actually picked it up.
-    const initialStatus: GraphicsJobStatus = 'received';
+    const initialStatus: GraphicsJobStatus = prefillCopy ? copyStartStatus : 'received';
     const { data, error } = await supabase
       .from('graphics_jobs')
       .insert({
@@ -762,6 +825,10 @@ export default function GraphicsPage() {
           estimate_id: prefillEstimateLink.estimateId,
           ...(prefillEstimateLink.customerNetsuiteId ? { customer_netsuite_id: prefillEstimateLink.customerNetsuiteId } : {}),
         } : {}),
+        // A copy keeps the original's NetSuite customer while the customer
+        // name is left as it was.
+        ...(prefillCopy?.customerNetsuiteId && (createForm.customer || null) === prefillCopy.customer
+          ? { customer_netsuite_id: prefillCopy.customerNetsuiteId } : {}),
       })
       .select()
       .single();
@@ -801,7 +868,7 @@ export default function GraphicsPage() {
         from_status: null,
         to_status: initialStatus,
         changed_by: user?.id,
-        note: `${GRAPHICS_CATEGORY_LABELS[cat]} job created${prefillPoLink && createForm.po_number ? ` from PO #${createForm.po_number}` : ''}${prefillEstimateLink ? ` from estimate ${prefillEstimateLink.estimateNumber || ''}`.trimEnd() : ''}`,
+        note: `${GRAPHICS_CATEGORY_LABELS[cat]} job created${prefillPoLink && createForm.po_number ? ` from PO #${createForm.po_number}` : ''}${prefillEstimateLink ? ` from estimate ${prefillEstimateLink.estimateNumber || ''}`.trimEnd() : ''}${prefillCopy ? ` as a copy of ${prefillCopy.jobNumber || 'another job'}` : ''}`,
       });
 
       // A job from an estimate marks a customer-approved estimate won, same
@@ -865,6 +932,47 @@ export default function GraphicsPage() {
         await uploadFilesToJob(data.id, createFiles);
       }
 
+      // Duplicate: link the chosen files from the original job. The rows
+      // share the stored object; the job page only deletes an object once
+      // no other job lists it.
+      if (prefillCopy) {
+        const keep = prefillCopy.files.filter(f => copyFileIds.has(f.id));
+        if (keep.length > 0) {
+          const { error: copyErr } = await supabase.from('graphics_job_files').insert(
+            keep.map(f => ({
+              job_id: data.id,
+              file_name: f.file_name,
+              file_type: f.file_type,
+              file_size: f.file_size,
+              storage_path: f.storage_path,
+              uploaded_by: user?.id || null,
+            }))
+          );
+          if (copyErr) await dialog.alert(`The job was created, but its files could not be copied: ${copyErr.message}`);
+        }
+
+        // Put the copy at the top or bottom of the work order, rewriting the
+        // whole list the way the Work Order screen does.
+        if (isAdmin && copyRankSpot !== 'none') {
+          try {
+            const { data: ranked, error: rankReadErr } = await supabase
+              .from('graphics_jobs')
+              .select('id')
+              .not('work_rank', 'is', null)
+              .order('work_rank', { ascending: true });
+            if (rankReadErr) throw new Error(rankReadErr.message);
+            const ids = (ranked || []).map((r: any) => r.id as string).filter((id: string) => id !== data.id);
+            const order = copyRankSpot === 'top' ? [data.id, ...ids] : [...ids, data.id];
+            const res = await apiFetch('/api/graphics-jobs/rank', { method: 'POST', body: JSON.stringify({ order }) });
+            const body = await res.json().catch(() => ({} as any));
+            if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
+            loadJobs();
+          } catch (e: any) {
+            await dialog.alert(`The job was created, but it could not be added to the work order: ${e?.message || 'unknown error'}`);
+          }
+        }
+      }
+
       // If a PO number was entered, link the PO's stored PDFs onto the job.
       if (createForm.po_number) {
         const { data: poRow } = await supabase
@@ -912,6 +1020,7 @@ export default function GraphicsPage() {
       setCreateFiles([]);
       setPrefillPoLink(null);
       setPrefillEstimateLink(null);
+      setPrefillCopy(null);
     }
     setCreating(false);
   };
@@ -1791,7 +1900,7 @@ export default function GraphicsPage() {
       {/* ═══════════ CREATE JOB MODAL ═══════════ */}
       {showCreate && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', padding: '0' }}
-          onClick={(e) => { if (e.target === e.currentTarget) { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillEstimateLink(null); setPrefillNote(null); } }}
+          onClick={(e) => { if (e.target === e.currentTarget) { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillEstimateLink(null); setPrefillCopy(null); setPrefillNote(null); } }}
         >
           <div style={{ background: 'var(--card)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px 14px 0 0', padding: '18px', paddingBottom: 'calc(18px + env(safe-area-inset-bottom, 0px))', maxWidth: '500px', width: '100%', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
 
@@ -1845,7 +1954,7 @@ export default function GraphicsPage() {
                 </div>
 
                 <button
-                  onClick={() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillEstimateLink(null); setPrefillNote(null); }}
+                  onClick={() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillEstimateLink(null); setPrefillCopy(null); setPrefillNote(null); }}
                   style={{ width: '100%', padding: '10px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
                 >
                   Cancel
@@ -2134,6 +2243,60 @@ export default function GraphicsPage() {
                   </button>
                 </DropZone>
 
+                {/* Duplicate: files from the original, and where the copy starts */}
+                {prefillCopy && (
+                  <div style={{ marginBottom: '12px' }}>
+                    <div style={labelStyle}>Files from {prefillCopy.jobNumber || 'the original job'}</div>
+                    {prefillCopy.files.length === 0 ? (
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>The original job has no files.</div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '8px' }}>
+                        {prefillCopy.files.map(f => (
+                          <label key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--text-body)', cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={copyFileIds.has(f.id)}
+                              onChange={e => setCopyFileIds(prev => {
+                                const next = new Set(prev);
+                                if (e.target.checked) next.add(f.id); else next.delete(f.id);
+                                return next;
+                              })}
+                            />
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.file_name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    <div style={labelStyle}>Start the copy at</div>
+                    <select
+                      style={inputStyle}
+                      value={copyStartStatus}
+                      onChange={e => setCopyStartStatus(e.target.value as GraphicsJobStatus)}
+                    >
+                      {/* Pre-print stages only: the copy has no approved
+                          proof, so starting it at Printing or later would
+                          skip the proof gate. */}
+                      {(['received', 'designing'] as GraphicsJobStatus[]).map(st => (
+                        <option key={st} value={st}>{GRAPHICS_STATUS_LABELS[st]}</option>
+                      ))}
+                    </select>
+                    {isAdmin && (
+                      <>
+                        <div style={{ ...labelStyle, marginTop: '8px' }}>Work order spot</div>
+                        <select
+                          style={inputStyle}
+                          value={copyRankSpot}
+                          onChange={e => setCopyRankSpot(e.target.value as 'none' | 'top' | 'bottom')}
+                        >
+                          <option value="none">Not in the work order</option>
+                          <option value="top">Top of the work order</option>
+                          <option value="bottom">Bottom of the work order</option>
+                        </select>
+                      </>
+                    )}
+                  </div>
+                )}
+
                 {/* Assign Team Members */}
                 <div style={{ marginBottom: '12px' }}>
                   <AssignmentPicker
@@ -2171,7 +2334,7 @@ export default function GraphicsPage() {
                     {creating ? 'Creating...' : !createForm.title.trim() ? 'Enter a title to continue' : `Create ${GRAPHICS_CATEGORY_LABELS[createForm.job_category as GraphicsJobCategory]} Job`}
                   </button>
                   <button
-                    onClick={() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillEstimateLink(null); setPrefillNote(null); }}
+                    onClick={() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillEstimateLink(null); setPrefillCopy(null); setPrefillNote(null); }}
                     style={{ width: '100%', padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
                   >
                     Cancel
