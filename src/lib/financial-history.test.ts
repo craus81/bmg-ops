@@ -52,7 +52,7 @@ describe('yearTotals', () => {
       nsSummaryToMonth('2024-01', { income: 400, cogs: 100, expense: 100, payroll: 100, otherIncome: 0, otherExpense: 0, grossMargin: 300, grossMarginPct: 75, netProfit: 100, netProfitPct: 25, laborPct: 25, accountCount: 3 }, true),
     ];
     const [y23, y24] = yearTotals(months);
-    expect(y23).toMatchObject({ year: 2023, income: 400, netIncome: 40, months: 2, sources: ['quickbooks'], netMarginPct: 10, directional: false });
+    expect(y23).toMatchObject({ year: 2023, income: 400, netIncome: 40, months: 2, salesMonths: 2, sources: ['quickbooks'], netMarginPct: 10, directional: false });
     expect(y24).toMatchObject({ year: 2024, income: 400, grossMarginPct: 75, sources: ['netsuite'], directional: true });
   });
 

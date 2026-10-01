@@ -128,7 +128,10 @@ months; the first full import (run 62ee000e) got 2025–2026 only. Re-running
 The monthly accrual P&Ls feed Reports → **Financial History**
 (`src/lib/financial-history.ts`), which puts QuickBooks months before the
 cutover and NetSuite months from it in one series. NetSuite months are cached
-in the same table under source `netsuite`.
+in the same table under source `netsuite`. Tapping a year opens its
+cross-check (`src/lib/financial-history-detail.ts`): both systems' monthly
+revenue and invoices side by side, QuickBooks' own yearly P&L against the sum
+of its months, and the year by account, all from stored data.
 
 ## 7. Daily sync
 
