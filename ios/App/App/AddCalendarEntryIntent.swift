@@ -58,7 +58,7 @@ enum FleetSuiteSiriAPI {
 
     static func addCalendarEntry(title: String, start: Date) async -> String {
         guard let stored = SiriKeyStore.load() else {
-            return "Open FleetSuite on this iPhone and sign in, then ask me again."
+            return "Open the FleetSuite app and sign in, then ask me again."
         }
 
         // Siri hands over midnight when only a day was given. Save that as an
