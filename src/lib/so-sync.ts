@@ -18,7 +18,15 @@ import { resolveLaborItem } from './labor-item';
 import { normalizeVehicleCount } from './estimate-totals';
 import { kitTaggedDescription } from './estimate-kits';
 
-export interface SoLineItem { itemId: string; quantity: number; rate: number; description?: string }
+export interface SoLineItem {
+  itemId: string; quantity: number; rate: number; description?: string;
+  /** false = NetSuite must not tax this line (migration 336). Omitted otherwise. */
+  taxable?: false;
+}
+
+/** The line's tax flag as SO/estimate payloads carry it: only an explicit false. */
+export const untaxedFlag = (li: { taxable?: unknown }): { taxable?: false } =>
+  (li.taxable === false ? { taxable: false } : {});
 
 export interface SoLineBuild {
   soLineItems: SoLineItem[];
@@ -82,6 +90,7 @@ export async function buildSoLineItems(
         quantity: parseFloat(li.quantity) * units,
         rate: parseFloat(li.unit_price) || 0,
         description: lineDesc,
+        ...untaxedFlag(li),
       });
       continue;
     }
@@ -99,6 +108,7 @@ export async function buildSoLineItems(
       quantity: parseFloat(li.quantity) * units,
       rate: parseFloat(li.unit_price) || 0,
       description: fullDesc,
+      ...untaxedFlag(li),
     });
     customLineDescriptions.push(label);
   }
@@ -138,10 +148,12 @@ export async function buildSoLineItems(
  * what NetSuite must bill, so raising it has to mark the SO out of date —
  * but folding a `1` into the body would change the hash of every estimate
  * ever pushed and light up "out of date" across the whole book on deploy.
+ * A line's tax flag joins the same way, only when it is an untaxed line
+ * (migration 336), since NetSuite has to stop taxing it.
  */
 export function soContentHash(
   estimate: { labor_hours?: unknown; labor_hours_override?: unknown; labor_rate?: unknown; po_number?: unknown; estimate_number?: unknown; vin?: unknown; vehicle_count?: unknown },
-  lines: Array<{ item_number?: unknown; quantity?: unknown; unit_price?: unknown; sort_order?: unknown }>,
+  lines: Array<{ item_number?: unknown; quantity?: unknown; unit_price?: unknown; sort_order?: unknown; taxable?: unknown }>,
 ): string {
   const money = (v: unknown) => +(parseFloat(String(v ?? 0)) || 0).toFixed(2);
   const units = normalizeVehicleCount(estimate.vehicle_count);
@@ -149,7 +161,7 @@ export function soContentHash(
     lines: [...lines]
       .filter(l => (parseFloat(String(l.quantity ?? 0)) || 0) > 0)
       .sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0))
-      .map(l => [String(l.item_number ?? ''), money(l.quantity), money(l.unit_price)]),
+      .map(l => [String(l.item_number ?? ''), money(l.quantity), money(l.unit_price), ...(l.taxable === false ? ['untaxed'] : [])]),
     labor: [money(estimate.labor_hours_override ?? estimate.labor_hours), money(estimate.labor_rate || 85)],
     ref: String(estimate.po_number ?? '').trim() || String(estimate.estimate_number ?? ''),
     vin: String(estimate.vin ?? '').trim().toUpperCase(),

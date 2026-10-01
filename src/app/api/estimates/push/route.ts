@@ -6,6 +6,8 @@ import { estimateContextMemo } from '@/lib/estimate-document';
 import { resolveLaborItem } from '@/lib/labor-item';
 import { resolveOrPromoteByName } from '@/lib/promote-prospect';
 import { kitTaggedDescription } from '@/lib/estimate-kits';
+import { nsLineTaxField } from '@/lib/netsuite';
+import { untaxedFlag } from '@/lib/so-sync';
 
 export const dynamic = 'force-dynamic';
 
@@ -79,7 +81,7 @@ async function getOAuthHelpers(config: ReturnType<typeof getNetSuiteConfig>) {
 async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfig>, payload: {
   customerId: string;
   memo?: string;
-  lineItems: { itemId: string; quantity: number; rate: number; description?: string }[];
+  lineItems: { itemId: string; quantity: number; rate: number; description?: string; taxable?: false }[];
   taxExempt: boolean;
   vin?: string | null;
   /** Customer's PO → the estimate's PO/Reference field (otherRefNum). */
@@ -97,6 +99,7 @@ async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
     quantity: li.quantity,
     rate: li.rate,
     ...(li.description ? { description: li.description } : {}),
+    ...nsLineTaxField(li),
   }));
 
   const body: any = {
@@ -178,7 +181,7 @@ async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
 async function updateNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfig>, nsEstimateId: string, payload: {
   customerId: string;
   memo?: string;
-  lineItems: { itemId: string; quantity: number; rate: number; description?: string }[];
+  lineItems: { itemId: string; quantity: number; rate: number; description?: string; taxable?: false }[];
   taxExempt: boolean;
   vin?: string | null;
   poNumber?: string | null;
@@ -197,6 +200,7 @@ async function updateNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
     quantity: li.quantity,
     rate: li.rate,
     ...(li.description ? { description: li.description } : {}),
+    ...nsLineTaxField(li),
   }));
 
   const body: any = {
@@ -385,7 +389,7 @@ export async function POST(req: NextRequest) {
     // convert-to-so) rather than being silently dropped. If FS-CUSTOM isn't
     // set up in NetSuite yet, the line is reported back as unmapped instead
     // of vanishing without a trace.
-    const nsLineItems: { itemId: string; quantity: number; rate: number; description?: string }[] = [];
+    const nsLineItems: { itemId: string; quantity: number; rate: number; description?: string; taxable?: false }[] = [];
     const customLineDescriptions: string[] = [];
     const unmappedLineDescriptions: string[] = [];
     let customItemId: string | null = null;
@@ -401,6 +405,7 @@ export async function POST(req: NextRequest) {
           quantity: line.quantity,
           rate: line.unit_price,
           description: kitTaggedDescription(line.description || undefined, line),
+          ...untaxedFlag(line),
         });
         continue;
       }
@@ -418,6 +423,7 @@ export async function POST(req: NextRequest) {
         quantity: line.quantity,
         rate: line.unit_price,
         description: kitTaggedDescription(line.notes ? `${label} (${line.notes})` : label, line),
+        ...untaxedFlag(line),
       });
       customLineDescriptions.push(label);
     }

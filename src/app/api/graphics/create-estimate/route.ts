@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { isLineTaxable, resolveLineTaxability } from '@/lib/line-taxability';
 import { createClient } from '@supabase/supabase-js';
 import { requireMoney } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
@@ -137,6 +138,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Which lines carry sales tax (migration 336): Service items and freight
+    // untaxed, an admin's per-part setting wins, anything unmatched taxed.
+    const stampedLines = await resolveLineTaxability(supabase, lineItems);
+
     // Compute totals
     const subtotal = lineItems.reduce((sum: number, l: any) => sum + (l.quantity * l.unit_price), 0);
     const autoLaborHours = lineItems.reduce((sum: number, l: any) => sum + l.labor_hours, 0);
@@ -145,7 +150,10 @@ export async function POST(req: NextRequest) {
     const laborTotal = autoLaborHours * laborRate;
     // One company sales tax rate (Settings → Sales Tax, super admin only).
     const taxRate = await getSalesTaxRate(supabase);
-    const taxAmount = subtotal * taxRate;
+    const taxableBase = stampedLines
+      .filter(isLineTaxable)
+      .reduce((sum: number, l: any) => sum + (l.quantity * l.unit_price), 0);
+    const taxAmount = taxableBase * taxRate;
     const grandTotal = subtotal + laborTotal + taxAmount;
 
     // Create the estimate
@@ -185,8 +193,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Insert line items
-    if (lineItems.length > 0) {
-      const rows = lineItems.map((l: any, idx: number) => ({
+    if (stampedLines.length > 0) {
+      const rows = stampedLines.map((l: any, idx: number) => ({
         estimate_id: estimate.id,
         sort_order: idx,
         part_id: l.part_id,
@@ -198,6 +206,7 @@ export async function POST(req: NextRequest) {
         line_total: l.quantity * l.unit_price,
         labor_hours: l.labor_hours,
         is_custom: l.is_custom,
+        taxable: l.taxable,
       }));
       await supabase.from('estimate_line_items').insert(rows);
     }

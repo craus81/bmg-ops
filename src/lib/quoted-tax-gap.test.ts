@@ -145,4 +145,32 @@ describe('summarizeTaxGap', () => {
     expect(r.rows.map(x => x.id)).toEqual(['a']);
     expect(r.examined).toBe(2);
   });
+
+  // Migration 336: services and freight are untaxed. A line that carries its
+  // own answer keeps it; an older line is judged by today's catalog rule.
+  it('does not count an untaxed service line as a shortfall', () => {
+    const r = summarizeTaxGap(
+      [est({ id: 'a', tax_amount: 79.5 })],
+      [line('a', 1, 1000), { ...line('a', 1, 500), taxable: false }],
+    );
+    expect(r.rows).toEqual([]);
+  });
+
+  it('judges lines saved before the stamp by the catalog rule', () => {
+    const labor = { ...line('a', 1, 500), item_number: 'Graphics Install Labor', taxable: null };
+    const isService = (l: TaxGapLine) => l.item_number !== 'Graphics Install Labor';
+    const quotedPartsOnly = [est({ id: 'a', tax_amount: 79.5 })];
+    expect(summarizeTaxGap(quotedPartsOnly, [line('a', 1, 1000), labor], isService).rows).toEqual([]);
+    // Without the catalog rule the same line counts as taxed, as it was quoted.
+    expect(summarizeTaxGap(quotedPartsOnly, [line('a', 1, 1000), labor]).rows).toHaveLength(1);
+  });
+
+  it('a stamped answer wins over the catalog rule', () => {
+    const r = summarizeTaxGap(
+      [est({ id: 'a', tax_amount: 79.5 })],
+      [{ ...line('a', 1, 1000), taxable: true }],
+      () => false,
+    );
+    expect(r.rows).toEqual([]);
+  });
 });

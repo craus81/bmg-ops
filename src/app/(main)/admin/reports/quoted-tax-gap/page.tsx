@@ -85,7 +85,8 @@ export default function QuotedTaxGapPage() {
         Estimates whose saved tax is below what the tax math gives today. Until 22 Sep 2026 the builder skipped any
         line whose NetSuite item had the Taxable box unticked — a checkbox nobody maintains — so ordinary parts fell
         out of the tax base and these quotes went out charging less tax than the invoice will. Each row is listed
-        because its own numbers disagree, not because of its date. Tax-exempt customers are excluded.
+        because its own numbers disagree, not because of its date. Tax-exempt customers are excluded, and service
+        items and freight count as untaxed, as they are on quotes today.
       </div>
 
       {error && <div style={{ color: 'var(--danger, #ef4444)', fontSize: '13px' }}>{error}</div>}

@@ -17,6 +17,7 @@ import InstalledPhotosGrid from '@/components/InstalledPhotosGrid';
 import PartTransactionsModal from '@/components/PartTransactionsModal';
 import PartPosModal from '@/components/PartPosModal';
 import { loadBillableCustomers, type BillableCustomer } from '@/lib/billable-customers';
+import { isPartTaxable, partTaxReason } from '@/lib/line-taxability';
 
 interface Part {
   id: string;
@@ -25,6 +26,8 @@ interface Part {
   display_name: string | null;
   description: string | null;
   item_type: string | null;
+  /** FleetSuite's sales-tax setting (migration 336): NULL = by item type. */
+  taxable_override: boolean | null;
   catalog: 'upfit' | 'graphics';
   sales_price: number;
   purchase_price: number;
@@ -439,6 +442,17 @@ export default function PartsPage() {
 
     setEditingLabor(null);
     setLaborValue('');
+    loadParts();
+  };
+
+  // Sales tax on quotes (migration 336). FleetSuite-owned like labor hours —
+  // the parts sync never writes it. NULL = by item type (Service untaxed).
+  const updateTaxOverride = async (partId: string, value: boolean | null) => {
+    const { error } = await supabase
+      .from('netsuite_parts')
+      .update({ taxable_override: value, updated_at: new Date().toISOString() })
+      .eq('id', partId);
+    if (error) { alert(`Could not save the tax setting: ${error.message}`); return; }
     loadParts();
   };
 
@@ -1273,6 +1287,27 @@ export default function PartsPage() {
                           >
                             {part.labor_hours == null ? '— not set' : `${part.labor_hours}h`}
                             {isAdmin && <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '4px' }}>Edit</span>}
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>
+                          Sales Tax on Quotes
+                        </div>
+                        {isAdmin ? (
+                          <select
+                            value={part.taxable_override === true ? 'taxed' : part.taxable_override === false ? 'untaxed' : 'default'}
+                            onChange={e => updateTaxOverride(part.id, e.target.value === 'taxed' ? true : e.target.value === 'untaxed' ? false : null)}
+                            title="Which quote lines carry sales tax. Default: Service items aren't taxed, everything else is. Sent to NetSuite with each line."
+                            style={{ ...inputStyle, padding: '4px 6px', fontSize: '12px' }}
+                          >
+                            <option value="default">Default ({isPartTaxable({ item_type: part.item_type }) ? 'taxed' : 'not taxed, service'})</option>
+                            <option value="taxed">Always taxed</option>
+                            <option value="untaxed">Never taxed</option>
+                          </select>
+                        ) : (
+                          <div style={{ fontSize: '14px', fontWeight: 700, color: isPartTaxable(part) ? 'var(--text-body)' : '#34d399' }}>
+                            {partTaxReason(part)}
                           </div>
                         )}
                       </div>
