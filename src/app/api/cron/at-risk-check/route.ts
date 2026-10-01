@@ -4,6 +4,7 @@ import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
+import { isShopWeekend, markWeekendSkip } from '@/lib/quiet-weekends';
 import { evaluateAtRiskCustomers } from '@/lib/at-risk';
 
 export const dynamic = 'force-dynamic';
@@ -24,6 +25,12 @@ export async function GET(req: NextRequest) {
   if (!isCron) {
     const auth = await requireAdmin(req);
     if (auth.error) return auth.error;
+  }
+
+  // Quiet weekends: routine nudges wait for Monday. A manual run still runs.
+  if (isCron && isShopWeekend()) {
+    await markWeekendSkip(service, 'at_risk_check');
+    return NextResponse.json({ skipped: 'weekend' });
   }
 
   try {

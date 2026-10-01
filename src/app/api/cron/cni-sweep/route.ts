@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { recordHeartbeat } from '@/lib/system-health';
+import { isShopWeekend, markWeekendSkip } from '@/lib/quiet-weekends';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { getCompanyInstallerIds } from '@/lib/cni-access';
@@ -30,7 +31,8 @@ export const maxDuration = 60;
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
   const authHeader = req.headers.get('authorization');
-  if (!secret || authHeader !== `Bearer ${secret}`) {
+  const isCron = !!secret && authHeader === `Bearer ${secret}`;
+  if (!isCron) {
     const admin = await requireAdmin(req);
     if (admin.error) return admin.error;
   }
@@ -39,6 +41,14 @@ export async function GET(req: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
   );
+
+  // Quiet weekends: insurance warnings, invite re-pings and budget notes
+  // wait for Monday (each pass stamps what it sent, so nothing is lost).
+  // A manual run still runs.
+  if (isCron && isShopWeekend()) {
+    await markWeekendSkip(supabase, 'cni_sweep');
+    return NextResponse.json({ skipped: 'weekend' });
+  }
 
   const passes: Record<string, unknown> = {};
   let failed = 0;
