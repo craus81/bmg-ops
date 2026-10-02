@@ -1,7 +1,7 @@
 /**
- * The three customer-facing vehicle emails, as pure content.
+ * The customer-facing vehicle emails, as pure content.
  *
- * All three used to fire on their own — "ready" and "shipped" the moment
+ * These used to fire on their own — "ready" and "shipped" the moment
  * staff moved a vehicle's status, the pickup reminder weekly from the
  * pickup-nudges cron. The owner's call on 2026-09-14 was that no customer
  * email leaves FleetSuite without a person choosing to send it, so the
@@ -12,15 +12,17 @@
  * same function with the same vehicle, so what the sender approves is what
  * the customer gets. The greeting, the CTA and the SMS all live here — one
  * place per kind, no second copy to drift.
+ *
+ * There is no "shipped" email any more (owner decision 2026-10-02):
+ * customers pick up or BMG drops off, so nobody needs telling.
  */
 
-export type VehicleEmailKind = 'ready' | 'shipped' | 'pickup_reminder';
+export type VehicleEmailKind = 'ready' | 'pickup_reminder';
 
-export const VEHICLE_EMAIL_KINDS: VehicleEmailKind[] = ['ready', 'shipped', 'pickup_reminder'];
+export const VEHICLE_EMAIL_KINDS: VehicleEmailKind[] = ['ready', 'pickup_reminder'];
 
 export const VEHICLE_EMAIL_LABEL: Record<VehicleEmailKind, string> = {
   ready: 'Ready for pickup',
-  shipped: 'Shipped',
   pickup_reminder: 'Pickup reminder',
 };
 
@@ -75,21 +77,6 @@ export function buildVehicleCustomerEmail(
   const label = vehicleEmailLabel(v);
   const vinTail = v.vin ? ` (VIN ending ${String(v.vin).slice(-8)})` : '';
   const cta = vehicleCta(v, appUrl);
-
-  if (kind === 'shipped') {
-    const body = `Your ${label}${vinTail} has left our facility. Reply to this email with any questions.`;
-    return {
-      subject: `[BMG Fleet] Your vehicle has shipped — ${label}`,
-      title: `On its way — ${label}`,
-      body,
-      // A shipped vehicle has nothing left to book; the dashboard is the
-      // only honest destination even when a booking token exists.
-      ctaUrl: `${appUrl}/customer/dashboard`,
-      ctaLabel: 'View order status',
-      threadSubject: `${label} shipped`,
-      smsBody: null,
-    };
-  }
 
   if (kind === 'pickup_reminder') {
     const days = v.daysReady ?? null;

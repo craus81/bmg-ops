@@ -219,11 +219,13 @@ export async function POST(request: Request) {
       });
     }
 
-    // On → shipped, tell the customer their vehicle left the shop —
-    // "where is my vehicle?" answered before it's asked.
+    // Shipped only marks the vehicle as off the lot (owner decision
+    // 2026-10-02): customers pick up or BMG drops off, so nobody gets a
+    // push, a bell alert or a customer email. It still shows up as one line
+    // in the afternoon staff digest email.
     if (newStatus === 'shipped') {
-      notifyShipped(vehicle).catch((err) => {
-        console.error('notifyShipped error:', err);
+      noteShippedInDigest(vehicle).catch((err) => {
+        console.error('noteShippedInDigest error:', err);
       });
     }
 
@@ -345,21 +347,20 @@ async function notifyCompletion(vehicle: any, actorName: string) {
 }
 
 /**
- * Staff prompt when a vehicle leaves the shop. This used to email the
- * customer "your vehicle has shipped" on its own; see notifyCompletion for
- * why it no longer does. The email itself is one press of Email Customer
- * on the vehicle (kind 'shipped').
+ * A digest line, nothing more, when a vehicle leaves the lot. Email is the
+ * only channel, and vehicle_complete isn't an emailNow type, so it queues
+ * for the afternoon "Today's alerts" email: no push, no bell alert, and
+ * nothing for anyone who turned email off for this alert.
  */
-async function notifyShipped(vehicle: any) {
-  if (!vehicle.customer_name) return;
+async function noteShippedInDigest(vehicle: any) {
   const vehicleLabel = vehicleLabelOf(vehicle);
   const targets = await vehicleAlertTargets(vehicle);
   if (targets.length === 0) return;
   await notifyMany(targets, {
     type: 'vehicle_complete',
-    title: `Tell ${vehicle.customer_name}: ${vehicleLabel} has shipped`,
-    body: `${vehicleLabel} was marked shipped and nothing has gone to the customer.`
-      + ' Open the vehicle and use Email Customer to let them know it is on its way.',
+    channels: ['email'],
+    title: `Shipped: ${vehicleLabel}`,
+    body: `${vehicleLabel}${vehicle.customer_name ? ` (${vehicle.customer_name})` : ''} left the lot. VIN ${vehicle.vin}.`,
     url: deepLinks.vehicle(vehicle.id),
   });
 }
