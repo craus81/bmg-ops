@@ -1,0 +1,54 @@
+# Keeps the Pro Vehicle Outlines session alive between daily syncs.
+#
+# PVO's login page has a reCAPTCHA, so the daily sync (pvo-sync.yml) can't
+# reliably sign in by itself — it reuses a session someone created by hand
+# with `node scripts/pvo-sync.mjs --login`, stored in R2. This opens PVO with
+# that session every few hours (no downloads) and saves the refreshed
+# cookies, so the session doesn't time out between runs. If it has lapsed,
+# it emails PVO_SUMMARY_EMAIL once.
+#
+# Uses the same secrets as pvo-sync.yml.
+
+name: pvo-keepalive
+
+on:
+  schedule:
+    - cron: '41 */3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: pvo-keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: Refresh the PVO session
+        run: |
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ] || [ -z "$R2_ACCOUNT_ID" ]; then
+            echo "::notice::PVO sync secrets aren't set up yet (see pvo-sync.yml) — skipping."
+            exit 0
+          fi
+          node scripts/pvo-sync.mjs --keepalive
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          PVO_SUMMARY_EMAIL: ${{ secrets.PVO_SUMMARY_EMAIL }}
+          RESEND_FROM_EMAIL: ${{ vars.RESEND_FROM_EMAIL }}
+          RESEND_FROM_NAME: ${{ vars.RESEND_FROM_NAME }}
