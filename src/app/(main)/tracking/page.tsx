@@ -752,10 +752,9 @@ export default function TrackingPage() {
     setMessagingVehicleId(null);
   };
 
-  /** Open the compose screen, defaulting to the email this vehicle's state
-   *  most likely calls for. */
+  /** Open the compose screen on the ready-for-pickup email. */
   const openEmailCustomer = (vehicle: FleetCheckin) => {
-    setEmailKind(vehicle.status === 'shipped' ? 'shipped' : 'ready');
+    setEmailKind('ready');
     setEmailOptedOut(false);
     setEmailCustomerFor(vehicle);
   };
@@ -2192,7 +2191,7 @@ export default function TrackingPage() {
                                 e.stopPropagation();
                                 openEmailCustomer(vehicle);
                               }}
-                              title="Send the customer a ready / shipped / pickup-reminder email"
+                              title="Send the customer a ready-for-pickup or pickup-reminder email"
                               style={{
                                 flex: 1, padding: '12px', borderRadius: '10px',
                                 fontSize: '13px', fontWeight: 800, cursor: 'pointer',
@@ -3655,7 +3654,7 @@ export default function TrackingPage() {
         />
       )}
 
-      {/* Email Customer: the ready / shipped / pickup-reminder emails that
+      {/* Email Customer: the ready / pickup-reminder emails that
           used to send themselves. The kind picker sits in the intro slot and
           drives previewKey, so switching it re-renders the preview. */}
       {emailCustomerFor && (

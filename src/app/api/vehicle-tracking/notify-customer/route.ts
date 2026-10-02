@@ -20,7 +20,7 @@ const service = createClient(
 
 const Schema = z.object({
   vehicleId: z.string().uuid(),
-  kind: z.enum(['ready', 'shipped', 'pickup_reminder']),
+  kind: z.enum(['ready', 'pickup_reminder']),
   emails: z.array(z.string().email()).max(20).optional(),
   cc: z.array(z.string().email().max(254)).max(10).optional(),
   bccSelf: z.boolean().optional(),
@@ -30,11 +30,11 @@ const Schema = z.object({
 
 /**
  * POST /api/vehicle-tracking/notify-customer — the staff-sent version of
- * the three vehicle emails ("ready", "shipped", pickup reminder), through
+ * the vehicle emails ("ready", pickup reminder), through
  * the standard compose contract (docs/customer-email-standard.md):
  * emails[] / cc / bccSelf / message / preview, Reply-To the sender.
  *
- * All three used to send themselves — two off the status change, one off
+ * They used to send themselves — off the status change and
  * the pickup-nudges cron. Owner decision 2026-09-14: a customer email is a
  * person's decision. The crons and the status route now notify staff and
  * this route is what that notification asks them to press. Content comes
@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
   // "How did we do?" rides along on the two completion emails exactly as it
   // did when they sent themselves (R6-13) — the decision is read-only here
   // and the suppression stamp is written only after a successful send.
-  const review = (kind === 'ready' || kind === 'shipped') && resolved.customer?.id
+  const review = kind === 'ready' && resolved.customer?.id
     ? await decideReviewAsk(service, resolved.customer.id)
     : null;
   const reviewHtml = review?.ask && review.url ? reviewBlockHtml(review.url) : '';

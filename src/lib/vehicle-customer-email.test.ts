@@ -32,12 +32,6 @@ describe('buildVehicleCustomerEmail', () => {
     }
   });
 
-  it('never offers a booking link on a shipped vehicle — there is nothing left to book', () => {
-    const c = buildVehicleCustomerEmail(van, 'shipped', APP);
-    expect(c.ctaUrl).toBe(`${APP}/customer/dashboard`);
-    expect(c.smsBody).toBeNull();
-  });
-
   it('falls back to the portal dashboard when the vehicle has no booking token', () => {
     const c = buildVehicleCustomerEmail({ ...van, customer_portal_token: null }, 'ready', APP);
     // Never a dead link, and never a button that promises booking it can't do.
