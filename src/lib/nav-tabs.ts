@@ -36,7 +36,7 @@ export const MAX_TABS = 7; // + More = 8 total
 export const allTabs: Tab[] = [
   { id: 'home', path: '/home', label: 'Home', feature: 'home', priority: 0 },
   { id: 'upfit', path: '/upfit', label: 'Upfit', feature: 'upfit_projects', priority: 0.5 },
-  { id: 'graphics', path: '/graphics', label: 'Graphics Production', shortLabel: 'Gfx Prod', feature: 'graphics', priority: 1 },
+  { id: 'graphics', path: '/graphics', label: 'Graphics Production', shortLabel: 'Graphics', feature: 'graphics', priority: 1 },
   { id: 'tracking', path: '/tracking', label: 'In-Shop', feature: 'in_shop', priority: 3 },
   // POs and Scans go after In-Shop so they slot in on the right of the
   // existing visible tabs without displacing anything.

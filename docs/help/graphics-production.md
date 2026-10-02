@@ -6,7 +6,7 @@ Each section is one task. Read the one you need.
 
 ## See all graphics jobs
 
-1. Tap **Graphics Production** (**Gfx Prod** in the bottom bar).
+1. Tap **Graphics Production** (**Graphics** in the bottom bar).
 2. Each row is a job. The top of the page shows status counts:
    **Proofing**, **Production**, etc.
 3. Tap a status chip to filter.
