@@ -110,10 +110,19 @@ describe('perPersonHours', () => {
     expect(rows.map(r => [r.name, r.totalHours])).toEqual([['Dana', 4], ['Sam', 1]]);
   });
 
+  it('counts a shop timer only inside shop hours (paused 3:30 PM → 7:00 AM)', () => {
+    const rows = perPersonHours([
+      // Mon 2:30 PM → Tue 8:00 AM Central = 1h Monday + 1h Tuesday.
+      shift({ id: 'c', context: 'shop', cniJobId: null, startedAt: '2026-06-01T19:30:00.000Z', endedAt: '2026-06-02T13:00:00.000Z' }),
+    ], names);
+    expect(rows[0].byContext).toEqual({ shop: 2 });
+  });
+
   it('breaks a person down by context so shop and field are not averaged together', () => {
     const rows = perPersonHours([
       shift({ id: 'a', context: 'field', cniJobId: null }),
-      shift({ id: 'b', context: 'shop', cniJobId: null, endedAt: '2026-06-01T10:00:00.000Z' }),
+      // Shop timers count shop hours only: Mon 8:00–10:00 AM Central.
+      shift({ id: 'b', context: 'shop', cniJobId: null, startedAt: '2026-06-01T13:00:00.000Z', endedAt: '2026-06-01T15:00:00.000Z' }),
     ], names);
     expect(rows[0].byContext).toEqual({ field: 4, shop: 2 });
     expect(rows[0].totalHours).toBe(6);

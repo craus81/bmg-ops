@@ -193,10 +193,11 @@ export async function POST(request: Request) {
       });
     }
 
-    // R3-21: a pick-list labor timer nobody stopped ends when the vehicle
-    // does — completing or shipping closes any open shop shift, flagged
-    // auto_closed so the margin report shows those hours as approximate.
-    if (newStatus === 'complete' || newStatus === 'shipped') {
+    // Shop job timer (owner rules 2026-10-02): finishing the completion
+    // procedure stops it, and so does shipping. Stuck for parts pauses it —
+    // nobody is working the vehicle while it waits — and techs press Resume
+    // (or Pull In again) once the parts are in.
+    if (newStatus === 'complete' || newStatus === 'shipped' || newStatus === 'stuck_parts') {
       try {
         await closeShopShiftsForCheckin(serviceSupabase, vehicleId);
       } catch (err) {

@@ -42,6 +42,12 @@ export const deepLinks = {
    *  would open the new one (Round 3, §7.2.6 — per-visit deep links). */
   pickList: (vin: string, checkinId?: string | null) =>
     `/vehicles/${vin}/pick-list${checkinId ? `?visit=${checkinId}` : ''}`,
+  /** Pick list arriving from a Pull In scan: starts (or joins) the job
+   *  timer once and opens the tag-techs list. */
+  pickListPullIn: (vin: string, checkinId: string) =>
+    `/vehicles/${vin}/pick-list?visit=${checkinId}&pullin=1`,
+  /** Pull In scanner (shop techs): scan a vehicle into a bay. */
+  pullIn: () => '/pull-in',
   /** Upfit board — opens the project detail (optionally flashing a note or task). */
   upfitProject: (projectId: string, opts?: { noteId?: string | null; taskId?: string | null }) =>
     `/upfit?id=${projectId}${opts?.noteId ? `&note=${opts.noteId}` : ''}${opts?.taskId ? `&task=${opts.taskId}` : ''}`,

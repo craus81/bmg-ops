@@ -53,6 +53,33 @@ Tap **Enter Manually** if decoding fails.
 
 ---
 
+## Pull a vehicle into a bay (job timer)
+
+1. On **Home**, tap **Pull In**.
+2. Scan the VIN barcode. No good barcode? Tap **Photo of the VIN plate**
+   and take one clear photo — the VIN is read for you. You can also type
+   the last 6 of the VIN.
+3. The vehicle's pick list opens, the job timer starts, and the vehicle
+   moves to **In Progress**.
+4. Tick anyone else working on it and tap **Add**. They join the timer
+   and come off whatever vehicle they were on.
+
+A vehicle that isn't checked in yet goes to check-in first, then
+**Pull In & Start Timer**.
+
+**Pausing.** Switching to another task? Tap **⏸ Pause** on the timer —
+that takes just you off. **Pause everyone** stops it for the whole crew.
+**▶ Resume** (or **▶ Join** while a crewmate's clock runs) starts you
+again.
+
+**The clock only counts shop hours:** weekdays 7:00 AM – 3:30 PM, less
+11:30 AM – 12:00 PM lunch. Outside those hours it shows *paused* and picks back
+up at 7:00 AM on its own. Marking the vehicle **Stuck (Parts)** pauses
+it for everyone (tap **▶ Resume** when the parts arrive). It stops for
+good when the completion procedure is finished.
+
+---
+
 ## Scan a part number arriving at the shop
 
 1. **Scan** → **Scan Part**.

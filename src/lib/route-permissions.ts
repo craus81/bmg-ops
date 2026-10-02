@@ -535,6 +535,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/vendor-invoices/route.ts': { kind: 'admin', contains: ['requireAdmin(', 'requireRole('] },
   'src/app/api/vendor-invoices/sync-paid/route.ts': role(),
   'src/app/api/vendor-invoices/workflow/route.ts': role(),
+  'src/app/api/vin-plate/read/route.ts': staff(),
   'src/app/api/webhooks/resend/route.ts': webhook('Resend delivery events; svix HMAC verified', 'verifySvixSignature'),
   // Dialpad Event Subscriptions (R6-3): deliveries are HS256 JWTs signed
   // with the shared secret set on the subscription, verified fail-closed —

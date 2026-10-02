@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { shopWorkMs } from './shop-hours';
 
 /**
  * Shop labor capture (R3-21, owner decisions 2026-09-07): 'shop'-context
@@ -15,14 +16,22 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * with no rate configured the margin report shows hours but excludes labor
  * from the math, saying so.
  *
- * Timers are only as accurate as button-pressing, so hours from shifts that
- * nobody stopped (auto_closed: vehicle completion or the daily sweep ended
- * them) are reported separately as approximate.
+ * Shop clock (owner rules 2026-10-02): a shop timer counts only shop
+ * hours — weekdays 7:00 AM–3:30 PM Central less lunch (src/lib/shop-hours.ts).
+ * Outside them it is paused, not stopped, so one timer can span the days a
+ * vehicle is in the bay and finishing the completion procedure is the
+ * normal way it ends. A tech who moves to another task pauses themselves
+ * (leaves the crew); tagging a tech onto a job moves them off any other
+ * running shop job.
+ *
+ * Timers are only as accurate as button-pressing, so hours from shifts the
+ * sweep had to end are reported separately as approximate.
  */
 
-/** Cap the daily sweep writes when closing a forgotten timer. */
+/** Cap the daily sweep writes when closing a forgotten print-room timer.
+ *  Shop timers are exempt: they pause off-hours and run until completion. */
 export const SHOP_SHIFT_MAX_HOURS = 12;
-/** The sweep closes open shop shifts older than this. */
+/** The sweep closes open print-room shifts older than this. */
 export const SHOP_SHIFT_STALE_HOURS = 14;
 
 export interface MemberWindow {
@@ -34,12 +43,14 @@ export interface MemberWindow {
 /**
  * Presence-overlap hours per member for one shift interval. Pure math so the
  * tests can pin it: clamp each member's window to [start, end], never
- * negative; a missing added_at counts from shift start.
+ * negative; a missing added_at counts from shift start. With `shopClock`
+ * (shop-context shifts) only shop hours inside that overlap count.
  */
 export function shiftMemberHours(
   startedAt: string,
   endedAt: string,
   members: MemberWindow[],
+  opts: { shopClock?: boolean } = {},
 ): Map<string, number> {
   const start = Date.parse(startedAt);
   const end = Date.parse(endedAt);
@@ -51,16 +62,22 @@ export function shiftMemberHours(
   for (const m of members) {
     const from = Math.max(start, m.added_at ? Date.parse(m.added_at) : start);
     const to = Math.min(end, m.removed_at ? Date.parse(m.removed_at) : end);
-    const hours = Math.max(0, (to - from) / 3_600_000);
+    const ms = opts.shopClock ? shopWorkMs(from, to) : to - from;
+    const hours = Math.max(0, ms / 3_600_000);
     out.set(m.profile_id, (out.get(m.profile_id) || 0) + hours);
   }
   return out;
 }
 
 /** Σ member-hours for one shift. */
-export function totalShiftHours(startedAt: string, endedAt: string, members: MemberWindow[]): number {
+export function totalShiftHours(
+  startedAt: string,
+  endedAt: string,
+  members: MemberWindow[],
+  opts: { shopClock?: boolean } = {},
+): number {
   let total = 0;
-  for (const h of shiftMemberHours(startedAt, endedAt, members).values()) total += h;
+  for (const h of shiftMemberHours(startedAt, endedAt, members, opts).values()) total += h;
   return total;
 }
 
@@ -152,7 +169,7 @@ export async function getShopLaborForCheckins(
   for (const s of shifts) {
     const entry = out.get(s.fleet_checkin_id) || { hours: 0, approxHours: 0, cost: null, hasOpenShift: false };
     const open = !s.ended_at;
-    const hours = totalShiftHours(s.started_at, s.ended_at || nowIso, membersByShift.get(s.id) || []);
+    const hours = totalShiftHours(s.started_at, s.ended_at || nowIso, membersByShift.get(s.id) || [], { shopClock: true });
     entry.hours += hours;
     if (open || s.auto_closed) entry.approxHours += hours;
     if (open) entry.hasOpenShift = true;
@@ -167,14 +184,16 @@ export async function getShopLaborForCheckins(
 }
 
 /**
- * End every open shop shift on a check-in, marking auto_closed — the
- * completion ceremony calls this so a forgotten timer stops when the
- * vehicle does. Best effort; idempotent (no open shifts = no writes).
+ * End every open shop shift on a check-in — finishing the completion
+ * procedure is how a job timer stops, and Stuck for parts pauses it (owner
+ * rules 2026-10-02), so this is a normal stop, not an approximate
+ * auto-close. Best effort; idempotent (no
+ * open shifts = no writes).
  */
 export async function closeShopShiftsForCheckin(service: SupabaseClient, checkinId: string): Promise<number> {
   const { data, error } = await service
     .from('work_shifts')
-    .update({ ended_at: new Date().toISOString(), auto_closed: true })
+    .update({ ended_at: new Date().toISOString() })
     .eq('context', 'shop')
     .eq('fleet_checkin_id', checkinId)
     .is('ended_at', null)
@@ -184,4 +203,58 @@ export async function closeShopShiftsForCheckin(service: SupabaseClient, checkin
     return 0;
   }
   return (data || []).length;
+}
+
+/**
+ * A tech works one shop job at a time (owner rule 2026-10-02: tagging a tech
+ * who is on another vehicle MOVES them). Takes these people off every OTHER
+ * open shop shift, and ends any shift that leaves with nobody on it, so its
+ * clock stops rather than running with an empty crew. Returns the check-in
+ * ids they were moved off.
+ */
+export async function moveOffOtherShopShifts(
+  service: SupabaseClient,
+  profileIds: string[],
+  keepShiftId: string,
+): Promise<string[]> {
+  if (profileIds.length === 0) return [];
+  const { data: memberships, error } = await service
+    .from('work_shift_members')
+    .select('id, shift_id')
+    .in('profile_id', profileIds)
+    .is('removed_at', null);
+  if (error) {
+    console.warn('moveOffOtherShopShifts read failed:', error.message);
+    return [];
+  }
+  const candidateIds = [...new Set((memberships || []).map(m => m.shift_id))].filter(id => id !== keepShiftId);
+  if (candidateIds.length === 0) return [];
+  const { data: shifts } = await service
+    .from('work_shifts')
+    .select('id, fleet_checkin_id')
+    .in('id', candidateIds)
+    .eq('context', 'shop')
+    .is('ended_at', null);
+  if (!shifts || shifts.length === 0) return [];
+
+  const now = new Date().toISOString();
+  const shiftIds = new Set(shifts.map(s => s.id));
+  await service
+    .from('work_shift_members')
+    .update({ removed_at: now })
+    .in('id', (memberships || []).filter(m => shiftIds.has(m.shift_id)).map(m => m.id));
+
+  const moved: string[] = [];
+  for (const shift of shifts) {
+    if (shift.fleet_checkin_id) moved.push(shift.fleet_checkin_id);
+    const { count } = await service
+      .from('work_shift_members')
+      .select('id', { count: 'exact', head: true })
+      .eq('shift_id', shift.id)
+      .is('removed_at', null);
+    if (!count) {
+      await service.from('work_shifts').update({ ended_at: now }).eq('id', shift.id).is('ended_at', null);
+    }
+  }
+  return moved;
 }

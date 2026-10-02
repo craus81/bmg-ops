@@ -5,7 +5,7 @@ import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { rolesOf, canActOnCniJob } from '@/lib/cni-access';
 import { getOpenCniShift, getFieldRate } from '@/lib/pay-credits';
 import { FIELD_ROLES, memberViews, cniRoster, fieldRoster, shopRoster } from '@/lib/shifts';
-import { getOpenShopShift, getShopLaborForCheckins } from '@/lib/shop-labor';
+import { getOpenShopShift, getShopLaborForCheckins, moveOffOtherShopShifts } from '@/lib/shop-labor';
 import { loadBurn } from '@/lib/labor-burn';
 
 export const dynamic = 'force-dynamic';
@@ -182,12 +182,32 @@ export async function POST(req: NextRequest) {
       .eq('id', checkinId)
       .maybeSingle();
     if (!checkin) return NextResponse.json({ error: 'Check-in not found' }, { status: 404 });
-    const existing = await getOpenShopShift(service, checkinId);
-    if (existing) {
-      return NextResponse.json({ shift: { ...existing, members: await memberViews(service, existing.id) }, existing: true });
-    }
     allowedIds = new Set((await shopRoster(service)).map(r => r.profile_id));
     allowedIds.add(auth.user.id);
+    const existing = await getOpenShopShift(service, checkinId);
+    if (existing) {
+      // Someone's clock is already running on this vehicle: pressing Start
+      // (or scanning it in) means "I'm working on it too" — join the crew
+      // instead of a second timer. Owner rule 2026-10-02: one shop job at a
+      // time, so joiners move off whatever they were on.
+      const joining = new Set<string>(parsed.data.members.map(m => m.profileId));
+      if (!isAdmin || joining.size === 0) joining.add(auth.user.id);
+      for (const id of joining) {
+        if (!allowedIds.has(id)) {
+          return NextResponse.json({ error: 'One or more crew members are not eligible for this shift' }, { status: 400 });
+        }
+      }
+      const onCrew = new Set((await memberViews(service, existing.id)).map(m => m.profile_id));
+      const toAdd = [...joining].filter(id => !onCrew.has(id));
+      if (toAdd.length > 0) {
+        const { error: joinErr } = await service.from('work_shift_members').insert(
+          toAdd.map(profileId => ({ shift_id: existing.id, profile_id: profileId, share_weight: 1, added_by: auth.user.id })),
+        );
+        if (joinErr) return NextResponse.json({ error: 'Failed to join the timer: ' + joinErr.message }, { status: 500 });
+      }
+      await moveOffOtherShopShifts(service, [...joining], existing.id);
+      return NextResponse.json({ shift: { ...existing, members: await memberViews(service, existing.id) }, existing: true });
+    }
   } else if (context === 'graphics') {
     // R6-6 print-room timer: same shape as the shop timer — one open shift
     // per graphics job, costing only, never a rate and never credits. The
@@ -271,6 +291,7 @@ export async function POST(req: NextRequest) {
   if (memErr) {
     return NextResponse.json({ error: 'Failed to tag crew: ' + memErr.message }, { status: 500 });
   }
+  if (context === 'shop') await moveOffOtherShopShifts(service, [...members.keys()], shift.id);
 
   return NextResponse.json({
     shift: { ...shift, members: await memberViews(service, shift.id) },

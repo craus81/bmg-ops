@@ -15,6 +15,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { hoursNote, summarizeTaskHours } from '@/lib/so-line-tasks';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 import { toJpegIfHeic } from '@/lib/heic';
+import { shopWorkMs, shopClockResumeLabel } from '@/lib/shop-hours';
 import ConditionReportCard from '@/components/ConditionReportCard';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 
@@ -122,6 +123,9 @@ export default function VehiclePickListPage() {
   // exact record the notification was about.
   const searchParams = useSearchParams();
   const visitId = searchParams?.get('visit') || null;
+  // ?pullin=1 — arrived from the Pull In scanner: start (or join) the job
+  // timer once and open the tag-techs list.
+  const pullIn = searchParams?.get('pullin') === '1';
   const { user, profile, isInstaller, isShopTech, isFieldTech, isAdmin } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
@@ -166,6 +170,9 @@ export default function VehiclePickListPage() {
   const [laborLoaded, setLaborLoaded] = useState(false);
   const [laborBusy, setLaborBusy] = useState(false);
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const [tagSheetOpen, setTagSheetOpen] = useState(false);
+  const [tagPicks, setTagPicks] = useState<Set<string>>(new Set());
+  const pullInHandled = useRef(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -287,6 +294,28 @@ export default function VehiclePickListPage() {
     loadLaborShift(vehicle.id);
   }, [vehicle, canUseShopTimer, loadLaborShift]);
 
+  // Pull In (owner flow 2026-10-02): scanning a vehicle in starts its job
+  // timer — chaining Received → In Progress — and offers the tag list.
+  useEffect(() => {
+    if (!pullIn || pullInHandled.current || !vehicle || !laborLoaded || !canUseShopTimer) return;
+    pullInHandled.current = true;
+    const params = new URLSearchParams(searchParams?.toString() || '');
+    params.delete('pullin');
+    router.replace(`/vehicles/${vin}/pick-list${params.toString() ? `?${params.toString()}` : ''}`);
+    (async () => {
+      if (vehicle.status === 'complete' || vehicle.status === 'shipped') {
+        await dialog.alert('This vehicle is already marked complete, so no timer was started.');
+        return;
+      }
+      if (await startLaborTimer()) {
+        setTagPicks(new Set());
+        setTagSheetOpen(true);
+      }
+    })();
+    // startLaborTimer is recreated each render; the ref makes this run once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pullIn, vehicle, laborLoaded, canUseShopTimer]);
+
   // Tick the elapsed display while a timer runs.
   useEffect(() => {
     if (!laborShift) return;
@@ -295,8 +324,10 @@ export default function VehiclePickListPage() {
     return () => clearInterval(t);
   }, [laborShift]);
 
-  const startLaborTimer = async () => {
-    if (!vehicle || laborBusy) return;
+  // Start the job timer — or, when a crewmate's is already running, join
+  // it (the API moves you off any other shop job either way).
+  const startLaborTimer = async (): Promise<boolean> => {
+    if (!vehicle || laborBusy) return false;
     setLaborBusy(true);
     let started = false;
     try {
@@ -323,6 +354,7 @@ export default function VehiclePickListPage() {
     // The timer keeps running either way; a transition failure surfaces
     // through postStatusChange's own error UI.
     if (started && vehicle.status === 'received') await postStatusChange('in_progress');
+    return started;
   };
 
   const stopLaborTimer = async () => {
@@ -346,8 +378,8 @@ export default function VehiclePickListPage() {
     setLaborBusy(false);
   };
 
-  const changeCrew = async (change: { add?: string; remove?: string }) => {
-    if (!laborShift || laborBusy) return;
+  const changeCrew = async (change: { add?: string[]; remove?: string }) => {
+    if (!vehicle || !laborShift || laborBusy) return;
     setLaborBusy(true);
     try {
       const res = await fetch('/api/shifts/members', {
@@ -355,13 +387,17 @@ export default function VehiclePickListPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           shiftId: laborShift.id,
-          add: change.add ? [{ profileId: change.add }] : [],
+          add: (change.add || []).map(profileId => ({ profileId })),
           remove: change.remove ? [change.remove] : [],
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) await dialog.alert(data.error || 'Failed to update the crew');
-      else if (data.members) setLaborShift(prev => (prev ? { ...prev, members: data.members } : prev));
+      else if (data.ended) {
+        // The last person on the crew paused: the clock stopped.
+        setLaborShift(null);
+        await loadLaborShift(vehicle.id);
+      } else if (data.members) setLaborShift(prev => (prev ? { ...prev, members: data.members } : prev));
     } catch (err: any) {
       await dialog.alert(err.message || 'Network error');
     }
@@ -541,7 +577,10 @@ export default function VehiclePickListPage() {
   const hasCompletionPhoto = completionPhotos.length > 0;
   const readyToComplete = allRequiredDone && hasCompletionPhoto;
 
-  const laborElapsedMs = laborShift ? Math.max(0, nowTick - Date.parse(laborShift.started_at)) : 0;
+  // Shop clock: only weekday shop hours count (7:00–3:30 Central, less lunch).
+  const laborElapsedMs = laborShift ? shopWorkMs(Date.parse(laborShift.started_at), nowTick) : 0;
+  const laborResumeLabel = laborShift ? shopClockResumeLabel(nowTick) : null;
+  const meOnCrew = !!(user && laborShift?.members.some(m => m.profile_id === user.id));
   const laborElapsedLabel = `${Math.floor(laborElapsedMs / 3_600_000)}h ${String(Math.floor((laborElapsedMs % 3_600_000) / 60_000)).padStart(2, '0')}m`;
   const laborCrewAvailable = laborRoster.filter(r => !laborShift?.members.some(m => m.profile_id === r.profile_id));
 
@@ -661,8 +700,15 @@ export default function VehiclePickListPage() {
               <div style={{ fontSize: '13px', color: 'var(--text-primary)', marginTop: '4px', fontWeight: laborShift ? 700 : 400 }}>
                 {laborShift
                   ? <>⏱ {laborElapsedLabel} · crew of {laborShift.members.length}</>
-                  : loggedHours > 0 ? `${loggedHours}h logged on this vehicle` : 'No time logged yet'}
+                  : loggedHours > 0
+                    ? `${isComplete ? '' : vehicle.status === 'stuck_parts' ? 'Paused while stuck for parts · ' : 'Paused · '}${loggedHours}h logged on this vehicle`
+                    : 'No time logged yet'}
               </div>
+              {laborShift && laborResumeLabel && (
+                <div style={{ fontSize: '12px', fontWeight: 700, color: '#f59e0b', marginTop: '3px' }}>
+                  ⏸ Shop clock paused · resumes {laborResumeLabel}
+                </div>
+              )}
               {/* Burn chip (R6-12) — the comparison the floor never had:
                   hours logged against hours SOLD, amber at 80%, red at 100%. */}
               {burn && (
@@ -682,17 +728,29 @@ export default function VehiclePickListPage() {
                 </div>
               )}
             </div>
-            {(laborShift || !isComplete) && (
-              <button
-                onClick={laborShift ? stopLaborTimer : startLaborTimer}
-                disabled={laborBusy}
-                style={{
-                  padding: '10px 18px', borderRadius: '10px', border: 'none',
-                  background: laborShift ? 'var(--danger, #ef4444)' : 'var(--accent, #2563eb)',
-                  color: '#fff', fontSize: '13px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
-                }}
-              >{laborBusy ? '…' : laborShift ? '■ Stop' : '▶ Start Timer'}</button>
-            )}
+            {(laborShift || !isComplete) && (() => {
+              // Pause = take yourself off the crew (the last one off stops
+              // the clock). Not on a running crew: Join. Nothing running:
+              // Start, or Resume once time has been logged.
+              const pausing = !!laborShift && meOnCrew;
+              const onClick = pausing
+                ? () => { if (user) void changeCrew({ remove: user.id }); }
+                : () => { void startLaborTimer(); };
+              const label = !laborShift
+                ? (loggedHours > 0 ? '▶ Resume' : '▶ Start Timer')
+                : !pausing ? '▶ Join' : '⏸ Pause';
+              return (
+                <button
+                  onClick={onClick}
+                  disabled={laborBusy}
+                  style={{
+                    padding: '10px 18px', borderRadius: '10px', border: 'none',
+                    background: pausing ? '#f59e0b' : 'var(--accent, #2563eb)',
+                    color: '#fff', fontSize: '13px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
+                  }}
+                >{laborBusy ? '…' : label}</button>
+              );
+            })()}
           </div>
           {laborShift && (
             <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border)' }}>
@@ -714,20 +772,29 @@ export default function VehiclePickListPage() {
                   </span>
                 ))}
                 {laborCrewAvailable.length > 0 && (
-                  <select
-                    value=""
+                  <button
+                    onClick={() => { setTagPicks(new Set()); setTagSheetOpen(true); }}
                     disabled={laborBusy}
-                    onChange={e => { if (e.target.value) changeCrew({ add: e.target.value }); }}
                     style={{
-                      padding: '4px 8px', borderRadius: '8px', fontSize: '12px',
+                      padding: '4px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
                       border: '1px dashed var(--border)', background: 'var(--card)', color: 'var(--text-muted)', cursor: 'pointer',
                     }}
-                  >
-                    <option value="">+ Add crew…</option>
-                    {laborCrewAvailable.map(r => (
-                      <option key={r.profile_id} value={r.profile_id}>{r.full_name}</option>
-                    ))}
-                  </select>
+                  >+ Tag techs</button>
+                )}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', marginTop: '8px' }}>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                  Pause when you switch to another task. The clock only counts weekdays 7:00–3:30 (less lunch) and stops when the vehicle is completed.
+                </div>
+                {((meOnCrew && laborShift.members.length > 1) || (isAdmin && !meOnCrew)) && (
+                  <button
+                    onClick={stopLaborTimer}
+                    disabled={laborBusy}
+                    style={{
+                      flexShrink: 0, padding: '6px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                      border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', cursor: 'pointer',
+                    }}
+                  >⏸ Pause everyone</button>
                 )}
               </div>
             </div>
@@ -1172,6 +1239,69 @@ export default function VehiclePickListPage() {
           onClose={() => setCompletionModalOpen(false)}
           onComplete={() => { setCompletionModalOpen(false); load(); }}
         />
+      )}
+
+      {/* Tag techs — the scanning tech adds whoever else is on this vehicle.
+          Anyone tagged here moves off the shop job they were on. */}
+      {tagSheetOpen && laborShift && (
+        <>
+          <div onClick={() => setTagSheetOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000 }} />
+          <div style={{
+            position: 'fixed', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
+            width: 'min(420px, calc(94vw / var(--ts)))', maxHeight: 'calc(80vh / var(--ts))',
+            display: 'flex', flexDirection: 'column', overflow: 'hidden',
+            background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px',
+            boxShadow: '0 24px 60px rgba(0,0,0,0.35)', zIndex: 1001,
+          }}>
+            <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>Who else is on this vehicle?</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                Timer running for {laborShift.members.map(m => m.full_name).join(', ')}. Anyone you tag joins the timer and comes off their other job.
+              </div>
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto' }}>
+              {laborCrewAvailable.length === 0 && (
+                <div style={{ padding: '16px', fontSize: '13px', color: 'var(--text-muted)' }}>Every shop tech is already on this job.</div>
+              )}
+              {laborCrewAvailable.map(r => {
+                const on = tagPicks.has(r.profile_id);
+                return (
+                  <label key={r.profile_id} style={{
+                    display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px',
+                    borderTop: '1px solid var(--border)', cursor: 'pointer', fontSize: '15px', color: 'var(--text-primary)',
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={() => setTagPicks(prev => {
+                        const next = new Set(prev);
+                        if (next.has(r.profile_id)) next.delete(r.profile_id); else next.add(r.profile_id);
+                        return next;
+                      })}
+                      style={{ width: '20px', height: '20px' }}
+                    />
+                    {r.full_name}
+                  </label>
+                );
+              })}
+            </div>
+            <div style={{ display: 'flex', gap: '10px', padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
+              <button
+                onClick={() => setTagSheetOpen(false)}
+                style={{ flex: 1, padding: '12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '14px', fontWeight: 700, cursor: 'pointer' }}
+              >{tagPicks.size > 0 ? 'Cancel' : 'Just me'}</button>
+              <button
+                onClick={async () => { const ids = [...tagPicks]; setTagSheetOpen(false); if (ids.length) await changeCrew({ add: ids }); }}
+                disabled={tagPicks.size === 0 || laborBusy}
+                style={{
+                  flex: 2, padding: '12px', borderRadius: '10px', border: 'none',
+                  background: tagPicks.size === 0 ? 'var(--border)' : 'var(--accent, #2563eb)', color: '#fff',
+                  fontSize: '14px', fontWeight: 800, cursor: tagPicks.size === 0 ? 'default' : 'pointer',
+                }}
+              >{tagPicks.size === 0 ? 'Tag techs' : `Add ${tagPicks.size} tech${tagPicks.size === 1 ? '' : 's'}`}</button>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

@@ -66,7 +66,7 @@ const emptySplit = (): HoursSplit => ({
 
 function addShift(split: HoursSplit, shift: ShiftInput) {
   if (!shift.endedAt) { split.openShifts += 1; return; }
-  const hours = totalShiftHours(shift.startedAt, shift.endedAt, shift.members);
+  const hours = totalShiftHours(shift.startedAt, shift.endedAt, shift.members, { shopClock: shift.context === 'shop' });
   split.shifts += 1;
   if (shift.autoClosed) { split.autoClosedShifts += 1; split.autoClosedHours = round1(split.autoClosedHours + hours); }
   else split.measuredHours = round1(split.measuredHours + hours);
@@ -166,7 +166,8 @@ export function perPersonHours(
       for (const m of s.members) get(m.profile_id).openShifts += 1;
       continue;
     }
-    const hours = shiftMemberHours(s.startedAt, s.endedAt, s.members);
+    // Shop job timers count shop hours only (src/lib/shop-hours.ts).
+    const hours = shiftMemberHours(s.startedAt, s.endedAt, s.members, { shopClock: s.context === 'shop' });
     for (const [profileId, h] of hours) {
       const row = get(profileId);
       row.shifts += 1;

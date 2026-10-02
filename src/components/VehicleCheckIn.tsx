@@ -61,7 +61,13 @@ function dropboxTermsFor(term: string, model?: string | null): string[] {
   return model ? [`${short} ${model}`, term, short] : [term, short];
 }
 
-export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => void }) {
+export default function VehicleCheckIn({ onCheckedIn, initialVin, pullInAfter = false }: {
+  onCheckedIn?: () => void;
+  /** Start on this VIN, as if it had just been scanned (Pull In hand-off). */
+  initialVin?: string | null;
+  /** Arrived from Pull In: the done screen offers to pull the vehicle in. */
+  pullInAfter?: boolean;
+}) {
   const { user, canSeeMoney } = useAuth();
   const router = useRouter();
   const { open: openPopout } = usePopout();
@@ -264,6 +270,15 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
     setVin(scannedVin);
     handleDecodeVin(scannedVin);
   };
+
+  // Pull In hand-off: a VIN scanned there that wasn't on the lot.
+  const initialVinUsed = useRef(false);
+  useEffect(() => {
+    if (initialVinUsed.current || !initialVin || !isValidVIN(initialVin)) return;
+    initialVinUsed.current = true;
+    handleCameraScan(initialVin.toUpperCase());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialVin]);
 
   const switchToCamera = () => { setMode('camera'); };
   const switchToText = () => { setMode('text'); };
@@ -1327,6 +1342,15 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
             }}>
               {photoWarning}
             </div>
+          )}
+          {pullInAfter && savedCheckin.id && (
+            <button
+              onClick={() => router.push(deepLinks.pickListPullIn(savedCheckin.vin, savedCheckin.id))}
+              style={{
+                width: '100%', padding: '14px', borderRadius: '12px', border: 'none',
+                background: theme.navy, color: '#fff', fontSize: '15px', fontWeight: 800, cursor: 'pointer',
+              }}
+            >▶ Pull In &amp; Start Timer</button>
           )}
           <button
             onClick={() => router.push(`/vehicles/${savedCheckin.vin}/pick-list`)}

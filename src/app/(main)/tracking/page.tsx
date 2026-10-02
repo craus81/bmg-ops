@@ -1616,7 +1616,11 @@ export default function TrackingPage() {
                 </div>
                 <div style={{ flex: 1, overflowY: 'auto', padding: '14px' }}>
                   <Suspense fallback={<div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>Loading check-in…</div>}>
-                    <VehicleCheckIn onCheckedIn={() => loadVehicles(false)} />
+                    <VehicleCheckIn
+                      onCheckedIn={() => loadVehicles(false)}
+                      initialVin={searchParams?.get('vin') || null}
+                      pullInAfter={searchParams?.get('pullin') === '1'}
+                    />
                   </Suspense>
                 </div>
               </div>
