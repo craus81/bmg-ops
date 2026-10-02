@@ -1,12 +1,15 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { theme } from '@/lib/theme';
 import {
   COVERAGE_COLORS,
   nextCoverageColor,
   boxCaption,
+  labelPill,
   measureBoxes,
+  savedLabelFontSize,
+  LABEL_FONT_FAMILY,
   type BoxLegend,
   type CoverageBox,
   type PhotoProof,
@@ -61,28 +64,50 @@ type Drag =
 
 const MIN_BOX_PX = 6;
 
-// The drawn box exactly as it appears on screen and in the saved JPEG (see
-// paintBoxes in src/lib/coverage-proof.ts): a tinted rect with a solid label
-// pill, since plain colored text over a photo is unreadable.
-function CoverageBoxShape({ box, photoW, stroke }: { box: CoverageBox; photoW: number; stroke?: string }) {
-  const fontSize = photoW / 48;
+// On-screen sizes (CSS px) for what's drawn over the photo. They hold steady
+// whatever the photo's resolution or zoom, so a tag never dwarfs the decal it
+// names and zooming in leaves room to draw tight boxes.
+const TAG_FONT_PX = 11;
+const HANDLE_PX = 10;
+/** The resize handle's invisible grab area — bigger than it looks, for fingers. */
+const HANDLE_HIT_PX = 24;
+const MARKER_PX = 5;
+
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 8;
+const ZOOM_STEP = 1.5;
+
+// Real text width for a label, measured the way the saved picture's canvas
+// measures it — an estimate from the character count ran long and stretched
+// the pills well past their text.
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+function labelTextWidth(text: string, fontSize: number): number {
+  if (measureCtx === undefined) {
+    measureCtx = typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : null;
+  }
+  if (!measureCtx) return text.length * fontSize * 0.56;
+  measureCtx.font = `700 ${fontSize}px ${LABEL_FONT_FAMILY}`;
+  return measureCtx.measureText(text).width;
+}
+
+// The drawn box as it appears on screen (see paintBoxes in
+// src/lib/coverage-proof.ts for the saved picture): a tinted rect with a
+// solid label pill, since plain colored text over a photo is unreadable.
+// fontSize is in photo pixels — the editor passes one that works out to a
+// fixed size on screen, the preview the saved picture's size.
+function CoverageBoxShape({ box, photoW, fontSize, stroke }: { box: CoverageBox; photoW: number; fontSize: number; stroke?: string }) {
   const label = boxCaption(box);
-  const padX = fontSize * 0.45, padY = fontSize * 0.3;
-  const pillH = fontSize + padY * 2;
-  // Above the box when there's room, otherwise tucked inside its top edge.
-  const pillY = box.rect.y - pillH > 0 ? box.rect.y - pillH : box.rect.y;
+  const pill = label ? labelPill(box.rect, fontSize, labelTextWidth(label, fontSize), photoW) : null;
   return (
     <>
       <rect
         x={box.rect.x} y={box.rect.y} width={box.rect.w} height={box.rect.h}
         fill={`${box.color}33`} stroke={stroke || box.color} strokeWidth={2} vectorEffect="non-scaling-stroke"
       />
-      {label && (
+      {pill && (
         <>
-          {/* Canvas measures the real text width; SVG approximates it here —
-              the pill is only the on-screen stand-in for the saved picture. */}
-          <rect x={box.rect.x} y={pillY} width={label.length * fontSize * 0.62 + padX * 2} height={pillH} fill={box.color} rx={fontSize * 0.2} />
-          <text x={box.rect.x + padX} y={pillY + pillH / 2} fill="#fff" fontSize={fontSize} fontWeight={700} dominantBaseline="middle">{label}</text>
+          <rect x={pill.x} y={pill.y} width={pill.w} height={pill.h} fill={box.color} rx={fontSize * 0.2} />
+          <text x={pill.x + pill.padX} y={pill.y + pill.h / 2} fill="#fff" fontSize={fontSize} fontFamily={LABEL_FONT_FAMILY} fontWeight={700} dominantBaseline="middle">{label}</text>
         </>
       )}
     </>
@@ -111,7 +136,7 @@ export function CoverageProofPreview({ src, boxes, caption }: { src: string; box
         />
         {dim && (
           <svg viewBox={`0 0 ${dim.w} ${dim.h}`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
-            {boxes.map(b => <CoverageBoxShape key={b.id} box={b} photoW={dim.w} />)}
+            {boxes.map(b => <CoverageBoxShape key={b.id} box={b} photoW={dim.w} fontSize={savedLabelFontSize(dim.w)} />)}
           </svg>
         )}
       </div>
@@ -133,6 +158,22 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
   const [planeW, setPlaneW] = useState('');
   const [planeH, setPlaneH] = useState('');
 
+  // ----- Zoom -----
+  // The photo sits in a scrolling viewport; zoom widens the content inside it.
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [viewportW, setViewportW] = useState(0);
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  const pendingScroll = useRef<{ left: number; top: number } | null>(null);
+  // Fingers/buttons currently down, and the pinch or pan they're making.
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const gesture = useRef<
+    | { kind: 'pinch'; startDist: number; startZoom: number; mid: { x: number; y: number } }
+    | { kind: 'pan'; x: number; y: number }
+    | null
+  >(null);
+
   const boxes = proof.boxes;
   const cal = proof.calibration || null;
   const calibrated = isCalibrated(cal);
@@ -142,8 +183,82 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
   useEffect(() => {
     setDim(null); setSelectedId(null); setDrag(null);
     setLineDraft(null); setCornerDraft([]); setLineInches(''); setPlaneW(''); setPlaneH('');
-    setTool('box');
+    setTool('box'); setZoom(1);
   }, [proof.id]);
+
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp || typeof ResizeObserver === 'undefined') return;
+    // contentRect is CSS px, so the app's text-size zoom cancels out.
+    const ro = new ResizeObserver(([en]) => setViewportW(en.contentRect.width));
+    ro.observe(vp);
+    return () => ro.disconnect();
+  }, []);
+
+  /** Photo pixels per on-screen CSS pixel — scales the fixed-size overlays.
+   *  The photo is `zoom` viewports wide, which is known before layout. */
+  const k = dim && viewportW > 0 ? dim.w / (viewportW * zoom) : 1;
+
+  /** CSS px of the viewport per real (client) px — they differ under text-size zoom. */
+  const cssPerClient = () => {
+    const vp = viewportRef.current;
+    const w = vp?.getBoundingClientRect().width;
+    return vp && w ? vp.offsetWidth / w : 1;
+  };
+
+  /**
+   * Zoom to `next`, keeping the photo point under `focus` (a client point —
+   * the cursor or pinch midpoint; the viewport's center by default) where it
+   * is, then pan by `pan` client px.
+   */
+  const zoomTo = (next: number, focus?: { clientX: number; clientY: number }, pan = { x: 0, y: 0 }) => {
+    const vp = viewportRef.current, content = contentRef.current;
+    const z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next));
+    if (!vp || !content || !dim) { setZoom(z); return; }
+    const vr = vp.getBoundingClientRect(), cr = content.getBoundingClientRect();
+    if (!vr.width || !cr.width || !cr.height) { setZoom(z); return; }
+    const s = vp.offsetWidth / vr.width;
+    const cx = focus ? focus.clientX : vr.left + vr.width / 2;
+    const cy = focus ? focus.clientY : vr.top + vr.height / 2;
+    const fx = (cx - cr.left) / cr.width, fy = (cy - cr.top) / cr.height;
+    const ox = (cx - vr.left) * s - vp.clientLeft, oy = (cy - vr.top) * s - vp.clientTop;
+    const newW = vp.clientWidth * z, newH = newW * (dim.h / dim.w);
+    const target = { left: fx * newW - ox - pan.x * s, top: fy * newH - oy - pan.y * s };
+    if (z === zoom) {
+      vp.scrollLeft = target.left; vp.scrollTop = target.top;
+    } else {
+      pendingScroll.current = target;
+      setZoom(z);
+    }
+  };
+  const zoomToRef = useRef(zoomTo);
+  zoomToRef.current = zoomTo;
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+
+  useLayoutEffect(() => {
+    const vp = viewportRef.current, t = pendingScroll.current;
+    if (!vp || !t) return;
+    pendingScroll.current = null;
+    vp.scrollLeft = t.left; vp.scrollTop = t.top;
+  }, [zoom]);
+
+  // Ctrl/⌘ + scroll zooms at the cursor; a trackpad pinch arrives the same
+  // way. It has to be a non-passive listener to stop the page zooming too.
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      // A pinch sends small deltas, a mouse wheel ~100 a notch; capping the
+      // step keeps one notch to a gentle zoom.
+      const step = Math.max(-25, Math.min(25, e.deltaY));
+      zoomToRef.current(zoomRef.current * Math.exp(-step * 0.01), e);
+    };
+    vp.addEventListener('wheel', onWheel, { passive: false });
+    return () => vp.removeEventListener('wheel', onWheel);
+  }, []);
 
   const selected = boxes.find(b => b.id === selectedId) || null;
 
@@ -278,6 +393,78 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
     setDrag(null);
   };
 
+  // ----- Pinch and pan -----
+  // These run in the capture phase so a second finger, or a pan, never
+  // reaches the draw/move handlers underneath.
+  const twoPointers = () => {
+    const [a, b] = Array.from(pointers.current.values());
+    return {
+      dist: Math.hypot(b.x - a.x, b.y - a.y),
+      mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
+    };
+  };
+
+  /** A second finger landed mid-drag: undo what the first one started. */
+  const abandonDrag = () => {
+    if (drag && (drag.kind === 'move' || drag.kind === 'resize')) update(drag.id, { rect: drag.rect });
+    setDrag(null);
+  };
+
+  const onPointerDownCapture = (e: React.PointerEvent) => {
+    // A new first touch (or any mouse press) starts fresh, in case a finger
+    // lifted somewhere we never heard about.
+    if (e.isPrimary) { pointers.current.clear(); gesture.current = null; }
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const svg = svgRef.current;
+    if (pointers.current.size === 2) {
+      abandonDrag();
+      const { dist, mid } = twoPointers();
+      gesture.current = { kind: 'pinch', startDist: Math.max(1, dist), startZoom: zoom, mid };
+    } else if (
+      pointers.current.size === 1
+      // Middle button, space + drag, or dragging empty photo with Select.
+      && (e.button === 1 || spaceHeld || (tool === 'select' && e.target === svg && zoom > 1))
+    ) {
+      gesture.current = { kind: 'pan', x: e.clientX, y: e.clientY };
+    } else {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    svg?.setPointerCapture?.(e.pointerId);
+  };
+
+  const onPointerMoveCapture = (e: React.PointerEvent) => {
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const g = gesture.current;
+    if (!g) return;
+    e.stopPropagation();
+    if (g.kind === 'pinch' && pointers.current.size >= 2) {
+      const { dist, mid } = twoPointers();
+      zoomTo(g.startZoom * (dist / g.startDist), { clientX: mid.x, clientY: mid.y }, { x: mid.x - g.mid.x, y: mid.y - g.mid.y });
+      g.mid = mid;
+    } else if (g.kind === 'pan') {
+      const vp = viewportRef.current;
+      if (!vp) return;
+      const s = cssPerClient();
+      vp.scrollLeft -= (e.clientX - g.x) * s;
+      vp.scrollTop -= (e.clientY - g.y) * s;
+      g.x = e.clientX; g.y = e.clientY;
+    }
+  };
+
+  const onPointerUpCapture = (e: React.PointerEvent) => {
+    pointers.current.delete(e.pointerId);
+    const g = gesture.current;
+    if (!g) return;
+    e.stopPropagation();
+    // Lifting one finger of a pinch ends it; the other finger doesn't start
+    // a drag halfway through.
+    if (g.kind === 'pan' || pointers.current.size === 0) gesture.current = null;
+    else if (pointers.current.size < 2) gesture.current = { kind: 'pan', ...Array.from(pointers.current.values())[0] };
+  };
+
   // ----- Committing a calibration -----
   const commitLine = () => {
     const inches = parseFloat(lineInches);
@@ -307,14 +494,25 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
-      if (e.key === 'Escape') {
+      if (e.key === ' ') {
+        // Held space turns a drag into a pan, like most design tools.
+        e.preventDefault(); setSpaceHeld(true);
+      } else if (e.key === 'Escape') {
         setSelectedId(null); setDrag(null); setLineDraft(null); setCornerDraft([]);
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
         e.preventDefault(); remove(selectedId);
       }
     };
+    const onKeyUp = (e: KeyboardEvent) => { if (e.key === ' ') setSpaceHeld(false); };
+    const onBlur = () => setSpaceHeld(false);
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remove() closes over the current boxes
   }, [selectedId, boxes, cal]);
 
@@ -333,6 +531,11 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
     padding: '5px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
     cursor: 'pointer', background: bg, border: `1px solid ${color}`, color,
   });
+
+  const zoomBtn: React.CSSProperties = {
+    width: '28px', height: '28px', borderRadius: '6px', fontSize: '13px', fontWeight: 700, cursor: 'pointer',
+    background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)',
+  };
 
   const previewRect = drag?.kind === 'draw'
     ? { x: Math.min(drag.x1, drag.x2), y: Math.min(drag.y1, drag.y2), w: Math.abs(drag.x2 - drag.x1), h: Math.abs(drag.y2 - drag.y1) }
@@ -628,7 +831,26 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
       </div>
 
       {/* Photo canvas */}
-      <div style={{ position: 'relative', background: '#000', border: `1px solid ${theme.border}`, borderRadius: '12px', overflow: 'hidden' }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '6px', flexWrap: 'wrap' }}>
+          <button onClick={() => zoomTo(zoom / ZOOM_STEP)} disabled={zoom <= ZOOM_MIN} title="Zoom out" style={{ ...zoomBtn, opacity: zoom <= ZOOM_MIN ? 0.4 : 1 }}>−</button>
+          <span style={{ minWidth: '42px', textAlign: 'center', fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)' }}>{Math.round(zoom * 100)}%</span>
+          <button onClick={() => zoomTo(zoom * ZOOM_STEP)} disabled={zoom >= ZOOM_MAX} title="Zoom in" style={{ ...zoomBtn, opacity: zoom >= ZOOM_MAX ? 0.4 : 1 }}>+</button>
+          <button onClick={() => zoomTo(1)} disabled={zoom === 1} title="Fit the whole photo" style={{ ...zoomBtn, width: 'auto', padding: '0 8px', opacity: zoom === 1 ? 0.4 : 1 }}>Fit</button>
+          <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '4px' }}>
+            {zoom > 1 ? 'Move around: two fingers, space + drag, or drag empty photo with Select' : 'Pinch or Ctrl + scroll to zoom'}
+          </span>
+        </div>
+        <div
+          ref={viewportRef}
+          style={{
+            position: 'relative', background: '#000', border: `1px solid ${theme.border}`, borderRadius: '12px',
+            overflow: zoom > 1 ? 'auto' : 'hidden',
+            // Zoomed in, the viewport keeps the fitted photo's height and scrolls.
+            height: zoom > 1 && dim && viewportW ? viewportW * (dim.h / dim.w) : undefined,
+          }}
+        >
+        <div ref={contentRef} style={{ position: 'relative', width: `${zoom * 100}%` }}>
         {/* eslint-disable-next-line @next/next/no-img-element -- photo dimensions are unknown; next/image needs fixed sizes */}
         <img
           src={src}
@@ -645,21 +867,32 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
-            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', cursor: tool === 'select' ? 'default' : 'crosshair', touchAction: 'none' }}
+            onPointerDownCapture={onPointerDownCapture}
+            onPointerMoveCapture={onPointerMoveCapture}
+            onPointerUpCapture={onPointerUpCapture}
+            onPointerCancelCapture={onPointerUpCapture}
+            style={{
+              position: 'absolute', inset: 0, width: '100%', height: '100%', touchAction: 'none',
+              cursor: spaceHeld ? 'grab' : tool === 'select' ? (zoom > 1 ? 'grab' : 'default') : 'crosshair',
+            }}
           >
             {boxes.map(b => {
               const sel = b.id === selectedId;
               return (
                 <g key={b.id} onPointerDown={e => beginEdit(e, b, 'move')} style={{ cursor: tool === 'select' ? 'move' : 'crosshair' }}>
-                  <CoverageBoxShape box={b} photoW={dim.w} stroke={sel ? '#f59e0b' : undefined} />
+                  <CoverageBoxShape box={b} photoW={dim.w} fontSize={TAG_FONT_PX * k} stroke={sel ? '#f59e0b' : undefined} />
                   {sel && tool === 'select' && (
-                    <rect
-                      x={b.rect.x + b.rect.w - dim.w / 90} y={b.rect.y + b.rect.h - dim.w / 90}
-                      width={dim.w / 45} height={dim.w / 45}
-                      fill="#f59e0b" stroke="#fff" strokeWidth={1} vectorEffect="non-scaling-stroke"
-                      onPointerDown={e => beginEdit(e, b, 'resize')}
-                      style={{ cursor: 'nwse-resize' }}
-                    />
+                    <g onPointerDown={e => beginEdit(e, b, 'resize')} style={{ cursor: 'nwse-resize' }}>
+                      <rect
+                        x={b.rect.x + b.rect.w - (HANDLE_HIT_PX * k) / 2} y={b.rect.y + b.rect.h - (HANDLE_HIT_PX * k) / 2}
+                        width={HANDLE_HIT_PX * k} height={HANDLE_HIT_PX * k} fill="transparent"
+                      />
+                      <rect
+                        x={b.rect.x + b.rect.w - (HANDLE_PX * k) / 2} y={b.rect.y + b.rect.h - (HANDLE_PX * k) / 2}
+                        width={HANDLE_PX * k} height={HANDLE_PX * k} rx={2 * k}
+                        fill="#f59e0b" stroke="#fff" strokeWidth={1} vectorEffect="non-scaling-stroke"
+                      />
+                    </g>
                   )}
                 </g>
               );
@@ -674,7 +907,7 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
                 while its tool is open, so the reference stays visible. */}
             {(liveLine || (tool === 'calibrate-line' && cal?.line)) && (() => {
               const l = liveLine || cal!.line!;
-              const r = dim.w / 120;
+              const r = MARKER_PX * k;
               return (
                 <g>
                   <line x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke="#fbbf24" strokeWidth={3} vectorEffect="non-scaling-stroke" />
@@ -687,7 +920,7 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
                 is open. */}
             {(cornerDraft.length > 0 || (tool === 'calibrate-plane' && cal?.plane)) && (() => {
               const pts = cornerDraft.length > 0 ? cornerDraft : cal!.plane!.corners;
-              const r = dim.w / 120;
+              const r = MARKER_PX * k;
               return (
                 <g>
                   <polygon
@@ -698,7 +931,7 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
                   {pts.map((p, i) => (
                     <g key={i}>
                       <circle cx={p.x} cy={p.y} r={r} fill="#fbbf24" />
-                      <text x={p.x + r * 1.4} y={p.y} fill="#fbbf24" fontSize={dim.w / 55} fontWeight={700} dominantBaseline="middle">{i + 1}</text>
+                      <text x={p.x + r * 1.4} y={p.y} fill="#fbbf24" fontSize={TAG_FONT_PX * k} fontWeight={700} dominantBaseline="middle">{i + 1}</text>
                     </g>
                   ))}
                 </g>
@@ -706,6 +939,8 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
             })()}
           </svg>
         )}
+        </div>
+        </div>
       </div>
     </div>
   );
