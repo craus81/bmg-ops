@@ -70,3 +70,14 @@ jobs:
           PVO_SUMMARY_EMAIL: ${{ secrets.PVO_SUMMARY_EMAIL }}
           RESEND_FROM_EMAIL: ${{ vars.RESEND_FROM_EMAIL }}
           RESEND_FROM_NAME: ${{ vars.RESEND_FROM_NAME }}
+
+      # What the PVO login page looked like when sign-in failed (taken before
+      # anything is typed). Kept briefly: the repo is public.
+      - name: Upload sign-in screenshot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pvo-login-page
+          path: ~/pvo-debug/
+          retention-days: 3
+          if-no-files-found: ignore

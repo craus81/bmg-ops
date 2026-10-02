@@ -262,6 +262,79 @@ async function isLoggedIn(ctx) {
 // usual Salesforce Experience Cloud forms: one page with username + password,
 // or username first and password on the next step. Playwright's CSS locators
 // pierce open shadow roots, so Lightning login components work too.
+// Selectors in priority order — the first one that matches a visible element
+// in any frame wins, so a generic fallback can't beat a specific match.
+const USER_SELECTORS = [
+  'input[autocomplete="username"]', 'input[type="email"]', 'input[name="username"]',
+  'input[id*="username" i]', 'input[name*="user" i]', 'input[name*="email" i]',
+  'input[placeholder*="user" i]', 'input[placeholder*="email" i]', 'input[type="text"]',
+];
+const PASS_SELECTORS = ['input[type="password"]'];
+const SUBMIT_SELECTORS = [
+  'button[type="submit"]', 'input[type="submit"]', 'button:has-text("Log In")',
+  'button:has-text("Login")', 'button:has-text("Sign In")', 'button:has-text("Next")',
+  'button:has-text("Continue")', '[role="button"]:has-text("Log In")',
+];
+// A landing page that needs a click before the login form appears.
+const LOGIN_LINK = 'a:has-text("Log In"), a:has-text("Login"), a:has-text("Sign In"), button:has-text("Log In"), button:has-text("Login"), button:has-text("Sign In")';
+
+// Salesforce login forms are often inside an iframe, which page-level
+// locators don't reach — look through every frame.
+async function findVisible(page, selectors) {
+  for (const sel of selectors) {
+    for (const frame of page.frames()) {
+      const loc = frame.locator(sel).filter({ visible: true }).first();
+      if (await loc.count().catch(() => 0)) return loc;
+    }
+  }
+  return null;
+}
+
+async function waitForVisible(page, selectors, ms) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const loc = await findVisible(page, selectors);
+    if (loc) return loc;
+    await sleep(1000);
+  }
+  return null;
+}
+
+// What the sign-in page looked like, for a failed run's log: addresses,
+// field attributes and button labels only — never values. A screenshot is
+// taken only before anything is typed (the repo, and so its run artifacts,
+// are public) and uploaded as a short-lived run artifact.
+async function describeLoginPage(page, { screenshot = false } = {}) {
+  try {
+    for (const frame of page.frames()) {
+      let where = frame.url();
+      try { const u = new URL(where); where = u.host + u.pathname; } catch { /* about:blank etc. */ }
+      const info = await frame.evaluate(() => {
+        const vis = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+        const inputs = [...document.querySelectorAll('input')].filter(vis).map((i) =>
+          [i.type, i.name && `name=${i.name}`, i.id && `id=${i.id}`, i.placeholder && `placeholder=${i.placeholder}`,
+           i.autocomplete && `autocomplete=${i.autocomplete}`].filter(Boolean).join(' '));
+        const clicks = [...document.querySelectorAll('a, button, [role="button"], input[type="submit"]')].filter(vis)
+          .map((b) => (b.textContent || b.value || '').replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 15);
+        return { title: document.title, inputs, clicks };
+      }).catch(() => null);
+      if (!info) continue;
+      log(`  frame ${where} — "${info.title}"`);
+      log(`    inputs: ${info.inputs.join(' | ') || 'none'}`);
+      log(`    buttons/links: ${info.clicks.join(' | ') || 'none'}`);
+    }
+    if (!screenshot) return;
+    const dir = join(homedir(), 'pvo-debug');
+    mkdirSync(dir, { recursive: true });
+    await page.screenshot({ path: join(dir, 'login-page.png'), fullPage: true });
+  } catch { /* diagnostics are best effort */ }
+}
+
+// Unattended sign-in through PVO's Salesforce login page: one page with
+// username + password, or username first and password on the next step,
+// possibly behind a "Log In" link and possibly inside an iframe.
+// Playwright's CSS locators pierce open shadow roots, so Lightning login
+// components work too.
 async function autoLogin(ctx, page) {
   if (!PVO_EMAIL || !PVO_PASSWORD) return false;
   log('Signing into PVO...');
@@ -269,25 +342,37 @@ async function autoLogin(ctx, page) {
     await page.goto(`${BASE}/members`, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
 
-    const userBox = page.locator([
-      'input[type="email"]', 'input[name="username"]', 'input[id*="username" i]',
-      'input[name*="user" i]', 'input[placeholder*="user" i]', 'input[placeholder*="email" i]',
-    ].join(', ')).filter({ visible: true }).first();
-    const passBox = page.locator('input[type="password"]').filter({ visible: true }).first();
-    const submit = page.locator([
-      'button[type="submit"]', 'input[type="submit"]', 'button:has-text("Log In")',
-      'button:has-text("Login")', 'button:has-text("Sign In")', 'button:has-text("Next")',
-      'button:has-text("Continue")',
-    ].join(', ')).filter({ visible: true }).first();
-
-    await userBox.waitFor({ state: 'visible', timeout: 30000 });
+    let userBox = await waitForVisible(page, USER_SELECTORS, 15000);
+    if (!userBox) {
+      const link = page.locator(LOGIN_LINK).filter({ visible: true }).first();
+      if (await link.count().catch(() => 0)) {
+        log('  clicking through to the login form');
+        await link.click();
+        await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+        userBox = await waitForVisible(page, USER_SELECTORS, 30000);
+      }
+    }
+    if (!userBox) {
+      log('Sign-in failed: no username box found on the login page. What the page showed:');
+      await describeLoginPage(page, { screenshot: true });
+      return false;
+    }
     await userBox.fill(PVO_EMAIL);
-    if (!(await passBox.isVisible().catch(() => false))) {
-      await submit.click();
-      await passBox.waitFor({ state: 'visible', timeout: 30000 });
+
+    let passBox = await findVisible(page, PASS_SELECTORS);
+    if (!passBox) {
+      const next = await findVisible(page, SUBMIT_SELECTORS);
+      if (next) await next.click(); else await userBox.press('Enter');
+      passBox = await waitForVisible(page, PASS_SELECTORS, 30000);
+    }
+    if (!passBox) {
+      log('Sign-in failed: no password box appeared after the username. What the page showed:');
+      await describeLoginPage(page);
+      return false;
     }
     await passBox.fill(PVO_PASSWORD);
-    await submit.click();
+    const submit = await findVisible(page, SUBMIT_SELECTORS);
+    if (submit) await submit.click(); else await passBox.press('Enter');
 
     // SSO bounces through a few redirects before landing back on PVO.
     const deadline = Date.now() + 90 * 1000;
@@ -307,6 +392,7 @@ async function autoLogin(ctx, page) {
     else log(`Sign-in did not finish (ended on ${new URL(page.url()).host}).`);
   } catch (err) {
     log(`Sign-in failed: ${err.message.split('\n')[0]}`);
+    await describeLoginPage(page);
   }
   return false;
 }
