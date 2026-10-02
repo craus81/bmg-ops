@@ -257,7 +257,7 @@ export function RollNesting(props: Props) {
           <input type="checkbox" checked={useRollPricing} onChange={e => onUseRollPricingChange(e.target.checked)} />
           Price materials from roll usage
           <span style={{ fontWeight: 700, color: 'var(--text-muted)' }}>
-            {fmt1(usage.totalRollSqft)} ft²{totalExtraSqft > 0.005 ? ` + ${fmt1(totalExtraSqft)} ft² by area` : ''}{showMoney && totalMaterial > 0 ? ` → $${fmt2(totalMaterial)}` : ''}
+            {fmt1(usage.totalRollSqft)} ft²{totalExtraSqft > 0.005 ? ` + ${fmt1(totalExtraSqft)} ft² not laid out (charged by size)` : ''}{showMoney && totalMaterial > 0 ? ` → $${fmt2(totalMaterial)}` : ''}
           </span>
         </label>
       </div>
@@ -292,7 +292,7 @@ export function RollNesting(props: Props) {
               {(fUsage || extra > 0.005) && (
                 <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)' }}>
                   {fUsage ? `${fUsage.rolls.length > 1 ? `${fUsage.rolls.length} rolls · ` : ''}${fmtFtIn(fUsage.rolls.reduce((s, r) => s + r.usedLengthIn, 0))} used · ${fmt1(fUsage.rollSqft)} ft² roll · ${fmt1(fUsage.graphicSqft)} ft² graphics · ${waste.toFixed(0)}% waste` : ''}
-                  {extra > 0.005 ? `${fUsage ? ' · ' : ''}${fmt1(extra)} ft² billed by area` : ''}
+                  {extra > 0.005 ? `${fUsage ? ' · ' : ''}${fmt1(extra)} ft² not laid out, charged by size` : ''}
                   {showMoney && film.ratePerSqft > 0 ? ` · $${fmt2(material)} @ $${fmt2(film.ratePerSqft)}/ft²` : ''}
                 </span>
               )}

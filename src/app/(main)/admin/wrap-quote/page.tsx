@@ -287,6 +287,23 @@ type Tool = 'select' | 'box' | 'circle' | 'roof' | 'hood' | 'poly' | 'calibrate'
 
 const EMPTY_LABOR: LaborSection = { flat: 0, hourly: 0, hours: 0, extra: 0 };
 const fmt = (n: number) => (n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// What the customer is charged, split so the parts add up to Price: vinyl
+// and labor already carry any quantity discount / shop minimum, and Price
+// includes sales tax. "Price" (not "cost") — this is what we charge.
+function PriceBreakdown({ totals }: { totals: { adjMaterials: number; adjLabor: number; tax: number; total: number; nested: boolean } }) {
+  const part = (label: string, value: number, color: string, title?: string) => (
+    <div title={title} style={{ fontSize: '12px', fontWeight: 800, color }}>{label}: ${fmt(value)}</div>
+  );
+  return (
+    <>
+      {part('Vinyl', totals.adjMaterials, '#f472b6', totals.nested ? 'Priced from the nested roll layout: roll width × used length per film' : 'Priced by shape area')}
+      {part('Labor', totals.adjLabor, 'var(--text-secondary)')}
+      {totals.tax > 0.005 && part('Tax', totals.tax, 'var(--text-secondary)')}
+      {part('Price', totals.total, '#22c55e')}
+    </>
+  );
+}
 const num = (v: any) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
 
 const laborSectionTotal = (s: LaborSection) => num(s.flat) + num(s.hourly) * num(s.hours) + num(s.extra);
@@ -863,6 +880,7 @@ export default function WrapQuotePage() {
   const nest = useMemo(() => {
     const pieces: NestPiece[] = [];
     const overflowSqft = new Map<string, number>();
+    let overflowCount = 0;
     let capped = false;
     for (const m of measurements) {
       const sub = substrateById(m.substrate_id);
@@ -887,6 +905,7 @@ export default function WrapQuotePage() {
           for (const part of parts) {
             if (pieces.length >= NEST_PIECE_CAP) {
               capped = true;
+              overflowCount++;
               overflowSqft.set(filmKey, (overflowSqft.get(filmKey) || 0) + (part.w * part.h) / 144);
             } else {
               pieces.push({
@@ -904,7 +923,7 @@ export default function WrapQuotePage() {
         }
       }
     }
-    return { pieces, overflowSqft, capped };
+    return { pieces, overflowSqft, overflowCount, capped };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- substrateById reads substrates
   }, [measurements, kitSets, substrates, rollConfig]);
   const nestPieces = nest.pieces;
@@ -3611,7 +3630,7 @@ export default function WrapQuotePage() {
                       Roll: {fmt(totals.nestedRollSqft)} ft²
                     </div>
                   )}
-                  <div style={{ fontSize: '12px', fontWeight: 800, color: '#22c55e' }}>Estimated Cost: ${fmt(totals.total)}</div>
+                  <PriceBreakdown totals={totals} />
                   {/* Internal materials margin — never appears on the emailed
                       quote. Compares cost against the DISCOUNTED material
                       price, so a too-generous qty discount flags itself. */}
@@ -3757,8 +3776,9 @@ export default function WrapQuotePage() {
         <div>
           {nestCapped && (
             <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '10px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)', fontSize: '11px', fontWeight: 700, color: '#fbbf24' }}>
-              The layout shows the first {nestPieces.length} pieces (quantity × sets is very large). Pieces beyond that
-              still bill — by their area instead of roll footage — so the quote stays whole.
+              This job has too many pieces to lay out on screen. The roll shows the first {nestPieces.length} pieces.
+              The other {nest.overflowCount} piece{nest.overflowCount !== 1 ? 's' : ''} ({fmt([...nest.overflowSqft.values()].reduce((a, b) => a + b, 0))} ft²)
+              are still in the price, charged by their own size instead of by roll length.
             </div>
           )}
           <RollNesting
@@ -3782,10 +3802,9 @@ export default function WrapQuotePage() {
               <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-secondary)' }}>
                 Graphics: {fmt(totals.billedArea)} ft²
               </div>
-              {totals.nested && (
-                <div style={{ fontSize: '12px', fontWeight: 800, color: '#f472b6' }}>Quote materials: ${fmt(totals.adjMaterials)}</div>
-              )}
-              <div style={{ marginLeft: 'auto', fontSize: '12px', fontWeight: 800, color: '#22c55e' }}>Estimated Cost: ${fmt(totals.total)}</div>
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                <PriceBreakdown totals={totals} />
+              </div>
               <button onClick={() => setTab('quote')} style={{
                 padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 800, border: 'none',
                 background: '#22c55e', color: '#fff', cursor: 'pointer',
