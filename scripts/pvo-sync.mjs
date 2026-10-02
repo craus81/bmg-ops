@@ -39,6 +39,9 @@
  *   --seed-existing  Mark catalog entries we already have as downloaded
  *   --dry-run        Show what would be downloaded, download nothing
  *   --headful        Run the browser visibly (for debugging)
+ *   --keepalive      Just open PVO with the saved session and save the
+ *                    refreshed cookies — no downloads (run every few hours
+ *                    by .github/workflows/pvo-keepalive.yml)
  *
  * Requires (env or .env.local): NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
  * R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME.
@@ -81,6 +84,7 @@ const has = (f) => argv.includes(f);
 const val = (f, d) => { const i = argv.indexOf(f); return i !== -1 && argv[i + 1] ? argv[i + 1] : d; };
 
 const LOGIN_MODE = has('--login');
+const KEEPALIVE = has('--keepalive');
 const RESCAN = has('--rescan');
 const SEED_EXISTING = has('--seed-existing');
 const DRY_RUN = has('--dry-run');
@@ -775,8 +779,50 @@ async function sendSummary({ subject, lines, names = [], failures = [] }) {
 const SIGN_IN_HELP = 'Check the PVO_EMAIL and PVO_PASSWORD secrets in GitHub (Settings → Secrets and variables → Actions), then use "Run workflow" on the pvo-sync action to try again.';
 
 // ── Main ──
+// PVO's login page has a reCAPTCHA, so unattended password sign-in can't be
+// relied on: the session from a hand sign-in (--login) is what the daily
+// run lives on. Touching PVO every few hours keeps that session from timing
+// out between runs. Emails only when the session first goes from working to
+// lapsed, so a dead session costs one email, not one every few hours.
+async function keepAlive() {
+  const ctx = await openBrowser({ headed: false });
+  try {
+    const alive = await isLoggedIn(ctx);
+    const { data } = supabase
+      ? await supabase.from('sync_state').select('last_result').eq('sync_type', 'pvo_keepalive').maybeSingle()
+      : { data: null };
+    const wasAlive = data?.last_result?.alive !== false;
+    if (alive) {
+      await saveSession(ctx);
+      log('PVO session is alive — refreshed and saved.');
+    } else {
+      log('PVO session has lapsed. Sign in again: node scripts/pvo-sync.mjs --login');
+      if (wasAlive) {
+        await sendSummary({
+          subject: 'PVO templates: sign in again',
+          lines: [
+            'The saved Pro Vehicle Outlines session has expired, so the daily template download will stop until someone signs in again.',
+            'On a Mac with the bmg-ops folder: git pull, then node scripts/pvo-sync.mjs --login, and sign in in the Chrome window it opens.',
+          ],
+        });
+      }
+    }
+    if (supabase) {
+      await supabase.from('sync_state').upsert({
+        sync_type: 'pvo_keepalive',
+        last_synced_at: new Date().toISOString(),
+        last_result: { alive, checked_at: new Date().toISOString() },
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'sync_type' });
+    }
+  } finally {
+    await ctx.close();
+  }
+}
+
 async function main() {
   if (LOGIN_MODE) return doLogin();
+  if (KEEPALIVE) return keepAlive();
 
   const ctx = await openBrowser({ headed: HEADFUL });
   const page = ctx.pages()[0] || await ctx.newPage();
