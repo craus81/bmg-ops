@@ -5,6 +5,7 @@ import { requireFeature } from '@/lib/api-auth';
 import { logAudit } from '@/lib/audit';
 import { validateBody, z } from '@/lib/validate';
 import { computeTotals, normalizeVehicleCount } from '@/lib/estimate-totals';
+import { resolveLineTaxability } from '@/lib/line-taxability';
 import { getSalesTaxRate } from '@/lib/sales-tax';
 import { getDefaultLaborRate, toLaborRate } from '@/lib/labor-rate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
@@ -183,7 +184,7 @@ export async function POST(req: NextRequest) {
     const normalizedVin = vin?.trim().toUpperCase() || null;
     const normalizedUnit = unit_number?.trim() || null;
 
-    const lines = line_items || [];
+    const requestLines = line_items || [];
     // Sales tax rate is NEVER taken from the request body: it is one company
     // setting, changed only by a super admin in Settings → Sales Tax
     // (quote_settings, migration 245). An estimate that already exists keeps
@@ -206,11 +207,13 @@ export async function POST(req: NextRequest) {
       ? parseFloat(String(labor_hours_override))
       : null;
 
-    // Every non-labor line is taxed; only a tax-exempt customer zeroes it.
-    // The per-item lookup that used to run here (migration 252) is gone —
-    // NetSuite's item Taxable checkbox is not maintained in this account
-    // and was excluding ordinary parts, under-quoting tax on documents
-    // customers sign. See the note atop src/lib/estimate-totals.ts.
+    // Which lines carry tax is FleetSuite's own rule (migration 336): Service
+    // items and freight untaxed, an admin's per-part setting wins, anything
+    // unmatched is taxed. Resolved here from the catalog, never from the
+    // request, so the stored total is authoritative; each line keeps the
+    // answer it was quoted with. NOT NetSuite's item Taxable box — see the
+    // note atop src/lib/estimate-totals.ts.
+    const lines = await resolveLineTaxability(supabase, requestLines);
     const units = normalizeVehicleCount(vehicle_count);
     const totals = computeTotals(lines, effectiveTaxRate, !!tax_exempt, effectiveLaborRate, override, units);
 
@@ -360,6 +363,7 @@ export async function POST(req: NextRequest) {
           // 0 is a real value.
           labor_hours: l.labor_hours == null || l.labor_hours === '' ? null : (parseFloat(l.labor_hours) || 0),
           is_custom: !!l.is_custom,
+          taxable: l.taxable,
           notes: l.notes || null,
           wrap_quote_id: l.wrap_quote_id || null,
           ...kitLineColumns(l),
@@ -390,7 +394,7 @@ export async function POST(req: NextRequest) {
         if (after?.netsuite_so_id) {
           salesOrderNumber = after.netsuite_so_number || null;
           const nowHash = soContentHash(after, lines.map((l: any, idx: number) => ({
-            item_number: l.item_number || null, quantity: l.quantity, unit_price: l.unit_price, sort_order: idx,
+            item_number: l.item_number || null, quantity: l.quantity, unit_price: l.unit_price, sort_order: idx, taxable: l.taxable,
           })));
           // A null pushed hash (converted before migration 259) is unknown,
           // not "in sync" — offer the push with the softer wording client-side.
@@ -476,6 +480,7 @@ export async function POST(req: NextRequest) {
           // 0 is a real value.
           labor_hours: l.labor_hours == null || l.labor_hours === '' ? null : (parseFloat(l.labor_hours) || 0),
           is_custom: !!l.is_custom,
+          taxable: l.taxable,
           notes: l.notes || null,
           wrap_quote_id: l.wrap_quote_id || null,
           ...kitLineColumns(l),

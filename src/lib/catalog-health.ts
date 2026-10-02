@@ -97,7 +97,7 @@ export const CATALOG_ATTRIBUTES: CatalogAttribute[] = [
   },
   {
     key: 'taxability', label: 'Taxability (reference)',
-    why: 'Mirrors NetSuite’s item Taxable box. Quotes no longer price off it — every non-labor line is taxed — so a gap here costs nothing today.',
+    why: 'Mirrors NetSuite’s item Taxable box. Quotes don’t price off it — FleetSuite’s own setting on the part (Service items and freight untaxed by default) decides — so a gap here costs nothing today.',
     isSet: p => p.is_taxable !== null && p.is_taxable !== undefined,
     fixHint: 'Fix it in NetSuite on the item record; the parts sync mirrors it.',
   },

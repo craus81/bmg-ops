@@ -157,6 +157,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         line_total: l.line_total ?? 0,
         labor_hours: l.labor_hours ?? null,
         is_custom: !!l.is_custom,
+        // The copy carries the source's totals, so it keeps the tax answer
+        // each line was quoted with (migration 336); a Save re-resolves it.
+        taxable: l.taxable ?? null,
         notes: l.notes ?? null,
         wrap_quote_id: l.wrap_quote_id ?? null,
         ...kitLineColumns(l),

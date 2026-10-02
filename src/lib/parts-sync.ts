@@ -286,9 +286,10 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
   // fed the quote's tax base under migration 252 until Sep 2026, when the
   // checkbox turned out to be unmaintained in this account: it excluded
   // $6,848.61 of ordinary parts from a quote and left $175 of freight as
-  // the only taxed line, while NetSuite's invoice taxed all of it. Quotes
-  // now tax every non-labor line (src/lib/estimate-totals.ts). Do not wire
-  // this column back into money without fixing the source data first.
+  // the only taxed line, while NetSuite's invoice taxed all of it. Quote
+  // taxability now comes from FleetSuite's own rule (item type plus the
+  // taxable_override column the sync never writes, src/lib/line-taxability.ts).
+  // Do not wire this column back into money without fixing the source data.
   // Requested in its own attempt because not every account/role exposes it
   // on every item type; if SuiteQL rejects the column the sync still runs.
   const ITEM_COLUMNS = `
