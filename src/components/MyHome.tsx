@@ -116,7 +116,9 @@ export default function MyHome({ role, embedded = false }: { role: MyHomeRole; e
   // ── Quick actions ───────────────────────────────────────────────
   const actions: { label: string; path: string; primary: boolean }[] = [];
   if (role === 'shop_tech' && (hasFeature('in_shop') || hasFeature('fleet_checkin'))) {
-    actions.push({ label: 'Check In a Vehicle', path: '/tracking?checkin=1', primary: true });
+    // Pull In: scan a vehicle into a bay — starts its job timer.
+    actions.push({ label: 'Pull In', path: deepLinks.pullIn(), primary: true });
+    actions.push({ label: 'Check In', path: '/tracking?checkin=1', primary: false });
   }
   if ((role === 'field_tech' || role === 'shop_tech') && hasFeature('scan')) {
     actions.push({ label: role === 'field_tech' ? 'Scan an Install' : 'Scan', path: '/scan', primary: role === 'field_tech' });

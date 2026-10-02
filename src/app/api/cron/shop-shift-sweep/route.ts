@@ -13,8 +13,11 @@ export const maxDuration = 60;
  * SHOP_SHIFT_MAX_HOURS (nobody wrenches a van for 14 straight hours — the
  * cap keeps one forgotten Stop press from booking a phantom double shift),
  * flagged auto_closed so the margin report shows the hours as approximate.
- * Completion closes timers earlier (update-status); this catches vehicles
- * that never completed with a timer running.
+ * Shop job timers are exempt since the shop-clock rules (2026-10-02): they
+ * pause outside shop hours instead of running overnight, legitimately span
+ * the days a vehicle is in the bay, and stop at completion — so an open
+ * shop timer two days old is normal, not forgotten. Print-room timers keep
+ * the cap.
  */
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -34,9 +37,9 @@ export async function GET(req: NextRequest) {
     const { data: stale, error } = await supabase
       .from('work_shifts')
       .select('id, started_at')
-      // R6-6: print-room shifts run on the same timer model, so the same
-      // runaway cap applies — nobody laminates for fourteen hours either.
-      .in('context', ['shop', 'graphics'])
+      // R6-6: print-room shifts get the runaway cap — nobody laminates for
+      // fourteen hours. Shop timers pause off-hours instead (see above).
+      .eq('context', 'graphics')
       .is('ended_at', null)
       .lt('started_at', staleCutoff)
       .limit(200);

@@ -4,6 +4,8 @@ import { requireAuth, isAdminRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { rolesOf } from '@/lib/cni-access';
 import { loadShift, canManageShift, eligibleMemberIds, memberViews } from '@/lib/shifts';
+import { moveOffOtherShopShifts } from '@/lib/shop-labor';
+import { endShiftNow } from '@/lib/shift-end';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,6 +32,11 @@ const Schema = z.object({
  * (or its starter, or an admin) can do this. Changes only affect vehicles
  * completed AFTER the change — already-snapshotted credits are untouched
  * (admin corrections go through the credit editor instead).
+ *
+ * Shop job timers (owner rules 2026-10-02): a tech works one shop job at a
+ * time, so tagging someone moves them off any other running shop job; and
+ * removing yourself is how you pause — when that leaves nobody on the
+ * crew, the timer stops (it is resumed with Start/Resume, a new shift).
  */
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
@@ -75,12 +82,21 @@ export async function POST(req: NextRequest) {
       if (error) return NextResponse.json({ error: 'Failed to add crew: ' + error.message }, { status: 500 });
       for (const m of toAdd) currentIds.add(m.profileId);
     }
+    if (shift.context === 'shop' && !shift.ended_at) {
+      await moveOffOtherShopShifts(service, add.map(m => m.profileId), shiftId);
+    }
   }
 
   if (remove.length > 0) {
     const removeSet = new Set(remove);
     const remaining = [...currentIds].filter(id => !removeSet.has(id));
     if (remaining.length === 0) {
+      // Shop timer: the last person pausing stops the clock.
+      if (shift.context === 'shop' && !shift.ended_at) {
+        const ended = await endShiftNow(service, shift);
+        if (ended.error) return NextResponse.json({ error: 'Failed to pause the timer: ' + ended.error }, { status: 500 });
+        return NextResponse.json({ members: await memberViews(service, shiftId), ended: true });
+      }
       return NextResponse.json({ error: 'A shift needs at least one member — end the shift instead' }, { status: 400 });
     }
     const { error } = await service

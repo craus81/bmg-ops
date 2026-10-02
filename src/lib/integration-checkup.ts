@@ -161,8 +161,9 @@ export const ENV_SPECS: EnvSpec[] = [
   { name: 'APNS_BUNDLE_ID', group: 'push', powers: 'Native iOS push', whenMissing: 'off' },
 
   // --- AI ---
-  { name: 'ANTHROPIC_API_KEY', group: 'ai', powers: 'PO and vendor-invoice extraction, ship-to parsing, voice notes, knowledge-base vision, the AI agent, the Estimator\u2019s customer-proof reader', whenMissing: 'warn' },
+  { name: 'ANTHROPIC_API_KEY', group: 'ai', powers: 'PO and vendor-invoice extraction, ship-to parsing, voice notes, knowledge-base vision, the AI agent, the Estimator\u2019s customer-proof reader, the Pull In VIN plate reader', whenMissing: 'warn' },
   { name: 'PROOF_READER_MODEL', group: 'ai', powers: 'Overrides the vision model that reads customer proofs in the Estimator (defaults to claude-opus-5)', whenMissing: 'off' },
+  { name: 'VIN_READER_MODEL', group: 'ai', powers: 'Overrides the vision model that reads VIN plate photos on Pull In (defaults to claude-sonnet-5-5)', whenMissing: 'off' },
 
   // --- Platform ---
   { name: 'NEXT_PUBLIC_SUPABASE_URL', group: 'platform', powers: 'The database', whenMissing: 'fail' },
