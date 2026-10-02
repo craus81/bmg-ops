@@ -21,7 +21,7 @@ const ROLES: { value: AppRole; label: string; color: string }[] = [
   { value: 'executive', label: 'Executive', color: '#eab308' },
   { value: 'finance', label: 'Finance / AP', color: '#2dd4bf' },
   { value: 'sales', label: 'Sales', color: '#60a5fa' },
-  { value: 'graphics_production', label: 'Graphics / Production', color: '#c084fc' },
+  { value: 'graphics_production', label: 'Graphics Production', color: '#c084fc' },
   { value: 'shop_tech', label: 'Shop Tech (O\'Fallon)', color: '#38bdf8' },
   { value: 'field_tech', label: 'Field Tech (Off-site)', color: '#fbbf24' },
   { value: 'installer', label: 'CNI Installer', color: 'var(--text-muted)' },

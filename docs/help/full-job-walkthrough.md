@@ -161,7 +161,7 @@ You'll see the new SO number on the estimate page.
 ## Step 6 — Graphics work starts in parallel
 
 Even before Acme's vans arrive at the shop, your graphics team can
-start designing. Whoever's running graphics goes to **Graphics** in
+start designing. Whoever's running graphics goes to **Graphics Production** in
 the bottom nav (or `/graphics`).
 
 If a graphics job hasn't already been auto-created from the estimate,

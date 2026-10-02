@@ -44,7 +44,7 @@ interface ThreadDetail {
 const CONTEXT_LABELS: Record<string, string> = {
   fleet_checkin: 'Vehicle',
   purchase_order: 'PO',
-  graphics_job: 'Graphics Job',
+  graphics_job: 'Graphics Production Job',
   estimate: 'Estimate',
   general: 'General',
 };

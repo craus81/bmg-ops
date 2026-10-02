@@ -51,6 +51,7 @@ import NumberInput from '@/components/NumberInput';
 import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
   GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
+  GRAPHICS_SHIP_SPEED_OPTIONS, graphicsShipSpeedLabel,
 } from '@/lib/types';
 import { requiresReason, proofGateApplies, isOffTheFloor } from '@/lib/graphics-status';
 
@@ -669,7 +670,7 @@ export default function GraphicsJobRecordPage() {
     'title', 'part_number', 'customer', 'quantity', 'po_number', 'priority',
     'due_date', 'scheduled_install_date', 'install_location', 'supplier',
     'content', 'vinyl_type', 'vinyl_color', 'laminate', 'print_method',
-    'cut_method', 'premask', 'tracking_number', 'ship_to', 'notes',
+    'cut_method', 'premask', 'tracking_number', 'ship_to', 'ship_speed', 'notes',
   ] as const;
   // Unsaved-changes signal: any editable field differing between the edit
   // copy and the loaded job. Warns on tab close/refresh while dirty (in-app
@@ -1291,10 +1292,13 @@ export default function GraphicsJobRecordPage() {
             </div>
           )}
 
-          {(job.tracking_number || job.ship_to) && (
+          {(job.tracking_number || job.ship_to || job.ship_speed) && (
             <div style={{ marginBottom: '10px' }}>
               <div style={labelStyle}>Shipping</div>
               <div style={{ fontSize: '11px' }}>
+                {job.ship_speed && (
+                  <div style={{ fontWeight: 700, color: 'var(--text-body)', marginBottom: '2px' }}>{graphicsShipSpeedLabel(job.ship_speed)}</div>
+                )}
                 {job.tracking_number && (
                   <a
                     href={upsTrackingUrl(job.tracking_number)}
@@ -1496,6 +1500,15 @@ export default function GraphicsJobRecordPage() {
           )}
 
           <div style={labelStyle}>Shipping</div>
+          {((edit.job_category || 'production') === 'production' || edit.ship_speed) && (
+            <div style={{ marginBottom: '6px' }}>
+              <div style={{ ...labelStyle, fontSize: '8px' }}>Shipping Speed</div>
+              <select style={inputStyle} value={edit.ship_speed || ''} onChange={e => setEdit({ ...edit, ship_speed: (e.target.value || null) as GraphicsJob['ship_speed'] })}>
+                <option value="">Not set</option>
+                {GRAPHICS_SHIP_SPEED_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          )}
           <div style={{ marginBottom: '6px' }}>
             <div style={{ ...labelStyle, fontSize: '8px' }}>Tracking #</div>
             <input style={inputStyle} value={edit.tracking_number || ''} onChange={e => setEdit({ ...edit, tracking_number: e.target.value })} />

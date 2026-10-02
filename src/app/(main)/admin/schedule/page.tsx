@@ -863,7 +863,7 @@ export default function SchedulePage() {
                 padding: '9px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 800,
                 background: 'rgba(34,197,94,0.12)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.35)', cursor: 'pointer',
               }}>
-                {cardBusy ? 'Working…' : '→ Create Graphics Job'}
+                {cardBusy ? 'Working…' : '→ Create Graphics Production Job'}
               </button>
               <button onClick={() => setCardEvent(null)} style={{ padding: '9px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--subtle-bg)', color: 'var(--text-muted)', border: `1px solid ${theme.border}`, cursor: 'pointer' }}>Close</button>
             </div>

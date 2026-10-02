@@ -1,4 +1,4 @@
-# Graphics
+# Graphics Production
 
 Each section is one task. Read the one you need.
 
@@ -6,23 +6,26 @@ Each section is one task. Read the one you need.
 
 ## See all graphics jobs
 
-1. Tap **Graphics** in the bottom nav.
+1. Tap **Graphics Production** (**Gfx Prod** in the bottom bar).
 2. Each row is a job. The top of the page shows status counts:
    **Proofing**, **Production**, etc.
 3. Tap a status chip to filter.
 
 ---
 
-## Create a new graphics job
+## Create a new graphics production job
 
-1. **Graphics** → tap **+ New Graphics Job**.
+1. **Graphics Production** → tap **+ New Job**.
 2. Pick a job type:
    - **Production** — full design → proof → print → install.
-   - **Customer Supplied** — customer is providing the artwork.
    - **Proofing** — design and approval only, no production yet.
+   - **Internal Project** — samples, R&D and other in-house work.
 3. Pick the customer and vehicle(s).
 4. Type a title.
-5. Tap **Create**.
+5. For a Production job, pick the **Shipping Speed** (UPS Ground unless
+   it needs to go faster, or Customer pickup / Delivered by BMG when it
+   won't ship).
+6. Tap **Create**.
 
 Most jobs auto-create from estimates — only build manually for
 one-off work.
@@ -134,7 +137,7 @@ Most jobs auto-link from their estimate. To link manually:
 
 ## See only your assigned jobs
 
-1. **Graphics** → filter chip **Mine**.
+1. **Graphics Production** → filter chip **Mine**.
 2. Or use the **My Jobs** widget on your home dashboard.
 
 ---

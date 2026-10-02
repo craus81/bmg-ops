@@ -22,7 +22,7 @@ interface UniversalSearchProps {
  *  since "Acme" alone doesn't say whether it's the customer or their PO. */
 const KIND_LABEL: Record<string, string> = {
   invoices: 'Invoice', purchase_orders: 'PO', vehicles: 'Vehicle',
-  graphics_jobs: 'Graphics', estimates: 'Estimate', parts: 'Part',
+  graphics_jobs: 'Graphics Production', estimates: 'Estimate', parts: 'Part',
   customers: 'Customer', quotes: 'Quote', messages: 'Message',
 };
 
@@ -30,7 +30,7 @@ const GROUP_CONFIG: Record<string, { label: string; icon: string; color: string 
   invoices: { label: 'Invoices', icon: '', color: '#34d399' },
   purchase_orders: { label: 'Purchase Orders', icon: '', color: '#60a5fa' },
   vehicles: { label: 'Vehicles', icon: '', color: '#34d399' },
-  graphics_jobs: { label: 'Graphics Jobs', icon: '', color: '#a78bfa' },
+  graphics_jobs: { label: 'Graphics Production Jobs', icon: '', color: '#a78bfa' },
   estimates: { label: 'Estimates', icon: '', color: '#fbbf24' },
   parts: { label: 'Parts Catalog', icon: '', color: '#f97316' },
   customers: { label: 'Customers', icon: '', color: '#06b6d4' },
@@ -83,7 +83,7 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
       const sourceLabel = item.source === 'po'
         ? `PO #${item.po_number || '?'}`
         : item.source === 'graphics'
-          ? (item.job_title || 'Graphics job')
+          ? (item.job_title || 'Graphics production job')
           : `Scan batch${item.po_number ? ` · PO #${item.po_number}` : ''}`;
       return (
         <button key={item.id} onClick={select} style={resultBtnStyle}>

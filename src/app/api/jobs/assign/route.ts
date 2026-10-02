@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
 
     // 4. Notify assigned users
     if (notifyUsers && userIds.length > 0) {
-      const typeLabel = jobType === 'scanned_vehicle' ? 'Vehicle' : 'Graphics Job';
+      const typeLabel = jobType === 'scanned_vehicle' ? 'Vehicle' : 'Graphics Production Job';
       const title = `Assigned to ${typeLabel}`;
       const body = jobTitle
         ? `You've been assigned to: ${jobTitle}`
@@ -147,8 +147,8 @@ export async function POST(req: NextRequest) {
         if (teamIds.length > 0) {
           await notifyMany(teamIds, {
             type: 'graphics',
-            title: 'New Graphics Job',
-            body: jobTitle ? `New job: ${jobTitle}` : 'A new graphics job has been created.',
+            title: 'New Graphics Production Job',
+            body: jobTitle ? `New job: ${jobTitle}` : 'A new graphics production job has been created.',
             url: deepLinks.graphicsJob(jobId),
           }).catch(err => console.warn('Team notification error:', err));
         }

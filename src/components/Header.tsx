@@ -809,7 +809,7 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
                       {[
                         { key: null, label: 'Admin' },
                         { key: 'sales', label: 'Sales' },
-                        { key: 'graphics_production', label: 'Graphics' },
+                        { key: 'graphics_production', label: 'Graphics Production' },
                         { key: 'shop_tech', label: 'Shop Tech' },
                         { key: 'field_tech', label: 'Field Tech' },
                         { key: 'installer', label: 'Installer' },
