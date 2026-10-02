@@ -4005,7 +4005,7 @@ export default function WrapQuotePage() {
                 {jobsByQuote[q.id] && (
                   <button
                     onClick={e => { e.stopPropagation(); window.open(`/graphics?editJob=${jobsByQuote[q.id].id}`, '_blank'); }}
-                    title="Open this quote's graphics job on the Graphics board"
+                    title="Open this quote's job on Graphics Production"
                     style={{ fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', background: 'rgba(34,197,94,0.12)', color: '#22c55e', border: 'none', cursor: 'pointer' }}
                   >{jobsByQuote[q.id].job_number || 'Job'} ↗</button>
                 )}
@@ -4090,10 +4090,10 @@ export default function WrapQuotePage() {
               <button
                 onClick={() => createGraphicsJob(viewQuote)}
                 disabled={creatingJobFor === viewQuote.id}
-                title={jobsByQuote[viewQuote.id] ? "Open this quote's graphics job on the Graphics board" : 'Create a graphics job pre-filled from this quote'}
+                title={jobsByQuote[viewQuote.id] ? "Open this quote's job on Graphics Production" : 'Create a graphics production job pre-filled from this quote'}
                 style={btnStyle('#22c55e', 'var(--card)')}
               >
-                {creatingJobFor === viewQuote.id ? 'Creating…' : jobsByQuote[viewQuote.id] ? `Job ${jobsByQuote[viewQuote.id].job_number || ''} ↗` : 'Create Graphics Job'}
+                {creatingJobFor === viewQuote.id ? 'Creating…' : jobsByQuote[viewQuote.id] ? `Job ${jobsByQuote[viewQuote.id].job_number || ''} ↗` : 'Create Graphics Production Job'}
               </button>
               {viewQuote.netsuite_estimate_id && (
                 <button onClick={() => viewEstimatePdf(viewQuote.netsuite_estimate_id)} style={btnStyle('#a78bfa', 'var(--card)')}>

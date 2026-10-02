@@ -1048,7 +1048,7 @@ export default function PoRecordPage() {
             title="Opens the graphics job form prefilled from this PO — review and submit to create"
             style={{ ...btnSm, color: '#a78bfa' }}
           >
-            + Graphics Job
+            + Graphics Production Job
           </button>
           {(() => {
             const hasSO = po.netsuite_so_id || soResult?.salesOrderId;
@@ -1373,7 +1373,7 @@ export default function PoRecordPage() {
                             title="Opens the graphics job form prefilled from this line — review and submit to create"
                             style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.3)', color: '#a78bfa', cursor: 'pointer' }}
                           >
-                            + Graphics Job
+                            + Graphics Production Job
                           </button>
                         )}
                       </div>
@@ -1672,7 +1672,7 @@ export default function PoRecordPage() {
 
       {/* Graphics jobs */}
       <div style={card}>
-        <div style={eyebrow}>Graphics jobs ({gfxJobs.length})</div>
+        <div style={eyebrow}>Graphics production jobs ({gfxJobs.length})</div>
         {gfxJobs.length > 0 ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '10px' }}>
             {gfxJobs.map(j => (
@@ -1696,7 +1696,7 @@ export default function PoRecordPage() {
           </div>
         ) : (
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
-            No graphics jobs created from this PO yet.
+            No graphics production jobs created from this PO yet.
           </div>
         )}
         <button
@@ -1704,7 +1704,7 @@ export default function PoRecordPage() {
           title="Opens the graphics job form prefilled from this PO — review and submit to create"
           style={{ width: '100%', padding: '10px', borderRadius: '8px', background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
         >
-          + Create Graphics Job ({po.line_items.length} part{po.line_items.length !== 1 ? 's' : ''})
+          + Create Graphics Production Job ({po.line_items.length} part{po.line_items.length !== 1 ? 's' : ''})
         </button>
       </div>
 

@@ -4880,7 +4880,7 @@ export default function EstimatesPage() {
           padding: '12px', marginBottom: '12px',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-            <div style={labelStyle}>Graphics Jobs</div>
+            <div style={labelStyle}>Graphics Production Jobs</div>
             <div style={{ display: 'flex', gap: '6px' }}>
               <button
                 onClick={spawnGraphicsJob}
@@ -4891,7 +4891,7 @@ export default function EstimatesPage() {
                   color: '#a78bfa', cursor: graphicsLinking ? 'wait' : 'pointer',
                 }}
               >
-                {graphicsLinking ? '…' : '+ New graphics job'}
+                {graphicsLinking ? '…' : '+ New graphics production job'}
               </button>
               <button
                 onClick={() => setShowGraphicsPicker(s => !s)}

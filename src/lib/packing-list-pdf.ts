@@ -12,7 +12,7 @@
 
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import type { GraphicsJob } from '@/lib/types';
+import { graphicsShipSpeedLabel, type GraphicsJob } from '@/lib/types';
 
 // The BMG logo for the header, preloaded at module load rather than
 // fetched when the user clicks Print — an await before window.open()
@@ -52,6 +52,8 @@ export interface PackingListData {
   invoiceNumber?: string | null;
   trackingNumber?: string | null;
   carrier?: string | null;
+  /** Shipping speed label, e.g. "UPS 2nd Day Air" (migration 336). */
+  shipSpeed?: string | null;
   dueDate?: string | null;
   lines: PackingListLine[];
 }
@@ -98,6 +100,7 @@ export function packingListFromJob(
     invoiceNumber: job.netsuite_invoice_number,
     trackingNumber: job.tracking_number,
     carrier: job.carrier,
+    shipSpeed: graphicsShipSpeedLabel(job.ship_speed),
     dueDate: job.due_date,
     lines,
   };
@@ -223,7 +226,7 @@ export function exportPackingListPDF(data: PackingListData, opts?: { print?: boo
   y = (doc as any).lastAutoTable.finalY + 18;
 
   // ─── Shipping ──────────────────────────────────────────────
-  if (data.trackingNumber || data.carrier) {
+  if (data.trackingNumber || data.carrier || data.shipSpeed) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9);
     doc.setTextColor(110);
@@ -232,7 +235,7 @@ export function exportPackingListPDF(data: PackingListData, opts?: { print?: boo
     y += 13;
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
-    const shipBits = [data.carrier, data.trackingNumber].filter(Boolean).join('  ·  ');
+    const shipBits = [data.shipSpeed, data.carrier, data.trackingNumber].filter(Boolean).join('  ·  ');
     doc.text(shipBits, margin, y);
     y += 16;
   }

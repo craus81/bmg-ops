@@ -646,7 +646,7 @@ export default function InvoicingHubPage() {
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', flexWrap: 'wrap' }}>
         {([
-          { id: 'graphics' as HubTab, label: `Graphics Jobs (${doneJobs.length})` },
+          { id: 'graphics' as HubTab, label: `Graphics Production Jobs (${doneJobs.length})` },
           { id: 'scans' as HubTab, label: `Scanned Vehicles (${scanGroups.length})` },
           { id: 'sent' as HubTab, label: `Invoiced (${sentInvoices.length})` },
         ]).map(t => (

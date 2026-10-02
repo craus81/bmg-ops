@@ -1302,7 +1302,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
                 padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 800,
                 background: '#fb923c', color: '#fff', border: 'none', cursor: 'pointer',
               }}
-            >+ Create Graphics Job</button>
+            >+ Create Graphics Production Job</button>
           </div>
         )}
 

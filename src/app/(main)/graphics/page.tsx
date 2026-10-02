@@ -45,7 +45,7 @@ import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '
 import { fetchAllRows } from '@/lib/fetch-all';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
-import type { GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsJobView, Profile } from '@/lib/types';
+import type { GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsJobView, GraphicsShipSpeed, Profile } from '@/lib/types';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import NumberInput from '@/components/NumberInput';
 import { canonicalPartFromCache } from '@/lib/parts-cache';
@@ -53,6 +53,7 @@ import { NotInCatalogAdd } from '@/components/AddToCatalog';
 import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
   GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
+  GRAPHICS_SHIP_SPEED_OPTIONS, DEFAULT_GRAPHICS_SHIP_SPEED,
 } from '@/lib/types';
 
 type FilterStatus = GraphicsJobStatus | 'all' | 'active' | 'awaiting';
@@ -256,7 +257,7 @@ export default function GraphicsPage() {
     scheduled_install_date: '',
     install_location: '',
     ship_to: '',
-    supplier: '',
+    ship_speed: DEFAULT_GRAPHICS_SHIP_SPEED as GraphicsShipSpeed,
     po_number: '',
   });
   const [createAssignees, setCreateAssignees] = useState<string[]>([]);
@@ -487,7 +488,9 @@ export default function GraphicsPage() {
           const parts = String(src.part_number || '').split(',').map((x: string) => x.trim()).filter(Boolean);
           setCreateForm(f => ({
             ...f,
-            job_category: (src.job_category as GraphicsJobCategory) || 'production',
+            // Customer Supplied is no longer offered in the creator (Craig,
+            // 2026-10-02) — a copy of one starts as a Production job.
+            job_category: (src.job_category && src.job_category !== 'customer_supplied' ? src.job_category as GraphicsJobCategory : 'production'),
             title: `Copy of ${src.title || src.job_number || 'job'}`,
             part_numbers: parts,
             part_number: parts[0] || '',
@@ -505,7 +508,7 @@ export default function GraphicsPage() {
             priority: src.priority || 'normal',
             install_location: src.install_location || '',
             ship_to: src.ship_to || '',
-            supplier: src.supplier || '',
+            ship_speed: (src.ship_speed as GraphicsShipSpeed) || DEFAULT_GRAPHICS_SHIP_SPEED,
           }));
           setCustomerSearch(src.customer || '');
           const files = srcFiles || [];
@@ -781,7 +784,7 @@ export default function GraphicsPage() {
   const createJob = async () => {
     setCreating(true);
     const cat = createForm.job_category || 'production';
-    const prefix = cat === 'proofing' ? 'PRF' : cat === 'internal' ? 'INT' : cat === 'customer_supplied' ? 'CSG' : 'GFX';
+    const prefix = cat === 'proofing' ? 'PRF' : cat === 'internal' ? 'INT' : 'GFX';
     const jobNumber = await nextJobNumber(supabase, prefix, () => legacyJobNumber.gfx(prefix));
     // Every category, proofing included, starts at Received (owner decision,
     // 2026-09-29): the designer moving a proof to Designing is the signal
@@ -808,8 +811,8 @@ export default function GraphicsPage() {
         due_date: createForm.due_date && createForm.due_date !== 'N/A' ? createForm.due_date : null,
         scheduled_install_date: cat !== 'internal' && createForm.scheduled_install_date && createForm.scheduled_install_date !== 'N/A' ? createForm.scheduled_install_date : null,
         install_location: cat !== 'internal' ? (createForm.install_location || null) : null,
-        ship_to: (cat === 'production' || cat === 'customer_supplied') ? (createForm.ship_to || null) : null,
-        supplier: cat === 'customer_supplied' ? (createForm.supplier || null) : null,
+        ship_to: cat === 'production' ? (createForm.ship_to || null) : null,
+        ship_speed: cat === 'production' ? createForm.ship_speed : null,
         po_number: createForm.po_number || null,
         status: initialStatus,
         created_by: user?.id,
@@ -1014,7 +1017,7 @@ export default function GraphicsPage() {
         job_category: '', title: '', part_number: '', part_numbers: [], partInput: '', customer: '', quantity: 1,
         content: '', notes: '',
         vinyl_type: '', vinyl_color: '', laminate: '', print_method: '', cut_method: '', premask: '',
-        priority: 'normal', due_date: '', scheduled_install_date: '', install_location: '', ship_to: '', supplier: '', po_number: '',
+        priority: 'normal', due_date: '', scheduled_install_date: '', install_location: '', ship_to: '', ship_speed: DEFAULT_GRAPHICS_SHIP_SPEED, po_number: '',
       });
       setCreateAssignees([]);
       setCreateFiles([]);
@@ -1518,7 +1521,11 @@ export default function GraphicsPage() {
             {([
               { id: 'all' as const, label: 'All', color: '#60a5fa' },
               { id: 'production' as const, label: 'Production', color: GRAPHICS_CATEGORY_COLORS.production },
-              { id: 'customer_supplied' as const, label: 'Cust. Supplied', color: GRAPHICS_CATEGORY_COLORS.customer_supplied },
+              // Customer Supplied is retired from the creator; the chip stays
+              // only while older jobs of that type are still on the board.
+              ...(jobs.some(j => j.job_category === 'customer_supplied')
+                ? [{ id: 'customer_supplied' as const, label: 'Cust. Supplied', color: GRAPHICS_CATEGORY_COLORS.customer_supplied }]
+                : []),
               { id: 'proofing' as const, label: 'Proofing', color: GRAPHICS_CATEGORY_COLORS.proofing },
               { id: 'internal' as const, label: 'Internal', color: GRAPHICS_CATEGORY_COLORS.internal },
             ]).map(c => {
@@ -1921,13 +1928,12 @@ export default function GraphicsPage() {
             {/* ─── STEP 1: Choose Job Type ─── */}
             {createStep === 'category' && (
               <>
-                <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '6px' }}>New Job</div>
+                <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '6px' }}>New Graphics Production Job</div>
                 <div style={{ fontSize: '12px', color: 'var(--text-label)', marginBottom: '16px' }}>What type of job is this?</div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' }}>
                   {([
                     { id: 'production' as const, title: 'Production', desc: 'Full production job — printing, cutting, packing, shipping, install' },
-                    { id: 'customer_supplied' as const, title: 'Customer Supplied', desc: 'Graphics supplied by customer — track shipping, install date, and proof' },
                     { id: 'proofing' as const, title: 'Proofing', desc: 'Design and proof approval only — no production steps yet' },
                     { id: 'internal' as const, title: 'Internal Project', desc: 'Internal work like T-Mobile design, samples, or R&D' },
                   ]).map(cat => (
@@ -2063,7 +2069,7 @@ export default function GraphicsPage() {
                     <div style={labelStyle}>Due Date</div>
                     <input type="date" style={inputStyle} value={createForm.due_date} onChange={e => setCreateForm({ ...createForm, due_date: e.target.value })} />
                   </div>
-                  {/* Production, Proofing & Customer Supplied get install date */}
+                  {/* Production & Proofing get install date */}
                   {createForm.job_category !== 'internal' && (
                     <div>
                       <div style={labelStyle}>Scheduled Install Date</div>
@@ -2094,8 +2100,16 @@ export default function GraphicsPage() {
                       )}
                     </div>
                   )}
-                  {/* Production & Customer Supplied get ship-to */}
-                  {(createForm.job_category === 'production' || createForm.job_category === 'customer_supplied') && (
+                  {/* Production jobs get ship speed + ship-to */}
+                  {createForm.job_category === 'production' && (
+                    <div style={{ gridColumn: '1 / -1' }}>
+                      <div style={labelStyle}>Shipping Speed</div>
+                      <select style={inputStyle} value={createForm.ship_speed} onChange={e => setCreateForm({ ...createForm, ship_speed: e.target.value as GraphicsShipSpeed })}>
+                        {GRAPHICS_SHIP_SPEED_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                    </div>
+                  )}
+                  {createForm.job_category === 'production' && (
                     <div style={{ gridColumn: '1 / -1' }}>
                       <div style={labelStyle}>Ship To Address</div>
                       <textarea style={{ ...inputStyle, minHeight: '60px', resize: 'vertical' }} value={createForm.ship_to} onChange={e => setCreateForm({ ...createForm, ship_to: e.target.value })}
@@ -2162,34 +2176,6 @@ export default function GraphicsPage() {
                       </div>
                     </div>
                   </>
-                )}
-
-                {/* Customer Supplied fields */}
-                {createForm.job_category === 'customer_supplied' && (
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
-                    <div style={{ gridColumn: '1 / -1' }}>
-                      <div style={labelStyle}>Graphics Supplier</div>
-                      <input style={inputStyle} value={createForm.supplier} onChange={e => setCreateForm({ ...createForm, supplier: e.target.value })} placeholder="Who is supplying the graphics?" />
-                    </div>
-                    <div>
-                      <div style={labelStyle}>Ship Date</div>
-                      <input type="date" style={inputStyle} value={createForm.due_date} onChange={e => setCreateForm({ ...createForm, due_date: e.target.value })} />
-                    </div>
-                    <div>
-                      <div style={labelStyle}>Scheduled Install Date</div>
-                      {createForm.scheduled_install_date === 'N/A' ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <div style={{ ...inputStyle, display: 'flex', alignItems: 'center', color: 'var(--text-muted)', fontStyle: 'italic' }}>N/A</div>
-                          <button type="button" onClick={() => setCreateForm({ ...createForm, scheduled_install_date: '' })} style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}>Set Date</button>
-                        </div>
-                      ) : (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <input type="date" style={{ ...inputStyle, flex: 1 }} value={createForm.scheduled_install_date} onChange={e => setCreateForm({ ...createForm, scheduled_install_date: e.target.value })} />
-                          <button type="button" onClick={() => setCreateForm({ ...createForm, scheduled_install_date: 'N/A' })} style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}>N/A</button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
                 )}
 
                 <div style={{ marginBottom: '12px' }}>

@@ -25,7 +25,7 @@ const TABLE_LABELS: Record<string, string> = {
   install_credits: 'Pay Credits',
   // A2 row-diff trigger tables (migration 195)
   upfit_projects: 'Upfit Projects',
-  graphics_jobs: 'Graphics Jobs',
+  graphics_jobs: 'Graphics Production Jobs',
   cni_jobs: 'CNI Jobs',
   estimates: 'Estimates',
   fleet_checkins: 'Vehicle Check-Ins',

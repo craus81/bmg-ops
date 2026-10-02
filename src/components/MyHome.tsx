@@ -122,7 +122,7 @@ export default function MyHome({ role, embedded = false }: { role: MyHomeRole; e
     actions.push({ label: role === 'field_tech' ? 'Scan an Install' : 'Scan', path: '/scan', primary: role === 'field_tech' });
   }
   if (role === 'graphics' && hasFeature('graphics')) {
-    actions.push({ label: 'Graphics Board', path: '/graphics', primary: true });
+    actions.push({ label: 'Graphics Production', path: '/graphics', primary: true });
     actions.push({ label: 'My Jobs', path: deepLinks.graphicsBoard({ mine: true }), primary: false });
   }
   if (role === 'sales' && hasFeature('estimates')) {

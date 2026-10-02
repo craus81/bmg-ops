@@ -88,6 +88,8 @@ export default function BottomNav() {
         return (
           <button
             key={tab.id}
+            aria-label={tab.label}
+            title={tab.label}
             className={active ? undefined : 'bottom-nav-tab'}
             onClick={() => tab.id === AI_TAB_ID
               ? window.dispatchEvent(new Event(AI_CHAT_TOGGLE_EVENT))
@@ -114,7 +116,7 @@ export default function BottomNav() {
             {/* Ellipsis guard: with 8 tabs on a narrow phone the longest
                 labels (Customers, Estimates) can exceed their slot at 10px —
                 clip visually, screen readers still get the full text. */}
-            <span style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tab.label}</span>
+            <span style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tab.shortLabel ?? tab.label}</span>
           </button>
         );
       })}

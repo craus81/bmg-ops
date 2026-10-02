@@ -9,7 +9,7 @@ export const ROLE_LABELS: Record<AppRole, string> = {
   field_tech: 'Field Tech',
   shop_tech: 'Shop Tech (O\'Fallon)',
   sales: 'Sales',
-  graphics_production: 'Graphics / Production',
+  graphics_production: 'Graphics Production',
   customer: 'Customer',
   finance: 'Finance / AP',
 };
@@ -561,6 +561,28 @@ export const GRAPHICS_CATEGORY_COLORS: Record<GraphicsJobCategory, string> = {
   customer_supplied: '#3b82f6',
 };
 
+/** How a Production job leaves the building (migration 336). Everything
+ *  ships UPS; the last two mean it is not shipped at all. */
+export type GraphicsShipSpeed =
+  | 'ups_ground' | 'ups_3_day_select' | 'ups_2nd_day_air' | 'ups_next_day_air'
+  | 'customer_pickup' | 'bmg_delivered';
+
+export const GRAPHICS_SHIP_SPEED_OPTIONS: { value: GraphicsShipSpeed; label: string }[] = [
+  { value: 'ups_ground', label: 'UPS Ground' },
+  { value: 'ups_3_day_select', label: 'UPS 3 Day Select' },
+  { value: 'ups_2nd_day_air', label: 'UPS 2nd Day Air' },
+  { value: 'ups_next_day_air', label: 'UPS Next Day Air' },
+  { value: 'customer_pickup', label: 'Customer pickup' },
+  { value: 'bmg_delivered', label: 'Delivered by BMG / installed here' },
+];
+
+export const DEFAULT_GRAPHICS_SHIP_SPEED: GraphicsShipSpeed = 'ups_ground';
+
+export function graphicsShipSpeedLabel(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return GRAPHICS_SHIP_SPEED_OPTIONS.find(o => o.value === value)?.label ?? value;
+}
+
 export interface GraphicsJob {
   id: string;
   po_id: string | null;
@@ -583,6 +605,7 @@ export interface GraphicsJob {
   tracking_number: string | null;
   carrier: string | null;
   ship_to: string | null;
+  ship_speed: GraphicsShipSpeed | null;
   priority: 'low' | 'normal' | 'high' | 'rush';
   due_date: string | null;
   scheduled_install_date: string | null;

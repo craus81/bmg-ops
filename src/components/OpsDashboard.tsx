@@ -505,7 +505,7 @@ export default function OpsDashboard() {
     const flagged = gfxJobs.filter(j => j.status === 'flagged');
     if (flagged.length > 0) queue.push({
       key: 'flagged', count: flagged.length, tone: 'err', path: '/graphics',
-      title: 'Graphics jobs flagged for review',
+      title: 'Graphics production jobs flagged for review',
       detail: flagged.slice(0, 3).map(j => j.part_number || j.title).filter(Boolean).join(' · '),
     });
     const unpaid = count(unpaidRes, 'unpaid');

@@ -1911,7 +1911,7 @@ export default function TrackingPage() {
                             background: 'rgba(251,146,60,0.12)', color: '#fb923c',
                             border: '1px solid rgba(251,146,60,0.35)', cursor: 'pointer',
                           }}
-                          title={(vehicle as any).graphics_signal || 'Needs graphics job'}
+                          title={(vehicle as any).graphics_signal || 'Needs a graphics production job'}
                         >Needs Graphics</div>
                       )}
                     </div>

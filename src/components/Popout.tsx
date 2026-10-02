@@ -32,7 +32,7 @@ const LABELS: Record<PopoutType, { label: string; color: string }> = {
   invoices: { label: 'Invoice', color: '#34d399' },
   purchase_orders: { label: 'Purchase Order', color: '#60a5fa' },
   vehicles: { label: 'Vehicle', color: '#34d399' },
-  graphics_jobs: { label: 'Graphics Job', color: '#a78bfa' },
+  graphics_jobs: { label: 'Graphics Production Job', color: '#a78bfa' },
   estimates: { label: 'Estimate', color: '#fbbf24' },
   parts: { label: 'Part', color: '#f97316' },
   customers: { label: 'Customer', color: '#06b6d4' },
@@ -170,8 +170,8 @@ export function renderDetail(type: PopoutType, item: any, showMoney = false) {
           {detailRow('Invoice #', item.invoice_number)}
           {detailRow('Customer', item.customer)}
           {detailRow('PO #', item.po_number)}
-          {detailRow('Graphics Job', item.job_title)}
-          {detailRow('Source', item.source === 'po' ? 'Purchase order' : item.source === 'graphics' ? 'Graphics job' : 'Scan batch')}
+          {detailRow('Graphics Production Job', item.job_title)}
+          {detailRow('Source', item.source === 'po' ? 'Purchase order' : item.source === 'graphics' ? 'Graphics production job' : 'Scan batch')}
           {detailRow('Date', item.date ? formatDate(item.date) : null)}
         </div>
       );

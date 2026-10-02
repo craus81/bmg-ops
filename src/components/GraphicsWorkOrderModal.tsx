@@ -25,7 +25,7 @@ import { apiFetch } from '@/lib/api-client';
 import { isOffTheFloor } from '@/lib/graphics-status';
 import { rankedQueue, unrankedPool } from '@/lib/graphics-work-order';
 import {
-  GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS,
+  GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, graphicsShipSpeedLabel,
   type GraphicsJob, type Profile,
 } from '@/lib/types';
 
@@ -185,6 +185,10 @@ export default function GraphicsWorkOrderModal({ jobs, profiles = [], onClose }:
           {GRAPHICS_STATUS_LABELS[job.status].replace('Job ', '')}
         </span>
         {job.priority !== 'normal' && <span style={chip(priorityColor(job.priority))}>{job.priority}</span>}
+        {/* Ground is the norm; only call out a faster or non-UPS speed. */}
+        {job.ship_speed && job.ship_speed !== 'ups_ground' && (
+          <span style={chip('#38bdf8')}>{graphicsShipSpeedLabel(job.ship_speed)}</span>
+        )}
         {job.due_date && (
           <span style={{
             fontSize: '10px', fontWeight: 700, whiteSpace: 'nowrap',
