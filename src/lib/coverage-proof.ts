@@ -174,13 +174,35 @@ export function measureBoxes(boxes: CoverageBox[], cal: PhotoCalibration | null 
   });
 }
 
+export const LABEL_FONT_FAMILY = "-apple-system, 'Segoe UI', Roboto, sans-serif";
+
+/**
+ * Label text size on the saved proof picture, in photo pixels: about 1% of
+ * the photo's width, so a tag reads when the picture is viewed whole without
+ * burying the artwork it points at. (It was 1/48, which on a proof sheet drew
+ * tags wider than the decals.)
+ */
+export const savedLabelFontSize = (photoW: number) => Math.max(11, Math.round(photoW / 100));
+
+/**
+ * Where a label pill goes: above the box when there's room, otherwise tucked
+ * inside its top edge, and slid left so it never runs off the photo.
+ */
+export function labelPill(rect: PixelRect, fontSize: number, textW: number, photoW: number, gap = 0) {
+  const padX = fontSize * 0.45, padY = fontSize * 0.3;
+  const w = textW + padX * 2, h = fontSize + padY * 2;
+  const x = Math.max(0, Math.min(rect.x, photoW - w));
+  const y = rect.y - h - gap > 0 ? rect.y - h - gap : rect.y + gap;
+  return { x, y, w, h, padX };
+}
+
 /**
  * Paint the boxes onto a 2D context sized to the photo's pixels. Shared by the
  * on-screen SVG's raster twin and the saved proof so the emailed picture is
  * exactly what the estimator drew.
  */
 function paintBoxes(ctx: CanvasRenderingContext2D, boxes: CoverageBox[], w: number) {
-  const fontSize = Math.max(13, Math.round(w / 48));
+  const fontSize = savedLabelFontSize(w);
   ctx.lineWidth = Math.max(2, w / 350);
   ctx.textBaseline = 'middle';
   for (const b of boxes) {
@@ -193,17 +215,12 @@ function paintBoxes(ctx: CanvasRenderingContext2D, boxes: CoverageBox[], w: numb
     if (!label) continue;
     // A photo backdrop is busy, so the label rides a solid pill in the box's
     // own color — plain colored text on a photo is unreadable.
-    ctx.font = `700 ${fontSize}px -apple-system, 'Segoe UI', Roboto, sans-serif`;
-    const padX = fontSize * 0.45, padY = fontSize * 0.3;
-    const textW = ctx.measureText(label).width;
-    const pillW = textW + padX * 2, pillH = fontSize + padY * 2;
-    // Above the box when there's room, otherwise tucked inside its top edge.
-    const pillX = x;
-    const pillY = y - pillH - ctx.lineWidth > 0 ? y - pillH - ctx.lineWidth : y + ctx.lineWidth;
+    ctx.font = `700 ${fontSize}px ${LABEL_FONT_FAMILY}`;
+    const pill = labelPill(b.rect, fontSize, ctx.measureText(label).width, w, ctx.lineWidth);
     ctx.fillStyle = b.color;
-    ctx.fillRect(pillX, pillY, pillW, pillH);
+    ctx.fillRect(pill.x, pill.y, pill.w, pill.h);
     ctx.fillStyle = '#fff';
-    ctx.fillText(label, pillX + padX, pillY + pillH / 2);
+    ctx.fillText(label, pill.x + pill.padX, pill.y + pill.h / 2);
   }
 }
 
