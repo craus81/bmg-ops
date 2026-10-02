@@ -173,6 +173,7 @@ export const ENV_SPECS: EnvSpec[] = [
   { name: 'CRON_SECRET', group: 'platform', powers: 'Authenticating scheduled runs — without it every cron is effectively off', whenMissing: 'fail' },
   { name: 'NEXT_PUBLIC_APP_URL', group: 'platform', powers: 'Absolute URLs in emails and notifications — deep links break without it', whenMissing: 'fail' },
   { name: 'HEALTH_PING_URL', group: 'platform', powers: "The external dead-man's switch that catches the scheduler itself dying", whenMissing: 'warn' },
+  { name: 'HEALTH_JOBS_PING_URL', group: 'platform', powers: 'A second external check that goes red when any background job is stale or erroring (HEALTH_PING_URL only covers the app and scheduler)', whenMissing: 'off' },
   { name: 'VERCEL_ENV', group: 'platform', powers: 'Set by Vercel automatically', whenMissing: 'off' },
   { name: 'NEXT_PUBLIC_TELEMETRY', group: 'platform', powers: 'Browser usage telemetry kill switch — set to "off" to record nothing (build-time: a change needs a redeploy). Unset = on', whenMissing: 'off', docs: 'docs/usage-telemetry.md' },
   { name: 'PROOF_SENDERS', group: 'platform', powers: 'Which senders the proof sweep treats as proof email', whenMissing: 'off' },
