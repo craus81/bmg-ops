@@ -5,7 +5,7 @@ import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { rolesOf, canActOnCniJob } from '@/lib/cni-access';
 import { getOpenCniShift, getFieldRate } from '@/lib/pay-credits';
 import { FIELD_ROLES, memberViews, cniRoster, fieldRoster, shopRoster } from '@/lib/shifts';
-import { getOpenShopShift, getShopLaborForCheckins, moveOffOtherShopShifts } from '@/lib/shop-labor';
+import { getOpenShopShift, getShopLaborForCheckins, moveOffOtherShopShifts, deptOfStage, switchShopShiftDept, type ShopTimerDept } from '@/lib/shop-labor';
 import { loadBurn } from '@/lib/labor-burn';
 
 export const dynamic = 'force-dynamic';
@@ -80,6 +80,7 @@ export async function GET(req: NextRequest) {
       // Hours only — the blended COST rate is admin-side job costing and
       // never returned here.
       loggedHours: labor?.hours ?? 0,
+      loggedByDept: labor?.byDept ?? { graphics: 0, upfit: 0 },
       // Labor burn meter (R6-12): hours logged against hours SOLD. Hours and
       // a percentage, still no cost rate. Null sold hours means the chip
       // says "no sold hours on file" rather than showing a 0% budget.
@@ -131,6 +132,9 @@ const StartSchema = z.object({
   locationId: z.string().uuid().optional().nullable(),
   locationName: z.string().trim().max(200).optional().nullable(),
   members: z.array(MemberInput).max(50).default([]),
+  /** Shop timers: which crew this time bills (migration 337). Omitted → the
+   *  vehicle's current stage decides (Graphics → graphics, else upfit). */
+  shopStage: z.enum(['graphics', 'upfit']).optional().nullable(),
 });
 
 /**
@@ -149,6 +153,7 @@ export async function POST(req: NextRequest) {
 
   let allowedIds: Set<string>;
   let ratePerVehicle: number | null = null;
+  let shopDept: ShopTimerDept | null = null;
 
   if (context === 'cni') {
     if (!cniJobId) return NextResponse.json({ error: 'cniJobId required' }, { status: 400 });
@@ -178,13 +183,19 @@ export async function POST(req: NextRequest) {
     if (!checkinId) return NextResponse.json({ error: 'checkinId required' }, { status: 400 });
     const { data: checkin } = await service
       .from('fleet_checkins')
-      .select('id')
+      .select('id, shop_stage')
       .eq('id', checkinId)
       .maybeSingle();
     if (!checkin) return NextResponse.json({ error: 'Check-in not found' }, { status: 404 });
     allowedIds = new Set((await shopRoster(service)).map(r => r.profile_id));
     allowedIds.add(auth.user.id);
-    const existing = await getOpenShopShift(service, checkinId);
+    shopDept = parsed.data.shopStage || ((checkin as any).shop_stage === 'graphics' ? 'graphics' : 'upfit');
+    let existing = await getOpenShopShift(service, checkinId);
+    // A running timer billing the other crew: hand it over to this one
+    // (same people carry on) rather than joining time to the wrong side.
+    if (existing && parsed.data.shopStage && deptOfStage((existing as any).shop_stage) !== shopDept) {
+      existing = await switchShopShiftDept(service, checkinId, existing.id, existing.started_by, shopDept);
+    }
     if (existing) {
       // Someone's clock is already running on this vehicle: pressing Start
       // (or scanning it in) means "I'm working on it too" — join the crew
@@ -265,6 +276,7 @@ export async function POST(req: NextRequest) {
       context,
       cni_job_id: context === 'cni' ? cniJobId : null,
       fleet_checkin_id: context === 'shop' ? checkinId : null,
+      shop_stage: context === 'shop' ? shopDept : null,
       graphics_job_id: context === 'graphics' ? graphicsJobId : null,
       task_tag: context === 'graphics' ? (parsed.data.taskTag || null) : null,
       part_number: (context === 'shop' || context === 'graphics') ? null : (partNumber || null),
@@ -274,7 +286,7 @@ export async function POST(req: NextRequest) {
       location_name: parsed.data.locationName || null,
       started_by: auth.user.id,
     })
-    .select('id, started_by, started_at')
+    .select('id, started_by, started_at, shop_stage')
     .single();
   if (error || !shift) {
     return NextResponse.json({ error: 'Failed to start shift: ' + (error?.message || 'unknown') }, { status: 500 });

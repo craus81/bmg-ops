@@ -6,6 +6,9 @@ import {
   VEHICLE_STATUS_COLORS,
   GRAPHICS_INSTALL_LABELS,
   GRAPHICS_INSTALL_COLORS,
+  VEHICLE_ROW_LABELS,
+  VEHICLE_ROW_COLORS,
+  type VehicleRowKey,
 } from '@/lib/types';
 
 interface StatusBadgeProps {
@@ -32,6 +35,12 @@ function resolveStatus(status: string) {
       return { colors, label: `Graphics: ${label}`, isStuck: lane === 'stuck' };
     }
     return { colors: FALLBACK_COLORS, label: status, isStuck: false };
+  }
+  // One-line status row keys (Graphics, Upfit Complete, …) — vehicle
+  // cards and stage history rows carry these.
+  const rowKey = status as VehicleRowKey;
+  if (VEHICLE_ROW_LABELS[rowKey]) {
+    return { colors: VEHICLE_ROW_COLORS[rowKey], label: VEHICLE_ROW_LABELS[rowKey], isStuck: false };
   }
   const vehicleStatus = status as VehicleTrackingStatus;
   const colors = VEHICLE_STATUS_COLORS[vehicleStatus];
