@@ -97,7 +97,7 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 
 Do **not** set: `NETSUITE_*`, `RESEND_*`, `GOOGLE_*`, `ANTHROPIC_API_KEY`,
-`DROPBOX_*`, `PAYCHEX_*`, `APNS_*`, `DIALPAD_*`, `HEALTH_PING_URL`, or
+`DROPBOX_*`, `PAYCHEX_*`, `APNS_*`, `DIALPAD_*`, `HEALTH_PING_URL`, `HEALTH_JOBS_PING_URL`, or
 `SUPABASE_DB_URL` (the app doesn't need it; only the migration step does).
 
 With those absent, every outbound path in the app degrades to "not

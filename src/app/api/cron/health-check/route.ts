@@ -20,19 +20,23 @@ const REALERT_HOURS = 6;
  * goes stale or records an error — a dead NetSuite sync used to be able to
  * hide for weeks. Runs every 30 min via Vercel Cron.
  *
- * Dead-man's switch: every run also pings HEALTH_PING_URL (a
- * healthchecks.io-style check URL). If the Vercel cron scheduler itself
- * dies — the one failure this route can't alert on, since it stops running
- * too — the pings stop arriving and the external service emails/pages the
- * admins. Bad checks ping the /fail variant so the external service also
- * mirrors job-level problems.
+ * Two external checks, healthchecks.io-style (<url> = success,
+ * <url>/fail = failure; the body shows up in the check's event log):
+ *
+ * - HEALTH_PING_URL is the dead-man's switch for the app itself. It goes
+ *   red only when the watcher stops running (the Vercel cron scheduler or
+ *   the app is down), crashes, or can't write to the database. A single
+ *   background job erroring no longer turns it red: in September 2026 that
+ *   mirroring made it read as 20 "outages" totalling 3.5 days when the app
+ *   was up the whole time, mostly daily jobs holding it red until their
+ *   next run.
+ * - HEALTH_JOBS_PING_URL (optional) mirrors job-level problems: /fail
+ *   whenever any monitored job is stale or last recorded an error.
  */
-const pingExternalMonitor = async (ok: boolean, summary: string) => {
-  const base = process.env.HEALTH_PING_URL;
+const pingExternalMonitor = async (envVar: 'HEALTH_PING_URL' | 'HEALTH_JOBS_PING_URL', ok: boolean, summary: string) => {
+  const base = process.env[envVar];
   if (!base) return;
   try {
-    // healthchecks.io convention: <url> = success, <url>/fail = failure.
-    // The body shows up in the check's event log for context.
     await fetch(ok ? base : `${base.replace(/\/$/, '')}/fail`, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
@@ -41,7 +45,7 @@ const pingExternalMonitor = async (ok: boolean, summary: string) => {
     });
   } catch (err) {
     // Never let the dead-man's switch break the watcher itself.
-    console.error('HEALTH_PING_URL ping failed:', err);
+    console.error(`${envVar} ping failed:`, err);
   }
 };
 
@@ -111,11 +115,14 @@ export async function GET(req: NextRequest) {
       ...(alertsWrite.ok ? [] : [`health_alerts heartbeat write failed: ${alertsWrite.error}`]),
       ...(selfWrite.ok ? [] : [`health_check heartbeat write failed: ${selfWrite.error}`]),
     ];
-    const summaryParts = [
-      ...(bad.length === 0 ? [`all ${checks.length} jobs ok`] : bad.map(c => `${c.label}: ${c.problem}`)),
-      ...writeErrors,
-    ];
-    await pingExternalMonitor(bad.length === 0 && writeErrors.length === 0, summaryParts.join(' · '));
+    const jobsSummary = bad.length === 0 ? `all ${checks.length} jobs ok` : bad.map(c => `${c.label}: ${c.problem}`).join(' · ');
+    const appSummary = writeErrors.length > 0
+      ? writeErrors.join(' · ')
+      : `watcher ran · ${bad.length === 0 ? `all ${checks.length} jobs ok` : `${bad.length} job${bad.length !== 1 ? 's' : ''} need attention (see System Health)`}`;
+    await Promise.all([
+      pingExternalMonitor('HEALTH_PING_URL', writeErrors.length === 0, appSummary),
+      pingExternalMonitor('HEALTH_JOBS_PING_URL', bad.length === 0, jobsSummary),
+    ]);
 
     return NextResponse.json({
       status: 'ok',
@@ -128,7 +135,11 @@ export async function GET(req: NextRequest) {
     console.error('health-check failed:', e);
     // The watcher ran but crashed — still a failure signal worth surfacing
     // externally (a success ping here would mask the crash).
-    await pingExternalMonitor(false, `health-check crashed: ${e.message || 'unknown error'}`);
+    const crashed = `health-check crashed: ${e.message || 'unknown error'}`;
+    await Promise.all([
+      pingExternalMonitor('HEALTH_PING_URL', false, crashed),
+      pingExternalMonitor('HEALTH_JOBS_PING_URL', false, crashed),
+    ]);
     return NextResponse.json({ error: e.message || 'health check failed' }, { status: 500 });
   }
 }
