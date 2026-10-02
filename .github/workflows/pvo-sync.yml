@@ -21,9 +21,9 @@
 
 name: pvo-sync
 
+# The daily schedule is off (Craig, 2026-10-02): the renamed Art Station
+# library replaces PVO downloads. Run it by hand from the Actions tab if needed.
 on:
-  schedule:
-    - cron: '23 11 * * *'  # 6:23am Central (daylight time), 5:23am standard
   workflow_dispatch:
     inputs:
       args:
