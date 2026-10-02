@@ -4,7 +4,8 @@ import { notify, notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { loadChecklistTemplate, buildTaskRows } from '@/lib/install-checklist';
 import { appendSoLineTasks } from '@/lib/so-line-tasks';
-import { closeShopShiftsForCheckin } from '@/lib/shop-labor';
+import { closeShopShiftsForCheckin, followStageWithShopTimer } from '@/lib/shop-labor';
+import { isShopStage, vehicleRowKey, type ShopStage } from '@/lib/types';
 import { logAudit } from '@/lib/audit';
 import { createClient as createServiceClient } from '@supabase/supabase-js';
 
@@ -13,22 +14,26 @@ const serviceSupabase = createServiceClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-// Legal transitions for fleet_checkins.status. stuck_parts/stuck_graphics are
-// side-branches reachable from/to any live state. Invoicing still flips
-// received/in_progress/complete directly; this state machine only governs the
-// install pipeline.
+// Legal transitions for fleet_checkins.status. The one-line status row
+// (owner layout 2026-10-02) dropped Stuck (Parts/Graphics) and plain In
+// Progress from the buttons: Graphics / Graphics Complete / In Progress
+// Upfit / Upfit Complete are shop stages (see handleStageChange) that keep
+// status = in_progress. 'in_progress' itself is still accepted for older
+// clients, and stuck_* rows left over from before migration 337 can still
+// move out. Invoicing still flips received/in_progress/complete directly;
+// this state machine only governs the install pipeline.
 const LEGAL_TRANSITIONS: Record<string, string[]> = {
-  received: ['in_progress', 'stuck_parts', 'stuck_graphics', 'complete'],
-  in_progress: ['complete', 'stuck_parts', 'stuck_graphics', 'received'],
-  stuck_parts: ['received', 'in_progress', 'stuck_graphics'],
-  stuck_graphics: ['received', 'in_progress', 'stuck_parts'],
+  received: ['in_progress', 'complete'],
+  in_progress: ['complete', 'received'],
+  stuck_parts: ['received', 'in_progress', 'complete'],
+  stuck_graphics: ['received', 'in_progress', 'complete'],
   complete: ['shipped', 'in_progress'],
   shipped: ['complete'],
   // legacy value — treat like received
-  checked_in: ['in_progress', 'stuck_parts', 'stuck_graphics', 'received', 'complete'],
+  checked_in: ['in_progress', 'received', 'complete'],
 };
 
-const VALID_STATUSES = ['received', 'in_progress', 'stuck_parts', 'stuck_graphics', 'complete', 'shipped'];
+const VALID_STATUSES = ['received', 'in_progress', 'complete', 'shipped'];
 
 export async function POST(request: Request) {
   const auth = await requireStaff(request as NextRequest);
@@ -43,7 +48,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'vehicleId and newStatus are required' }, { status: 400 });
     }
 
-    if (!VALID_STATUSES.includes(newStatus)) {
+    if (!VALID_STATUSES.includes(newStatus) && !isShopStage(newStatus)) {
       return NextResponse.json({ error: 'Invalid status value' }, { status: 400 });
     }
 
@@ -51,7 +56,7 @@ export async function POST(request: Request) {
     const [vehicleResult, profileResult] = await Promise.all([
       serviceSupabase
         .from('fleet_checkins')
-        .select('id, status, vin, customer_name, vehicle_year, vehicle_make, vehicle_model, assigned_to, matched_graphics_job_id, graphics_install_status, qc_completed_at, customer_portal_token, source_estimate_id')
+        .select('id, status, vin, customer_name, vehicle_year, vehicle_make, vehicle_model, assigned_to, matched_graphics_job_id, graphics_install_status, qc_completed_at, customer_portal_token, source_estimate_id, shop_stage, upfit_completed_at')
         .eq('id', vehicleId)
         .single(),
       serviceSupabase.from('profiles').select('id, full_name, role, roles').eq('id', user.id).single(),
@@ -71,6 +76,10 @@ export async function POST(request: Request) {
       ? profileResult.data.roles
       : (profileResult.data?.role ? [profileResult.data.role] : []);
     const isAdmin = isAdminRole(userRoles);
+
+    if (isShopStage(newStatus)) {
+      return handleStageChange(vehicle, newStatus, note, user.id, userName);
+    }
 
     // No-op: same status
     if (currentStatus === newStatus) {
@@ -153,7 +162,10 @@ export async function POST(request: Request) {
     // Build update payload. QC stamps apply to every real completion, but
     // never overwrite an earlier stamp (shipped → complete re-entry, or a
     // second completion after in_progress rework keeps the original).
-    const updatePayload: Record<string, any> = { status: newStatus };
+    // A shop stage only means something while in_progress; Received /
+    // Complete / Shipped clear it (the Graphics Complete and Upfit Complete
+    // checks live in their own columns and stay).
+    const updatePayload: Record<string, any> = { status: newStatus, shop_stage: null };
     if (isCompleting) {
       if (!(vehicle as any).qc_completed_at) {
         updatePayload.qc_completed_at = new Date().toISOString();
@@ -194,10 +206,8 @@ export async function POST(request: Request) {
     }
 
     // Shop job timer (owner rules 2026-10-02): finishing the completion
-    // procedure stops it, and so does shipping. Stuck for parts pauses it —
-    // nobody is working the vehicle while it waits — and techs press Resume
-    // (or Pull In again) once the parts are in.
-    if (newStatus === 'complete' || newStatus === 'shipped' || newStatus === 'stuck_parts') {
+    // procedure stops it, and so does shipping.
+    if (newStatus === 'complete' || newStatus === 'shipped') {
       try {
         await closeShopShiftsForCheckin(serviceSupabase, vehicleId);
       } catch (err) {
@@ -240,6 +250,86 @@ export async function POST(request: Request) {
     console.error('Vehicle tracking update error:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
+}
+
+/**
+ * One-line status buttons Graphics / Graphics Complete / In Progress Upfit /
+ * Upfit Complete (owner layout 2026-10-02 — no forced order). Each one puts
+ * the vehicle in_progress with that shop_stage, and:
+ *   - Graphics opens the graphics install lane (clearing its done check);
+ *   - Graphics Complete completes the lane (the migration-085 trigger flips
+ *     the linked graphics job to installed), and the check stays;
+ *   - In Progress Upfit clears the Upfit Complete check;
+ *   - Upfit Complete stamps upfit_completed_at, and the check stays.
+ * History gets one row, row-key to row-key, so the timeline and the "in
+ * stage since" chips follow the row. A running shop timer follows the
+ * stage (followStageWithShopTimer).
+ */
+async function handleStageChange(
+  vehicle: any,
+  stage: ShopStage,
+  note: string | null | undefined,
+  userId: string,
+  userName: string,
+) {
+  const currentStatus = vehicle.status as string;
+  if (currentStatus === 'shipped') {
+    return NextResponse.json({ error: 'This vehicle is marked Shipped. Move it back to Complete first.' }, { status: 400 });
+  }
+  const fromKey = vehicleRowKey(vehicle);
+  if (fromKey === stage) {
+    return NextResponse.json({ success: true, noop: true, vehicleId: vehicle.id, fromStatus: fromKey, toStatus: stage });
+  }
+
+  const now = new Date().toISOString();
+  const lane = vehicle.graphics_install_status || 'pending';
+  const updatePayload: Record<string, any> = { status: 'in_progress', shop_stage: stage };
+  if (stage === 'graphics' && lane !== 'in_progress') {
+    updatePayload.graphics_install_status = 'in_progress';
+    updatePayload.graphics_install_completed_at = null;
+    updatePayload.graphics_install_completed_by = null;
+  } else if (stage === 'graphics_complete' && lane !== 'complete') {
+    updatePayload.graphics_install_status = 'complete';
+    updatePayload.graphics_install_completed_at = now;
+    updatePayload.graphics_install_completed_by = userId;
+  } else if (stage === 'upfit' && vehicle.upfit_completed_at) {
+    updatePayload.upfit_completed_at = null;
+    updatePayload.upfit_completed_by = null;
+  } else if (stage === 'upfit_complete' && !vehicle.upfit_completed_at) {
+    updatePayload.upfit_completed_at = now;
+    updatePayload.upfit_completed_by = userId;
+  }
+
+  const { error: updateError } = await serviceSupabase
+    .from('fleet_checkins')
+    .update(updatePayload)
+    .eq('id', vehicle.id);
+  if (updateError) {
+    return NextResponse.json({ error: 'Failed to update status: ' + updateError.message }, { status: 500 });
+  }
+
+  await serviceSupabase.from('vehicle_status_history').insert({
+    vehicle_id: vehicle.id,
+    from_status: fromKey,
+    to_status: stage,
+    note: note?.trim() || null,
+    changed_by: userId,
+    changed_by_name: userName,
+  });
+
+  // Starting work on a freshly received vehicle: same checklist the old
+  // Received → In Progress move instantiated.
+  if (currentStatus === 'received' || currentStatus === 'checked_in') {
+    await instantiateChecklist(vehicle.id, !!vehicle.matched_graphics_job_id);
+  }
+
+  try {
+    await followStageWithShopTimer(serviceSupabase, vehicle.id, stage);
+  } catch (err) {
+    console.warn('update-status: shop timer follow failed:', err);
+  }
+
+  return NextResponse.json({ success: true, vehicleId: vehicle.id, fromStatus: fromKey, toStatus: stage });
 }
 
 async function instantiateChecklist(vehicleId: string, hasGraphics: boolean) {

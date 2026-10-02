@@ -35,6 +35,8 @@ interface VehicleData {
   scheduled_upfit_date: string | null;
   assigned_to: string | null;
   matched_graphics_job_id: string | null;
+  /** One-line status (migration 337): which crew is on it while in_progress. */
+  shop_stage?: string | null;
   proof_file_path: string | null;
   proof_file_name: string | null;
   qc_completed_at: string | null;
@@ -104,6 +106,8 @@ interface ShopShift {
   id: string;
   started_by: string;
   started_at: string;
+  /** Which crew the timer bills (migration 337); null = older upfit timer. */
+  shop_stage?: string | null;
   members: ShiftMemberView[];
 }
 
@@ -161,6 +165,7 @@ export default function VehiclePickListPage() {
   const [laborShift, setLaborShift] = useState<ShopShift | null>(null);
   const [laborRoster, setLaborRoster] = useState<{ profile_id: string; full_name: string }[]>([]);
   const [loggedHours, setLoggedHours] = useState(0);
+  const [loggedByDept, setLoggedByDept] = useState<{ graphics: number; upfit: number }>({ graphics: 0, upfit: 0 });
   // Labor burn meter (R6-12): hours logged against hours SOLD. Null sold
   // hours renders as "no sold hours on file" — never a 0% or 100% budget.
   const [burn, setBurn] = useState<{
@@ -282,6 +287,7 @@ export default function VehiclePickListPage() {
       setLaborShift(data.shift || null);
       setLaborRoster(data.roster || []);
       setLoggedHours(Number(data.loggedHours) || 0);
+      setLoggedByDept({ graphics: Number(data.loggedByDept?.graphics) || 0, upfit: Number(data.loggedByDept?.upfit) || 0 });
       setBurn(data.burn || null);
       setLaborLoaded(true);
     } catch { /* non-blocking */ }
@@ -295,7 +301,7 @@ export default function VehiclePickListPage() {
   }, [vehicle, canUseShopTimer, loadLaborShift]);
 
   // Pull In (owner flow 2026-10-02): scanning a vehicle in starts its job
-  // timer — chaining Received → In Progress — and offers the tag list.
+  // timer — chaining Received → In Progress Upfit — and offers the tag list.
   useEffect(() => {
     if (!pullIn || pullInHandled.current || !vehicle || !laborLoaded || !canUseShopTimer) return;
     pullInHandled.current = true;
@@ -352,8 +358,9 @@ export default function VehiclePickListPage() {
     // through the one status writer. Only 'received' chains — a timer on
     // an in-flight or completed vehicle (rework) must not move the board.
     // The timer keeps running either way; a transition failure surfaces
-    // through postStatusChange's own error UI.
-    if (started && vehicle.status === 'received') await postStatusChange('in_progress');
+    // through postStatusChange's own error UI. A new timer bills upfit
+    // unless the vehicle is on Graphics, so received → In Progress Upfit.
+    if (started && vehicle.status === 'received') await postStatusChange('upfit');
     return started;
   };
 
@@ -438,7 +445,7 @@ export default function VehiclePickListPage() {
     setActionLoading(false);
   };
 
-  const startInstall = () => postStatusChange('in_progress');
+  const startInstall = () => postStatusChange('upfit');
   const markComplete = () => postStatusChange('complete', { note: completionNote.trim() || undefined });
   const forceComplete = () => postStatusChange('complete', { note: completionNote.trim() || undefined, force: true });
 
@@ -583,6 +590,13 @@ export default function VehiclePickListPage() {
   const meOnCrew = !!(user && laborShift?.members.some(m => m.profile_id === user.id));
   const laborElapsedLabel = `${Math.floor(laborElapsedMs / 3_600_000)}h ${String(Math.floor((laborElapsedMs % 3_600_000) / 60_000)).padStart(2, '0')}m`;
   const laborCrewAvailable = laborRoster.filter(r => !laborShift?.members.some(m => m.profile_id === r.profile_id));
+  // Which crew the timer bills (owner rule 2026-10-02: timers run on Graphics
+  // and on In Progress Upfit). Switching sets the vehicle's status, and the
+  // server hands a running timer over to that crew.
+  const laborDept: 'graphics' | 'upfit' = laborShift
+    ? (laborShift.shop_stage === 'graphics' ? 'graphics' : 'upfit')
+    : (vehicle.shop_stage === 'graphics' ? 'graphics' : 'upfit');
+  const showDeptSwitch = !!vehicle.matched_graphics_job_id && !isComplete;
 
   return (
     <div>
@@ -699,9 +713,9 @@ export default function VehiclePickListPage() {
               </div>
               <div style={{ fontSize: '13px', color: 'var(--text-primary)', marginTop: '4px', fontWeight: laborShift ? 700 : 400 }}>
                 {laborShift
-                  ? <>⏱ {laborElapsedLabel} · crew of {laborShift.members.length}</>
+                  ? <>⏱ {laborElapsedLabel} · {laborDept === 'graphics' ? 'Graphics' : 'Upfit'} · crew of {laborShift.members.length}</>
                   : loggedHours > 0
-                    ? `${isComplete ? '' : vehicle.status === 'stuck_parts' ? 'Paused while stuck for parts · ' : 'Paused · '}${loggedHours}h logged on this vehicle`
+                    ? `${isComplete ? '' : 'Paused · '}${loggedHours}h logged on this vehicle${loggedByDept.graphics > 0 && loggedByDept.upfit > 0 ? ` (upfit ${loggedByDept.upfit}h · graphics ${loggedByDept.graphics}h)` : ''}`
                     : 'No time logged yet'}
               </div>
               {laborShift && laborResumeLabel && (
@@ -752,6 +766,29 @@ export default function VehiclePickListPage() {
               );
             })()}
           </div>
+          {showDeptSwitch && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '10px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Working on</span>
+              {(['upfit', 'graphics'] as const).map(d => {
+                const on = laborDept === d;
+                return (
+                  <button
+                    key={d}
+                    type="button"
+                    disabled={actionLoading || laborBusy || vehicle.shop_stage === d}
+                    onClick={() => { void postStatusChange(d); }}
+                    style={{
+                      padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                      border: on ? '1.5px solid var(--accent, #2563eb)' : '1px solid var(--border)',
+                      background: on ? 'color-mix(in srgb, var(--accent, #2563eb) 12%, transparent)' : 'var(--card)',
+                      color: on ? 'var(--text-primary)' : 'var(--text-secondary)',
+                      cursor: 'pointer',
+                    }}
+                  >{d === 'upfit' ? 'Upfit' : 'Graphics'}</button>
+                );
+              })}
+            </div>
+          )}
           {laborShift && (
             <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border)' }}>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>

@@ -21,7 +21,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { deepLinks } from '@/lib/deep-links';
-import { GRAPHICS_STATUS_LABELS, VEHICLE_STATUS_LABELS } from '@/lib/types';
+import { GRAPHICS_STATUS_LABELS, VEHICLE_STATUS_LABELS, VEHICLE_ROW_LABELS } from '@/lib/types';
 import { estimateHeadlineNumber } from '@/lib/estimate-number';
 
 interface ActivityItem {
@@ -147,7 +147,7 @@ export default function RecentActivity() {
         const title =
           h.from_status === null ? 'Checked in vehicle'
           : h.from_status === h.to_status ? 'Added a note'
-          : `Moved to ${(VEHICLE_STATUS_LABELS as Record<string, string>)[h.to_status] || pretty(h.to_status)}`;
+          : `Moved to ${(VEHICLE_ROW_LABELS as Record<string, string>)[h.to_status] || (VEHICLE_STATUS_LABELS as Record<string, string>)[h.to_status] || pretty(h.to_status)}`;
         out.push({
           key: `veh-${h.id}`, when: h.created_at, tag: 'SHOP', title,
           subtitle: [desc, v.customer_name].filter(Boolean).join(' · '),

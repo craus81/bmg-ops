@@ -98,11 +98,22 @@ export async function getShopLaborRate(service: SupabaseClient): Promise<number 
   return rate != null ? Number(rate) : null;
 }
 
+/**
+ * Which crew a shop timer is billing (migration 337, owner rule 2026-10-02:
+ * timers run on Graphics and on In Progress Upfit). Older shifts carry null
+ * and count as upfit.
+ */
+export type ShopTimerDept = 'graphics' | 'upfit';
+
+export function deptOfStage(stage: string | null | undefined): ShopTimerDept {
+  return stage === 'graphics' || stage === 'graphics_complete' ? 'graphics' : 'upfit';
+}
+
 /** The check-in's open shop shift, if any (mirrors getOpenCniShift). */
 export async function getOpenShopShift(service: SupabaseClient, checkinId: string) {
   const { data } = await service
     .from('work_shifts')
-    .select('id, started_by, started_at')
+    .select('id, started_by, started_at, shop_stage')
     .eq('context', 'shop')
     .eq('fleet_checkin_id', checkinId)
     .is('ended_at', null)
@@ -121,6 +132,8 @@ export interface CheckinLabor {
   /** hours × the blended rate, or null when no rate is configured. */
   cost: number | null;
   hasOpenShift: boolean;
+  /** `hours` split by the crew the timer was billing. */
+  byDept: Record<ShopTimerDept, number>;
 }
 
 /**
@@ -138,7 +151,7 @@ export async function getShopLaborForCheckins(
   for (let i = 0; i < checkinIds.length; i += 100) {
     const { data, error } = await service
       .from('work_shifts')
-      .select('id, fleet_checkin_id, started_at, ended_at, auto_closed')
+      .select('id, fleet_checkin_id, started_at, ended_at, auto_closed, shop_stage')
       .eq('context', 'shop')
       .in('fleet_checkin_id', checkinIds.slice(i, i + 100));
     if (error) {
@@ -167,10 +180,11 @@ export async function getShopLaborForCheckins(
   const rate = await getShopLaborRate(service);
   const nowIso = new Date().toISOString();
   for (const s of shifts) {
-    const entry = out.get(s.fleet_checkin_id) || { hours: 0, approxHours: 0, cost: null, hasOpenShift: false };
+    const entry = out.get(s.fleet_checkin_id) || { hours: 0, approxHours: 0, cost: null, hasOpenShift: false, byDept: { graphics: 0, upfit: 0 } };
     const open = !s.ended_at;
     const hours = totalShiftHours(s.started_at, s.ended_at || nowIso, membersByShift.get(s.id) || [], { shopClock: true });
     entry.hours += hours;
+    entry.byDept[deptOfStage(s.shop_stage)] += hours;
     if (open || s.auto_closed) entry.approxHours += hours;
     if (open) entry.hasOpenShift = true;
     out.set(s.fleet_checkin_id, entry);
@@ -178,6 +192,8 @@ export async function getShopLaborForCheckins(
   for (const entry of out.values()) {
     entry.hours = Math.round(entry.hours * 100) / 100;
     entry.approxHours = Math.round(entry.approxHours * 100) / 100;
+    entry.byDept.graphics = Math.round(entry.byDept.graphics * 100) / 100;
+    entry.byDept.upfit = Math.round(entry.byDept.upfit * 100) / 100;
     entry.cost = rate != null ? Math.round(entry.hours * rate * 100) / 100 : null;
   }
   return out;
@@ -185,9 +201,8 @@ export async function getShopLaborForCheckins(
 
 /**
  * End every open shop shift on a check-in — finishing the completion
- * procedure is how a job timer stops, and Stuck for parts pauses it (owner
- * rules 2026-10-02), so this is a normal stop, not an approximate
- * auto-close. Best effort; idempotent (no
+ * procedure (or shipping) is how a job timer stops (owner rules
+ * 2026-10-02), so this is a normal stop, not an approximate auto-close. Best effort; idempotent (no
  * open shifts = no writes).
  */
 export async function closeShopShiftsForCheckin(service: SupabaseClient, checkinId: string): Promise<number> {
@@ -257,4 +272,72 @@ export async function moveOffOtherShopShifts(
     }
   }
   return moved;
+}
+
+/**
+ * Keep a running shop timer in step with the vehicle's one-line status
+ * (owner rule 2026-10-02: timers run on Graphics and on In Progress Upfit).
+ *
+ *  - Graphics Complete / Upfit Complete ends a timer billing that crew —
+ *    that work is finished — and leaves the other crew's timer alone.
+ *  - Graphics / In Progress Upfit, while a timer bills the other crew, ends
+ *    it and starts one for this crew with the same people on it, so the
+ *    hours land on the right side of the job.
+ *
+ * Never starts a timer from nothing: tapping a status in the office isn't
+ * someone clocking onto the vehicle (Pull In / Start Timer do that).
+ * Best effort, like the other shop-timer side effects.
+ */
+export async function followStageWithShopTimer(
+  service: SupabaseClient,
+  checkinId: string,
+  stage: string,
+): Promise<void> {
+  const open = await getOpenShopShift(service, checkinId);
+  if (!open) return;
+  const dept = deptOfStage(stage);
+  const running = deptOfStage((open as any).shop_stage);
+  if (stage === 'graphics_complete' || stage === 'upfit_complete') {
+    if (running === dept) await closeShopShiftsForCheckin(service, checkinId);
+    return;
+  }
+  if (running === dept) return;
+  await switchShopShiftDept(service, checkinId, open.id, open.started_by, dept);
+}
+
+/**
+ * End shift `shiftId` and start a new open shop shift on the same check-in
+ * for `dept`, carrying over whoever is still on the crew. Returns the new
+ * shift (or null when nobody was on it — then nothing is restarted).
+ */
+export async function switchShopShiftDept(
+  service: SupabaseClient,
+  checkinId: string,
+  shiftId: string,
+  startedBy: string | null,
+  dept: ShopTimerDept,
+): Promise<{ id: string; started_by: string; started_at: string; shop_stage: string } | null> {
+  const now = new Date().toISOString();
+  const { data: crew } = await service
+    .from('work_shift_members')
+    .select('id, profile_id')
+    .eq('shift_id', shiftId)
+    .is('removed_at', null);
+  await service.from('work_shift_members').update({ removed_at: now }).eq('shift_id', shiftId).is('removed_at', null);
+  await service.from('work_shifts').update({ ended_at: now }).eq('id', shiftId).is('ended_at', null);
+  if (!crew || crew.length === 0) return null;
+
+  const { data: shift, error } = await service
+    .from('work_shifts')
+    .insert({ context: 'shop', fleet_checkin_id: checkinId, shop_stage: dept, started_by: startedBy || crew[0].profile_id })
+    .select('id, started_by, started_at, shop_stage')
+    .single();
+  if (error || !shift) {
+    console.warn('switchShopShiftDept: restart failed:', error?.message);
+    return null;
+  }
+  await service.from('work_shift_members').insert(
+    crew.map(m => ({ shift_id: shift.id, profile_id: m.profile_id, share_weight: 1, added_by: startedBy || m.profile_id })),
+  );
+  return shift as any;
 }

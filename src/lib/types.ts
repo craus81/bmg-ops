@@ -329,8 +329,71 @@ export interface QuoteElement {
 export type VehicleTrackingStatus = 'received' | 'in_progress' | 'stuck_parts' | 'stuck_graphics' | 'complete' | 'shipped';
 
 export const VEHICLE_STATUS_PIPELINE: VehicleTrackingStatus[] = [
-  'received', 'in_progress', 'stuck_parts', 'stuck_graphics', 'complete', 'shipped'
+  'received', 'in_progress', 'complete', 'shipped'
 ];
+
+/**
+ * One-line vehicle status (owner layout 2026-10-02). The vehicle's `status`
+ * column keeps its four real values (received / in_progress / complete /
+ * shipped) so every report, alert and dashboard reads it as before; while it
+ * is in_progress, `shop_stage` says which crew is on it. Graphics Complete is
+ * the graphics install lane being 'complete' and Upfit Complete is
+ * upfit_completed_at — both stay checked whatever button is current, so the
+ * row shows what is actually finished. Stuck (Parts/Graphics) and plain
+ * "In Progress" are retired from the buttons (migration 337 moved the
+ * vehicles that held them).
+ */
+export type ShopStage = 'graphics' | 'graphics_complete' | 'upfit' | 'upfit_complete';
+export const SHOP_STAGES: ShopStage[] = ['graphics', 'graphics_complete', 'upfit', 'upfit_complete'];
+
+export type VehicleRowKey = 'received' | ShopStage | 'complete' | 'shipped';
+export const VEHICLE_ROW: VehicleRowKey[] = [
+  'received', 'graphics', 'graphics_complete', 'upfit', 'upfit_complete', 'complete', 'shipped',
+];
+
+export const VEHICLE_ROW_LABELS: Record<VehicleRowKey, string> = {
+  received: 'Received',
+  graphics: 'Graphics',
+  graphics_complete: 'Graphics Complete',
+  upfit: 'In Progress Upfit',
+  upfit_complete: 'Upfit Complete',
+  complete: 'Complete',
+  shipped: 'Shipped',
+};
+
+const DONE_COLORS = { bg: 'rgba(34,197,94,0.12)', border: 'rgba(34,197,94,0.45)', text: '#22c55e' };
+export const VEHICLE_ROW_COLORS: Record<VehicleRowKey, { bg: string; border: string; text: string }> = {
+  received: { bg: 'rgba(99,102,241,0.08)', border: 'rgba(99,102,241,0.25)', text: '#818cf8' },
+  graphics: { bg: 'rgba(167,139,250,0.15)', border: 'rgba(167,139,250,0.45)', text: '#a78bfa' },
+  graphics_complete: DONE_COLORS,
+  upfit: { bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.25)', text: '#60a5fa' },
+  upfit_complete: DONE_COLORS,
+  complete: { bg: 'rgba(52,211,153,0.08)', border: 'rgba(52,211,153,0.25)', text: '#34d399' },
+  shipped: { bg: 'rgba(139,92,246,0.08)', border: 'rgba(139,92,246,0.25)', text: '#a78bfa' },
+};
+
+export function isShopStage(v: unknown): v is ShopStage {
+  return typeof v === 'string' && (SHOP_STAGES as string[]).includes(v);
+}
+
+/** Which button on the one-line row is current for this vehicle. */
+export function vehicleRowKey(v: { status?: string | null; shop_stage?: string | null }): VehicleRowKey {
+  const s = v.status;
+  if (s === 'complete' || s === 'shipped') return s;
+  if (s === 'received' || s === 'checked_in' || !s) return 'received';
+  if (isShopStage(v.shop_stage)) return v.shop_stage;
+  // Legacy rows the migration didn't touch (or a plain in_progress set by an
+  // older client): stuck for graphics reads as graphics, anything else upfit.
+  return s === 'stuck_graphics' ? 'graphics' : 'upfit';
+}
+
+/** The sticky "finished" checks on the row. */
+export function vehicleDoneChecks(v: { graphics_install_status?: string | null; upfit_completed_at?: string | null }) {
+  return {
+    graphics: v.graphics_install_status === 'complete',
+    upfit: !!v.upfit_completed_at,
+  };
+}
 
 // "Physically on the ground at the shop" — the statuses the In-Shop board's
 // On Ground count, ShopArrivals, and the estimate builder's checked-in
@@ -395,6 +458,11 @@ export interface FleetCheckin {
   graphics_install_completed_at?: string | null;
   graphics_install_completed_by?: string | null;
   graphics_install_notes?: string | null;
+  // One-line status (migration 337): which crew is on it while in_progress,
+  // and the sticky Upfit Complete stamp.
+  shop_stage?: ShopStage | null;
+  upfit_completed_at?: string | null;
+  upfit_completed_by?: string | null;
   created_at: string;
   updated_at: string;
 }

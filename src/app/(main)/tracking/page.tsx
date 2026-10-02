@@ -19,7 +19,8 @@ import { openOrCreateVehicleThread } from '@/lib/customer-thread';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import { deepLinks } from '@/lib/deep-links';
 import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto, GraphicsJob, GraphicsInstallStatus, CheckinSalesOrder } from '@/lib/types';
-import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS, GRAPHICS_STATUS_LABELS, GRAPHICS_INSTALL_PIPELINE, GRAPHICS_INSTALL_LABELS, GRAPHICS_INSTALL_COLORS, IN_SHOP_STATUSES } from '@/lib/types';
+import { VEHICLE_STATUS_LABELS, GRAPHICS_STATUS_LABELS, GRAPHICS_INSTALL_LABELS, IN_SHOP_STATUSES, VEHICLE_ROW, VEHICLE_ROW_LABELS, VEHICLE_ROW_COLORS, vehicleRowKey, type VehicleRowKey } from '@/lib/types';
+import VehicleStatusRow from '@/components/VehicleStatusRow';
 import NetSuitePdf from '@/components/NetSuitePdf';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import { openNetSuiteInvoicePdfByNumber } from '@/lib/netsuite-pdf-client';
@@ -38,7 +39,7 @@ import ShopArrivals from '@/components/ShopArrivals';
 import MyWorkList from '@/components/MyWorkList';
 import PersonalListsModal from '@/components/PersonalListsModal';
 
-type FilterStatus = VehicleTrackingStatus | 'all' | 'stuck';
+type FilterStatus = VehicleRowKey | 'all';
 
 /** "Invoiced" pill beside the status badge, once the vehicle's SO is billed
  *  (in NetSuite or by FleetSuite's completion flow). Same shape as
@@ -1241,7 +1242,7 @@ export default function TrackingPage() {
     }
   };
 
-  const updateStatus = useCallback(async (vehicleId: string, newStatus: VehicleTrackingStatus, opts: { force?: boolean } = {}) => {
+  const updateStatus = useCallback(async (vehicleId: string, newStatus: VehicleRowKey, opts: { force?: boolean } = {}) => {
     setUpdatingId(vehicleId);
     setUpdateSuccess(null);
     try {
@@ -1292,12 +1293,15 @@ export default function TrackingPage() {
         });
       }
       setStatusNote('');
-      setUpdateSuccess(`Updated to ${VEHICLE_STATUS_LABELS[newStatus]}`);
+      setUpdateSuccess(`Updated to ${VEHICLE_ROW_LABELS[newStatus]}`);
       setTimeout(() => setUpdateSuccess(null), 2000);
       await loadVehicles();
       if (expandedId === vehicleId) {
         loadHistory(vehicleId);
         loadTasks(vehicleId);
+        // Graphics Complete flips the linked graphics job to installed.
+        const v = vehicles.find(x => x.id === vehicleId);
+        if (v) loadGraphicsJob(v);
       }
 
       // Prompt for completion photos when marking as complete
@@ -1312,55 +1316,6 @@ export default function TrackingPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [statusNote, expandedId, profile, vehicles]);
 
-  // Graphics install lane (migration 085) — runs in parallel to the upfit
-  // pipeline driven by updateStatus above. Independent state machine, but
-  // the completion ceremony in update-status gates on this being 'complete'
-  // or 'n/a' when a graphics job is linked.
-  const updateGraphicsInstall = useCallback(async (vehicleId: string, newStatus: GraphicsInstallStatus) => {
-    setUpdatingId(vehicleId);
-    setUpdateSuccess(null);
-    try {
-      const res = await fetch('/api/vehicle-tracking/graphics-install-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          vehicleId,
-          newStatus,
-          note: statusNote.trim() || null,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        await dialog.alert('Graphics install update failed: ' + (data.error || 'Unknown error'));
-        setUpdatingId(null);
-        return;
-      }
-      const sentNote = statusNote.trim();
-      if (sentNote) {
-        const v = vehicles.find(x => x.id === vehicleId);
-        reportMentions({
-          text: sentNote,
-          sourceType: 'vehicle_note',
-          sourceId: vehicleId,
-          contextLabel: v ? `${vehicleTitle(v)} — ${v.customer_name || 'vehicle'}` : 'In-Shop vehicle',
-          contextUrl: deepLinks.vehicle(vehicleId),
-        });
-      }
-      setStatusNote('');
-      setUpdateSuccess(`Graphics: ${GRAPHICS_INSTALL_LABELS[newStatus]}`);
-      setTimeout(() => setUpdateSuccess(null), 2000);
-      await loadVehicles();
-      if (expandedId === vehicleId) {
-        loadHistory(vehicleId);
-        const v = vehicles.find(x => x.id === vehicleId);
-        if (v) loadGraphicsJob(v);
-      }
-    } catch {
-      await dialog.alert('Network error — please try again');
-    }
-    setUpdatingId(null);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [statusNote, expandedId, vehicles]);
 
   const deleteVehicle = async (vehicleId: string) => {
     setDeletingId(vehicleId);
@@ -1422,12 +1377,10 @@ export default function TrackingPage() {
   const archivedVehicles = vehicles.filter(v => !!(v as any).archived_at);
 
   const filtered = (showArchived ? archivedVehicles : activeVehicles).filter(v => {
-    const status = v.status as VehicleTrackingStatus;
-    if (filterStatus === 'stuck') return status === 'stuck_parts' || status === 'stuck_graphics';
-    if (filterStatus === 'shipped') return status === 'shipped';
-    if (filterStatus !== 'all') return status === filterStatus;
+    const key = vehicleRowKey(v);
+    if (filterStatus !== 'all') return key === filterStatus;
     // "All" tab excludes shipped — shipped only shows on its own tab
-    return status !== 'shipped';
+    return key !== 'shipped';
   }).filter(v => {
     if (!searchTerm) return true;
     const s = searchTerm.toLowerCase();
@@ -1437,9 +1390,8 @@ export default function TrackingPage() {
 
   // Pipeline counts (active vehicles only)
   const statusCounts: Record<string, number> = {};
-  VEHICLE_STATUS_PIPELINE.forEach(s => { statusCounts[s] = 0; });
-  activeVehicles.forEach(v => { if (statusCounts[v.status] !== undefined) statusCounts[v.status]++; });
-  const stuckCount = (statusCounts['stuck_parts'] || 0) + (statusCounts['stuck_graphics'] || 0);
+  VEHICLE_ROW.forEach(s => { statusCounts[s] = 0; });
+  activeVehicles.forEach(v => { statusCounts[vehicleRowKey(v)]++; });
 
   // Group filtered vehicles by customer/SO
   const grouped = filtered.reduce((acc: Record<string, FleetCheckin[]>, v) => {
@@ -1637,21 +1589,6 @@ export default function TrackingPage() {
           <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--text-primary)' }}>{activeVehicles.filter(v => v.status !== 'shipped').length}</div>
           <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>In Shop</div>
         </div>
-        <div
-          onClick={() => setFilterStatus(filterStatus === 'stuck' ? 'all' : 'stuck')}
-          style={{
-            background: stuckCount > 0 ? 'var(--warning-bg)' : 'var(--card)',
-            border: `1px solid ${stuckCount > 0 ? 'var(--warning-border)' : 'var(--border)'}`,
-            borderRadius: '12px', padding: '12px', textAlign: 'center', cursor: 'pointer',
-          }}
-        >
-          <div style={{ fontSize: '24px', fontWeight: 800, color: stuckCount > 0 ? 'var(--warning)' : 'var(--text-primary)' }}>
-            {stuckCount}
-          </div>
-          <div style={{ fontSize: '10px', fontWeight: 700, color: stuckCount > 0 ? 'var(--warning)' : 'var(--text-muted)', textTransform: 'uppercase' }}>
-            Stuck
-          </div>
-        </div>
         <div style={{
           background: overdueBack > 0 ? 'var(--error-bg)' : 'var(--card)',
           border: `1px solid ${overdueBack > 0 ? 'var(--error-border)' : 'var(--border)'}`,
@@ -1694,9 +1631,9 @@ export default function TrackingPage() {
             whiteSpace: 'nowrap',
           }}
         >On Ground ({activeVehicles.filter(v => v.status !== 'shipped').length})</button>
-        {VEHICLE_STATUS_PIPELINE.map(status => {
+        {VEHICLE_ROW.map(status => {
           const count = statusCounts[status] || 0;
-          const colors = VEHICLE_STATUS_COLORS[status];
+          const colors = VEHICLE_ROW_COLORS[status];
           const isActive = filterStatus === status;
           return (
             <button
@@ -1710,7 +1647,7 @@ export default function TrackingPage() {
                 whiteSpace: 'nowrap',
               }}
             >
-              {VEHICLE_STATUS_LABELS[status].split('(')[0].trim()} ({count})
+              {VEHICLE_ROW_LABELS[status]} ({count})
             </button>
           );
         })}
@@ -1785,7 +1722,7 @@ export default function TrackingPage() {
             const isCollapsed = collapsedGroups.has(groupKey);
             const statusSummary: Record<string, number> = {};
             groupVehicles.forEach(v => {
-              const s = v.status === 'checked_in' ? 'received' : v.status;
+              const s = vehicleRowKey(v);
               statusSummary[s] = (statusSummary[s] || 0) + 1;
             });
 
@@ -1810,7 +1747,7 @@ export default function TrackingPage() {
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     {Object.entries(statusSummary).map(([s, count]) => {
-                      const sc = VEHICLE_STATUS_COLORS[s as VehicleTrackingStatus];
+                      const sc = VEHICLE_ROW_COLORS[s as VehicleRowKey];
                       return (
                         <span key={s} style={{
                           fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px',
@@ -1829,6 +1766,7 @@ export default function TrackingPage() {
                     {groupVehicles.map(vehicle => {
             const isExpanded = expandedId === vehicle.id;
             const status = (vehicle.status === 'checked_in' ? 'received' : vehicle.status) as VehicleTrackingStatus;
+            const rowKey = vehicleRowKey(vehicle);
 
             return (
               <div key={vehicle.id} id={`vehicle-${vehicle.id}`} style={{
@@ -1886,10 +1824,10 @@ export default function TrackingPage() {
                             )}
                             {showStage && (
                               <span
-                                title={`In ${VEHICLE_STATUS_LABELS[status] || vehicle.status} since ${new Date(stageSince[vehicle.id] || vehicle.created_at).toLocaleDateString()}`}
+                                title={`In ${VEHICLE_ROW_LABELS[rowKey]} since ${new Date(stageSince[vehicle.id] || vehicle.created_at).toLocaleDateString()}`}
                                 style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: `${stageColor}18`, border: `1px solid ${stageColor}44`, color: stageColor }}
                               >
-                                ⏱ in {(VEHICLE_STATUS_LABELS[status] || vehicle.status).toLowerCase()} {days}d
+                                ⏱ in {VEHICLE_ROW_LABELS[rowKey].toLowerCase()} {days}d
                               </span>
                             )}
                           </div>
@@ -1920,7 +1858,7 @@ export default function TrackingPage() {
                       )}
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: '8px' }}>
-                      <StatusBadge status={status} />
+                      <StatusBadge status={rowKey} />
                       {vehicleInvoiceNumber(vehicle) && (
                         <div style={{ marginTop: '4px' }}>
                           <InvoicedBadge invoiceNumber={vehicleInvoiceNumber(vehicle)} />
@@ -2013,7 +1951,7 @@ export default function TrackingPage() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
                           {/* Stacked, so a narrow screen keeps room for the name. */}
                           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
-                            <StatusBadge status={status} />
+                            <StatusBadge status={rowKey} />
                             <InvoicedBadge invoiceNumber={vehicleInvoiceNumber(vehicle)} showNumber />
                           </div>
                           <button
@@ -2089,49 +2027,34 @@ export default function TrackingPage() {
                       )}
                     </div>
 
-                    {/* Status Update Buttons — available to all roles */}
+                    {/* Status Update Buttons — available to all roles. One line
+                        (owner layout 2026-10-02): the graphics install lane
+                        and the upfit work share it, and Graphics Complete /
+                        Upfit Complete stay checked once done. */}
                     <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
-                          Update Status
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '6px' }}>
+                          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                            Update Status
+                          </div>
+                          {(vehicle as any).matched_graphics_job_id && graphicsJobs[vehicle.id] && (
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                              #{graphicsJobs[vehicle.id]?.job_number || (graphicsJobs[vehicle.id]?.id || '').slice(0, 8)} · {GRAPHICS_STATUS_LABELS[graphicsJobs[vehicle.id]!.status] || graphicsJobs[vehicle.id]!.status}
+                            </div>
+                          )}
                         </div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                          {VEHICLE_STATUS_PIPELINE.map(s => {
-                            const colors = VEHICLE_STATUS_COLORS[s];
-                            const isCurrent = s === status;
-                            const isUpdating = updatingId === vehicle.id;
-                            return (
-                              <button
-                                key={s}
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  e.preventDefault();
-                                  if (!isCurrent && !isUpdating) {
-                                    if (s === 'complete') {
-                                      // Marking complete must go through the completion
-                                      // process (checklist + photos), not a direct status flip.
-                                      setCompletionModalVehicleId(vehicle.id);
-                                    } else {
-                                      updateStatus(vehicle.id, s);
-                                    }
-                                  }
-                                }}
-                                disabled={isCurrent || isUpdating}
-                                style={{
-                                  padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                                  background: isCurrent ? colors.bg : 'var(--subtle-bg)',
-                                  border: `1.5px solid ${isCurrent ? colors.border : 'var(--border)'}`,
-                                  color: isCurrent ? colors.text : 'var(--text-secondary)',
-                                  opacity: isCurrent ? 1 : (isUpdating ? 0.4 : 1),
-                                  cursor: isCurrent || isUpdating ? 'default' : 'pointer',
-                                  transition: 'all 0.15s',
-                                }}
-                              >
-                                {isCurrent ? `● ${VEHICLE_STATUS_LABELS[s]}` : VEHICLE_STATUS_LABELS[s]}
-                              </button>
-                            );
-                          })}
-                        </div>
+                        <VehicleStatusRow
+                          vehicle={vehicle as any}
+                          disabled={updatingId === vehicle.id}
+                          onPick={(k) => {
+                            if (k === 'complete') {
+                              // Marking complete must go through the completion
+                              // process (checklist + photos), not a direct status flip.
+                              setCompletionModalVehicleId(vehicle.id);
+                            } else {
+                              updateStatus(vehicle.id, k);
+                            }
+                          }}
+                        />
 
                         {/* Note input */}
                         <div onClick={(e) => e.stopPropagation()}>
@@ -2210,70 +2133,6 @@ export default function TrackingPage() {
                           )}
                         </div>
                       </div>
-
-                    {/* Graphics Install Lane (migration 085) — runs in parallel
-                        to the upfit pipeline above, no forced ordering. The
-                        completion ceremony in /api/vehicle-tracking/update-status
-                        gates on this being 'complete' or 'n/a' when a graphics
-                        job is linked. Hidden for pure-upfit jobs whose lane is
-                        backfilled to 'pending' or 'n/a' with no matched job. */}
-                    {(() => {
-                      const lane = ((vehicle as any).graphics_install_status as GraphicsInstallStatus) || 'pending';
-                      const hasGraphics = !!(vehicle as any).matched_graphics_job_id;
-                      const showLane = hasGraphics || (lane !== 'pending' && lane !== 'n/a');
-                      if (!showLane) return null;
-                      const isUpdating = updatingId === vehicle.id;
-                      // 'n/a' is opt-out and only really makes sense if an
-                      // admin needs to bypass the gate without doing the work
-                      // (e.g. graphics shipped direct to customer); hide it
-                      // from non-admins to keep the row tidy.
-                      const visibleStates = GRAPHICS_INSTALL_PIPELINE.filter(s => s !== 'n/a' || isAdmin);
-                      return (
-                        <div style={{ marginBottom: '12px' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
-                            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                              Graphics Install
-                            </div>
-                            {hasGraphics && graphicsJobs[vehicle.id] && (
-                              <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                                #{graphicsJobs[vehicle.id]?.job_number || (graphicsJobs[vehicle.id]?.id || '').slice(0, 8)} · {GRAPHICS_STATUS_LABELS[graphicsJobs[vehicle.id]!.status] || graphicsJobs[vehicle.id]!.status}
-                              </div>
-                            )}
-                          </div>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                            {visibleStates.map(s => {
-                              const colors = GRAPHICS_INSTALL_COLORS[s];
-                              const isCurrent = s === lane;
-                              return (
-                                <button
-                                  key={s}
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    e.preventDefault();
-                                    if (!isCurrent && !isUpdating) {
-                                      updateGraphicsInstall(vehicle.id, s);
-                                    }
-                                  }}
-                                  disabled={isCurrent || isUpdating}
-                                  style={{
-                                    padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                                    background: isCurrent ? colors.bg : 'var(--subtle-bg)',
-                                    border: `1.5px solid ${isCurrent ? colors.border : 'var(--border)'}`,
-                                    color: isCurrent ? colors.text : 'var(--text-secondary)',
-                                    opacity: isCurrent ? 1 : (isUpdating ? 0.4 : 1),
-                                    cursor: isCurrent || isUpdating ? 'default' : 'pointer',
-                                    transition: 'all 0.15s',
-                                  }}
-                                >
-                                  {isCurrent ? `● ${GRAPHICS_INSTALL_LABELS[s]}` : GRAPHICS_INSTALL_LABELS[s]}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    })()}
 
                     {/* Vehicle Info */}
                     <div style={{
@@ -3542,7 +3401,7 @@ export default function TrackingPage() {
                                       <span style={{ color: 'var(--text-muted)' }}>
                                         {h.from_status.startsWith('graphics:')
                                           ? `Graphics: ${GRAPHICS_INSTALL_LABELS[h.from_status.slice('graphics:'.length) as GraphicsInstallStatus] || h.from_status.slice('graphics:'.length)}`
-                                          : VEHICLE_STATUS_LABELS[h.from_status as VehicleTrackingStatus] || h.from_status}
+                                          : VEHICLE_ROW_LABELS[h.from_status as VehicleRowKey] || VEHICLE_STATUS_LABELS[h.from_status as VehicleTrackingStatus] || h.from_status}
                                       </span>
                                       <span style={{ color: 'var(--text-muted)' }}>→</span>
                                     </>

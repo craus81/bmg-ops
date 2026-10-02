@@ -17,8 +17,8 @@ import { storage } from '@/lib/storage';
 import { toJpegIfHeic } from '@/lib/heic';
 import { firstGraphicsMatch } from '@/lib/graphics-detection';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
-import type { NetsuiteSalesOrder, GraphicsProof, FleetCheckin, VehicleTrackingStatus } from '@/lib/types';
-import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS } from '@/lib/types';
+import type { NetsuiteSalesOrder, GraphicsProof, FleetCheckin } from '@/lib/types';
+import VehicleStatusRow from '@/components/VehicleStatusRow';
 import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
 import ProofViewer from '@/components/ProofViewer';
@@ -296,7 +296,7 @@ export default function VehicleCheckIn({ onCheckedIn, initialVin, pullInAfter = 
       // awaiting pickup is still in our custody).
       const { data: existing } = await supabase
         .from('fleet_checkins')
-        .select('id, vin, vehicle_year, vehicle_make, vehicle_model, customer_name, sales_order_number, status, created_at')
+        .select('id, vin, vehicle_year, vehicle_make, vehicle_model, customer_name, sales_order_number, status, created_at, shop_stage, graphics_install_status, upfit_completed_at, matched_graphics_job_id')
         .eq('vin', v)
         .is('archived_at', null)
         .neq('status', 'shipped')
@@ -1490,47 +1490,35 @@ export default function VehicleCheckIn({ onCheckedIn, initialVin, pullInAfter = 
               <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '8px' }}>SO #{duplicateVehicle.sales_order_number}</div>
             )}
             <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', marginBottom: '6px' }}>Update Status</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-              {VEHICLE_STATUS_PIPELINE.map(s => {
-                const colors = VEHICLE_STATUS_COLORS[s];
-                const isCurrent = duplicateVehicle.status === s || (duplicateVehicle.status === 'checked_in' && s === 'received');
-                return (
-                  <button
-                    key={s}
-                    disabled={isCurrent || updatingDupStatus}
-                    onClick={async () => {
-                      setUpdatingDupStatus(true);
-                      const res = await fetch('/api/vehicle-tracking/update-status', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ vehicleId: duplicateVehicle.id, newStatus: s }),
-                      });
-                      if (res.ok) {
-                        setDuplicateVehicle({ ...duplicateVehicle, status: s });
-                      } else {
-                        const data = await res.json().catch(() => ({}));
-                        if (res.status === 422 && Array.isArray(data.missing)) {
-                          await dialog.alert(`Cannot mark complete yet:\n\n• ${data.missing.join('\n• ')}`);
-                        } else {
-                          await dialog.alert('Update failed: ' + (data.error || 'Unknown error'));
-                        }
-                      }
-                      setUpdatingDupStatus(false);
-                    }}
-                    style={{
-                      padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                      background: isCurrent ? colors.bg : 'var(--subtle-bg)',
-                      border: `1.5px solid ${isCurrent ? colors.border : theme.border}`,
-                      color: isCurrent ? colors.text : theme.textSecondary,
-                      opacity: isCurrent ? 1 : (updatingDupStatus ? 0.4 : 1),
-                      cursor: isCurrent || updatingDupStatus ? 'default' : 'pointer',
-                    }}
-                  >
-                    {isCurrent ? `● ${VEHICLE_STATUS_LABELS[s]}` : VEHICLE_STATUS_LABELS[s]}
-                  </button>
-                );
-              })}
-            </div>
+            <VehicleStatusRow
+              vehicle={duplicateVehicle}
+              disabled={updatingDupStatus}
+              onPick={async (k) => {
+                setUpdatingDupStatus(true);
+                const res = await fetch('/api/vehicle-tracking/update-status', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ vehicleId: duplicateVehicle.id, newStatus: k }),
+                });
+                if (res.ok) {
+                  // Re-read so the Graphics / Upfit Complete checks match the server.
+                  const { data: fresh } = await supabase
+                    .from('fleet_checkins')
+                    .select('id, vin, vehicle_year, vehicle_make, vehicle_model, customer_name, sales_order_number, status, created_at, shop_stage, graphics_install_status, upfit_completed_at, matched_graphics_job_id')
+                    .eq('id', duplicateVehicle.id)
+                    .maybeSingle();
+                  setDuplicateVehicle(fresh || duplicateVehicle);
+                } else {
+                  const data = await res.json().catch(() => ({}));
+                  if (res.status === 422 && Array.isArray(data.missing)) {
+                    await dialog.alert(`Cannot mark complete yet:\n\n• ${data.missing.join('\n• ')}`);
+                  } else {
+                    await dialog.alert('Update failed: ' + (data.error || 'Unknown error'));
+                  }
+                }
+                setUpdatingDupStatus(false);
+              }}
+            />
             <button
               onClick={() => { setDuplicateVehicle(null); setVinError(''); setVin(''); }}
               style={{ marginTop: '10px', width: '100%', padding: '10px', borderRadius: '10px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.textSecondary, fontSize: '13px', fontWeight: 700 }}
