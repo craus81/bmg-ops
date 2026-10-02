@@ -48,6 +48,11 @@ export interface TaxGapLine {
   estimate_id: string;
   quantity: number | null;
   unit_price: number | null;
+  /** Stamped at save since migration 336; NULL on lines saved before it. */
+  taxable?: boolean | null;
+  part_id?: string | null;
+  netsuite_item_id?: string | null;
+  item_number?: string | null;
 }
 
 /**
@@ -100,9 +105,20 @@ export function bucketFor(e: Pick<TaxGapEstimate, 'customer_approved' | 'sent_fo
 
 const cents = (n: number) => Math.round(n * 100) / 100;
 
-export function summarizeTaxGap(estimates: TaxGapEstimate[], lines: TaxGapLine[]): TaxGapReport {
+/**
+ * `catalogTaxable` answers today's rule (migration 336: Service items and
+ * freight untaxed, admin override per part) for a line saved before lines
+ * carried their own answer. Without it those lines count as taxed, which is
+ * how they were quoted. A line that carries `taxable` keeps it either way.
+ */
+export function summarizeTaxGap(
+  estimates: TaxGapEstimate[],
+  lines: TaxGapLine[],
+  catalogTaxable?: (line: TaxGapLine) => boolean,
+): TaxGapReport {
   const byEstimate = new Map<string, TaxGapLine[]>();
-  for (const l of lines) {
+  for (const raw of lines) {
+    const l = raw.taxable == null && catalogTaxable ? { ...raw, taxable: catalogTaxable(raw) } : raw;
     const own = byEstimate.get(l.estimate_id);
     if (own) own.push(l);
     else byEstimate.set(l.estimate_id, [l]);

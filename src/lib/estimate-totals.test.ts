@@ -119,12 +119,10 @@ describe('computeTotals', () => {
 // the even cent, which is pinned here — if this fails, a customer is signing
 // a total we will not bill.
 //
-// The `taxable: false` exclusion this suite used to assert is GONE. It came
-// from NetSuite's item Taxable checkbox, which turned out not to be
-// maintained in this account: a Sep 2026 quote excluded $6,848.61 of
-// ordinary parts and taxed only $175 of freight, while NetSuite's invoice
-// taxed everything. Every non-labor line is taxed now, and the cases below
-// pin that a stray `taxable: false` on a line can no longer reduce tax.
+// A line stamped `taxable: false` is left out of the tax. The stamp comes
+// from FleetSuite's own rule (migration 336: Service items and freight
+// untaxed, admin override per part), never from NetSuite's unmaintained item
+// Taxable box, so these cases pin the math, not where the flag comes from.
 describe('computeTotals — EST-2608-024 against NetSuite EST942', () => {
   const lines = [
     { quantity: 4, unit_price: 697.50, labor_hours: 0 }, // 5010 — exactly $221.805 of tax
@@ -134,8 +132,9 @@ describe('computeTotals — EST-2608-024 against NetSuite EST942', () => {
     { quantity: 1, unit_price: 595.97, labor_hours: 0 }, // 256500
     { quantity: 1, unit_price: 63.14, labor_hours: 0 },  // 202003
     { quantity: 1, unit_price: 94.73, labor_hours: 0 },  // 202999
-    { quantity: 1, unit_price: 150.00, labor_hours: 0 }, // Freight — taxed like everything else
+    { quantity: 1, unit_price: 150.00, labor_hours: 0 }, // Freight
   ];
+  const freightUntaxed = lines.map((l, i) => (i === lines.length - 1 ? { ...l, taxable: false } : l));
 
   it('books tax per line, ties to the even cent', () => {
     const r = computeTotals(lines, 0.0795, false, 115, 4.5);
@@ -159,14 +158,16 @@ describe('computeTotals — EST-2608-024 against NetSuite EST942', () => {
     expect(computeTotals(lines, 0.0795, true, 115, 4.5).tax_amount).toBe(0);
   });
 
-  it('a leftover taxable:false on a line no longer reduces tax', () => {
-    // Saved estimates and in-flight payloads may still carry the field.
-    // It must be inert, or this fix silently does nothing for them.
-    const withFlag = lines.map(l => ({ ...l, taxable: false }));
-    expect(computeTotals(withFlag, 0.0795, false, 115, 4.5).tax_amount).toBe(321.68);
+  it('untaxed freight lands on exactly what NetSuite billed for EST942', () => {
+    // NetSuite left the $150 freight out and billed $309.76; with freight
+    // stamped non-taxable the quote now agrees to the penny.
+    const r = computeTotals(freightUntaxed, 0.0795, false, 115, 4.5);
+    expect(r.tax_amount).toBe(309.76);
+    expect(r.subtotal).toBe(4046.48); // the line still bills, just untaxed
+    expect(r.grand_total).toBe(4873.74);
   });
 
-  it('every non-labor line is taxed, whatever the flag says', () => {
+  it('only an explicit false leaves a line out', () => {
     const mixed = [
       { quantity: 1, unit_price: 100, labor_hours: 0 },
       { quantity: 1, unit_price: 100, labor_hours: 0, taxable: null },
@@ -174,7 +175,8 @@ describe('computeTotals — EST-2608-024 against NetSuite EST942', () => {
       { quantity: 1, unit_price: 100, labor_hours: 0, taxable: true },
       { quantity: 1, unit_price: 100, labor_hours: 0, taxable: false },
     ];
-    expect(computeTotals(mixed, 0.1, false, 0, 0).tax_amount).toBe(50);
+    // null/undefined are lines saved before migration 336, quoted as taxed.
+    expect(computeTotals(mixed, 0.1, false, 0, 0).tax_amount).toBe(40);
   });
 
   it('labor is still never taxed', () => {
@@ -254,15 +256,16 @@ describe('vehicle count', () => {
     expect(t.subtotal).toBe(2790);
   });
 
-  it('taxes the fleet amount even on a line still carrying taxable:false', () => {
-    // The flag is inert now (see the EST942 suite). A fleet estimate is
-    // where an accidental exclusion would cost the most, so pin it here too.
+  it('leaves an untaxed line out at any count, and still taxes the rest', () => {
     const t = computeTotals(
-      [{ quantity: 1, unit_price: 500, labor_hours: 0, taxable: false }],
+      [
+        { quantity: 1, unit_price: 500, labor_hours: 0 },
+        { quantity: 1, unit_price: 200, labor_hours: 0, taxable: false },
+      ],
       0.0795, false, 85, null, 10,
     );
-    expect(t.tax_amount).toBe(397.5); // 5000 × 7.95%
-    expect(t.subtotal).toBe(5000);
+    expect(t.tax_amount).toBe(397.5); // 5000 × 7.95%; the 2000 service is untaxed
+    expect(t.subtotal).toBe(7000);
   });
 
   it('honours tax exemption at any count', () => {

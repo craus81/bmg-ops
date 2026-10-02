@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { computeTotals } from '@/lib/estimate-totals';
+import { resolveLineTaxability } from '@/lib/line-taxability';
 import { FALLBACK_SALES_TAX_RATE } from '@/lib/sales-tax';
 import { FALLBACK_LABOR_RATE } from '@/lib/labor-rate';
 import { kitLineColumns, kitLineSchemaFields } from '@/lib/estimate-kits';
@@ -95,12 +96,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         ...kitLineColumns(l),
       };
     });
-    const { error: insertErr } = await supabase.from('estimate_line_items').insert(lineRows);
+    // Stamp each new line's sales-tax answer (migration 336) so the totals
+    // below and the NetSuite push agree with what the builder would quote.
+    const stampedRows = await resolveLineTaxability(supabase, lineRows);
+    const { error: insertErr } = await supabase.from('estimate_line_items').insert(stampedRows);
     if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 500 });
 
     const { data: allLines } = await supabase
       .from('estimate_line_items')
-      .select('quantity, unit_price, labor_hours')
+      .select('quantity, unit_price, labor_hours, taxable')
       .eq('estimate_id', params.id);
     const totals = computeTotals(
       allLines || [],

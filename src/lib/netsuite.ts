@@ -1640,6 +1640,18 @@ export async function createVendor(payload: {
  * callers WHICH item labor billed to. Importing suiteqlQuery from here.
  */
 
+/**
+ * The line-level tax flag for a NetSuite transaction line (migration 336).
+ * Only an untaxed line carries it, so the payload for every ordinary line is
+ * byte-identical to before; NetSuite then stops taxing that line on this
+ * transaction and on anything transformed from it (SO → invoice). Which lines
+ * are untaxed is FleetSuite's rule (src/lib/line-taxability.ts), not the
+ * item's Taxable box.
+ */
+export function nsLineTaxField(li: { taxable?: unknown }): { isTaxable?: false } {
+  return li.taxable === false ? { isTaxable: false } : {};
+}
+
 export async function createSalesOrder(payload: {
   customerId: string | number;
   poNumber: string;
@@ -1661,6 +1673,8 @@ export async function createSalesOrder(payload: {
     quantity: number;
     rate: number;
     description?: string;
+    /** false = untaxed line (migration 336); sent to NetSuite as isTaxable. */
+    taxable?: false;
   }[];
 }): Promise<{
   success: boolean;
@@ -1684,6 +1698,7 @@ export async function createSalesOrder(payload: {
     quantity: li.quantity,
     ...(li.rate > 0 ? { price: { id: '-1' }, rate: li.rate } : {}),
     ...(li.description ? { description: li.description } : {}),
+    ...nsLineTaxField(li),
   }));
 
   const body: any = {
@@ -2973,7 +2988,7 @@ export async function updateSalesOrderVin(
 export async function updateSalesOrderLines(
   salesOrderId: string | number,
   payload: {
-    lineItems: { itemId: string | number; quantity: number; rate: number; description?: string }[];
+    lineItems: { itemId: string | number; quantity: number; rate: number; description?: string; taxable?: false }[];
     poNumber?: string | null;
     memo?: string | null;
     vin?: string | null;
@@ -2990,6 +3005,7 @@ export async function updateSalesOrderLines(
     quantity: li.quantity,
     ...(li.rate > 0 ? { price: { id: '-1' }, rate: li.rate } : {}),
     ...(li.description ? { description: li.description } : {}),
+    ...nsLineTaxField(li),
   }));
   const body: any = { item: { items } };
   if (payload.poNumber?.trim()) body.otherRefNum = payload.poNumber.trim();

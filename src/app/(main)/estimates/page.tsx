@@ -32,6 +32,7 @@ import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
 import { roundCentsHalfEven, normalizeVehicleCount, perVehicleAmount } from '@/lib/estimate-totals';
+import { resolveLineTaxability } from '@/lib/line-taxability';
 import { deltaLabel, type EstimateDiff } from '@/lib/estimate-diff';
 import { type DraftLine } from '@/lib/paste-to-estimate';
 import { FALLBACK_SALES_TAX_RATE, pctToRate, rateToPct } from '@/lib/sales-tax';
@@ -157,6 +158,10 @@ interface LineItem extends KitLineFields {
   purchase_price?: number | null;
   avg_install_cost?: number | null;
 }
+
+/** A line's catalog identity for the tax lookup (part, NetSuite item, number). */
+const lineTaxKey = (l: Pick<LineItem, 'part_id' | 'netsuite_item_id' | 'item_number'>) =>
+  `${l.part_id || ''}|${l.netsuite_item_id || ''}|${String(l.item_number || '').trim()}`;
 
 // Shared with convert-to-so's blocking graphics gate — one predicate, so the
 // panel here and the server-side wall can never disagree about what counts
@@ -480,6 +485,9 @@ export default function EstimatesPage() {
   // halves of "who is this for" — exactly one is set once a customer is
   // picked, and the approval/send paths accept either.
   const [prospectId, setProspectId] = useState<string | null>(null);
+  // Line identities (lineTaxKey) FleetSuite doesn't tax: Service items,
+  // freight, and parts an admin set to untaxed (migration 336).
+  const [untaxedLineKeys, setUntaxedLineKeys] = useState<Set<string>>(new Set());
   // Sales tax is company-wide and NOT editable here — it comes from
   // quote_settings and only a super admin can change it (Settings → Sales
   // Tax). `taxRate` still holds a per-estimate value because an already-saved
@@ -1606,21 +1614,46 @@ export default function EstimatesPage() {
   const laborUnsetCount = lines.filter(l => !l.is_custom && l.labor_hours == null).length;
   const effectiveLaborHours = laborOverride !== null ? laborOverride : autoLaborHours;
   const laborTotal = effectiveLaborHours * laborRate;
-  // Parts/materials only (never labor) — every one of them. Mirrors
-  // computeTotals on the server, which is what actually gets stored. The
-  // per-item exclusion that used to live here is gone; see the note atop
-  // src/lib/estimate-totals.ts.
+  // Parts/materials only (never labor), minus lines FleetSuite doesn't tax
+  // (migration 336: Service items and freight, or a part an admin set to
+  // untaxed). Mirrors computeTotals on the server, which resolves the same
+  // rule from the catalog and is what actually gets stored. An unresolved
+  // line is taxed, the same fallback the server takes.
+  const isTaxedLine = (l: LineItem) => !untaxedLineKeys.has(lineTaxKey(l));
+  const taxableAmount = lines.reduce((s, l) => (isTaxedLine(l) ? s + fleetQty(l) * l.unit_price : s), 0);
   // Per line, each rounded to cents, ties to the even cent — the same math
   // computeTotals runs server-side, which is the same math NetSuite books.
   // Taxing the combined base in one go drifts a cent or two off the invoice.
   const taxAmount = taxExempt
     ? 0
-    : lines.reduce((s, l) => s + roundCentsHalfEven(fleetQty(l) * l.unit_price * taxRate), 0);
+    : lines.reduce((s, l) => (isTaxedLine(l)
+      ? s + roundCentsHalfEven(fleetQty(l) * l.unit_price * taxRate)
+      : s), 0);
   // Compare at the precision the rate is displayed and stored at — a float
   // round-trip through the database is not a "different rate".
   const atCompanyRate = Math.abs(rateToPct(taxRate) - rateToPct(companyTaxRate)) < 0.005;
   const grandTotal = subtotal + laborTotal + taxAmount;
   const perVehicle = perVehicleAmount(grandTotal, units);
+
+  // Refresh which lines are untaxed whenever the line-up of items changes.
+  // Keyed on the sorted line identities, so re-ordering or a quantity edit
+  // doesn't re-query.
+  const lineTaxRefsKey = [...new Set(lines.map(lineTaxKey))].sort().join('\n');
+  useEffect(() => {
+    const refs = lineTaxRefsKey ? lineTaxRefsKey.split('\n') : [];
+    if (refs.length === 0) { setUntaxedLineKeys(new Set()); return; }
+    let cancelled = false;
+    (async () => {
+      const asLines = refs.map(k => {
+        const [part_id, netsuite_item_id, item_number] = k.split('|');
+        return { key: k, part_id: part_id || null, netsuite_item_id: netsuite_item_id || null, item_number };
+      });
+      const stamped = await resolveLineTaxability(supabase, asLines);
+      if (!cancelled) setUntaxedLineKeys(new Set(stamped.filter(l => !l.taxable).map(l => l.key)));
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the line-up is the only real input; the client is stable
+  }, [lineTaxRefsKey]);
 
   // ── Stock check ──
   // The signature is what the answer was computed FOR: item numbers,
@@ -5142,6 +5175,12 @@ export default function EstimatesPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-body)', marginBottom: '4px' }}>
               <span>
                 Sales Tax on Parts ({rateToPct(taxRate).toFixed(2)}%)
+                {/* Say WHY the tax is below parts × rate. */}
+                {!taxExempt && taxableAmount < subtotal - 0.005 && (
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                    {' '}— on {fmt(taxableAmount)}; {fmt(subtotal - taxableAmount)} of services or freight isn't taxed
+                  </span>
+                )}
               </span>
               <span>{fmt(taxAmount)}</span>
             </div>

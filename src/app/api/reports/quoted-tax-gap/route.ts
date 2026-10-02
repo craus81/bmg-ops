@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { summarizeTaxGap, type TaxGapEstimate, type TaxGapLine } from '@/lib/quoted-tax-gap';
+import { CATALOG_TAX_COLUMNS, taxabilityResolver, type PartTaxFields } from '@/lib/line-taxability';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -26,7 +27,7 @@ const ESTIMATE_COLUMNS =
  * a human act — re-save an unsent quote, talk to the customer about a signed
  * one — so there is deliberately no repair-all here.
  *
- * Both reads paginate. estimate_line_items is well past PostgREST's 1000-row
+ * Every read paginates. estimate_line_items is well past PostgREST's 1000-row
  * cap, and a silently truncated read would under-report the exposure while
  * looking complete, so a failed page fails the whole report.
  */
@@ -48,7 +49,7 @@ export async function GET(req: NextRequest) {
   const { data: lines, error: lineError } = await fetchAllRows<TaxGapLine>((from, to) =>
     supabase
       .from('estimate_line_items')
-      .select('estimate_id, quantity, unit_price')
+      .select('estimate_id, quantity, unit_price, taxable, part_id, netsuite_item_id, item_number')
       .order('id')
       .range(from, to) as unknown as PromiseLike<{ data: TaxGapLine[] | null; error: { message: string } | null }>,
   );
@@ -56,8 +57,23 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: `Could not read estimate lines: ${lineError.message}` }, { status: 502 });
   }
 
+  // Today's tax rule per part (migration 336), for lines saved before each
+  // line carried its own answer: a service line left untaxed back then is
+  // not a shortfall now.
+  type CatalogRow = PartTaxFields & { id: string; netsuite_id: string | null; item_number: string | null };
+  const { data: parts, error: partError } = await fetchAllRows<CatalogRow>((from, to) =>
+    supabase
+      .from('netsuite_parts')
+      .select(CATALOG_TAX_COLUMNS)
+      .order('id')
+      .range(from, to) as unknown as PromiseLike<{ data: CatalogRow[] | null; error: { message: string } | null }>,
+  );
+  if (partError) {
+    return NextResponse.json({ error: `Could not read the parts catalog: ${partError.message}` }, { status: 502 });
+  }
+
   return NextResponse.json({
     generatedAt: new Date().toISOString(),
-    ...summarizeTaxGap(estimates, lines),
+    ...summarizeTaxGap(estimates, lines, taxabilityResolver(parts)),
   });
 }

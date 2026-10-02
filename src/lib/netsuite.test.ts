@@ -232,6 +232,27 @@ describe('createSalesOrder', () => {
     );
   });
 
+  it('marks an untaxed line isTaxable:false and leaves every other line as before', async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, {
+        status: 204,
+        headers: { Location: 'https://x/services/rest/record/v1/salesOrder/12345' },
+      }))
+      .mockResolvedValueOnce(jsonResponse({ items: [{ tranid: 'SO-1001' }] }));
+
+    await createSalesOrder({
+      ...payload,
+      lineItems: [
+        { itemId: '55', quantity: 2, rate: 125.5, description: 'Shelf unit' },
+        { itemId: '60', quantity: 1, rate: 450, description: 'Graphics install', taxable: false },
+      ],
+    });
+
+    const items = JSON.parse(fetchMock.mock.calls[0][1].body).item.items;
+    expect(items[0]).toEqual({ item: { id: '55' }, quantity: 2, price: { id: '-1' }, rate: 125.5, description: 'Shelf unit' });
+    expect(items[1]).toEqual({ item: { id: '60' }, quantity: 1, price: { id: '-1' }, rate: 450, description: 'Graphics install', isTaxable: false });
+  });
+
   it('returns a failure (not a throw) when NetSuite rejects the order', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     fetchMock.mockResolvedValueOnce(new Response('Invalid entity', { status: 400 }));
