@@ -14,8 +14,15 @@ export interface FacetSource {
 }
 
 export interface TemplateFacets {
-  /** Whole inches as a string ("148"), or '' when unknown. */
+  /**
+   * Whole inches as a string ("148"), or '' when unknown. Extended-body vans
+   * share a wheelbase with the regular body but are a different vehicle to
+   * wrap (Transit 148 vs 148 Extended, ProMaster 159 vs 159 Extended), so
+   * they get their own value: "148 Extended".
+   */
   wheelbase: string;
+  /** Body style: Cargo, Passenger, Chassis Cab, Sedan… or ''. */
+  body: string;
   roof: string;
   bed: string;
   cab: string;
@@ -49,6 +56,19 @@ const ROOFS: [RegExp, string][] = [
   [/\b(?:standard|regular) roof\b/i, 'Standard'],
 ];
 
+const BODIES: [RegExp, string][] = [
+  [/\bchassis cab\b/i, 'Chassis Cab'],
+  [/\bcutaway\b/i, 'Cutaway'],
+  [/\bcrew van\b/i, 'Crew Van'],
+  [/\bcargo\b/i, 'Cargo'],
+  [/\bpassenger\b/i, 'Passenger'],
+  [/\bwagon\b/i, 'Wagon'],
+  [/\bsedan\b/i, 'Sedan'],
+  [/\bcoupe\b/i, 'Coupe'],
+  [/\bhatchback\b/i, 'Hatchback'],
+  [/\b(?:convertible|cabriolet|roadster)\b/i, 'Convertible'],
+];
+
 /** Display order for the roof dropdown (lowest first). */
 export const ROOF_ORDER = ['Low', 'Standard', 'Medium', 'High', 'Super High', 'Mega'];
 
@@ -75,9 +95,12 @@ export function templateFacets(t: FacetSource): TemplateFacets {
   const text = `${t.variant || ''} ${t.variant ? '' : t.name || ''}`.trim();
   const wbCol = Number(t.wheelbase_in);
   const wbText = /(?:^|[\s,;])(\d{2,3})in\b/.exec(text);
-  const wheelbase = wbCol > 0 ? String(Math.round(wbCol)) : wbText ? wbText[1] : '';
+  const inches = wbCol > 0 ? String(Math.round(wbCol)) : wbText ? wbText[1] : '';
+  // "Extended" / "Extended Body" — but not a pickup's "Extended Cab".
+  const extended = /\bextended\b(?! cab)/i.test(text);
   return {
-    wheelbase,
+    wheelbase: inches && extended ? `${inches} Extended` : inches,
+    body: BODIES.find(([re]) => re.test(text))?.[1] || '',
     roof: ROOFS.find(([re]) => re.test(text))?.[1] || '',
     bed: bedOf(text),
     cab: CABS.find(([re]) => re.test(text))?.[1] || '',

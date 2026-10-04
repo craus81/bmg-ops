@@ -395,6 +395,7 @@ export default function WrapQuotePage() {
   const [yearFilter, setYearFilter] = useState('');
   const [makeFilter, setMakeFilter] = useState('');
   const [modelFilter, setModelFilter] = useState('');
+  const [bodyFilter, setBodyFilter] = useState('');
   const [wheelbaseFilter, setWheelbaseFilter] = useState('');
   const [roofFilter, setRoofFilter] = useState('');
   const [bedFilter, setBedFilter] = useState('');
@@ -772,11 +773,11 @@ export default function WrapQuotePage() {
   // left after applying all the OTHERS — so picking "Ford" + "Transit"
   // leaves only the wheelbases and roofs a Transit actually comes in, and a
   // dropdown with nothing to offer (bed length on a van) isn't shown.
-  type FilterKey = 'year' | 'make' | 'model' | 'wheelbase' | 'roof' | 'bed' | 'cab';
+  type FilterKey = 'year' | 'make' | 'model' | 'body' | 'wheelbase' | 'roof' | 'bed' | 'cab';
   const filterValues: Record<FilterKey, string> = useMemo(() => ({
-    year: yearFilter, make: makeFilter, model: modelFilter,
+    year: yearFilter, make: makeFilter, model: modelFilter, body: bodyFilter,
     wheelbase: wheelbaseFilter, roof: roofFilter, bed: bedFilter, cab: cabFilter,
-  }), [yearFilter, makeFilter, modelFilter, wheelbaseFilter, roofFilter, bedFilter, cabFilter]);
+  }), [yearFilter, makeFilter, modelFilter, bodyFilter, wheelbaseFilter, roofFilter, bedFilter, cabFilter]);
   const filterValueOf = (t: Template, key: FilterKey): string => {
     if (key === 'year') return (t.year || '').trim();
     if (key === 'make') return t.make.trim();
@@ -800,17 +801,18 @@ export default function WrapQuotePage() {
     if (filterValues[key] && seen.has(normText(filterValues[key]))) seen.set(normText(filterValues[key]), filterValues[key]);
     const list = [...seen.values()];
     if (key === 'year') return list.sort().reverse();
-    if (key === 'wheelbase') return list.sort((a, b) => Number(a) - Number(b));
+    // "148" before "148 Extended" before "156".
+    if (key === 'wheelbase') return list.sort((a, b) => parseFloat(a) - parseFloat(b) || a.length - b.length);
     if (key === 'roof') return list.sort((a, b) => ROOF_ORDER.indexOf(a) - ROOF_ORDER.indexOf(b));
     return list.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   };
   const filterOptions: Record<FilterKey, string[]> = useMemo(() => ({
-    year: filterChoices('year'), make: filterChoices('make'), model: filterChoices('model'),
+    year: filterChoices('year'), make: filterChoices('make'), model: filterChoices('model'), body: filterChoices('body'),
     wheelbase: filterChoices('wheelbase'), roof: filterChoices('roof'), bed: filterChoices('bed'), cab: filterChoices('cab'),
   // eslint-disable-next-line react-hooks/exhaustive-deps -- filterChoices reads only the deps listed
   }), [activeTemplates, facetsById, filterValues]);
   const filterSetters: Record<FilterKey, (v: string) => void> = {
-    year: setYearFilter, make: setMakeFilter, model: setModelFilter,
+    year: setYearFilter, make: setMakeFilter, model: setModelFilter, body: setBodyFilter,
     wheelbase: setWheelbaseFilter, roof: setRoofFilter, bed: setBedFilter, cab: setCabFilter,
   };
   const anyFilter = Object.values(filterValues).some(Boolean);
@@ -855,6 +857,7 @@ export default function WrapQuotePage() {
     // Keep the narrower filters only where the pick satisfies them.
     const facets = templateFacets(t);
     if (modelFilter && normText(modelFilter) !== normText(t.model)) setModelFilter('');
+    if (bodyFilter && bodyFilter !== facets.body) setBodyFilter('');
     if (wheelbaseFilter && wheelbaseFilter !== facets.wheelbase) setWheelbaseFilter('');
     if (roofFilter && roofFilter !== facets.roof) setRoofFilter('');
     if (bedFilter && bedFilter !== facets.bed) setBedFilter('');
@@ -3241,7 +3244,8 @@ export default function WrapQuotePage() {
               ['year', 'All years', '110px', (v: string) => v],
               ['make', 'All makes', '150px', (v: string) => v],
               ['model', 'All models', '150px', (v: string) => v],
-              ['wheelbase', 'Any wheelbase', '140px', (v: string) => `${v}" wheelbase`],
+              ['body', 'Any body', '130px', (v: string) => v],
+              ['wheelbase', 'Any wheelbase', '150px', (v: string) => (/\D/.test(v) ? v.replace(/^(\d+)/, '$1"') : `${v}" wheelbase`)],
               ['roof', 'Any roof', '120px', (v: string) => `${v} roof`],
               ['bed', 'Any bed', '120px', (v: string) => (['Chassis', 'Flat Bed', 'Flareside'].includes(v) ? v : `${v} bed`)],
               ['cab', 'Any cab', '130px', (v: string) => v],

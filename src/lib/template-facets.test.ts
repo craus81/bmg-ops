@@ -5,10 +5,24 @@ const f = (variant: string | null, wheelbase_in: number | null = null) => templa
 
 describe('templateFacets', () => {
   it('reads roof and wheelbase off a van description', () => {
-    expect(f('Passenger Van, 148in, Med Roof, Sliding Door', 148)).toEqual({ wheelbase: '148', roof: 'Medium', bed: '', cab: '' });
+    expect(f('Passenger Van, 148in, Med Roof, Sliding Door', 148)).toEqual({ wheelbase: '148', body: 'Passenger', roof: 'Medium', bed: '', cab: '' });
     expect(f('Cargo Van, 130in, Low Roof, Swing Doors')).toMatchObject({ wheelbase: '130', roof: 'Low' });
     expect(f('Standard Roof; Cargo; 170in')).toMatchObject({ wheelbase: '170', roof: 'Standard' });
     expect(f('1500 Cargo, Low Roof, 136in')).toMatchObject({ wheelbase: '136', roof: 'Low' });
+  });
+
+  it('gives extended-body vans their own wheelbase choice', () => {
+    expect(f('Cargo Van, 148in, Extended, High Roof', 147.6)).toMatchObject({ wheelbase: '148 Extended', body: 'Cargo' });
+    expect(f('3500, Cargo, High Roof, Extended Body', 159)).toMatchObject({ wheelbase: '159 Extended', roof: 'High' });
+    expect(f('2500-3500 Cargo, High Roof', 159).wheelbase).toBe('159');
+    expect(f('Extended Cab Long Box', 143.5)).toMatchObject({ wheelbase: '144', cab: 'Extended Cab' });
+  });
+
+  it('reads the body style', () => {
+    expect(f('Sedan').body).toBe('Sedan');
+    expect(f('5 Door Hatchback').body).toBe('Hatchback');
+    expect(f('Wagon SLT').body).toBe('Wagon');
+    expect(f('Crew Cab Short Bed').body).toBe('');
   });
 
   it('prefers the wheelbase column over the text', () => {
@@ -37,7 +51,7 @@ describe('templateFacets', () => {
   });
 
   it('does not treat a Transit "Chassis Cab" as a pickup', () => {
-    expect(f('Chassis Cab, 138in, Low Roof')).toEqual({ wheelbase: '138', roof: 'Low', bed: '', cab: '' });
+    expect(f('Chassis Cab, 138in, Low Roof')).toEqual({ wheelbase: '138', body: 'Chassis Cab', roof: 'Low', bed: '', cab: '' });
   });
 
   it('falls back to the name when there is no variant', () => {
