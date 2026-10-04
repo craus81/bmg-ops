@@ -54,6 +54,7 @@ import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { summarizeAudits, applyCoverageNorm, type TemplateAudit, type AuditSummary } from '@/lib/calibration-audit';
 import { referenceDimensions, calibrationDelta, type PanelDimension } from '@/lib/wrap-reference';
 import { estimateHeadlineNumber } from '@/lib/estimate-number';
+import { templateFacets, ROOF_ORDER, type TemplateFacets } from '@/lib/template-facets';
 import {
   DEFAULT_ROLL,
   MAX_ROLLS_PER_FILM,
@@ -393,6 +394,11 @@ export default function WrapQuotePage() {
   // ----- Estimator state -----
   const [yearFilter, setYearFilter] = useState('');
   const [makeFilter, setMakeFilter] = useState('');
+  const [modelFilter, setModelFilter] = useState('');
+  const [wheelbaseFilter, setWheelbaseFilter] = useState('');
+  const [roofFilter, setRoofFilter] = useState('');
+  const [bedFilter, setBedFilter] = useState('');
+  const [cabFilter, setCabFilter] = useState('');
   const [tplSearch, setTplSearch] = useState('');
   const [tplGridSearch, setTplGridSearch] = useState('');
   const [templateId, setTemplateId] = useState('');
@@ -755,33 +761,84 @@ export default function WrapQuotePage() {
   // Retired templates stay in state (the Templates tab manages them) but are
   // hidden from the estimator's vehicle pickers.
   const activeTemplates = useMemo(() => templates.filter(t => t.is_active !== false), [templates]);
-  const years = useMemo(() => [...new Set(activeTemplates.map(t => (t.year || '').trim()).filter(Boolean))].sort().reverse(), [activeTemplates]);
-  // Dedupe makes case-insensitively (first-seen casing wins) so "FORD" and
-  // "Ford" don't appear as two entries that each hide the other's templates.
-  const makes = useMemo(() => {
+  // Roof / bed / cab / wheelbase aren't columns — they're read out of each
+  // template's description once, here (see src/lib/template-facets.ts).
+  const facetsById = useMemo(() => {
+    const m = new Map<string, TemplateFacets>();
+    for (const t of activeTemplates) m.set(t.id, templateFacets(t));
+    return m;
+  }, [activeTemplates]);
+  // Every picker dropdown is a filter, and each one's choices are what's
+  // left after applying all the OTHERS — so picking "Ford" + "Transit"
+  // leaves only the wheelbases and roofs a Transit actually comes in, and a
+  // dropdown with nothing to offer (bed length on a van) isn't shown.
+  type FilterKey = 'year' | 'make' | 'model' | 'wheelbase' | 'roof' | 'bed' | 'cab';
+  const filterValues: Record<FilterKey, string> = useMemo(() => ({
+    year: yearFilter, make: makeFilter, model: modelFilter,
+    wheelbase: wheelbaseFilter, roof: roofFilter, bed: bedFilter, cab: cabFilter,
+  }), [yearFilter, makeFilter, modelFilter, wheelbaseFilter, roofFilter, bedFilter, cabFilter]);
+  const filterValueOf = (t: Template, key: FilterKey): string => {
+    if (key === 'year') return (t.year || '').trim();
+    if (key === 'make') return t.make.trim();
+    if (key === 'model') return t.model.trim();
+    return facetsById.get(t.id)?.[key] || '';
+  };
+  const passesFilters = (t: Template, except?: FilterKey) =>
+    (Object.keys(filterValues) as FilterKey[]).every(key =>
+      key === except || !filterValues[key] || normText(filterValueOf(t, key)) === normText(filterValues[key]));
+  // Choices for one dropdown. Deduped case-insensitively (first-seen casing
+  // wins) so "FORD" and "Ford" don't appear as two entries that each hide
+  // the other's templates; the active value keeps its exact casing because a
+  // <select> matches its value against options verbatim.
+  const filterChoices = (key: FilterKey): string[] => {
     const seen = new Map<string, string>();
     for (const t of activeTemplates) {
-      if (yearFilter && normText(t.year) !== normText(yearFilter)) continue;
-      const key = normText(t.make);
-      if (key && !seen.has(key)) seen.set(key, t.make.trim());
+      if (!passesFilters(t, key)) continue;
+      const v = filterValueOf(t, key);
+      if (v && !seen.has(normText(v))) seen.set(normText(v), v);
     }
-    // The <select> matches its value against options verbatim — keep the
-    // active filter's exact casing in the list so the pick never shows blank.
-    if (makeFilter && seen.has(normText(makeFilter))) seen.set(normText(makeFilter), makeFilter);
-    return [...seen.values()].sort((a, b) => a.localeCompare(b));
-  }, [activeTemplates, yearFilter, makeFilter]);
-  const templateOptions = useMemo(() =>
-    activeTemplates.filter(t =>
-      (!yearFilter || normText(t.year) === normText(yearFilter)) &&
-      (!makeFilter || normText(t.make) === normText(makeFilter))),
-    [activeTemplates, yearFilter, makeFilter]);
-  // Live type-ahead results for the template search box. Searches the WHOLE
-  // active library, not the Year/Make-filtered subset — a leftover filter
-  // used to make the search say "No templates match" for templates that
-  // plainly exist. Full list here; the render caps what's shown and says so.
-  const templateSearchMatches = useMemo(() =>
+    if (filterValues[key] && seen.has(normText(filterValues[key]))) seen.set(normText(filterValues[key]), filterValues[key]);
+    const list = [...seen.values()];
+    if (key === 'year') return list.sort().reverse();
+    if (key === 'wheelbase') return list.sort((a, b) => Number(a) - Number(b));
+    if (key === 'roof') return list.sort((a, b) => ROOF_ORDER.indexOf(a) - ROOF_ORDER.indexOf(b));
+    return list.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  };
+  const filterOptions: Record<FilterKey, string[]> = useMemo(() => ({
+    year: filterChoices('year'), make: filterChoices('make'), model: filterChoices('model'),
+    wheelbase: filterChoices('wheelbase'), roof: filterChoices('roof'), bed: filterChoices('bed'), cab: filterChoices('cab'),
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- filterChoices reads only the deps listed
+  }), [activeTemplates, facetsById, filterValues]);
+  const filterSetters: Record<FilterKey, (v: string) => void> = {
+    year: setYearFilter, make: setMakeFilter, model: setModelFilter,
+    wheelbase: setWheelbaseFilter, roof: setRoofFilter, bed: setBedFilter, cab: setCabFilter,
+  };
+  const anyFilter = Object.values(filterValues).some(Boolean);
+  const clearFilters = () => (Object.keys(filterSetters) as FilterKey[]).forEach(k => filterSetters[k](''));
+  // Changing one filter can strand another (switch Ford → Ram with "Transit"
+  // still picked): drop any value its dropdown no longer offers, so a filter
+  // you can't see is never silently hiding templates.
+  useEffect(() => {
+    if (activeTemplates.length === 0) return; // library still loading
+    (Object.keys(filterValues) as FilterKey[]).forEach(key => {
+      if (filterValues[key] && !filterOptions[key].some(o => normText(o) === normText(filterValues[key]))) filterSetters[key]('');
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- setters are stable
+  }, [filterOptions]);
+  const templateOptions = useMemo(() => activeTemplates.filter(t => passesFilters(t)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- passesFilters reads only the deps listed
+    [activeTemplates, facetsById, filterValues]);
+  // Live type-ahead results for the template search box. The dropdowns act
+  // as filters on the search. Because a leftover filter can make the search
+  // come up empty for a template that plainly exists, the unfiltered count
+  // is kept too so the results can say "N more without the filters".
+  const templateSearchAll = useMemo(() =>
     tplSearch.trim().length < 2 ? [] : activeTemplates.filter(t => matchesTemplateSearch(t, tplSearch)),
     [activeTemplates, tplSearch]);
+  const templateSearchMatches = useMemo(() => templateSearchAll.filter(t => passesFilters(t)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- passesFilters reads only the deps listed
+    [templateSearchAll, facetsById, filterValues]);
+  const searchHiddenByFilters = templateSearchAll.length - templateSearchMatches.length;
   // Picking a template (search result, browse dropdown, or grid Open) syncs
   // the Year/Make filters to it so the browse <select> always shows the pick
   // instead of rendering blank when a filter excludes it.
@@ -795,6 +852,13 @@ export default function WrapQuotePage() {
     setTplSearch('');
     setYearFilter((t.year || '').trim());
     setMakeFilter(t.make.trim());
+    // Keep the narrower filters only where the pick satisfies them.
+    const facets = templateFacets(t);
+    if (modelFilter && normText(modelFilter) !== normText(t.model)) setModelFilter('');
+    if (wheelbaseFilter && wheelbaseFilter !== facets.wheelbase) setWheelbaseFilter('');
+    if (roofFilter && roofFilter !== facets.roof) setRoofFilter('');
+    if (bedFilter && bedFilter !== facets.bed) setBedFilter('');
+    if (cabFilter && cabFilter !== facets.cab) setCabFilter('');
   };
 
   // Resolve the estimate's vehicle (Add Graphics round trip) against the
@@ -3173,14 +3237,27 @@ export default function WrapQuotePage() {
               wheelbase is the ruler the drawing is measured by. */}
           {(!photoMode || proofMode) && (
           <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
-            <select value={yearFilter} onChange={e => { setYearFilter(e.target.value); setTemplateId(''); }} style={{ ...inputStyle, width: '110px' }}>
-              <option value="">All years</option>
-              {years.map(y => <option key={y} value={y}>{y}</option>)}
-            </select>
-            <select value={makeFilter} onChange={e => { setMakeFilter(e.target.value); setTemplateId(''); }} style={{ ...inputStyle, width: '150px' }}>
-              <option value="">All makes</option>
-              {makes.map(m => <option key={m} value={m}>{m}</option>)}
-            </select>
+            {([
+              ['year', 'All years', '110px', (v: string) => v],
+              ['make', 'All makes', '150px', (v: string) => v],
+              ['model', 'All models', '150px', (v: string) => v],
+              ['wheelbase', 'Any wheelbase', '140px', (v: string) => `${v}" wheelbase`],
+              ['roof', 'Any roof', '120px', (v: string) => `${v} roof`],
+              ['bed', 'Any bed', '120px', (v: string) => (['Chassis', 'Flat Bed', 'Flareside'].includes(v) ? v : `${v} bed`)],
+              ['cab', 'Any cab', '130px', (v: string) => v],
+            ] as [FilterKey, string, string, (v: string) => string][])
+              // Year / make / model always show; the rest only when the
+              // templates left actually differ by them.
+              .filter(([key]) => ['year', 'make', 'model'].includes(key) || filterOptions[key].length > 0)
+              .map(([key, allLabel, width, label]) => (
+                <select key={key} aria-label={allLabel} value={filterValues[key]} onChange={e => { filterSetters[key](e.target.value); setTemplateId(''); }} style={{ ...inputStyle, width }}>
+                  <option value="">{allLabel}</option>
+                  {filterOptions[key].map(o => <option key={o} value={o}>{label(o)}</option>)}
+                </select>
+              ))}
+            {anyFilter && (
+              <button onClick={() => { clearFilters(); setTemplateId(''); }} style={{ ...inputStyle, width: 'auto', cursor: 'pointer', color: 'var(--text-muted)', fontWeight: 600 }}>Clear filters</button>
+            )}
             <div style={{ position: 'relative', width: '220px' }}>
               <input
                 value={tplSearch}
@@ -3195,7 +3272,7 @@ export default function WrapQuotePage() {
               {tplSearch.trim().length >= 2 && (
                 <div style={{ position: 'absolute', top: '100%', left: 0, minWidth: '100%', width: 'max-content', maxWidth: '420px', zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '260px', overflowY: 'auto', marginTop: '2px' }}>
                   {templateSearchMatches.length === 0 ? (
-                    <div style={{ padding: '8px 10px', fontSize: '11px', color: 'var(--text-muted)' }}>No templates match</div>
+                    <div style={{ padding: '8px 10px', fontSize: '11px', color: 'var(--text-muted)' }}>{searchHiddenByFilters > 0 ? 'No templates match with these filters' : 'No templates match'}</div>
                   ) : templateSearchMatches.slice(0, 50).map(t => (
                     <button key={t.id} onMouseDown={e => e.preventDefault()} onClick={() => pickTemplate(t)} style={{ display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '12px', color: 'var(--text-primary)' }}>
                       <span style={{ fontWeight: 700 }}>{templateLabel(t)}</span>
@@ -3206,6 +3283,11 @@ export default function WrapQuotePage() {
                     <div style={{ padding: '6px 10px', fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>
                       Showing 50 of {templateSearchMatches.length} matches — keep typing to narrow
                     </div>
+                  )}
+                  {searchHiddenByFilters > 0 && (
+                    <button onMouseDown={e => e.preventDefault()} onClick={clearFilters} style={{ display: 'block', width: '100%', padding: '6px 10px', textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '10px', color: '#06b6d4', fontWeight: 600 }}>
+                      {searchHiddenByFilters} more match without the filters — clear filters
+                    </button>
                   )}
                 </div>
               )}
