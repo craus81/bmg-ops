@@ -19,7 +19,7 @@ interface RowVehicle {
 
 /**
  * The one-line Update Status row (owner layout 2026-10-02): Received,
- * Graphics, Graphics Complete, In Progress Upfit, Upfit Complete, Complete,
+ * Graphics In Progress, Graphics Complete, Upfit In Progress, Upfit Complete, Complete,
  * Shipped — no forced order. The current button gets the ● dot; Graphics
  * Complete and Upfit Complete keep a green ✓ once done, whatever is current.
  * Graphics buttons are hidden on vehicles with no graphics job (unless the

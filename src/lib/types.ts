@@ -353,9 +353,9 @@ export const VEHICLE_ROW: VehicleRowKey[] = [
 
 export const VEHICLE_ROW_LABELS: Record<VehicleRowKey, string> = {
   received: 'Received',
-  graphics: 'Graphics',
+  graphics: 'Graphics In Progress',
   graphics_complete: 'Graphics Complete',
-  upfit: 'In Progress Upfit',
+  upfit: 'Upfit In Progress',
   upfit_complete: 'Upfit Complete',
   complete: 'Complete',
   shipped: 'Shipped',
