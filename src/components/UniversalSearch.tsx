@@ -450,7 +450,11 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
         onClick={(e) => e.stopPropagation()}
         style={{
           width: '100%', maxWidth: '500px', margin: '0 auto',
-          maxHeight: 'calc(100vh / var(--ts))', display: 'flex', flexDirection: 'column',
+          // 100% of the fixed overlay, not 100vh: in the iPhone app the
+          // visible area is shorter than 100vh (status bar + home bar
+          // insets), so a 100vh panel ran past the bottom edge and the last
+          // result groups couldn't be scrolled into view.
+          maxHeight: '100%', minHeight: 0, display: 'flex', flexDirection: 'column',
           background: 'var(--bg)',
         }}
       >
@@ -487,7 +491,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
         </div>
 
         {/* Results */}
-        <div style={{ flex: 1, overflowY: 'auto' }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
           {searching && (
             <div style={{ padding: '32px', textAlign: 'center', color: 'var(--text-label)', fontSize: '13px' }}>
               Searching...
