@@ -15,7 +15,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { vehicleDescription } from './estimate-document';
-import { normalizeVehicleCount, perVehicleAmount } from './estimate-totals';
+import { discountLabel, normalizeVehicleCount, perVehicleAmount } from './estimate-totals';
 import { toKitDisplayLines } from './estimate-kits';
 
 export interface EstimatePdfImage {
@@ -242,6 +242,9 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
   const totals: [string, string, boolean][] = [['Subtotal', money(est.subtotal), false]];
   if (Number(est.labor_total) > 0) {
     totals.push([`Labor (${laborHours} hrs @ $${est.labor_rate}/hr)`, money(est.labor_total), false]);
+  }
+  if (Number((est as any).discount_amount) > 0) {
+    totals.push([discountLabel((est as any).discount_type, (est as any).discount_value), `-${money((est as any).discount_amount)}`, false]);
   }
   if (!est.tax_exempt && Number(est.tax_amount) > 0) {
     totals.push([`Tax (${(Number(est.tax_rate) * 100).toFixed(2)}%)`, money(est.tax_amount), false]);

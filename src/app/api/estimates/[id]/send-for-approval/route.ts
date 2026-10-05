@@ -17,7 +17,7 @@ import { MAX_ATTACHMENT_BYTES } from '@/lib/email-attachments';
 import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
 import { estimatePdfFilename } from '@/lib/estimate-pdf';
 import { validateBody, z } from '@/lib/validate';
-import { computeQuotedMargin, getMarginFloorPct } from '@/lib/quoted-margin';
+import { computeQuotedMargin, estimateDiscountRatio, getMarginFloorPct } from '@/lib/quoted-margin';
 import { normalizeVehicleCount } from '@/lib/estimate-totals';
 import { getShopLaborRate } from '@/lib/shop-labor';
 import { logAudit } from '@/lib/audit';
@@ -292,6 +292,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     })),
     effectiveLaborHours,
     laborCostRate,
+    // A discount (migration 342) lowers what the parts earn; without it a
+    // big enough discount would slip a quote under the floor unseen.
+    estimateDiscountRatio(estimate),
   );
   const belowFloor = quotedMargin.marginPct != null && quotedMargin.marginPct < floorPct;
   const floorReason = (body.floorReason || '').trim();

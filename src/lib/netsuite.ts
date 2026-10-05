@@ -1648,8 +1648,53 @@ export async function createVendor(payload: {
  * are untaxed is FleetSuite's rule (src/lib/line-taxability.ts), not the
  * item's Taxable box.
  */
-export function nsLineTaxField(li: { taxable?: unknown }): { isTaxable?: false } {
-  return li.taxable === false ? { isTaxable: false } : {};
+export function nsLineTaxField(li: { taxable?: unknown }): { isTaxable?: boolean } {
+  if (li.taxable === false) return { isTaxable: false };
+  // Only a discount's taxed share sets true (src/lib/discount-item.ts): a
+  // discount item may well default to untaxed in NetSuite, and then the
+  // invoice would keep the tax the quote took off.
+  if (li.taxable === true) return { isTaxable: true };
+  return {};
+}
+
+/** One line on a pushed estimate or sales order. */
+export interface NsPushLine {
+  itemId: string | number;
+  /** Omitted only on a Discount-type item's line, which has no quantity. */
+  quantity?: number;
+  rate: number;
+  description?: string;
+  /** false = untaxed line (migration 336); sent to NetSuite as isTaxable.
+   *  true only on a discount's taxed share (migration 342). */
+  taxable?: boolean;
+  /** An estimate discount line (migration 342): rate is negative. */
+  discount?: true;
+  /** The discount item is NetSuite type "Discount": no quantity, no price level. */
+  discountItem?: true;
+}
+
+/**
+ * Map a line to NetSuite's item sublist shape. `pinPrice` (sales orders):
+ * a line with a rate pins the price level to "Custom" (internal id -1) so
+ * NetSuite keeps our rate instead of re-sourcing it from the item's or the
+ * customer's price level; lines with no rate fall through to NetSuite's own
+ * sourcing. A discount line always carries its (negative) rate, and a
+ * Discount-type item gets the rate alone, since it has neither a quantity
+ * nor price levels.
+ */
+export function nsItemLine(li: NsPushLine, opts: { pinPrice: boolean }) {
+  const money = li.discountItem
+    ? { rate: li.rate }
+    : !opts.pinPrice
+      ? { rate: li.rate }
+      : (li.rate > 0 || li.discount) ? { price: { id: '-1' }, rate: li.rate } : {};
+  return {
+    item: { id: li.itemId },
+    ...(li.discountItem ? {} : { quantity: li.quantity }),
+    ...money,
+    ...(li.description ? { description: li.description } : {}),
+    ...nsLineTaxField(li),
+  };
 }
 
 export async function createSalesOrder(payload: {
@@ -1668,14 +1713,7 @@ export async function createSalesOrder(payload: {
   /** Written to custbody_vin_number_ — the same custom field the SuiteQL
    *  reads select as `vin`, so the SO shows the VIN wherever we display it. */
   vin?: string | null;
-  lineItems: {
-    itemId: string | number;
-    quantity: number;
-    rate: number;
-    description?: string;
-    /** false = untaxed line (migration 336); sent to NetSuite as isTaxable. */
-    taxable?: false;
-  }[];
+  lineItems: NsPushLine[];
 }): Promise<{
   success: boolean;
   salesOrderId?: string;
@@ -1689,17 +1727,9 @@ export async function createSalesOrder(payload: {
 
   const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
 
-  // Build line items for NetSuite. For any line with an explicit rate, pin the
-  // price level to "Custom" (internal id -1) so NetSuite keeps our rate instead
-  // of re-sourcing it from the item's / customer's default price level. Lines
-  // with no rate fall through to NetSuite's normal price-level sourcing.
-  const items = payload.lineItems.map((li) => ({
-    item: { id: li.itemId },
-    quantity: li.quantity,
-    ...(li.rate > 0 ? { price: { id: '-1' }, rate: li.rate } : {}),
-    ...(li.description ? { description: li.description } : {}),
-    ...nsLineTaxField(li),
-  }));
+  // Build line items for NetSuite, pinning the "Custom" price level on every
+  // line with a rate (see nsItemLine).
+  const items = payload.lineItems.map((li) => nsItemLine(li, { pinPrice: true }));
 
   const body: any = {
     entity: { id: payload.customerId },
@@ -2988,7 +3018,7 @@ export async function updateSalesOrderVin(
 export async function updateSalesOrderLines(
   salesOrderId: string | number,
   payload: {
-    lineItems: { itemId: string | number; quantity: number; rate: number; description?: string; taxable?: false }[];
+    lineItems: NsPushLine[];
     poNumber?: string | null;
     memo?: string | null;
     vin?: string | null;
@@ -3000,13 +3030,7 @@ export async function updateSalesOrderLines(
   const { oauth, token } = createOAuth(config);
   const authHeader = getAuthHeader(oauth, token, { url, method: 'PATCH' });
 
-  const items = payload.lineItems.map((li) => ({
-    item: { id: li.itemId },
-    quantity: li.quantity,
-    ...(li.rate > 0 ? { price: { id: '-1' }, rate: li.rate } : {}),
-    ...(li.description ? { description: li.description } : {}),
-    ...nsLineTaxField(li),
-  }));
+  const items = payload.lineItems.map((li) => nsItemLine(li, { pinPrice: true }));
   const body: any = { item: { items } };
   if (payload.poNumber?.trim()) body.otherRefNum = payload.poNumber.trim();
   if (payload.memo) body.memo = payload.memo;

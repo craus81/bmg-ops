@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { logAudit } from '@/lib/audit';
 import { validateBody, z } from '@/lib/validate';
-import { computeTotals, normalizeVehicleCount } from '@/lib/estimate-totals';
+import { computeTotals, normalizeDiscount, normalizeVehicleCount } from '@/lib/estimate-totals';
 import { resolveLineTaxability } from '@/lib/line-taxability';
 import { getSalesTaxRate } from '@/lib/sales-tax';
 import { getDefaultLaborRate, toLaborRate } from '@/lib/labor-rate';
@@ -53,6 +53,9 @@ const UpsertEstimateSchema = z.object({
   vehicle_count: z.union([z.number(), z.string()]).optional().nullable(),
   labor_rate: z.union([z.number(), z.string()]).optional(),
   labor_hours_override: z.union([z.number(), z.string()]).optional().nullable(),
+  // Off the whole job, before tax (migration 342). null/absent = no discount.
+  discount_type: z.enum(['percent', 'amount']).optional().nullable(),
+  discount_value: z.union([z.number(), z.string()]).optional().nullable(),
   line_items: z.array(LineItemSchema).max(500).optional(),
   created_by: z.string().uuid().optional().nullable(),
   install_instructions: z.string().max(5000).optional().nullable(),
@@ -166,6 +169,7 @@ export async function POST(req: NextRequest) {
     title, notes, status,
     tax_exempt, vehicle_count,
     labor_rate, labor_hours_override,
+    discount_type, discount_value,
     line_items, // array of line item objects
     created_by,
     // T1.6 install context
@@ -215,7 +219,8 @@ export async function POST(req: NextRequest) {
     // note atop src/lib/estimate-totals.ts.
     const lines = await resolveLineTaxability(supabase, requestLines);
     const units = normalizeVehicleCount(vehicle_count);
-    const totals = computeTotals(lines, effectiveTaxRate, !!tax_exempt, effectiveLaborRate, override, units);
+    const discount = normalizeDiscount(discount_type, discount_value);
+    const totals = computeTotals(lines, effectiveTaxRate, !!tax_exempt, effectiveLaborRate, override, units, discount);
 
     if (id) {
       // ── Revision lock ─────────────────────────────────────────────────
@@ -320,6 +325,9 @@ export async function POST(req: NextRequest) {
           labor_hours_override: override,
           subtotal: totals.subtotal,
           labor_total: totals.labor_total,
+          discount_type: discount?.type ?? null,
+          discount_value: discount?.value ?? null,
+          discount_amount: totals.discount_amount,
           tax_amount: totals.tax_amount,
           grand_total: totals.grand_total,
           install_instructions: install_instructions || null,
@@ -388,7 +396,7 @@ export async function POST(req: NextRequest) {
       try {
         const { data: after } = await supabase
           .from('estimates')
-          .select('netsuite_so_id, netsuite_so_number, so_pushed_hash, labor_hours, labor_hours_override, labor_rate, po_number, estimate_number, vin')
+          .select('netsuite_so_id, netsuite_so_number, so_pushed_hash, labor_hours, labor_hours_override, labor_rate, po_number, estimate_number, vin, vehicle_count, discount_type, discount_value')
           .eq('id', id)
           .maybeSingle();
         if (after?.netsuite_so_id) {
@@ -434,6 +442,9 @@ export async function POST(req: NextRequest) {
           labor_hours_override: override,
           subtotal: totals.subtotal,
           labor_total: totals.labor_total,
+          discount_type: discount?.type ?? null,
+          discount_value: discount?.value ?? null,
+          discount_amount: totals.discount_amount,
           tax_amount: totals.tax_amount,
           grand_total: totals.grand_total,
           install_instructions: install_instructions || null,

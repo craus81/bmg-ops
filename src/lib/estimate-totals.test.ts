@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeTotals, roundCentsHalfEven, normalizeVehicleCount } from './estimate-totals';
+import { computeTotals, discountLabel, discountSplit, normalizeDiscount, roundCentsHalfEven, normalizeVehicleCount } from './estimate-totals';
 
 // Characterization tests: these lock in the production behavior of the
 // estimate money math. If one of these fails, pricing changed — make sure
@@ -19,6 +19,8 @@ describe('computeTotals', () => {
       subtotal: 250,
       labor_hours: 3.5, // 1.5h × qty 2 + 0.5h × qty 1
       labor_total: 332.5,
+      discount_amount: 0,
+      discount_taxed: 0,
       tax_amount: 20,
       grand_total: 602.5,
     });
@@ -44,6 +46,8 @@ describe('computeTotals', () => {
       subtotal: 250,
       labor_hours: 3.5,
       labor_total: 332.5,
+      discount_amount: 0,
+      discount_taxed: 0,
       tax_amount: 0,
       grand_total: 582.5,
     });
@@ -87,6 +91,8 @@ describe('computeTotals', () => {
       subtotal: 0,
       labor_hours: 0,
       labor_total: 0,
+      discount_amount: 0,
+      discount_taxed: 0,
       tax_amount: 0,
       grand_total: 0,
     });
@@ -291,5 +297,98 @@ describe('normalizeVehicleCount', () => {
     expect(normalizeVehicleCount(undefined)).toBe(1);
     expect(normalizeVehicleCount('many')).toBe(1);
     expect(normalizeVehicleCount(NaN)).toBe(1);
+  });
+});
+
+describe('estimate discount (migration 342)', () => {
+  const lines = [
+    { quantity: 2, unit_price: 100, labor_hours: 1.5 },
+    { quantity: 1, unit_price: 50, labor_hours: 0.5 },
+  ];
+
+  it('takes a percent off the whole job (parts + labor) before tax', () => {
+    // Base 250 parts + 332.50 labor = 582.50; 10% = 58.25. The taxed share is
+    // 250/582.50 of it = 25.00, which lowers the tax by 25 x 8% = 2.00.
+    expect(computeTotals(lines, 0.08, false, 95, null, 1, { type: 'percent', value: 10 })).toEqual({
+      subtotal: 250,
+      labor_hours: 3.5,
+      labor_total: 332.5,
+      discount_amount: 58.25,
+      discount_taxed: 25,
+      tax_amount: 18,
+      grand_total: 542.25,
+    });
+  });
+
+  it('takes a dollar amount off, split by taxed and untaxed dollars', () => {
+    const r = computeTotals(
+      [{ quantity: 1, unit_price: 600 }, { quantity: 1, unit_price: 400, taxable: false }],
+      0.1, false, 0, null, 1, { type: 'amount', value: 100 },
+    );
+    expect(r.discount_amount).toBe(100);
+    expect(r.discount_taxed).toBe(60);
+    expect(r.tax_amount).toBe(54); // 60 - 6
+    expect(r.grand_total).toBe(954); // 1000 - 100 + 54
+  });
+
+  it('never takes the job below zero', () => {
+    const r = computeTotals([{ quantity: 1, unit_price: 50 }], 0.1, false, 0, null, 1, { type: 'amount', value: 500 });
+    expect(r.discount_amount).toBe(50);
+    expect(r.tax_amount).toBe(0);
+    expect(r.grand_total).toBe(0);
+  });
+
+  it('a tax-exempt customer still gets the discount and no tax', () => {
+    const r = computeTotals(lines, 0.08, true, 95, null, 1, { type: 'percent', value: 10 });
+    expect(r.tax_amount).toBe(0);
+    expect(r.grand_total).toBe(524.25);
+  });
+
+  it('a dollar discount on a fleet estimate is for the whole order', () => {
+    const one = computeTotals([{ quantity: 1, unit_price: 100 }], 0, false, 0, null, 3, { type: 'amount', value: 30 });
+    expect(one.subtotal).toBe(300);
+    expect(one.grand_total).toBe(270);
+  });
+
+  it('no discount leaves every figure exactly as before', () => {
+    const plain = computeTotals(lines, 0.0795, false, 120, null);
+    const none = computeTotals(lines, 0.0795, false, 120, null, 1, null);
+    expect(none).toEqual(plain);
+  });
+});
+
+describe('normalizeDiscount', () => {
+  it('reads what the builder or a row sends', () => {
+    expect(normalizeDiscount('percent', '12.5')).toEqual({ type: 'percent', value: 12.5 });
+    expect(normalizeDiscount('amount', 250)).toEqual({ type: 'amount', value: 250 });
+  });
+  it('treats blank, zero, negative and unknown types as no discount', () => {
+    expect(normalizeDiscount('percent', '')).toBeNull();
+    expect(normalizeDiscount('percent', 0)).toBeNull();
+    expect(normalizeDiscount('amount', -5)).toBeNull();
+    expect(normalizeDiscount(null, 10)).toBeNull();
+    expect(normalizeDiscount('bogus', 10)).toBeNull();
+  });
+  it('caps a percent at 100', () => {
+    expect(normalizeDiscount('percent', 150)).toEqual({ type: 'percent', value: 100 });
+  });
+});
+
+describe('discountSplit', () => {
+  it('rounds a percent to the cent and keeps the two shares summing to the whole', () => {
+    const s = discountSplit(333.33, 111.11, { type: 'percent', value: 7 });
+    expect(s.amount).toBe(23.33);
+    expect(Math.round((s.taxedPortion + s.untaxedPortion) * 100) / 100).toBe(23.33);
+  });
+  it('is all untaxed when nothing on the job is taxed', () => {
+    expect(discountSplit(500, 0, { type: 'amount', value: 50 })).toEqual({ amount: 50, taxedPortion: 0, untaxedPortion: 50 });
+  });
+});
+
+describe('discountLabel', () => {
+  it('names the percent, not a dollar amount', () => {
+    expect(discountLabel('percent', 10)).toBe('Discount (10%)');
+    expect(discountLabel('percent', '12.5')).toBe('Discount (12.5%)');
+    expect(discountLabel('amount', 250)).toBe('Discount');
   });
 });

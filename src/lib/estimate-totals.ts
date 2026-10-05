@@ -40,6 +40,11 @@
  *    so the pushed copy needs no second interpretation of the count.
  *    labor_hours and labor_hours_override stay JOB totals: an override is
  *    the hours for the whole job, which is what the field already meant.
+ *  - A discount (migration 342) comes off the whole job after labor and
+ *    before tax; see discountSplit. `subtotal` stays the parts total BEFORE
+ *    the discount and `discount_amount` is reported on its own, so
+ *    grand_total = subtotal + labor_total - discount_amount + tax_amount.
+ *    A dollar discount on a fleet estimate is for the whole order.
  */
 
 import { isLineTaxable } from './line-taxability';
@@ -66,6 +71,58 @@ export function normalizeVehicleCount(value: unknown): number {
   return Number.isFinite(n) && n >= 1 ? n : 1;
 }
 
+/**
+ * A discount the rep typed on the estimate (migration 342): a percent of the
+ * whole job, or a dollar amount off the whole job. NULL = no discount.
+ */
+export type EstimateDiscount = { type: 'percent' | 'amount'; value: number } | null;
+
+/** Read a discount off a request or an estimate row; anything unusable is none. */
+export function normalizeDiscount(type: unknown, value: unknown): EstimateDiscount {
+  if (type !== 'percent' && type !== 'amount') return null;
+  const n = Math.round((parseFloat(String(value ?? '')) || 0) * 100) / 100;
+  if (!(n > 0)) return null;
+  return { type, value: type === 'percent' ? Math.min(n, 100) : n };
+}
+
+/** "Discount (10%)" / "Discount": the label documents and NetSuite share. */
+export function discountLabel(type: unknown, value: unknown): string {
+  const d = normalizeDiscount(type, value);
+  return d?.type === 'percent' ? `Discount (${+d.value.toFixed(2)}%)` : 'Discount';
+}
+
+/**
+ * The dollars a discount takes off, and how they split between taxed and
+ * untaxed money.
+ *
+ * The discount comes off the WHOLE job (parts + labor, Craig 2026-10-05),
+ * so it is spread over taxed and untaxed dollars in proportion. The taxed
+ * share is what lowers the sales tax (Missouri taxes the price after a
+ * seller's discount), and it is also exactly what the push sends to
+ * NetSuite as a taxed discount line, with the rest as an untaxed one, so
+ * NetSuite's tax comes out the same as ours.
+ *
+ *  - base: the job before the discount (parts subtotal + labor).
+ *  - taxedBase: the part of `base` on taxed lines (never labor).
+ *
+ * A percent is rounded to the cent; a dollar amount is capped at the base,
+ * so a discount can never take the job below $0.
+ */
+export function discountSplit(base: number, taxedBase: number, discount: EstimateDiscount): {
+  amount: number; taxedPortion: number; untaxedPortion: number;
+} {
+  const cleanBase = Math.round(base * 100) / 100;
+  if (!discount || !(cleanBase > 0)) return { amount: 0, taxedPortion: 0, untaxedPortion: 0 };
+  const raw = discount.type === 'percent'
+    ? roundCentsHalfEven(cleanBase * discount.value / 100)
+    : discount.value;
+  const amount = Math.round(Math.min(Math.max(raw, 0), cleanBase) * 100) / 100;
+  const share = Math.min(Math.max(taxedBase, 0), cleanBase) / cleanBase;
+  const taxedPortion = roundCentsHalfEven(amount * share);
+  const untaxedPortion = Math.round((amount - taxedPortion) * 100) / 100;
+  return { amount, taxedPortion, untaxedPortion };
+}
+
 export function computeTotals(
   lines: any[],
   taxRate: number,
@@ -73,6 +130,7 @@ export function computeTotals(
   laborRate: number,
   laborHoursOverride: number | null,
   vehicleCount: unknown = 1,
+  discount: EstimateDiscount = null,
 ) {
   const units = normalizeVehicleCount(vehicleCount);
   const qtyOf = (l: any) => (parseFloat(l.quantity || 0) || 0) * units;
@@ -84,17 +142,26 @@ export function computeTotals(
   // taxed line by line, each rounded to cents, exactly as NetSuite books it.
   // The line amount here is the FLEET amount (qty × units) because that is
   // the quantity the sales order will carry.
-  const taxAmount = taxExempt ? 0 : lines.reduce((sum: number, l: any) => {
+  const taxedBase = lines.reduce((sum: number, l: any) => (
+    isLineTaxable(l) ? sum + qtyOf(l) * parseFloat(l.unit_price || 0) : sum
+  ), 0);
+  const disc = discountSplit(subtotal + laborTotal, taxedBase, discount);
+  // The discount's taxed share is one more line with its own rounded tax
+  // (a negative one), the same way NetSuite books the taxed discount line.
+  const lineTax = lines.reduce((sum: number, l: any) => {
     if (!isLineTaxable(l)) return sum;
     const lineAmount = qtyOf(l) * parseFloat(l.unit_price || 0);
     return sum + roundCentsHalfEven(lineAmount * taxRate);
   }, 0);
-  const grandTotal = subtotal + laborTotal + taxAmount;
+  const taxAmount = taxExempt ? 0 : lineTax - roundCentsHalfEven(disc.taxedPortion * taxRate);
+  const grandTotal = subtotal + laborTotal - disc.amount + taxAmount;
 
   return {
     subtotal: Math.round(subtotal * 100) / 100,
     labor_hours: Math.round(autoLaborHours * 100) / 100,
     labor_total: Math.round(laborTotal * 100) / 100,
+    discount_amount: disc.amount,
+    discount_taxed: disc.taxedPortion,
     tax_amount: Math.round(taxAmount * 100) / 100,
     grand_total: Math.round(grandTotal * 100) / 100,
   };

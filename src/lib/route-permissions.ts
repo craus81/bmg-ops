@@ -83,6 +83,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // Reading which NetSuite item labor bills to is admin (it exposes item
   // ids); setting it is super-admin, like the tax rate — it decides which
   // GL account every labor dollar posts to.
+  'src/app/api/admin/discount-item/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   'src/app/api/admin/labor-item/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   'src/app/api/admin/link-customer/route.ts': admin(),
   // The QuickBooks ledger import (migration 314 / R8-2). Driven from OUTSIDE

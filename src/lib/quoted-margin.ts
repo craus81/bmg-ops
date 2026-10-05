@@ -44,10 +44,22 @@ export interface QuotedMargin {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+/**
+ * The share of the job an estimate's discount (migration 342) takes off,
+ * from its stored totals: 0.1 for 10% off. The discount comes off every
+ * dollar alike, so parts revenue shrinks by the same share.
+ */
+export function estimateDiscountRatio(estimate: { discount_amount?: unknown; subtotal?: unknown; labor_total?: unknown }): number {
+  const amount = Number(estimate.discount_amount) || 0;
+  const base = (Number(estimate.subtotal) || 0) + (Number(estimate.labor_total) || 0);
+  return amount > 0 && base > 0 ? Math.min(amount / base, 1) : 0;
+}
+
 export function computeQuotedMargin(
   lines: QuotedMarginLine[],
   laborHours: number,
   laborCostRate: number | null,
+  discountRatio = 0,
 ): QuotedMargin {
   let costTotal = 0;
   let costedRevenue = 0;
@@ -56,7 +68,9 @@ export function computeQuotedMargin(
 
   for (const l of lines) {
     const qty = Number(l.quantity) || 0;
-    const price = Number(l.unit_price) || 0;
+    const listPrice = Number(l.unit_price) || 0;
+    // What the line actually earns after the estimate's discount.
+    const price = listPrice * (1 - discountRatio);
     const hasCost = l.purchase_price != null || l.avg_install_cost != null;
     const unitCost = hasCost ? (Number(l.purchase_price) || 0) + (Number(l.avg_install_cost) || 0) : null;
     if (unitCost != null) {
@@ -68,7 +82,7 @@ export function computeQuotedMargin(
     detail.push({
       item_number: l.item_number ?? null,
       quantity: qty,
-      unit_price: round2(price),
+      unit_price: round2(listPrice),
       unit_cost: unitCost != null ? round2(unitCost) : null,
       margin_pct: unitCost != null && price > 0
         ? round2(((price - unitCost) / price) * 100)

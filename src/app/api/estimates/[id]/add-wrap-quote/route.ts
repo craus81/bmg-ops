@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { computeTotals } from '@/lib/estimate-totals';
+import { computeTotals, normalizeDiscount } from '@/lib/estimate-totals';
 import { resolveLineTaxability } from '@/lib/line-taxability';
 import { FALLBACK_SALES_TAX_RATE } from '@/lib/sales-tax';
 import { FALLBACK_LABOR_RATE } from '@/lib/labor-rate';
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   try {
     const [{ data: estimate }, { data: quote }] = await Promise.all([
-      supabase.from('estimates').select('id, tax_rate, tax_exempt, labor_rate, labor_hours_override, customer_approved, status, netsuite_so_id, vehicle_count').eq('id', params.id).maybeSingle(),
+      supabase.from('estimates').select('id, tax_rate, tax_exempt, labor_rate, labor_hours_override, customer_approved, status, netsuite_so_id, vehicle_count, discount_type, discount_value').eq('id', params.id).maybeSingle(),
       supabase.from('wrap_quotes').select('id, quote_number, vehicle_description, materials_total, labor_total, package_qty').eq('id', wrapQuoteId).maybeSingle(),
     ]);
     if (!estimate) return NextResponse.json({ error: 'Estimate not found' }, { status: 404 });
@@ -163,11 +163,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       // Without the count, adding a line to a 12-vehicle estimate would
       // recompute its totals at one vehicle and quietly divide it by 12.
       (estimate as any).vehicle_count,
+      // A percent discount grows with the new lines; a dollar one stays put.
+      normalizeDiscount((estimate as any).discount_type, (estimate as any).discount_value),
     );
     await supabase.from('estimates').update({
       labor_hours: totals.labor_hours,
       subtotal: totals.subtotal,
       labor_total: totals.labor_total,
+      discount_amount: totals.discount_amount,
       tax_amount: totals.tax_amount,
       grand_total: totals.grand_total,
       updated_at: new Date().toISOString(),
