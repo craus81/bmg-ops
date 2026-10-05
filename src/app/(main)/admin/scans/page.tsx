@@ -11,6 +11,7 @@ import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNe
 import { useAddToCatalog, AddToCatalogRow, offerAddToCatalog } from '@/components/AddToCatalog';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import PhoneInput from '@/components/PhoneInput';
+import BillableCustomerField, { BillableCustomerChips } from '@/components/BillableCustomerField';
 import { theme } from '@/lib/theme';
 import { locationBillingOverride } from '@/lib/scan-billing';
 import { shipToCityLabel } from '@/lib/graphics-job-from-po';
@@ -18,7 +19,7 @@ import { sameCity } from '@/lib/plant-location';
 import type { HeldScan, HeldCandidate } from '@/lib/scan-match';
 import { findExistingScanVins, sameVehicleVin, vinTail, fetchScansMatchingVins, pickScanForLine } from '@/lib/vin-match';
 import { scanLifecycle } from '@/lib/scan-state';
-import { customerRequiresPo, loadBillableCustomers, matchesBillableCustomer, DEFAULT_BILLABLE_CUSTOMERS, type BillableCustomer } from '@/lib/billable-customers';
+import { customerRequiresPo, loadBillableCustomers, DEFAULT_BILLABLE_CUSTOMERS, type BillableCustomer } from '@/lib/billable-customers';
 import { decodeVinsBatch } from '@/lib/vin-decoder';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 import PhotoLightbox, { type LightboxPhoto } from '@/components/PhotoLightbox';
@@ -406,25 +407,7 @@ export default function AdminScansPage() {
   // (one click for Reading Truck / Masterack) instead of retyping variants.
   // Free text stays for everyone else; clicking the active chip clears it.
   const customerQuickPick = (current: string, onPick: (name: string) => void) => (
-    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '4px' }}>
-      {billableCustomers.map(c => {
-        const active = matchesBillableCustomer(c, current);
-        return (
-          <button
-            key={c.name}
-            type="button"
-            onMouseDown={e => e.preventDefault()}
-            onClick={() => onPick(active ? '' : c.name)}
-            style={{
-              padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
-              border: `1px solid ${active ? 'rgba(167,139,250,0.5)' : theme.border}`,
-              background: active ? 'rgba(167,139,250,0.12)' : 'transparent',
-              color: active ? '#a78bfa' : 'var(--text-muted)',
-            }}
-          >{c.label}</button>
-        );
-      })}
-    </div>
+    <BillableCustomerChips current={current} billableCustomers={billableCustomers} onPick={onPick} />
   );
 
   // Categorize scans
@@ -2227,37 +2210,14 @@ export default function AdminScansPage() {
             </div>
             <div style={{ position: 'relative' }}>
               <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Billable Customer</div>
-              <input
+              {/* Every NetSuite customer, not just the shortlist chips or
+                  names that happen to be a part's default customer. */}
+              <BillableCustomerField
                 value={bulkEditCustomer}
-                onChange={e => setBulkEditCustomer(e.target.value)}
-                placeholder={single ? 'Billable customer' : 'No change'}
-                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}
+                onChange={setBulkEditCustomer}
+                billableCustomers={billableCustomers}
+                placeholder={single ? 'Search customers…' : 'No change'}
               />
-              {customerQuickPick(bulkEditCustomer, setBulkEditCustomer)}
-              {bulkEditCustomer.length >= 1 && (() => {
-                const q = bulkEditCustomer.toLowerCase();
-                const set = new Set<string>();
-                for (const p of allParts) {
-                  const c = (p.billable_customer || '').trim();
-                  if (c && c.toLowerCase() !== q && c.toLowerCase().includes(q)) set.add(c);
-                }
-                const matches = [...set].sort().slice(0, 8);
-                if (matches.length === 0) return null;
-                return (
-                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '200px', overflowY: 'auto', marginTop: '2px' }}>
-                    {matches.map(c => (
-                      <button
-                        key={c}
-                        onMouseDown={e => e.preventDefault()}
-                        onClick={() => setBulkEditCustomer(c)}
-                        style={{ display: 'block', width: '100%', padding: '6px 8px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
-                      >
-                        {c}
-                      </button>
-                    ))}
-                  </div>
-                );
-              })()}
             </div>
             <div>
               <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Location</div>
@@ -3393,6 +3353,7 @@ interface VendorLine {
   existing: string | null; // lifecycle label when the VIN is already a scan
   lastChecked?: string; // vin|part key of the last existing-scan lookup, to skip redundant queries
   selected?: boolean; // multi-select for applying a part to many lines at once
+  customer?: string; // per-line billable customer; blank = the invoice's
 }
 
 interface VendorReview {
@@ -3402,6 +3363,8 @@ interface VendorReview {
   dueDate: string;
   totalAmount: string;
   notes: string;
+  // Billable customer for every line without its own.
+  customer: string;
   lines: VendorLine[];
 }
 
@@ -3423,7 +3386,7 @@ interface VendorInvoiceRecord {
   rejection_reason: string | null;
   netsuite_bill_id: string | null;
   company: VendorCompany | null;
-  lines: { id: string; vin: string; part_number: string | null; amount: number | null; was_existing_scan: boolean; scan_log_id: string | null }[];
+  lines: { id: string; vin: string; part_number: string | null; amount: number | null; was_existing_scan: boolean; scan_log_id: string | null; billable_customer: string | null }[];
 }
 
 // Payment-pipeline chip per vendor_invoices.status (see /admin/ap for the queue).
@@ -3487,6 +3450,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
   const [applyPartSearch, setApplyPartSearch] = useState('');
   const [applyAmount, setApplyAmount] = useState('');
   const [showApplyPartDropdown, setShowApplyPartDropdown] = useState(false);
+  const [applyCustomer, setApplyCustomer] = useState('');
 
   // Retroactive upload: the invoice was already processed and paid outside
   // the app — record it as paid, skipping the approval pipeline.
@@ -3662,18 +3626,21 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
   const applyPartToSelected = (partNumber: string) => {
     const part = partNumber.trim();
     const amount = applyAmount.trim();
-    if ((!part && !amount) || !review) return;
+    const customer = applyCustomer.trim();
+    if ((!part && !amount && !customer) || !review) return;
     setReview(prev => prev ? {
       ...prev,
       lines: prev.lines.map(l => l.selected ? {
         ...l,
         ...(part ? { partNumber: part } : {}),
         ...(amount ? { amount } : {}),
+        ...(customer ? { customer } : {}),
         selected: false,
       } : l),
     } : prev);
     setApplyPartSearch('');
     setApplyAmount('');
+    setApplyCustomer('');
     setShowApplyPartDropdown(false);
     if (part) {
       // The newly assigned part may have a remembered rate for this vendor.
@@ -3725,7 +3692,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
     setCommitResult(null);
     setVendorRates({});
     setNsVendors([]);
-    setReview({ vendorName: '', invoiceNumber: '', invoiceDate: '', dueDate: '', totalAmount: '', notes: '', lines: [blankLine()] });
+    setReview({ vendorName: '', invoiceNumber: '', invoiceDate: '', dueDate: '', totalAmount: '', notes: '', customer: '', lines: [blankLine()] });
   };
 
   // Files beyond Vercel's ~4.5MB request-body ceiling can't reach the
@@ -3778,7 +3745,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
       if (!extracted) {
         // Extraction failing never blocks the flow — fall back to manual entry.
         setNotice(prev => [prev, `AI couldn't read this invoice: ${extractError}`].filter(Boolean).join('\n'));
-        setReview({ vendorName: '', invoiceNumber: '', invoiceDate: '', dueDate: '', totalAmount: '', notes: '', lines: [blankLine()] });
+        setReview({ vendorName: '', invoiceNumber: '', invoiceDate: '', dueDate: '', totalAmount: '', notes: '', customer: '', lines: [blankLine()] });
       } else {
         const d = extracted;
         let lines: VendorLine[] = (d.lines || []).map((l: any) => ({
@@ -3802,6 +3769,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
           dueDate: d.due_date || '',
           totalAmount: d.total_amount != null ? String(d.total_amount) : '',
           notes: d.notes || '',
+          customer: '',
           lines,
         });
         // Remembered rates fill any amounts the invoice didn't spell out.
@@ -4013,11 +3981,13 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
           totalAmount: parseFloat(review.totalAmount) >= 0 ? parseFloat(review.totalAmount) : null,
           locationId: vLocation || null,
           notes: review.notes.trim() || null,
+          billableCustomer: review.customer.trim() || null,
           file: stagedFile,
           lines: validLines.map(l => ({
             vin: l.vin.trim(),
             partNumber: l.partNumber.trim() || null,
             amount: parseFloat(l.amount) >= 0 ? parseFloat(l.amount) : null,
+            billableCustomer: l.customer?.trim() || null,
           })),
           ...(alreadyPaid ? { alreadyPaid: true } : {}),
         }),
@@ -4409,6 +4379,22 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
             </span>
           </div>
 
+          {/* Billable customer — who BMG bills for these installs. Lines can
+              override it via the selected-lines bar. */}
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
+            <div style={{ ...labelStyle, marginBottom: 0, paddingTop: '9px' }}>Billable Customer</div>
+            <div style={{ minWidth: '260px' }}>
+              <BillableCustomerField
+                value={review.customer}
+                onChange={customer => setReview(prev => prev ? { ...prev, customer } : prev)}
+                billableCustomers={billableCustomers}
+              />
+            </div>
+            <span style={{ fontSize: '10px', color: 'var(--text-muted)', paddingTop: '9px' }}>
+              Blank uses each part&apos;s default customer. A pick goes on new VINs and on scanned VINs that have no customer yet; a customer already on a scan is kept.
+            </span>
+          </div>
+
           {/* Lines */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
@@ -4526,7 +4512,16 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
                   title="Price to set on every selected line — works with or without a part number"
                   style={{ ...inputStyle, fontSize: '11px', padding: '6px 8px', width: '90px' }}
                 />
-                <button onClick={() => applyPartToSelected(applyPartSearch)} disabled={!applyPartSearch.trim() && !applyAmount.trim()} style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#f472b6', color: '#fff', border: 'none', cursor: 'pointer', opacity: applyPartSearch.trim() || applyAmount.trim() ? 1 : 0.4 }}>
+                <div style={{ minWidth: '200px' }}>
+                  <BillableCustomerField
+                    value={applyCustomer}
+                    onChange={setApplyCustomer}
+                    billableCustomers={billableCustomers}
+                    placeholder="Customer for selected lines…"
+                    chips={false}
+                  />
+                </div>
+                <button onClick={() => applyPartToSelected(applyPartSearch)} disabled={!applyPartSearch.trim() && !applyAmount.trim() && !applyCustomer.trim()} style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#f472b6', color: '#fff', border: 'none', cursor: 'pointer', opacity: applyPartSearch.trim() || applyAmount.trim() || applyCustomer.trim() ? 1 : 0.4 }}>
                   Apply to {selectedCount}
                 </button>
                 <button onClick={() => setReview({ ...review, lines: review.lines.map(l => ({ ...l, selected: false })) })} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-muted)', cursor: 'pointer' }}>
@@ -4631,6 +4626,12 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
                 })()}
                 style={{ width: '90px', padding: '6px 8px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', flexShrink: 0 }}
               />
+              {line.customer?.trim() && (
+                <span title="Billable customer for this line (overrides the invoice's)" style={{ display: 'flex', alignItems: 'center', gap: '3px', fontSize: '9px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa', whiteSpace: 'nowrap', flexShrink: 0, maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {line.customer}
+                  <button onClick={() => updateLine(line.key, { customer: '' })} title="Use the invoice's customer" style={{ background: 'none', border: 'none', color: '#a78bfa', fontSize: '10px', cursor: 'pointer', padding: 0 }}>✕</button>
+                </span>
+              )}
               {line.existing ? (
                 <span title="This VIN is already in the system — its record will be updated with the cost and keep this state" style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(251,191,36,0.12)', color: '#fbbf24', whiteSpace: 'nowrap', flexShrink: 0 }}>
                   ↻ {line.existing}
@@ -4753,6 +4754,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
                     <div key={l.id} style={{ display: 'flex', gap: '8px', fontSize: '11px', padding: '2px 0', color: 'var(--text-secondary)' }}>
                       <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{l.vin}</span>
                       {l.part_number && <span style={{ color: 'var(--text-muted)' }}>{l.part_number}</span>}
+                      {l.billable_customer && <span style={{ color: '#a78bfa' }}>{l.billable_customer}</span>}
                       <span style={{ flex: 1 }} />
                       {l.was_existing_scan && <span style={{ fontSize: '9px', color: '#fbbf24' }}>pre-existing</span>}
                       <span style={{ fontWeight: 700, color: '#f472b6' }}>{l.amount != null ? fmtMoney(Number(l.amount)) : '—'}</span>
