@@ -17,6 +17,8 @@ interface CustomerPickerProps {
   onChange: (result: { customer: string; customerNetsuiteId: string | null }) => void;
   placeholder?: string;
   style?: React.CSSProperties;
+  /** False hides the "Create in NetSuite" fallback (pick-only fields). */
+  allowCreate?: boolean;
 }
 
 /**
@@ -25,7 +27,7 @@ interface CustomerPickerProps {
  * customer needs to resolve to a real NetSuite customer: the Create/Edit PO
  * forms and the Gmail import review modal.
  */
-export default function CustomerPicker({ value, netsuiteId, onChange, placeholder, style }: CustomerPickerProps) {
+export default function CustomerPicker({ value, netsuiteId, onChange, placeholder, style, allowCreate = true }: CustomerPickerProps) {
   const supabase = createClient();
   const [results, setResults] = useState<CustomerMatch[]>([]);
   const [searching, setSearching] = useState(false);
@@ -114,7 +116,7 @@ export default function CustomerPicker({ value, netsuiteId, onChange, placeholde
 
   const matched = !!netsuiteId;
   const trimmed = value.trim();
-  const showCreateOption = trimmed.length >= 2 && !matched && !searching && results.length === 0;
+  const showCreateOption = allowCreate && trimmed.length >= 2 && !matched && !searching && results.length === 0;
 
   return (
     <div ref={boxRef} style={{ position: 'relative', ...style }}>

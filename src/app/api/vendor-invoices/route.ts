@@ -17,6 +17,7 @@ const LineSchema = z.object({
   vin: z.string().trim().min(5).max(20),
   partNumber: z.string().trim().max(80).nullable().optional(),
   amount: z.number().nonnegative().nullable().optional(),
+  billableCustomer: z.string().trim().max(160).nullable().optional(),
 });
 
 const PostSchema = z.object({
@@ -28,6 +29,7 @@ const PostSchema = z.object({
   totalAmount: z.number().nonnegative().nullable().optional(),
   locationId: z.string().uuid().nullable().optional(),
   notes: z.string().trim().max(2000).nullable().optional(),
+  billableCustomer: z.string().trim().max(160).nullable().optional(),
   file: z.object({
     storagePath: z.string().max(500),
     fileName: z.string().max(200),
@@ -65,7 +67,7 @@ export async function GET(req: NextRequest) {
   const auth = await requireRole(req, ['finance']);
   if (auth.error) return auth.error;
 
-  const SELECT = '*, company:companies(id, name, netsuite_vendor_id), lines:vendor_invoice_lines(id, vin, part_number, amount, was_existing_scan, scan_log_id)';
+  const SELECT = '*, company:companies(id, name, netsuite_vendor_id), lines:vendor_invoice_lines(id, vin, part_number, amount, was_existing_scan, scan_log_id, billable_customer)';
 
   // Single-invoice fetch: the ?invoice= deep-link fallback for rows older
   // than the newest-200 window the list returns.
@@ -107,10 +109,12 @@ export async function POST(req: NextRequest) {
       locationId: body.locationId || null,
       notes: body.notes || null,
       file: body.file || null,
+      billableCustomer: body.billableCustomer || null,
       lines: body.lines.map(l => ({
         vin: l.vin,
         partNumber: l.partNumber ?? null,
         amount: l.amount ?? null,
+        billableCustomer: l.billableCustomer || null,
       })),
       actorId: auth.user!.id,
       ...(body.alreadyPaid ? { initialStatus: 'paid' as const, auditDetail: { alreadyPaid: true } } : {}),

@@ -30,6 +30,7 @@ interface ScanRow {
   location_id: string | null;
   exported_at: string | null;
   archived_at: string | null;
+  billable_customer: string | null;
   invoice_number: string | null;
   date_invoiced: string | null;
   is_paid: boolean | null;
@@ -126,6 +127,8 @@ export interface VendorInvoiceLineInput {
   vin: string;
   partNumber: string | null;
   amount: number | null;
+  /** Billable customer for this line; null falls back to the invoice's. */
+  billableCustomer?: string | null;
 }
 
 export interface RecordVendorInvoiceInput {
@@ -138,6 +141,8 @@ export interface RecordVendorInvoiceInput {
   locationId: string | null;
   notes: string | null;
   file: { storagePath: string; fileName: string } | null;
+  /** Default billable customer for lines without their own. */
+  billableCustomer?: string | null;
   lines: VendorInvoiceLineInput[];
   /** created_by on the invoice and scanned_by on any scans created. */
   actorId: string;
@@ -169,6 +174,8 @@ export async function recordVendorInvoice(
     vin: cleanVin(l.vin),
     partNumber: l.partNumber?.trim() || null,
     amount: l.amount ?? null,
+    // An explicitly picked customer (line, else invoice); null = infer.
+    billableCustomer: l.billableCustomer?.trim() || input.billableCustomer?.trim() || null,
   }));
   const badVins = rawLines.filter(l => l.vin.length < 5).map(l => l.vin);
   if (badVins.length > 0) {
@@ -330,7 +337,7 @@ export async function recordVendorInvoice(
         ...(decoded.get(line.vin) || {}),
         part_number: part?.item_number || line.partNumber,
         part_description: part?.display_name || null,
-        billable_customer: overrideCustomer ?? part?.billable_customer ?? null,
+        billable_customer: line.billableCustomer ?? overrideCustomer ?? part?.billable_customer ?? null,
         location_id: input.locationId || null,
         location_name: locationName,
         scanned_by: input.actorId,
@@ -370,6 +377,7 @@ export async function recordVendorInvoice(
       part_number: line.partNumber,
       amount: line.amount,
       was_existing_scan: !!scan,
+      billable_customer: line.billableCustomer,
     })),
   );
   if (linesErr) {
@@ -396,6 +404,23 @@ export async function recordVendorInvoice(
     }
   }
 
+  // Matched scans with no billable customer take the one picked on the
+  // invoice. A customer already on a scan is kept — it may already be
+  // invoiced to them.
+  const customerFills = new Map<string, string[]>();
+  const filledScanIds = new Set<string>();
+  for (const m of matched) {
+    if (!m.scan || m.scan.billable_customer?.trim() || !m.line.billableCustomer) continue;
+    if (filledScanIds.has(m.scan.id)) continue;
+    filledScanIds.add(m.scan.id);
+    const ids = customerFills.get(m.line.billableCustomer) || [];
+    ids.push(m.scan.id);
+    customerFills.set(m.line.billableCustomer, ids);
+  }
+  for (const [customer, ids] of customerFills) {
+    await service.from('scan_logs').update({ billable_customer: customer }).in('id', ids);
+  }
+
   // Newly created scans can still auto-match open POs (best-effort).
   const newScanIds = toCreateIdx.map(i => entryScanIds[i]).filter((id): id is string => !!id);
   if (newScanIds.length > 0) {
@@ -414,6 +439,7 @@ export async function recordVendorInvoice(
       invoice_number: input.invoiceNumber || null,
       total_amount: input.totalAmount ?? null,
       lines: matched.length,
+      billable_customer: input.billableCustomer?.trim() || null,
       scans_updated: updated.length,
       scans_created: created.length,
       ...(input.auditDetail || {}),
