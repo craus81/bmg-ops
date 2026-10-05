@@ -699,7 +699,7 @@ export default function CustomerRecordPage() {
   const addToNetSuite = async () => {
     if (!prospect || converting) return;
     if (prospect.netsuite_id) { await dialog.alert('Already in NetSuite.'); return; }
-    if (!(await dialog.confirm(`Promote "${prospect.company_name}" to a NetSuite customer? This creates the NetSuite record — until now the lead has lived only in FleetSuite.`, { confirmLabel: 'Promote' }))) return;
+    if (!(await dialog.confirm(`Promote "${prospect.company_name}" to a NetSuite customer? This creates the NetSuite record — until now the prospect has lived only in FleetSuite.`, { confirmLabel: 'Promote' }))) return;
     setConverting(true);
     try {
       const res = await fetch('/api/prospects/push-to-netsuite', {
@@ -2026,14 +2026,22 @@ export default function CustomerRecordPage() {
 
       {/* Header */}
       <div style={card}>
-        <button onClick={() => router.push('/admin/prospects')} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', padding: 0, marginBottom: '8px' }}>‹ Customers</button>
+        {(() => {
+          // Back to the tab this record lives on.
+          const tab = prospect?.record_type === 'vendor' ? 'vendors' : prospect && !prospect.netsuite_id ? 'prospects' : null;
+          return (
+            <button onClick={() => router.push(tab ? `/admin/prospects?tab=${tab}` : '/admin/prospects')} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', padding: 0, marginBottom: '8px' }}>
+              ‹ {tab === 'vendors' ? 'Vendors' : tab === 'prospects' ? 'Prospects' : 'Customers'}
+            </button>
+          );
+        })()}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
           <div style={{ fontSize: '24px', fontWeight: 800, letterSpacing: '-0.5px', color: 'var(--text-primary)' }}>{name}</div>
           {prospect ? (
             isVendor ? (
               <span title="Supplier/partner contact — FleetSuite only, never created in NetSuite as a customer" style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>Vendor</span>
             ) : !prospect.netsuite_id && (
-              <span title="A lead lives in FleetSuite only — promote it below, or it promotes itself when its first estimate is pushed to NetSuite" style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'rgba(96,165,250,0.12)', color: '#60a5fa' }}>Lead</span>
+              <span title="A prospect lives in FleetSuite only — promote it below, or it promotes itself when its first estimate is pushed to NetSuite" style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'rgba(96,165,250,0.12)', color: '#60a5fa' }}>Prospect</span>
             )
           ) : (
             <span style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'var(--warning-bg)', color: 'var(--warning)' }}>Not tracked</span>
@@ -2119,7 +2127,7 @@ export default function CustomerRecordPage() {
           )}
           {prospect && <button onClick={openEdit} title="Edit company details, lead source, and notes" style={btnSm}>✎ Edit</button>}
           {prospect && !prospect.netsuite_id && !isVendor && (
-            <button onClick={addToNetSuite} disabled={converting} title="Promote this lead: create the NetSuite customer and link it (also happens automatically when the lead's first estimate is pushed)" style={{ ...btnSm, opacity: converting ? 0.6 : 1 }}>
+            <button onClick={addToNetSuite} disabled={converting} title="Promote this prospect: create the NetSuite customer and link it (also happens automatically when the prospect's first estimate is pushed)" style={{ ...btnSm, opacity: converting ? 0.6 : 1 }}>
               {converting ? 'Promoting…' : 'Promote to NetSuite Customer'}
             </button>
           )}
@@ -2657,7 +2665,7 @@ export default function CustomerRecordPage() {
           {prospect && !prospect.netsuite_id && (
             <div style={card}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                <div style={{ ...eyebrow, marginBottom: 0 }}>Lead status</div>
+                <div style={{ ...eyebrow, marginBottom: 0 }}>Prospect status</div>
                 <span style={{ flex: 1 }} />
                 {([['active', 'Active', '#22c55e'], ['nurturing', 'Nurture', '#f59e0b'], ['lost', 'Lost', '#ef4444']] as const).map(([k, label, color]) => (
                   <button key={k}
@@ -2669,7 +2677,7 @@ export default function CustomerRecordPage() {
                       });
                       const data = await res.json().catch(() => ({}));
                       if (!res.ok || !data.success) { await dialog.alert(`Could not change the status: ${data?.error || `HTTP ${res.status}`}`); return; }
-                      logAuto('status_change', `Lead status: ${prospect.status || 'active'} → ${k}`);
+                      logAuto('status_change', `Prospect status: ${prospect.status || 'active'} → ${k}`);
                       setProspect(prev => (prev ? { ...prev, status: k } : prev));
                     }}
                     style={{

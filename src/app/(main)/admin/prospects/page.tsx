@@ -9,17 +9,17 @@
  * customer creation (+ business-card scan), XLSX export, the cross-company
  * contacts directory, and the NetSuite sync buttons.
  *
- * Prospects and customers are unified: creating a record (typed or scanned
- * off a business card) immediately creates it in NetSuite as a customer —
- * there is no separate "prospect" stage or convert step. The one exception
- * is vendor records (record_type 'vendor'): supplier/partner reps captured
- * for their contact info live under the Vendors tab and are never pushed to
- * NetSuite as customers. The legacy
- * prospects.status column persists in the DB but is no longer surfaced;
- * the distinction that matters is the lead tier (owner decision
- * 2026-08-30): a record with no netsuite_id is a LEAD — creating it no
- * longer creates a NetSuite customer. It's promoted from its record page,
- * or automatically when its first estimate is pushed to NetSuite.
+ * One table (prospects), three kinds of record, each with its own tab:
+ *   - Customers: record_type 'customer' WITH a netsuite_id.
+ *   - Prospects: record_type 'customer' with NO netsuite_id (owner decision
+ *     2026-10-05; called the "lead tier" before that, #706). They live only
+ *     in FleetSuite and never sync. One becomes a customer from its record
+ *     page's Promote button, or automatically when its first estimate is
+ *     pushed to NetSuite.
+ *   - Vendors: record_type 'vendor' — supplier/partner reps, never pushed.
+ * "+ New Customer" always creates the NetSuite customer in the same click;
+ * "+ New Prospect" never does (owner decision 2026-10-05 — the old
+ * "create in NetSuite" checkbox is gone).
  *
  * Legacy deep links (?id= / ?ns=) predate the record pages and are
  * forwarded there so old notification URLs and bookmarks keep working.
@@ -115,7 +115,13 @@ export default function ProspectsPage() {
   const [prospects, setProspects] = useState<Prospect[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [crmTab, setCrmTab] = useState<'prospects' | 'vendors' | 'contacts'>('prospects');
+  // Tab keys are what the user sees; the table underneath is `prospects`
+  // for all three record kinds (see the header comment).
+  type CrmTab = 'customers' | 'prospects' | 'vendors' | 'contacts';
+  const [crmTab, setCrmTab] = useState<CrmTab>(() => {
+    const t = searchParams.get('tab');
+    return t === 'prospects' || t === 'vendors' || t === 'contacts' ? t : 'customers';
+  });
   const [tagFilter, setTagFilter] = useState<string>('');
 
   // Extended filters (Ashley's request: spend, recent activity, owner, open
@@ -163,16 +169,23 @@ export default function ProspectsPage() {
 
   // Create form (creation only — editing lives on the record page).
   // record_type 'vendor' = supplier/partner rep: same record, no NetSuite push.
+  // A prospect is record_type 'customer' that simply isn't pushed — the
+  // create form's kind (below) decides that, not a column.
   const emptyForm = { company_name: '', contact_name: '', title: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1, record_type: 'customer', lead_source: '' };
   const [showCreate, setShowCreate] = useState(false);
   // Usage telemetry (R7-4): Cancel flips active → a started attempt is an abandon.
   const formTel = useFormTelemetry('prospect_create', { active: showCreate });
   const [form, setForm] = useState(emptyForm);
-  // Create the NetSuite customer in the same click (owner decision
-  // 2026-09-02, restoring the pre-lead-tier default). Unticking it keeps a
-  // business card or a tyre-kicker out of NetSuite until they're real —
-  // the record stays a lead, promotable from its page.
-  const [createInNetsuite, setCreateInNetsuite] = useState(true);
+  // Which kind of record the create form makes. Customer = created in
+  // NetSuite in the same click; Prospect = FleetSuite only, promotable from
+  // its page later; Vendor = FleetSuite only, always.
+  type CreateKind = 'customer' | 'prospect' | 'vendor';
+  const [createKind, setCreateKind] = useState<CreateKind>('customer');
+  const kindFor = (tab: CrmTab): CreateKind => tab === 'vendors' ? 'vendor' : tab === 'prospects' ? 'prospect' : 'customer';
+  const pickKind = (k: CreateKind) => {
+    setCreateKind(k);
+    setForm(f => ({ ...f, record_type: k === 'vendor' ? 'vendor' : 'customer' }));
+  };
   // "What do they want" — one deal per checked type at create time, so a
   // combined upfit+graphics inquiry is two deals, not a free-text note that
   // gets re-typed into the estimate later. UI-only state: `form` spreads
@@ -343,12 +356,12 @@ export default function ProspectsPage() {
   // Create a customer, then land on its record page — the record is where
   // everything else (contacts, deals, activity) gets added.
   //
-  // The NetSuite customer is created in the same click by default (owner
-  // decision 2026-09-02), with an opt-out on the form. The lead tier (#706)
-  // is still the machinery underneath: unticking the box — or a NetSuite
-  // failure — leaves a lead (prospects row, netsuite_id null) that the
-  // record page's Promote button, or the first push of one of its
-  // estimates, finishes later. Vendor records are FleetSuite-only always.
+  // A Customer is created in NetSuite in the same click; a Prospect never
+  // is (owner decision 2026-10-05). Either way the FleetSuite row is saved
+  // first, so a NetSuite failure on a customer leaves a prospect
+  // (netsuite_id null) that the record page's Promote button, or the first
+  // push of one of its estimates, finishes later. Vendor records are
+  // FleetSuite-only always.
   //
   // `startEstimate` (Valarie's new-client-to-quote flow) lands in the
   // estimate builder with the new record pre-selected instead: as a real
@@ -360,7 +373,7 @@ export default function ProspectsPage() {
   const createCustomer = async (startEstimate = false) => {
     if (!form.company_name.trim() || saving) return;
     setSaving(true);
-    const isVendor = form.record_type === 'vendor';
+    const isVendor = createKind === 'vendor';
     const name = form.company_name.trim();
 
     // Duplicate guard, now the shared SERVER-side check (audit Stage 1):
@@ -459,7 +472,7 @@ export default function ProspectsPage() {
       else throw new Error(body?.error || `HTTP ${res.status}`);
     } catch (e: any) {
       setSaving(false);
-      await dialog.alert(`Could not create the ${isVendor ? 'vendor' : 'customer'}: ${e?.message || 'unknown error'}`);
+      await dialog.alert(`Could not create the ${createKind}: ${e?.message || 'unknown error'}`);
       return;
     }
     if (!data) { setSaving(false); return; }
@@ -506,11 +519,10 @@ export default function ProspectsPage() {
       }).catch(() => {});
     }
 
-    // Create the NetSuite customer in the same click (owner decision
-    // 2026-09-02). The lead tier (#706) still exists underneath — this is
-    // its default, not its removal: unticking the box, or a NetSuite
-    // failure here, leaves a perfectly good lead that the record page's
-    // Promote button finishes later.
+    // A Customer gets its NetSuite record in the same click (owner
+    // decisions 2026-09-02 and 2026-10-05); a Prospect never does. A
+    // NetSuite failure here leaves a perfectly good prospect that the
+    // record page's Promote button finishes later.
     //
     // Order matters: the CRM row is saved FIRST and never rolled back. A
     // NetSuite hiccup must not discard what someone just typed, which is
@@ -523,7 +535,7 @@ export default function ProspectsPage() {
     // pre-flight already blocks outright — so it can't reject a record the
     // human deliberately approved.
     let promotedCustomerId: string | null = null;
-    if (createInNetsuite && !isVendor) {
+    if (createKind === 'customer') {
       try {
         const res = await fetch('/api/prospects/push-to-netsuite', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -537,7 +549,7 @@ export default function ProspectsPage() {
         // so far, or they'll assume NetSuite has it.
         await dialog.alert(
           `"${name}" was saved, but NetSuite refused to create the customer:\n\n${err?.message || 'unknown error'}\n\n`
-          + 'The record is a lead for now — open it and use "Promote to NetSuite Customer" once the problem is sorted.',
+          + 'It is under Prospects for now — open it and use "Promote to NetSuite Customer" once the problem is sorted.',
         );
       }
     }
@@ -595,6 +607,7 @@ export default function ProspectsPage() {
           zip: card.zip || prev.zip,
           website: card.website || prev.website,
         }));
+        if (!showCreate) pickKind(kindFor(crmTab === 'contacts' ? 'customers' : crmTab));
         setShowCreate(true);
       } else {
         await dialog.alert('Could not read any contact info off that card — try a closer, sharper photo.');
@@ -621,13 +634,21 @@ export default function ProspectsPage() {
       .sort((a, b) => a.name.localeCompare(b.name));
   })();
 
-  const vendorCount = prospects.filter(p => p.record_type === 'vendor').length;
-  const customerCount = prospects.length - vendorCount;
+  const kindOf = (p: Prospect): 'customers' | 'prospects' | 'vendors' =>
+    p.record_type === 'vendor' ? 'vendors' : p.netsuite_id ? 'customers' : 'prospects';
+  const vendorCount = prospects.filter(p => kindOf(p) === 'vendors').length;
+  const prospectCount = prospects.filter(p => kindOf(p) === 'prospects').length;
+  const customerCount = prospects.length - vendorCount - prospectCount;
+  const tabCount = crmTab === 'vendors' ? vendorCount : crmTab === 'prospects' ? prospectCount : customerCount;
 
-  // Filter — the Customers and Vendors tabs share the table; each shows only
-  // its own record type.
+  // Filter — the Customers, Prospects and Vendors tabs share the table; each
+  // shows only its own kind. The dashboard's pipeline-stage deep links are
+  // about deals, which prospects have as often as customers, so while one
+  // is active the Customers and Prospects tabs both show either kind.
   const filtered = prospects.filter(p => {
-    if ((p.record_type === 'vendor') !== (crmTab === 'vendors')) return false;
+    const kind = kindOf(p);
+    const pipelineSpan = !!stageFilter && crmTab !== 'vendors' && kind !== 'vendors';
+    if (kind !== crmTab && !pipelineSpan) return false;
     if (stageFilter && oppStagesByProspect) {
       const want = stageFilter === 'open' ? ['lead', 'quoted', 'negotiating'] : [stageFilter];
       const stages = oppStagesByProspect[p.id];
@@ -778,7 +799,7 @@ export default function ProspectsPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
         <div>
           <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>Customers</div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{customerCount} total · {prospects.filter(p => p.netsuite_id).length} in NetSuite{vendorCount > 0 ? ` · ${vendorCount} vendor${vendorCount === 1 ? '' : 's'}` : ''}</div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{customerCount} customer{customerCount === 1 ? '' : 's'} · {prospectCount} prospect{prospectCount === 1 ? '' : 's'}{vendorCount > 0 ? ` · ${vendorCount} vendor${vendorCount === 1 ? '' : 's'}` : ''}</div>
         </div>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           <button onClick={async () => {
@@ -804,15 +825,14 @@ export default function ProspectsPage() {
           </DropZone>
           <button onClick={() => {
             if (showCreate) { setShowCreate(false); setForm(emptyForm); setInterestedIn([]); return; }
-            // Open matching the active tab — on Vendors, the form starts as a
-            // vendor (it used to open as Customer there, hiding the vendor
-            // path behind the small type pills).
-            setForm(f => ({ ...f, record_type: crmTab === 'vendors' ? 'vendor' : 'customer' }));
+            // Open matching the active tab — on Vendors the form starts as a
+            // vendor, on Prospects as a prospect.
+            pickKind(kindFor(crmTab));
             setShowCreate(true);
           }} style={{
             padding: '8px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
             background: 'var(--tab-active-bg)', border: '1px solid var(--tab-active-border)', color: 'var(--tab-active-color)', cursor: 'pointer',
-          }}>{showCreate ? 'Cancel' : crmTab === 'vendors' ? '+ New Vendor' : '+ New Customer'}</button>
+          }}>{showCreate ? 'Cancel' : crmTab === 'vendors' ? '+ New Vendor' : crmTab === 'prospects' ? '+ New Prospect' : '+ New Customer'}</button>
         </div>
       </div>
 
@@ -821,17 +841,19 @@ export default function ProspectsPage() {
         <div data-form="prospect_create" style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '14px', marginBottom: '14px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
             <div style={{ gridColumn: '1 / -1', display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-              {([['customer', 'Customer'], ['vendor', 'Vendor']] as const).map(([k, label]) => (
-                <button key={k} onClick={() => setForm({ ...form, record_type: k })} style={{
+              {([['customer', 'Customer'], ['prospect', 'Prospect'], ['vendor', 'Vendor']] as const).map(([k, label]) => (
+                <button key={k} onClick={() => pickKind(k)} style={{
                   padding: '5px 12px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
-                  background: form.record_type === k ? 'var(--tab-active-bg)' : 'var(--subtle-bg)',
-                  border: `1px solid ${form.record_type === k ? 'var(--tab-active-border)' : 'var(--border)'}`,
-                  color: form.record_type === k ? 'var(--text-primary)' : 'var(--text-muted)',
+                  background: createKind === k ? 'var(--tab-active-bg)' : 'var(--subtle-bg)',
+                  border: `1px solid ${createKind === k ? 'var(--tab-active-border)' : 'var(--border)'}`,
+                  color: createKind === k ? 'var(--text-primary)' : 'var(--text-muted)',
                 }}>{label}</button>
               ))}
-              {form.record_type === 'vendor' && (
-                <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Supplier/partner contact — stays in FleetSuite, never created in NetSuite as a customer.</span>
-              )}
+              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                {createKind === 'vendor' ? 'Supplier/partner contact — stays in FleetSuite, never created in NetSuite as a customer.'
+                  : createKind === 'prospect' ? 'Stays in FleetSuite only. Becomes a NetSuite customer when promoted, or when its first estimate is pushed.'
+                  : 'Created in NetSuite as a customer right away.'}
+              </span>
             </div>
             <div style={{ gridColumn: '1 / -1' }}><div style={labelStyle}>Company Name *</div><input style={inputStyle} value={form.company_name} onChange={e => setForm({ ...form, company_name: e.target.value })} /></div>
             <div><div style={labelStyle}>Contact Name</div><input style={inputStyle} value={form.contact_name} onChange={e => setForm({ ...form, contact_name: e.target.value })} /></div>
@@ -875,31 +897,15 @@ export default function ProspectsPage() {
             )}
             <div style={{ gridColumn: '1 / -1' }}><div style={labelStyle}>Notes</div><MentionTextArea style={{ ...inputStyle, minHeight: '50px', resize: 'vertical' }} placeholder="@ tags a teammate" value={form.notes} onChange={v => setForm({ ...form, notes: v })} /></div>
           </div>
-          {form.record_type !== 'vendor' && (
-            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '12px', color: 'var(--text-secondary)', cursor: 'pointer', marginBottom: '10px' }}>
-              <input
-                type="checkbox"
-                checked={createInNetsuite}
-                onChange={e => setCreateInNetsuite(e.target.checked)}
-                style={{ accentColor: '#22c55e', marginTop: '2px' }}
-              />
-              <span>
-                Create the customer in NetSuite now
-                <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)' }}>
-                  Untick for a business card or a maybe — it stays a FleetSuite lead you can promote from its record later.
-                </span>
-              </span>
-            </label>
-          )}
           <div style={{ display: 'flex', gap: '8px' }}>
             <button onClick={() => createCustomer()} disabled={saving || !form.company_name.trim()} style={{
               flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
               background: form.company_name.trim() ? '#22c55e' : 'var(--border)', color: '#fff', border: 'none', cursor: 'pointer',
               opacity: saving ? 0.5 : 1,
-            }}>{saving ? 'Creating...' : form.record_type === 'vendor' ? 'Create Vendor' : 'Create Customer'}</button>
+            }}>{saving ? 'Creating...' : createKind === 'vendor' ? 'Create Vendor' : createKind === 'prospect' ? 'Create Prospect' : 'Create Customer'}</button>
             {form.record_type !== 'vendor' && (
               <button onClick={() => createCustomer(true)} disabled={saving || !form.company_name.trim()}
-                title="Create the customer, then jump straight into a new estimate with them pre-selected"
+                title={`Create the ${createKind}, then jump straight into a new estimate with them pre-selected`}
                 style={{
                   flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
                   background: form.company_name.trim() ? 'rgba(96,165,250,0.12)' : 'var(--border)',
@@ -914,12 +920,12 @@ export default function ProspectsPage() {
 
       {/* Tab switcher */}
       <div style={{ display: 'flex', gap: '0', marginBottom: '12px', borderBottom: '2px solid var(--border)' }}>
-        {(['prospects', 'vendors', 'contacts'] as const).map(tab => (
+        {(['customers', 'prospects', 'vendors', 'contacts'] as const).map(tab => (
           <button key={tab} onClick={() => { setCrmTab(tab); if (tab === 'contacts') loadAllContacts(); }} style={{
             padding: '8px 16px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
             background: 'none', border: 'none', borderBottom: crmTab === tab ? '2px solid #3b82f6' : '2px solid transparent',
             color: crmTab === tab ? '#3b82f6' : 'var(--text-muted)', marginBottom: '-2px',
-          }}>{tab === 'prospects' ? `Customers (${customerCount})` : tab === 'vendors' ? `Vendors (${vendorCount})` : `Contacts${contactsLoaded ? ` (${allContacts.length})` : ''}`}</button>
+          }}>{tab === 'customers' ? `Customers (${customerCount})` : tab === 'prospects' ? `Prospects (${prospectCount})` : tab === 'vendors' ? `Vendors (${vendorCount})` : `Contacts${contactsLoaded ? ` (${allContacts.length})` : ''}`}</button>
         ))}
       </div>
 
@@ -998,7 +1004,7 @@ export default function ProspectsPage() {
       {/* Search & Filters */}
       <input
         value={search} onChange={e => setSearch(e.target.value)}
-        placeholder={crmTab === 'vendors' ? 'Search vendors...' : 'Search customers...'}
+        placeholder={crmTab === 'vendors' ? 'Search vendors...' : crmTab === 'prospects' ? 'Search prospects...' : 'Search customers...'}
         style={{ ...inputStyle, marginBottom: '8px' }}
       />
       <div style={{ display: 'flex', gap: '4px', marginBottom: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1073,7 +1079,7 @@ export default function ProspectsPage() {
       {/* Result count + export */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
         <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-          {sorted.length} of {crmTab === 'vendors' ? vendorCount : customerCount} {(crmTab === 'vendors' ? vendorCount : customerCount) === 1 ? 'record' : 'records'}
+          {sorted.length} of {tabCount} {tabCount === 1 ? 'record' : 'records'}{stageFilter && crmTab !== 'vendors' ? ' · pipeline filter shows customers and prospects' : ''}
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
         {crmTab !== 'vendors' && (
@@ -1109,8 +1115,22 @@ export default function ProspectsPage() {
           <div style={{ fontSize: '13px', fontWeight: 700 }}>
             {crmTab === 'vendors'
               ? (search ? 'No matching vendors' : vendorCount === 0 ? 'No vendors yet — use + New (or Scan Card) and pick Vendor to capture a supplier contact' : 'No vendors match the current filters')
-              : (search ? 'No matching customers' : 'No customers match the current filters')}
+              : crmTab === 'prospects'
+                ? (search ? 'No matching prospects' : prospectCount === 0 ? 'No prospects yet — use + New Prospect (or Scan Card) to add one that stays in FleetSuite' : 'No prospects match the current filters')
+                : (search ? 'No matching customers' : 'No customers match the current filters')}
           </div>
+          {search && crmTab !== 'vendors' && (() => {
+            // A search (often a ?q= deep link from global search) can be for
+            // a record on the other tab — offer the jump instead of a dead end.
+            const s = search.toLowerCase();
+            const other = crmTab === 'prospects' ? 'customers' : 'prospects';
+            const n = prospects.filter(p => kindOf(p) === other && (p.company_name.toLowerCase().includes(s) || (p.contact_name || '').toLowerCase().includes(s) || (p.email || '').toLowerCase().includes(s))).length;
+            return n > 0 ? (
+              <button onClick={() => setCrmTab(other)} style={{ marginTop: '10px', padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)', color: '#60a5fa' }}>
+                {n} match{n === 1 ? '' : 'es'} in {other === 'prospects' ? 'Prospects' : 'Customers'} →
+              </button>
+            ) : null;
+          })()}
         </div>
       ) : (() => {
         const thStyle: React.CSSProperties = {
@@ -1124,8 +1144,9 @@ export default function ProspectsPage() {
         const badge = (label: string, color: string, bg: string) => (
           <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: bg, color, marginLeft: '5px', verticalAlign: '1px' }}>{label}</span>
         );
-        // Vendors have no NetSuite spend — their tab drops the money columns.
-        const vendorsTab = crmTab === 'vendors';
+        // Vendors and prospects have no NetSuite spend — their tabs drop the
+        // money columns (unless a pipeline filter is mixing customers in).
+        const vendorsTab = crmTab === 'vendors' || (crmTab === 'prospects' && !stageFilter);
         return (
           <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
             <div className="responsive-table">
@@ -1152,7 +1173,9 @@ export default function ProspectsPage() {
                           {prospect.multi_location && badge('MULTI-LOC', '#f59e0b', 'rgba(251,191,36,0.1)')}
                           {prospect.netsuite_id
                             ? badge('NS', '#a78bfa', 'rgba(167,139,250,0.1)')
-                            : prospect.record_type !== 'vendor' && badge('LEAD', '#60a5fa', 'rgba(96,165,250,0.1)')}
+                            : prospect.record_type !== 'vendor' && crmTab !== 'prospects' && badge('PROSPECT', '#60a5fa', 'rgba(96,165,250,0.1)')}
+                          {kindOf(prospect) === 'prospects' && prospect.status === 'nurturing' && badge('NURTURE', '#f59e0b', 'rgba(251,191,36,0.1)')}
+                          {kindOf(prospect) === 'prospects' && prospect.status === 'lost' && badge('LOST', '#ef4444', 'rgba(239,68,68,0.1)')}
                         </td>
                         <td style={tdStyle}>
                           {prospect.contact_name ? (

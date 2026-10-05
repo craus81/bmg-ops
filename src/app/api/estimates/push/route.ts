@@ -359,7 +359,7 @@ export async function POST(req: NextRequest) {
       if (!resolved) {
         await releaseClaim();
         return NextResponse.json({
-          error: 'No NetSuite customer linked to this estimate, and no CRM lead matches the customer name. Promote the record from its CRM page, or pick a NetSuite customer.',
+          error: 'No NetSuite customer linked to this estimate, and no prospect matches the customer name. Promote the record from its CRM page, or pick a NetSuite customer.',
         }, { status: 400 });
       }
       estimate.customer_netsuite_id = resolved.netsuiteId;

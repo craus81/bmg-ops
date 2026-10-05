@@ -3769,7 +3769,7 @@ export default function EstimatesPage() {
                   >
                     <div style={{ fontWeight: 700 }}>{c.company_name}</div>
                     <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>
-                      {c.isLead ? 'Lead — not in NetSuite yet' : `${c.entity_id} · NS #${c.netsuite_id}`}
+                      {c.isLead ? 'Prospect — not in NetSuite yet' : `${c.entity_id} · NS #${c.netsuite_id}`}
                     </div>
                   </button>
                 ))}
