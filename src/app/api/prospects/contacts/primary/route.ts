@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
   // Say that plainly instead of failing on a foreign key.
   if (!prospect?.netsuite_id) {
     return NextResponse.json({
-      error: 'This record is still a lead. Promote it to a NetSuite customer first — the primary contact is stored against the customer.',
+      error: 'This record is still a prospect. Promote it to a NetSuite customer first — the primary contact is stored against the customer.',
     }, { status: 409 });
   }
 
