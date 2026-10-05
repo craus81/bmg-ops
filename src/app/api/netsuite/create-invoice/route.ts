@@ -6,6 +6,7 @@ import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { normPart } from '@/lib/po-invoice-verify';
 import { logAudit, type AuditEntry } from '@/lib/audit';
+import { notifyPortalInvoice } from '@/lib/portal-invoice-notify';
 
 const Schema = z.object({
   salesOrderIds: z.array(z.string().regex(/^\d{1,15}$/, 'Sales order id must be numeric')).min(1).max(200),
@@ -379,6 +380,20 @@ export async function POST(req: NextRequest) {
                 priorInvoices: priorList,
                 newInvoice: invoiceResult.invoiceNumber || stampId,
               },
+            });
+          }
+
+          // Customers paid only through their own AP portal (Bodewell):
+          // tell the portal contacts to enter it (best-effort). The SO's
+          // customer comes from the invoice header.
+          if (invoiceResult.invoiceId) {
+            await notifyPortalInvoice(supabase, {
+              invoiceId: invoiceResult.invoiceId,
+              invoiceNumber: invoiceResult.invoiceNumber || null,
+              poNumber: po.po_number || null,
+              source: 'a PO',
+              detail: po.netsuite_so_number ? `SO ${po.netsuite_so_number}` : null,
+              actorId: auth.user.id,
             });
           }
 

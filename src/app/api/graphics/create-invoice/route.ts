@@ -4,6 +4,7 @@ import { requireMoney } from '@/lib/api-auth';
 import { createDirectInvoice, findItems, getItemBasePrices } from '@/lib/netsuite';
 import { resolveCustomerNsId } from '@/lib/graphics-invoice';
 import { notifyInvoiceCreated } from '@/lib/graphics-invoice-notify';
+import { notifyPortalInvoice } from '@/lib/portal-invoice-notify';
 import { resolveLocationWithOverride } from '@/lib/invoice-location';
 import { validateBody, z } from '@/lib/validate';
 import { partNumberPattern } from '@/lib/part-number';
@@ -340,6 +341,19 @@ export async function POST(req: NextRequest) {
       jobLabel: job.title || `Job #${job.job_number}` || `Job ${jobId.slice(0, 8)}`,
       customer: job.customer,
       invoiceNumber: result.invoiceNumber || stampId,
+      actorId: userId || auth.user.id,
+    });
+
+    // Customers paid only through their own AP portal (Bodewell): tell the
+    // portal contacts to enter it (best-effort, never fails the invoice).
+    await notifyPortalInvoice(supabase, {
+      invoiceId: result.invoiceId,
+      invoiceNumber: result.invoiceNumber || null,
+      customerNsId: customerNsId,
+      amount: invoiceAmount,
+      poNumber: poNumber || null,
+      source: 'a graphics job',
+      detail: job.title || (job.job_number ? `Job #${job.job_number}` : null),
       actorId: userId || auth.user.id,
     });
 

@@ -50,6 +50,11 @@ describe('shouldDigestEmail', () => {
     expect(shouldDigestEmail({ type: 'mention' })).toBe(true);
   });
 
+  it('sends an email carrying attachments immediately (the digest is text-only)', () => {
+    expect(shouldDigestEmail({ type: 'vehicle_complete', emailAttachments: [{ filename: 'a.pdf', content: Buffer.from('x') }] })).toBe(false);
+    expect(shouldDigestEmail({ type: 'vehicle_complete', emailAttachments: [] })).toBe(true);
+  });
+
   it('sends emailNow types immediately', () => {
     expect(shouldDigestEmail({ type: 'estimate_review_requested' })).toBe(false);
     expect(shouldDigestEmail({ type: 'invoice_email_bounced' })).toBe(false);

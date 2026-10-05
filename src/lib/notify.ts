@@ -48,6 +48,10 @@ export interface NotifyPayload {
   /** Optional footnote under the email CTA (e.g. "replying to this email
    *  goes to the customer"). Email channel only. */
   emailCtaNote?: string;
+  /** Files attached to the email copy (e.g. the invoice PDF on a portal
+   *  invoice alert), listed by name under the body. Email channel only; an
+   *  email carrying attachments always sends now, never via the digest. */
+  emailAttachments?: { filename: string; content: Buffer; contentType?: string }[];
   /** For message notifications: the message context */
   messageContext?: {
     senderName: string;
@@ -397,9 +401,11 @@ async function sendViaApns(payload: NotifyPayload): Promise<boolean> {
  * path (emailReplyTo — replying must reach the customer while it matters)
  * or carry a chat message.
  */
-export function shouldDigestEmail(payload: Pick<NotifyPayload, 'type' | 'forceChannels' | 'emailReplyTo' | 'messageContext'>): boolean {
+export function shouldDigestEmail(payload: Pick<NotifyPayload, 'type' | 'forceChannels' | 'emailReplyTo' | 'messageContext' | 'emailAttachments'>): boolean {
   if (payload.forceChannels) return false;
   if (payload.messageContext) return false;
+  // The digest stores text only, so attachments would be lost there.
+  if (payload.emailAttachments && payload.emailAttachments.length > 0) return false;
   const replyTo = payload.emailReplyTo;
   if (replyTo && (typeof replyTo === 'string' ? replyTo.trim() : replyTo.length > 0)) return false;
   return !emailsImmediately(payload.type);
@@ -444,11 +450,18 @@ async function sendViaEmail(payload: NotifyPayload): Promise<boolean> {
       payload.body,
       ctaUrl,
       payload.messageContext ? 'Open Chat' : 'Open in App',
-      payload.emailCtaNote ? { ctaNote: payload.emailCtaNote } : undefined,
+      payload.emailCtaNote || payload.emailAttachments?.length
+        ? {
+          ...(payload.emailCtaNote ? { ctaNote: payload.emailCtaNote } : {}),
+          ...(payload.emailAttachments?.length ? { attachmentNames: payload.emailAttachments.map(a => a.filename) } : {}),
+        }
+        : undefined,
     );
 
     return await sendEmail(
-      profile.email, subject, html, undefined, undefined, payload.emailReplyTo, undefined,
+      profile.email, subject, html, undefined,
+      payload.emailAttachments?.length ? payload.emailAttachments : undefined,
+      payload.emailReplyTo, undefined,
       // The notification's own deep link doubles as the email-log context.
       { kind: 'staff_notification', contextUrl: payload.url || null },
     );
