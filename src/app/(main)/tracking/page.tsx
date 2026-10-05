@@ -1031,6 +1031,7 @@ export default function TrackingPage() {
       setSoSearchOpen(null);
       setSoSearchTerm('');
       setSoSearchResults([]);
+      void scanVehicleForGraphics(vehicleId);
       setUpdateSuccess('Sales order linked');
       setTimeout(() => setUpdateSuccess(null), 2000);
     } catch (err) {
@@ -1238,8 +1239,37 @@ export default function TrackingPage() {
       loadNotes(id);
       loadTasks(id);
       const v = vehicles.find(x => x.id === id);
-      if (v) loadGraphicsJob(v);
+      if (v) {
+        loadGraphicsJob(v);
+        // A vehicle whose SO was never read for graphics lines (linked
+        // after check-in, or checked in before this scan ran) gets scanned
+        // once, so the status row can show the Graphics steps.
+        const vv = v as any;
+        if (vv.netsuite_sales_order_id && !vv.graphics_signal && !vv.graphics_scanned_at && !vv.matched_graphics_job_id) {
+          void scanVehicleForGraphics(id);
+        }
+      }
     }
+  };
+
+  // Read the vehicle's NetSuite SO / estimate lines for graphics (vinyl,
+  // Graphics Install Labor, …) and refresh the row if they're found.
+  const scanVehicleForGraphics = async (vehicleId: string) => {
+    try {
+      const res = await fetch('/api/vehicle-tracking/scan-graphics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vehicleId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return;
+      setVehicles(prev => prev.map(x => x.id === vehicleId ? {
+        ...x,
+        graphics_signal: data.signal || (x as any).graphics_signal || null,
+        graphics_scanned_at: data.scanned ? new Date().toISOString() : (x as any).graphics_scanned_at,
+        ...(data.signal && !(x as any).graphics_signal && !(x as any).matched_graphics_job_id ? { needs_graphics: true } : {}),
+      } as any : x));
+    } catch { /* best effort — the row just keeps the upfit-only steps */ }
   };
 
   const updateStatus = useCallback(async (vehicleId: string, newStatus: VehicleRowKey, opts: { force?: boolean } = {}) => {

@@ -596,7 +596,7 @@ export default function VehiclePickListPage() {
   const laborDept: 'graphics' | 'upfit' = laborShift
     ? (laborShift.shop_stage === 'graphics' ? 'graphics' : 'upfit')
     : (vehicle.shop_stage === 'graphics' ? 'graphics' : 'upfit');
-  const showDeptSwitch = !!vehicle.matched_graphics_job_id && !isComplete;
+  const showDeptSwitch = (!!vehicle.matched_graphics_job_id || !!(vehicle as any).graphics_signal) && !isComplete;
 
   return (
     <div>
