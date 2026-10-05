@@ -15,6 +15,7 @@ interface RowVehicle {
   graphics_install_status?: string | null;
   upfit_completed_at?: string | null;
   matched_graphics_job_id?: string | null;
+  graphics_signal?: string | null;
 }
 
 /**
@@ -22,8 +23,9 @@ interface RowVehicle {
  * Graphics In Progress, Graphics Complete, Upfit In Progress, Upfit Complete, Complete,
  * Shipped — no forced order. The current button gets the ● dot; Graphics
  * Complete and Upfit Complete keep a green ✓ once done, whatever is current.
- * Graphics buttons are hidden on vehicles with no graphics job (unless the
- * lane was already worked).
+ * Graphics buttons show when the vehicle has a graphics job, its sales order
+ * or estimate has graphics lines (graphics_signal — vinyl, Graphics Install
+ * Labor, …; owner ask 2026-10-05), or the lane was already worked.
  */
 export default function VehicleStatusRow({
   vehicle,
@@ -37,7 +39,7 @@ export default function VehicleStatusRow({
   const current = vehicleRowKey(vehicle);
   const done = vehicleDoneChecks(vehicle);
   const lane = vehicle.graphics_install_status || 'pending';
-  const showGraphics = !!vehicle.matched_graphics_job_id || lane === 'in_progress' || lane === 'complete';
+  const showGraphics = !!vehicle.matched_graphics_job_id || !!vehicle.graphics_signal || lane === 'in_progress' || lane === 'complete';
   const keys = VEHICLE_ROW.filter(k => showGraphics || (k !== 'graphics' && k !== 'graphics_complete'));
 
   return (

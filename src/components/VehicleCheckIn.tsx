@@ -296,7 +296,7 @@ export default function VehicleCheckIn({ onCheckedIn, initialVin, pullInAfter = 
       // awaiting pickup is still in our custody).
       const { data: existing } = await supabase
         .from('fleet_checkins')
-        .select('id, vin, vehicle_year, vehicle_make, vehicle_model, customer_name, sales_order_number, status, created_at, shop_stage, graphics_install_status, upfit_completed_at, matched_graphics_job_id')
+        .select('id, vin, vehicle_year, vehicle_make, vehicle_model, customer_name, sales_order_number, status, created_at, shop_stage, graphics_install_status, upfit_completed_at, matched_graphics_job_id, graphics_signal')
         .eq('vin', v)
         .is('archived_at', null)
         .neq('status', 'shipped')
@@ -1504,7 +1504,7 @@ export default function VehicleCheckIn({ onCheckedIn, initialVin, pullInAfter = 
                   // Re-read so the Graphics / Upfit Complete checks match the server.
                   const { data: fresh } = await supabase
                     .from('fleet_checkins')
-                    .select('id, vin, vehicle_year, vehicle_make, vehicle_model, customer_name, sales_order_number, status, created_at, shop_stage, graphics_install_status, upfit_completed_at, matched_graphics_job_id')
+                    .select('id, vin, vehicle_year, vehicle_make, vehicle_model, customer_name, sales_order_number, status, created_at, shop_stage, graphics_install_status, upfit_completed_at, matched_graphics_job_id, graphics_signal')
                     .eq('id', duplicateVehicle.id)
                     .maybeSingle();
                   setDuplicateVehicle(fresh || duplicateVehicle);

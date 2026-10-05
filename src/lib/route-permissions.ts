@@ -524,6 +524,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/vehicle-tracking/labor-burn/route.ts': staff(),
   'src/app/api/vehicle-tracking/notify-customer/route.ts': staff(),
   'src/app/api/vehicle-tracking/invoice/route.ts': admin(),
+  'src/app/api/vehicle-tracking/scan-graphics/route.ts': staff(),
   'src/app/api/vehicle-tracking/turnaround-suggest/route.ts': staff(),
   'src/app/api/vehicle-tracking/update-status/route.ts': staff(),
   'src/app/api/vehicles/[vin]/installs/route.ts': staff(),
