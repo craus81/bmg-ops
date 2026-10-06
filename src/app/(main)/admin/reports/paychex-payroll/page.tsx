@@ -6,7 +6,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 import { theme } from '@/lib/theme';
 import { downloadCsv } from '@/lib/csv';
-import type { PayrollGroup, PayrollReport, PeriodSummary } from '@/lib/paychex-payroll';
+import { PAYROLL_ROLES, DIVISION_LABELS, type PayrollGroup, type PayrollReport, type PeriodSummary } from '@/lib/paychex-payroll';
 
 /**
  * Paychex Payroll (migration 340, owner ask 2026-10-06): the Paychex Flex
@@ -14,12 +14,14 @@ import type { PayrollGroup, PayrollReport, PeriodSummary } from '@/lib/paychex-p
  * period, month, location, position and person. Three tabs:
  *   Report — the rollups for a date range (by pay period END date).
  *   Upload — preview then save a Paychex CSV; re-uploading a period replaces it.
- *   People — match Paychex employees to FleetSuite people (feeds the pooled
- *            shop labor rate the Vehicle Margin report uses).
+ *   People — match Paychex employees to FleetSuite people and give each a
+ *            payroll role (migration 341). Roles split the report into
+ *            Upfit / Graphics / Shared and pick the pooled shop labor rates
+ *            the Vehicle Margin report uses.
  * Super admin / executive only, same wall as the route.
  */
 
-interface Employee { paychex_employee_id: string; employee_name: string; profile_id: string | null; profile_name: string | null; guess_profile_id: string | null }
+interface Employee { paychex_employee_id: string; employee_name: string; profile_id: string | null; profile_name: string | null; guess_profile_id: string | null; role: string | null; suggested_role: string | null }
 interface ImportRow { id: string; file_name: string | null; uploaded_at: string; uploaded_by_name: string | null; row_count: number; period_count: number; first_period_start: string | null; last_period_end: string | null; replaced_rows: number }
 interface CostBasis { rate: number | null; source: 'paychex' | 'setting' | null; people?: number; throughPeriodEnd?: string }
 interface Payload {
@@ -28,7 +30,7 @@ interface Payload {
   employees: Employee[];
   profiles: { id: string; full_name: string | null }[];
   imports: ImportRow[];
-  shopCostBasis: CostBasis;
+  shopCostBases: { upfit: CostBasis; graphics: CostBasis };
 }
 type PreviewPeriod = PeriodSummary & { replaces: number };
 
@@ -106,6 +108,56 @@ function GroupTable({ title, rows, labelHeader, labelFmt, csvName }: {
   );
 }
 
+function BasisLine({ crew, pool, b }: { crew: string; pool: string; b: CostBasis }) {
+  if (b.source === 'paychex') {
+    return <>{crew} cost {fmtRate(b.rate)}/hr, the pooled payroll cost of {b.people} {pool} (last 3 months, through {fmtDate(b.throughPeriodEnd || null)}).</>;
+  }
+  if (b.source === 'setting') {
+    return <>{crew} use the blended Settings rate ({fmtRate(b.rate)}/hr) until at least 3 people have the {pool} role.</>;
+  }
+  return <>{crew} have no rate yet. Give at least 3 people the {pool} role.</>;
+}
+
+function MonthDivisionTable({ rows, csvName }: { rows: PayrollReport['byMonthDivision']; csvName: string }) {
+  if (rows.length === 0) return null;
+  const hasUnassigned = rows.some(r => r.unassigned);
+  const exportCsv = () => downloadCsv(csvName,
+    ['Month', 'Upfit', 'Graphics', 'Shared', ...(hasUnassigned ? ['No role set'] : []), 'Total'],
+    rows.map(r => [r.month, r.upfit, r.graphics, r.shared, ...(hasUnassigned ? [r.unassigned] : []), Math.round((r.upfit + r.graphics + r.shared + r.unassigned) * 100) / 100]));
+  return (
+    <div style={card}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+        <div style={eyebrow}>Upfit vs Graphics labor by month</div>
+        <button style={{ ...btn, padding: '4px 10px', fontSize: '11px' }} onClick={exportCsv}>CSV</button>
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>
+            <th style={{ ...th, textAlign: 'left' }}>Month</th>
+            <th style={th}>{DIVISION_LABELS.upfit}</th>
+            <th style={th}>{DIVISION_LABELS.graphics}</th>
+            <th style={th}>Shared</th>
+            {hasUnassigned && <th style={th}>No role set</th>}
+            <th style={th}>Total</th>
+          </tr></thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.month}>
+                <td style={{ ...td, textAlign: 'left', fontWeight: 600 }}>{fmtMonth(r.month)}</td>
+                <td style={td}>{fmtMoney(r.upfit)}</td>
+                <td style={td}>{fmtMoney(r.graphics)}</td>
+                <td style={td}>{fmtMoney(r.shared)}</td>
+                {hasUnassigned && <td style={{ ...td, color: theme.warning }}>{fmtMoney(r.unassigned)}</td>}
+                <td style={{ ...td, fontWeight: 700 }}>{fmtMoney(r.upfit + r.graphics + r.shared + r.unassigned)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function ReportTab({ data, onRange }: { data: Payload; onRange: (from: string, to: string) => void }) {
   const [from, setFrom] = useState(data.range.from);
   const [to, setTo] = useState(data.range.to);
@@ -115,7 +167,7 @@ function ReportTab({ data, onRange }: { data: Payload; onRange: (from: string, t
   const preset = (f: string, tt: string) => { setFrom(f); setTo(tt); onRange(f, tt); };
   const ago = (days: number) => { const d = new Date(); d.setDate(d.getDate() - days); return d.toISOString().slice(0, 10); };
   const today = new Date().toISOString().slice(0, 10);
-  const basis = data.shopCostBasis;
+  const unassigned = data.employees.filter(e => !e.role).length;
 
   return (
     <>
@@ -142,14 +194,26 @@ function ReportTab({ data, onRange }: { data: Payload; onRange: (from: string, t
             <Tile label="Worked hours" value={fmtHrs(t.regular_hours + t.overtime_hours)} sub={`${fmtHrs(t.overtime_hours)} overtime (${t.overtime_pct ?? 0}%)`} />
             <Tile label="Cost per worked hour" value={fmtRate(t.loaded_rate)} sub="Everyone, loaded" />
           </div>
+          {r.byDivision.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '14px' }}>
+              {r.byDivision.map(g => (
+                <Tile key={g.key} label={g.label} value={fmtMoney(g.total_labor_cost)}
+                  sub={`${t.total_labor_cost ? Math.round((g.total_labor_cost / t.total_labor_cost) * 100) : 0}% of labor · ${g.people} people · ${fmtRate(g.loaded_rate)}/hr`} />
+              ))}
+            </div>
+          )}
+          {unassigned > 0 && (
+            <div style={{ ...card, fontSize: '12px', color: theme.warning }}>
+              {unassigned} {unassigned === 1 ? 'person has' : 'people have'} no role yet, so their pay shows as "no role set". Set roles on the People tab.
+            </div>
+          )}
           <div style={{ ...card, fontSize: '12px', color: 'var(--text-secondary)' }}>
             <b>Shop labor on job costs:</b>{' '}
-            {basis.source === 'paychex'
-              ? <>Vehicle Margin is costing timer hours at {fmtRate(basis.rate)}/hr, the pooled payroll cost of the {basis.people} people on shop timers over the last 3 months of paychecks (through {fmtDate(basis.throughPeriodEnd || null)}).</>
-              : basis.source === 'setting'
-                ? <>Vehicle Margin is still using the blended Settings rate ({fmtRate(basis.rate)}/hr). It switches to payroll once at least 3 people who run shop timers are matched on the People tab.</>
-                : <>No rate yet. Match the people who run shop timers on the People tab.</>}
+            <BasisLine crew="Upfit timers" pool="Shop Techs" b={data.shopCostBases.upfit} />{' '}
+            <BasisLine crew="Graphics timers" pool="Graphics Production + Installers" b={data.shopCostBases.graphics} />
           </div>
+          <MonthDivisionTable rows={r.byMonthDivision} csvName={`payroll-upfit-vs-graphics-${data.range.from}-${data.range.to}.csv`} />
+          <GroupTable title="By role" rows={r.byRole} labelHeader="Role" csvName={`payroll-by-role-${data.range.from}-${data.range.to}.csv`} />
           <GroupTable title="By month" rows={r.byMonth} labelHeader="Month" labelFmt={g => fmtMonth(g.key)} csvName={`payroll-by-month-${data.range.from}-${data.range.to}.csv`} />
           <GroupTable title="By location" rows={r.byLocation} labelHeader="Location" csvName={`payroll-by-location-${data.range.from}-${data.range.to}.csv`} />
           <GroupTable title="By position" rows={r.byPosition} labelHeader="Position" csvName={`payroll-by-position-${data.range.from}-${data.range.to}.csv`} />
@@ -271,13 +335,18 @@ function UploadTab({ imports, onSaved }: { imports: ImportRow[]; onSaved: () => 
 
 function PeopleTab({ employees, profiles, onSaved }: { employees: Employee[]; profiles: Payload['profiles']; onSaved: () => void }) {
   const initial = useMemo(() => Object.fromEntries(employees.map(e => [e.paychex_employee_id, e.profile_id || e.guess_profile_id || ''])), [employees]);
+  const initialRoles = useMemo(() => Object.fromEntries(employees.map(e => [e.paychex_employee_id, e.role || e.suggested_role || ''])), [employees]);
   const [picks, setPicks] = useState<Record<string, string>>(initial);
+  const [rolePicks, setRolePicks] = useState<Record<string, string>>(initialRoles);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => setPicks(initial), [initial]);
+  useEffect(() => setRolePicks(initialRoles), [initialRoles]);
 
-  const changed = employees.filter(e => (picks[e.paychex_employee_id] || '') !== (e.profile_id || ''));
+  const changed = employees.filter(e =>
+    (picks[e.paychex_employee_id] || '') !== (e.profile_id || '')
+    || (rolePicks[e.paychex_employee_id] || '') !== (e.role || ''));
   const taken = new Map<string, number>();
   for (const v of Object.values(picks)) if (v) taken.set(v, (taken.get(v) || 0) + 1);
   const dupes = [...taken.values()].some(n => n > 1);
@@ -287,11 +356,15 @@ function PeopleTab({ employees, profiles, onSaved }: { employees: Employee[]; pr
     try {
       const res = await apiFetch('/api/reports/paychex-payroll/links', {
         method: 'POST',
-        body: JSON.stringify({ links: changed.map(e => ({ paychexEmployeeId: e.paychex_employee_id, profileId: picks[e.paychex_employee_id] || null })) }),
+        body: JSON.stringify({ links: changed.map(e => ({
+          paychexEmployeeId: e.paychex_employee_id,
+          profileId: picks[e.paychex_employee_id] || null,
+          role: rolePicks[e.paychex_employee_id] || null,
+        })) }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Save failed');
-      setMessage(`Saved ${json.saved} ${json.saved === 1 ? 'match' : 'matches'}.`);
+      setMessage(`Saved ${json.saved} ${json.saved === 1 ? 'person' : 'people'}.`);
       onSaved();
     } catch (e: any) {
       setError(e.message || 'Save failed');
@@ -303,22 +376,33 @@ function PeopleTab({ employees, profiles, onSaved }: { employees: Employee[]; pr
 
   return (
     <div style={card}>
-      <div style={eyebrow}>Match Paychex employees to FleetSuite people</div>
+      <div style={eyebrow}>People and roles</div>
       <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
-        Matches let job costing use real payroll. Guesses by name are filled in and marked <i>suggested</i>. Check them, then save.
-        Anyone who doesn't use FleetSuite can stay unmatched.
+        Give everyone a <b>role</b>. Roles split payroll into Upfit, Graphics and Shared (Sales + Office), and the Shop Tech and Graphics
+        Production/Installer pools set the labor rate on job costs. Matching a FleetSuite login is optional; anyone who doesn't use FleetSuite
+        can stay unmatched. Guesses are filled in and marked <i>suggested</i>. Check them, then save.
       </div>
       {employees.map(e => {
         const v = picks[e.paychex_employee_id] || '';
-        const suggested = !e.profile_id && v && v === e.guess_profile_id;
+        const rv = rolePicks[e.paychex_employee_id] || '';
+        const suggested = (!e.profile_id && v && v === e.guess_profile_id) || (!e.role && rv && rv === e.suggested_role);
         return (
           <div key={e.paychex_employee_id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
             <div style={{ flex: '1 1 180px', fontSize: '13px', fontWeight: 600 }}>
               {e.employee_name} <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '11px' }}>#{e.paychex_employee_id}</span>
               {suggested && <span style={{ marginLeft: '6px', fontSize: '10px', fontWeight: 800, color: theme.warning }}>suggested</span>}
             </div>
-            <select style={{ ...input, flex: '1 1 200px' }} value={v} onChange={ev => setPicks(p => ({ ...p, [e.paychex_employee_id]: ev.target.value }))}>
-              <option value="">Not matched</option>
+            <select aria-label="Payroll role" style={{ ...input, flex: '1 1 170px', borderColor: rv ? 'var(--border)' : theme.warningBorder }} value={rv}
+              onChange={ev => setRolePicks(p => ({ ...p, [e.paychex_employee_id]: ev.target.value }))}>
+              <option value="">No role</option>
+              {(['upfit', 'graphics', 'shared'] as const).map(d => (
+                <optgroup key={d} label={DIVISION_LABELS[d]}>
+                  {PAYROLL_ROLES.filter(r => r.division === d).map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
+                </optgroup>
+              ))}
+            </select>
+            <select aria-label="FleetSuite login" style={{ ...input, flex: '1 1 170px' }} value={v} onChange={ev => setPicks(p => ({ ...p, [e.paychex_employee_id]: ev.target.value }))}>
+              <option value="">No FleetSuite login</option>
               {profiles.map(p => <option key={p.id} value={p.id}>{p.full_name || '(no name)'}</option>)}
             </select>
           </div>
@@ -367,7 +451,7 @@ export default function PaychexPayrollPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasFeature identity changes per render; auth state deps cover it
   }, [authLoading, router, load]);
 
-  const unmatched = data?.employees.filter(e => !e.profile_id).length || 0;
+  const noRole = data?.employees.filter(e => !e.role).length || 0;
   const tabBtn = (key: typeof tab, label: string) => (
     <button key={key} onClick={() => setTab(key)} style={{
       ...btn, borderRadius: '999px', padding: '6px 14px',
@@ -386,7 +470,7 @@ export default function PaychexPayrollPage() {
       <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
         {tabBtn('report', 'Report')}
         {tabBtn('upload', 'Upload')}
-        {tabBtn('people', unmatched ? `People (${unmatched} unmatched)` : 'People')}
+        {tabBtn('people', noRole ? `People (${noRole} need a role)` : 'People')}
       </div>
       {error && <div style={{ ...card, color: theme.error }}>{error}</div>}
       {loading && !data && <div style={card}>Loading…</div>}

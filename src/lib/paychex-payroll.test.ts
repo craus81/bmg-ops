@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseCsv, parsePaychexPayroll, toAmount, toIsoDate, summarizePeriods, loadedHourlyCost,
   rateWindowStart, splitPaychexName, guessProfile, buildPayrollReport,
+  defaultPayrollRole, divisionOf, roleLabel, PAYROLL_ROLES,
 } from './paychex-payroll';
 
 // Synthetic rows in the real report's shape: no header, 15 columns, period
@@ -149,5 +150,35 @@ describe('buildPayrollReport', () => {
   });
   it('empty range → zero totals', () => {
     expect(buildPayrollReport([]).totals).toMatchObject({ people: 0, total_labor_cost: 0, loaded_rate: null });
+  });
+});
+
+describe('payroll roles', () => {
+  it('every role rolls up to a division', () => {
+    expect(PAYROLL_ROLES.map(r => `${r.key}:${r.division}`)).toEqual([
+      'shop_tech:upfit', 'upfit_management:upfit',
+      'graphics_production:graphics', 'graphics_installer:graphics', 'graphics_management:graphics',
+      'sales:shared', 'office_admin:shared',
+    ]);
+    expect(divisionOf('bogus')).toBeNull();
+    expect(roleLabel(null)).toBe('(no role set)');
+  });
+
+  it('suggests a role only from an unambiguous login role', () => {
+    expect(defaultPayrollRole(['shop_tech'])).toBe('shop_tech');
+    expect(defaultPayrollRole(['production'])).toBe('graphics_production');
+    expect(defaultPayrollRole(['sales'])).toBe('sales');
+    expect(defaultPayrollRole(['finance'])).toBe('office_admin');
+    expect(defaultPayrollRole(['installer'])).toBeNull();
+    expect(defaultPayrollRole(['super_admin'])).toBeNull();
+  });
+
+  it('splits the report into Upfit / Graphics / Shared, unassigned last', () => {
+    const rows = parsePaychexPayroll(GOOD).rows;
+    const roles: Record<string, string> = { '4': 'shop_tech', '5': 'graphics_installer' };
+    const r = buildPayrollReport(rows.map(c => ({ ...c, role: roles[c.paychex_employee_id] ?? null })));
+    expect(r.byDivision.map(g => `${g.label}:${g.total_labor_cost}`)).toEqual(['Upfit:4990', 'Graphics:1720', '(no role set):538.25']);
+    expect(r.byRole.map(g => g.label).sort()).toEqual(['(no role set)', 'Graphics Installer', 'Shop Tech']);
+    expect(r.byMonthDivision).toEqual([{ month: '2026-01', upfit: 4990, graphics: 1720, shared: 0, unassigned: 538.25 }]);
   });
 });

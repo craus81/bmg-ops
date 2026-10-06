@@ -247,10 +247,68 @@ export function guessProfile<T extends { id: string; full_name: string | null }>
   return hits.length === 1 ? hits[0] : null;
 }
 
+// ── Roles and divisions (migration 341, owner list 2026-10-06) ──────────────
+
+export type PayrollDivision = 'upfit' | 'graphics' | 'shared';
+
+/** BMG's payroll roles. Each rolls up to a division so payroll splits into
+ *  Upfit vs Graphics; Sales and Office/Admin serve both and stay Shared. */
+export const PAYROLL_ROLES = [
+  { key: 'shop_tech', label: 'Shop Tech', division: 'upfit' },
+  { key: 'upfit_management', label: 'Upfit Management', division: 'upfit' },
+  { key: 'graphics_production', label: 'Graphics Production', division: 'graphics' },
+  { key: 'graphics_installer', label: 'Graphics Installer', division: 'graphics' },
+  { key: 'graphics_management', label: 'Graphics Management', division: 'graphics' },
+  { key: 'sales', label: 'Sales', division: 'shared' },
+  { key: 'office_admin', label: 'Office/Admin', division: 'shared' },
+] as const satisfies readonly { key: string; label: string; division: PayrollDivision }[];
+
+export type PayrollRole = (typeof PAYROLL_ROLES)[number]['key'];
+export const PAYROLL_ROLE_KEYS = PAYROLL_ROLES.map(r => r.key) as [PayrollRole, ...PayrollRole[]];
+
+export const DIVISION_LABELS: Record<PayrollDivision, string> = {
+  upfit: 'Upfit',
+  graphics: 'Graphics',
+  shared: 'Shared (Sales + Office)',
+};
+
+export function roleLabel(role: string | null | undefined): string {
+  return PAYROLL_ROLES.find(r => r.key === role)?.label ?? '(no role set)';
+}
+
+export function divisionOf(role: string | null | undefined): PayrollDivision | null {
+  return PAYROLL_ROLES.find(r => r.key === role)?.division ?? null;
+}
+
+/**
+ * Shop labor pools: which payroll roles price which shop timer. Upfit timers
+ * cost at the Shop Tech pool (owner: shop techs only); graphics timers at
+ * the graphics floor crew's pool.
+ */
+export const SHOP_POOL_ROLES: Record<'upfit' | 'graphics', PayrollRole[]> = {
+  upfit: ['shop_tech'],
+  graphics: ['graphics_production', 'graphics_installer'],
+};
+
+/**
+ * Starting guess from a FleetSuite login role, only where it's unambiguous.
+ * Installers are left blank: an installer can be upfit or graphics.
+ */
+export function defaultPayrollRole(fleetRoles: string[]): PayrollRole | null {
+  const has = (...r: string[]) => r.some(x => fleetRoles.includes(x));
+  if (has('shop_tech')) return 'shop_tech';
+  if (has('graphics_production', 'production')) return 'graphics_production';
+  if (has('sales')) return 'sales';
+  if (has('admin', 'finance')) return 'office_admin';
+  return null;
+}
+
 // ── Report ────────────────────────────────────────────────────────────────
 
 export interface StoredCheck extends PayrollCheckRow {
   id?: string;
+  /** Payroll role (migration 341), joined in by the API; null = not set. */
+  role?: string | null;
 }
 
 export interface PayrollGroup {
@@ -316,7 +374,13 @@ export interface PayrollReport {
   byPosition: PayrollGroup[];
   byPeriod: PayrollGroup[];   // key = "start|end", oldest first
   byMonth: PayrollGroup[];    // key = YYYY-MM of period_end, oldest first
+  byRole: PayrollGroup[];     // key = role ('' = not set)
+  byDivision: PayrollGroup[]; // key = division ('' = role not set), Upfit → Graphics → Shared
+  /** Labor cost per month per division — the Upfit vs Graphics trend. */
+  byMonthDivision: { month: string; upfit: number; graphics: number; shared: number; unassigned: number }[];
 }
+
+const DIVISION_ORDER: Record<string, number> = { upfit: 0, graphics: 1, shared: 2, '': 3 };
 
 /** Every rollup the report page shows, from the checks in range. */
 export function buildPayrollReport(checks: StoredCheck[]): PayrollReport {
@@ -333,5 +397,24 @@ export function buildPayrollReport(checks: StoredCheck[]): PayrollReport {
       .sort((a, b) => a.key.localeCompare(b.key)),
     byMonth: groupBy(checks, c => c.period_end.slice(0, 7), c => c.period_end.slice(0, 7))
       .sort((a, b) => a.key.localeCompare(b.key)),
+    byRole: groupBy(checks, c => (divisionOf(c.role) ? c.role! : ''), c => roleLabel(c.role)),
+    byDivision: groupBy(checks, c => divisionOf(c.role) || '', c => {
+      const d = divisionOf(c.role);
+      return d ? DIVISION_LABELS[d] : '(no role set)';
+    }).sort((a, b) => DIVISION_ORDER[a.key] - DIVISION_ORDER[b.key]),
+    byMonthDivision: monthByDivision(checks),
   };
+}
+
+function monthByDivision(checks: StoredCheck[]): PayrollReport['byMonthDivision'] {
+  const map = new Map<string, { month: string; upfit: number; graphics: number; shared: number; unassigned: number }>();
+  for (const c of checks) {
+    const month = c.period_end.slice(0, 7);
+    const m = map.get(month) || { month, upfit: 0, graphics: 0, shared: 0, unassigned: 0 };
+    m[divisionOf(c.role) || 'unassigned'] += Number(c.total_labor_cost);
+    map.set(month, m);
+  }
+  return [...map.values()]
+    .map(m => ({ month: m.month, upfit: round2(m.upfit), graphics: round2(m.graphics), shared: round2(m.shared), unassigned: round2(m.unassigned) }))
+    .sort((a, b) => a.month.localeCompare(b.month));
 }

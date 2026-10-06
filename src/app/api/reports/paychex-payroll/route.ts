@@ -3,8 +3,9 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { requireFinancials } from '@/lib/api-auth';
 import { validateSearchParams, z } from '@/lib/validate';
 import { fetchAllRows } from '@/lib/fetch-all';
-import { buildPayrollReport, guessProfile, type StoredCheck } from '@/lib/paychex-payroll';
-import { getShopLaborCostBasis } from '@/lib/shop-labor';
+import { buildPayrollReport, guessProfile, defaultPayrollRole, type StoredCheck } from '@/lib/paychex-payroll';
+import { getShopLaborCostBases } from '@/lib/shop-labor';
+import { rolesOf } from '@/lib/ai-agent-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,8 +18,9 @@ const GetSchema = z.object({ from: dateStr.optional(), to: dateStr.optional() })
  * The Paychex payroll report (migration 340): every rollup for the checks
  * whose pay period ENDS in [from, to] (default: this calendar year), the
  * Paychex employee ↔ FleetSuite person matches with best guesses for the
- * unmatched, recent uploads, and the shop cost rate the margin report is
- * using. Per-person pay is here and nowhere else — super_admin / executive.
+ * unmatched, each employee's payroll role (migration 341) with a suggestion
+ * from their FleetSuite login role when unset, recent uploads, and the shop
+ * cost rates the margin report is using. Per-person pay is here and nowhere else — super_admin / executive.
  */
 export async function GET(req: NextRequest) {
   const auth = await requireFinancials(req);
@@ -51,8 +53,9 @@ export async function GET(req: NextRequest) {
   const latestName = new Map<string, string>();
   for (const r of everyone) if (!latestName.has(r.paychex_employee_id)) latestName.set(r.paychex_employee_id, r.employee_name);
 
-  const [{ data: links }, { data: profiles }, { data: imports }] = await Promise.all([
+  const [{ data: links }, { data: roleRows }, { data: profiles }, { data: imports }] = await Promise.all([
     service.from('payroll_employee_links').select('paychex_employee_id, profile_id'),
+    service.from('payroll_employee_roles').select('paychex_employee_id, role'),
     service.from('profiles').select('id, full_name, role, roles, status').neq('role', 'customer').order('full_name'),
     service.from('payroll_imports')
       .select('id, file_name, uploaded_at, uploaded_by, row_count, period_count, first_period_start, last_period_end, replaced_rows')
@@ -63,17 +66,23 @@ export async function GET(req: NextRequest) {
   const linkByEmp = new Map((links || []).map(l => [l.paychex_employee_id, l.profile_id]));
   const linkedProfiles = new Set((links || []).map(l => l.profile_id));
   const nameById = new Map(staff.map((p: any) => [p.id, p.full_name]));
+  const profileById = new Map(staff.map((p: any) => [p.id, p]));
+  const roleByEmp = new Map((roleRows || []).map(r => [r.paychex_employee_id, r.role as string]));
 
   const employees = [...latestName.entries()]
     .map(([id, name]) => {
       const profileId = linkByEmp.get(id) || null;
       const guess = profileId ? null : guessProfile(name, staff.filter((p: any) => !linkedProfiles.has(p.id)));
+      const role = roleByEmp.get(id) || null;
+      const forRole = profileId || guess?.id;
       return {
         paychex_employee_id: id,
         employee_name: name,
         profile_id: profileId,
         profile_name: profileId ? nameById.get(profileId) || null : null,
         guess_profile_id: guess?.id || null,
+        role,
+        suggested_role: role ? null : (forRole ? defaultPayrollRole(rolesOf(profileById.get(forRole))) : null),
       };
     })
     .sort((a, b) => a.employee_name.localeCompare(b.employee_name));
@@ -83,10 +92,10 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     range: { from, to },
-    report: buildPayrollReport(checks),
+    report: buildPayrollReport(checks.map(c => ({ ...c, role: roleByEmp.get(c.paychex_employee_id) || null }))),
     employees,
     profiles: staff.map((p: any) => ({ id: p.id, full_name: p.full_name })),
     imports: (imports || []).map(i => ({ ...i, uploaded_by_name: i.uploaded_by ? uploaderNames.get(i.uploaded_by) || null : null })),
-    shopCostBasis: await getShopLaborCostBasis(service),
+    shopCostBases: await getShopLaborCostBases(service),
   });
 }
