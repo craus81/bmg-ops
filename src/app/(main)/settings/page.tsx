@@ -169,6 +169,16 @@ export default function SettingsPage() {
   const [laborBusy, setLaborBusy] = useState(false);
   const [laborSaved, setLaborSaved] = useState(false);
   const [laborError, setLaborError] = useState('');
+  const [discountItem, setDiscountItem] = useState<{
+    configured_item_number: string | null;
+    resolved: { id: string; itemNumber: string | null; source: string } | null;
+    error?: string;
+    candidates: { id: string; itemNumber: string }[];
+  } | null>(null);
+  const [discountItemInput, setDiscountItemInput] = useState('');
+  const [discountBusy, setDiscountBusy] = useState(false);
+  const [discountSaved, setDiscountSaved] = useState(false);
+  const [discountError, setDiscountError] = useState('');
 
   // Push notification state
   const [pushSupported, setPushSupported] = useState(false);
@@ -207,6 +217,7 @@ export default function SettingsPage() {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once, when the Company section becomes visible
   useEffect(() => { if (isSuperAdmin) loadLaborItem(); }, [isSuperAdmin]);
+  useEffect(() => { if (isSuperAdmin) loadDiscountItem(); }, [isSuperAdmin]);
 
   // Blended shop labor cost rate (R3-21, migration 269) — super-admin write,
   // same posture as the tax rate and labor item above.
@@ -486,6 +497,46 @@ export default function SettingsPage() {
     // Re-read so the panel shows what the push will actually use, not what
     // was typed.
     await loadLaborItem();
+  };
+
+  const loadDiscountItem = async () => {
+    setDiscountBusy(true);
+    setDiscountError('');
+    try {
+      const res = await apiFetch('/api/admin/discount-item');
+      const data = await res.json();
+      if (!res.ok) { setDiscountError(data?.error || 'Could not read the discount item.'); return; }
+      setDiscountItem(data);
+      setDiscountItemInput(data.configured_item_number || '');
+    } catch (e: any) {
+      setDiscountError(e?.message || 'Could not read the discount item.');
+    } finally {
+      setDiscountBusy(false);
+    }
+  };
+
+  const handleSaveDiscountItem = async () => {
+    setDiscountBusy(true);
+    setDiscountError('');
+    try {
+      const res = await apiFetch('/api/admin/discount-item', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ item_number: discountItemInput.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setDiscountError(data?.error || 'Could not save the discount item.'); return; }
+      setDiscountSaved(true);
+      setTimeout(() => setDiscountSaved(false), 2500);
+    } catch (e: any) {
+      setDiscountError(e?.message || 'Could not save the discount item.');
+      return;
+    } finally {
+      setDiscountBusy(false);
+    }
+    // Re-read so the panel shows what the push will actually use, not what
+    // was typed.
+    await loadDiscountItem();
   };
 
   const handleSaveSignature = async () => {
@@ -959,6 +1010,71 @@ export default function SettingsPage() {
             )}
             {laborError && (
               <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{laborError}</div>
+            )}
+          </div>
+
+          <div style={sectionStyle}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>NetSuite Discount Item</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
+              An estimate's discount pushes to NetSuite as a line on this item: one taxed line for the share
+              on taxed parts and one untaxed line for the rest. Leave it blank and the server picks the
+              best active item of type Discount. If NetSuite has none, a discounted estimate won't push
+              or convert until one exists, so NetSuite never bills more than the quote.
+            </div>
+
+            <div style={{ fontSize: '11px', marginBottom: '10px', color: 'var(--text-label)' }}>
+              {discountBusy && !discountItem ? 'Checking NetSuite…' : discountItem?.resolved ? (
+                <>Discounts currently post to{' '}
+                  <b style={{ color: 'var(--text-body)' }}>{discountItem.resolved.itemNumber || `internal id ${discountItem.resolved.id}`}</b>
+                  {discountItem.resolved.source === 'search' && ' — auto-picked, save it below to pin it'}
+                                    {discountItem.resolved.source === 'setting' && ' — pinned here'}.
+                </>
+              ) : discountItem ? (
+                <b style={{ color: '#ef4444' }}>
+                  ⚠ No discount item found in NetSuite. Discounted estimates can't push until you create one (type Discount).
+                </b>
+              ) : 'Not checked yet.'}
+            </div>
+
+            <div style={labelStyle}>NetSuite item name</div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                value={discountItemInput}
+                onChange={e => setDiscountItemInput(e.target.value)}
+                placeholder="Exact item name (blank = auto)"
+                style={{ ...inputStyle, width: '240px' }}
+              />
+              <button
+                onClick={handleSaveDiscountItem}
+                disabled={discountBusy}
+                style={{
+                  padding: '8px 16px', borderRadius: '8px', border: 'none',
+                  background: discountSaved ? '#22c55e' : '#3b82f6', color: '#fff',
+                  fontSize: '12px', fontWeight: 800,
+                  cursor: discountBusy ? 'default' : 'pointer', opacity: discountBusy ? 0.5 : 1,
+                }}
+              >
+                {discountBusy ? 'Working...' : discountSaved ? 'Saved!' : 'Save Item'}
+              </button>
+              <button
+                onClick={loadDiscountItem}
+                disabled={discountBusy}
+                style={{
+                  padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border-color)',
+                  background: 'transparent', color: 'var(--text-body)',
+                  fontSize: '12px', fontWeight: 700, cursor: discountBusy ? 'default' : 'pointer',
+                }}
+              >
+                Re-check
+              </button>
+            </div>
+            {(discountItem?.candidates?.length || 0) > 1 && (
+              <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '8px' }}>
+                Other discount items in NetSuite: {discountItem!.candidates.slice(1, 6).map(c => c.itemNumber).join(', ')}
+              </div>
+            )}
+            {discountError && (
+              <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{discountError}</div>
             )}
           </div>
 

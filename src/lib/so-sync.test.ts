@@ -22,3 +22,20 @@ describe('soContentHash and line taxability', () => {
     expect(untaxedFlag({})).toEqual({});
   });
 });
+
+describe('soContentHash and the estimate discount (migration 342)', () => {
+  const estimate = { labor_hours: 2, labor_rate: 120, estimate_number: 'EST-1', vin: '' };
+  const lines = [{ item_number: 'A', quantity: 1, unit_price: 100, sort_order: 0 }];
+
+  it('an estimate with no discount hashes exactly as before', () => {
+    expect(soContentHash({ ...estimate, discount_type: null, discount_value: null }, lines)).toBe(soContentHash(estimate, lines));
+  });
+
+  it('adding or changing a discount marks the sales order out of date', () => {
+    const plain = soContentHash(estimate, lines);
+    const tenPct = soContentHash({ ...estimate, discount_type: 'percent', discount_value: 10 }, lines);
+    const twelvePct = soContentHash({ ...estimate, discount_type: 'percent', discount_value: 12 }, lines);
+    expect(tenPct).not.toBe(plain);
+    expect(twelvePct).not.toBe(tenPct);
+  });
+});

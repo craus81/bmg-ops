@@ -15,7 +15,7 @@ const supabase = createClient(
 
 const ESTIMATE_COLUMNS =
   'id, estimate_number, customer_name, status, tax_rate, tax_exempt, tax_amount, vehicle_count, ' +
-  'labor_rate, labor_hours_override, customer_approved, customer_approved_at, sent_for_approval_at, ' +
+  'labor_rate, labor_hours_override, discount_type, discount_value, customer_approved, customer_approved_at, sent_for_approval_at, ' +
   'netsuite_estimate_number, created_at, updated_at';
 
 /**
@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
   const { data: lines, error: lineError } = await fetchAllRows<TaxGapLine>((from, to) =>
     supabase
       .from('estimate_line_items')
-      .select('estimate_id, quantity, unit_price, taxable, part_id, netsuite_item_id, item_number')
+      .select('estimate_id, quantity, unit_price, labor_hours, taxable, part_id, netsuite_item_id, item_number')
       .order('id')
       .range(from, to) as unknown as PromiseLike<{ data: TaxGapLine[] | null; error: { message: string } | null }>,
   );

@@ -15,13 +15,21 @@ import { createHash } from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQuery } from './netsuite';
 import { resolveLaborItem } from './labor-item';
-import { normalizeVehicleCount } from './estimate-totals';
+import { normalizeDiscount, normalizeVehicleCount } from './estimate-totals';
 import { kitTaggedDescription } from './estimate-kits';
+import { buildDiscountLines, estimateDiscountSplit, resolveDiscountItem } from './discount-item';
 
 export interface SoLineItem {
-  itemId: string; quantity: number; rate: number; description?: string;
-  /** false = NetSuite must not tax this line (migration 336). Omitted otherwise. */
-  taxable?: false;
+  itemId: string;
+  /** Omitted only on a Discount-type item's line (see src/lib/discount-item). */
+  quantity?: number;
+  rate: number; description?: string;
+  /** false = NetSuite must not tax this line (migration 336); true only on
+   *  a discount's taxed share (migration 342). Omitted otherwise. */
+  taxable?: boolean;
+  /** An estimate discount line (migration 342). */
+  discount?: true;
+  discountItem?: true;
 }
 
 /** The line's tax flag as SO/estimate payloads carry it: only an explicit false. */
@@ -36,6 +44,9 @@ export interface SoLineBuild {
   laborItemNumber: string | null;
   laborHours: number;
   laborRate: number;
+  /** The estimate has a discount but NetSuite has no discount item to carry it. */
+  discountSkipped: boolean;
+  discountAmount: number;
 }
 
 /**
@@ -68,7 +79,10 @@ export async function findCustomItemId(): Promise<string | null> {
  */
 export async function buildSoLineItems(
   supabase: SupabaseClient,
-  estimate: { labor_hours?: unknown; labor_hours_override?: unknown; labor_rate?: unknown; vehicle_count?: unknown },
+  estimate: {
+    labor_hours?: unknown; labor_hours_override?: unknown; labor_rate?: unknown; vehicle_count?: unknown;
+    labor_total?: unknown; discount_type?: unknown; discount_value?: unknown;
+  },
   lines: any[],
 ): Promise<SoLineBuild> {
   const units = normalizeVehicleCount(estimate.vehicle_count);
@@ -134,7 +148,23 @@ export async function buildSoLineItems(
     } catch { laborSkipped = true; }
   }
 
-  return { soLineItems, customLineDescriptions, unmappedLineDescriptions, laborSkipped, laborItemNumber, laborHours, laborRate };
+  // The discount (migration 342) goes last. A missing discount item is
+  // reported (discountSkipped) like labor, and callers BLOCK on it: the
+  // sales order would bill the full price the customer was not quoted.
+  const { amount: discountAmount } = estimateDiscountSplit(estimate, sorted);
+  let discountSkipped = false;
+  if (discountAmount > 0) {
+    try {
+      const { item } = await resolveDiscountItem(supabase);
+      if (item) soLineItems.push(...buildDiscountLines(estimate, sorted, item));
+      else discountSkipped = true;
+    } catch { discountSkipped = true; }
+  }
+
+  return {
+    soLineItems, customLineDescriptions, unmappedLineDescriptions, laborSkipped, laborItemNumber, laborHours, laborRate,
+    discountSkipped, discountAmount,
+  };
 }
 
 /**
@@ -149,14 +179,19 @@ export async function buildSoLineItems(
  * but folding a `1` into the body would change the hash of every estimate
  * ever pushed and light up "out of date" across the whole book on deploy.
  * A line's tax flag joins the same way, only when it is an untaxed line
- * (migration 336), since NetSuite has to stop taxing it.
+ * (migration 336), since NetSuite has to stop taxing it. So does a discount
+ * (migration 342), only when there is one.
  */
 export function soContentHash(
-  estimate: { labor_hours?: unknown; labor_hours_override?: unknown; labor_rate?: unknown; po_number?: unknown; estimate_number?: unknown; vin?: unknown; vehicle_count?: unknown },
+  estimate: {
+    labor_hours?: unknown; labor_hours_override?: unknown; labor_rate?: unknown; po_number?: unknown; estimate_number?: unknown; vin?: unknown; vehicle_count?: unknown;
+    discount_type?: unknown; discount_value?: unknown;
+  },
   lines: Array<{ item_number?: unknown; quantity?: unknown; unit_price?: unknown; sort_order?: unknown; taxable?: unknown }>,
 ): string {
   const money = (v: unknown) => +(parseFloat(String(v ?? 0)) || 0).toFixed(2);
   const units = normalizeVehicleCount(estimate.vehicle_count);
+  const discount = normalizeDiscount(estimate.discount_type, estimate.discount_value);
   const body = {
     lines: [...lines]
       .filter(l => (parseFloat(String(l.quantity ?? 0)) || 0) > 0)
@@ -166,6 +201,7 @@ export function soContentHash(
     ref: String(estimate.po_number ?? '').trim() || String(estimate.estimate_number ?? ''),
     vin: String(estimate.vin ?? '').trim().toUpperCase(),
     ...(units > 1 ? { vehicles: units } : {}),
+    ...(discount ? { discount: [discount.type, discount.value] } : {}),
   };
   return createHash('sha256').update(JSON.stringify(body)).digest('hex');
 }

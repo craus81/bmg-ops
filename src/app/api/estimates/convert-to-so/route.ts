@@ -150,7 +150,17 @@ export async function POST(req: NextRequest) {
     const {
       soLineItems, customLineDescriptions, unmappedLineDescriptions,
       laborSkipped, laborItemNumber, laborHours, laborRate,
+      discountSkipped, discountAmount,
     } = await buildSoLineItems(supabase, estimate, lineItems);
+
+    // A sales order without the discount line bills more than the customer
+    // signed for, so this stops before anything is created in NetSuite.
+    if (discountSkipped) {
+      return NextResponse.json({
+        error: `This estimate has a $${discountAmount.toFixed(2)} discount, but NetSuite has no discount item to carry it. Create a Discount item in NetSuite (or name one in Settings → NetSuite Discount Item), then convert again. No sales order was created.`,
+        step: 'discount_item',
+      }, { status: 409 });
+    }
 
     if (soLineItems.length === 0) {
       return NextResponse.json({

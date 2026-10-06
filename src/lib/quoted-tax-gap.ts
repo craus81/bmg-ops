@@ -1,4 +1,4 @@
-import { computeTotals } from './estimate-totals';
+import { computeTotals, normalizeDiscount } from './estimate-totals';
 import { deepLinks } from './deep-links';
 
 /**
@@ -36,6 +36,8 @@ export interface TaxGapEstimate {
   vehicle_count: number | null;
   labor_rate: number | null;
   labor_hours_override: number | null;
+  discount_type?: string | null;
+  discount_value?: number | null;
   customer_approved: boolean | null;
   customer_approved_at: string | null;
   sent_for_approval_at: string | null;
@@ -48,6 +50,8 @@ export interface TaxGapLine {
   estimate_id: string;
   quantity: number | null;
   unit_price: number | null;
+  /** Only matters on a discounted estimate: labor is part of what the discount spreads over. */
+  labor_hours?: number | null;
   /** Stamped at save since migration 336; NULL on lines saved before it. */
   taxable?: boolean | null;
   part_id?: string | null;
@@ -146,6 +150,9 @@ export function summarizeTaxGap(
         ? null
         : Number(e.labor_hours_override),
       e.vehicle_count ?? 1,
+      // A discount (migration 342) rightly lowers the tax; leaving it out
+      // would list every discounted estimate as under-taxed.
+      normalizeDiscount(e.discount_type, e.discount_value),
     ).tax_amount;
 
     const quoted = Number(e.tax_amount || 0);
