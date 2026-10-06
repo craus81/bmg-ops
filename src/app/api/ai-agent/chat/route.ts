@@ -506,6 +506,16 @@ JSON block (one "supabase", one "netsuite"), then you combine the results yourse
   invoiced revenue by month (CustInvc, SUM(foreigntotal) grouped by TO_CHAR(trandate,'YYYY-MM')); labor % = labor / revenue.
 - Revenue per labor dollar or per worked hour: same two queries, divide.
 - Match months on the YYYY-MM key; say which months are missing from either side rather than treating them as zero.
+- UPFIT VS GRAPHICS REVENUE (owner rule; the Reports → Upfit vs Graphics page uses the same rule): split invoice
+  lines by item. NetSuite: SELECT TO_CHAR(t.trandate,'YYYY-MM') AS month, i.itemid, i.itemtype, SUM(-tl.netamount) AS amount
+  FROM transaction t JOIN transactionline tl ON tl.transaction = t.id LEFT JOIN item i ON tl.item = i.id
+  WHERE t.type IN ('CustInvc','CustCred') AND tl.mainline = 'F' AND tl.taxline = 'F' AND <date range>
+  GROUP BY TO_CHAR(t.trandate,'YYYY-MM'), i.itemid, i.itemtype. Then file each row yourself (use the part after the
+  last ':' of itemid, case-insensitive): Graphics = 3M Vinyl, Graphics Install Labor, Graphics Removal, or itemid
+  starting '06'; left out = freight/shipping items (itemtype ShipItem, or itemid containing FREIGHT/SHIPPING) and
+  Subtotal/EndGroup/Group/Description lines; not split = Discount items and lines with no item; Upfit = everything
+  else (Parts Install Labor included). Pair with payroll labor by division (payroll_employee_roles mapping above);
+  Shared labor stays its own line. Parts/materials cost is not part of this split.
 
 ANSWER FORMAT:
 - Be concise and direct
