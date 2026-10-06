@@ -40,6 +40,7 @@ import GraphicsMaterialsCard from '@/components/GraphicsMaterialsCard';
 import GraphicsRollPlan from '@/components/GraphicsRollPlan';
 import GraphicsPackChecklist from '@/components/GraphicsPackChecklist';
 import GraphicsJobVehicleFiles from '@/components/GraphicsJobVehicleFiles';
+import GraphicsJobSources from '@/components/GraphicsJobSources';
 import PrintRoomTimer from '@/components/PrintRoomTimer';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { DropZone } from '@/components/DropZone';
@@ -1591,10 +1592,10 @@ export default function GraphicsJobRecordPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ fontSize: '11px', color: '#60a5fa', fontWeight: 700 }}>Estimate Linked</div>
               <button
-                onClick={() => router.push('/estimates')}
+                onClick={() => router.push(deepLinks.estimate(job.estimate_id!))}
                 style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}
               >
-                Open Estimates
+                Open Estimate
               </button>
             </div>
           </div>
@@ -1978,6 +1979,14 @@ export default function GraphicsJobRecordPage() {
         </DropZone>
       </div>
 
+      {/* ── From the estimate / wrap quote: rep, vehicle, PO, quote proofs + files ── */}
+      <GraphicsJobSources
+        jobId={job.id}
+        estimateId={job.estimate_id ?? null}
+        wrapQuoteId={(job as any).wrap_quote_id ?? null}
+        cardStyle={card}
+        labelStyle={labelStyle}
+      />
       {/* ── From vehicles: linked check-ins' proof + photos ── */}
       <GraphicsJobVehicleFiles jobId={job.id} cardStyle={card} labelStyle={labelStyle} />
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeQuotedMargin, type QuotedMarginLine } from './quoted-margin';
+import { computeQuotedMargin, estimateDiscountRatio, type QuotedMarginLine } from './quoted-margin';
 
 const line = (over: Partial<QuotedMarginLine>): QuotedMarginLine => ({
   item_number: 'PART-1', quantity: 1, unit_price: 100,
@@ -52,5 +52,22 @@ describe('computeQuotedMargin — the frozen twin of the builder strip', () => {
   it('labor cost = sold hours x blended rate; null rate = null (parts-only margin)', () => {
     expect(computeQuotedMargin([line({})], 6, 42.5).laborCost).toBe(255);
     expect(computeQuotedMargin([line({})], 6, null).laborCost).toBeNull();
+  });
+});
+
+describe('quoted margin after an estimate discount (migration 342)', () => {
+  it('a discount lowers what the parts earn, so it cannot slip under the floor unseen', () => {
+    const line = { item_number: 'A', quantity: 1, unit_price: 100, purchase_price: 60, avg_install_cost: null };
+    expect(computeQuotedMargin([line], 0, null).marginPct).toBe(40);
+    const ratio = estimateDiscountRatio({ discount_amount: 20, subtotal: 100, labor_total: 0 });
+    expect(ratio).toBe(0.2);
+    const m = computeQuotedMargin([line], 0, null, ratio);
+    expect(m.marginPct).toBe(25); // (80 - 60) / 80
+    expect(m.lines[0].unit_price).toBe(100); // the detail keeps the list price
+  });
+
+  it('no discount is a ratio of zero', () => {
+    expect(estimateDiscountRatio({ discount_amount: 0, subtotal: 100, labor_total: 50 })).toBe(0);
+    expect(estimateDiscountRatio({})).toBe(0);
   });
 });

@@ -14,7 +14,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { generateToken } from './magic-link-approval';
-import { openProofRound } from '@/lib/proof-rounds';
+import { openProofRound, roundForSend, roundLabel, tagFileName } from '@/lib/proof-rounds';
 import { sendEmail, buildNotificationEmail } from './resend';
 import { getEmailSignature } from './email-signature';
 import { deepLinks } from './deep-links';
@@ -173,18 +173,24 @@ export async function sendProofApproval(
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
   const label = job.title || job.job_number || `Job ${jobId.slice(0, 8)}`;
+  // Name the revision in the subject, heading and attached file names, so a
+  // customer holding several proof emails can tell which is current (each
+  // fresh send replaces the previous link).
+  const roundNumber = await roundForSend(service, job.id, { reminder });
+  const rev = roundNumber ? ` (${roundLabel(roundNumber)})` : '';
   const subject = reminder
-    ? `[BMG Fleet] Reminder: proof awaiting your approval — ${label}`
-    : `[BMG Fleet] Proof ready for approval — ${label}`;
+    ? `[BMG Fleet] Reminder: proof awaiting your approval${rev} — ${label}`
+    : `[BMG Fleet] Proof ready for approval${rev} — ${label}`;
   const emailTitle = reminder
-    ? `Reminder: proof awaiting approval — ${label}`
-    : `Proof ready for approval — ${label}`;
+    ? `Reminder: proof awaiting approval${rev} — ${label}`
+    : `Proof ready for approval${rev} — ${label}`;
+  const attachedName = (name: string) => (roundNumber ? tagFileName(name, roundNumber) : name);
   const emailBody = reminder
     ? `Just a reminder — your graphic proof for ${label} is still waiting on your review. Production can't move forward until it's approved. Approve or request changes with the button below (this fresh link expires in ${expiryDays} days).`
     : `Your graphic proof is ready for review — ${label}. Approve or request changes using the button below. Link expires in ${expiryDays} days.`;
   const emailOpts = {
     note: message,
-    attachmentNames: attachmentRows.map(r => r.file_name),
+    attachmentNames: attachmentRows.map(r => attachedName(r.file_name)),
     // Composed sends carry the sender's signature; automated reminders have
     // no actor and go out without one.
     signature: await getEmailSignature(service, opts.actorId),
@@ -206,7 +212,7 @@ export async function sendProofApproval(
   if (emailList.length > 0 && attachmentRows.length > 0) {
     const fetched = await fetchEmailAttachments(FILE_BUCKET_PREFIX, attachmentRows);
     if (!fetched.ok) return { ok: false, status: fetched.status, error: fetched.error };
-    emailAttachments = fetched.attachments;
+    emailAttachments = fetched.attachments.map(a => ({ ...a, filename: attachedName(a.filename) }));
   }
 
   const { token, expiresAt } = generateToken(expiryDays);
@@ -281,7 +287,7 @@ export async function sendProofApproval(
 
   if (phone && !reminder) {
     const link = `${appUrl}/approve/proof/${token}?via=sms&to=${encodeURIComponent(phone)}`;
-    const smsBody = `[BMG Fleet] Your graphic proof is ready for review: ${link}`;
+    const smsBody = `[BMG Fleet] Your graphic proof${rev} is ready for review: ${link}`;
     try {
       const result = await sendSMS(phone, smsBody);
       dispatch.sms = {

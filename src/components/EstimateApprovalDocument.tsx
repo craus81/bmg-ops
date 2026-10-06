@@ -13,6 +13,7 @@
 
 import { ApprovalHeader, Row, Section } from '@/components/ApprovalPageShell';
 import ZoomableImage from '@/components/ZoomableImage';
+import { discountLabel } from '@/lib/estimate-totals';
 
 export default function EstimateApprovalDocument({ estimate: est, lines, graphics, proofs = [] }: { estimate: any; lines: any[]; graphics: any[]; proofs?: any[] }) {
   const subtotal = lines.reduce((s: number, l: any) => s + (l.line_total || l.unit_price * l.quantity || 0), 0);
@@ -116,6 +117,7 @@ export default function EstimateApprovalDocument({ estimate: est, lines, graphic
         <div style={{ borderTop: '2px solid #cbd5e1', marginTop: '10px', paddingTop: '10px', fontSize: '13px', color: '#0f172a' }}>
           <Row label="Subtotal" value={`$${subtotal.toFixed(2)}`} />
           {est.labor_total > 0 && <Row label={`Labor (${est.labor_hours_override ?? est.labor_hours} hrs @ $${est.labor_rate}/hr)`} value={`$${Number(est.labor_total).toFixed(2)}`} />}
+          {Number(est.discount_amount) > 0 && <Row label={discountLabel(est.discount_type, est.discount_value)} value={`−$${Number(est.discount_amount).toFixed(2)}`} />}
           {!est.tax_exempt && est.tax_amount > 0 && <Row label={`Tax (${(est.tax_rate * 100).toFixed(2)}%)`} value={`$${Number(est.tax_amount).toFixed(2)}`} />}
           <Row label="Total" value={`$${Number(est.grand_total).toFixed(2)}`} bold />
         </div>

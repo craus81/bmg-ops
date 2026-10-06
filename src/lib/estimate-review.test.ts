@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { pickReviewer, reviewStateOf, canDecideReview, type StaffOption } from './estimate-review';
+import { pickReviewer, reviewStateOf, canDecideReview, reviewReminderDue, type StaffOption } from './estimate-review';
+import { shopWorkMs } from './shop-hours';
 
 const STAFF: StaffOption[] = [
   { id: 'u-craig', name: 'Craig George', email: 'cgeorge@bmgfleet.com' },
@@ -84,5 +85,43 @@ describe('canDecideReview', () => {
 
   it('is false for a signed-out user', () => {
     expect(canDecideReview(pending, null, true)).toBe(false);
+  });
+});
+
+describe('reviewReminderDue', () => {
+  // Mon 2026-10-05 is a weekday; Central is UTC-5 (CDT).
+  const at = (iso: string) => new Date(iso).getTime();
+  const pendingSince = (requested: string, reminded: string | null = null) => ({
+    internal_review_status: 'pending',
+    internal_review_requested_at: requested,
+    internal_review_reminded_at: reminded,
+  });
+
+  it('fires once 6 shop hours have passed', () => {
+    // 8:00 AM Central request; lunch (11:30–12:00) doesn't count.
+    const est = pendingSince('2026-10-05T13:00:00Z');
+    expect(reviewReminderDue(est, at('2026-10-05T18:00:00Z'), shopWorkMs)).toBe(false); // 1:00 PM = 4.5h
+    expect(reviewReminderDue(est, at('2026-10-05T19:30:00Z'), shopWorkMs)).toBe(true); // 2:30 PM = 6h
+  });
+
+  it('carries a late Friday send over the weekend instead of firing at night', () => {
+    // Fri 2:00 PM Central → 1.5 shop hours Friday, so due Monday ~11:30.
+    const est = pendingSince('2026-10-09T19:00:00Z');
+    expect(reviewReminderDue(est, at('2026-10-10T19:00:00Z'), shopWorkMs)).toBe(false); // Saturday
+    expect(reviewReminderDue(est, at('2026-10-12T15:00:00Z'), shopWorkMs)).toBe(false); // Mon 10:00 AM
+    expect(reviewReminderDue(est, at('2026-10-12T17:00:00Z'), shopWorkMs)).toBe(true); // Mon 12:00 PM
+  });
+
+  it('reminds once per review round, and again after a re-send', () => {
+    const now = at('2026-10-06T21:00:00Z');
+    expect(reviewReminderDue(pendingSince('2026-10-05T13:00:00Z', '2026-10-05T19:30:00Z'), now, shopWorkMs)).toBe(false);
+    // Re-sent after the reminder: new round, new reminder once it ages.
+    expect(reviewReminderDue(pendingSince('2026-10-06T12:00:00Z', '2026-10-05T19:30:00Z'), now, shopWorkMs)).toBe(true);
+  });
+
+  it('ignores reviews that are answered or never requested', () => {
+    const now = at('2026-10-09T21:00:00Z');
+    expect(reviewReminderDue({ internal_review_status: 'approved', internal_review_requested_at: '2026-10-05T13:00:00Z' }, now, shopWorkMs)).toBe(false);
+    expect(reviewReminderDue({ internal_review_status: 'pending', internal_review_requested_at: null }, now, shopWorkMs)).toBe(false);
   });
 });

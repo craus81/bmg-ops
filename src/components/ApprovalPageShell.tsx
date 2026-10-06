@@ -23,6 +23,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { AGREEMENT_TEXT } from '@/lib/approval-agreement';
+import { LEGAL } from '@/lib/legal';
 
 type ApprovalStatus =
   | 'loading' | 'ready' | 'already_approved' | 'already_rejected'
@@ -165,10 +166,10 @@ export default function ApprovalPageShell({
     setSubmitting(false);
   };
 
-  if (status === 'loading') return <ApprovalFrame>Loading {noun}...</ApprovalFrame>;
-  if (status === 'invalid') return <ApprovalFrame>{copy?.invalid || 'Invalid approval link. Please contact BMG Fleet Installations.'}</ApprovalFrame>;
-  if (status === 'expired') return <ApprovalFrame>{copy?.expired || 'This approval link has expired. Please ask BMG Fleet Installations to re-send.'}</ApprovalFrame>;
-  if (status === 'error') return <ApprovalFrame>Something went wrong{message ? `: ${message}` : ''}. Please try again.</ApprovalFrame>;
+  if (status === 'loading') return <ApprovalFrame><div style={{ color: '#475569', fontSize: '14px' }}>Loading {noun}...</div></ApprovalFrame>;
+  if (status === 'invalid') return <ApprovalFrame><LinkProblem title="This link is no longer active">{copy?.invalid || 'Invalid approval link. Please contact BMG Fleet Installations.'}</LinkProblem></ApprovalFrame>;
+  if (status === 'expired') return <ApprovalFrame><LinkProblem title="This link has expired">{copy?.expired || 'This approval link has expired. Please ask BMG Fleet Installations to re-send.'}</LinkProblem></ApprovalFrame>;
+  if (status === 'error') return <ApprovalFrame><LinkProblem title="Something went wrong">Something went wrong{message ? `: ${message}` : ''}. Please try again.</LinkProblem></ApprovalFrame>;
   if (status === 'already_approved' || status === 'submitted_accepted') {
     return (
       <ApprovalFrame>
@@ -302,8 +303,32 @@ function Decided({ tone, title, docLabel, timestamp, cta }: {
 export function ApprovalFrame({ children }: { children: React.ReactNode }) {
   return (
     <div style={{ minHeight: 'calc(100vh / var(--ts))', background: '#f1f5f9', padding: '20px 16px' }}>
-      <div style={{ maxWidth: '640px', margin: '0 auto', background: '#fff', borderRadius: '14px', padding: '22px', border: '1px solid #e2e8f0' }}>
+      {/* Explicit text color + light color-scheme: these pages are always
+          light, but without them a viewer in dark mode inherits the app's
+          near-white text and reads white on white. */}
+      <div style={{ maxWidth: '640px', margin: '0 auto', background: '#fff', color: '#0f172a', colorScheme: 'light', borderRadius: '14px', padding: '22px', border: '1px solid #e2e8f0' }}>
         {children}
+      </div>
+    </div>
+  );
+}
+
+/** A link that can't be used (replaced, expired, failed): a clear title,
+ *  the reason, and how to reach BMG for a fresh one. */
+function LinkProblem({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ textAlign: 'center', padding: '6px 0' }}>
+      <div aria-hidden style={{
+        width: '44px', height: '44px', margin: '0 auto 12px', borderRadius: '50%',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: '#fef3c7', color: '#b45309', fontSize: '22px', fontWeight: 800,
+      }}>!</div>
+      <div style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>{title}</div>
+      <div style={{ fontSize: '14px', color: '#334155', marginTop: '8px', lineHeight: 1.5 }}>{children}</div>
+      <div style={{ fontSize: '13px', color: '#475569', marginTop: '14px' }}>
+        Need a new link? Email{' '}
+        <a href={`mailto:${LEGAL.contactEmail}`} style={{ color: '#1d4ed8', fontWeight: 700 }}>{LEGAL.contactEmail}</a>
+        {' '}or reply to the email we sent you.
       </div>
     </div>
   );

@@ -30,6 +30,41 @@ export function roundLabel(roundNumber: number): string {
   return `Revision ${roundNumber - 1}`;
 }
 
+/** "Rev0" for the first proof, "Rev1" for revision 1 — the short form
+ *  stamped on attached proof file names, numbered like roundLabel. */
+export function roundFileTag(roundNumber: number): string {
+  return `Rev${Math.max(0, roundNumber - 1)}`;
+}
+
+/** Insert a round tag before a file's extension: "wrap.pdf" → "wrap - Rev1.pdf". */
+export function tagFileName(fileName: string, roundNumber: number): string {
+  const tag = roundFileTag(roundNumber);
+  const dot = fileName.lastIndexOf('.');
+  if (dot <= 0) return `${fileName} - ${tag}`;
+  return `${fileName.slice(0, dot)} - ${tag}${fileName.slice(dot)}`;
+}
+
+/**
+ * The round a send belongs to, read before it goes out so the email can
+ * name it: a fresh send opens the next round; a reminder or relink stays
+ * in the latest one. Best-effort — null when the rounds can't be read.
+ */
+export async function roundForSend(service: Db, jobId: string, opts: { reminder: boolean }): Promise<number | null> {
+  try {
+    const { data } = await service
+      .from('graphics_proof_rounds')
+      .select('round_number')
+      .eq('job_id', jobId);
+    const rounds = (data || []) as ProofRound[];
+    if (opts.reminder) {
+      return rounds.length > 0 ? Math.max(...rounds.map(r => Number(r.round_number) || 0)) : 1;
+    }
+    return nextRoundNumber(rounds);
+  } catch {
+    return null;
+  }
+}
+
 /** The number the next send should take. */
 export function nextRoundNumber(rounds: ProofRound[]): number {
   if (rounds.length === 0) return 1;

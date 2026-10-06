@@ -83,6 +83,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // Reading which NetSuite item labor bills to is admin (it exposes item
   // ids); setting it is super-admin, like the tax rate — it decides which
   // GL account every labor dollar posts to.
+  'src/app/api/admin/discount-item/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   'src/app/api/admin/labor-item/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   'src/app/api/admin/link-customer/route.ts': admin(),
   // The QuickBooks ledger import (migration 314 / R8-2). Driven from OUTSIDE
@@ -164,6 +165,8 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/calendar/sync-event/route.ts': staff(),
   'src/app/api/calendar/sync-graphics/route.ts': staff(),
   'src/app/api/calendar/sync-upfit/route.ts': staff(),
+  'src/app/api/camera-installs/[id]/route.ts': staff(),
+  'src/app/api/camera-installs/route.ts': staff(),
   'src/app/api/siri/key/route.ts': feature('schedule'),
   'src/app/api/siri/calendar-event/route.ts': token('iPhone Siri intent, no session: the per-device Siri key (only its hash stored in siri_keys, revoked on sign-out) is the credential, and authenticateSiriKey re-checks on every call that its owner is approved, not deactivated and still holds the schedule feature; the only write is one calendar_events row owned by that user', 'authenticateSiriKey('),
   'src/app/api/checkins/condition/route.ts': staff(),
@@ -238,6 +241,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cron/pickup-nudges/route.ts': cron('requireAdmin('),
   'src/app/api/cron/parts-sync/route.ts': cron('requireAdmin('),
   'src/app/api/cron/promised-back-check/route.ts': cron('requireAdmin('),
+  'src/app/api/cron/estimate-review-reminder/route.ts': cron('requireAdmin('),
   'src/app/api/cron/proof-reminder-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/prospect-reminder-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/quote-followup-check/route.ts': cron('requireAdmin('),
@@ -301,6 +305,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/graphics-jobs/[id]/download-all/route.ts': staff(),
   'src/app/api/help/route.ts': staff(),
   'src/app/api/graphics-jobs/[id]/send-for-approval/route.ts': staff(),
+  'src/app/api/graphics-jobs/[id]/sources/route.ts': staff(),
   'src/app/api/graphics-jobs/[id]/vehicles/route.ts': staff(),
   'src/app/api/graphics-jobs/assign-po/route.ts': staff(),
   'src/app/api/graphics-jobs/rank/route.ts': admin(),

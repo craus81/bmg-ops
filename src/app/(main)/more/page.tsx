@@ -75,6 +75,7 @@ export default function MorePage() {
         { title: 'Schedule', sub: 'Installs, upfits & events — two-way synced with Google Calendar', path: '/admin/schedule', show: F('schedule') },
         { title: 'Upfit Projects', sub: 'Track upfit jobs from estimate to completion', path: '/upfit', show: F('upfit_projects') },
         { title: 'Scan & Log', sub: 'Scan VINs and log work', path: '/scan', show: F('scan') },
+        { title: 'Camera Installs', sub: 'Scan VIN, camera IMEI & GO9B IMEI for T-Mobile camera installs · CSV & PDF', path: '/camera-installs', show: F('in_shop') },
         { title: 'Proof Search', sub: 'Find proof artwork in Dropbox by customer or part', path: '/admin/proof-search', show: F('proof_search') },
       ],
     },

@@ -62,6 +62,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       step: 'labor_item',
     }, { status: 409 });
   }
+  if (build.discountSkipped) {
+    return NextResponse.json({
+      error: `The estimate has a $${build.discountAmount.toFixed(2)} discount but NetSuite has no discount item (Settings → NetSuite Discount Item). Pushing now would bill the full price — nothing was changed.`,
+      step: 'discount_item',
+    }, { status: 409 });
+  }
   if (build.unmappedLineDescriptions.length > 0) {
     return NextResponse.json({
       error: `These lines can't be mapped to NetSuite (create the FS-CUSTOM placeholder item): ${build.unmappedLineDescriptions.join(', ')}. Nothing was changed.`,

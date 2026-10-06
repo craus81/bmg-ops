@@ -31,7 +31,7 @@ import { apiErrorMessage } from '@/lib/api-error-message';
 import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
-import { roundCentsHalfEven, normalizeVehicleCount, perVehicleAmount } from '@/lib/estimate-totals';
+import { discountLabel, discountSplit, normalizeDiscount, roundCentsHalfEven, normalizeVehicleCount, perVehicleAmount } from '@/lib/estimate-totals';
 import { resolveLineTaxability } from '@/lib/line-taxability';
 import { deltaLabel, type EstimateDiff } from '@/lib/estimate-diff';
 import { type DraftLine } from '@/lib/paste-to-estimate';
@@ -263,6 +263,10 @@ interface Estimate {
   labor_hours_override: number | null;
   subtotal: number;
   labor_total: number;
+  /** Migration 342: off the whole job, before tax. */
+  discount_type?: 'percent' | 'amount' | null;
+  discount_value?: number | null;
+  discount_amount?: number | null;
   tax_amount: number;
   grand_total: number;
   netsuite_estimate_id: string | null;
@@ -537,6 +541,10 @@ export default function EstimatesPage() {
   // Company default labor rate, read like companyTaxRateRef above.
   const companyLaborRateRef = useRef(DEFAULT_LABOR_RATE);
   const [laborOverride, setLaborOverride] = useState<number | null>(null);
+  // Discount off the whole job (migration 342). The input is kept as typed
+  // text so "12." survives while typing; blank = no discount.
+  const [discountType, setDiscountType] = useState<'percent' | 'amount'>('percent');
+  const [discountInput, setDiscountInput] = useState('');
   const [lines, setLines] = useState<LineItem[]>([]);
   // Margin floor (%) below which a quote gets flagged — admin-set, shared
   // with the wrap-quote builder via the quote_settings singleton.
@@ -1110,7 +1118,7 @@ export default function EstimatesPage() {
   // save retires it. See src/lib/estimate-draft.ts.
   const draftFields = {
     editingId, title, notes, customerId, prospectId, customerName, customerNsId,
-    taxRate, taxExempt, vehicleCount, laborRate, laborOverride, lines,
+    taxRate, taxExempt, vehicleCount, laborRate, laborOverride, discountType, discountInput, lines,
     vin, unitNumber, vehiclePlatformId, vehicleOther, vehicleOtherMode,
     vehicleYear, vehicleWheelbase, vehicleRoof, vehicleCab, vehicleBed,
     installInstructions, onSiteContactName, onSiteContactPhone,
@@ -1190,6 +1198,8 @@ export default function EstimatesPage() {
     setVehicleCount(normalizeVehicleCount((f as any).vehicleCount));
     setLaborRate(typeof f.laborRate === 'number' ? f.laborRate : companyLaborRateRef.current);
     setLaborOverride(typeof f.laborOverride === 'number' ? f.laborOverride : null);
+    setDiscountType(f.discountType === 'amount' ? 'amount' : 'percent');
+    setDiscountInput(typeof f.discountInput === 'string' ? f.discountInput : '');
     setLines(Array.isArray(f.lines)
       ? f.lines.map((l: any) => ({ ...l, key: l.key || genKey() }))
       : []);
@@ -1624,7 +1634,7 @@ export default function EstimatesPage() {
   // Per line, each rounded to cents, ties to the even cent — the same math
   // computeTotals runs server-side, which is the same math NetSuite books.
   // Taxing the combined base in one go drifts a cent or two off the invoice.
-  const taxAmount = taxExempt
+  const lineTaxAmount = taxExempt
     ? 0
     : lines.reduce((s, l) => (isTaxedLine(l)
       ? s + roundCentsHalfEven(fleetQty(l) * l.unit_price * taxRate)
@@ -1632,7 +1642,13 @@ export default function EstimatesPage() {
   // Compare at the precision the rate is displayed and stored at — a float
   // round-trip through the database is not a "different rate".
   const atCompanyRate = Math.abs(rateToPct(taxRate) - rateToPct(companyTaxRate)) < 0.005;
-  const grandTotal = subtotal + laborTotal + taxAmount;
+  // Discount (migration 342): off the whole job, spread over taxed and
+  // untaxed dollars so the taxed share lowers the tax. Same discountSplit
+  // the server stores and the NetSuite push sends.
+  const discount = normalizeDiscount(discountType, discountInput);
+  const discountCalc = discountSplit(subtotal + laborTotal, taxableAmount, discount);
+  const taxAmount = taxExempt ? 0 : lineTaxAmount - roundCentsHalfEven(discountCalc.taxedPortion * taxRate);
+  const grandTotal = subtotal + laborTotal - discountCalc.amount + taxAmount;
   const perVehicle = perVehicleAmount(grandTotal, units);
 
   // Refresh which lines are untaxed whenever the line-up of items changes.
@@ -1761,7 +1777,11 @@ export default function EstimatesPage() {
   // sides cannot move a ratio — but per-vehicle dollars under a fleet total
   // would read as the job's margin and be off by the vehicle count.
   const trueCostTotal = costedLines.reduce((s, l) => s + fleetQty(l) * lineTrueCost(l), 0);
-  const costedRevenue = costedLines.reduce((s, l) => s + fleetQty(l) * l.unit_price, 0);
+  // A discount comes off every dollar of the job alike, so the parts it
+  // covers earn that much less (the same scaling send-for-approval applies
+  // before the margin floor check).
+  const discountRatio = subtotal + laborTotal > 0 ? discountCalc.amount / (subtotal + laborTotal) : 0;
+  const costedRevenue = costedLines.reduce((s, l) => s + fleetQty(l) * l.unit_price, 0) * (1 - discountRatio);
   const marginDollars = costedRevenue - trueCostTotal;
   const marginPct = costedRevenue > 0 ? (marginDollars / costedRevenue) * 100 : null;
   const uncostedCount = lines.length - costedLines.length;
@@ -1811,6 +1831,8 @@ export default function EstimatesPage() {
         vehicle_count: units,
         labor_rate: laborRate,
         labor_hours_override: laborOverride,
+        discount_type: discount ? discount.type : null,
+        discount_value: discount ? discount.value : null,
         install_instructions: installInstructions,
         on_site_contact_name: onSiteContactName,
         on_site_contact_phone: onSiteContactPhone,
@@ -2112,8 +2134,24 @@ export default function EstimatesPage() {
       + unmatchedNote;
     if (!(await dialog.confirm(confirmMsg))) return;
 
-    // Save first to ensure latest data
-    await saveEstimate(isSync ? 'pushed' : 'draft');
+    // Save first to ensure latest data -- except on an accepted estimate.
+    // Its contents are frozen, so the save could only trip the revision
+    // lock's "why are you changing it?" prompt; push the accepted document
+    // as stored instead, the same way View/Print and Email PDF do.
+    const est = await freshEstimateRow(editingId);
+    if (isContentFrozen(est)) {
+      if (draftSerialized !== draftBaselineRef.current && !(await dialog.confirm(
+        'The customer accepted this estimate, so it is locked and the changes on screen are NOT saved. '
+        + 'NetSuite will get the accepted document, not what you are looking at.\n\n'
+        + 'Push the accepted document anyway? To quote the changes instead, use "Duplicate as New Revision".',
+        { confirmLabel: 'Push accepted document', cancelLabel: 'Go back' },
+      ))) return;
+    } else {
+      const saved = await saveEstimate(isSync ? 'pushed' : 'draft');
+      // Refused or cancelled: pushing something that silently differs from
+      // the screen is worse than not pushing.
+      if (!saved) return;
+    }
 
     if (isSync) {
       setSyncing(true);
@@ -2914,6 +2952,8 @@ export default function EstimatesPage() {
     }
     setLaborRate(est.labor_rate || companyLaborRateRef.current);
     setLaborOverride(est.labor_hours_override);
+    setDiscountType(est.discount_type === 'amount' ? 'amount' : 'percent');
+    setDiscountInput(est.discount_type && est.discount_value != null ? String(Number(est.discount_value)) : '');
     setVin(est.vin || '');
     setUnitNumber(est.unit_number || '');
     setVehiclePlatformId(est.vehicle_platform_id || null);
@@ -3219,6 +3259,8 @@ export default function EstimatesPage() {
     setRevisionDiff(null);
     setLaborRate(companyLaborRateRef.current);
     setLaborOverride(null);
+    setDiscountType('percent');
+    setDiscountInput('');
     setLines([]);
     setPartSearch('');
     setPartResults([]);
@@ -4223,59 +4265,22 @@ export default function EstimatesPage() {
           </div>
         )}
 
-        {/* Part search + visual catalog browser (N4-A) */}
+        {/* Part search + visual catalog browser (N4-A). The search box gets its
+            own full-width line so it can't be squeezed to a sliver on a phone;
+            the action buttons wrap underneath it. */}
         {(
-          <div style={{ position: 'relative', marginBottom: '8px', display: 'flex', gap: '8px' }}>
+          <div style={{ marginBottom: '8px' }}>
+          <div style={{ position: 'relative', marginBottom: '8px' }}>
+            <span aria-hidden style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', fontSize: '13px', color: 'var(--text-label)', pointerEvents: 'none' }}>🔍</span>
             <input
               ref={partSearchRef}
-              placeholder="Search parts catalog to add..."
+              type="search"
+              aria-label="Search parts to add"
+              placeholder="Search parts to add (part # or name)…"
               value={partSearch}
               onChange={e => setPartSearch(e.target.value)}
-              style={{ ...inputStyle, background: 'var(--subtle-bg)', flex: 1 }}
+              style={{ ...inputStyle, background: 'var(--subtle-bg)', padding: '10px 10px 10px 32px', fontSize: '13px' }}
             />
-            <button
-              type="button"
-              onClick={() => setShowCatalogBrowser(true)}
-              title="Browse the catalog by category and vendor, with photos"
-              style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
-            >
-              Browse Catalog
-            </button>
-            <button
-              type="button"
-              onClick={() => { setDraftError(null); setDraftResult(null); setDraftFromQbo(null); setDraftOpen(true); }}
-              title="Paste an RFQ email and get a reviewable grid of candidate lines. Nothing is added until you accept it."
-              style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.3)', background: 'rgba(167,139,250,0.08)', color: '#a78bfa', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
-            >
-              Draft from Text
-            </button>
-            <button
-              type="button"
-              onClick={addGraphics}
-              disabled={saving}
-              title="Save this estimate and price vehicle graphics in the wrap-quote builder — the result comes back as lines on this estimate"
-              style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: saving ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}
-            >
-              🎨 Add Graphics
-            </button>
-            <button
-              type="button"
-              onClick={openQuickGraphics}
-              title="Skip the estimator — type in square footage, vinyl type, and labor directly"
-              style={{ padding: '8px 14px', borderRadius: '8px', border: `1px solid ${quickGfxOpen ? 'rgba(96,165,250,0.4)' : 'var(--border)'}`, background: quickGfxOpen ? 'rgba(96,165,250,0.08)' : 'var(--card)', color: quickGfxOpen ? '#60a5fa' : 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
-            >
-              + Graphics Line
-            </button>
-            {lines.some(l => l.part_id && !l.is_custom) && (
-              <button
-                type="button"
-                onClick={saveLinesAsPackage}
-                title="Save this estimate's catalog lines as a reusable package (Browse Catalog → Packages)"
-                style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
-              >
-                Save as Package
-              </button>
-            )}
             {(partResults.length > 0 || kitResults.length > 0 || (isAdmin && !partSearching && partSearch.trim().length >= 2)) && (
               <div style={{
                 position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
@@ -4354,6 +4359,52 @@ export default function EstimatesPage() {
                 )}
               </div>
             )}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+            <button
+              type="button"
+              onClick={() => setShowCatalogBrowser(true)}
+              title="Browse the catalog by category and vendor, with photos"
+              className="est-part-action" style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              <span className="est-lbl-full">Browse Catalog</span><span className="est-lbl-short">Browse</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => { setDraftError(null); setDraftResult(null); setDraftFromQbo(null); setDraftOpen(true); }}
+              title="Paste an RFQ email and get a reviewable grid of candidate lines. Nothing is added until you accept it."
+              className="est-part-action" style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.3)', background: 'rgba(167,139,250,0.08)', color: '#a78bfa', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              <span className="est-lbl-full">Draft from Text</span><span className="est-lbl-short">Draft</span>
+            </button>
+            <button
+              type="button"
+              onClick={addGraphics}
+              disabled={saving}
+              title="Save this estimate and price vehicle graphics in the wrap-quote builder — the result comes back as lines on this estimate"
+              className="est-part-action" style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: saving ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}
+            >
+              <span className="est-lbl-full">🎨 Add Graphics</span><span className="est-lbl-short">🎨 Graphics</span>
+            </button>
+            <button
+              type="button"
+              onClick={openQuickGraphics}
+              title="Skip the estimator — type in square footage, vinyl type, and labor directly"
+              className="est-part-action" style={{ padding: '8px 14px', borderRadius: '8px', border: `1px solid ${quickGfxOpen ? 'rgba(96,165,250,0.4)' : 'var(--border)'}`, background: quickGfxOpen ? 'rgba(96,165,250,0.08)' : 'var(--card)', color: quickGfxOpen ? '#60a5fa' : 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              <span className="est-lbl-full">+ Graphics Line</span><span className="est-lbl-short">+ Line</span>
+            </button>
+            {lines.some(l => l.part_id && !l.is_custom) && (
+              <button
+                type="button"
+                onClick={saveLinesAsPackage}
+                title="Save this estimate's catalog lines as a reusable package (Browse Catalog → Packages)"
+                className="est-part-action" style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                <span className="est-lbl-full">Save as Package</span><span className="est-lbl-short">Package</span>
+              </button>
+            )}
+          </div>
           </div>
         )}
 
@@ -5065,6 +5116,42 @@ export default function EstimatesPage() {
           </div>
         </div>
 
+        <div style={{ marginBottom: '10px' }}>
+          <div style={labelStyle}>Discount</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            {(['percent', 'amount'] as const).map(t => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setDiscountType(t)}
+                title={t === 'percent' ? 'Percent off the whole job' : 'Dollars off the whole job'}
+                style={{
+                  padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 800, cursor: 'pointer',
+                  border: `1px solid ${discountType === t ? theme.orange : 'var(--border)'}`,
+                  background: discountType === t ? theme.orange : 'transparent',
+                  color: discountType === t ? '#fff' : 'var(--text-label)',
+                }}
+              >
+                {t === 'percent' ? '%' : '$'}
+              </button>
+            ))}
+            <input
+              type="number"
+              inputMode="decimal"
+              min={0}
+              max={discountType === 'percent' ? 100 : undefined}
+              step={discountType === 'percent' ? 0.5 : 0.01}
+              style={{ ...inputStyle, flex: 1 }}
+              value={discountInput}
+              onChange={e => setDiscountInput(e.target.value)}
+              placeholder={discountType === 'percent' ? 'e.g. 10 (blank = none)' : 'e.g. 250 (blank = none)'}
+              title={units > 1 && discountType === 'amount'
+                ? 'Dollars off the WHOLE order (all vehicles), before tax.'
+                : 'Comes off the whole job (parts + labor), before tax.'}
+            />
+          </div>
+        </div>
+
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
           <div style={{ flex: 1 }}>
             <div style={labelStyle}>Tax Rate</div>
@@ -5171,6 +5258,12 @@ export default function EstimatesPage() {
             <span>Labor ({effectiveLaborHours.toFixed(1)}h × {fmt(laborRate)}/hr)</span>
             <span>{fmt(laborTotal)}</span>
           </div>
+          {discountCalc.amount > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#22c55e', marginBottom: '4px' }}>
+              <span>{discountLabel(discount?.type, discount?.value)}</span>
+              <span>−{fmt(discountCalc.amount)}</span>
+            </div>
+          )}
           {!taxExempt && (
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-body)', marginBottom: '4px' }}>
               <span>

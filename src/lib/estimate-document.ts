@@ -17,7 +17,7 @@
  */
 
 import type { EmailSignature } from './email-signature';
-import { normalizeVehicleCount, perVehicleAmount } from './estimate-totals';
+import { discountLabel, normalizeVehicleCount, perVehicleAmount } from './estimate-totals';
 import { toKitDisplayLines } from './estimate-kits';
 import {
   escHtml,
@@ -178,6 +178,9 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
   const totals: QuoteDocTotalRow[] = [{ labelHtml: 'Subtotal', valueHtml: money(est.subtotal) }];
   if (Number(est.labor_total) > 0) {
     totals.push({ labelHtml: `Labor (${escHtml(laborHours)} hrs @ $${escHtml(est.labor_rate)}/hr)`, valueHtml: money(est.labor_total) });
+  }
+  if (Number(est.discount_amount) > 0) {
+    totals.push({ labelHtml: escHtml(discountLabel(est.discount_type, est.discount_value)), valueHtml: `&minus;${money(est.discount_amount)}` });
   }
   // Estimate tax_rate is a FRACTION — rendered as (rate*100)%.
   if (!est.tax_exempt && Number(est.tax_amount) > 0) {

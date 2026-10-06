@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { fmtInches } from '@/lib/format';
+import {
+  ESTIMATE_LINK_COLUMNS, WRAP_QUOTE_LINK_COLUMNS,
+  estimateJobPo, estimateVehicleLine, joinBlocks, wrapQuoteJobFields,
+} from '@/lib/graphics-links';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 
 export const dynamic = 'force-dynamic';
@@ -68,7 +71,7 @@ export async function POST(req: NextRequest) {
 
     const { data: quote, error: qErr } = await supabase
       .from('wrap_quotes')
-      .select('id, quote_number, vehicle_description, customer_id, customer, project_type, project_notes, measurements, total_area_sqft')
+      .select(WRAP_QUOTE_LINK_COLUMNS)
       .eq('id', quoteId)
       .single();
     if (qErr || !quote) {
@@ -78,7 +81,7 @@ export async function POST(req: NextRequest) {
     if (mode === 'link') {
       const { data: existing, error: exErr } = await supabase
         .from('graphics_jobs')
-        .select('id, job_number, wrap_quote_id, status')
+        .select('id, job_number, wrap_quote_id, estimate_id, status')
         .eq('id', existingJobId)
         .single();
       if (exErr || !existing) {
@@ -94,6 +97,8 @@ export async function POST(req: NextRequest) {
         .from('graphics_jobs')
         .update({
           wrap_quote_id: quoteId,
+          // The quote's estimate/SO comes along when the job has none.
+          ...(quote.estimate_id && !existing.estimate_id ? { estimate_id: quote.estimate_id } : {}),
           updated_at: new Date().toISOString(),
         })
         .eq('id', existingJobId);
@@ -152,20 +157,21 @@ export async function POST(req: NextRequest) {
 
     // Seed the production specs from the quote's measurement snapshot: the
     // films become vinyl/laminate, each drawn area becomes a content line.
-    const measurements: any[] = Array.isArray(quote.measurements) ? quote.measurements : [];
-    const filmNames = [...new Set(measurements.map(m => m.substrate?.film_name || m.substrate?.name).filter(Boolean))];
-    const laminateNames = [...new Set(measurements.map(m => m.substrate?.laminate_name).filter(Boolean))];
-    const areaLines = measurements.map(m => {
-      const qty = Math.max(1, Number(m.qty) || 1);
-      const dims = `${fmtInches(m.dim1_in)}" × ${fmtInches(m.dim2_in)}"`;
-      const film = m.substrate?.name ? ` — ${m.substrate.name}` : '';
-      return `${m.name || 'Area'}: ${qty > 1 ? `${qty}× ` : ''}${dims}${film}`;
-    });
-    const totalSqft = Number(quote.total_area_sqft) || 0;
-    const content = [
-      ...areaLines,
-      totalSqft > 0 ? `Total coverage: ${totalSqft.toFixed(1)} ft²` : null,
-    ].filter(Boolean).join('\n') || null;
+    const fields = wrapQuoteJobFields(quote);
+
+    // Already on an estimate/SO? The job links to it too, and takes the
+    // vehicle (VIN, unit) and PO # from it, same as a job made from the
+    // estimate.
+    let estimate: any = null;
+    if (quote.estimate_id) {
+      const { data } = await supabase
+        .from('estimates')
+        .select(ESTIMATE_LINK_COLUMNS)
+        .eq('id', quote.estimate_id)
+        .maybeSingle();
+      estimate = data;
+    }
+    const po = estimateJobPo(estimate);
 
     const customerName: string | null = quote.customer?.name || null;
     const title = [customerName, quote.vehicle_description || 'Vehicle wrap']
@@ -192,13 +198,15 @@ export async function POST(req: NextRequest) {
         customer: customerName,
         customer_netsuite_id: customerNetsuiteId,
         quantity: 1,
-        content,
-        notes: [quote.project_type, quote.project_notes].filter(Boolean).join(' — ') || null,
-        vinyl_type: filmNames.length > 0 ? filmNames.join(', ') : null,
-        laminate: laminateNames.length > 0 ? laminateNames.join(', ') : null,
+        content: joinBlocks(estimateVehicleLine(estimate), po.soNote, fields.content),
+        notes: fields.notes,
+        vinyl_type: fields.vinylType,
+        laminate: fields.laminate,
+        po_number: po.poNumber,
         priority: 'normal',
         status: 'received',
         wrap_quote_id: quoteId,
+        estimate_id: estimate?.id || null,
         assigned_to: defaultAssignee?.id || null,
         created_by: userId || auth.user.id,
       })

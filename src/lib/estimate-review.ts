@@ -87,3 +87,31 @@ export function canDecideReview(
   if (state.status !== 'pending' || !userId) return false;
   return state.reviewerId === userId || isAdmin;
 }
+
+/**
+ * Overdue review reminder (owner ask 2026-10-06): reps should get quotes to
+ * customers fast, but with a second pair of eyes — so a review still pending
+ * after this many SHOP hours (weekdays 7:00–3:30 Central, less lunch; see
+ * shop-hours.ts) pings every admin to go look. Shop hours, not clock hours,
+ * so a 2 PM Friday send reminds Monday morning instead of Friday night.
+ */
+export const REVIEW_REMINDER_SHOP_HOURS = 6;
+
+/**
+ * True when a pending review has waited REVIEW_REMINDER_SHOP_HOURS of shop
+ * time and this round hasn't been reminded yet. A round is the span since
+ * internal_review_requested_at: a reminder stamped before the latest
+ * request belongs to an earlier round, so a re-send earns a new reminder.
+ */
+export function reviewReminderDue(
+  estimate: { internal_review_status?: string | null; internal_review_requested_at?: string | null; internal_review_reminded_at?: string | null },
+  nowMs: number,
+  shopMsBetween: (fromMs: number, toMs: number) => number,
+): boolean {
+  if (estimate.internal_review_status !== 'pending') return false;
+  const requestedMs = estimate.internal_review_requested_at ? new Date(estimate.internal_review_requested_at).getTime() : NaN;
+  if (!Number.isFinite(requestedMs)) return false;
+  const remindedMs = estimate.internal_review_reminded_at ? new Date(estimate.internal_review_reminded_at).getTime() : NaN;
+  if (Number.isFinite(remindedMs) && remindedMs >= requestedMs) return false;
+  return shopMsBetween(requestedMs, nowMs) >= REVIEW_REMINDER_SHOP_HOURS * 3_600_000;
+}

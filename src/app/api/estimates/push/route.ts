@@ -6,8 +6,10 @@ import { estimateContextMemo } from '@/lib/estimate-document';
 import { resolveLaborItem } from '@/lib/labor-item';
 import { resolveOrPromoteByName } from '@/lib/promote-prospect';
 import { kitTaggedDescription } from '@/lib/estimate-kits';
-import { nsLineTaxField } from '@/lib/netsuite';
+import { nsItemLine, type NsPushLine } from '@/lib/netsuite';
+import { buildDiscountLines, estimateDiscountSplit, resolveDiscountItem } from '@/lib/discount-item';
 import { untaxedFlag } from '@/lib/so-sync';
+import { normalizeVehicleCount } from '@/lib/estimate-totals';
 
 export const dynamic = 'force-dynamic';
 
@@ -81,7 +83,7 @@ async function getOAuthHelpers(config: ReturnType<typeof getNetSuiteConfig>) {
 async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfig>, payload: {
   customerId: string;
   memo?: string;
-  lineItems: { itemId: string; quantity: number; rate: number; description?: string; taxable?: false }[];
+  lineItems: NsPushLine[];
   taxExempt: boolean;
   vin?: string | null;
   /** Customer's PO → the estimate's PO/Reference field (otherRefNum). */
@@ -94,13 +96,7 @@ async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
   const authData = oauth.authorize({ url, method: 'POST' }, token);
   const authHeader = oauth.toHeader(authData).Authorization;
 
-  const items = payload.lineItems.map((li) => ({
-    item: { id: li.itemId },
-    quantity: li.quantity,
-    rate: li.rate,
-    ...(li.description ? { description: li.description } : {}),
-    ...nsLineTaxField(li),
-  }));
+  const items = payload.lineItems.map((li) => nsItemLine(li, { pinPrice: false }));
 
   const body: any = {
     entity: { id: payload.customerId },
@@ -181,7 +177,7 @@ async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
 async function updateNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfig>, nsEstimateId: string, payload: {
   customerId: string;
   memo?: string;
-  lineItems: { itemId: string; quantity: number; rate: number; description?: string; taxable?: false }[];
+  lineItems: NsPushLine[];
   taxExempt: boolean;
   vin?: string | null;
   poNumber?: string | null;
@@ -195,13 +191,7 @@ async function updateNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
   const authData = oauth.authorize({ url, method: 'PATCH' }, token);
   const authHeader = oauth.toHeader(authData).Authorization;
 
-  const items = payload.lineItems.map((li) => ({
-    item: { id: li.itemId },
-    quantity: li.quantity,
-    rate: li.rate,
-    ...(li.description ? { description: li.description } : {}),
-    ...nsLineTaxField(li),
-  }));
+  const items = payload.lineItems.map((li) => nsItemLine(li, { pinPrice: false }));
 
   const body: any = {
     entity: { id: payload.customerId },
@@ -389,10 +379,16 @@ export async function POST(req: NextRequest) {
     // convert-to-so) rather than being silently dropped. If FS-CUSTOM isn't
     // set up in NetSuite yet, the line is reported back as unmapped instead
     // of vanishing without a trace.
-    const nsLineItems: { itemId: string; quantity: number; rate: number; description?: string; taxable?: false }[] = [];
+    const nsLineItems: NsPushLine[] = [];
     const customLineDescriptions: string[] = [];
     const unmappedLineDescriptions: string[] = [];
     let customItemId: string | null = null;
+    // Fleet estimate (vehicle_count > 1, migration 304): quantities are per
+    // vehicle and the quote is for all of them, exactly as buildSoLineItems
+    // pushes the sales order. Without it the NetSuite estimate showed one
+    // vehicle's worth while the discount line (a whole-order figure) and the
+    // signed total covered the fleet.
+    const units = normalizeVehicleCount(estimate.vehicle_count);
 
     for (const line of lines) {
       // A qty-0 line totals to $0 on the customer's document — never send
@@ -402,7 +398,7 @@ export async function POST(req: NextRequest) {
       if (line.netsuite_item_id) {
         nsLineItems.push({
           itemId: line.netsuite_item_id,
-          quantity: line.quantity,
+          quantity: (parseFloat(line.quantity) || 0) * units,
           rate: line.unit_price,
           description: kitTaggedDescription(line.description || undefined, line),
           ...untaxedFlag(line),
@@ -420,7 +416,7 @@ export async function POST(req: NextRequest) {
       }
       nsLineItems.push({
         itemId: customItemId,
-        quantity: line.quantity,
+        quantity: (parseFloat(line.quantity) || 0) * units,
         rate: line.unit_price,
         description: kitTaggedDescription(line.notes ? `${label} (${line.notes})` : label, line),
         ...untaxedFlag(line),
@@ -455,6 +451,25 @@ export async function POST(req: NextRequest) {
         console.warn('Could not resolve a NetSuite labor item — labor not pushed');
       }
     }
+    // The discount (migration 342) goes last, as a taxed line for its share
+    // on taxed parts and an untaxed line for the rest (src/lib/discount-item).
+    // No discount item means NetSuite would quote the full price, so the
+    // push stops and says so instead of sending a copy that disagrees.
+    const discountSplitNow = estimateDiscountSplit(estimate, lines);
+    if (discountSplitNow.amount > 0) {
+      const { item: discountItem, error: discountErr } = await resolveDiscountItem(supabase);
+      if (!discountItem) {
+        await releaseClaim();
+        return NextResponse.json({
+          error: discountErr
+            ? `This estimate has a $${discountSplitNow.amount.toFixed(2)} discount, but looking up the NetSuite discount item failed (${discountErr}). Nothing was pushed.`
+            : `This estimate has a $${discountSplitNow.amount.toFixed(2)} discount, but NetSuite has no discount item. Create a Discount item in NetSuite (or name one in Settings → NetSuite Discount Item), then push again. Nothing was pushed.`,
+          step: 'discount_item',
+        }, { status: 409 });
+      }
+      nsLineItems.push(...buildDiscountLines(estimate, lines, discountItem));
+    }
+
     // Echoed on both responses so the builder can name the money that did
     // not make it (or the item it billed to).
     const laborReport = {
