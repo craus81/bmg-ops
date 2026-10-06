@@ -529,3 +529,12 @@ button {
     font-size: 16px !important;
   }
 }
+
+/* Estimate builder part-search buttons: shorter labels on phones so the
+   row fits under the full-width search box. */
+.est-lbl-short { display: none; }
+@media (max-width: 640px) {
+  .est-lbl-full { display: none; }
+  .est-lbl-short { display: inline; }
+  .est-part-action { padding: 8px 10px !important; flex: 1 1 auto; }
+}
