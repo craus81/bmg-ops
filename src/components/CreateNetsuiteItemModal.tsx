@@ -276,11 +276,11 @@ export function CreateNetsuiteItemModal({
             </div>
           )}
           <div>
-            <label style={labelStyle}>Display Name</label>
+            <label style={labelStyle}>Display Name (shows as Description on estimates)</label>
             <input value={displayName} onChange={e => setDisplayName(e.target.value)} style={inputStyle} />
           </div>
           <div>
-            <label style={labelStyle}>Description</label>
+            <label style={labelStyle}>Long Description (parts record only)</label>
             <textarea value={description} onChange={e => setDescription(e.target.value)} rows={2} style={{ ...inputStyle, resize: 'vertical' }} />
           </div>
           <div>
