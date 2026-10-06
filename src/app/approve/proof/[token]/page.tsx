@@ -26,7 +26,7 @@ export default function ProofApprovalPage() {
       noun="proof"
       agreementText={PROOF_AGREEMENT_TEXT}
       copy={{
-        invalid: 'This approval link is no longer valid. If a newer email was sent, please use that one — otherwise contact BMG Fleet Installations.',
+        invalid: 'A newer proof email has probably replaced this link. Please open the most recent proof email from BMG.',
         acceptLabel: 'Approve Proof',
         rejectSendLabel: 'Send change request',
         rejectPlaceholder: 'What would you like changed on this proof?',
