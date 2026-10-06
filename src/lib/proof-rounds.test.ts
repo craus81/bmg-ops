@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   roundLabel, nextRoundNumber, addressingFor, summarizeRounds, roundChip,
-  customerRevisionStats, type ProofRound, type JobRoundCount,
+  customerRevisionStats, tagFileName, roundForSend, type ProofRound, type JobRoundCount,
 } from './proof-rounds';
 
 const round = (n: number, over: Partial<ProofRound> = {}): ProofRound => ({
@@ -108,5 +108,25 @@ describe('customerRevisionStats', () => {
     const { rows, excludedInFlight } = customerRevisionStats([]);
     expect(rows).toEqual([]);
     expect(excludedInFlight).toBe(0);
+  });
+});
+
+describe('tagFileName', () => {
+  it('stamps the revision before the extension, numbered like roundLabel', () => {
+    expect(tagFileName('wrap.pdf', 1)).toBe('wrap - Rev0.pdf');
+    expect(tagFileName('wrap.final.pdf', 3)).toBe('wrap.final - Rev2.pdf');
+    expect(tagFileName('proof', 2)).toBe('proof - Rev1');
+  });
+});
+
+describe('roundForSend', () => {
+  const db = (rows: { round_number: number }[] | null) => ({
+    from: () => ({ select: () => ({ eq: async () => ({ data: rows }) }) }),
+  });
+  it('a fresh send takes the next round; a reminder stays in the latest', async () => {
+    expect(await roundForSend(db([]), 'j', { reminder: false })).toBe(1);
+    expect(await roundForSend(db([{ round_number: 1 }, { round_number: 2 }]), 'j', { reminder: false })).toBe(3);
+    expect(await roundForSend(db([{ round_number: 1 }, { round_number: 2 }]), 'j', { reminder: true })).toBe(2);
+    expect(await roundForSend(db(null), 'j', { reminder: true })).toBe(1);
   });
 });

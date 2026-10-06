@@ -239,6 +239,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cron/pickup-nudges/route.ts': cron('requireAdmin('),
   'src/app/api/cron/parts-sync/route.ts': cron('requireAdmin('),
   'src/app/api/cron/promised-back-check/route.ts': cron('requireAdmin('),
+  'src/app/api/cron/estimate-review-reminder/route.ts': cron('requireAdmin('),
   'src/app/api/cron/proof-reminder-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/prospect-reminder-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/quote-followup-check/route.ts': cron('requireAdmin('),

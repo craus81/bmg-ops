@@ -685,6 +685,44 @@ export function transactionUrl(page: 'custinvc' | 'vendbill' | 'purchord', inter
   return `https://${accountForUrl}.app.netsuite.com/app/accounting/transactions/${page}.nl?id=${internalId}`;
 }
 
+const INVENTORY_ACCOUNTS = [
+  { key: 'asset', number: '19000', label: 'Inventory Asset', env: 'NETSUITE_INVENTORY_ASSET_ACCOUNT_ID' },
+  { key: 'cogs', number: '58000', label: 'Cost of Goods Sold', env: 'NETSUITE_INVENTORY_COGS_ACCOUNT_ID' },
+  { key: 'income', number: '47900', label: 'Sales', env: 'NETSUITE_INVENTORY_INCOME_ACCOUNT_ID' },
+] as const;
+
+let inventoryAccountCache: { asset: string; cogs: string; income: string } | null = null;
+
+/**
+ * Internal ids of the GL accounts a new inventory item is booked to. The REST
+ * record needs internal ids, not account numbers, so each number is looked up
+ * once per server instance; an env var per account overrides the lookup.
+ */
+async function inventoryItemAccounts(): Promise<{ asset: string; cogs: string; income: string } | { error: string }> {
+  if (inventoryAccountCache) return inventoryAccountCache;
+  const ids: Record<string, string> = {};
+  const missing: string[] = [];
+  for (const a of INVENTORY_ACCOUNTS) {
+    const envId = process.env[a.env];
+    if (envId) { ids[a.key] = envId; continue; }
+    try {
+      const result = await suiteqlQuery(
+        `SELECT id FROM account WHERE isinactive = 'F' AND acctnumber = '${a.number}' FETCH FIRST 1 ROWS ONLY`,
+      );
+      const id = result?.items?.[0]?.id;
+      if (id != null) ids[a.key] = id.toString();
+      else missing.push(`${a.number} ${a.label}`);
+    } catch (err: any) {
+      missing.push(`${a.number} ${a.label} (${err?.message || 'lookup failed'})`);
+    }
+  }
+  if (missing.length) {
+    return { error: `Could not find the NetSuite account${missing.length > 1 ? 's' : ''} for inventory items: ${missing.join(', ')}. Set ${INVENTORY_ACCOUNTS.map(a => a.env).join(' / ')} to the internal ids.` };
+  }
+  inventoryAccountCache = { asset: ids.asset, cogs: ids.cogs, income: ids.income };
+  return inventoryAccountCache;
+}
+
 export async function createItem(payload: {
   itemId: string;
   recordType: string; // e.g. 'serviceSaleItem', 'nonInventoryResaleItem', 'inventoryItem'
@@ -715,6 +753,17 @@ export async function createItem(payload: {
   // SuiteQL the subsidiary table (see docs/cni-vendor-bills.md); override via
   // NETSUITE_SUBSIDIARY_ID. Item subsidiary is a multi-select in REST.
   body.subsidiary = { items: [{ id: process.env.NETSUITE_SUBSIDIARY_ID || '2' }] };
+
+  // Inventory items are refused without GL accounts ("You must specify asset
+  // and COGS accounts for this inventory item"). BMG books them to 19000
+  // Inventory Asset / 58000 Cost of Goods Sold / 47900 Sales.
+  if (recordType === 'inventoryItem') {
+    const accounts = await inventoryItemAccounts();
+    if ('error' in accounts) return { success: false, error: accounts.error };
+    body.assetAccount = { id: accounts.asset };
+    body.cogsAccount = { id: accounts.cogs };
+    body.incomeAccount = { id: accounts.income };
+  }
 
   try {
     const response = await fetch(url, {

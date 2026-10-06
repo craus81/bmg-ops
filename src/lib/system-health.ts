@@ -39,6 +39,7 @@ export const HEALTH_MONITORS: HealthMonitor[] = [
   { syncType: 'at_risk_check', label: 'At-risk account sweep', intervalMinutes: 1440 },
   { syncType: 'quote_followup_check', label: 'Quote follow-up nudges', intervalMinutes: 1440 },
   { syncType: 'prospect_reminder_check', label: 'Prospect follow-up reminders', intervalMinutes: 1440 },
+  { syncType: 'estimate_review_reminder', label: 'Overdue estimate-review reminders', intervalMinutes: 60 },
   { syncType: 'proof_reminder_check', label: 'Proof-approval reminders', intervalMinutes: 1440 },
   { syncType: 'stuck_vehicle_check', label: 'Stuck-vehicle sweep', intervalMinutes: 1440 },
   { syncType: 'stale_purchase_request_check', label: 'Aging parts-request sweep', intervalMinutes: 1440 },
