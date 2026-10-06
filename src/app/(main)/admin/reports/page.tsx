@@ -8,7 +8,7 @@ interface ReportLink {
   title: string;
   blurb: string;
   href: string;
-  source: 'NetSuite' | 'FleetSuite' | 'QuickBooks + NetSuite' | 'Paychex';
+  source: 'NetSuite' | 'FleetSuite' | 'QuickBooks + NetSuite' | 'Paychex' | 'NetSuite + Paychex';
   /** Who the destination page actually admits. Omit for anyone who can
    *  reach this index. Listing a report someone will be bounced out of is a
    *  dead click, so the card is hidden instead of explaining itself. */
@@ -53,6 +53,13 @@ const REPORTS: ReportLink[] = [
     blurb: 'Labor cost from Paychex Flex (wages, employer taxes and benefits) by pay period, month, location, position and person, with overtime called out. Upload the Payroll Labor Cost CSV each payroll; it also sets the shop labor rate job costing uses, and the AI can answer questions about it.',
     href: '/admin/reports/paychex-payroll',
     source: 'Paychex',
+    visibility: 'financials',
+  },
+  {
+    title: 'Upfit vs Graphics',
+    blurb: 'Which side of the business makes the money: NetSuite revenue split by item (3M Vinyl, Graphics Install Labor, Graphics Removal and 06 part numbers are Graphics; everything else is Upfit) next to Paychex labor cost split by payroll role, by month, with what is left after labor.',
+    href: '/admin/reports/upfit-vs-graphics',
+    source: 'NetSuite + Paychex',
     visibility: 'financials',
   },
   {

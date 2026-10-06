@@ -448,6 +448,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/reports/paychex-payroll/route.ts': financials(),
   'src/app/api/reports/paychex-payroll/import/route.ts': financials(),
   'src/app/api/reports/paychex-payroll/links/route.ts': financials(),
+  'src/app/api/reports/upfit-vs-graphics/route.ts': financials(),
   'src/app/api/reports/graphics-costs/route.ts': money(),
   'src/app/api/reports/material-yield/route.ts': role(),
   'src/app/api/reports/proof-revisions/route.ts': admin(),
