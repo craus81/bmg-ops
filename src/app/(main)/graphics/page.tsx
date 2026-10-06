@@ -224,6 +224,8 @@ export default function GraphicsPage() {
   // submit writes estimate_id so the estimate's Graphics Jobs panel sees it.
   const [prefillEstimateLink, setPrefillEstimateLink] = useState<{
     estimateId: string; estimateNumber: string | null; customerNetsuiteId: string | null;
+    /** The estimate's wrap quote, when it has exactly one no job holds yet. */
+    wrapQuoteId: string | null;
   } | null>(null);
   // Set when a job page's Duplicate button opens the create modal
   // (?new=1&copyFrom=<id>). The form is filled from that job; the submit
@@ -452,8 +454,12 @@ export default function GraphicsPage() {
               part_numbers: p.partNumbers || [],
               part_number: p.partNumbers?.[0] || f.part_number,
               quantity: p.quantity || 1,
+              content: p.content || f.content,
               notes: p.notes || f.notes,
-              po_number: p.soNumber || f.po_number,
+              vinyl_type: p.vinylType || f.vinyl_type,
+              laminate: p.laminate || f.laminate,
+              // Customer's PO when the estimate has one, else the SO #.
+              po_number: p.poNumber || p.soNumber || f.po_number,
             }));
             if (p.customer) setCustomerSearch(p.customer);
             if (p.defaultAssigneeId) setCreateAssignees([p.defaultAssigneeId]);
@@ -461,8 +467,9 @@ export default function GraphicsPage() {
               estimateId: fromEstimate,
               estimateNumber: p.estimateNumber || null,
               customerNetsuiteId: p.customerNetsuiteId || null,
+              wrapQuoteId: p.wrapQuoteId || null,
             });
-            setPrefillNote(`Filled in from ${p.soNumber ? `SO #${p.soNumber} (estimate ${p.estimateNumber})` : `estimate ${p.estimateNumber}`}. Check it over, then create.`);
+            setPrefillNote(`Filled in from ${p.soNumber ? `SO #${p.soNumber} (estimate ${p.estimateNumber})` : `estimate ${p.estimateNumber}`}${p.wrapQuoteNumber ? ` and wrap quote ${p.wrapQuoteNumber}` : ''}. Check it over, then create.`);
           } catch (e: any) {
             setPrefillNote(`Could not read the estimate (${e?.message || 'unknown error'}) — fill the job in by hand.`);
           }
@@ -826,6 +833,7 @@ export default function GraphicsPage() {
         // …and to the source estimate / SO when opened from one.
         ...(prefillEstimateLink ? {
           estimate_id: prefillEstimateLink.estimateId,
+          ...(prefillEstimateLink.wrapQuoteId ? { wrap_quote_id: prefillEstimateLink.wrapQuoteId } : {}),
           ...(prefillEstimateLink.customerNetsuiteId ? { customer_netsuite_id: prefillEstimateLink.customerNetsuiteId } : {}),
         } : {}),
         // A copy keeps the original's NetSuite customer while the customer

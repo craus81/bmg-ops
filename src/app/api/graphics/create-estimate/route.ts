@@ -7,6 +7,7 @@ import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { getSalesTaxRate } from '@/lib/sales-tax';
 import { getDefaultLaborRate } from '@/lib/labor-rate';
 import { partNumberPattern } from '@/lib/part-number';
+import { addWrapQuoteToEstimate } from '@/lib/wrap-quote-estimate';
 
 export const dynamic = 'force-dynamic';
 
@@ -170,10 +171,10 @@ export async function POST(req: NextRequest) {
         customer_name: customerName,
         customer_netsuite_id: customerNsId,
         title,
-        notes: [
-          job.po_number ? `PO #${job.po_number}` : null,
-          job.notes,
-        ].filter(Boolean).join('\n') || null,
+        // The job's PO # goes in the estimate's own PO field (it rides to
+        // the SO and the invoice from there), not buried in the notes.
+        po_number: (job.po_number || '').trim() || null,
+        notes: job.notes || null,
         status: 'draft',
         tax_rate: taxRate,
         tax_exempt: false,
@@ -221,21 +222,43 @@ export async function POST(req: NextRequest) {
       })
       .eq('id', jobId);
 
+    // A job made from a wrap quote: fold the quote's vinyl + install lines
+    // into the new estimate and link the quote to it, the same as the
+    // estimator's Add to Estimate. Skipped when the quote is already on
+    // another estimate (that one keeps it).
+    let quoteLines = 0;
+    let finalTotal = Math.round(grandTotal * 100) / 100;
+    if (job.wrap_quote_id) {
+      const { data: quote } = await supabase
+        .from('wrap_quotes')
+        .select('id, estimate_id')
+        .eq('id', job.wrap_quote_id)
+        .maybeSingle();
+      if (quote && !quote.estimate_id) {
+        const added = await addWrapQuoteToEstimate(supabase, estimate.id, quote.id);
+        if (added.status === 200) {
+          quoteLines = added.body.linesAdded || 0;
+          const { data: est } = await supabase.from('estimates').select('grand_total').eq('id', estimate.id).maybeSingle();
+          if (est) finalTotal = Number(est.grand_total) || 0;
+        }
+      }
+    }
+
     // Log in status history
     await supabase.from('graphics_status_history').insert({
       job_id: jobId,
       from_status: job.status,
       to_status: job.status,
       changed_by: userId || auth.user.id,
-      note: `Estimate created: ${estimateNumber}${lineItems.length > 0 ? ` (${lineItems.length} line item${lineItems.length !== 1 ? 's' : ''})` : ''}`,
+      note: `Estimate created: ${estimateNumber}${lineItems.length + quoteLines > 0 ? ` (${lineItems.length + quoteLines} line item${lineItems.length + quoteLines !== 1 ? 's' : ''})` : ''}`,
     });
 
     return NextResponse.json({
       success: true,
       estimate_id: estimate.id,
       estimate_number: estimateNumber,
-      line_item_count: lineItems.length,
-      grand_total: Math.round(grandTotal * 100) / 100,
+      line_item_count: lineItems.length + quoteLines,
+      grand_total: finalTotal,
     });
   } catch (err: any) {
     console.error('Graphics create-estimate error:', err);
