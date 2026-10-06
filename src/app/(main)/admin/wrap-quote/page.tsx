@@ -54,7 +54,7 @@ import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { summarizeAudits, applyCoverageNorm, type TemplateAudit, type AuditSummary } from '@/lib/calibration-audit';
 import { referenceDimensions, calibrationDelta, type PanelDimension } from '@/lib/wrap-reference';
 import { estimateHeadlineNumber } from '@/lib/estimate-number';
-import { templateFacets, ROOF_ORDER, type TemplateFacets } from '@/lib/template-facets';
+import { ROOF_ORDER } from '@/lib/template-facets';
 import {
   DEFAULT_ROLL,
   MAX_ROLLS_PER_FILM,
@@ -99,6 +99,14 @@ interface Template {
   wheelbase_in: number | null;
   panel_data: PanelDimension[] | null;
   is_active: boolean | null;
+  // Generated in the database from the variant (migration 344, a port of
+  // src/lib/template-facets.ts) — what the picker's narrower dropdowns
+  // filter on.
+  facet_wheelbase?: string | null;
+  facet_body?: string | null;
+  facet_roof?: string | null;
+  facet_bed?: string | null;
+  facet_cab?: string | null;
 }
 
 // "Film" is the material (a substrate is the surface being wrapped); the
@@ -357,15 +365,35 @@ const templateLabel = (t: Template) =>
 // over them must go through this.
 const normText = (v?: string | null) => (v || '').trim().toLowerCase();
 
-// Free-text template search: every space-separated term must match somewhere
-// in the label, name, or code ("transit 2023 high" finds 2023 High Roof
-// Transits regardless of word order).
-const matchesTemplateSearch = (t: Template, query: string) => {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  const hay = `${templateLabel(t)} ${t.name || ''} ${t.template_code || ''}`.toLowerCase();
-  return q.split(/\s+/).every(term => hay.includes(term));
+// ----- Template library lookups -----
+// The library is ~9,450 templates, so the page never downloads it: the
+// database searches and filters it (migration 344) and the page keeps only
+// the rows it has shown. Every space-separated search term must match
+// somewhere in the label, name, or code ("transit 2023 high" finds 2023 High
+// Roof Transits regardless of word order).
+type TemplateFilterKey = 'year' | 'make' | 'model' | 'body' | 'wheelbase' | 'roof' | 'bed' | 'cab';
+type TemplateFilters = Record<TemplateFilterKey, string>;
+interface TemplateSearchResult { rows: Template[]; total: number; unfilteredTotal: number }
+const TEMPLATE_COLUMNS = 'id, name, make, model, year, variant, scale, template_code, template_image_path, px_per_in, overall_length_in, overall_height_in, wheelbase_in, panel_data, is_active, facet_wheelbase, facet_body, facet_roof, facet_bed, facet_cab';
+const EMPTY_FILTER_OPTIONS: Record<TemplateFilterKey, string[]> = { year: [], make: [], model: [], body: [], wheelbase: [], roof: [], bed: [], cab: [] };
+
+const searchTemplates = async (
+  supabase: any,
+  opts: { query?: string; filters?: Partial<TemplateFilters>; limit?: number; offset?: number; includeRetired?: boolean },
+): Promise<TemplateSearchResult | null> => {
+  const { data, error } = await supabase.rpc('search_vehicle_templates', {
+    p_query: opts.query || '',
+    p_filters: opts.filters || {},
+    p_limit: opts.limit ?? 50,
+    p_offset: opts.offset ?? 0,
+    p_include_retired: !!opts.includeRetired,
+  });
+  if (error || !data) return null;
+  return { rows: (data.rows || []) as Template[], total: Number(data.total) || 0, unfilteredTotal: Number(data.unfiltered_total) || 0 };
 };
+
+// Escape LIKE wildcards so a typed "%" or "_" matches itself in .ilike().
+const likeExact = (v: string) => v.trim().replace(/[\\%_]/g, c => `\\${c}`);
 
 const imageUrl = (path: string | null) => {
   if (!path) return '';
@@ -386,7 +414,34 @@ export default function WrapQuotePage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const [loading, setLoading] = useState(true);
-  const [templates, setTemplates] = useState<Template[]>([]);
+  // Only the templates this page has shown (search results, the picked one,
+  // a reopened quote's), keyed by id — never the whole library.
+  const [tplCache, setTplCache] = useState<Record<string, Template>>({});
+  const rememberTemplates = (rows: Template[]) => {
+    if (rows.length) setTplCache(prev => ({ ...prev, ...Object.fromEntries(rows.map(t => [t.id, t])) }));
+  };
+  const patchTemplate = (id: string, patch: Partial<Template>) =>
+    setTplCache(prev => (prev[id] ? { ...prev, [id]: { ...prev[id], ...patch } } : prev));
+  const loadTemplateById = async (id: string | null | undefined): Promise<Template | null> => {
+    if (!id) return null;
+    if (tplCache[id]) return tplCache[id];
+    const { data } = await supabase.from('vehicle_templates').select(TEMPLATE_COLUMNS).eq('id', id).maybeSingle();
+    if (data) rememberTemplates([data as Template]);
+    return (data as Template) || null;
+  };
+  // Library counts (tab label, calibration banner, empty state).
+  const [tplStats, setTplStats] = useState<{ total: number; active: number; uncalibrated: number } | null>(null);
+  // Bumped whenever the library changes (upload, calibration, retire,
+  // delete) so the dropdowns, lists and grid re-ask the database.
+  const [tplVersion, setTplVersion] = useState(0);
+  // The Templates grid has its own counter: a retire or delete patches the
+  // grid in place rather than throwing away the pages already shown.
+  const [tplGridVersion, setTplGridVersion] = useState(0);
+  const loadTemplateStats = async () => {
+    const { data } = await supabase.rpc('vehicle_template_stats');
+    if (data) setTplStats({ total: Number(data.total) || 0, active: Number(data.active) || 0, uncalibrated: Number(data.uncalibrated) || 0 });
+  };
+  const libraryChanged = () => { setTplVersion(v => v + 1); setTplGridVersion(v => v + 1); loadTemplateStats(); };
   const [substrates, setSubstrates] = useState<Film[]>([]);
   const [settings, setSettings] = useState<Settings>({ company: {}, tax_rate: 0, design: EMPTY_LABOR, preparation: EMPTY_LABOR, installation: EMPTY_LABOR, min_job_charge: 0, qty_discounts: [] });
   const [history, setHistory] = useState<WrapQuote[]>([]);
@@ -687,11 +742,10 @@ export default function WrapQuotePage() {
 
   const loadAll = async () => {
     setLoading(true);
-    const [tplRes, subRes, setRes, histRes, floorRes, jobsRes] = await Promise.all([
-      // The template library can exceed PostgREST's silent 1000-row cap — a
-      // bare select made everything past row 1000 unfindable in the pickers.
-      fetchAllRows<Template>((from, to) =>
-        supabase.from('vehicle_templates').select('id, name, make, model, year, variant, scale, template_code, template_image_path, px_per_in, overall_length_in, overall_height_in, wheelbase_in, panel_data, is_active').not('template_image_path', 'is', null).order('make').order('model').order('id').range(from, to)),
+    // The template library is NOT loaded here — it's ~9,450 rows; the
+    // pickers and the Templates tab ask the database for what they show.
+    loadTemplateStats();
+    const [subRes, setRes, histRes, floorRes, jobsRes] = await Promise.all([
       supabase.from('wrap_substrates').select('*').order('name'),
       supabase.from('wrap_quote_settings').select('*').eq('id', 1).maybeSingle(),
       supabase.from('wrap_quotes').select('*').order('created_at', { ascending: false }).limit(200),
@@ -716,7 +770,6 @@ export default function WrapQuotePage() {
     const companyTaxPct = floorRes.data?.sales_tax_rate_pct != null
       ? Number(floorRes.data.sales_tax_rate_pct)
       : FALLBACK_SALES_TAX_RATE_PCT;
-    setTemplates((tplRes.data || []) as Template[]);
     setSubstrates((subRes.data || []) as Film[]);
     if (setRes.data) {
       setSettings({
@@ -753,64 +806,62 @@ export default function WrapQuotePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
   }, [custSearch]);
 
-  const template = templates.find(t => t.id === templateId) || null;
+  const template = templateId ? tplCache[templateId] || null : null;
+  // A template picked by id from somewhere that didn't hand over the row
+  // (a reopened quote, a deep link) is fetched on its own.
+  useEffect(() => {
+    if (templateId && !tplCache[templateId]) loadTemplateById(templateId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- loadTemplateById reads the cache it guards
+  }, [templateId]);
   const activeSubstrates = substrates.filter(s => s.is_active !== false);
   const substrateById = (id: string | null) => substrates.find(s => s.id === id) || null;
   const defaultFilmId = () =>
     lastFilmId && activeSubstrates.some(s => s.id === lastFilmId) ? lastFilmId : activeSubstrates[0]?.id || null;
 
-  // Retired templates stay in state (the Templates tab manages them) but are
-  // hidden from the estimator's vehicle pickers.
-  const activeTemplates = useMemo(() => templates.filter(t => t.is_active !== false), [templates]);
-  // Roof / bed / cab / wheelbase aren't columns — they're read out of each
-  // template's description once, here (see src/lib/template-facets.ts).
-  const facetsById = useMemo(() => {
-    const m = new Map<string, TemplateFacets>();
-    for (const t of activeTemplates) m.set(t.id, templateFacets(t));
-    return m;
-  }, [activeTemplates]);
   // Every picker dropdown is a filter, and each one's choices are what's
   // left after applying all the OTHERS — so picking "Ford" + "Transit"
   // leaves only the wheelbases and roofs a Transit actually comes in, and a
-  // dropdown with nothing to offer (bed length on a van) isn't shown.
-  type FilterKey = 'year' | 'make' | 'model' | 'body' | 'wheelbase' | 'roof' | 'bed' | 'cab';
-  const filterValues: Record<FilterKey, string> = useMemo(() => ({
+  // dropdown with nothing to offer (bed length on a van) isn't shown. The
+  // database works the choices out (vehicle_template_filter_options,
+  // migration 344); retired templates are left out of the estimator.
+  type FilterKey = TemplateFilterKey;
+  const filterValues: TemplateFilters = useMemo(() => ({
     year: yearFilter, make: makeFilter, model: modelFilter, body: bodyFilter,
     wheelbase: wheelbaseFilter, roof: roofFilter, bed: bedFilter, cab: cabFilter,
   }), [yearFilter, makeFilter, modelFilter, bodyFilter, wheelbaseFilter, roofFilter, bedFilter, cabFilter]);
-  const filterValueOf = (t: Template, key: FilterKey): string => {
-    if (key === 'year') return (t.year || '').trim();
-    if (key === 'make') return t.make.trim();
-    if (key === 'model') return t.model.trim();
-    return facetsById.get(t.id)?.[key] || '';
-  };
-  const passesFilters = (t: Template, except?: FilterKey) =>
-    (Object.keys(filterValues) as FilterKey[]).every(key =>
-      key === except || !filterValues[key] || normText(filterValueOf(t, key)) === normText(filterValues[key]));
-  // Choices for one dropdown. Deduped case-insensitively (first-seen casing
-  // wins) so "FORD" and "Ford" don't appear as two entries that each hide
-  // the other's templates; the active value keeps its exact casing because a
+  const filterKey = JSON.stringify(filterValues);
+  // Raw choices from the database, tagged with the filters they were asked
+  // for so a slow answer to an older pick never lands on a newer one.
+  const [rawFilterOptions, setRawFilterOptions] = useState<{ key: string; options: Record<FilterKey, string[]> } | null>(null);
+  useEffect(() => {
+    let stale = false;
+    (async () => {
+      const { data, error } = await supabase.rpc('vehicle_template_filter_options', { p_filters: filterValues });
+      if (stale || error || !data) return;
+      setRawFilterOptions({ key: filterKey, options: { ...EMPTY_FILTER_OPTIONS, ...data } });
+    })();
+    return () => { stale = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- filterKey stands for filterValues
+  }, [filterKey, tplVersion]);
+  // Sorted for display. The database dedupes "FORD" / "Ford" (most common
+  // spelling wins); the active value keeps its exact casing because a
   // <select> matches its value against options verbatim.
-  const filterChoices = (key: FilterKey): string[] => {
-    const seen = new Map<string, string>();
-    for (const t of activeTemplates) {
-      if (!passesFilters(t, key)) continue;
-      const v = filterValueOf(t, key);
-      if (v && !seen.has(normText(v))) seen.set(normText(v), v);
-    }
-    if (filterValues[key] && seen.has(normText(filterValues[key]))) seen.set(normText(filterValues[key]), filterValues[key]);
-    const list = [...seen.values()];
-    if (key === 'year') return list.sort().reverse();
-    // "148" before "148 Extended" before "156".
-    if (key === 'wheelbase') return list.sort((a, b) => parseFloat(a) - parseFloat(b) || a.length - b.length);
-    if (key === 'roof') return list.sort((a, b) => ROOF_ORDER.indexOf(a) - ROOF_ORDER.indexOf(b));
-    return list.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  };
-  const filterOptions: Record<FilterKey, string[]> = useMemo(() => ({
-    year: filterChoices('year'), make: filterChoices('make'), model: filterChoices('model'), body: filterChoices('body'),
-    wheelbase: filterChoices('wheelbase'), roof: filterChoices('roof'), bed: filterChoices('bed'), cab: filterChoices('cab'),
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- filterChoices reads only the deps listed
-  }), [activeTemplates, facetsById, filterValues]);
+  const filterOptions: Record<FilterKey, string[]> = useMemo(() => {
+    const raw = rawFilterOptions?.options || EMPTY_FILTER_OPTIONS;
+    const sorted = (key: FilterKey): string[] => {
+      const list = (raw[key] || []).map(o => (filterValues[key] && normText(o) === normText(filterValues[key]) ? filterValues[key] : o));
+      if (key === 'year') return list.sort().reverse();
+      // "148" before "148 Extended" before "156".
+      if (key === 'wheelbase') return list.sort((a, b) => parseFloat(a) - parseFloat(b) || a.length - b.length);
+      if (key === 'roof') return list.sort((a, b) => ROOF_ORDER.indexOf(a) - ROOF_ORDER.indexOf(b));
+      return list.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    };
+    return {
+      year: sorted('year'), make: sorted('make'), model: sorted('model'), body: sorted('body'),
+      wheelbase: sorted('wheelbase'), roof: sorted('roof'), bed: sorted('bed'), cab: sorted('cab'),
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- filterValues only re-cases the active value
+  }, [rawFilterOptions]);
   const filterSetters: Record<FilterKey, (v: string) => void> = {
     year: setYearFilter, make: setMakeFilter, model: setModelFilter, body: setBodyFilter,
     wheelbase: setWheelbaseFilter, roof: setRoofFilter, bed: setBedFilter, cab: setCabFilter,
@@ -819,32 +870,70 @@ export default function WrapQuotePage() {
   const clearFilters = () => (Object.keys(filterSetters) as FilterKey[]).forEach(k => filterSetters[k](''));
   // Changing one filter can strand another (switch Ford → Ram with "Transit"
   // still picked): drop any value its dropdown no longer offers, so a filter
-  // you can't see is never silently hiding templates.
+  // you can't see is never silently hiding templates. Only checked against
+  // choices worked out for the filters as they stand now.
   useEffect(() => {
-    if (activeTemplates.length === 0) return; // library still loading
+    if (!rawFilterOptions || rawFilterOptions.key !== filterKey) return;
     (Object.keys(filterValues) as FilterKey[]).forEach(key => {
       if (filterValues[key] && !filterOptions[key].some(o => normText(o) === normText(filterValues[key]))) filterSetters[key]('');
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- setters are stable
   }, [filterOptions]);
-  const templateOptions = useMemo(() => activeTemplates.filter(t => passesFilters(t)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- passesFilters reads only the deps listed
-    [activeTemplates, facetsById, filterValues]);
-  // Live type-ahead results for the template search box. The dropdowns act
-  // as filters on the search. Because a leftover filter can make the search
-  // come up empty for a template that plainly exists, the unfiltered count
-  // is kept too so the results can say "N more without the filters".
-  const templateSearchAll = useMemo(() =>
-    tplSearch.trim().length < 2 ? [] : activeTemplates.filter(t => matchesTemplateSearch(t, tplSearch)),
-    [activeTemplates, tplSearch]);
-  const templateSearchMatches = useMemo(() => templateSearchAll.filter(t => passesFilters(t)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- passesFilters reads only the deps listed
-    [templateSearchAll, facetsById, filterValues]);
-  const searchHiddenByFilters = templateSearchAll.length - templateSearchMatches.length;
+  // The browse <select>: only once the filters narrow the library to a list
+  // a person can scroll (thousands of <option>s made every keystroke on the
+  // page slow).
+  const SELECT_LIST_MAX = 500;
+  const [templateList, setTemplateList] = useState<{ key: string; rows: Template[]; total: number } | null>(null);
+  useEffect(() => {
+    if (!anyFilter) { setTemplateList(null); return; }
+    let stale = false;
+    (async () => {
+      const res = await searchTemplates(supabase, { filters: filterValues, limit: SELECT_LIST_MAX });
+      if (stale || !res) return;
+      rememberTemplates(res.rows);
+      setTemplateList({ key: filterKey, rows: res.rows, total: res.total });
+    })();
+    return () => { stale = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- filterKey stands for filterValues
+  }, [filterKey, tplVersion]);
+  const templateOptions = templateList?.key === filterKey && templateList.total <= SELECT_LIST_MAX ? templateList.rows : [];
+  // The picked template stays listed even when the filters leave it out, so
+  // the <select> never renders blank over a loaded drawing.
+  const selectOptions = template && !templateOptions.some(t => t.id === template.id) ? [template, ...templateOptions] : templateOptions;
+  const selectPlaceholder = !anyFilter
+    ? `— Search or pick a make to list templates${tplStats ? ` (${tplStats.active.toLocaleString()})` : ''} —`
+    : templateList?.key !== filterKey ? '— Loading templates… —'
+    : templateList.total > SELECT_LIST_MAX ? `— ${templateList.total.toLocaleString()} templates; narrow the filters to list them —`
+    : templateList.total === 0 ? '— No templates match these filters —'
+    : '— Select vehicle template —';
+  // Live type-ahead results for the template search box: the database
+  // returns the first 50 matches. The dropdowns act as filters on the
+  // search. Because a leftover filter can make the search come up empty for
+  // a template that plainly exists, the unfiltered count comes back too so
+  // the results can say "N more without the filters".
+  const [templateSearch, setTemplateSearch] = useState<{ query: string; key: string; result: TemplateSearchResult } | null>(null);
+  useEffect(() => {
+    const q = tplSearch.trim();
+    if (q.length < 2) { setTemplateSearch(null); return; }
+    let stale = false;
+    const timer = setTimeout(async () => {
+      const res = await searchTemplates(supabase, { query: q, filters: filterValues, limit: 50 });
+      if (stale || !res) return;
+      rememberTemplates(res.rows);
+      setTemplateSearch({ query: q, key: filterKey, result: res });
+    }, 200);
+    return () => { stale = true; clearTimeout(timer); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- filterKey stands for filterValues
+  }, [tplSearch, filterKey, tplVersion]);
+  const searchCurrent = !!templateSearch && templateSearch.query === tplSearch.trim() && templateSearch.key === filterKey;
+  const templateSearchMatches = templateSearch?.result.rows || [];
+  const templateSearchTotal = templateSearch?.result.total || 0;
+  const searchHiddenByFilters = templateSearch ? templateSearch.result.unfilteredTotal - templateSearch.result.total : 0;
   // Picking a template (search result, browse dropdown, or grid Open) syncs
   // the Year/Make filters to it so the browse <select> always shows the pick
   // instead of rendering blank when a filter excludes it.
   const pickTemplate = (t: Template) => {
+    rememberTemplates([t]);
     setTemplateId(t.id);
     setImgDim(null);
     // On a customer proof the vehicle is the ruler, not the drawing: keep
@@ -855,33 +944,66 @@ export default function WrapQuotePage() {
     setYearFilter((t.year || '').trim());
     setMakeFilter(t.make.trim());
     // Keep the narrower filters only where the pick satisfies them.
-    const facets = templateFacets(t);
     if (modelFilter && normText(modelFilter) !== normText(t.model)) setModelFilter('');
-    if (bodyFilter && bodyFilter !== facets.body) setBodyFilter('');
-    if (wheelbaseFilter && wheelbaseFilter !== facets.wheelbase) setWheelbaseFilter('');
-    if (roofFilter && roofFilter !== facets.roof) setRoofFilter('');
-    if (bedFilter && bedFilter !== facets.bed) setBedFilter('');
-    if (cabFilter && cabFilter !== facets.cab) setCabFilter('');
+    if (bodyFilter && bodyFilter !== (t.facet_body || '')) setBodyFilter('');
+    if (wheelbaseFilter && wheelbaseFilter !== (t.facet_wheelbase || '')) setWheelbaseFilter('');
+    if (roofFilter && roofFilter !== (t.facet_roof || '')) setRoofFilter('');
+    if (bedFilter && bedFilter !== (t.facet_bed || '')) setBedFilter('');
+    if (cabFilter && cabFilter !== (t.facet_cab || '')) setCabFilter('');
   };
 
   // Resolve the estimate's vehicle (Add Graphics round trip) against the
   // template library: a unique match loads outright; several matches open
   // the search box with them listed; no match leaves the pickers alone.
   useEffect(() => {
-    if (!vehiclePrefill || templates.length === 0) return;
+    if (!vehiclePrefill) return;
     if (templateId || savedQuoteId) { setVehiclePrefill(null); return; }
-    const queries = [
-      [vehiclePrefill.year, vehiclePrefill.label].filter(Boolean).join(' '),
-      vehiclePrefill.label,
-    ].filter(q => q.trim().length >= 2);
-    for (const q of queries) {
-      const matches = activeTemplates.filter(t => matchesTemplateSearch(t, q));
-      if (matches.length === 1) { pickTemplate(matches[0]); break; }
-      if (matches.length > 1) { setTplSearch(q); break; }
-    }
+    const prefill = vehiclePrefill;
     setVehiclePrefill(null);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- fires once when both the prefill and the library are in
-  }, [vehiclePrefill, templates]);
+    const queries = [
+      [prefill.year, prefill.label].filter(Boolean).join(' '),
+      prefill.label,
+    ].filter(q => q.trim().length >= 2);
+    (async () => {
+      for (const q of queries) {
+        const res = await searchTemplates(supabase, { query: q, limit: 2 });
+        if (!res) return;
+        if (res.total === 1) { pickTemplate(res.rows[0]); return; }
+        if (res.total > 1) { setTplSearch(q); return; }
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fires once per prefill
+  }, [vehiclePrefill]);
+
+  // Templates tab grid: a page of cards at a time, retired ones included
+  // (this is where they're reactivated), searched in the database.
+  const TEMPLATE_GRID_PAGE = 60;
+  const [tplGrid, setTplGrid] = useState<{ query: string; rows: Template[]; total: number } | null>(null);
+  const [tplGridLoading, setTplGridLoading] = useState(false);
+  useEffect(() => {
+    if (tab !== 'templates') return;
+    const q = tplGridSearch.trim();
+    let stale = false;
+    setTplGridLoading(true);
+    const timer = setTimeout(async () => {
+      const res = await searchTemplates(supabase, { query: q, limit: TEMPLATE_GRID_PAGE, includeRetired: true });
+      if (stale) return;
+      setTplGridLoading(false);
+      if (res) setTplGrid({ query: q, rows: res.rows, total: res.total });
+    }, q ? 200 : 0);
+    return () => { stale = true; clearTimeout(timer); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- re-search on tab, query or library change
+  }, [tab, tplGridSearch, tplGridVersion]);
+  const loadMoreTemplates = async () => {
+    if (!tplGrid) return;
+    setTplGridLoading(true);
+    const res = await searchTemplates(supabase, { query: tplGrid.query, limit: TEMPLATE_GRID_PAGE, offset: tplGrid.rows.length, includeRetired: true });
+    setTplGridLoading(false);
+    if (!res) return;
+    setTplGrid(prev => (prev && prev.query === tplGrid.query
+      ? { ...prev, rows: [...prev.rows, ...res.rows.filter(r => !prev.rows.some(x => x.id === r.id))], total: res.total }
+      : prev));
+  };
 
   // ----- Pricing math -----
   const measurementPricing = (m: Measurement) => {
@@ -1371,7 +1493,8 @@ export default function WrapQuotePage() {
     if (!template || !calibLine || inches <= 0) return;
     const ppi = calibLine.lenPx / inches;
     await supabase.from('vehicle_templates').update({ px_per_in: ppi }).eq('id', template.id);
-    setTemplates(prev => prev.map(t => t.id === template.id ? { ...t, px_per_in: ppi } : t));
+    patchTemplate(template.id, { px_per_in: ppi });
+    loadTemplateStats();
     setCalibLine(null);
     setCalibInches('');
     setCalibRefKey('');
@@ -2018,8 +2141,8 @@ export default function WrapQuotePage() {
   // overrides, and binds saveQuote to the same row (same quote number).
   // From there every send option applies — email variants, NetSuite push,
   // PDF — so a quote sent earlier can be pushed to NetSuite later, etc.
-  const loadQuoteForEdit = (q: WrapQuote) => {
-    const tpl = templates.find(t => t.id === q.template_id) || null;
+  const loadQuoteForEdit = async (q: WrapQuote) => {
+    const tpl = await loadTemplateById(q.template_id);
     const ppi = num(tpl?.px_per_in);
     // Quotes saved before geometry was snapshotted have no shape coordinates.
     // Synthesize a simple stacked layout for boxes/circles from their real
@@ -2072,7 +2195,7 @@ export default function WrapQuotePage() {
     setProofMode(fromProof);
     setProofNotes([]);
     const scaledBy = fromProof ? proofs.find(p => p.wheel_line && p.calibration?.line)?.calibration?.line?.inches : null;
-    const tplWb = wheelbaseOf(templates.find(t => t.id === q.template_id) || null);
+    const tplWb = wheelbaseOf(tpl);
     setProofWheelbaseText(scaledBy && scaledBy !== tplWb ? String(scaledBy) : '');
     // Photo quotes derive their measurements from the boxes — keep the drawn
     // array empty so the two can't stack up.
@@ -2696,7 +2819,9 @@ export default function WrapQuotePage() {
     // (make, model, year, variant, name), case-insensitive.
     const newName = [tplForm.make.trim(), tplForm.model.trim(), tplForm.variant.trim()].filter(Boolean).join(' ');
     const norm = (v?: string | null) => (v || '').trim().toLowerCase();
-    const dupe = templates.find(t =>
+    const { data: sameVehicle } = await supabase.from('vehicle_templates').select(TEMPLATE_COLUMNS)
+      .ilike('make', likeExact(tplForm.make)).ilike('model', likeExact(tplForm.model));
+    const dupe = ((sameVehicle || []) as Template[]).find(t =>
       norm(t.name) === norm(newName) && norm(t.make) === norm(tplForm.make) &&
       norm(t.model) === norm(tplForm.model) && norm(t.year) === norm(tplForm.year) &&
       norm(t.variant) === norm(tplForm.variant));
@@ -2729,15 +2854,20 @@ export default function WrapQuotePage() {
       }
       setTplForm({ year: '', make: '', model: '', variant: '', code: '', length: '' });
       setTplFile(null);
-      await loadAll();
+      libraryChanged();
     } finally {
       setTplUploading(false);
     }
   };
 
   const toggleTemplate = async (t: Template) => {
-    await supabase.from('vehicle_templates').update({ is_active: t.is_active === false }).eq('id', t.id);
-    setTemplates(prev => prev.map(x => x.id === t.id ? { ...x, is_active: t.is_active === false } : x));
+    const is_active = t.is_active === false;
+    await supabase.from('vehicle_templates').update({ is_active }).eq('id', t.id);
+    patchTemplate(t.id, { is_active });
+    setTplGrid(prev => (prev ? { ...prev, rows: prev.rows.map(x => (x.id === t.id ? { ...x, is_active } : x)) } : prev));
+    loadTemplateStats();
+    // The estimator's dropdowns and lists leave retired templates out.
+    setTplVersion(v => v + 1);
   };
 
   // Force-delete one template. Unlike Delete All (which retires templates
@@ -2758,8 +2888,10 @@ export default function WrapQuotePage() {
         await dialog.alert(`Delete failed: ${data.error || 'Unknown error'}`);
         return;
       }
-      setTemplates(prev => prev.filter(x => x.id !== t.id));
+      setTplGrid(prev => (prev ? { ...prev, rows: prev.rows.filter(x => x.id !== t.id), total: prev.total - 1 } : prev));
       if (templateId === t.id) setTemplateId('');
+      loadTemplateStats();
+      setTplVersion(v => v + 1);
     } catch (e: any) {
       await dialog.alert(`Delete failed: ${e.message}`);
     }
@@ -2799,7 +2931,14 @@ export default function WrapQuotePage() {
       } while (cursor);
       const reasonText = Object.entries(reasonTotals).map(([k, v]) => `${k}: ${v}`).join(', ');
       setCalibStatus(`Done — ${calibrated} calibrated automatically${skipped ? `, ${skipped} skipped (${reasonText})` : ''}.`);
-      await loadAll();
+      // Calibrated rows held in this page are stale now — drop them so the
+      // next look-up fetches the new scale, and re-read the open one.
+      setTplCache({});
+      if (templateId) {
+        const { data } = await supabase.from('vehicle_templates').select(TEMPLATE_COLUMNS).eq('id', templateId).maybeSingle();
+        if (data) rememberTemplates([data as Template]);
+      }
+      libraryChanged();
     } catch (e: any) {
       setCalibStatus(`Failed: ${e.message}`);
     } finally {
@@ -3203,7 +3342,7 @@ export default function WrapQuotePage() {
           { id: 'history' as Tab, label: `Quote History (${history.filter(q => !q.archived_at).length})` },
           { id: 'pricing' as Tab, label: 'Pricing' },
           { id: 'company' as Tab, label: 'Company Info' },
-          { id: 'templates' as Tab, label: `Templates (${templates.length})` },
+          { id: 'templates' as Tab, label: `Templates${tplStats ? ` (${tplStats.total.toLocaleString()})` : ''}` },
         ]).map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{
             padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
@@ -3267,7 +3406,7 @@ export default function WrapQuotePage() {
                 value={tplSearch}
                 onChange={e => setTplSearch(e.target.value)}
                 onKeyDown={e => {
-                  if (e.key === 'Enter' && templateSearchMatches.length > 0) { e.preventDefault(); pickTemplate(templateSearchMatches[0]); }
+                  if (e.key === 'Enter' && searchCurrent && templateSearchMatches.length > 0) { e.preventDefault(); pickTemplate(templateSearchMatches[0]); }
                   else if (e.key === 'Escape') setTplSearch('');
                 }}
                 placeholder="Type to search templates…"
@@ -3275,17 +3414,19 @@ export default function WrapQuotePage() {
               />
               {tplSearch.trim().length >= 2 && (
                 <div style={{ position: 'absolute', top: '100%', left: 0, minWidth: '100%', width: 'max-content', maxWidth: '420px', zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '260px', overflowY: 'auto', marginTop: '2px' }}>
-                  {templateSearchMatches.length === 0 ? (
-                    <div style={{ padding: '8px 10px', fontSize: '11px', color: 'var(--text-muted)' }}>{searchHiddenByFilters > 0 ? 'No templates match with these filters' : 'No templates match'}</div>
-                  ) : templateSearchMatches.slice(0, 50).map(t => (
+                  {!templateSearch ? (
+                    <div style={{ padding: '8px 10px', fontSize: '11px', color: 'var(--text-muted)' }}>Searching…</div>
+                  ) : templateSearchMatches.length === 0 ? (
+                    <div style={{ padding: '8px 10px', fontSize: '11px', color: 'var(--text-muted)' }}>{!searchCurrent ? 'Searching…' : searchHiddenByFilters > 0 ? 'No templates match with these filters' : 'No templates match'}</div>
+                  ) : templateSearchMatches.map(t => (
                     <button key={t.id} onMouseDown={e => e.preventDefault()} onClick={() => pickTemplate(t)} style={{ display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '12px', color: 'var(--text-primary)' }}>
                       <span style={{ fontWeight: 700 }}>{templateLabel(t)}</span>
                       {t.template_code && <span style={{ color: 'var(--text-muted)', marginLeft: '6px', fontSize: '10px' }}>{t.template_code}</span>}
                     </button>
                   ))}
-                  {templateSearchMatches.length > 50 && (
+                  {templateSearchTotal > templateSearchMatches.length && (
                     <div style={{ padding: '6px 10px', fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>
-                      Showing 50 of {templateSearchMatches.length} matches — keep typing to narrow
+                      Showing {templateSearchMatches.length} of {templateSearchTotal.toLocaleString()} matches — keep typing to narrow
                     </div>
                   )}
                   {searchHiddenByFilters > 0 && (
@@ -3296,15 +3437,15 @@ export default function WrapQuotePage() {
                 </div>
               )}
             </div>
-            <select value={templateId} onChange={e => { setTemplateId(e.target.value); setImgDim(null); if (proofMode) { setProofWheelbaseText(''); rescaleProofs(wheelbaseOf(templates.find(t => t.id === e.target.value) || null)); } else resetEstimate(); }} style={{ ...inputStyle, flex: 1, minWidth: '220px' }}>
-              <option value="">— Select vehicle template —</option>
-              {templateOptions.map(t => <option key={t.id} value={t.id}>{templateLabel(t)}{t.template_code ? ` (${t.template_code})` : ''}</option>)}
+            <select value={templateId} onChange={e => { setTemplateId(e.target.value); setImgDim(null); if (proofMode) { setProofWheelbaseText(''); rescaleProofs(wheelbaseOf(tplCache[e.target.value] || null)); } else resetEstimate(); }} style={{ ...inputStyle, flex: 1, minWidth: '220px' }}>
+              <option value="">{selectPlaceholder}</option>
+              {selectOptions.map(t => <option key={t.id} value={t.id}>{templateLabel(t)}{t.template_code ? ` (${t.template_code})` : ''}</option>)}
             </select>
           </div>
 
           )}
 
-          {!photoMode && activeTemplates.length === 0 && (
+          {!photoMode && tplStats?.active === 0 && (
             <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>
               No vehicle templates yet — add your 1:20 outlines in the Templates tab, or switch to <b>Photo</b> above and draw on a photo instead.
             </div>
@@ -4451,7 +4592,7 @@ export default function WrapQuotePage() {
       {tab === 'templates' && (
         <div>
           {(() => {
-            const uncalibrated = templates.filter(t => !t.px_per_in).length;
+            const uncalibrated = tplStats?.uncalibrated || 0;
             if (uncalibrated === 0 && !calibStatus) return null;
             return (
               <div style={{ background: 'var(--card)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
@@ -4606,18 +4747,18 @@ export default function WrapQuotePage() {
               placeholder="Search templates by year, make, model, or code…"
               style={{ ...inputStyle, flex: 1, maxWidth: '360px' }}
             />
-            {tplGridSearch.trim() && (
+            {tplGrid && (
               <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>
-                {templates.filter(t => matchesTemplateSearch(t, tplGridSearch)).length} of {templates.length}
+                {tplGridLoading ? 'Searching…' : `${tplGrid.total.toLocaleString()}${tplGrid.query && tplStats ? ` of ${tplStats.total.toLocaleString()}` : ''} template${tplGrid.total === 1 ? '' : 's'}`}
               </span>
             )}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px' }}>
-            {templates.filter(t => matchesTemplateSearch(t, tplGridSearch)).map(t => (
+            {(tplGrid?.rows || []).map(t => (
               <div key={t.id} style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '10px', overflow: 'hidden' }}>
                 <div style={{ background: '#fff', height: '110px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   {/* eslint-disable-next-line @next/next/no-img-element -- R2-hosted, dimensions unknown */}
-                  <img src={imageUrl(t.template_image_path)} alt={t.name} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                  <img src={imageUrl(t.template_image_path)} alt={t.name} loading="lazy" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
                 </div>
                 <div style={{ padding: '8px 10px' }}>
                   <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>{templateLabel(t)}</div>
@@ -4635,6 +4776,13 @@ export default function WrapQuotePage() {
               </div>
             ))}
           </div>
+          {tplGrid && tplGrid.rows.length < tplGrid.total && (
+            <div style={{ textAlign: 'center', marginTop: '12px' }}>
+              <button onClick={loadMoreTemplates} disabled={tplGridLoading} style={btnStyle('#06b6d4', 'transparent')}>
+                {tplGridLoading ? 'Loading…' : `Show more (${(tplGrid.total - tplGrid.rows.length).toLocaleString()} left)`}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
