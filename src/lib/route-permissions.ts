@@ -302,6 +302,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/graphics-jobs/[id]/download-all/route.ts': staff(),
   'src/app/api/help/route.ts': staff(),
   'src/app/api/graphics-jobs/[id]/send-for-approval/route.ts': staff(),
+  'src/app/api/graphics-jobs/[id]/sources/route.ts': staff(),
   'src/app/api/graphics-jobs/[id]/vehicles/route.ts': staff(),
   'src/app/api/graphics-jobs/assign-po/route.ts': staff(),
   'src/app/api/graphics-jobs/rank/route.ts': admin(),
