@@ -481,6 +481,11 @@ Uploaded from Paychex each payroll. One row per employee per paycheck.
   total_labor_cost (= total_earnings + er_benefits + er_taxes — the employer's full cost)
 - payroll_employee_links: paychex_employee_id → profile_id (FK profiles) — use to name people in app terms or join to work_shift_members / work_shifts
 - payroll_imports: one row per upload (uploaded_at, row_count, first_period_start, last_period_end)
+- payroll_employee_roles: paychex_employee_id → role. Roles and the division each belongs to:
+  'shop_tech', 'upfit_management' → UPFIT; 'graphics_production', 'graphics_installer', 'graphics_management' → GRAPHICS;
+  'sales', 'office_admin' → SHARED (serves both). An employee with no row has no role set — report them as "no role set", never guess.
+  Division SQL: CASE WHEN r.role IN ('shop_tech','upfit_management') THEN 'Upfit' WHEN r.role LIKE 'graphics_%' THEN 'Graphics' WHEN r.role IN ('sales','office_admin') THEN 'Shared' ELSE 'No role set' END
+  (LEFT JOIN payroll_employee_roles r ON r.paychex_employee_id = c.paychex_employee_id)
 Rules:
 - Date payroll by period_end (the pay period a check belongs to). Off-cycle checks have one-day periods.
 - "Cost per hour" = SUM(total_labor_cost) / NULLIF(SUM(regular_hours + overtime_hours), 0) — loaded cost per WORKED hour.
@@ -491,6 +496,8 @@ Examples:
 - Labor cost by month: SELECT to_char(period_end, 'YYYY-MM') AS month, SUM(total_labor_cost) AS labor_cost, SUM(overtime_hours) AS ot_hours FROM payroll_checks GROUP BY 1 ORDER BY 1
 - Overtime leaders this year: SELECT employee_name, SUM(overtime_hours) ot_hours, SUM(overtime_amount) ot_pay FROM payroll_checks WHERE period_end >= date_trunc('year', NOW()) GROUP BY 1 ORDER BY 2 DESC LIMIT 10
 - By location and position: SELECT location, position, COUNT(DISTINCT paychex_employee_id) people, SUM(total_labor_cost) cost FROM payroll_checks WHERE period_end >= NOW() - INTERVAL '90 days' GROUP BY 1, 2 ORDER BY 3 DESC
+- Upfit vs Graphics labor by month: SELECT to_char(c.period_end,'YYYY-MM') month, <division CASE above> division, SUM(c.total_labor_cost) labor_cost, SUM(c.regular_hours + c.overtime_hours) hours FROM payroll_checks c LEFT JOIN payroll_employee_roles r ON r.paychex_employee_id = c.paychex_employee_id GROUP BY 1, 2 ORDER BY 1, 2
+  Prefer roles over Paychex "position" when the user asks about upfit, graphics, departments or divisions.
 
 COMBINING PAYROLL WITH NETSUITE (quick reports):
 Payroll lives in Supabase and revenue/expenses in NetSuite, so a cross-system report is TWO queries in one

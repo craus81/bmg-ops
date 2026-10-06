@@ -13,8 +13,8 @@ import { loadShopPayrollRate } from './payroll-rates';
  * intersection of the shift interval with their membership window
  * (added_at → removed_at). share_weight is a piece-rate concept and plays
  * no part here. Cost = total member-hours × the shop cost rate
- * (getShopLaborCostBasis): the pooled Paychex rate when payroll is uploaded
- * and linked (src/lib/payroll-rates.ts, migration 340), else the blended
+ * (getShopLaborCostBases): per crew, the pooled Paychex rate for that
+ * crew's payroll roles (src/lib/payroll-rates.ts, migrations 340/341), else the blended
  * quote_settings.shop_labor_cost_rate (Settings → Shop Labor Cost Rate);
  * with neither, the margin report shows hours but excludes labor from the
  * math, saying so.
@@ -111,20 +111,30 @@ export interface ShopLaborCostBasis {
 }
 
 /**
- * The rate shop hours are costed at. Paychex first (real payroll, pooled so
- * no one person's pay can be read back out of a job); the blended Settings
- * rate when payroll isn't uploaded or nobody on a shop timer is linked yet.
- * A payroll read failure falls back too, never fails the caller.
+ * The rates shop hours are costed at, per crew (migration 341): upfit
+ * timers at the Shop Tech payroll pool, graphics timers at the Graphics
+ * Production + Installer pool (src/lib/payroll-rates.ts — pooled so no one
+ * person's pay can be read back out of a job). A pool that isn't usable
+ * (no upload, fewer than 3 people with that role, a read failure) falls back
+ * to the blended Settings rate; never fails the caller.
  */
-export async function getShopLaborCostBasis(service: SupabaseClient): Promise<ShopLaborCostBasis> {
-  try {
-    const p = await loadShopPayrollRate(service);
-    if (p) return { rate: p.rate, source: 'paychex', people: p.people, throughPeriodEnd: p.windowEnd };
-  } catch (e: any) {
-    console.warn('loadShopPayrollRate failed, using the Settings rate:', e?.message || e);
+export async function getShopLaborCostBases(service: SupabaseClient): Promise<Record<ShopTimerDept, ShopLaborCostBasis>> {
+  const pool = async (dept: ShopTimerDept): Promise<ShopLaborCostBasis | null> => {
+    try {
+      const p = await loadShopPayrollRate(service, dept);
+      return p ? { rate: p.rate, source: 'paychex', people: p.people, throughPeriodEnd: p.windowEnd } : null;
+    } catch (e: any) {
+      console.warn(`loadShopPayrollRate(${dept}) failed, using the Settings rate:`, e?.message || e);
+      return null;
+    }
+  };
+  const [upfit, graphics] = await Promise.all([pool('upfit'), pool('graphics')]);
+  let setting: ShopLaborCostBasis | null = null;
+  if (!upfit || !graphics) {
+    const rate = await getShopLaborRate(service);
+    setting = { rate, source: rate != null ? 'setting' : null };
   }
-  const rate = await getShopLaborRate(service);
-  return { rate, source: rate != null ? 'setting' : null };
+  return { upfit: upfit ?? setting!, graphics: graphics ?? setting! };
 }
 
 /**
@@ -158,8 +168,8 @@ export interface CheckinLabor {
   hours: number;
   /** The subset of `hours` from auto-closed or still-open shifts. */
   approxHours: number;
-  /** hours × the shop cost rate (getShopLaborCostBasis), or null when no
-   *  rate is configured or the caller asked for hours only. */
+  /** each crew's hours × its cost rate (getShopLaborCostBases), or null
+   *  when a crew with hours has no rate or the caller asked for hours only. */
   cost: number | null;
   hasOpenShift: boolean;
   /** `hours` split by the crew the timer was billing. */
@@ -209,7 +219,7 @@ export async function getShopLaborForCheckins(
   }
 
   // Hours-only callers (pick-list, burn meter) skip the payroll reads.
-  const rate = opts.cost === false ? null : (await getShopLaborCostBasis(service)).rate;
+  const bases = opts.cost === false ? null : await getShopLaborCostBases(service);
   const nowIso = new Date().toISOString();
   for (const s of shifts) {
     const entry = out.get(s.fleet_checkin_id) || { hours: 0, approxHours: 0, cost: null, hasOpenShift: false, byDept: { graphics: 0, upfit: 0 } };
@@ -226,7 +236,17 @@ export async function getShopLaborForCheckins(
     entry.approxHours = Math.round(entry.approxHours * 100) / 100;
     entry.byDept.graphics = Math.round(entry.byDept.graphics * 100) / 100;
     entry.byDept.upfit = Math.round(entry.byDept.upfit * 100) / 100;
-    entry.cost = rate != null ? Math.round(entry.hours * rate * 100) / 100 : null;
+    // Each crew's hours at its own rate; a crew with hours but no rate makes
+    // the cost unknown rather than silently cheaper.
+    let cost: number | null = bases ? 0 : null;
+    for (const dept of ['upfit', 'graphics'] as const) {
+      if (cost == null || !bases) break;
+      const h = entry.byDept[dept];
+      if (h === 0) continue;
+      const r = bases[dept].rate;
+      cost = r != null ? cost + h * r : null;
+    }
+    entry.cost = cost != null ? Math.round(cost * 100) / 100 : null;
   }
   return out;
 }

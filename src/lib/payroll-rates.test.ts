@@ -30,30 +30,41 @@ function makeFake(tables: Record<string, Row[]>) {
 const check = (id: string, end: string, hrs: number, cost: number) =>
   ({ id: `${id}-${end}`, paychex_employee_id: id, period_end: end, regular_hours: hrs, overtime_hours: 0, total_labor_cost: cost });
 
-function world(people: string[]) {
+/** `shop` people are Shop Techs, `gfx` Graphics Production/Installers. */
+function world(shop: string[], gfx: string[] = []) {
+  const everyone = [...shop, ...gfx];
   return {
     payroll_checks: [
-      ...people.map(p => check(p, '2026-09-20', 80, 3200)),
-      ...people.map(p => check(p, '2026-01-11', 80, 99999)), // outside the 91-day window
-      check('zz', '2026-09-20', 80, 99999),                  // not on a shop timer
+      ...shop.map(p => check(p, '2026-09-20', 80, 3200)),       // $40/hr
+      ...gfx.map(p => check(p, '2026-09-20', 80, 2400)),        // $30/hr
+      ...everyone.map(p => check(p, '2026-01-11', 80, 99999)),  // outside the 91-day window
+      check('mgr', '2026-09-20', 80, 99999),                    // Upfit Management: in no pool
     ],
-    work_shifts: [{ id: 's1', context: 'shop', started_at: '2026-09-10T13:00:00Z' }, { id: 's0', context: 'shop', started_at: '2026-01-02T13:00:00Z' }],
-    work_shift_members: [...people.map(p => ({ shift_id: 's1', profile_id: `prof-${p}` })), { shift_id: 's0', profile_id: 'prof-zz' }],
-    payroll_employee_links: [...people, 'zz'].map(p => ({ paychex_employee_id: p, profile_id: `prof-${p}` })),
+    payroll_employee_roles: [
+      ...shop.map(p => ({ paychex_employee_id: p, role: 'shop_tech' })),
+      ...gfx.map((p, i) => ({ paychex_employee_id: p, role: i % 2 ? 'graphics_installer' : 'graphics_production' })),
+      { paychex_employee_id: 'mgr', role: 'upfit_management' },
+    ],
   };
 }
 
 describe('loadShopPayrollRate', () => {
-  it('pools linked shop-timer people over the window', async () => {
-    const r = await loadShopPayrollRate(makeFake(world(['a', 'b', 'c'])));
+  it('upfit pools Shop Techs only, over the window', async () => {
+    const r = await loadShopPayrollRate(makeFake(world(['a', 'b', 'c'], ['x', 'y', 'z'])), 'upfit');
     expect(r).toEqual({ rate: 40, people: 3, windowStart: '2026-06-21', windowEnd: '2026-09-20' });
   });
 
+  it('graphics pools Graphics Production + Installers', async () => {
+    const r = await loadShopPayrollRate(makeFake(world(['a', 'b', 'c'], ['x', 'y', 'z'])), 'graphics');
+    expect(r?.rate).toBe(30);
+    expect(r?.people).toBe(3);
+  });
+
   it(`fewer than ${MIN_POOL_PEOPLE} people would expose someone's pay → null`, async () => {
-    expect(await loadShopPayrollRate(makeFake(world(['a', 'b'])))).toBeNull();
+    expect(await loadShopPayrollRate(makeFake(world(['a', 'b'])), 'upfit')).toBeNull();
   });
 
   it('nothing uploaded → null', async () => {
-    expect(await loadShopPayrollRate(makeFake({}))).toBeNull();
+    expect(await loadShopPayrollRate(makeFake({}), 'upfit')).toBeNull();
   });
 });
