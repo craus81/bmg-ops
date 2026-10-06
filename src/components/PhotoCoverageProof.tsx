@@ -63,6 +63,10 @@ type Drag =
   | { kind: 'move' | 'resize'; id: string; grabX: number; grabY: number; rect: CoverageBox['rect'] };
 
 const MIN_BOX_PX = 6;
+// Smallest box side, in on-screen CSS px. Converted to photo px with the
+// current zoom, so zooming in lets a box shrink to a tiny decal while a
+// stray click at fit still can't leave an invisible box.
+const MIN_BOX_SCREEN_PX = 3;
 
 // On-screen sizes (CSS px) for what's drawn over the photo. They hold steady
 // whatever the photo's resolution or zoom, so a tag never dwarfs the decal it
@@ -198,6 +202,7 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
   /** Photo pixels per on-screen CSS pixel — scales the fixed-size overlays.
    *  The photo is `zoom` viewports wide, which is known before layout. */
   const k = dim && viewportW > 0 ? dim.w / (viewportW * zoom) : 1;
+  const minBoxPx = Math.max(1, MIN_BOX_SCREEN_PX * k);
 
   /** CSS px of the viewport per real (client) px — they differ under text-size zoom. */
   const cssPerClient = () => {
@@ -363,7 +368,7 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
     const r = drag.rect;
     update(drag.id, drag.kind === 'move'
       ? { rect: { ...r, x: r.x + dx, y: r.y + dy } }
-      : { rect: { ...r, w: Math.max(MIN_BOX_PX, r.w + dx), h: Math.max(MIN_BOX_PX, r.h + dy) } });
+      : { rect: { ...r, w: Math.max(minBoxPx, r.w + dx), h: Math.max(minBoxPx, r.h + dy) } });
   };
 
   const onPointerUp = () => {
@@ -376,7 +381,7 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
       const x = Math.min(drag.x1, drag.x2), y = Math.min(drag.y1, drag.y2);
       const w = Math.abs(drag.x2 - drag.x1), h = Math.abs(drag.y2 - drag.y1);
       // A click that never became a drag is a miss, not an invisible box.
-      if (w >= MIN_BOX_PX && h >= MIN_BOX_PX) {
+      if (w >= minBoxPx && h >= minBoxPx) {
         const box: CoverageBox = {
           id: crypto.randomUUID(),
           label: `Area ${boxes.length + 1}`,
