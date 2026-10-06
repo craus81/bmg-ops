@@ -61,6 +61,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@types/crypto-js": "^4.2.2",
     "@types/node": "^20.0.0",
     "@types/react": "^18.3.0",
