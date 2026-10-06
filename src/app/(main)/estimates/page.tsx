@@ -4249,59 +4249,22 @@ export default function EstimatesPage() {
           </div>
         )}
 
-        {/* Part search + visual catalog browser (N4-A) */}
+        {/* Part search + visual catalog browser (N4-A). The search box gets its
+            own full-width line so it can't be squeezed to a sliver on a phone;
+            the action buttons wrap underneath it. */}
         {(
-          <div style={{ position: 'relative', marginBottom: '8px', display: 'flex', gap: '8px' }}>
+          <div style={{ marginBottom: '8px' }}>
+          <div style={{ position: 'relative', marginBottom: '8px' }}>
+            <span aria-hidden style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', fontSize: '13px', color: 'var(--text-label)', pointerEvents: 'none' }}>🔍</span>
             <input
               ref={partSearchRef}
-              placeholder="Search parts catalog to add..."
+              type="search"
+              aria-label="Search parts to add"
+              placeholder="Search parts to add (part # or name)…"
               value={partSearch}
               onChange={e => setPartSearch(e.target.value)}
-              style={{ ...inputStyle, background: 'var(--subtle-bg)', flex: 1 }}
+              style={{ ...inputStyle, background: 'var(--subtle-bg)', padding: '10px 10px 10px 32px', fontSize: '13px' }}
             />
-            <button
-              type="button"
-              onClick={() => setShowCatalogBrowser(true)}
-              title="Browse the catalog by category and vendor, with photos"
-              style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
-            >
-              Browse Catalog
-            </button>
-            <button
-              type="button"
-              onClick={() => { setDraftError(null); setDraftResult(null); setDraftFromQbo(null); setDraftOpen(true); }}
-              title="Paste an RFQ email and get a reviewable grid of candidate lines. Nothing is added until you accept it."
-              style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.3)', background: 'rgba(167,139,250,0.08)', color: '#a78bfa', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
-            >
-              Draft from Text
-            </button>
-            <button
-              type="button"
-              onClick={addGraphics}
-              disabled={saving}
-              title="Save this estimate and price vehicle graphics in the wrap-quote builder — the result comes back as lines on this estimate"
-              style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: saving ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}
-            >
-              🎨 Add Graphics
-            </button>
-            <button
-              type="button"
-              onClick={openQuickGraphics}
-              title="Skip the estimator — type in square footage, vinyl type, and labor directly"
-              style={{ padding: '8px 14px', borderRadius: '8px', border: `1px solid ${quickGfxOpen ? 'rgba(96,165,250,0.4)' : 'var(--border)'}`, background: quickGfxOpen ? 'rgba(96,165,250,0.08)' : 'var(--card)', color: quickGfxOpen ? '#60a5fa' : 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
-            >
-              + Graphics Line
-            </button>
-            {lines.some(l => l.part_id && !l.is_custom) && (
-              <button
-                type="button"
-                onClick={saveLinesAsPackage}
-                title="Save this estimate's catalog lines as a reusable package (Browse Catalog → Packages)"
-                style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
-              >
-                Save as Package
-              </button>
-            )}
             {(partResults.length > 0 || kitResults.length > 0 || (isAdmin && !partSearching && partSearch.trim().length >= 2)) && (
               <div style={{
                 position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
@@ -4380,6 +4343,52 @@ export default function EstimatesPage() {
                 )}
               </div>
             )}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+            <button
+              type="button"
+              onClick={() => setShowCatalogBrowser(true)}
+              title="Browse the catalog by category and vendor, with photos"
+              className="est-part-action" style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              <span className="est-lbl-full">Browse Catalog</span><span className="est-lbl-short">Browse</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => { setDraftError(null); setDraftResult(null); setDraftFromQbo(null); setDraftOpen(true); }}
+              title="Paste an RFQ email and get a reviewable grid of candidate lines. Nothing is added until you accept it."
+              className="est-part-action" style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.3)', background: 'rgba(167,139,250,0.08)', color: '#a78bfa', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              <span className="est-lbl-full">Draft from Text</span><span className="est-lbl-short">Draft</span>
+            </button>
+            <button
+              type="button"
+              onClick={addGraphics}
+              disabled={saving}
+              title="Save this estimate and price vehicle graphics in the wrap-quote builder — the result comes back as lines on this estimate"
+              className="est-part-action" style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: saving ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}
+            >
+              <span className="est-lbl-full">🎨 Add Graphics</span><span className="est-lbl-short">🎨 Graphics</span>
+            </button>
+            <button
+              type="button"
+              onClick={openQuickGraphics}
+              title="Skip the estimator — type in square footage, vinyl type, and labor directly"
+              className="est-part-action" style={{ padding: '8px 14px', borderRadius: '8px', border: `1px solid ${quickGfxOpen ? 'rgba(96,165,250,0.4)' : 'var(--border)'}`, background: quickGfxOpen ? 'rgba(96,165,250,0.08)' : 'var(--card)', color: quickGfxOpen ? '#60a5fa' : 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              <span className="est-lbl-full">+ Graphics Line</span><span className="est-lbl-short">+ Line</span>
+            </button>
+            {lines.some(l => l.part_id && !l.is_custom) && (
+              <button
+                type="button"
+                onClick={saveLinesAsPackage}
+                title="Save this estimate's catalog lines as a reusable package (Browse Catalog → Packages)"
+                className="est-part-action" style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                <span className="est-lbl-full">Save as Package</span><span className="est-lbl-short">Package</span>
+              </button>
+            )}
+          </div>
           </div>
         )}
 
