@@ -4,6 +4,7 @@ import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { createInvoiceFromSO, fulfillSalesOrder } from '@/lib/netsuite';
 import { logAudit } from '@/lib/audit';
+import { notifyPortalInvoice } from '@/lib/portal-invoice-notify';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -298,6 +299,19 @@ export async function POST(req: NextRequest) {
           salesOrderId,
           newInvoice: stampNumber,
         },
+      });
+    }
+
+    // Customers paid only through their own AP portal (Bodewell): tell the
+    // portal contacts to enter it (best-effort). The SO's customer comes
+    // from the invoice header.
+    if (result.invoiceId) {
+      await notifyPortalInvoice(supabase, {
+        invoiceId: result.invoiceId,
+        invoiceNumber: result.invoiceNumber || null,
+        source: 'a finished vehicle',
+        detail: checkin.vin ? `VIN ${checkin.vin}` : null,
+        actorId: auth.user.id,
       });
     }
 

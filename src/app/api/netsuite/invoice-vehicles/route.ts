@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { createDirectInvoice, findCustomer, findItems, getItemBasePrices } from '@/lib/netsuite';
 import { resolveLocationWithOverride } from '@/lib/invoice-location';
 import { requireRole } from '@/lib/api-auth';
+import { notifyPortalInvoice } from '@/lib/portal-invoice-notify';
 import { validateBody, z } from '@/lib/validate';
 import { refreshPoInvoiceLinks } from '@/lib/po-invoice-sync';
 import { getPoBilledByPart, computeOverbillProblems } from '@/lib/po-invoice-verify';
@@ -381,6 +382,19 @@ export async function POST(req: NextRequest) {
               memo: `Scan invoice — ${custScans.length} vehicle${custScans.length !== 1 ? 's' : ''}`,
             }, { onConflict: 'purchase_order_id,netsuite_invoice_id', ignoreDuplicates: true });
           }
+
+          // Customers paid only through their own AP portal (Bodewell):
+          // tell the portal contacts to enter it (best-effort).
+          await notifyPortalInvoice(supabase, {
+            invoiceId: invoiceResult.invoiceId,
+            invoiceNumber: invoiceResult.invoiceNumber || null,
+            customerNsId: nsCustomer.id,
+            amount: lineItems.reduce((sum, li) => sum + li.quantity * li.rate, 0),
+            poNumber: poNumber || null,
+            source: 'the Scan Log',
+            detail: `${seenVins.size || custScans.length} vehicle${(seenVins.size || custScans.length) !== 1 ? 's' : ''}${soloVin ? ` (VIN ${soloVin})` : ''}`,
+            actorId: auth.user.id,
+          });
 
           results.push({
             customer: customerName,
