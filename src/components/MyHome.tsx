@@ -119,6 +119,8 @@ export default function MyHome({ role, embedded = false }: { role: MyHomeRole; e
     // Pull In: scan a vehicle into a bay — starts its job timer.
     actions.push({ label: 'Pull In', path: deepLinks.pullIn(), primary: true });
     actions.push({ label: 'Check In', path: '/tracking?checkin=1', primary: false });
+    // Camera Installs: T-Mobile camera + GO9B, its own process (2026-10-06).
+    actions.push({ label: 'Camera Install', path: `${deepLinks.cameraInstalls()}?new=1`, primary: false });
   }
   if ((role === 'field_tech' || role === 'shop_tech') && hasFeature('scan')) {
     actions.push({ label: role === 'field_tech' ? 'Scan an Install' : 'Scan', path: '/scan', primary: role === 'field_tech' });
