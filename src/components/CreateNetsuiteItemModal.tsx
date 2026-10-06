@@ -1,6 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { storage } from '@/lib/storage';
+import { toJpegIfHeic } from '@/lib/heic';
 
 export interface CreatedPart {
   id: string;
@@ -70,7 +72,41 @@ export function CreateNetsuiteItemModal({
     alreadyExists?: boolean;
     netsuiteUrl?: string;
     mirrorWarning?: string;
+    photoWarning?: string;
   } | null>(null);
+  // Optional product photo, saved onto the catalog part once it exists —
+  // same storage path and endpoint as Parts catalog → Add photo.
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const photoInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!photo) { setPhotoPreview(null); return; }
+    const url = URL.createObjectURL(photo);
+    setPhotoPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [photo]);
+
+  const savePhoto = async (partId: string, picked: File): Promise<string | undefined> => {
+    try {
+      const file = await toJpegIfHeic(picked);
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const path = `parts/${partId}/manual-${Date.now()}.${ext}`;
+      const { error: upErr } = await storage.from('photos').upload(path, file, { contentType: file.type });
+      if (upErr) return `Part created, but the picture didn't upload: ${upErr.message}. Add it from Parts → the part → Add photo.`;
+      const res = await fetch('/api/parts/categorize', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ partId, imagePath: path }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        return `Part created, but the picture didn't save: ${d.error || res.status}. Add it from Parts → the part → Add photo.`;
+      }
+    } catch (e: any) {
+      return `Part created, but the picture didn't upload: ${e?.message || 'unknown error'}. Add it from Parts → the part → Add photo.`;
+    }
+    return undefined;
+  };
 
   const finish = () => {
     if (done) onCreated(done.part, done.info);
@@ -117,12 +153,21 @@ export function CreateNetsuiteItemModal({
             catalog: cat,
           };
       if (data.mirrorWarning) console.warn(data.mirrorWarning);
+      // The picture needs the local catalog row; without it (mirror failed)
+      // there is nothing to attach it to.
+      let photoWarning: string | undefined;
+      if (photo) {
+        photoWarning = data.part?.id
+          ? await savePhoto(data.part.id, photo)
+          : "Part created, but the picture wasn't saved because the FleetSuite catalog entry is missing.";
+      }
       setDone({
         part,
         info,
         alreadyExists: !!data.alreadyExists,
         netsuiteUrl: data.netsuiteUrl,
         mirrorWarning: data.mirrorWarning,
+        photoWarning,
       });
       setSubmitting(false);
     } catch (e: any) {
@@ -163,6 +208,11 @@ export function CreateNetsuiteItemModal({
             {done.info?.priceWarning && (
               <div style={{ marginTop: '12px', fontSize: '11px', color: '#fbbf24', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '8px', padding: '8px 10px', textAlign: 'left' }}>
                 {done.info.priceWarning}
+              </div>
+            )}
+            {done.photoWarning && (
+              <div style={{ marginTop: '8px', fontSize: '11px', color: '#fbbf24', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '8px', padding: '8px 10px', textAlign: 'left' }}>
+                {done.photoWarning}
               </div>
             )}
             {done.mirrorWarning && (
@@ -236,6 +286,37 @@ export function CreateNetsuiteItemModal({
           <div>
             <label style={labelStyle}>Sales Price</label>
             <input value={price} onChange={e => setPrice(e.target.value.replace(/[^0-9.]/g, ''))} inputMode="decimal" placeholder="0.00" style={inputStyle} />
+          </div>
+          <div>
+            <label style={labelStyle}>Picture (optional)</label>
+            <input
+              ref={photoInput}
+              type="file"
+              accept="image/*,.heic,.heif"
+              style={{ display: 'none' }}
+              onChange={e => { const f = e.target.files?.[0]; if (f) setPhoto(f); e.target.value = ''; }}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              {photoPreview && (
+                <img src={photoPreview} alt="" style={{ width: '56px', height: '56px', objectFit: 'cover', borderRadius: '8px', border: '1px solid var(--border)' }} />
+              )}
+              <button
+                type="button"
+                onClick={() => photoInput.current?.click()}
+                disabled={submitting}
+                style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--subtle-bg)', color: 'var(--text-body)', fontWeight: 700, fontSize: '12px', cursor: 'pointer' }}
+              >
+                {photo ? 'Change picture' : 'Take photo / choose file'}
+              </button>
+              {photo && !submitting && (
+                <button type="button" onClick={() => setPhoto(null)} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer' }}>
+                  Remove
+                </button>
+              )}
+            </div>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+              Shows on estimates, the customer approval page and the Parts catalog.
+            </div>
           </div>
 
           {error && (
