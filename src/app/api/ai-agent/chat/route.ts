@@ -471,6 +471,35 @@ COMMON NETSUITE PATTERNS:
 - Revenue by month: SELECT EXTRACT(MONTH FROM t.trandate) mo, SUM(t.foreigntotal) FROM transaction t WHERE t.type = 'CustInvc' AND EXTRACT(YEAR FROM t.trandate) = 2026 GROUP BY 1 ORDER BY 1
 - Overdue invoices: SELECT t.tranid, c.companyname, t.foreignamountunpaid, (SYSDATE - t.duedate) AS days_overdue FROM transaction t JOIN customer c ON c.id = t.entity WHERE t.type = 'CustInvc' AND t.status = 'A' AND t.duedate < SYSDATE ORDER BY 4 DESC
 
+PAYROLL (Paychex Flex, source "supabase" — leadership only):
+Uploaded from Paychex each payroll. One row per employee per paycheck.
+- payroll_checks: paychex_employee_id, employee_name ("Last, First M"), period_start, period_end (dates),
+  location (business location: 'Main', 'Masterack', 'Brandon, Mississippi'), position (e.g. 'Installer',
+  'Installer Assistant', 'Installation Manager', 'Outside Sales', 'Graphic Designer', 'Administraton' [sic], 'Owner'),
+  regular_amount, regular_hours, overtime_amount, overtime_hours,
+  total_earnings (gross incl. reimbursements), er_benefits, er_taxes,
+  total_labor_cost (= total_earnings + er_benefits + er_taxes — the employer's full cost)
+- payroll_employee_links: paychex_employee_id → profile_id (FK profiles) — use to name people in app terms or join to work_shift_members / work_shifts
+- payroll_imports: one row per upload (uploaded_at, row_count, first_period_start, last_period_end)
+Rules:
+- Date payroll by period_end (the pay period a check belongs to). Off-cycle checks have one-day periods.
+- "Cost per hour" = SUM(total_labor_cost) / NULLIF(SUM(regular_hours + overtime_hours), 0) — loaded cost per WORKED hour.
+  PTO/holiday/bonus pay has no hours in this data, so it spreads across worked hours.
+- Salaried people show flat hours (typically 80 a period); say so when comparing their hourly cost.
+- Check what's uploaded before saying data is missing: SELECT MIN(period_start), MAX(period_end) FROM payroll_checks
+Examples:
+- Labor cost by month: SELECT to_char(period_end, 'YYYY-MM') AS month, SUM(total_labor_cost) AS labor_cost, SUM(overtime_hours) AS ot_hours FROM payroll_checks GROUP BY 1 ORDER BY 1
+- Overtime leaders this year: SELECT employee_name, SUM(overtime_hours) ot_hours, SUM(overtime_amount) ot_pay FROM payroll_checks WHERE period_end >= date_trunc('year', NOW()) GROUP BY 1 ORDER BY 2 DESC LIMIT 10
+- By location and position: SELECT location, position, COUNT(DISTINCT paychex_employee_id) people, SUM(total_labor_cost) cost FROM payroll_checks WHERE period_end >= NOW() - INTERVAL '90 days' GROUP BY 1, 2 ORDER BY 3 DESC
+
+COMBINING PAYROLL WITH NETSUITE (quick reports):
+Payroll lives in Supabase and revenue/expenses in NetSuite, so a cross-system report is TWO queries in one
+JSON block (one "supabase", one "netsuite"), then you combine the results yourself and show one table.
+- Labor as % of revenue by month: payroll SUM(total_labor_cost) by to_char(period_end,'YYYY-MM') + NetSuite
+  invoiced revenue by month (CustInvc, SUM(foreigntotal) grouped by TO_CHAR(trandate,'YYYY-MM')); labor % = labor / revenue.
+- Revenue per labor dollar or per worked hour: same two queries, divide.
+- Match months on the YYYY-MM key; say which months are missing from either side rather than treating them as zero.
+
 ANSWER FORMAT:
 - Be concise and direct
 - Format currency as $X,XXX.XX

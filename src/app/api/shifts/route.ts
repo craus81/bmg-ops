@@ -73,7 +73,7 @@ export async function GET(req: NextRequest) {
     if (!checkin) return NextResponse.json({ error: 'Check-in not found' }, { status: 404 });
     const open = await getOpenShopShift(service, q.data.checkinId);
     const shift = open ? { ...open, members: await memberViews(service, open.id) } : null;
-    const labor = (await getShopLaborForCheckins(service, [q.data.checkinId])).get(q.data.checkinId);
+    const labor = (await getShopLaborForCheckins(service, [q.data.checkinId], { cost: false })).get(q.data.checkinId);
     return NextResponse.json({
       shift,
       roster: await shopRoster(service),

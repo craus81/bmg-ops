@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { shopWorkMs } from './shop-hours';
+import { loadShopPayrollRate } from './payroll-rates';
 
 /**
  * Shop labor capture (R3-21, owner decisions 2026-09-07): 'shop'-context
@@ -11,10 +12,12 @@ import { shopWorkMs } from './shop-hours';
  * Hours are pure presence overlap: a member's hours on a shift are the
  * intersection of the shift interval with their membership window
  * (added_at → removed_at). share_weight is a piece-rate concept and plays
- * no part here. Cost = total member-hours × the blended shop rate
- * (quote_settings.shop_labor_cost_rate, Settings → Shop Labor Cost Rate);
- * with no rate configured the margin report shows hours but excludes labor
- * from the math, saying so.
+ * no part here. Cost = total member-hours × the shop cost rate
+ * (getShopLaborCostBasis): the pooled Paychex rate when payroll is uploaded
+ * and linked (src/lib/payroll-rates.ts, migration 340), else the blended
+ * quote_settings.shop_labor_cost_rate (Settings → Shop Labor Cost Rate);
+ * with neither, the margin report shows hours but excludes labor from the
+ * math, saying so.
  *
  * Shop clock (owner rules 2026-10-02): a shop timer counts only shop
  * hours — weekdays 7:00 AM–3:30 PM Central less lunch (src/lib/shop-hours.ts).
@@ -98,6 +101,32 @@ export async function getShopLaborRate(service: SupabaseClient): Promise<number 
   return rate != null ? Number(rate) : null;
 }
 
+export interface ShopLaborCostBasis {
+  rate: number | null;
+  /** 'paychex' = pooled payroll rate; 'setting' = the blended rate typed in Settings. */
+  source: 'paychex' | 'setting' | null;
+  /** Paychex basis only: how many people's paychecks fed it, and through when. */
+  people?: number;
+  throughPeriodEnd?: string;
+}
+
+/**
+ * The rate shop hours are costed at. Paychex first (real payroll, pooled so
+ * no one person's pay can be read back out of a job); the blended Settings
+ * rate when payroll isn't uploaded or nobody on a shop timer is linked yet.
+ * A payroll read failure falls back too, never fails the caller.
+ */
+export async function getShopLaborCostBasis(service: SupabaseClient): Promise<ShopLaborCostBasis> {
+  try {
+    const p = await loadShopPayrollRate(service);
+    if (p) return { rate: p.rate, source: 'paychex', people: p.people, throughPeriodEnd: p.windowEnd };
+  } catch (e: any) {
+    console.warn('loadShopPayrollRate failed, using the Settings rate:', e?.message || e);
+  }
+  const rate = await getShopLaborRate(service);
+  return { rate, source: rate != null ? 'setting' : null };
+}
+
 /**
  * Which crew a shop timer is billing (migration 337, owner rule 2026-10-02:
  * timers run on Graphics and on In Progress Upfit). Older shifts carry null
@@ -129,7 +158,8 @@ export interface CheckinLabor {
   hours: number;
   /** The subset of `hours` from auto-closed or still-open shifts. */
   approxHours: number;
-  /** hours × the blended rate, or null when no rate is configured. */
+  /** hours × the shop cost rate (getShopLaborCostBasis), or null when no
+   *  rate is configured or the caller asked for hours only. */
   cost: number | null;
   hasOpenShift: boolean;
   /** `hours` split by the crew the timer was billing. */
@@ -143,6 +173,7 @@ export interface CheckinLabor {
 export async function getShopLaborForCheckins(
   service: SupabaseClient,
   checkinIds: string[],
+  opts: { cost?: boolean } = {},
 ): Promise<Map<string, CheckinLabor>> {
   const out = new Map<string, CheckinLabor>();
   if (checkinIds.length === 0) return out;
@@ -177,7 +208,8 @@ export async function getShopLaborForCheckins(
     }
   }
 
-  const rate = await getShopLaborRate(service);
+  // Hours-only callers (pick-list, burn meter) skip the payroll reads.
+  const rate = opts.cost === false ? null : (await getShopLaborCostBasis(service)).rate;
   const nowIso = new Date().toISOString();
   for (const s of shifts) {
     const entry = out.get(s.fleet_checkin_id) || { hours: 0, approxHours: 0, cost: null, hasOpenShift: false, byDept: { graphics: 0, upfit: 0 } };

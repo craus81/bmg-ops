@@ -65,6 +65,9 @@ export const SUPABASE_FINANCIAL_PATTERNS: RegExp[] = [
   // future, so a table added in a later PR can't quietly land outside the
   // gate. This is the same financials tier as the GL data above.
   /\bledger_[a-z_]+\b/i,
+  // Paychex payroll (migration 340): per-person wages, employer taxes and
+  // benefits. Every payroll_* table, present and future, same tier.
+  /\bpayroll_[a-z_]+\b/i,
 ];
 
 // Secrets and forgery material: blocked for EVERY role, including

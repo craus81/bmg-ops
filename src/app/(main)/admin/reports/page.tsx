@@ -8,7 +8,7 @@ interface ReportLink {
   title: string;
   blurb: string;
   href: string;
-  source: 'NetSuite' | 'FleetSuite' | 'QuickBooks + NetSuite';
+  source: 'NetSuite' | 'FleetSuite' | 'QuickBooks + NetSuite' | 'Paychex';
   /** Who the destination page actually admits. Omit for anyone who can
    *  reach this index. Listing a report someone will be bounced out of is a
    *  dead click, so the card is hidden instead of explaining itself. */
@@ -46,6 +46,13 @@ const REPORTS: ReportLink[] = [
     blurb: 'Revenue, gross profit, expenses and net income for every month on record: QuickBooks before the cutover, NetSuite after, in one series with nothing counted twice. Yearly totals with growth, a monthly chart, and a month-by-year grid for seasonality.',
     href: '/admin/reports/financial-history',
     source: 'QuickBooks + NetSuite',
+    visibility: 'financials',
+  },
+  {
+    title: 'Paychex Payroll',
+    blurb: 'Labor cost from Paychex Flex (wages, employer taxes and benefits) by pay period, month, location, position and person, with overtime called out. Upload the Payroll Labor Cost CSV each payroll; it also sets the shop labor rate job costing uses, and the AI can answer questions about it.',
+    href: '/admin/reports/paychex-payroll',
+    source: 'Paychex',
     visibility: 'financials',
   },
   {

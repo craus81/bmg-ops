@@ -85,6 +85,12 @@ describe('touchesFinancialData — Supabase', () => {
     expect(touchesFinancialData('supabase', 'SELECT total FROM ledger_payments WHERE direction = $1')).toBe(true);
     expect(touchesFinancialData('supabase', 'SELECT * FROM ledger_report_snapshots')).toBe(true);
   });
+  // Migration 340: Paychex payroll is per-person pay — same leadership gate.
+  it('blocks the Paychex payroll tables', () => {
+    expect(touchesFinancialData('supabase', 'SELECT employee_name, total_labor_cost FROM payroll_checks')).toBe(true);
+    expect(touchesFinancialData('supabase', 'SELECT * FROM payroll_employee_links l JOIN profiles p ON p.id = l.profile_id')).toBe(true);
+    expect(touchesFinancialData('supabase', 'SELECT * FROM payroll_imports')).toBe(true);
+  });
   it('allows operational tables', () => {
     expect(touchesFinancialData('supabase', 'SELECT job_number, status FROM graphics_jobs')).toBe(false);
     expect(touchesFinancialData('supabase', 'SELECT estimate_number, grand_total FROM estimates')).toBe(false);

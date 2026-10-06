@@ -10,8 +10,10 @@ export const dynamic = 'force-dynamic';
  * The blended hourly COST of shop labor (Settings → Shop Labor Cost Rate,
  * migration 269) — what an hour of floor time costs the company, used by
  * the vehicle-margin report to price pick-list timer hours (R3-21, job
- * costing only). One number by owner decision: no per-tech wages live in
- * the app. Reading is admin-only (it's cost data); writing is super-admin,
+ * costing only). One number by owner decision. Since migration 340 it is
+ * the FALLBACK: once Paychex payroll is uploaded and linked, the margin
+ * report uses the pooled payroll rate instead (src/lib/payroll-rates.ts —
+ * still one number, so no tech's pay shows through a job). Reading is admin-only (it's cost data); writing is super-admin,
  * matching the labor-item and sales-tax precedents — it moves every
  * reported margin.
  */
