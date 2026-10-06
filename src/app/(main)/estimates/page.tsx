@@ -2134,8 +2134,24 @@ export default function EstimatesPage() {
       + unmatchedNote;
     if (!(await dialog.confirm(confirmMsg))) return;
 
-    // Save first to ensure latest data
-    await saveEstimate(isSync ? 'pushed' : 'draft');
+    // Save first to ensure latest data -- except on an accepted estimate.
+    // Its contents are frozen, so the save could only trip the revision
+    // lock's "why are you changing it?" prompt; push the accepted document
+    // as stored instead, the same way View/Print and Email PDF do.
+    const est = await freshEstimateRow(editingId);
+    if (isContentFrozen(est)) {
+      if (draftSerialized !== draftBaselineRef.current && !(await dialog.confirm(
+        'The customer accepted this estimate, so it is locked and the changes on screen are NOT saved. '
+        + 'NetSuite will get the accepted document, not what you are looking at.\n\n'
+        + 'Push the accepted document anyway? To quote the changes instead, use "Duplicate as New Revision".',
+        { confirmLabel: 'Push accepted document', cancelLabel: 'Go back' },
+      ))) return;
+    } else {
+      const saved = await saveEstimate(isSync ? 'pushed' : 'draft');
+      // Refused or cancelled: pushing something that silently differs from
+      // the screen is worse than not pushing.
+      if (!saved) return;
+    }
 
     if (isSync) {
       setSyncing(true);
