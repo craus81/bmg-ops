@@ -3,6 +3,10 @@ import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
+import {
+  ESTIMATE_LINK_COLUMNS,
+  estimateJobPo, estimateVehicleLine, findEstimateWrapQuote, joinBlocks, wrapQuoteJobFields,
+} from '@/lib/graphics-links';
 
 export const dynamic = 'force-dynamic';
 
@@ -113,11 +117,29 @@ async function buildEstimateJobPrefill(supabase: any, estimate: any) {
   const titleParts = [estimate.title || `Estimate ${estimate.estimate_number}`];
   if (estimate.vin) titleParts.push(`· ${String(estimate.vin).slice(-6)}`);
 
+  // The full vehicle (VIN, unit) rides in Content — the title only has
+  // room for the last 6. The customer's PO wins the PO # field (it becomes
+  // the invoice's PO); the SO # is the fallback.
+  const po = estimateJobPo(estimate);
+
+  // The estimate's wrap quote, when it has exactly one no job holds yet:
+  // the job links to it and takes its films and coverage areas, same as a
+  // job made from the quote.
+  const quote = await findEstimateWrapQuote(supabase, estimate.id);
+  const quoteFields = quote ? wrapQuoteJobFields(quote) : null;
+
   return {
     title: titleParts.join(' '),
     partNumbers: graphicsItemNumbers,
     quantity: graphicsQuantity,
     defaultAssigneeId: (defaultAssignee?.id as string | undefined) || null,
+    content: joinBlocks(estimateVehicleLine(estimate), po.soNote, quoteFields?.content),
+    poNumber: po.poNumber,
+    notes: joinBlocks(estimate.notes, quoteFields?.notes),
+    vinylType: quoteFields?.vinylType || null,
+    laminate: quoteFields?.laminate || null,
+    wrapQuoteId: (quote?.id as string | undefined) || null,
+    wrapQuoteNumber: (quote?.quote_number as string | undefined) || null,
   };
 }
 
@@ -134,7 +156,7 @@ export async function POST(req: NextRequest) {
 
     const { data: estimate, error: estErr } = await supabase
       .from('estimates')
-      .select('id, estimate_number, customer_id, customer_name, customer_netsuite_id, title, notes, vin, netsuite_so_number')
+      .select(ESTIMATE_LINK_COLUMNS)
       .eq('id', estimateId)
       .single();
     if (estErr || !estimate) {
@@ -149,7 +171,7 @@ export async function POST(req: NextRequest) {
           ...prefill,
           customer: estimate.customer_name || '',
           customerNetsuiteId: estimate.customer_netsuite_id || null,
-          notes: estimate.notes || '',
+          notes: prefill.notes || '',
           soNumber: estimate.netsuite_so_number || '',
           estimateNumber: estimate.estimate_number,
         },
@@ -174,7 +196,7 @@ export async function POST(req: NextRequest) {
     if (mode === 'link') {
       const { data: existing, error: exErr } = await supabase
         .from('graphics_jobs')
-        .select('id, job_number, estimate_id, status')
+        .select('id, job_number, estimate_id, wrap_quote_id, status')
         .eq('id', existingJobId)
         .single();
       if (exErr || !existing) {
@@ -186,10 +208,13 @@ export async function POST(req: NextRequest) {
         }, { status: 400 });
       }
 
+      const linkQuote = existing.wrap_quote_id ? null : await findEstimateWrapQuote(supabase, estimateId);
       const { error: updErr } = await supabase
         .from('graphics_jobs')
         .update({
           estimate_id: estimateId,
+          // …and the estimate's wrap quote, when the job has none.
+          ...(!existing.wrap_quote_id && linkQuote ? { wrap_quote_id: linkQuote.id } : {}),
           updated_at: new Date().toISOString(),
         })
         .eq('id', existingJobId);
@@ -230,10 +255,15 @@ export async function POST(req: NextRequest) {
         customer: estimate.customer_name || null,
         customer_netsuite_id: estimate.customer_netsuite_id || null,
         quantity: graphicsQuantity,
-        notes: estimate.notes || null,
+        content: prefill.content,
+        notes: prefill.notes,
+        vinyl_type: prefill.vinylType,
+        laminate: prefill.laminate,
+        po_number: prefill.poNumber,
         priority: 'normal',
         status: 'received',
         estimate_id: estimateId,
+        wrap_quote_id: prefill.wrapQuoteId,
         assigned_to: defaultAssigneeId,
         created_by: userId || auth.user.id,
       })

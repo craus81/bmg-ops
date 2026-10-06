@@ -2141,7 +2141,9 @@ export default function WrapQuotePage() {
   // overrides, and binds saveQuote to the same row (same quote number).
   // From there every send option applies — email variants, NetSuite push,
   // PDF — so a quote sent earlier can be pushed to NetSuite later, etc.
-  const loadQuoteForEdit = async (q: WrapQuote) => {
+  // Edit lands on the drawing (Estimator tab) where the boxes are; Resend
+  // lands on the Quote tab to send it again unchanged.
+  const loadQuoteForEdit = async (q: WrapQuote, landOn: 'estimator' | 'quote' = 'estimator') => {
     const tpl = await loadTemplateById(q.template_id);
     const ppi = num(tpl?.px_per_in);
     // Quotes saved before geometry was snapshotted have no shape coordinates.
@@ -2251,7 +2253,7 @@ export default function WrapQuotePage() {
     setSendInclude({ pricing: true, lineItems: true, diagram: true, netsuitePdf: false });
     setViewQuote(null);
     setReturnToQuotesFor(null);
-    setTab('quote');
+    setTab(landOn);
   };
 
   // A sent quote is finished — clear the whole estimator (drawing, customer,
@@ -4312,8 +4314,11 @@ export default function WrapQuotePage() {
                     ⧉ Accept Link
                   </button>
                 )}
-                <button onClick={e => { e.stopPropagation(); loadQuoteForEdit(q); }} title="Reopen this quote for editing / resending" style={btnStyle('#60a5fa', 'transparent')}>
+                <button onClick={e => { e.stopPropagation(); loadQuoteForEdit(q, 'estimator'); }} title="Reopen this quote on the drawing to change its boxes" style={btnStyle('#60a5fa', 'transparent')}>
                   Edit
+                </button>
+                <button onClick={e => { e.stopPropagation(); loadQuoteForEdit(q, 'quote'); }} title="Reopen this quote on the Quote tab to send it again" style={btnStyle('#60a5fa', 'transparent')}>
+                  Resend
                 </button>
                 <button onClick={e => { e.stopPropagation(); toggleArchiveQuote(q); }} title={q.archived_at ? 'Unarchive' : 'Archive'} style={btnStyle('#f59e0b', 'transparent')}>
                   {q.archived_at ? 'Unarchive' : 'Archive'}
@@ -4332,7 +4337,8 @@ export default function WrapQuotePage() {
           <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '640px', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto' }}>
             {quotePreview(viewQuote)}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px', marginTop: '8px' }}>
-              <button onClick={() => loadQuoteForEdit(viewQuote)} style={btnStyle('#60a5fa', 'var(--card)')}>Edit / Resend</button>
+              <button onClick={() => loadQuoteForEdit(viewQuote, 'estimator')} title="Reopen this quote on the drawing to change its boxes" style={btnStyle('#60a5fa', 'var(--card)')}>Edit</button>
+              <button onClick={() => loadQuoteForEdit(viewQuote, 'quote')} title="Reopen this quote on the Quote tab to send it again" style={btnStyle('#60a5fa', 'var(--card)')}>Resend</button>
               <button
                 onClick={() => createGraphicsJob(viewQuote)}
                 disabled={creatingJobFor === viewQuote.id}
