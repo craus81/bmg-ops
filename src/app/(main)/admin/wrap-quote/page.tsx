@@ -99,7 +99,7 @@ interface Template {
   wheelbase_in: number | null;
   panel_data: PanelDimension[] | null;
   is_active: boolean | null;
-  // Generated in the database from the variant (migration 344, a port of
+  // Generated in the database from the variant (migration 345, a port of
   // src/lib/template-facets.ts) — what the picker's narrower dropdowns
   // filter on.
   facet_wheelbase?: string | null;
@@ -367,7 +367,7 @@ const normText = (v?: string | null) => (v || '').trim().toLowerCase();
 
 // ----- Template library lookups -----
 // The library is ~9,450 templates, so the page never downloads it: the
-// database searches and filters it (migration 344) and the page keeps only
+// database searches and filters it (migration 345) and the page keeps only
 // the rows it has shown. Every space-separated search term must match
 // somewhere in the label, name, or code ("transit 2023 high" finds 2023 High
 // Roof Transits regardless of word order).
@@ -823,7 +823,7 @@ export default function WrapQuotePage() {
   // leaves only the wheelbases and roofs a Transit actually comes in, and a
   // dropdown with nothing to offer (bed length on a van) isn't shown. The
   // database works the choices out (vehicle_template_filter_options,
-  // migration 344); retired templates are left out of the estimator.
+  // migration 345); retired templates are left out of the estimator.
   type FilterKey = TemplateFilterKey;
   const filterValues: TemplateFilters = useMemo(() => ({
     year: yearFilter, make: makeFilter, model: modelFilter, body: bodyFilter,

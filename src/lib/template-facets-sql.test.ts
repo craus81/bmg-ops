@@ -1,5 +1,5 @@
 // The wrap estimator's template picker reads roof / bed / cab / body /
-// wheelbase from columns that migration 344 generates in the database with
+// wheelbase from columns that migration 345 generates in the database with
 // vehicle_template_facets(), a SQL port of templateFacets(). This runs the
 // migration in an in-memory Postgres (PGlite) and holds the port to the
 // TypeScript original, plus checks the search / filter functions the picker
@@ -34,7 +34,7 @@ beforeAll(async () => {
       is_active BOOLEAN DEFAULT true
     );
   `);
-  const sql = readFileSync(path.resolve(__dirname, '../../migrations/344-vehicle-template-search.sql'), 'utf8');
+  const sql = readFileSync(path.resolve(__dirname, '../../migrations/345-vehicle-template-search.sql'), 'utf8');
   await db.exec(sql);
   await db.exec(sql); // must be safe to re-run
 }, 60_000);
