@@ -151,6 +151,15 @@ export default function PayrollPage() {
         </div>
       </div>
 
+      {hasFeature('financials') && (
+        <button onClick={() => router.push('/admin/reports/paychex-payroll')} style={{
+          width: '100%', textAlign: 'left', padding: '10px 14px', borderRadius: '12px', marginBottom: '14px',
+          background: 'var(--card)', border: '1px solid var(--border)', cursor: 'pointer', fontSize: '13px', color: 'var(--text-primary)',
+        }}>
+          <b>Paychex Payroll →</b> <span style={{ color: 'var(--text-muted)' }}>upload the Paychex file and see company-wide labor cost</span>
+        </button>
+      )}
+
       {/* Period picker */}
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',

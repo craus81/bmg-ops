@@ -118,7 +118,7 @@ export async function loadSoldHours(
 /** Everything the chip needs for one vehicle. */
 export async function loadBurn(service: SupabaseClient, checkinId: string): Promise<Burn> {
   const [labor, sold] = await Promise.all([
-    getShopLaborForCheckins(service, [checkinId]),
+    getShopLaborForCheckins(service, [checkinId], { cost: false }),
     loadSoldHours(service, checkinId),
   ]);
   return computeBurn({
@@ -137,7 +137,7 @@ export async function loadBurnForCheckins(
   const out = new Map<string, Burn>();
   if (checkinIds.length === 0) return out;
 
-  const labor = await getShopLaborForCheckins(service, checkinIds);
+  const labor = await getShopLaborForCheckins(service, checkinIds, { cost: false });
 
   // Both link directions, batched.
   const sold = new Map<string, { hours: number | null; label: string | null; updatedAt: string }>();

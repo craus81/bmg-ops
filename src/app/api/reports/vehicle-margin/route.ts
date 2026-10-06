@@ -4,7 +4,7 @@ import { requireRole } from '@/lib/api-auth';
 import { suiteqlQuery } from '@/lib/netsuite';
 import { safeStringLiteral } from '@/lib/sql-safe';
 import { fetchAllRows } from '@/lib/fetch-all';
-import { getShopLaborForCheckins, getShopLaborRate } from '@/lib/shop-labor';
+import { getShopLaborForCheckins, getShopLaborCostBasis } from '@/lib/shop-labor';
 import { z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -294,13 +294,15 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // ── Shop labor (R3-21): pick-list timer hours × the blended cost rate
-    // (Settings → Shop Labor Cost Rate). Hours from auto-closed or
+    // ── Shop labor (R3-21): pick-list timer hours × the shop cost rate —
+    // the pooled Paychex rate when payroll is uploaded (migration 340), else
+    // the blended Settings → Shop Labor Cost Rate. Hours from auto-closed or
     // still-open timers are reported as approximate; no configured rate
     // means hours show but labor stays out of the margin math, said so in
     // the meta note. ──
     const laborByCheckin = await getShopLaborForCheckins(supabase, allIds);
-    const shopLaborRate = await getShopLaborRate(supabase);
+    const costBasis = await getShopLaborCostBasis(supabase);
+    const shopLaborRate = costBasis.rate;
 
     // ── Quoted margin (R5-10): the frozen-at-send snapshot (migration 275)
     // for whichever estimate this vehicle links back to — directly
@@ -404,8 +406,10 @@ export async function GET(req: NextRequest) {
         ...meta,
         shopLaborRate,
         laborNote: shopLaborRate != null
-          ? `Labor = pick-list timer hours × the blended shop rate ($${shopLaborRate}/hr). ≈ marks hours from timers nobody stopped (closed by completion or the daily sweep). A vehicle with no recorded hours shows $0 labor.`
-          : 'Timer hours are recorded, but no Shop Labor Cost Rate is set (Settings) — margin excludes labor until it is.',
+          ? `Labor = pick-list timer hours × ${costBasis.source === 'paychex'
+            ? `the shop's average payroll cost ($${shopLaborRate}/hr loaded: wages, employer taxes and benefits from Paychex, pooled across ${costBasis.people} ${costBasis.people === 1 ? 'person' : 'people'} on shop timers, paychecks through ${costBasis.throughPeriodEnd})`
+            : `the blended shop rate ($${shopLaborRate}/hr, Settings)`}. ≈ marks hours from timers nobody stopped (closed by completion or the daily sweep). A vehicle with no recorded hours shows $0 labor.`
+          : 'Timer hours are recorded, but no Shop Labor Cost Rate is set (Settings) and no Paychex payroll is uploaded — margin excludes labor until one is.',
       },
     });
   } catch (err: any) {
