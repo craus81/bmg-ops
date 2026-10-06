@@ -49,6 +49,10 @@
       "schedule": "30 13 * * *"
     },
     {
+      "path": "/api/cron/estimate-review-reminder",
+      "schedule": "27 * * * *"
+    },
+    {
       "path": "/api/cron/proof-reminder-check",
       "schedule": "50 13 * * *"
     },
