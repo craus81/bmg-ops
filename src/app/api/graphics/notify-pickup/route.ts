@@ -5,6 +5,7 @@ import { requireStaff } from '@/lib/api-auth';
 import { sendEmailDetailed, buildNotificationEmail } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { sendSMS } from '@/lib/sms-provider';
+import { logSms } from '@/lib/sms-log';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -216,6 +217,7 @@ export async function POST(req: NextRequest) {
           providerName: result.providerName,
           error: result.error || null,
         };
+        await logSms(supabase, contactPhone, smsBody, result, { kind: 'pickup_notice', sentBy: auth.user?.id, contextUrl: deepLinks.graphicsJob(jobId) });
         if (threadId) {
           await supabase.from('customer_messages').insert({
             thread_id: threadId,

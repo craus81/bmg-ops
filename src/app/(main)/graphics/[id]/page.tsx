@@ -41,6 +41,7 @@ import GraphicsRollPlan from '@/components/GraphicsRollPlan';
 import GraphicsPackChecklist from '@/components/GraphicsPackChecklist';
 import GraphicsJobVehicleFiles from '@/components/GraphicsJobVehicleFiles';
 import GraphicsJobSources from '@/components/GraphicsJobSources';
+import GraphicsApprovalHistory from '@/components/GraphicsApprovalHistory';
 import PrintRoomTimer from '@/components/PrintRoomTimer';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { DropZone } from '@/components/DropZone';
@@ -1815,6 +1816,15 @@ export default function GraphicsJobRecordPage() {
             )}
           </div>
         )}
+
+        {/* Every proof round with its emails, texts and customer replies. */}
+        <GraphicsApprovalHistory
+          jobId={job.id}
+          refreshKey={[ja.sent_for_approval_at, ja.customer_approved_at, ja.customer_rejected_at, ja.approval_reminder_sent_at].join('|')}
+          files={jobFiles}
+          fileUrl={getFileUrl}
+          onOpenFile={openFileInApp}
+        />
 
         {/* Standard compose screen; the proof picker rides in the intro slot —
             only the chosen file drives what the approval page displays. */}
