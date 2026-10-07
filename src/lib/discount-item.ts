@@ -1,5 +1,5 @@
 import { suiteqlQuery } from './netsuite';
-import { discountLabel, discountSplit, normalizeDiscount, normalizeVehicleCount } from './estimate-totals';
+import { discountLabel, discountSplit, lineMoney, normalizeDiscount, normalizeVehicleCount } from './estimate-totals';
 import { isLineTaxable } from './line-taxability';
 
 /**
@@ -128,7 +128,8 @@ export function estimateDiscountSplit(
 ) {
   const discount = normalizeDiscount(estimate.discount_type, estimate.discount_value);
   const units = normalizeVehicleCount(estimate.vehicle_count);
-  const amt = (l: any) => (parseFloat(l.quantity) || 0) * units * (parseFloat(l.unit_price) || 0);
+  // Each line after its own discount (migration 350), as computeTotals does.
+  const amt = (l: any) => lineMoney(l, units).net;
   const subtotal = (lines || []).reduce((s, l) => s + amt(l), 0);
   const taxedBase = (lines || []).reduce((s, l) => (isLineTaxable(l) ? s + amt(l) : s), 0);
   const labor = parseFloat(String(estimate.labor_total ?? 0)) || 0;
@@ -165,4 +166,40 @@ export function buildDiscountLines(
   if (split.taxedPortion > 0) out.push(make(split.taxedPortion, true, both ? ' - on taxed parts' : ''));
   if (split.untaxedPortion > 0) out.push(make(split.untaxedPortion, false, both ? ' - on labor and untaxed items' : ''));
   return out;
+}
+
+/**
+ * The NetSuite discount line that goes right under a part with its own
+ * discount (migration 350), or null when the line has none. NetSuite applies
+ * a discount line to the line above it, and this one carries that part's
+ * tax treatment: untaxed under an untaxed part, taxed under a taxed one
+ * (left unflagged for an exempt customer, like every other line).
+ */
+export function buildLineDiscountLine(
+  line: any,
+  estimate: { vehicle_count?: unknown; tax_exempt?: unknown },
+  item: DiscountItem,
+): DiscountNsLine | null {
+  const { discount } = lineMoney(line, estimate.vehicle_count);
+  if (!(discount > 0)) return null;
+  const what = String(line.item_number || line.description || '').trim();
+  const taxed = isLineTaxable(line);
+  return {
+    itemId: item.id,
+    ...(item.itemType === 'Discount' ? { discountItem: true as const } : { quantity: 1 }),
+    rate: -discount,
+    description: `${discountLabel(line.discount_type, line.discount_value)}${what ? ` - ${what}` : ''}`,
+    discount: true,
+    ...(taxed ? (estimate.tax_exempt ? {} : { taxable: true }) : { taxable: false }),
+  };
+}
+
+/** Does pushing this estimate need a NetSuite discount item at all? */
+export function estimateNeedsDiscountItem(
+  estimate: { discount_type?: unknown; discount_value?: unknown; labor_total?: unknown; vehicle_count?: unknown },
+  lines: any[],
+): number {
+  const units = normalizeVehicleCount(estimate.vehicle_count);
+  const lineDiscounts = (lines || []).reduce((s, l) => s + lineMoney(l, units).discount, 0);
+  return Math.round((estimateDiscountSplit(estimate, lines).amount + lineDiscounts) * 100) / 100;
 }

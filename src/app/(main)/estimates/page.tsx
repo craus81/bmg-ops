@@ -33,7 +33,7 @@ import { apiErrorMessage } from '@/lib/api-error-message';
 import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
-import { discountLabel, discountSplit, normalizeDiscount, roundCentsHalfEven, normalizeVehicleCount, perVehicleAmount } from '@/lib/estimate-totals';
+import { discountLabel, discountSplit, lineMoney, netUnitPrice, normalizeDiscount, roundCentsHalfEven, normalizeVehicleCount, perVehicleAmount } from '@/lib/estimate-totals';
 import { resolveLineTaxability } from '@/lib/line-taxability';
 import { deltaLabel, type EstimateDiff } from '@/lib/estimate-diff';
 import { type DraftLine } from '@/lib/paste-to-estimate';
@@ -160,6 +160,10 @@ interface LineItem extends KitLineFields {
   // average of what installers actually charge us for this part.
   purchase_price?: number | null;
   avg_install_cost?: number | null;
+  /** This line's own discount (migration 350). A type with no value is an
+   *  open, still-empty discount row. Value kept as typed text. */
+  discount_type?: 'percent' | 'amount' | null;
+  discount_value?: string | number | null;
 }
 
 /** A line's catalog identity for the tax lookup (part, NetSuite item, number). */
@@ -325,7 +329,7 @@ interface Estimate {
   internal_review_decided_by: string | null;
   internal_review_decided_at: string | null;
   internal_review_note: string | null;
-  // Team-wide snooze on the overdue-review reminder — migration 347.
+  // Team-wide snooze on the overdue-review reminder — migration 350.
   internal_review_snoozed_until?: string | null;
   internal_review_snoozed_by?: string | null;
 }
@@ -1624,7 +1628,10 @@ export default function EstimatesPage() {
   // rounding that keeps the quote and the NetSuite invoice penny-identical.
   const units = normalizeVehicleCount(vehicleCount);
   const fleetQty = (l: LineItem) => l.quantity * units;
-  const subtotal = lines.reduce((s, l) => s + fleetQty(l) * l.unit_price, 0);
+  // Each line after its own discount (migration 350), as the server does.
+  const lineNet = (l: LineItem) => lineMoney(l, units).net;
+  const subtotal = lines.reduce((s, l) => s + lineNet(l), 0);
+  const lineDiscountTotal = lines.reduce((s, l) => s + lineMoney(l, units).discount, 0);
   const autoLaborHours = lines.reduce((s, l) => s + ((l.labor_hours ?? 0) * fleetQty(l)), 0);
   // Lines built from parts whose labor was never set (NULL, migration 258):
   // they sum as zero, which is exactly the silent under-quote to flag.
@@ -1637,15 +1644,19 @@ export default function EstimatesPage() {
   // rule from the catalog and is what actually gets stored. An unresolved
   // line is taxed, the same fallback the server takes.
   const isTaxedLine = (l: LineItem) => !untaxedLineKeys.has(lineTaxKey(l));
-  const taxableAmount = lines.reduce((s, l) => (isTaxedLine(l) ? s + fleetQty(l) * l.unit_price : s), 0);
+  const taxableAmount = lines.reduce((s, l) => (isTaxedLine(l) ? s + lineNet(l) : s), 0);
   // Per line, each rounded to cents, ties to the even cent — the same math
   // computeTotals runs server-side, which is the same math NetSuite books.
   // Taxing the combined base in one go drifts a cent or two off the invoice.
   const lineTaxAmount = taxExempt
     ? 0
-    : lines.reduce((s, l) => (isTaxedLine(l)
-      ? s + roundCentsHalfEven(fleetQty(l) * l.unit_price * taxRate)
-      : s), 0);
+    : lines.reduce((s, l) => {
+      if (!isTaxedLine(l)) return s;
+      // A line discount on a taxed part has its own negative tax, as the
+      // NetSuite discount line under it will.
+      const m = lineMoney(l, units);
+      return s + roundCentsHalfEven(m.gross * taxRate) - roundCentsHalfEven(m.discount * taxRate);
+    }, 0);
   // Compare at the precision the rate is displayed and stored at — a float
   // round-trip through the database is not a "different rate".
   const atCompanyRate = Math.abs(rateToPct(taxRate) - rateToPct(companyTaxRate)) < 0.005;
@@ -1776,8 +1787,11 @@ export default function EstimatesPage() {
   // counted so the strip says what it's missing instead of lying.
   const lineTrueCost = (l: LineItem) => (l.purchase_price ?? 0) + (l.avg_install_cost ?? 0);
   const lineHasCost = (l: LineItem) => l.purchase_price != null || l.avg_install_cost != null;
-  const lineMarginPct = (l: LineItem): number | null =>
-    lineHasCost(l) && l.unit_price > 0 ? ((l.unit_price - lineTrueCost(l)) / l.unit_price) * 100 : null;
+  // On the price after the line's own discount (migration 350).
+  const lineMarginPct = (l: LineItem): number | null => {
+    const price = netUnitPrice(l, units);
+    return lineHasCost(l) && price > 0 ? ((price - lineTrueCost(l)) / price) * 100 : null;
+  };
   const costedLines = lines.filter(lineHasCost);
   // Fleet multi-unit (R6-9): the margin strip reports the WHOLE job, matching
   // the Total beside it. The percentage is unchanged either way — scaling both
@@ -1788,7 +1802,7 @@ export default function EstimatesPage() {
   // covers earn that much less (the same scaling send-for-approval applies
   // before the margin floor check).
   const discountRatio = subtotal + laborTotal > 0 ? discountCalc.amount / (subtotal + laborTotal) : 0;
-  const costedRevenue = costedLines.reduce((s, l) => s + fleetQty(l) * l.unit_price, 0) * (1 - discountRatio);
+  const costedRevenue = costedLines.reduce((s, l) => s + lineNet(l), 0) * (1 - discountRatio);
   const marginDollars = costedRevenue - trueCostTotal;
   const marginPct = costedRevenue > 0 ? (marginDollars / costedRevenue) * 100 : null;
   const uncostedCount = lines.length - costedLines.length;
@@ -1869,6 +1883,8 @@ export default function EstimatesPage() {
           is_custom: l.is_custom,
           notes: l.notes || null,
           wrap_quote_id: l.wrap_quote_id || null,
+          discount_type: normalizeDiscount(l.discount_type, l.discount_value)?.type ?? null,
+          discount_value: normalizeDiscount(l.discount_type, l.discount_value)?.value ?? null,
           kit_group_id: l.kit_group_id || null,
           kit_id: l.kit_id || null,
           kit_item_number: l.kit_item_number || null,
@@ -2800,7 +2816,7 @@ export default function EstimatesPage() {
     }
   };
 
-  // Quiet the overdue-review reminder for everyone (migration 347); null
+  // Quiet the overdue-review reminder for everyone (migration 350); null
   // wakes it back up. When a snooze runs out the reminder goes out once more.
   const snoozeReview = async (days: number | null) => {
     if (!editingId || snoozingReview) return;
@@ -3060,6 +3076,8 @@ export default function EstimatesPage() {
       is_custom: l.is_custom || false,
       notes: l.notes || '',
       wrap_quote_id: l.wrap_quote_id || null,
+      discount_type: l.discount_type === 'percent' || l.discount_type === 'amount' ? l.discount_type : null,
+      discount_value: l.discount_value != null ? String(Number(l.discount_value)) : null,
       kit_group_id: l.kit_group_id || null,
       kit_id: l.kit_id || null,
       kit_item_number: l.kit_item_number || null,
@@ -4659,6 +4677,16 @@ export default function EstimatesPage() {
                   <div className="est-c-total" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)', textAlign: 'right' }}>
                     <div className="est-cell-label">Total</div>
                     {fmt(line.quantity * line.unit_price)}
+                    {!line.discount_type && (
+                      <button
+                        type="button"
+                        onClick={() => setLines(prev => prev.map(l => l.key === line.key ? { ...l, discount_type: 'percent', discount_value: '' } : l))}
+                        title="Discount just this line"
+                        style={{ display: 'block', marginLeft: 'auto', background: 'none', border: 'none', padding: 0, fontSize: '9px', fontWeight: 700, color: '#22c55e', cursor: 'pointer' }}
+                      >
+                        + discount
+                      </button>
+                    )}
                     {(() => {
                       const pct = lineMarginPct(line);
                       if (pct == null) return null;
@@ -4714,6 +4742,61 @@ export default function EstimatesPage() {
                     ≡
                   </div>
                 </div>
+
+                {/* This line's own discount (migration 350): a slim row under
+                    the part, the way the quote and NetSuite show it. */}
+                {line.discount_type && (() => {
+                  const m = lineMoney(line, units);
+                  const setDisc = (patch: Partial<LineItem>) =>
+                    setLines(prev => prev.map(l => l.key === line.key ? { ...l, ...patch } : l));
+                  return (
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap',
+                      padding: '3px 8px', marginBottom: '4px', borderRadius: '6px',
+                      background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)',
+                    }}>
+                      <span style={{ fontSize: '10px', fontWeight: 800, color: '#22c55e' }}>Line discount</span>
+                      {(['percent', 'amount'] as const).map(t => (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => setDisc({ discount_type: t })}
+                          title={t === 'percent' ? 'Percent off this line' : units > 1 ? 'Dollars off this line (all vehicles)' : 'Dollars off this line'}
+                          style={{
+                            padding: '2px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 800, cursor: 'pointer',
+                            border: `1px solid ${line.discount_type === t ? '#22c55e' : 'var(--border)'}`,
+                            background: line.discount_type === t ? '#22c55e' : 'transparent',
+                            color: line.discount_type === t ? '#fff' : 'var(--text-label)',
+                          }}
+                        >
+                          {t === 'percent' ? '%' : '$'}
+                        </button>
+                      ))}
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        min={0}
+                        max={line.discount_type === 'percent' ? 100 : undefined}
+                        step={line.discount_type === 'percent' ? 0.5 : 0.01}
+                        value={line.discount_value ?? ''}
+                        onChange={e => setDisc({ discount_value: e.target.value })}
+                        placeholder={line.discount_type === 'percent' ? 'e.g. 10' : 'e.g. 50'}
+                        style={{ ...inputStyle, width: '90px', padding: '3px 6px', fontSize: '11px' }}
+                      />
+                      <span style={{ fontSize: '11px', fontWeight: 800, color: '#22c55e', marginLeft: 'auto' }}>
+                        {m.discount > 0 ? `−${fmt(m.discount)}` : ''}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setDisc({ discount_type: null, discount_value: null })}
+                        title="Remove this line's discount"
+                        style={{ background: 'transparent', border: 'none', color: '#f87171', fontSize: '13px', cursor: 'pointer', padding: '0 2px' }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  );
+                })()}
 
                 {/* Per-line stock, once someone has asked. One slim line
                     rather than a column: the grid collapses to stacked cells
@@ -5248,7 +5331,12 @@ export default function EstimatesPage() {
         {/* Totals */}
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: '10px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-body)', marginBottom: '4px' }}>
-            <span>Parts Subtotal</span>
+            <span>
+              Parts Subtotal
+              {lineDiscountTotal > 0.005 && (
+                <span style={{ fontSize: '10px', color: '#22c55e' }}> — after {fmt(lineDiscountTotal)} of line discounts</span>
+              )}
+            </span>
             <span>{fmt(subtotal)}</span>
           </div>
           {/* Margin strip — internal readout, never on the customer quote */}

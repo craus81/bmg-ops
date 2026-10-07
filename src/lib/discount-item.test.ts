@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { buildDiscountLines, estimateDiscountSplit, rankDiscountItems, type DiscountItem } from './discount-item';
+import { buildDiscountLines, buildLineDiscountLine, estimateDiscountSplit, estimateNeedsDiscountItem, rankDiscountItems, type DiscountItem } from './discount-item';
 import { nsItemLine } from './netsuite';
 
 const discountType: DiscountItem = { id: '901', itemNumber: 'Discount', itemType: 'Discount', source: 'setting' };
@@ -73,5 +73,31 @@ describe('nsItemLine', () => {
   it('sends a Discount-type line as the rate alone', () => {
     expect(nsItemLine({ itemId: '901', rate: -40, discount: true, discountItem: true, taxable: false }, { pinPrice: true }))
       .toEqual({ item: { id: '901' }, rate: -40, isTaxable: false });
+  });
+});
+
+describe('line discount NetSuite lines (migration 350)', () => {
+  it('goes under its part with the part\'s tax treatment', () => {
+    const taxed = { item_number: 'BRK-1', quantity: 2, unit_price: 100, discount_type: 'percent', discount_value: 10 };
+    expect(buildLineDiscountLine(taxed, { vehicle_count: 1 }, otherCharge)).toEqual({
+      itemId: '902', quantity: 1, rate: -20, description: 'Discount (10%) - BRK-1', discount: true, taxable: true,
+    });
+    const untaxed = { ...taxed, taxable: false };
+    expect(buildLineDiscountLine(untaxed, { vehicle_count: 1 }, discountType)).toEqual({
+      itemId: '901', discountItem: true, rate: -20, description: 'Discount (10%) - BRK-1', discount: true, taxable: false,
+    });
+    expect(buildLineDiscountLine(taxed, { vehicle_count: 1, tax_exempt: true }, otherCharge)?.taxable).toBeUndefined();
+    expect(buildLineDiscountLine({ quantity: 1, unit_price: 10 }, {}, otherCharge)).toBeNull();
+  });
+
+  it('the whole-job discount spreads over what is left after line discounts', () => {
+    const lines = [{ quantity: 1, unit_price: 500, discount_type: 'amount', discount_value: 100 }];
+    expect(estimateDiscountSplit({ discount_type: 'percent', discount_value: 10, labor_total: 0 }, lines).amount).toBe(40);
+  });
+
+  it('knows when an estimate needs the discount item at all', () => {
+    expect(estimateNeedsDiscountItem({}, [{ quantity: 1, unit_price: 10 }])).toBe(0);
+    expect(estimateNeedsDiscountItem({}, [{ quantity: 1, unit_price: 10, discount_type: 'amount', discount_value: 2 }])).toBe(2);
+    expect(estimateNeedsDiscountItem({ discount_type: 'amount', discount_value: 5 }, [{ quantity: 1, unit_price: 10 }])).toBe(5);
   });
 });

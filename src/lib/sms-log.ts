@@ -1,5 +1,5 @@
 /**
- * sms_log writer (migration 347): one row per outbound customer text, the
+ * sms_log writer (migration 350): one row per outbound customer text, the
  * texting counterpart of email_log. Best-effort — a failed log line must
  * never fail the send it describes.
  */

@@ -21,7 +21,7 @@ const SnoozeSchema = z.object({
  * POST /api/estimates/[id]/review-snooze
  *
  * Quiet the overdue-review reminder on one estimate for the whole team
- * (migration 347, owner ask 2026-10-07). When the snooze runs out the
+ * (migration 350, owner ask 2026-10-07). When the snooze runs out the
  * reminder goes out once more (estimate-review-reminder cron). Same people
  * who can answer the review can snooze it: the assigned reviewer or any
  * admin. `days: null` ends a snooze early.
