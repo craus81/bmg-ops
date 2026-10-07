@@ -58,3 +58,42 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   return NextResponse.json({ vehicles });
 }
+
+/**
+ * DELETE /api/graphics-jobs/[id]/vehicles?checkinId=<fleet_checkins.id>
+ *
+ * Unlink a vehicle that was linked to the wrong graphics job. Clears
+ * fleet_checkins.matched_graphics_job_id (only while it still points at this
+ * job) and sets needs_graphics so the vehicle goes back on the graphics
+ * page's Needs Graphics queue, where it can be linked to the right job.
+ * The check-in's own proof and photos stay on the vehicle.
+ */
+export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+  const auth = await requireStaff(req);
+  if (auth.error) return auth.error;
+
+  const jobId = (params.id || '').trim();
+  const checkinId = (req.nextUrl.searchParams.get('checkinId') || '').trim();
+  if (!jobId || !checkinId) return NextResponse.json({ error: 'id and checkinId required' }, { status: 400 });
+
+  const { data, error } = await supabase
+    .from('fleet_checkins')
+    .update({ matched_graphics_job_id: null, needs_graphics: true })
+    .eq('id', checkinId)
+    .eq('matched_graphics_job_id', jobId)
+    .select('id, vin')
+    .maybeSingle();
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (!data) return NextResponse.json({ error: 'That vehicle is not linked to this job.' }, { status: 404 });
+
+  // Leave a line in the job's history so the unlink is traceable.
+  const { data: job } = await supabase.from('graphics_jobs').select('status').eq('id', jobId).maybeSingle();
+  if (job) {
+    await supabase.from('graphics_status_history').insert({
+      job_id: jobId, from_status: job.status, to_status: job.status,
+      changed_by: auth.user.id, note: `Vehicle ${String(data.vin || '').slice(-8)} unlinked from this job`,
+    });
+  }
+
+  return NextResponse.json({ success: true });
+}
