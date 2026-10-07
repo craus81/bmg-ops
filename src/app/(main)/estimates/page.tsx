@@ -2214,6 +2214,16 @@ export default function EstimatesPage() {
     setViewingPdf(false);
   };
 
+  // ── Open the NetSuite sales order PDF in a new tab (to print it) ──
+  const [viewingSoPdf, setViewingSoPdf] = useState(false);
+  const viewSalesOrderPdf = async (soId: string) => {
+    if (viewingSoPdf) return;
+    setViewingSoPdf(true);
+    const { ok, error } = await openNetSuitePdf('salesOrder', soId);
+    if (!ok) await dialog.alert(`Could not open the sales order PDF: ${error}`);
+    setViewingSoPdf(false);
+  };
+
   /**
    * On a locked estimate, warn when the screen is holding changes the
    * document won't have. Returns false to abandon the open.
@@ -5981,7 +5991,18 @@ export default function EstimatesPage() {
               fontSize: '12px', fontWeight: 700, color: stale ? '#f59e0b' : '#22c55e', textAlign: 'center',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', flexWrap: 'wrap',
             }}>
-              <span>Sales Order: SO #{est.netsuite_so_number || est.netsuite_so_id}{stale ? ' — out of date with this estimate' : ''}</span>
+              <button
+                onClick={() => viewSalesOrderPdf(String(est.netsuite_so_id))}
+                disabled={viewingSoPdf}
+                title="Open the sales order PDF from NetSuite to view or print it"
+                style={{
+                  background: 'none', border: 'none', padding: 0, font: 'inherit', color: 'inherit',
+                  textDecoration: 'underline', cursor: viewingSoPdf ? 'wait' : 'pointer',
+                }}
+              >
+                {viewingSoPdf ? 'Opening sales order PDF…' : `Sales Order: SO #${est.netsuite_so_number || est.netsuite_so_id}`}
+              </button>
+              {stale && <span>— out of date with this estimate</span>}
               {stale && (
                 <button
                   onClick={() => pushSalesOrderChanges(est.id, est.netsuite_so_number || null)}
