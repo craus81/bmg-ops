@@ -3,7 +3,7 @@ import { orderAgeDays, summarizeOrderBook, type OrderBookRow } from './order-boo
 
 const row = (over: Partial<OrderBookRow>): OrderBookRow => ({
   id: 'x', netsuiteId: '1', tranid: 'SO1', customerName: 'C', trandate: '2026-09-01',
-  statusLabel: 'Pending Fulfillment', total: 0, unbilled: 0, billedPct: 0, ageDays: 0,
+  statusLabel: 'Pending Fulfillment', createdByName: null, total: 0, unbilled: 0, billedPct: 0, ageDays: 0,
   ...over,
 });
 

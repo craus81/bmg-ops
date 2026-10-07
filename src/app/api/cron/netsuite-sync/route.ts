@@ -14,6 +14,7 @@ import { closeConvertedEstimates } from '@/lib/estimate-close-sync';
 import { syncVehicleInvoices } from '@/lib/so-invoices';
 import { recordHeartbeat } from '@/lib/system-health';
 import { syncVendors } from '@/lib/vendor-master';
+import { syncNetsuiteCreators } from '@/lib/netsuite-creators';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -509,6 +510,17 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     console.error('[cron] AR payment sweep error:', err.message);
     results.arPayments = { error: err.message };
+  }
+
+  // ═══════════ 3e2. SO / PO CREATED BY ═══════════
+  // NetSuite's own Created By for mirrored SOs and POs (migration 348), so
+  // they carry the same "Created by" tag as FleetSuite records. Its own
+  // step: a role that can't read createdby loses the tag, nothing else.
+  try {
+    results.netsuiteCreators = await syncNetsuiteCreators(supabase);
+  } catch (err: any) {
+    console.error('[cron] NetSuite creator sweep error:', err.message);
+    results.netsuiteCreators = { error: err.message };
   }
 
   // ═══════════ 3f. CONVERTED-ESTIMATE CLOSE SWEEP ═══════════

@@ -36,6 +36,7 @@ import NumberInput from '@/components/NumberInput';
 import PartNumberAutocomplete, { lastPoLabel, type LastPoPrice } from '@/components/PartNumberAutocomplete';
 import { pickPrice } from '@/lib/part-suggest';
 import { isAdminRole } from '@/lib/features';
+import CreatedBy from '@/components/CreatedBy';
 
 type ShipTo = NonNullable<PurchaseOrder['ship_to']>;
 
@@ -1027,6 +1028,7 @@ export default function PoRecordPage() {
           {' '}· {po.line_items.length} item{po.line_items.length !== 1 ? 's' : ''}
           {po.netsuite_so_number && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>NS SO #{po.netsuite_so_number}</span>}
         </div>
+        <CreatedBy userId={po.created_by} at={po.created_at} style={{ display: 'block', marginTop: '2px' }} />
 
         {/* Actions */}
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}>

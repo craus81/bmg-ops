@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import CreatedBy from '@/components/CreatedBy';
 
 interface CniJobSummary {
   id: string;
@@ -15,6 +16,7 @@ interface CniJobSummary {
   assigned_installer_id: string | null;
   installer_name?: string;
   created_at: string;
+  created_by: string | null;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -66,7 +68,7 @@ export default function CniDashboardPage() {
     // Load jobs with installer names
     const { data: jobsData } = await supabase
       .from('cni_jobs')
-      .select('id, job_number, title, status, customer_name, deadline, assigned_installer_id, created_at')
+      .select('id, job_number, title, status, customer_name, deadline, assigned_installer_id, created_at, created_by')
       .order('created_at', { ascending: false });
 
     if (jobsData) {
@@ -347,6 +349,7 @@ export default function CniDashboardPage() {
                     <span>{job.job_number}</span>
                     {job.customer_name && <span>{job.customer_name}</span>}
                     {job.installer_name && !sortByInstaller && <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{job.installer_name}</span>}
+                    <CreatedBy compact userId={job.created_by} at={job.created_at} />
                     {job.deadline && (
                       <span style={{ color: isOverdue(job) ? 'var(--error)' : 'var(--text-muted)', fontWeight: isOverdue(job) ? 700 : 400 }}>
                         due {new Date(job.deadline).toLocaleDateString([], { month: 'short', day: 'numeric' })}

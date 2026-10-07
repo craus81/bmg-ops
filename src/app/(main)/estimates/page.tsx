@@ -46,6 +46,7 @@ import { useFormTelemetry } from '@/lib/use-form-telemetry';
 import { uploadRecordFile } from '@/lib/record-file-upload';
 import { bounceNextStep, bounceIsAmbiguous, recipientsLabel } from '@/lib/email-bounce';
 import EstimatePartsRequestModal from '@/components/EstimatePartsRequestModal';
+import CreatedBy from '@/components/CreatedBy';
 
 interface Part {
   id: string;
@@ -3595,6 +3596,7 @@ export default function EstimatesPage() {
                         {est.customer_name && <span>{est.customer_name}</span>}
                         <span style={{ color: 'var(--text-body)', fontWeight: 700 }}>{fmt(est.grand_total)}</span>
                         <span>{new Date(est.created_at).toLocaleDateString()}</span>
+                        <CreatedBy compact userId={est.created_by} at={est.created_at} style={{ fontSize: '10px', color: 'var(--text-label)' }} />
                         {estimateAltNumber(est) && <span style={{ color: '#a78bfa' }} title="FleetSuite's own estimate number — NetSuite's is the one shown first">FS: {estimateAltNumber(est)}</span>}
                         {/* The SO number moved to the status pill — showing it
                             here too put it on the row twice. */}
@@ -3770,6 +3772,7 @@ export default function EstimatesPage() {
                 FS: {editingAltNumber}
               </div>
             )}
+            <CreatedBy userId={editingEst?.created_by} at={editingEst?.created_at} style={{ display: 'block', fontSize: '10px' }} />
           </div>
         ) : (
           <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>

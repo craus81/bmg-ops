@@ -44,6 +44,8 @@ export interface OrderBookRow {
   customerName: string | null;
   trandate: string | null;
   statusLabel: string | null;
+  /** NetSuite's Created By (migration 348); null until the cron has read it. */
+  createdByName: string | null;
   total: number;
   unbilled: number;
   billedPct: number; // 0-100, of sold value
@@ -93,7 +95,7 @@ export function summarizeOrderBook(rows: OrderBookRow[]): OrderBookTotals {
 export async function loadOrderBook(service: SupabaseClient): Promise<{ rows: OrderBookRow[]; totals: OrderBookTotals }> {
   const { data: sos, error } = await fetchAllRows<any>((from, to) => service
     .from('netsuite_sales_orders')
-    .select('id, netsuite_id, tranid, customer_name, trandate, status, status_label, total')
+    .select('id, netsuite_id, tranid, customer_name, trandate, status, status_label, total, created_by_name')
     .order('id').range(from, to));
   if (error) throw new Error('order book: ' + error.message);
   const open = (sos || []).filter(so => isOpenSalesOrderStatus(so.status, so.status_label));
@@ -123,6 +125,7 @@ export async function loadOrderBook(service: SupabaseClient): Promise<{ rows: Or
       customerName: so.customer_name,
       trandate: so.trandate,
       statusLabel: so.status_label || so.status,
+      createdByName: so.created_by_name ?? null,
       total: round2(total),
       unbilled,
       billedPct: total > 0 ? Math.round(Math.max(0, Math.min(1, 1 - unbilled / total)) * 100) : 0,

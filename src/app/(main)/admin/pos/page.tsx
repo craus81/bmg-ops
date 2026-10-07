@@ -27,6 +27,7 @@ import NumberInput from '@/components/NumberInput';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import PartNumberAutocomplete, { lastPoLabel, type LastPoPrice, type PickedPartHit } from '@/components/PartNumberAutocomplete';
 import { pickPrice } from '@/lib/part-suggest';
+import CreatedBy from '@/components/CreatedBy';
 
 interface ImportLine extends ParsedPOLine {
   catalog_match: CatalogItem | null;
@@ -3430,6 +3431,7 @@ export default function POsPage() {
                         )}
                         <td style={tdStyle}>
                           <span style={{ fontWeight: 800, color: '#60a5fa' }}>{po.po_number}</span>
+                          <CreatedBy compact userId={po.created_by} at={po.created_at} style={{ display: 'block', fontSize: '10px', fontWeight: 500 }} />
                         </td>
                         <td style={{ ...tdStyle, color: 'var(--text-secondary)' }}>{po.customer}</td>
                         <td style={{ ...tdStyle, color: loc ? 'var(--text-secondary)' : 'var(--text-muted)' }} title={formatShipTo(po.ship_to) || undefined}>
