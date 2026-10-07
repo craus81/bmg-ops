@@ -150,6 +150,14 @@ export function __resetLocationCache(): void {
   locCache = null;
 }
 
+/** NetSuite internal id for one of BMG's location names (live lookup, then
+ *  the known production ids, then NETSUITE_DEFAULT_LOCATION_ID). */
+export async function locationIdForName(name: NsLocationName): Promise<string | null> {
+  const key = norm(name);
+  const map = await getLocationNameToId();
+  return map.get(key) || KNOWN_LOCATION_IDS[key] || process.env.NETSUITE_DEFAULT_LOCATION_ID || null;
+}
+
 /**
  * Resolve the NetSuite location for an invoice. Applies the customer/plant
  * rules, then maps the chosen location name to its internal id via a live

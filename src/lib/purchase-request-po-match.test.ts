@@ -91,3 +91,98 @@ describe('trackingUrl', () => {
     expect(trackingUrl('ABC')).toContain('google.com');
   });
 });
+
+// ── Mark ordered by hand (migration 347) ──────────────────────────────────
+
+/** Tiny in-memory stand-in for the Supabase query builder: enough filters
+ *  (eq / in / is / not-is) and verbs (select / update / upsert) for the
+ *  mark-ordered paths. */
+function fakeDb(tables: Record<string, any[]>) {
+  const from = (table: string) => {
+    const rows = (tables[table] ||= []);
+    const filters: ((r: any) => boolean)[] = [];
+    let patch: any = null;
+    let single = false;
+    let limit = Infinity;
+    const q: any = {
+      select: () => q, order: () => q,
+      limit: (n: number) => { limit = n; return q; },
+      eq: (c: string, v: any) => { filters.push(r => r[c] === v); return q; },
+      in: (c: string, vs: any[]) => { filters.push(r => vs.includes(r[c])); return q; },
+      is: (c: string, v: any) => { filters.push(r => (r[c] ?? null) === v); return q; },
+      not: (c: string, _op: string, v: any) => { filters.push(r => (r[c] ?? null) !== v); return q; },
+      update: (p: any) => { patch = p; return q; },
+      upsert: () => q,
+      maybeSingle: () => { single = true; return q; },
+      then: (resolve: any) => {
+        const hit = rows.filter(r => filters.every(f => f(r))).slice(0, limit);
+        if (patch) hit.forEach(r => Object.assign(r, patch));
+        resolve({ data: single ? hit[0] ?? null : hit, error: null });
+      },
+    };
+    return q;
+  };
+  return { from } as any;
+}
+
+describe('mark ordered by hand', () => {
+  it('reads a typed PO number with or without the PO prefix', async () => {
+    const { poNumberCandidates } = await import('./purchase-request-po-match');
+    expect(poNumberCandidates(' po 1234 ')).toEqual(['PO1234', '1234']);
+    expect(poNumberCandidates('#1234')).toEqual(['1234', 'PO1234']);
+    expect(poNumberCandidates('  ')).toEqual([]);
+  });
+
+  it('links to a mirrored PO, takes its vendor and flags parts not on it', async () => {
+    const { markRequestsOrdered } = await import('./purchase-request-po-match');
+    const tables: Record<string, any[]> = {
+      purchase_requests: [
+        { id: 'a', status: 'pending', ordered_by: null, item_number: 'ABC-1', quantity: 2 },
+        { id: 'b', status: 'pending', ordered_by: null, item_number: 'XYZ-9', quantity: 1 },
+      ],
+      netsuite_vendor_pos: [{ id: 'p1', netsuite_id: '900', tranid: 'PO1234', vendor_name: 'Ranger Design', vendor_netsuite_id: '55', trandate: '2026-10-06', status: 'B' }],
+      netsuite_vendor_po_lines: [{ po_id: 'p1', item_number: 'ABC-1' }],
+    };
+    const db = fakeDb(tables);
+    const res = await markRequestsOrdered(db, { ids: ['a', 'b'], poNumber: '1234', userId: 'u1' });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.result.marked).toBe(2);
+    expect(res.result.notOnPo).toEqual(['XYZ-9']);
+    expect(tables.purchase_requests[0]).toMatchObject({
+      status: 'ordered', ordered_match: 'manual', ordered_po_id: 'p1', ordered_po_number: 'PO1234', vendor_netsuite_id: '55',
+    });
+  });
+
+  it('keeps the typed number when the PO has not synced, then links it on the next sync', async () => {
+    const { markRequestsOrdered, linkManualOrders } = await import('./purchase-request-po-match');
+    const tables: Record<string, any[]> = {
+      purchase_requests: [{ id: 'a', status: 'pending', ordered_by: null, item_number: 'ABC-1', quantity: 2 }],
+      netsuite_vendor_pos: [],
+      netsuite_vendor_po_lines: [],
+    };
+    const db = fakeDb(tables);
+    const res = await markRequestsOrdered(db, { ids: ['a'], poNumber: 'po5555', userId: 'u1' });
+    expect(res.ok && res.result.po).toBeNull();
+    expect(tables.purchase_requests[0]).toMatchObject({
+      status: 'ordered', ordered_match: 'manual', ordered_po_number: 'PO5555', ordered_po_id: null, ordered_by: 'u1',
+    });
+
+    tables.netsuite_vendor_pos.push({ id: 'p9', netsuite_id: '901', tranid: 'PO5555', vendor_name: 'Masterack', vendor_netsuite_id: '7', trandate: '2026-10-07', status: 'B' });
+    expect(await linkManualOrders(db)).toBe(1);
+    expect(tables.purchase_requests[0]).toMatchObject({ ordered_po_id: 'p9', vendor_name: 'Masterack' });
+  });
+
+  it('refuses a request that is no longer pending, and Undo puts a hand mark back', async () => {
+    const { markRequestsOrdered, unmatchPurchaseRequest } = await import('./purchase-request-po-match');
+    const tables: Record<string, any[]> = {
+      purchase_requests: [{ id: 'a', status: 'ordered', ordered_match: 'manual', ordered_by: 'u1', ordered_po_number: 'PO1', ordered_po_id: null, item_number: 'ABC-1', quantity: 2 }],
+      netsuite_vendor_pos: [],
+    };
+    const db = fakeDb(tables);
+    const refused = await markRequestsOrdered(db, { ids: ['a'], poNumber: 'PO2', userId: 'u1' });
+    expect(refused.ok).toBe(false);
+    expect(await unmatchPurchaseRequest(db, 'a')).toEqual({ ok: true });
+    expect(tables.purchase_requests[0]).toMatchObject({ status: 'pending', ordered_by: null, ordered_po_number: null, ordered_match: null });
+  });
+});
