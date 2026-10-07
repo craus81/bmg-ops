@@ -19,6 +19,7 @@ import { sendEmail, buildNotificationEmail } from './resend';
 import { getEmailSignature } from './email-signature';
 import { deepLinks } from './deep-links';
 import { sendSMS } from './sms-provider';
+import { logSms } from './sms-log';
 import { fetchEmailAttachments, MAX_ATTACHMENT_BYTES } from './email-attachments';
 
 type Service = SupabaseClient<any, any, any>;
@@ -288,6 +289,7 @@ export async function sendProofApproval(
   if (phone && !reminder) {
     const link = `${appUrl}/approve/proof/${token}?via=sms&to=${encodeURIComponent(phone)}`;
     const smsBody = `[BMG Fleet] Your graphic proof${rev} is ready for review: ${link}`;
+    const smsMeta = { kind: 'proof_approval', sentBy: opts.actorId || null, contextUrl: deepLinks.graphicsJob(jobId) };
     try {
       const result = await sendSMS(phone, smsBody);
       dispatch.sms = {
@@ -297,8 +299,10 @@ export async function sendProofApproval(
         providerName: result.providerName,
         error: result.error || null,
       };
+      await logSms(service, phone, smsBody, result, smsMeta);
     } catch (err: any) {
       dispatch.sms = { target: phone, ok: false, error: err?.message };
+      await logSms(service, phone, smsBody, null, smsMeta, err?.message || 'send failed');
     }
   }
 
