@@ -804,6 +804,76 @@ export async function createItem(payload: {
   }
 }
 
+/** Item record types that carry a purchase price and vendor in NetSuite. */
+export function isPurchasableItemType(recordType: string): boolean {
+  return /Resale|Purchase|^inventory/.test(recordType);
+}
+
+async function patchItemRecord(recordType: string, internalId: string, body: Record<string, unknown>): Promise<{ success: boolean; error?: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const type = recordType.replace(/[^a-zA-Z]/g, '');
+  const url = `${baseUrl}/services/rest/record/v1/${type}/${encodeURIComponent(internalId)}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'PATCH' });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Authorization': authHeader, 'Content-Type': 'application/json', 'Prefer': 'respondAsync=false' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Set a new item's purchase price and preferred vendor. With NetSuite's
+ * Multiple Vendors feature the vendor lives on the itemVendor sublist;
+ * without it, on the single `vendor` field — so the sublist is tried first
+ * and the plain field second. Cost-only falls back last so a vendor problem
+ * never loses the price.
+ */
+export async function setItemPurchaseInfo(
+  recordType: string,
+  internalId: string,
+  info: { cost?: number | null; vendorId?: string | null },
+): Promise<{ success: boolean; error?: string }> {
+  const cost = info.cost != null && info.cost > 0 ? info.cost : null;
+  const vendorId = info.vendorId ? String(info.vendorId).replace(/[^0-9]/g, '') : '';
+  if (cost == null && !vendorId) return { success: true };
+  const costBody = cost != null ? { cost } : {};
+  if (!vendorId) return patchItemRecord(recordType, internalId, costBody);
+
+  const sublist = await patchItemRecord(recordType, internalId, {
+    ...costBody,
+    itemVendor: { items: [{ vendor: { id: vendorId }, preferredVendor: true, ...(cost != null ? { purchasePrice: cost } : {}) }] },
+  });
+  if (sublist.success) return sublist;
+  const single = await patchItemRecord(recordType, internalId, { ...costBody, vendor: { id: vendorId } });
+  if (single.success) return single;
+  if (cost != null) {
+    const costOnly = await patchItemRecord(recordType, internalId, costBody);
+    if (costOnly.success) return { success: false, error: `Cost was set, but the vendor wasn't: ${sublist.error}` };
+  }
+  return { success: false, error: sublist.error };
+}
+
 /**
  * Search NetSuite vendors by name/entity id. Note: unlike customer/item,
  * vendor-table SuiteQL access is not guaranteed for the integration role —
