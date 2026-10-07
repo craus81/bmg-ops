@@ -9,6 +9,7 @@ import { deepLinks } from '@/lib/deep-links';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
 import Link from 'next/link';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 /**
  * Credit application review queue (audit Stage 1 CRITICAL: the public form
@@ -240,7 +241,7 @@ export default function CreditApplicationsPage() {
       </div>
 
       {(detail || detailLoading) && (
-        <div onClick={() => { setDetail(null); }}
+        <div ref={closeOnEscape(() => { setDetail(null); })}
           style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Credit application"
             style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', width: 'min(760px, 100%)', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto' }}>

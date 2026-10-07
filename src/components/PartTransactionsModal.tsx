@@ -14,6 +14,7 @@ import { useRouter } from 'next/navigation';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { exportPackingListPDF } from '@/lib/packing-list-pdf';
 import { deepLinks } from '@/lib/deep-links';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface TxRow {
   id: string;
@@ -98,7 +99,7 @@ export default function PartTransactionsModal({ partNumber, itemId, onClose }: P
   };
 
   return (
-    <div onClick={onClose}
+    <div ref={closeOnEscape(onClose)}
       style={{ position: 'fixed', inset: 0, zIndex: 1400, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
       <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Part transactions"
         style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '16px', width: 'min(720px, 100%)', maxHeight: 'calc(100vh / var(--ts) - 40px)', display: 'flex', flexDirection: 'column', gap: '10px' }}>

@@ -17,6 +17,7 @@ import { theme } from '@/lib/theme';
 import { buildBuyList, chunkItems, type BuyListInputRow } from '@/lib/buy-list';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { deepLinks } from '@/lib/deep-links';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 const qty = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
 
@@ -139,7 +140,7 @@ export default function BuyListModal({ rows, onClose, onDone }: Props) {
 
   return (
     <div
-      onClick={() => { if (!busy) onClose(); }}
+      ref={closeOnEscape(() => { if (!busy) onClose(); })}
       style={{
         position: 'fixed', inset: 0, background: 'var(--overlay)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',

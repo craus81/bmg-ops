@@ -55,6 +55,7 @@ import {
   GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
   GRAPHICS_SHIP_SPEED_OPTIONS, DEFAULT_GRAPHICS_SHIP_SPEED,
 } from '@/lib/types';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 type FilterStatus = GraphicsJobStatus | 'all' | 'active' | 'awaiting';
 type FilterCategory = GraphicsJobCategory | 'all';
@@ -1846,7 +1847,7 @@ export default function GraphicsPage() {
       {linkAwaiting && (
         <div
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
-          onClick={() => { setLinkAwaiting(null); setLinkSearch(''); }}
+          ref={closeOnEscape(() => { setLinkAwaiting(null); setLinkSearch(''); })}
         >
           <div
             onClick={e => e.stopPropagation()}
@@ -1915,7 +1916,7 @@ export default function GraphicsPage() {
       {/* ═══════════ CREATE JOB MODAL ═══════════ */}
       {showCreate && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', padding: '0' }}
-          onClick={(e) => { if (e.target === e.currentTarget) { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillEstimateLink(null); setPrefillCopy(null); setPrefillNote(null); } }}
+          ref={closeOnEscape(() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillEstimateLink(null); setPrefillCopy(null); setPrefillNote(null); })}
         >
           <div style={{ background: 'var(--card)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px 14px 0 0', padding: '18px', paddingBottom: 'calc(18px + env(safe-area-inset-bottom, 0px))', maxWidth: '500px', width: '100%', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
 

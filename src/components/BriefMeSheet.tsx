@@ -16,6 +16,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface BriefResponse {
   brief: string;
@@ -77,7 +78,7 @@ export default function BriefMeSheet({ target, onClose }: { target: BriefTarget;
 
   return (
     <div
-      onClick={onClose}
+      ref={closeOnEscape(onClose)}
       style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
     >
       <div onClick={e => e.stopPropagation()} style={{

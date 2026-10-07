@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, useCallback, useMemo, ReactNode } from 'react';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface ConfirmOptions { confirmLabel?: string; cancelLabel?: string; destructive?: boolean; title?: string }
 interface AlertOptions { confirmLabel?: string; title?: string }
@@ -77,7 +78,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
       {children}
       {request && (
         <div
-          onClick={() => settle(false)}
+          ref={closeOnEscape(() => settle(false))}
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 4000, padding: '20px' }}
         >
           <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', maxWidth: '400px', width: '100%', padding: '18px', boxShadow: '0 16px 60px rgba(0,0,0,0.35)' }}>
@@ -91,7 +92,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
                 value={inputValue}
                 placeholder={request.options.placeholder}
                 onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') settle(true); if (e.key === 'Escape') settle(false); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') settle(true); if (e.key === 'Escape') { e.preventDefault(); settle(false); } }}
                 style={{ width: '100%', marginTop: '12px', padding: '10px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '14px', boxSizing: 'border-box' }}
               />
             )}

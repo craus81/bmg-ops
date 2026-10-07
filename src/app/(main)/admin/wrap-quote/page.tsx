@@ -75,6 +75,7 @@ import {
   splitForRoll,
   splitOutlineForRoll,
 } from '@/lib/roll-nesting';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 // Manual wrap-quote estimator (WrapUP-style): pick a 1:20 vehicle outline
 // template, draw measurement shapes over it, price by substrate + labor,
@@ -3409,7 +3410,7 @@ export default function WrapQuotePage() {
                 onChange={e => setTplSearch(e.target.value)}
                 onKeyDown={e => {
                   if (e.key === 'Enter' && searchCurrent && templateSearchMatches.length > 0) { e.preventDefault(); pickTemplate(templateSearchMatches[0]); }
-                  else if (e.key === 'Escape') setTplSearch('');
+                  else if (e.key === 'Escape' && tplSearch) { e.preventDefault(); setTplSearch(''); }
                 }}
                 placeholder="Type to search templates…"
                 style={{ ...inputStyle, width: '100%' }}
@@ -4333,7 +4334,7 @@ export default function WrapQuotePage() {
       })()}
 
       {viewQuote && (
-        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={closeViewQuote}>
+        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} ref={closeOnEscape(closeViewQuote)}>
           <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '640px', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto' }}>
             {quotePreview(viewQuote)}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px', marginTop: '8px' }}>
@@ -4843,7 +4844,7 @@ export default function WrapQuotePage() {
       {followupNoteFor && (
         <div
           style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}
-          onClick={() => !fuSaving && setFollowupNoteFor(null)}
+          ref={closeOnEscape(() => !fuSaving && setFollowupNoteFor(null))}
         >
           <div onClick={e => e.stopPropagation()} style={{
             width: '100%', maxWidth: '420px', background: 'var(--card)', border: `1px solid ${theme.border}`,

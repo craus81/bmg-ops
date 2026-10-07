@@ -36,6 +36,7 @@ import {
   aggregateLines, autoLayout, checkpoint, emptyLayout, estimateLinesFromLayout, footprint,
   initialUndoable, layoutWarnings, parseLayout, redo, snapPosition, undo, undoableApply,
 } from '@/lib/upfit-layout';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 const UpfitSceneLazy = dynamic(() => import('@/components/upfit/UpfitScene'), {
   ssr: false,
@@ -1094,7 +1095,7 @@ export default function UpfitDesignerPage() {
 
       {/* Save-as-template modal — a design becomes a trade package. */}
       {templateModal && (
-        <div onClick={() => setTemplateModal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '16px' }}>
+        <div ref={closeOnEscape(() => setTemplateModal(null))} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '16px' }}>
           <div onClick={e => e.stopPropagation()} style={{ ...card, width: '100%', maxWidth: '380px', background: 'var(--bg, var(--card))' }}>
             <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '10px' }}>Save as trade package</div>
             <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: '12px' }}>

@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
 import type { WorkListItem, WorkListType } from '@/lib/personal-work-list';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface Person { id: string; name: string; count: number }
 
@@ -136,12 +137,6 @@ export default function PersonalListsModal({ type, initialUserId, onClose }: {
     setUserId(id);
   };
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') void close(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [close]);
-
   useEffect(() => () => { if (pendingRef.current) void flush(); }, [flush]);
 
   const move = (i: number, delta: number) => {
@@ -182,7 +177,7 @@ export default function PersonalListsModal({ type, initialUserId, onClose }: {
 
   return (
     <div
-      onClick={() => void close()}
+      ref={closeOnEscape(close)}
       style={{
         position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
         display: 'flex', alignItems: 'flex-start', justifyContent: 'center',

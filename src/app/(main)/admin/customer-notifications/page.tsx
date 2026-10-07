@@ -30,6 +30,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { apiFetch } from '@/lib/api-client';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { theme } from '@/lib/theme';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface CustomerRow {
   id: string;
@@ -283,7 +284,7 @@ export default function CustomerNotificationsPage() {
 
       {portalFor && (
         <div
-          onClick={() => setPortalFor(null)}
+          ref={closeOnEscape(() => setPortalFor(null))}
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}
         >
           <div

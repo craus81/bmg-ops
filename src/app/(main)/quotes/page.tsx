@@ -19,6 +19,7 @@ import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
 import { expiryLabel, type ExpiryState } from '@/lib/quote-expiry';
 import { viewLabel, type ViewSummary } from '@/lib/quote-views';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface FollowUpNote {
   id: string;
@@ -473,7 +474,7 @@ export default function QuotesPage() {
       {logTarget && (
         <div
           style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 1500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
-          onClick={() => { if (!logSaving) setLogTarget(null); }}
+          ref={closeOnEscape(() => { if (!logSaving) setLogTarget(null); })}
         >
           <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '14px', padding: '20px', width: '100%', maxWidth: '420px', boxShadow: '0 8px 30px rgba(0,0,0,0.3)' }}>
             <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>

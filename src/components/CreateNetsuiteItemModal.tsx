@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { storage } from '@/lib/storage';
 import { toJpegIfHeic } from '@/lib/heic';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 export interface CreatedPart {
   id: string;
@@ -181,7 +182,7 @@ export function CreateNetsuiteItemModal({
 
   if (done) {
     return (
-      <div onClick={finish} style={{
+      <div ref={closeOnEscape(finish)} style={{
         position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
         display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
         zIndex: 1000, padding: '20px', overflowY: 'auto',
@@ -235,7 +236,7 @@ export function CreateNetsuiteItemModal({
   }
 
   return (
-    <div onClick={onClose} style={{
+    <div ref={closeOnEscape(onClose)} style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
       display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
       zIndex: 1000, padding: '20px', overflowY: 'auto',

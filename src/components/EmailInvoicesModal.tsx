@@ -17,6 +17,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { loadBccSelfPref, saveBccSelfPref } from '@/components/EmailComposeModal';
 import { useDialog } from '@/components/DialogProvider';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 export interface EmailableInvoice {
   invoiceId?: string;
@@ -278,7 +279,7 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
   const toggleOne = (idx: number) => setInvoices(prev => prev.map((i, j) => j === idx ? { ...i, include: !i.include } : i));
 
   return (
-    <div onClick={onClose} style={{
+    <div ref={closeOnEscape(onClose)} style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
       display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
       zIndex: 1100, padding: '20px', overflowY: 'auto',

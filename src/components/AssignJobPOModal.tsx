@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useAuth } from '@/components/AuthProvider';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface PO {
   id: string;
@@ -48,14 +49,6 @@ export default function AssignJobPOModal({ open, onClose, jobId, jobPartNumber, 
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [open]);
-
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    if (open) document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
-  }, [open, onClose]);
 
   const fetchPOs = useCallback(async (q: string) => {
     setSearching(true);
@@ -106,11 +99,11 @@ export default function AssignJobPOModal({ open, onClose, jobId, jobPartNumber, 
   if (!open) return null;
 
   return (
-    <div style={{
+    <div ref={closeOnEscape(onClose)} style={{
       position: 'fixed', inset: 0, zIndex: 300,
       background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)',
       display: 'flex', flexDirection: 'column',
-    }} onClick={onClose}>
+    }}>
       <div
         onClick={(e) => e.stopPropagation()}
         style={{

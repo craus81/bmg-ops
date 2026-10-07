@@ -6,6 +6,7 @@ import { uploadRecordFile } from '@/lib/record-file-upload';
 import { createClient } from '@/lib/supabase-browser';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { deepLinks } from '@/lib/deep-links';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface Defaults {
   delivery_instructions: string | null;
@@ -140,7 +141,7 @@ export default function CustomerDefaultsEditor({ initial, customerId, customerNa
 
   return (
     <div
-      onClick={onClose}
+      ref={closeOnEscape(onClose)}
       style={{
         position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',

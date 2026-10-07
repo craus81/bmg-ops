@@ -18,6 +18,7 @@ import { toJpegIfHeic } from '@/lib/heic';
 import { shopWorkMs, shopClockResumeLabel } from '@/lib/shop-hours';
 import ConditionReportCard from '@/components/ConditionReportCard';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface VehicleData {
   id: string;
@@ -1282,7 +1283,7 @@ export default function VehiclePickListPage() {
           Anyone tagged here moves off the shop job they were on. */}
       {tagSheetOpen && laborShift && (
         <>
-          <div onClick={() => setTagSheetOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000 }} />
+          <div ref={closeOnEscape(() => setTagSheetOpen(false))} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000 }} />
           <div style={{
             position: 'fixed', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
             width: 'min(420px, calc(94vw / var(--ts)))', maxHeight: 'calc(80vh / var(--ts))',

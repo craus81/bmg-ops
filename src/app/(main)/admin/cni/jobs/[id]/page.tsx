@@ -16,6 +16,7 @@ import { theme } from '@/lib/theme';
 import RecordChanges from '@/components/RecordChanges';
 import NumberInput from '@/components/NumberInput';
 import { deepLinks } from '@/lib/deep-links';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface CniJob {
   id: string;
@@ -2178,7 +2179,7 @@ export default function CniJobDetailPage() {
 
       {/* Import already-scanned vehicles modal */}
       {importOpen && (
-        <div onClick={() => setImportOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+        <div ref={closeOnEscape(() => setImportOpen(false))} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '16px', padding: '20px', maxWidth: '460px', width: '100%', maxHeight: 'calc(88vh / var(--ts))', overflowY: 'auto', border: '1px solid var(--border)' }}>
             <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>Import Scanned Vehicles</div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>
@@ -2256,7 +2257,7 @@ export default function CniJobDetailPage() {
         const deviceJob = isVerizonRfidPart(job.part_number) || !!(job as any).device_capture;
         const people = addRoster;
         return (
-        <div onClick={() => setAddVinOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+        <div ref={closeOnEscape(() => setAddVinOpen(false))} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '16px', padding: '20px', maxWidth: '440px', width: '100%', maxHeight: 'calc(88vh / var(--ts))', overflowY: 'auto', border: '1px solid var(--border)' }}>
             <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>Add a Completed Vehicle</div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px' }}>

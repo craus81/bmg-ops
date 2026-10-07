@@ -56,6 +56,7 @@ import {
   GRAPHICS_SHIP_SPEED_OPTIONS, graphicsShipSpeedLabel,
 } from '@/lib/types';
 import { requiresReason, proofGateApplies, isOffTheFloor } from '@/lib/graphics-status';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 // ── Date helpers (same behavior as the board — avoid UTC shift) ──────────
 function parseLocalDate(dateStr: string | null | undefined): Date | null {
@@ -2097,7 +2098,7 @@ export default function GraphicsJobRecordPage() {
         <div style={{
           position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 1500,
           display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
-        }} onClick={() => setPendingStatus(null)}>
+        }} ref={closeOnEscape(() => setPendingStatus(null))}>
           <div onClick={e => e.stopPropagation()} style={{
             background: 'var(--card)', borderRadius: '14px', padding: '20px',
             width: '100%', maxWidth: '400px', boxShadow: '0 8px 30px rgba(0,0,0,0.3)',

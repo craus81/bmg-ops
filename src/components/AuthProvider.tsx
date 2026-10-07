@@ -41,6 +41,10 @@ interface AuthContextType {
   saveNavTabs: (ids: string[] | null) => Promise<void>;
 }
 
+function sameJson(a: unknown, b: unknown) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 const AuthContext = createContext<AuthContextType>({
   user: null, profile: null, isAdmin: false, isProduction: false, isGraphicsProduction: false, isSales: false, isCustomer: false, isInstaller: false, isFieldTech: false, isShopTech: false, canSeeMoney: false, hasRole: () => false, hasFeature: () => false, loading: true, signOut: async () => {},
   viewAsRole: null, setViewAsRole: () => {}, isActualAdmin: false,
@@ -100,8 +104,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error(failure.message);
     }
     setProfileError(false);
-    setProfile(profileRes.data);
-    setFeatureOverrides(overridesRes.data || []);
+    // Keep the same objects when nothing changed: pages re-run their loads
+    // on a new profile object, and this re-reads on every return to the tab.
+    setProfile(p => sameJson(p, profileRes.data) ? p : profileRes.data);
+    setFeatureOverrides(o => sameJson(o, overridesRes.data || []) ? o : (overridesRes.data || []));
   };
 
   /**
@@ -182,7 +188,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data } = supabase.auth.onAuthStateChange(async (event: any, session: any) => {
       if (!mountedRef.current) return;
       const u = session?.user ?? null;
-      setUser(u);
+      // supabase-js fires SIGNED_IN (or TOKEN_REFRESHED) every time the
+      // browser tab becomes visible again, with a fresh copy of the same
+      // user. ~55 page effects depend on `user`, and a new object re-ran them,
+      // reloading the page's data over whatever had been typed: switch tabs
+      // to copy something, come back, and the form was wiped. Keep the
+      // existing object while it is still the same person (a real profile
+      // edit, USER_UPDATED, still takes the new copy).
+      setUser(prev => (prev && u && prev.id === u.id && event !== 'USER_UPDATED' ? prev : u));
       if (!u) {
         setProfile(null);
         setFeatureOverrides([]);

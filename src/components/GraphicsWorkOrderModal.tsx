@@ -28,6 +28,7 @@ import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, graphicsShipSpeedLabel,
   type GraphicsJob, type Profile,
 } from '@/lib/types';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 const priorityColor = (p: string) => {
   switch (p) {
@@ -114,12 +115,6 @@ export default function GraphicsWorkOrderModal({ jobs, profiles = [], onClose }:
     await flush();
     onClose(changedRef.current);
   }, [flush, onClose]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') void close(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [close]);
 
   // A pending debounce must not die with the component.
   useEffect(() => () => { if (pendingRef.current) void flush(); }, [flush]);
@@ -216,7 +211,7 @@ export default function GraphicsWorkOrderModal({ jobs, profiles = [], onClose }:
 
   return (
     <div
-      onClick={() => void close()}
+      ref={closeOnEscape(close)}
       style={{
         position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
         display: 'flex', alignItems: 'flex-start', justifyContent: 'center',

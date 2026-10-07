@@ -5,6 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import NumberInput from '@/components/NumberInput';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface Member { profile_id: string; full_name: string; share_weight: number }
 interface Credit {
@@ -593,7 +594,7 @@ export default function CniJobShiftsPage() {
 
       {/* Back-pay crew picker modal */}
       {backfillOpen && (
-        <div onClick={() => setBackfillOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+        <div ref={closeOnEscape(() => setBackfillOpen(false))} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '16px', padding: '20px', maxWidth: '420px', width: '100%', maxHeight: 'calc(85vh / var(--ts))', overflowY: 'auto', border: '1px solid var(--border)' }}>
             <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>
               Who worked this job?
@@ -621,7 +622,7 @@ export default function CniJobShiftsPage() {
 
       {/* Shift roster editor modal */}
       {editShift && (
-        <div onClick={() => setEditShift(null)} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+        <div ref={closeOnEscape(() => setEditShift(null))} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '16px', padding: '20px', maxWidth: '420px', width: '100%', maxHeight: 'calc(85vh / var(--ts))', overflowY: 'auto', border: '1px solid var(--border)' }}>
             <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>
               Edit Shift Roster — {new Date(editShift.started_at).toLocaleDateString()}
@@ -648,7 +649,7 @@ export default function CniJobShiftsPage() {
 
       {/* Per-vehicle split editor modal */}
       {editVehicle && (
-        <div onClick={() => setEditVehicle(null)} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+        <div ref={closeOnEscape(() => setEditVehicle(null))} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '16px', padding: '20px', maxWidth: '420px', width: '100%', maxHeight: 'calc(85vh / var(--ts))', overflowY: 'auto', border: '1px solid var(--border)' }}>
             <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>
               Edit Split — <span style={{ fontFamily: 'monospace' }}>{editVehicle.credits[0].vin}</span>
@@ -677,7 +678,7 @@ export default function CniJobShiftsPage() {
 
       {/* Per-vehicle assign-installer modal */}
       {assignVin && (
-        <div onClick={() => setAssignVin(null)} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+        <div ref={closeOnEscape(() => setAssignVin(null))} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '16px', padding: '20px', maxWidth: '420px', width: '100%', maxHeight: 'calc(85vh / var(--ts))', overflowY: 'auto', border: '1px solid var(--border)' }}>
             <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>
               Tag Installer — <span style={{ fontFamily: 'monospace' }}>{assignVin.vin}</span>

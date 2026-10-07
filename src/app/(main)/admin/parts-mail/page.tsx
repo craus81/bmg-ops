@@ -13,6 +13,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import IncomingParts from '@/components/IncomingParts';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface MailRow {
   id: string;
@@ -517,7 +518,7 @@ export default function PartsMailPage() {
       {/* In-app invoice viewer — always exits via Close, even on mobile */}
       {viewingInvoice && (
         <div
-          onClick={() => setViewingInvoice(null)}
+          ref={closeOnEscape(() => setViewingInvoice(null))}
           style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.9)', display: 'flex', flexDirection: 'column', padding: '12px' }}
         >
           <div onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '10px' }}>

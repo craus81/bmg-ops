@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { deepLinks } from '@/lib/deep-links';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface EditableInvoice {
   id: string;
@@ -121,7 +122,7 @@ export default function EditVendorInvoiceModal({ invoice, onClose, onSaved }: Pr
   };
 
   return (
-    <div onClick={onClose} style={{
+    <div ref={closeOnEscape(onClose)} style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
       display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
       zIndex: 1500, padding: '20px', overflowY: 'auto',

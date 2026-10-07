@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { theme } from '@/lib/theme';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface RankedTemplate {
   id: string;
@@ -88,7 +89,7 @@ export default function GuideTemplatePicker({
 
   return (
     <div
-      onClick={() => { if (!creating) onClose(); }}
+      ref={closeOnEscape(() => { if (!creating) onClose(); })}
       style={{
         position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 400,
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px',

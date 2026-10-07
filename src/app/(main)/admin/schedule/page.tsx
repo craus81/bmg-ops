@@ -15,6 +15,7 @@ import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { deepLinks } from '@/lib/deep-links';
 import { scheduledDays, dayLabel } from '@/lib/cni-schedule-days';
 import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface CalendarEvent {
   id: string;
@@ -721,7 +722,7 @@ export default function SchedulePage() {
       {/* Create event modal */}
       {/* ═══ Event card: notes, files, convert to job ═══ */}
       {cardEvent && (
-        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }} onClick={() => setCardEvent(null)}>
+        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }} ref={closeOnEscape(() => setCardEvent(null))}>
           <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '14px', padding: '20px', width: '100%', maxWidth: '480px', maxHeight: 'calc(88vh / var(--ts))', overflowY: 'auto', boxShadow: '0 8px 30px rgba(0,0,0,0.3)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px', marginBottom: '4px' }}>
               {cardEdit ? (
@@ -872,7 +873,7 @@ export default function SchedulePage() {
       )}
 
       {showCreate && (
-        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }} onClick={() => setShowCreate(false)}>
+        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }} ref={closeOnEscape(() => setShowCreate(false))}>
           <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '14px', padding: '20px', width: '100%', maxWidth: '400px', boxShadow: '0 8px 30px rgba(0,0,0,0.3)' }}>
             <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '14px' }}>New Event</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
