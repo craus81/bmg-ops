@@ -18,6 +18,8 @@ import { INTERNAL_STAFF_ROLES } from '@/lib/features';
 import {
   canDecideReview,
   reviewStateOf,
+  reviewSnoozedUntil,
+  REVIEW_SNOOZE_DAYS,
   REVIEW_STATUS_DISPLAY,
   type ReviewDecision,
 } from '@/lib/estimate-review';
@@ -322,6 +324,9 @@ interface Estimate {
   internal_review_decided_by: string | null;
   internal_review_decided_at: string | null;
   internal_review_note: string | null;
+  // Team-wide snooze on the overdue-review reminder — migration 347.
+  internal_review_snoozed_until?: string | null;
+  internal_review_snoozed_by?: string | null;
 }
 
 // Allowed qualifier options per platform, from vehicle_platforms.config —
@@ -797,6 +802,7 @@ export default function EstimatesPage() {
   const [sendingForReview, setSendingForReview] = useState(false);
   const [reviewPdfName, setReviewPdfName] = useState<string | null>(null);
   const [decidingReview, setDecidingReview] = useState(false);
+  const [snoozingReview, setSnoozingReview] = useState(false);
   // Approved internal staff — the reviewer dropdown, and the names the
   // review banner shows for reviewer/requester ids.
   const [staffDirectory, setStaffDirectory] = useState<{ id: string; name: string; email: string }[]>([]);
@@ -2790,6 +2796,30 @@ export default function EstimatesPage() {
       await dialog.alert('Network error — please try again.');
     } finally {
       setDecidingReview(false);
+    }
+  };
+
+  // Quiet the overdue-review reminder for everyone (migration 347); null
+  // wakes it back up. When a snooze runs out the reminder goes out once more.
+  const snoozeReview = async (days: number | null) => {
+    if (!editingId || snoozingReview) return;
+    setSnoozingReview(true);
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/review-snooze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ days }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        await dialog.alert('Could not snooze that: ' + (data.error || 'Unknown error'));
+        return;
+      }
+      loadEstimates(true);
+    } catch {
+      await dialog.alert('Network error — please try again.');
+    } finally {
+      setSnoozingReview(false);
     }
   };
 
@@ -5843,6 +5873,44 @@ export default function EstimatesPage() {
                   >Pass to someone else</button>
                 </div>
               )}
+              {mine && state.status === 'pending' && (() => {
+                const until = reviewSnoozedUntil(est);
+                const snoozed = until != null && until > Date.now();
+                return (
+                  <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap', alignItems: 'center', fontSize: '11px', color: 'var(--text-muted)' }}>
+                    {snoozed ? (
+                      <>
+                        <span>🔕 Reminders snoozed for everyone until {new Date(until!).toLocaleString([], { weekday: 'short', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })}{est.internal_review_snoozed_by ? ` by ${staffName(est.internal_review_snoozed_by)}` : ''}</span>
+                        <button
+                          onClick={() => snoozeReview(null)}
+                          disabled={snoozingReview}
+                          style={{
+                            padding: '4px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                            background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)',
+                            opacity: snoozingReview ? 0.5 : 1,
+                          }}
+                        >Unsnooze</button>
+                      </>
+                    ) : (
+                      <>
+                        <span title="Stops the overdue-review reminder for the whole team. It goes out once more when the snooze ends.">🔕 Snooze reminders:</span>
+                        {REVIEW_SNOOZE_DAYS.map(d => (
+                          <button
+                            key={d}
+                            onClick={() => snoozeReview(d)}
+                            disabled={snoozingReview}
+                            style={{
+                              padding: '4px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                              background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)',
+                              opacity: snoozingReview ? 0.5 : 1,
+                            }}
+                          >{d === 7 ? '1 week' : `${d} day${d === 1 ? '' : 's'}`}</button>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           );
         })()}
