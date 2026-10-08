@@ -1,12 +1,15 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 import EditVendorInvoiceModal from '@/components/EditVendorInvoiceModal';
+import NetsuiteVendorLinker from '@/components/NetsuiteVendorLinker';
+import { deepLinks } from '@/lib/deep-links';
 
 interface ApInvoice {
   id: string;
@@ -77,10 +80,13 @@ const ageColor = (days: number) => days >= 14 ? '#ef4444' : days >= 7 ? '#fbbf24
 export default function ApQueuePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isAdmin, hasRole, loading: authLoading } = useAuth();
+  const { isAdmin, hasRole, hasFeature, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
   const canAct = isAdmin || hasRole('finance');
+  // The company page is a CNI admin page — finance would bounce off it, so
+  // their vendor names stay plain text.
+  const canOpenCompany = hasFeature('cni_admin');
 
   const [invoices, setInvoices] = useState<ApInvoice[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
@@ -95,6 +101,8 @@ export default function ApQueuePage() {
   // The invoice currently open in the header editor (fix vendor link, dates,
   // amount, etc.) — null when the editor is closed.
   const [editing, setEditing] = useState<ApInvoice | null>(null);
+  // The invoice whose "Link NetSuite vendor" panel is open, if any.
+  const [linkingFor, setLinkingFor] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -298,8 +306,28 @@ export default function ApQueuePage() {
                 <div style={{ flex: 1, minWidth: '220px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                     <span style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>
-                      {inv.vendor_name}{inv.invoice_number ? ` · #${inv.invoice_number}` : ''}
+                      {inv.company && canOpenCompany ? (
+                        <Link
+                          href={deepLinks.cniCompany(inv.company.id)}
+                          title={`Open ${inv.company.name}'s company record`}
+                          style={{ color: 'inherit', textDecoration: 'underline', textDecorationColor: 'var(--border)', textUnderlineOffset: '3px' }}
+                        >
+                          {inv.vendor_name}
+                        </Link>
+                      ) : inv.vendor_name}
+                      {inv.invoice_number ? ` · #${inv.invoice_number}` : ''}
                     </span>
+                    {inv.company?.netsuite_vendor_id && (
+                      <a
+                        href={deepLinks.netsuiteVendor(inv.company.netsuite_vendor_id)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={`NetSuite vendor #${inv.company.netsuite_vendor_id}`}
+                        style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textDecoration: 'none', whiteSpace: 'nowrap' }}
+                      >
+                        NetSuite ↗
+                      </a>
+                    )}
                     <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: chip.bg, color: chip.color }}>{chip.label}</span>
                     {(() => {
                       const age = invoiceAge(inv);
@@ -341,6 +369,39 @@ export default function ApQueuePage() {
                   {!vendorLinked && (inv.status === 'submitted' || inv.status === 'approved') && (
                     <div style={{ fontSize: '11px', color: '#fbbf24', marginTop: '4px' }}>
                       ⚠ Not linked to a NetSuite vendor yet — billing will need that first.
+                      {isAdmin && (
+                        <button
+                          onClick={() => setLinkingFor(linkingFor === inv.id ? null : inv.id)}
+                          style={{ marginLeft: '8px', fontSize: '11px', fontWeight: 800, color: 'var(--orange)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                        >
+                          {linkingFor === inv.id ? 'Close' : 'Link or create vendor'}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {linkingFor === inv.id && !vendorLinked && (
+                    <div style={{ marginTop: '8px', padding: '10px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--subtle-bg, rgba(148,163,184,0.06))', maxWidth: '520px' }}>
+                      <NetsuiteVendorLinker
+                        companyId={inv.company?.id}
+                        companyName={inv.company?.name || inv.vendor_name}
+                        onLinked={async v => {
+                          // An invoice recorded before its company existed has
+                          // no company yet — attach the one the link created.
+                          if (!inv.company) {
+                            const res = await fetch('/api/vendor-invoices', {
+                              method: 'PATCH',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ id: inv.id, companyId: v.companyId }),
+                            });
+                            if (!res.ok) {
+                              const data = await res.json().catch(() => ({}));
+                              await dialog.alert(`Vendor #${v.netsuiteVendorId} is linked to ${v.companyName}, but this invoice couldn't be attached to it: ${data.error || res.status}. Use Edit to pick the company.`);
+                            }
+                          }
+                          setLinkingFor(null);
+                          await load();
+                        }}
+                      />
                     </div>
                   )}
                 </div>

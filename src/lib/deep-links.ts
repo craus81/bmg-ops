@@ -147,6 +147,12 @@ export const deepLinks = {
   /** Dedicated CNI installer record page (optionally flashing an internal note). */
   cniInstaller: (userId: string, noteId?: string | null) =>
     `/admin/cni/installers/${userId}${noteId ? `?note=${noteId}` : ''}`,
+  /** CNI installer company record — contact info, members, documents and
+   *  the NetSuite vendor link its bills go to. */
+  cniCompany: (companyId: string) => `/admin/cni/companies/${companyId}`,
+  /** Opens a NetSuite vendor record in NetSuite (a redirect route, since
+   *  the account id behind the NetSuite URL lives in server env only). */
+  netsuiteVendor: (vendorId: string) => `/api/cni/vendor-link?id=${encodeURIComponent(vendorId)}`,
   /** Dedicated prospect / customer record page. */
   prospect: (prospectId: string) => `/admin/prospects/${prospectId}`,
   /** The same record page with the standard customer compose screen already
