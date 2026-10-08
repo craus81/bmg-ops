@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { PRICING_REQUEST_PUSH_BLOCKED } from '@/lib/pricing-request';
 import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
@@ -291,6 +292,11 @@ export async function POST(req: NextRequest) {
 
     if (estErr || !estimate) {
       return NextResponse.json({ error: 'Estimate not found' }, { status: 404 });
+    }
+    // A pricing request's price sheet (migration 352) is billed off the
+    // customer's PO, never through a NetSuite estimate or sales order.
+    if (estimate.pricing_request_id) {
+      return NextResponse.json({ error: PRICING_REQUEST_PUSH_BLOCKED }, { status: 409 });
     }
     // Flatten the platform label for the memo's vehicle line.
     (estimate as any).vehicle_platform_label = (estimate as any).vehicle_platforms?.label || null;

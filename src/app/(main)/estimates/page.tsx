@@ -253,6 +253,9 @@ const GRAPHICS_STATUS_COLORS: Record<string, string> = {
 interface Estimate {
   id: string;
   estimate_number: string;
+  /** Set when this estimate is a pricing request's price sheet (migration
+   *  352): sent for approval like any estimate, never pushed to NetSuite. */
+  pricing_request_id?: string | null;
   customer_id: string | null;
   /** The CRM lead this was quoted for, when there's no customers row yet. */
   prospect_id: string | null;
@@ -489,6 +492,19 @@ export default function EstimatesPage() {
 
   // Builder state
   const [editingId, setEditingId] = useState<string | null>(null);
+  // The pricing request this estimate prices, if any (migration 352): its
+  // number for the banner and the requester's email for the approval send.
+  const [priceSheetRequest, setPriceSheetRequest] = useState<{ request_number: string; company_name: string; contact_email: string | null } | null>(null);
+  const priceSheetRequestId = editingId ? estimates.find(e => e.id === editingId)?.pricing_request_id || null : null;
+  useEffect(() => {
+    if (!priceSheetRequestId) { setPriceSheetRequest(null); return; }
+    let cancelled = false;
+    fetch(`/api/pricing-requests/${priceSheetRequestId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(j => { if (!cancelled) setPriceSheetRequest(j?.request || null); })
+      .catch(() => { if (!cancelled) setPriceSheetRequest(null); });
+    return () => { cancelled = true; };
+  }, [priceSheetRequestId]);
   const [title, setTitle] = useState('');
   const [notes, setNotes] = useState('');
   const [customerId, setCustomerId] = useState<string | null>(null);
@@ -3740,6 +3756,9 @@ export default function EstimatesPage() {
   // ═══════════ BUILDER VIEW ═══════════
   const editingEst = editingId ? estimates.find(e => e.id === editingId) : null;
   const isPushed = editingEst?.netsuite_estimate_id;
+  // A pricing request's price sheet is billed off the customer's PO, so the
+  // NetSuite push and Convert to SO stay hidden (the routes refuse it too).
+  const isPriceSheet = !!editingEst?.pricing_request_id;
   // Same "accepted" the content lock uses: signed in the app, or marked
   // accepted (phone/PO approvals, conversion).
   const estAccepted = !!(editingEst && ((editingEst as any).customer_approved || editingEst.status === 'accepted'));
@@ -3799,6 +3818,20 @@ export default function EstimatesPage() {
           </div>
         )}
       </div>
+
+      {isPriceSheet && editingEst?.pricing_request_id && (
+        <a
+          href={deepLinks.pricingRequest(editingEst.pricing_request_id)}
+          style={{
+            display: 'block', marginBottom: '12px', padding: '10px 12px', borderRadius: '10px',
+            background: 'rgba(34,211,238,0.08)', border: '1px solid rgba(34,211,238,0.25)',
+            color: '#22d3ee', fontSize: '12px', fontWeight: 700, textDecoration: 'none',
+          }}
+        >
+          Price sheet for {priceSheetRequest?.request_number || 'a pricing request'}
+          {priceSheetRequest?.company_name ? ` (${priceSheetRequest.company_name})` : ''}. Send it for approval here; it is never pushed to NetSuite. Open the request →
+        </a>
+      )}
 
       {/* Customer Selection */}
       <div style={{ marginBottom: '12px', position: 'relative' }}>
@@ -5521,7 +5554,7 @@ export default function EstimatesPage() {
         })()}
 
         {/* Push or Sync to NetSuite */}
-        {editingId && customerNsId && lines.length > 0 && (
+        {editingId && customerNsId && lines.length > 0 && !isPriceSheet && (
           <>
             <button
               onClick={() => pushToNetSuite(!!isPushed)}
@@ -6091,7 +6124,7 @@ export default function EstimatesPage() {
         )}
         {/* Convert to Sales Order — gated on customer approval; admins can
             override with a recorded reason (phone/email/PO approvals). */}
-        {editingId && customerNsId && lines.length > 0 && !estimates.find(e => e.id === editingId)?.netsuite_so_id && (() => {
+        {editingId && customerNsId && lines.length > 0 && !isPriceSheet && !estimates.find(e => e.id === editingId)?.netsuite_so_id && (() => {
           const approved = !!(estimates.find(e => e.id === editingId) as any)?.customer_approved;
           const locked = !approved && !isAdmin;
           return (
@@ -6241,6 +6274,7 @@ export default function EstimatesPage() {
         <EmailComposeModal
           title="Review Approval Email Before Sending"
           customerId={customerId}
+          initialTo={priceSheetRequest?.contact_email || undefined}
           stateKey={`estimate-approval:${editingId}`}
           sendLabel="Send for Approval"
           messagePlaceholder="Optional note to the customer — added above the estimate…"
