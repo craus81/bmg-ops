@@ -682,7 +682,11 @@ export async function POST(req: NextRequest) {
         buyer_name: buyerName(extracted),
         buyer_email: buyerEmail(extracted),
       };
-      if (adminUser?.id) insertPayload.created_by = adminUser.id;
+      // The person who confirmed the import is the PO's creator (its
+      // "Created by" tag); the first admin stays the fallback for a
+      // server-to-server create with no person behind it.
+      const creatorId = actorId || adminUser?.id;
+      if (creatorId) insertPayload.created_by = creatorId;
 
       const { data: newPO, error: poError } = await supabase.from('purchase_orders').insert(insertPayload).select().single();
       if (poError || !newPO) {

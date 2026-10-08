@@ -14,6 +14,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { flashNote } from '@/lib/focus-note';
 import { fetchAllRows } from '@/lib/fetch-all';
 import RecordChanges from '@/components/RecordChanges';
+import CreatedBy from '@/components/CreatedBy';
 
 interface UpfitNote {
   id: string;
@@ -843,6 +844,7 @@ export default function UpfitProjectsPage() {
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: '16px', fontWeight: 700, color: theme.textPrimary }}>{selected.project_name}</div>
             {selected.customer_name && <div style={{ fontSize: '12px', color: theme.textSecondary }}>{selected.customer_name}</div>}
+            <CreatedBy userId={selected.created_by} at={selected.created_at} style={{ display: 'block', fontSize: '11px' }} />
           </div>
           <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', background: `${st.color}20`, color: st.color, border: `1px solid ${st.color}40` }}>{st.label}</span>
           {/* R6-13: who changed what on this project. */}
@@ -1688,6 +1690,7 @@ export default function UpfitProjectsPage() {
                   {p.estimate_number && <span>Est: {p.estimate_number}</span>}
                   {p.netsuite_so_number && <span>SO: {p.netsuite_so_number}</span>}
                   {p.scheduled_date && <span>Sched: {fmt(p.scheduled_date)}</span>}
+                  <CreatedBy compact userId={p.created_by} at={p.created_at} style={{ fontSize: '10px' }} />
                   {(() => {
                     const r = boardReadiness[p.id];
                     if (!r) return null;

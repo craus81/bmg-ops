@@ -38,6 +38,7 @@ import MentionsInbox from '@/components/MentionsInbox';
 import ShopArrivals from '@/components/ShopArrivals';
 import MyWorkList from '@/components/MyWorkList';
 import PersonalListsModal from '@/components/PersonalListsModal';
+import CreatedBy from '@/components/CreatedBy';
 
 type FilterStatus = VehicleRowKey | 'all';
 
@@ -1821,6 +1822,7 @@ export default function TrackingPage() {
                       {vehicle.sales_order_number && (
                         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px' }}>SO #{vehicle.sales_order_number}</div>
                       )}
+                      <CreatedBy compact label="Checked in by" userId={vehicle.checked_in_by} at={vehicle.created_at} style={{ display: 'block', marginTop: '1px' }} />
                       {(vehicle as any).scheduled_upfit_date && (
                         <div style={{ fontSize: '11px', color: '#3b82f6', fontWeight: 600, marginTop: '1px' }}>Upfit: {new Date((vehicle as any).scheduled_upfit_date + 'T12:00:00').toLocaleDateString()}</div>
                       )}
@@ -1977,6 +1979,7 @@ export default function TrackingPage() {
                           <div style={{ fontWeight: 800, fontSize: '15px', color: 'var(--text-primary)' }}>{vehicle.customer_name || 'No Customer'}</div>
                           <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>{vehicleTitle(vehicle)}</div>
                           <div style={{ fontSize: '11px', fontFamily: 'monospace', color: 'var(--text-muted)' }}>{vehicle.vin}</div>
+                          <CreatedBy label="Checked in by" userId={vehicle.checked_in_by} at={vehicle.created_at} style={{ display: 'block', fontSize: '11px', marginTop: '2px' }} />
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
                           {/* Stacked, so a narrow screen keeps room for the name. */}

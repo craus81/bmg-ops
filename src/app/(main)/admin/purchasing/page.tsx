@@ -29,6 +29,7 @@ import PartsDemandTab from '@/components/PartsDemandTab';
 import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
 import { trackingUrl } from '@/lib/tracking-url';
+import CreatedBy from '@/components/CreatedBy';
 
 interface RequestRow {
   id: string;
@@ -661,6 +662,7 @@ export default function PurchasingQueuePage() {
                       <td style={{ padding: '9px 14px' }}>
                         <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{r.item_number}</div>
                         {r.description && <div style={{ fontSize: '11px', color: theme.textSecondary }}>{r.description}</div>}
+                        <CreatedBy compact label="Requested by" name={r.requester?.full_name} at={r.created_at} source={!r.requester?.full_name && r.source === 'auto_reorder' ? 'system' : null} style={{ display: 'block' }} />
                       </td>
                       <td style={{ padding: '9px 10px', textAlign: 'right', fontWeight: 800, color: 'var(--text-primary)' }}>{r.quantity}</td>
                       <td style={{ padding: '9px 10px' }}>
