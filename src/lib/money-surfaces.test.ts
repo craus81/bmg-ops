@@ -34,6 +34,7 @@ const ALLOWED: Record<string, string> = {
   'src/app/(main)/admin/parts-mail/page.tsx': 'part_admin — admin only',
   'src/app/(main)/admin/scans/page.tsx': 'admin console',
   'src/app/(main)/admin/import-installs/page.tsx': 'data_import — admin only',
+  'src/app/(main)/admin/vendor-costs/page.tsx': 'admin only (page redirects non-admins; its API is requireAdmin)',
   'src/app/(main)/admin/wrap-quote/page.tsx': 'the wrap quote builder — sales/admin',
   'src/app/(main)/admin/prospects/page.tsx': 'prospects — sales/admin',
   'src/app/(main)/admin/prospects/[id]/page.tsx': 'prospects — sales/admin',

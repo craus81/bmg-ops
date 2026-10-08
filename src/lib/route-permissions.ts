@@ -400,6 +400,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/parts/install-photos/route.ts': staff(),
   'src/app/api/parts/import-profiles/route.ts': admin(),
   'src/app/api/parts/import-vendor-assets/route.ts': admin(),
+  'src/app/api/parts/vendor-costs/route.ts': admin(),
   'src/app/api/parts/merge/route.ts': admin(),
   'src/app/api/parts/mirror/route.ts': staff(),
   'src/app/api/parts/proof-sweep/route.ts': admin(),

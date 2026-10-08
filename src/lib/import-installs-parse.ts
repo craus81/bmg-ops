@@ -60,7 +60,7 @@ export const looksLikeVin = (v: string) => /^[A-HJ-NPR-Z0-9]{11,17}$/i.test(v);
  * lines), which matters now that real .csv exports are accepted — the old
  * naive split broke on any quoted field. Rows with no content are dropped.
  */
-function parseDelimited(text: string, delim: '\t' | ','): string[][] {
+export function parseDelimited(text: string, delim: '\t' | ','): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = '';
@@ -152,7 +152,7 @@ export function parsePastedText(text: string): ParseOutcome {
  * `String(8.9e21)` would. Digits Excel already rounded off are gone either
  * way; validation still catches a truncated ID.
  */
-function excelCellText(v: unknown): string {
+export function excelCellText(v: unknown): string {
   if (v === null || v === undefined) return '';
   if (v instanceof Date) return v.toISOString().slice(0, 10);
   if (typeof v === 'number') return Number.isInteger(v) ? v.toFixed(0) : String(v);
@@ -166,7 +166,7 @@ function excelCellText(v: unknown): string {
   return String(v);
 }
 
-function sheetCells(ws: Worksheet): string[][] {
+export function sheetCells(ws: Worksheet): string[][] {
   const colCount = ws.columnCount;
   const out: string[][] = [];
   ws.eachRow({ includeEmpty: false }, (row) => {
