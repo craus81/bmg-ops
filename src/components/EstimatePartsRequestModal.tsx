@@ -15,6 +15,7 @@
 
 import { useMemo, useState } from 'react';
 import { theme } from '@/lib/theme';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 const qtyText = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
 
@@ -99,7 +100,7 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
 
   return (
     <div
-      onClick={() => { if (!busy) onClose(); }}
+      ref={closeOnEscape(() => { if (!busy) onClose(); })}
       style={{
         position: 'fixed', inset: 0, background: 'var(--overlay)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',

@@ -46,6 +46,7 @@ import { useFormTelemetry } from '@/lib/use-form-telemetry';
 import { uploadRecordFile } from '@/lib/record-file-upload';
 import { bounceNextStep, bounceIsAmbiguous, recipientsLabel } from '@/lib/email-bounce';
 import EstimatePartsRequestModal from '@/components/EstimatePartsRequestModal';
+import { closeOnEscape } from '@/lib/modal-escape';
 import CreatedBy from '@/components/CreatedBy';
 
 interface Part {
@@ -4075,7 +4076,7 @@ export default function EstimatesPage() {
                   autoFocus
                   value={checkinSearch}
                   onChange={e => setCheckinSearch(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Escape') setCheckinPickerOpen(false); }}
+                  onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); setCheckinPickerOpen(false); } }}
                   placeholder="Search vehicles in the shop — VIN, customer, make, model…"
                   style={{ ...inputStyle, marginBottom: '6px' }}
                 />
@@ -5721,7 +5722,7 @@ export default function EstimatesPage() {
             nothing reaches the line list until it is ticked and accepted. */}
         {draftOpen && (
           <div
-            onClick={() => !draftBusy && setDraftOpen(false)}
+            ref={closeOnEscape(() => !draftBusy && setDraftOpen(false))}
             style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', zIndex: 70 }}
           >
             <div
@@ -6422,7 +6423,7 @@ export default function EstimatesPage() {
       {followupNoteFor && (
         <div
           style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}
-          onClick={() => !fuSaving && setFollowupNoteFor(null)}
+          ref={closeOnEscape(() => !fuSaving && setFollowupNoteFor(null))}
         >
           <div onClick={e => e.stopPropagation()} style={{
             width: '100%', maxWidth: '420px', background: 'var(--card)', border: '1px solid var(--border)',

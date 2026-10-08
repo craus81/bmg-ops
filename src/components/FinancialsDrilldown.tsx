@@ -26,6 +26,7 @@ import { printStatements, printBill, openArInvoicePdf, usd2, fmtDate } from '@/l
 import { fetchCompanyLetterhead, type CompanyLetterhead } from '@/lib/company-profile';
 import type { OpenArInvoice, OpenVendorBill, AccountBalance, AgingBucketKey } from '@/lib/financials-data';
 import type { FinancialsData } from './FinancialsDashboard';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 export const AGE_META: { key: AgingBucketKey; label: string; shortLabel: string; color: string }[] = [
   { key: 'current', label: 'Current — not yet due', shortLabel: 'Current', color: 'var(--success)' },
@@ -142,8 +143,8 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
   onClose: () => void;
 }) {
   const dialog = useDialog();
-  const panelRef = useFocusTrap<HTMLDivElement>(true, onClose);
-  const downOnBackdrop = useRef(false);
+  // Esc is bound on the backdrop (closeOnEscape), so only the topmost window closes.
+  const panelRef = useFocusTrap<HTMLDivElement>(true);
 
   // Company letterhead for printed statements/bills — same source as the
   // wrap quote's header. Loaded up front so print clicks stay synchronous.
@@ -519,13 +520,12 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
   ) : null;
 
   return (
-    // Close only when the click STARTED on the backdrop — a drag-select that
-    // ends past the panel edge must not nuke the modal (and its filters).
+    // A click outside never closes it (X or Esc only), so a stray click or a
+    // drag-select past the panel edge can't throw away its filters.
     // zIndex 1200: above AiChat's 1000 mascot/panel, below DialogProvider's
     // 4000 so error alerts still stack on top.
     <div
-      onMouseDown={e => { downOnBackdrop.current = e.target === e.currentTarget; }}
-      onClick={e => { if (e.target === e.currentTarget && downOnBackdrop.current) onClose(); }}
+      ref={closeOnEscape(onClose)}
       style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto', padding: 'calc(4vh / var(--ts)) 12px calc(24px + env(safe-area-inset-bottom))' }}>
       <div ref={panelRef} role="dialog" aria-modal="true" aria-label={VIEW_TITLES[view]} onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
         style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '14px', width: 'min(980px, 100%)', maxHeight: 'calc(92vh / var(--ts))', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: 'var(--shadow-md)' }}>

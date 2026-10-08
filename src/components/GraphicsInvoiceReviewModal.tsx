@@ -19,6 +19,7 @@ import PhoneInput from '@/components/PhoneInput';
 import NumberInput from '@/components/NumberInput';
 import type { GraphicsJob } from '@/lib/types';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface CustomerRow {
   id: string;
@@ -351,7 +352,7 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
   };
 
   return (
-    <div onClick={onClose} style={{
+    <div ref={closeOnEscape(onClose)} style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
       display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
       zIndex: 1000, padding: '20px', overflowY: 'auto',

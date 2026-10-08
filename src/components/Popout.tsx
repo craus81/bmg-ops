@@ -16,6 +16,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { deepLinks } from '@/lib/deep-links';
 import { buildRecent, pushRecent } from '@/lib/command-palette';
 import { estimateHeadlineNumber, estimateAltNumber } from '@/lib/estimate-number';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 export type PopoutType =
   | 'purchase_orders'
@@ -343,7 +344,7 @@ export function PopoutProvider({ children }: { children: ReactNode }) {
           // must clear those — while staying under toasts (1400/1500) and
           // DialogProvider (4000). UniversalSearch (300) stays below as before.
           style={{ position: 'fixed', inset: 0, zIndex: 1300, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(6px)', display: 'flex', flexDirection: 'column', padding: '16px' }}
-          onClick={close}
+          ref={closeOnEscape(close)}
         >
           <div
             onClick={(e) => e.stopPropagation()}

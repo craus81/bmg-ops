@@ -26,6 +26,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { createClient } from '@/lib/supabase-browser';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 // BMG staff directory for the Cc row — one load per app session (same
 // rule as MentionTextArea: approved profiles, minus customer-only accounts).
@@ -520,7 +521,7 @@ export default function EmailComposeModal({
   return (
     <div
       style={{ position: 'fixed', inset: 0, background: 'var(--overlay, rgba(0,0,0,0.5))', zIndex: 1500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
-      onClick={() => { if (!sending) closeCompose(); }}
+      ref={closeOnEscape(() => { if (!sending) closeCompose(); })}
     >
       <div onClick={e => e.stopPropagation()} style={{
         background: 'var(--card)', borderRadius: '14px', padding: '16px',

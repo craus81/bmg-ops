@@ -15,6 +15,7 @@ import { useEffect, useState } from 'react';
 import { deepLinks } from '@/lib/deep-links';
 import { useAuth } from '@/components/AuthProvider';
 import type { HistoryDetail } from '@/lib/ledger/history';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface Props {
   recordId: string;
@@ -66,12 +67,6 @@ export default function QuickBooksRecordModal({ recordId, onClose, backHref, bac
     return () => { cancelled = true; };
   }, [recordId]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   const pdf = record?.documents.find(d => d.kind === 'pdf') || null;
   const attachments = record?.documents.filter(d => d.kind === 'attachment') || [];
   // Subtotal/description rows carry no money of their own; keep them as
@@ -79,7 +74,7 @@ export default function QuickBooksRecordModal({ recordId, onClose, backHref, bac
   const lines = record?.lines.filter(l => l.kind !== 'tax') || [];
 
   return (
-    <div onClick={onClose}
+    <div ref={closeOnEscape(onClose)}
       style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
       <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="QuickBooks record"
         style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', width: 'min(820px, 100%)', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto' }}>

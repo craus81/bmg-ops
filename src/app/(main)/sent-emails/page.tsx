@@ -21,6 +21,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { apiFetch } from '@/lib/api-client';
 import { useAuth } from '@/components/AuthProvider';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface EmailRow {
   id: string;
@@ -209,7 +210,7 @@ export default function SentEmailsPage() {
 
       {/* Sent-email viewer — same shape as the account history's. */}
       {viewing && (
-        <div onClick={() => setViewing(null)}
+        <div ref={closeOnEscape(() => setViewing(null))}
           style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Sent email"
             style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '16px', width: 'min(720px, 100%)', maxHeight: 'calc(100vh / var(--ts) - 40px)', display: 'flex', flexDirection: 'column', gap: '8px' }}>

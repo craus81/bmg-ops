@@ -47,6 +47,7 @@ import {
   type DimUnits,
 } from '@/lib/dimension-scale';
 import { buildInstallGuidePdf, installGuideFileName, type RenderedGuidePage } from '@/lib/install-guide-pdf';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 type Tool = 'select' | 'dim' | 'note' | 'calibrate';
 
@@ -1507,7 +1508,7 @@ export default function InstallGuideEditorPage() {
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 200,
             display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
           }}
-          onClick={() => { if (!sendBusy) setSendOpen(false); }}
+          ref={closeOnEscape(() => { if (!sendBusy) setSendOpen(false); })}
         >
           <div
             onClick={e => e.stopPropagation()}
@@ -1561,7 +1562,7 @@ export default function InstallGuideEditorPage() {
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 210,
             display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
           }}
-          onClick={() => setJobPicker(null)}
+          ref={closeOnEscape(() => setJobPicker(null))}
         >
           <div
             onClick={e => e.stopPropagation()}
@@ -1653,7 +1654,7 @@ export default function InstallGuideEditorPage() {
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 200,
             display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
           }}
-          onClick={() => { setPdfImport(null); pdfDocRef.current = null; pdfFileRef.current = null; }}
+          ref={closeOnEscape(() => { setPdfImport(null); pdfDocRef.current = null; pdfFileRef.current = null; })}
         >
           <div
             onClick={e => e.stopPropagation()}

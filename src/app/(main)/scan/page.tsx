@@ -17,6 +17,7 @@ import { isVerizonRfidPart } from '@/lib/rfid';
 import NumberInput from '@/components/NumberInput';
 import { useFormTelemetry } from '@/lib/use-form-telemetry';
 import { useAddToCatalog, AddToCatalogRow, offerAddToCatalog } from '@/components/AddToCatalog';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface Part {
   id: string;
@@ -1374,7 +1375,7 @@ export default function ScanPage() {
 
           {/* Crew tag checklist (field installers; weights default to an even split) */}
           {crewOpen && (
-            <div onClick={() => setCrewOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+            <div ref={closeOnEscape(() => setCrewOpen(false))} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
               <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: theme.card, borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: 'calc(92vh / var(--ts))', overflowY: 'auto' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                   <div style={{ fontSize: '15px', fontWeight: 800, color: theme.textPrimary }}>Who&apos;s working this shift?</div>

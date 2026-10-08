@@ -13,6 +13,7 @@ import { INTERNAL_STAFF_ROLES } from '@/lib/features';
 import { Search as SearchIcon } from 'lucide-react';
 import HelpButton from '@/components/HelpButton';
 import { forgetSiriKey } from '@/lib/siri-bridge';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface HeaderProps {
   activePartNumber?: string;
@@ -47,7 +48,7 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
     setSwitchEmail('');
     setSwitchPassword('');
   };
-  const switchModalRef = useFocusTrap<HTMLDivElement>(showSwitchModal, closeSwitchModal);
+  const switchModalRef = useFocusTrap<HTMLDivElement>(showSwitchModal);
 
   // Notifications state
   const [showNotifications, setShowNotifications] = useState(false);
@@ -325,7 +326,7 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
           </div>
         </header>
         <div style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
-          onClick={closeSwitchModal}>
+          ref={closeOnEscape(closeSwitchModal)}>
           <div
             ref={switchModalRef}
             role="dialog"

@@ -149,7 +149,7 @@ export default function PartNumberAutocomplete({
         onKeyDown={e => {
           if (e.key === 'ArrowDown' && hits.length) { e.preventDefault(); setOpen(true); setActive(a => Math.min(a + 1, hits.length - 1)); }
           else if (e.key === 'ArrowUp' && hits.length) { e.preventDefault(); setActive(a => Math.max(a - 1, 0)); }
-          else if (e.key === 'Escape') setOpen(false);
+          else if (e.key === 'Escape') { if (showList) e.preventDefault(); setOpen(false); }
           else if (e.key === 'Enter') {
             e.preventDefault();
             if (showList && active >= 0 && hits[active]) pick(hits[active]);

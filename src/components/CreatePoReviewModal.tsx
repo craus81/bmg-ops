@@ -14,6 +14,7 @@
 
 import { useMemo, useState } from 'react';
 import { theme } from '@/lib/theme';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 const LOCATIONS = ["O'Fallon", 'Wentzville', 'Kansas City', 'Social Circle'] as const;
 type LocationName = typeof LOCATIONS[number];
@@ -123,7 +124,7 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
 
   return (
     <div
-      onClick={() => { if (!busy) onClose(); }}
+      ref={closeOnEscape(() => { if (!busy) onClose(); })}
       style={{
         position: 'fixed', inset: 0, background: 'var(--overlay)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',

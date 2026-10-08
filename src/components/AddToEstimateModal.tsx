@@ -8,6 +8,7 @@ import { apiErrorMessage } from '@/lib/api-error-message';
 import type { BrowsePart } from '@/components/PartCatalogBrowser';
 import { kitEstimateLines, type KitWithMembers } from '@/lib/part-kits';
 import { estimateHeadlineNumber, estimateNumberMatches } from '@/lib/estimate-number';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 /**
  * "Add to estimate" chooser for the standalone catalog (the /parts Visual
@@ -171,7 +172,7 @@ export default function AddToEstimateModal({ part, kit, onClose }: {
   return (
     <div
       style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}
-      onClick={onClose}
+      ref={closeOnEscape(onClose)}
     >
       <div
         onClick={e => e.stopPropagation()}

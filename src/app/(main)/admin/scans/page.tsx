@@ -27,6 +27,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { type EmailedInfo, fetchEmailedByNumber, isBadDelivery } from '@/lib/invoice-emails';
 import { InvoiceEmailedBadge } from '@/components/InvoiceEmailedBadge';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 /** One completion photo (K8, migration 190) attached to a scan. */
 interface ScanPhoto {
@@ -1843,7 +1844,7 @@ export default function AdminScansPage() {
 
       {/* Email invoices modal (shared component, same flow as the Invoicing hub) */}
       {archiveIds && (
-        <div onClick={() => !archiving && setArchiveIds(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+        <div ref={closeOnEscape(() => !archiving && setArchiveIds(null))} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: '420px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '18px' }}>
             <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '6px' }}>
               Archive {archiveIds.length} scan{archiveIds.length !== 1 ? 's' : ''} without invoicing?
@@ -2337,7 +2338,7 @@ export default function AdminScansPage() {
       {/* Worksheet Review Modal — per-page sections (each page is its own
           worksheet with its own part numbers, customer, and VIN list). */}
       {heldReview && (
-        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={() => setHeldReview(null)}>
+        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} ref={closeOnEscape(() => setHeldReview(null))}>
           <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '14px', padding: '18px', width: '100%', maxWidth: '520px', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto', boxShadow: '0 8px 30px rgba(0,0,0,0.3)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
               <div>
@@ -2388,7 +2389,7 @@ export default function AdminScansPage() {
           });
         };
         return (
-        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={() => setWorksheetReview(null)}>
+        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} ref={closeOnEscape(() => setWorksheetReview(null))}>
           <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '14px', padding: '18px', width: '100%', maxWidth: '640px', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto', boxShadow: '0 8px 30px rgba(0,0,0,0.3)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <div>

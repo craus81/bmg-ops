@@ -18,6 +18,7 @@ import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { touchLabel, type QuietLead } from '@/lib/quiet-leads';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 const LOST_REASONS = [
   { id: 'price', label: 'Price' },
@@ -251,7 +252,7 @@ export default function QuietLeadsPage() {
 
       {prompt && (
         <div
-          onClick={() => !busy && setPrompt(null)}
+          ref={closeOnEscape(() => !busy && setPrompt(null))}
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', zIndex: 60 }}
         >
           <div onClick={e => e.stopPropagation()} style={{ ...card, width: '100%', maxWidth: '440px' }}>

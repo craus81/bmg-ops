@@ -38,6 +38,7 @@ import MentionsInbox from '@/components/MentionsInbox';
 import ShopArrivals from '@/components/ShopArrivals';
 import MyWorkList from '@/components/MyWorkList';
 import PersonalListsModal from '@/components/PersonalListsModal';
+import { closeOnEscape } from '@/lib/modal-escape';
 import CreatedBy from '@/components/CreatedBy';
 
 type FilterStatus = VehicleRowKey | 'all';
@@ -510,18 +511,14 @@ export default function TrackingPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed lookups; ref dedupes
   }, [expandedId, vehicleSalesOrders]);
 
-  // Lock body scroll and bind Escape while a vehicle detail modal is open
+  // Lock body scroll while a vehicle detail modal is open (Esc is bound on
+  // the backdrop, see closeOnEscape).
   useEffect(() => {
     if (!expandedId) return;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setExpandedId(null);
-    };
-    window.addEventListener('keydown', onKey);
     return () => {
       document.body.style.overflow = prevOverflow;
-      window.removeEventListener('keydown', onKey);
     };
   }, [expandedId]);
 
@@ -1947,7 +1944,7 @@ export default function TrackingPage() {
                   <>
                     {/* Backdrop */}
                     <div
-                      onClick={() => setExpandedId(null)}
+                      ref={closeOnEscape(() => setExpandedId(null))}
                       style={{
                         position: 'fixed', inset: 0,
                         background: 'rgba(0,0,0,0.55)',

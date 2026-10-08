@@ -12,6 +12,7 @@ import PartPicker, { type PickedPart } from '@/components/PartPicker';
 import { isVerizonRfidPart } from '@/lib/rfid';
 import InstallerPreviewBanner from '@/components/InstallerPreviewBanner';
 import { getInstallerPreview } from '@/lib/installer-preview';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface InstallTask {
   id: string;
@@ -907,7 +908,7 @@ export default function InstallerJobDetailPage() {
 
       {/* Crew tag checklist (company roster; weights default to an even split). */}
       {crewOpen && shiftInfo && (
-        <div onClick={() => setCrewOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+        <div ref={closeOnEscape(() => setCrewOpen(false))} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
           <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: 'var(--card)', borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: 'calc(92vh / var(--ts))', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
               <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Who&apos;s working this shift?</div>
@@ -1009,7 +1010,7 @@ export default function InstallerJobDetailPage() {
 
       {/* Change the part the open shift scans under (mid-shift, §1.2). */}
       {changePartOpen && shiftInfo?.shift && (
-        <div onClick={() => setChangePartOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+        <div ref={closeOnEscape(() => setChangePartOpen(false))} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
           <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: 'var(--card)', borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: 'calc(92vh / var(--ts))', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
               <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Part for this shift</div>
@@ -1039,7 +1040,7 @@ export default function InstallerJobDetailPage() {
 
       {/* Verizon RFID device capture modal (VIN known from the job). */}
       {captureVin && (
-        <div onClick={closeCapture} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+        <div ref={closeOnEscape(closeCapture)} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
           <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: 'var(--card)', borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: 'calc(92vh / var(--ts))', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
               <div>
@@ -1062,7 +1063,7 @@ export default function InstallerJobDetailPage() {
 
       {/* Scan a new vehicle onto the job (VINs aren't pre-loaded). */}
       {scanNewOpen && (
-        <div onClick={() => setScanNewOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+        <div ref={closeOnEscape(() => setScanNewOpen(false))} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
           <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: 'var(--card)', borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: 'calc(92vh / var(--ts))', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
               <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>

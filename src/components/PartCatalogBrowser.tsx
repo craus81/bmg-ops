@@ -6,6 +6,7 @@ import { toJpegIfHeic } from '@/lib/heic';
 import { createClient } from '@/lib/supabase-browser';
 import AddToEstimateModal from '@/components/AddToEstimateModal';
 import { loadKits, normItem, type KitWithMembers } from '@/lib/part-kits';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 /**
  * The Ranger-Design-style catalog browser (roadmap N4-A): a faceted,
@@ -774,7 +775,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
           and marketing description live on this record; "Open full record"
           jumps to the ops list row (sync, files, labor, price edits). */}
       {detail && (
-        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={() => setDetail(null)}>
+        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} ref={closeOnEscape(() => setDetail(null))}>
           <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg, var(--card))', borderRadius: '16px', border: '1px solid var(--border)', width: '100%', maxWidth: '720px', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.4)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 16px', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--bg, var(--card))', zIndex: 1, flexWrap: 'wrap' }}>
               <span style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{detail.item_number}</span>
@@ -966,7 +967,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
   }
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={onClose}>
+    <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} ref={closeOnEscape(onClose)}>
       <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg, var(--card))', borderRadius: '16px', width: '100%', maxWidth: '1100px', height: 'calc(88vh / var(--ts))', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid var(--border)', boxShadow: '0 12px 40px rgba(0,0,0,0.4)' }}>
         {body}
       </div>

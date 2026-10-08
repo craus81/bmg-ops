@@ -55,6 +55,7 @@ import BriefMeSheet from '@/components/BriefMeSheet';
 import QuickBooksRecordModal from '@/components/QuickBooksRecordModal';
 import type { HistoryRow } from '@/lib/ledger/history';
 import { uploadRecordFile } from '@/lib/record-file-upload';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface Prospect {
   id: string;
@@ -3077,7 +3078,7 @@ export default function CustomerRecordPage() {
 
       {/* Edit record */}
       {editOpen && prospect && (
-        <div onClick={() => !editSaving && setEditOpen(false)}
+        <div ref={closeOnEscape(() => !editSaving && setEditOpen(false))}
           style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Edit record"
             style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', width: 'min(560px, 100%)', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto' }}>
@@ -3147,7 +3148,7 @@ export default function CustomerRecordPage() {
 
       {/* Statement options */}
       {stModalOpen && (
-        <div onClick={() => !stWorking && !emailingSt && setStModalOpen(false)}
+        <div ref={closeOnEscape(() => !stWorking && !emailingSt && setStModalOpen(false))}
           style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Statement options"
             style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', width: 'min(440px, 100%)' }}>
@@ -3263,7 +3264,7 @@ export default function CustomerRecordPage() {
 
       {/* Sent-email viewer — opens off the activity feed's "View email". */}
       {viewEmail && (
-        <div onClick={() => setViewEmail(null)}
+        <div ref={closeOnEscape(() => setViewEmail(null))}
           style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Sent email"
             style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '16px', width: 'min(720px, 100%)', maxHeight: 'calc(100vh / var(--ts) - 40px)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -3290,7 +3291,7 @@ export default function CustomerRecordPage() {
       {/* Assign parent / leasing company (K1) — the manual link that wins
           over the NetSuite hierarchy and survives resync. Note required. */}
       {parentPickerOpen && customer && (
-        <div onClick={() => !parentSaving && setParentPickerOpen(false)}
+        <div ref={closeOnEscape(() => !parentSaving && setParentPickerOpen(false))}
           style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Assign parent account"
             style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', width: 'min(440px, 100%)' }}>

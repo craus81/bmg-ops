@@ -12,6 +12,7 @@ import {
 import BriefMeSheet, { type BriefTarget } from '@/components/BriefMeSheet';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { deepLinks } from '@/lib/deep-links';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface UniversalSearchProps {
   open: boolean;
@@ -399,15 +400,6 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
     }
   }, [open]);
 
-  // Close on Escape
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    if (open) document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
-  }, [open, onClose]);
-
   const doSearch = useCallback(async (q: string) => {
     if (q.length < 2) {
       setResults({});
@@ -441,11 +433,11 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
   const totalResults = groupKeys.reduce((sum, k) => sum + (results[k]?.length || 0), 0);
 
   return (
-    <div style={{
+    <div ref={closeOnEscape(onClose)} style={{
       position: 'fixed', inset: 0, zIndex: 300,
       background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)',
       display: 'flex', flexDirection: 'column',
-    }} onClick={onClose}>
+    }}>
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
@@ -630,7 +622,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
           just found is still on screen while you write what the call was. */}
       {callFor && (
         <div
-          onClick={() => setCallFor(null)}
+          ref={closeOnEscape(() => setCallFor(null))}
           style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
         >
           <div onClick={e => e.stopPropagation()} style={{

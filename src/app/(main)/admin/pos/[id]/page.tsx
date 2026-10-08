@@ -36,6 +36,7 @@ import NumberInput from '@/components/NumberInput';
 import PartNumberAutocomplete, { lastPoLabel, type LastPoPrice } from '@/components/PartNumberAutocomplete';
 import { pickPrice } from '@/lib/part-suggest';
 import { isAdminRole } from '@/lib/features';
+import { closeOnEscape } from '@/lib/modal-escape';
 import CreatedBy from '@/components/CreatedBy';
 import PoPricingRequestLink from '@/components/PoPricingRequestLink';
 
@@ -1902,7 +1903,7 @@ export default function PoRecordPage() {
       {/* PDF preview modal */}
       {pdfPreview && (
         <div
-          onClick={() => setPdfPreview(null)}
+          ref={closeOnEscape(() => setPdfPreview(null))}
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
         >
           <div

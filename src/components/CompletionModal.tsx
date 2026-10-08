@@ -14,6 +14,7 @@ import { openNetSuitePdf, openNetSuiteInvoicePdfByNumber } from '@/lib/netsuite-
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { deepLinks } from '@/lib/deep-links';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface Task {
   id: string;
@@ -465,7 +466,7 @@ export default function CompletionModal({
   ].filter(Boolean).join(' + ');
 
   return (
-    <div onClick={onClose} style={{
+    <div ref={closeOnEscape(onClose)} style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
       display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
       // zIndex 1500 keeps this on top of /tracking's vehicle popout modal
