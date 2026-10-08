@@ -7,6 +7,8 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 import NetsuiteVendorSearch, { type NsVendor } from '@/components/NetsuiteVendorSearch';
+import NetsuiteVendorLinker from '@/components/NetsuiteVendorLinker';
+import { deepLinks } from '@/lib/deep-links';
 import PhoneInput from '@/components/PhoneInput';
 import { apiFetch } from '@/lib/api-client';
 
@@ -125,6 +127,9 @@ export default function CniCompanyDetailPage() {
   const [vendorId, setVendorId] = useState('');
   const [showVendorSearch, setShowVendorSearch] = useState(false);
   const [pickedVendor, setPickedVendor] = useState<NsVendor | null>(null);
+  // The linked vendor's name as NetSuite has it, so a wrong id shows up as
+  // the wrong name (or "not found") right here instead of on a failed bill.
+  const [vendorInfo, setVendorInfo] = useState<{ state: 'idle' | 'loading' | 'found' | 'missing'; name?: string; error?: string }>({ state: 'idle' });
   const [primaryContact, setPrimaryContact] = useState('');
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -157,6 +162,31 @@ export default function CniCompanyDetailPage() {
     loadFeed();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, isAdmin, companyId]);
+
+  useEffect(() => {
+    if (!vendorId) { setVendorInfo({ state: 'idle' }); return; }
+    if (!/^\d+$/.test(vendorId)) {
+      setVendorInfo({ state: 'missing', error: 'Not a NetSuite internal id (a number) — bills will fail. Change it.' });
+      return;
+    }
+    // Picked from the search just now — that already IS the NetSuite name.
+    if (pickedVendor?.id === vendorId) {
+      setVendorInfo({ state: 'found', name: pickedVendor.companyName || pickedVendor.entityId });
+      return;
+    }
+    let cancelled = false;
+    setVendorInfo({ state: 'loading' });
+    fetch(`${deepLinks.netsuiteVendor(vendorId)}&info=1`)
+      .then(r => r.json().catch(() => ({})))
+      .then(data => {
+        if (cancelled) return;
+        setVendorInfo(data.found
+          ? { state: 'found', name: data.companyName || '' }
+          : { state: 'missing', error: data.error || 'Not found in NetSuite' });
+      })
+      .catch(() => { if (!cancelled) setVendorInfo({ state: 'idle' }); });
+    return () => { cancelled = true; };
+  }, [vendorId, pickedVendor]);
 
   const loadData = async () => {
     const { data: companyData } = await supabase
@@ -605,7 +635,7 @@ export default function CniCompanyDetailPage() {
         </div>
         <div style={{ marginBottom: '10px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-            <label style={labelStyle}>NetSuite Vendor ID</label>
+            <label style={labelStyle}>NetSuite Vendor</label>
             <span style={{ display: 'flex', gap: '12px' }}>
               {company?.netsuite_vendor_id && (
                 <button
@@ -617,25 +647,72 @@ export default function CniCompanyDetailPage() {
                   {refreshing ? 'Refreshing…' : '↻ Refresh from NetSuite'}
                 </button>
               )}
-              <button
-                onClick={() => { setShowVendorSearch(s => !s); setPickedVendor(null); }}
-                style={{ fontSize: '11px', fontWeight: 700, color: 'var(--orange)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-              >
-                {showVendorSearch ? 'Close search' : 'Search NetSuite'}
-              </button>
+              {vendorId && (
+                <button
+                  onClick={() => { setShowVendorSearch(s => !s); }}
+                  style={{ fontSize: '11px', fontWeight: 700, color: 'var(--orange)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                >
+                  {showVendorSearch ? 'Close search' : 'Change'}
+                </button>
+              )}
             </span>
           </div>
-          <input
-            value={vendorId} onChange={e => { setVendorId(e.target.value); setPickedVendor(null); }}
-            placeholder="Company-level vendor (lump-sum payouts)"
-            style={inputStyle}
-          />
-          {pickedVendor && (
-            <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--success)', marginTop: '4px' }}>
-              Selected: {pickedVendor.companyName || pickedVendor.entityId} (#{pickedVendor.id}) — hit Save Changes to link.
+          {/* No typed id: a mistyped one (Slight Wraps saved as 2663, not
+              2763) only surfaced when every bill failed with a misleading
+              currency error. The vendor is picked from NetSuite or created
+              there, and the linked one shows its NetSuite name. */}
+          {vendorId ? (
+            <div style={{ ...inputStyle, display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 700 }}>#{vendorId}</span>
+              <span style={{ color: vendorInfo.state === 'missing' ? 'var(--error)' : 'var(--text-muted)', fontSize: '13px' }}>
+                {vendorInfo.state === 'loading' && 'checking NetSuite…'}
+                {vendorInfo.state === 'found' && vendorInfo.name}
+                {vendorInfo.state === 'missing' && `⚠ ${vendorInfo.error || 'Not found in NetSuite'}`}
+              </span>
+              <span style={{ flex: 1 }} />
+              {/^\d+$/.test(vendorId) && (
+                <a
+                  href={deepLinks.netsuiteVendor(vendorId)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textDecoration: 'none', whiteSpace: 'nowrap' }}
+                >
+                  NetSuite ↗
+                </a>
+              )}
+              <button
+                onClick={() => { setVendorId(''); setPickedVendor(null); setShowVendorSearch(false); }}
+                title="Clear the link (takes effect when you Save Changes)"
+                style={{ fontSize: '11px', fontWeight: 700, color: 'var(--error)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+              >
+                Unlink
+              </button>
+            </div>
+          ) : (
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+              Not linked — bills can&apos;t be created for this company until it is. Find the vendor in NetSuite below, or create it.
             </div>
           )}
-          {showVendorSearch && (
+          {vendorId !== (company?.netsuite_vendor_id || '') && (
+            <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--success)', marginTop: '4px' }}>
+              {vendorId
+                ? `Selected: ${pickedVendor ? (pickedVendor.companyName || pickedVendor.entityId) : `#${vendorId}`} — hit Save Changes to link.`
+                : 'Vendor link cleared — hit Save Changes to unlink.'}
+            </div>
+          )}
+          {company && !vendorId && !company.netsuite_vendor_id ? (
+            <div style={{ marginTop: '8px' }}>
+              <NetsuiteVendorLinker
+                companyId={companyId}
+                companyName={name || company?.name || ''}
+                onLinked={async v => {
+                  setPickedVendor(null);
+                  setSaveMsg({ success: true, message: `Linked to NetSuite vendor #${v.netsuiteVendorId}` });
+                  await loadData();
+                }}
+              />
+            </div>
+          ) : (!vendorId || showVendorSearch) && (
             <div style={{ marginTop: '8px' }}>
               <NetsuiteVendorSearch
                 onSelect={v => {
@@ -650,7 +727,8 @@ export default function CniCompanyDetailPage() {
                     setAddress([v.address.street, v.address.city, v.address.state, v.address.zip].filter(Boolean).join(', '));
                   }
                 }}
-                autoFocus
+                initialQuery={name || company?.name || ''}
+                autoFocus={showVendorSearch}
               />
             </div>
           )}

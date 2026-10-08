@@ -21,12 +21,16 @@ export default function NetsuiteVendorSearch({
   onSelect,
   placeholder = 'Search NetSuite vendors by name…',
   autoFocus = false,
+  initialQuery = '',
 }: {
   onSelect: (v: NsVendor) => void;
   placeholder?: string;
   autoFocus?: boolean;
+  /** Starts the box (and the search) with this text — e.g. the company's
+   *  own name, so the likely match is already listed. */
+  initialQuery?: string;
 }) {
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(initialQuery);
   const [results, setResults] = useState<NsVendor[]>([]);
   const [state, setState] = useState<'idle' | 'searching' | 'done' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);

@@ -35,6 +35,8 @@ const GROUP_CONFIG: Record<string, { label: string; icon: string; color: string 
   estimates: { label: 'Estimates', icon: '', color: '#fbbf24' },
   parts: { label: 'Parts Catalog', icon: '', color: '#f97316' },
   customers: { label: 'Customers', icon: '', color: '#06b6d4' },
+  cni_companies: { label: 'CNI Companies', icon: '', color: '#f472b6' },
+  cni_installers: { label: 'CNI Installers', icon: '', color: '#f472b6' },
   messages: { label: 'Messages', icon: '', color: '#3b82f6' },
   quotes: { label: 'Quotes', icon: '', color: '#8b5cf6' },
 };
@@ -186,6 +188,30 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
           <div style={subtitleStyle}>
             {[item.contact_name, item.email, item.phone].filter(Boolean).join(' · ')}
           </div>
+        </button>
+      );
+
+    case 'cni_companies':
+      return (
+        <button key={item.id} onClick={select} style={resultBtnStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+            <span style={titleStyle}>{item.name}</span>
+            <span style={{ ...statusBadge, color: item.netsuite_vendor_id ? '#4ade80' : '#fbbf24' }}>
+              {item.netsuite_vendor_id ? `NetSuite #${item.netsuite_vendor_id}` : 'No NetSuite vendor'}
+            </span>
+          </div>
+          <div style={subtitleStyle}>{[item.email, item.phone].filter(Boolean).join(' · ')}</div>
+        </button>
+      );
+
+    case 'cni_installers':
+      return (
+        <button key={item.id} onClick={select} style={resultBtnStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+            <span style={titleStyle}>{item.full_name || item.email}</span>
+            {item.deactivated && <span style={{ ...statusBadge, color: '#ef4444' }}>deactivated</span>}
+          </div>
+          <div style={subtitleStyle}>{[item.company_name, item.email].filter(Boolean).join(' · ')}</div>
         </button>
       );
 
@@ -347,6 +373,13 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
   // and an "Open full page" button — which was a wasted tap now that every
   // entity here has a real page; customers already skipped it for that reason.
   const openDetail = useCallback((group: string, item: any) => {
+    // CNI records have their own admin pages but no popout type (and no
+    // recents entry — buildRecent refuses kinds it can't describe).
+    if (group === 'cni_companies' || group === 'cni_installers') {
+      onClose();
+      router.push(group === 'cni_companies' ? deepLinks.cniCompany(item.id) : deepLinks.cniInstaller(item.id));
+      return;
+    }
     const path = pathFor(group as PopoutType, item);
     // Remember it for the recents strip (R6-13). Device-local, never sent
     // anywhere; buildRecent refuses anything it can't name or reach.
@@ -462,7 +495,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
             type="text"
             value={query}
             onChange={(e) => handleInput(e.target.value)}
-            placeholder="Search POs, invoices, vehicles, jobs, parts, customers..."
+            placeholder="Search POs, invoices, vehicles, jobs, parts, customers, installers..."
             style={{
               flex: 1, background: 'transparent', border: 'none', outline: 'none',
               color: 'var(--text-body)', fontSize: '16px', fontWeight: 600,
@@ -549,7 +582,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
               {shownRecents.length === 0 && (
                 <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-label)' }}>Search everything</div>
               )}
-              <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>POs, invoices, vehicles, graphics jobs, estimates, parts, customers, messages, quotes</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>POs, invoices, vehicles, graphics jobs, estimates, parts, customers, CNI installers, messages, quotes</div>
             </div>
           )}
 

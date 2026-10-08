@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireStaff } from '@/lib/api-auth';
+import { requireStaff, profileHasFeature } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -143,6 +143,49 @@ export async function GET(req: NextRequest) {
       .ilike('invoice_number', like)
       .limit(MAX_PER_GROUP * 10),
   ]);
+
+  // CNI installers and their companies — only for viewers who can open the
+  // CNI admin pages these results link to (a result that bounces to /home
+  // is a dead click). Name/email only: a phone-shaped query isn't a name and
+  // its punctuation would corrupt the .or() filter.
+  let cniInstallers: any[] = [];
+  let cniInstallerCount = 0;
+  let cniCompanies: any[] = [];
+  let cniCompanyCount = 0;
+  if (!phoneLike && await profileHasFeature(auth.user.id, auth.profile, 'cni_admin')) {
+    const [installerHits, companyHits] = await Promise.all([
+      supabase
+        .from('profiles')
+        .select('id, full_name, email, company_id, deactivated', { count: 'exact' })
+        .or('role.eq.installer,roles.cs.{installer}')
+        .or(`full_name.ilike.${like},email.ilike.${like}`)
+        .order('full_name')
+        .limit(MAX_PER_GROUP),
+      supabase
+        .from('companies')
+        .select('id, name, email, phone, netsuite_vendor_id', { count: 'exact' })
+        .or(`name.ilike.${like},email.ilike.${like}`)
+        .order('name')
+        .limit(MAX_PER_GROUP),
+    ]);
+    cniCompanies = companyHits.data || [];
+    cniCompanyCount = companyHits.count ?? cniCompanies.length;
+    const rows = installerHits.data || [];
+    cniInstallerCount = installerHits.count ?? rows.length;
+    const companyIds = [...new Set(rows.map((r: any) => r.company_id).filter(Boolean))];
+    const companyNames: Record<string, string> = {};
+    for (const c of cniCompanies) companyNames[c.id] = c.name;
+    const missing = companyIds.filter(id => !companyNames[id]);
+    if (missing.length > 0) {
+      const { data } = await supabase.from('companies').select('id, name').in('id', missing);
+      for (const c of data || []) companyNames[c.id] = c.name;
+    }
+    cniInstallers = rows.map((r: any) => ({
+      id: r.id, full_name: r.full_name, email: r.email,
+      company_name: r.company_id ? companyNames[r.company_id] || null : null,
+      deactivated: !!r.deactivated,
+    }));
+  }
 
   // Also search PO line items by part number (separate query since we need the PO context)
   const { data: poLineMatches } = await supabase
@@ -332,6 +375,14 @@ export async function GET(req: NextRequest) {
   if (customerRows.length) {
     results.customers = customerRows.slice(0, MAX_PER_GROUP * 2);
     totals.customers = customerCount;
+  }
+  if (cniCompanies.length) {
+    results.cni_companies = cniCompanies;
+    totals.cni_companies = cniCompanyCount;
+  }
+  if (cniInstallers.length) {
+    results.cni_installers = cniInstallers;
+    totals.cni_installers = cniInstallerCount;
   }
   if (messages.data?.length) {
     results.messages = messages.data;

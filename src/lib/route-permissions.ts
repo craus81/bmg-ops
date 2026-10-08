@@ -213,6 +213,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cni/submit-photos/route.ts': authScoped('external installer / coordinator flow; requireStaff would wrongly reject the installer side, so membership is checked in-route against the CNI job'),
   'src/app/api/cni/update-pay-rate/route.ts': admin(),
   'src/app/api/cni/update-schedule/route.ts': authScoped('external installer / coordinator flow; requireStaff would wrongly reject the installer side, so membership is checked in-route against the CNI job'),
+  'src/app/api/cni/vendor-link/route.ts': staff(),
   'src/app/api/company-profile/route.ts': authScoped('the company letterhead printed on customer-facing documents; intentionally readable by any approved login (documented in-file)'),
   'src/app/api/credit-application/submit/route.ts': pub('the public credit-application form; honeypot + fake bot success, service-role insert only, and the review side is feature-gated'),
   'src/app/api/credit-applications/[id]/route.ts': feature('credit_applications'),
