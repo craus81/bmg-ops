@@ -292,7 +292,7 @@ export default function CniVendorIdsPage() {
                       disabled={rs.saving}
                       style={{
                         padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                        background: rs.saving ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+                        background: rs.saving ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none',
                         cursor: rs.saving ? 'default' : 'pointer', whiteSpace: 'nowrap',
                       }}
                     >

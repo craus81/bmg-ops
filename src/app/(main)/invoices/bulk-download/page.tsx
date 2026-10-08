@@ -278,7 +278,7 @@ export default function BulkInvoiceDownloadPage() {
             onClick={searchCustomers}
             disabled={searching || search.trim().length < 2}
             style={{
-              padding: '10px 16px', borderRadius: '10px', background: theme.navy,
+              padding: '10px 16px', borderRadius: '10px', background: theme.accent,
               color: '#fff', fontWeight: 700, fontSize: '13px', border: 'none',
               opacity: searching || search.trim().length < 2 ? 0.4 : 1, cursor: 'pointer',
             }}

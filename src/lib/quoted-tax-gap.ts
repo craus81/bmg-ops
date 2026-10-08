@@ -52,6 +52,9 @@ export interface TaxGapLine {
   unit_price: number | null;
   /** Only matters on a discounted estimate: labor is part of what the discount spreads over. */
   labor_hours?: number | null;
+  /** The line's own discount (migration 350): it lowers that line's tax. */
+  discount_type?: string | null;
+  discount_value?: number | null;
   /** Stamped at save since migration 336; NULL on lines saved before it. */
   taxable?: boolean | null;
   part_id?: string | null;

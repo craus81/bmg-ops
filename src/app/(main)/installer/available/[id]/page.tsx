@@ -315,7 +315,7 @@ export default function AvailableJobDetailPage() {
             onClick={() => { setResponseType('interested'); setShowResponseForm(true); }}
             style={{
               flex: 1, padding: '14px', borderRadius: '12px', fontSize: '14px', fontWeight: 700,
-              background: 'var(--orange)', color: '#fff', border: 'none',
+              background: 'var(--accent)', color: '#fff', border: 'none',
             }}
           >
             I'm Interested
@@ -435,7 +435,7 @@ export default function AvailableJobDetailPage() {
               disabled={submitting}
               style={{
                 flex: 2, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-                background: submitting ? 'var(--text-muted)' : responseType === 'interested' ? 'var(--orange)' : 'var(--error)',
+                background: submitting ? 'var(--text-muted)' : responseType === 'interested' ? 'var(--accent)' : 'var(--error)',
                 color: '#fff', border: 'none',
               }}
             >

@@ -673,7 +673,7 @@ export default function CniCompanyDetailPage() {
           disabled={saving}
           style={{
             width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-            background: saving ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+            background: saving ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none',
             cursor: saving ? 'default' : 'pointer',
           }}
         >
@@ -844,7 +844,7 @@ export default function CniCompanyDetailPage() {
             disabled={feedBusy}
             style={{
               padding: '10px 18px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-              background: feedBusy ? 'var(--text-muted)' : 'var(--orange)', color: '#fff',
+              background: feedBusy ? 'var(--text-muted)' : 'var(--accent)', color: '#fff',
               border: 'none', cursor: feedBusy ? 'default' : 'pointer',
             }}
           >
@@ -1075,7 +1075,7 @@ export default function CniCompanyDetailPage() {
                   <button
                     onClick={() => router.push(`/admin/ap?invoice=${inv.id}`)}
                     title="Open in Payments to submit, approve, bill, or mark paid"
-                    style={{ padding: '6px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: 'var(--orange)', color: '#fff', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                    style={{ padding: '6px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}
                   >
                     {(VI_STATUS[inv.status] || VI_STATUS.recorded).cta}
                   </button>

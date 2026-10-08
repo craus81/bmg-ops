@@ -314,7 +314,7 @@ export default function QuietLeadsPage() {
                 disabled={busy || (prompt.action === 'touch' && !note.trim())}
                 style={{
                   ...btn('#fff'),
-                  background: busy || (prompt.action === 'touch' && !note.trim()) ? 'var(--text-muted)' : 'var(--orange)',
+                  background: busy || (prompt.action === 'touch' && !note.trim()) ? 'var(--text-muted)' : 'var(--accent)',
                   border: 'none', padding: '8px 16px', fontSize: '12px',
                 }}
               >

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { storage } from '@/lib/storage';
 import { toJpegIfHeic } from '@/lib/heic';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { createClient } from '@/lib/supabase-browser';
 
 export interface CreatedPart {
   id: string;
@@ -63,6 +64,32 @@ export function CreateNetsuiteItemModal({
   const [description, setDescription] = useState(initialDescription || '');
   const [price, setPrice] = useState(initialPrice != null ? String(initialPrice) : '');
   const [recordType, setRecordType] = useState(ITEM_TYPES[0].value);
+  const [cost, setCost] = useState('');
+  // Preferred vendor, picked from the NetSuite vendor master (synced nightly
+  // into netsuite_vendors) so it carries NetSuite's internal id.
+  const [vendor, setVendor] = useState<{ id: string; name: string } | null>(null);
+  const [vendorQuery, setVendorQuery] = useState('');
+  const [vendorResults, setVendorResults] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    const q = vendorQuery.trim();
+    if (vendor || q.length < 2) { setVendorResults([]); return; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const like = `%${q.replace(/[%_,()]/g, ' ')}%`;
+      const { data } = await createClient()
+        .from('netsuite_vendors')
+        .select('netsuite_id, company_name, entity_id')
+        .eq('is_inactive', false)
+        .or(`company_name.ilike.${like},entity_id.ilike.${like}`)
+        .order('company_name')
+        .limit(10);
+      if (!cancelled) {
+        setVendorResults((data || []).map((v: { netsuite_id: string; company_name: string | null; entity_id: string | null }) => ({ id: v.netsuite_id, name: v.company_name || v.entity_id || v.netsuite_id })));
+      }
+    }, 200);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [vendorQuery, vendor]);
+  const purchasable = /Resale|^inventory/.test(recordType);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Success state — shown in-modal so there's explicit confirmation before the
@@ -127,6 +154,9 @@ export function CreateNetsuiteItemModal({
           displayName: displayName.trim() || null,
           description: description.trim() || null,
           salesPrice: price.trim() ? Number(price) : null,
+          purchasePrice: cost.trim() ? Number(cost) : null,
+          vendorId: vendor?.id || null,
+          vendorName: vendor?.name || null,
           catalog: cat,
           billableCustomer: billableCustomer || null,
           existingPartId: existingPartId || null,
@@ -207,7 +237,7 @@ export function CreateNetsuiteItemModal({
               </a>
             )}
             {done.info?.priceWarning && (
-              <div style={{ marginTop: '12px', fontSize: '11px', color: '#fbbf24', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '8px', padding: '8px 10px', textAlign: 'left' }}>
+              <div style={{ marginTop: '12px', fontSize: '11px', color: '#fbbf24', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '8px', padding: '8px 10px', textAlign: 'left', whiteSpace: 'pre-wrap' }}>
                 {done.info.priceWarning}
               </div>
             )}
@@ -288,6 +318,42 @@ export function CreateNetsuiteItemModal({
             <label style={labelStyle}>Sales Price</label>
             <input value={price} onChange={e => setPrice(e.target.value.replace(/[^0-9.]/g, ''))} inputMode="decimal" placeholder="0.00" style={inputStyle} />
           </div>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <div style={{ flex: '0 0 35%' }}>
+              <label style={labelStyle}>Cost</label>
+              <input value={cost} onChange={e => setCost(e.target.value.replace(/[^0-9.]/g, ''))} inputMode="decimal" placeholder="0.00" style={inputStyle} />
+            </div>
+            <div style={{ flex: 1, position: 'relative' }}>
+              <label style={labelStyle}>Vendor</label>
+              {vendor ? (
+                <div style={{ ...inputStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vendor.name}</span>
+                  <button type="button" onClick={() => { setVendor(null); setVendorQuery(''); }} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px', padding: 0 }}>✕</button>
+                </div>
+              ) : (
+                <input value={vendorQuery} onChange={e => setVendorQuery(e.target.value)} placeholder="Search NetSuite vendors" style={inputStyle} />
+              )}
+              {!vendor && vendorResults.length > 0 && (
+                <div style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 5, marginTop: '2px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px', boxShadow: '0 8px 24px rgba(0,0,0,0.25)', maxHeight: '220px', overflowY: 'auto' }}>
+                  {vendorResults.map(v => (
+                    <button
+                      key={v.id}
+                      type="button"
+                      onClick={() => { setVendor(v); setVendorResults([]); }}
+                      style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 10px', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)', color: 'var(--text-primary)', fontSize: '13px', cursor: 'pointer' }}
+                    >
+                      {v.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          {!purchasable && (cost.trim() || vendor) && (
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '-6px' }}>
+              &quot;For Sale&quot; items have no cost or vendor in NetSuite, so these are saved in FleetSuite only. Pick a &quot;For Resale&quot; or Inventory type to send them to NetSuite.
+            </div>
+          )}
           <div>
             <label style={labelStyle}>Picture (optional)</label>
             <input

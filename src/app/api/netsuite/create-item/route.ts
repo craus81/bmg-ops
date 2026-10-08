@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createItem, findItems, itemUrl, updateItemFields } from '@/lib/netsuite';
+import { createItem, findItems, itemUrl, isPurchasableItemType, setItemPurchaseInfo, updateItemFields } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
@@ -28,6 +28,11 @@ const Schema = z.object({
   displayName: z.string().max(300).optional().nullable(),
   description: z.string().max(2000).optional().nullable(),
   salesPrice: z.number().nonnegative().optional().nullable(),
+  // Purchase price (NetSuite "cost") and preferred vendor (NetSuite vendor
+  // internal id + its name for the local catalog row).
+  purchasePrice: z.number().nonnegative().optional().nullable(),
+  vendorId: z.string().regex(/^\d+$/).max(20).optional().nullable(),
+  vendorName: z.string().trim().max(200).optional().nullable(),
   catalog: z.enum(['upfit', 'graphics']).optional().nullable(),
   billableCustomer: z.string().max(200).optional().nullable(),
   // Local netsuite_parts row to link to the new NetSuite record (catalog flow:
@@ -47,7 +52,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
-  const { partNumber, recordType, displayName, description, salesPrice, catalog, billableCustomer, existingPartId } = parsed.data;
+  const { partNumber, recordType, displayName, description, salesPrice, purchasePrice, vendorId, vendorName, catalog, billableCustomer, existingPartId } = parsed.data;
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -176,6 +181,24 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Cost + preferred vendor. Only Resale/Purchase/Inventory types carry them
+  // in NetSuite; sale-only types keep them in FleetSuite alone. Non-fatal,
+  // like the sales price: both are stored locally regardless.
+  const wantsPurchaseInfo = (purchasePrice != null && purchasePrice > 0) || !!vendorId;
+  if (wantsPurchaseInfo && isPurchasableItemType(recordType)) {
+    const warn = (msg: string) => { priceWarning = priceWarning ? `${priceWarning}\n${msg}` : msg; };
+    if (result.internalId) {
+      const infoRes = await setItemPurchaseInfo(recordType, result.internalId, { cost: purchasePrice, vendorId });
+      if (!infoRes.success) warn(`Item created, but setting its NetSuite cost/vendor failed: ${infoRes.error}`);
+    } else {
+      warn('Item created, but NetSuite did not return its internal id, so cost and vendor could not be set there.');
+    }
+  }
+  const localPurchase = {
+    ...(purchasePrice != null && purchasePrice > 0 ? { purchase_price: purchasePrice } : {}),
+    ...(vendorName ? { vendor: vendorName } : {}),
+  };
+
   // Mirror into netsuite_parts so the new item is immediately matchable in
   // PO import, scans, estimates, etc. without waiting for the next full sync.
   const itemType = recordType.startsWith('service')
@@ -198,6 +221,7 @@ export async function POST(req: NextRequest) {
         ...(description ? { description } : {}),
         ...(salesPrice != null ? { sales_price: salesPrice } : {}),
         ...(billableCustomer ? { billable_customer: billableCustomer } : {}),
+        ...localPurchase,
         updated_at: new Date().toISOString(),
       })
       .eq('id', upgradeTarget.id)
@@ -235,6 +259,7 @@ export async function POST(req: NextRequest) {
       catalog: catalog || 'graphics',
       sales_price: salesPrice || 0,
       billable_customer: billableCustomer || null,
+      ...localPurchase,
       is_active: true,
       updated_at: new Date().toISOString(),
     })

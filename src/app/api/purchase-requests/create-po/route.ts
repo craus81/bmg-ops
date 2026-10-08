@@ -5,6 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { createPurchaseOrder, resolveDefaultLocationId, transactionUrl } from '@/lib/netsuite';
+import { locationIdForName } from '@/lib/invoice-location';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -41,6 +42,17 @@ const Schema = z.object({
   vendorNetsuiteId: z.string().trim().regex(/^\d+$/, 'vendorNetsuiteId must be the numeric NetSuite internal id').max(20),
   vendorName: z.string().max(200).optional().nullable(),
   memo: z.string().max(500).optional().nullable(),
+  /** The review screen's edits, per request. A quantity below the request's
+   *  splits it: the ordered part goes on the PO, the rest stays pending. A
+   *  rate prices that request's item line (same item = same line = one rate). */
+  lines: z.array(z.object({
+    requestId: z.string().uuid(),
+    quantity: z.number().positive().max(100000),
+    rate: z.number().min(0).max(1000000).optional().nullable(),
+  })).max(100).optional(),
+  /** Which plant the PO is for — one PO is always one location. Omitted =
+   *  the default location. */
+  locationName: z.enum(["O'Fallon", 'Wentzville', 'Kansas City', 'Social Circle']).optional().nullable(),
 });
 
 export async function POST(req: NextRequest) {
@@ -54,6 +66,10 @@ export async function POST(req: NextRequest) {
   const body = parsed.data;
 
   const requestIds = [...new Set(body.requestIds)];
+  const edits = new Map((body.lines || []).map(l => [l.requestId, l]));
+  if ([...edits.keys()].some(id => !requestIds.includes(id))) {
+    return NextResponse.json({ error: 'A reviewed line isn’t one of the requests being ordered — refresh the queue.' }, { status: 400 });
+  }
   const { data: requests, error: loadErr } = await supabase
     .from('purchase_requests')
     .select('*')
@@ -110,8 +126,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Another PO is already being created for some of these requests — refresh the queue.' }, { status: 409 });
   }
 
-  // Cost each line from the catalog where we can; lines without a known
-  // purchase price go rate-less and NetSuite sources the item's default.
+  // What each request orders: the reviewed quantity when the review screen
+  // sent one, else the whole request.
+  const orderQty = new Map((requests as any[]).map(r => [r.id as string, edits.get(r.id)?.quantity ?? (Number(r.quantity) || 0)]));
+
+  // Cost each line from the review screen's price, else the catalog; lines
+  // with neither go rate-less and NetSuite sources the item's default.
   const itemNumbers = [...new Set((requests as any[]).map(r => r.item_number))];
   const { data: priceRows } = await supabase
     .from('netsuite_parts')
@@ -129,7 +149,10 @@ export async function POST(req: NextRequest) {
       description: r.description || null, quantity: 0,
       rate: price > 0 ? price : null,
     };
-    line.quantity += Number(r.quantity) || 0;
+    // A reviewed line's price wins, and a blank one means "NetSuite's own".
+    const edit = edits.get(r.id);
+    if (edit && edit.rate !== undefined) line.rate = edit.rate != null && edit.rate > 0 ? edit.rate : null;
+    line.quantity += orderQty.get(r.id) || 0;
     if (!line.description && r.description) line.description = r.description;
     byItem.set(r.netsuite_item_id, line);
   }
@@ -157,7 +180,9 @@ export async function POST(req: NextRequest) {
   // every exit releases the claim.
   let po: Awaited<ReturnType<typeof createPurchaseOrder>>;
   try {
-    const locationId = await resolveDefaultLocationId();
+    const locationId = body.locationName
+      ? await locationIdForName(body.locationName)
+      : await resolveDefaultLocationId();
     po = await createPurchaseOrder({
       vendorId: body.vendorNetsuiteId,
       locationId: locationId || undefined,
@@ -225,20 +250,53 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { error: stampErr } = await supabase
-      .from('purchase_requests')
-      .update({
-        status: 'ordered',
-        ordered_po_id: mirrorRowId,
-        ordered_at: now,
-        ordered_by: admin.user.id,
-        vendor_netsuite_id: body.vendorNetsuiteId,
-        ...(vendorName ? { vendor_name: vendorName } : {}),
-        updated_at: now,
-      })
-      .in('id', requestIds);
-    stamped = !stampErr;
-    if (stampErr) console.error('create-po: request stamp failed:', stampErr);
+    const stamp = {
+      status: 'ordered',
+      ordered_po_id: mirrorRowId,
+      ordered_at: now,
+      ordered_by: admin.user.id,
+      vendor_netsuite_id: body.vendorNetsuiteId,
+      ...(vendorName ? { vendor_name: vendorName } : {}),
+      updated_at: now,
+    };
+    const unchanged = (requests as any[]).filter(r => orderQty.get(r.id) === Number(r.quantity)).map(r => r.id as string);
+    const changed = (requests as any[]).filter(r => orderQty.get(r.id) !== Number(r.quantity));
+    let ok = true;
+    if (unchanged.length > 0) {
+      const { error: stampErr } = await supabase.from('purchase_requests').update(stamp).in('id', unchanged);
+      if (stampErr) { ok = false; console.error('create-po: request stamp failed:', stampErr); }
+    }
+    for (const r of changed) {
+      const qty = orderQty.get(r.id)!;
+      const { error: stampErr } = await supabase.from('purchase_requests').update({ ...stamp, quantity: qty }).eq('id', r.id);
+      if (stampErr) { ok = false; console.error('create-po: request stamp failed:', stampErr); continue; }
+      // Ordered fewer than asked: the rest stays in the queue as its own row,
+      // the same split the NetSuite auto-match makes.
+      const remainder = +((Number(r.quantity) - qty).toFixed(2));
+      if (remainder > 0) {
+        const { error: splitErr } = await supabase.from('purchase_requests').insert({
+          item_number: r.item_number,
+          netsuite_item_id: r.netsuite_item_id,
+          description: r.description,
+          vendor_name: r.vendor_name,
+          vendor_netsuite_id: r.vendor_netsuite_id,
+          source_project_id: r.source_project_id,
+          source_estimate_id: r.source_estimate_id ?? null,
+          needed_by: r.needed_by,
+          note: r.note,
+          requested_by: r.requested_by,
+          source: r.source,
+          created_at: r.created_at,
+          split_from_id: r.split_from_id || r.id,
+          auto_match_blocked_po_ids: r.auto_match_blocked_po_ids || [],
+          quantity: remainder,
+          status: 'pending',
+          updated_at: now,
+        });
+        if (splitErr) { ok = false; console.error('create-po: remainder split failed:', splitErr); }
+      }
+    }
+    stamped = ok;
   } catch (err) {
     console.error('create-po: request stamp failed:', err);
   }

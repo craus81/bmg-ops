@@ -362,7 +362,7 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
             </div>
 
             <button onClick={handleSwitchUser} disabled={switching || !switchEmail.trim() || !switchPassword.trim()} style={{
-              width: '100%', padding: '14px', borderRadius: '12px', background: 'var(--navy)', color: '#fff',
+              width: '100%', padding: '14px', borderRadius: '12px', background: 'var(--accent)', color: '#fff',
               fontWeight: 800, fontSize: '14px', border: 'none', marginBottom: '8px',
               opacity: switching || !switchEmail.trim() || !switchPassword.trim() ? 0.4 : 1,
             }}>{switching ? 'Signing in...' : 'Switch Account'}</button>

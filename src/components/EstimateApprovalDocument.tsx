@@ -12,11 +12,12 @@
  */
 
 import { ApprovalHeader, Row, Section } from '@/components/ApprovalPageShell';
+import { Fragment } from 'react';
 import ZoomableImage from '@/components/ZoomableImage';
 import { discountLabel } from '@/lib/estimate-totals';
 
 export default function EstimateApprovalDocument({ estimate: est, lines, graphics, proofs = [] }: { estimate: any; lines: any[]; graphics: any[]; proofs?: any[] }) {
-  const subtotal = lines.reduce((s: number, l: any) => s + (l.line_total || l.unit_price * l.quantity || 0), 0);
+  const subtotal = lines.reduce((s: number, l: any) => s + (l.line_total || l.unit_price * l.quantity || 0) - (Number(l.discount_amount) || 0), 0);
 
   return (
     <>
@@ -70,8 +71,8 @@ export default function EstimateApprovalDocument({ estimate: est, lines, graphic
               <div style={{ whiteSpace: 'nowrap', color: '#64748b' }}>Qty {l.quantity}</div>
             </div>
           ) : (
+            <Fragment key={l.id}>
             <div
-              key={l.id}
               className="appr-line"
               style={{ borderTop: '1px solid #e2e8f0', padding: '8px 0', fontSize: '13px', color: '#0f172a' }}
             >
@@ -112,6 +113,14 @@ export default function EstimateApprovalDocument({ estimate: est, lines, graphic
                 <span className="appr-cell-label">Total</span>${Number(l.line_total || (l.unit_price || 0) * (l.quantity || 0)).toFixed(2)}
               </div>
             </div>
+            {/* The line's own discount (migration 350), a row under it. */}
+            {Number(l.discount_amount) > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '0 0 6px 18px', fontSize: '12px', color: '#15803d' }}>
+                <span>{discountLabel(l.discount_type, l.discount_value)}</span>
+                <span style={{ fontWeight: 600 }}>−${Number(l.discount_amount).toFixed(2)}</span>
+              </div>
+            )}
+            </Fragment>
           ))}
         </div>
         <div style={{ borderTop: '2px solid #cbd5e1', marginTop: '10px', paddingTop: '10px', fontSize: '13px', color: '#0f172a' }}>

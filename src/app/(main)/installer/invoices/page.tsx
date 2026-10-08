@@ -335,7 +335,7 @@ export default function InstallerInvoicesPage() {
             disabled={extracting}
             style={{
               width: '100%', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: 700,
-              background: extracting ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+              background: extracting ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none',
             }}
           >
             {extracting ? 'Reading invoice…' : 'Upload Invoice'}

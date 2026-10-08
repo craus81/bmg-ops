@@ -525,7 +525,7 @@ export default function InstallerProfilePage() {
             disabled={calBusy}
             style={{
               padding: '12px 18px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-              background: calBusy ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+              background: calBusy ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none',
             }}
           >
             {calBusy ? 'Working…' : 'Show my calendar link'}
@@ -566,7 +566,7 @@ export default function InstallerProfilePage() {
         disabled={saving}
         style={{
           width: '100%', padding: '16px', borderRadius: '12px',
-          background: saving ? 'var(--text-muted)' : 'var(--orange)',
+          background: saving ? 'var(--text-muted)' : 'var(--accent)',
           color: '#fff', fontSize: '15px', fontWeight: 700, border: 'none',
           marginBottom: '100px',
         }}

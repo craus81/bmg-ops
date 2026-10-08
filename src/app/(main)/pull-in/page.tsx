@@ -197,7 +197,7 @@ export default function PullInPage() {
             disabled={!!busy || manual.length < 6}
             style={{
               padding: '12px 18px', borderRadius: '10px', border: 'none',
-              background: theme.navy, color: '#fff', fontSize: '14px', fontWeight: 800, cursor: 'pointer',
+              background: theme.accent, color: '#fff', fontSize: '14px', fontWeight: 800, cursor: 'pointer',
             }}
           >Go</button>
         </div>

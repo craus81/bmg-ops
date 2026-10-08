@@ -17,7 +17,7 @@ import { suiteqlQuery } from './netsuite';
 import { resolveLaborItem } from './labor-item';
 import { normalizeDiscount, normalizeVehicleCount } from './estimate-totals';
 import { kitTaggedDescription } from './estimate-kits';
-import { buildDiscountLines, estimateDiscountSplit, resolveDiscountItem } from './discount-item';
+import { buildDiscountLines, buildLineDiscountLine, estimateNeedsDiscountItem, resolveDiscountItem, type DiscountItem } from './discount-item';
 
 export interface SoLineItem {
   itemId: string;
@@ -81,7 +81,7 @@ export async function buildSoLineItems(
   supabase: SupabaseClient,
   estimate: {
     labor_hours?: unknown; labor_hours_override?: unknown; labor_rate?: unknown; vehicle_count?: unknown;
-    labor_total?: unknown; discount_type?: unknown; discount_value?: unknown;
+    labor_total?: unknown; discount_type?: unknown; discount_value?: unknown; tax_exempt?: unknown;
   },
   lines: any[],
 ): Promise<SoLineBuild> {
@@ -91,6 +91,26 @@ export async function buildSoLineItems(
   const customLineDescriptions: string[] = [];
   const unmappedLineDescriptions: string[] = [];
   let customItemId: string | null | undefined;
+
+  // Discounts (migration 342 whole-job, 350 per line) need the NetSuite
+  // discount item. A missing one is reported (discountSkipped) like labor,
+  // and callers BLOCK on it: the sales order would bill the full price the
+  // customer was not quoted.
+  const discountAmount = estimateNeedsDiscountItem(estimate, sorted);
+  let discountItem: DiscountItem | null = null;
+  let discountSkipped = false;
+  if (discountAmount > 0) {
+    try {
+      discountItem = (await resolveDiscountItem(supabase)).item;
+    } catch { discountItem = null; }
+    discountSkipped = !discountItem;
+  }
+  // A line's own discount goes right under it: NetSuite applies a discount
+  // line to the line above.
+  const pushLineDiscount = (li: any) => {
+    const d = discountItem ? buildLineDiscountLine(li, estimate, discountItem) : null;
+    if (d) soLineItems.push(d);
+  };
 
   for (const li of sorted) {
     if ((parseFloat(li.quantity) || 0) <= 0) continue;
@@ -106,6 +126,7 @@ export async function buildSoLineItems(
         description: lineDesc,
         ...untaxedFlag(li),
       });
+      pushLineDiscount(li);
       continue;
     }
     if (customItemId === undefined) customItemId = await findCustomItemId();
@@ -124,6 +145,7 @@ export async function buildSoLineItems(
       description: fullDesc,
       ...untaxedFlag(li),
     });
+    pushLineDiscount(li);
     customLineDescriptions.push(label);
   }
 
@@ -148,18 +170,8 @@ export async function buildSoLineItems(
     } catch { laborSkipped = true; }
   }
 
-  // The discount (migration 342) goes last. A missing discount item is
-  // reported (discountSkipped) like labor, and callers BLOCK on it: the
-  // sales order would bill the full price the customer was not quoted.
-  const { amount: discountAmount } = estimateDiscountSplit(estimate, sorted);
-  let discountSkipped = false;
-  if (discountAmount > 0) {
-    try {
-      const { item } = await resolveDiscountItem(supabase);
-      if (item) soLineItems.push(...buildDiscountLines(estimate, sorted, item));
-      else discountSkipped = true;
-    } catch { discountSkipped = true; }
-  }
+  // The whole-job discount (migration 342) goes last.
+  if (discountItem) soLineItems.push(...buildDiscountLines(estimate, sorted, discountItem));
 
   return {
     soLineItems, customLineDescriptions, unmappedLineDescriptions, laborSkipped, laborItemNumber, laborHours, laborRate,
@@ -187,7 +199,7 @@ export function soContentHash(
     labor_hours?: unknown; labor_hours_override?: unknown; labor_rate?: unknown; po_number?: unknown; estimate_number?: unknown; vin?: unknown; vehicle_count?: unknown;
     discount_type?: unknown; discount_value?: unknown;
   },
-  lines: Array<{ item_number?: unknown; quantity?: unknown; unit_price?: unknown; sort_order?: unknown; taxable?: unknown }>,
+  lines: Array<{ item_number?: unknown; quantity?: unknown; unit_price?: unknown; sort_order?: unknown; taxable?: unknown; discount_type?: unknown; discount_value?: unknown }>,
 ): string {
   const money = (v: unknown) => +(parseFloat(String(v ?? 0)) || 0).toFixed(2);
   const units = normalizeVehicleCount(estimate.vehicle_count);
@@ -196,7 +208,16 @@ export function soContentHash(
     lines: [...lines]
       .filter(l => (parseFloat(String(l.quantity ?? 0)) || 0) > 0)
       .sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0))
-      .map(l => [String(l.item_number ?? ''), money(l.quantity), money(l.unit_price), ...(l.taxable === false ? ['untaxed'] : [])]),
+      .map(l => {
+        // A line's own discount (migration 350) joins only when it has one,
+        // so existing hashes are unchanged.
+        const ld = normalizeDiscount(l.discount_type, l.discount_value);
+        return [
+          String(l.item_number ?? ''), money(l.quantity), money(l.unit_price),
+          ...(l.taxable === false ? ['untaxed'] : []),
+          ...(ld ? ['disc', ld.type, ld.value] : []),
+        ];
+      }),
     labor: [money(estimate.labor_hours_override ?? estimate.labor_hours), money(estimate.labor_rate || 85)],
     ref: String(estimate.po_number ?? '').trim() || String(estimate.estimate_number ?? ''),
     vin: String(estimate.vin ?? '').trim().toUpperCase(),

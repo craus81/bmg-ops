@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
+import { useDialog } from '@/components/DialogProvider';
 import { deepLinks } from '@/lib/deep-links';
 import { resolveStoredFileUrl, storage } from '@/lib/storage';
 import ProofThumbnail from '@/components/ProofThumbnail';
@@ -44,6 +45,8 @@ export default function GraphicsJobVehicleFiles({ jobId, cardStyle, labelStyle }
   const [vehicles, setVehicles] = useState<LinkedVehicle[] | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [viewing, setViewing] = useState<LinkedVehicle | null>(null);
+  const [unlinking, setUnlinking] = useState<string | null>(null);
+  const dialog = useDialog();
 
   useEffect(() => {
     let cancelled = false;
@@ -70,6 +73,24 @@ export default function GraphicsJobVehicleFiles({ jobId, cardStyle, labelStyle }
     else next.add(id);
     return next;
   });
+
+  // For a vehicle linked to the wrong job: drops it from this job and puts it
+  // back on the Needs Graphics queue to be linked to the right one.
+  const unlink = async (v: LinkedVehicle) => {
+    const label = [[v.year, v.make, v.model].filter(Boolean).join(' '), v.vin.slice(-8)].filter(Boolean).join(' · ');
+    if (!(await dialog.confirm(`Unlink ${label} from this graphics job? It goes back on the Needs Graphics queue so you can link it to the right job.`, { destructive: true, confirmLabel: 'Unlink' }))) return;
+    setUnlinking(v.id);
+    try {
+      const res = await apiFetch(`/api/graphics-jobs/${encodeURIComponent(jobId)}/vehicles?checkinId=${encodeURIComponent(v.id)}`, { method: 'DELETE' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
+      setVehicles(prev => (prev || []).filter(x => x.id !== v.id));
+    } catch (e: any) {
+      await dialog.alert('Failed to unlink: ' + (e?.message || 'unknown error'));
+    } finally {
+      setUnlinking(null);
+    }
+  };
 
   return (
     <div style={cardStyle}>
@@ -103,6 +124,12 @@ export default function GraphicsJobVehicleFiles({ jobId, cardStyle, labelStyle }
                   href={deepLinks.vehicle(v.id)}
                   style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none', flexShrink: 0 }}
                 >Open vehicle</a>
+                <button
+                  type="button"
+                  onClick={() => unlink(v)}
+                  disabled={unlinking === v.id}
+                  style={{ fontSize: '10px', fontWeight: 700, color: '#f87171', background: 'none', border: 'none', padding: 0, cursor: 'pointer', flexShrink: 0, opacity: unlinking === v.id ? 0.5 : 1 }}
+                >{unlinking === v.id ? 'Unlinking…' : 'Unlink'}</button>
               </div>
 
               {isOpen && (

@@ -326,6 +326,7 @@ export default function ApQueuePage() {
                     })()}
                   </div>
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    {inv.created_by && inv.created_by !== inv.submitted_by && <span>Created: {stamp(inv.created_by, inv.created_at)}</span>}
                     {stamp(inv.submitted_by, inv.submitted_at) && <span>Submitted: {stamp(inv.submitted_by, inv.submitted_at)}</span>}
                     {stamp(inv.approved_by, inv.approved_at) && <span>Approved: {stamp(inv.approved_by, inv.approved_at)}</span>}
                     {stamp(inv.billed_by, inv.billed_at) && <span>Billed: {stamp(inv.billed_by, inv.billed_at)}{inv.netsuite_bill_id ? ` · NS #${inv.netsuite_bill_id}` : ''}</span>}

@@ -138,7 +138,7 @@ export async function addWrapQuoteToEstimate(
 
   const { data: allLines } = await supabase
     .from('estimate_line_items')
-    .select('quantity, unit_price, labor_hours, taxable')
+    .select('quantity, unit_price, labor_hours, taxable, discount_type, discount_value')
     .eq('estimate_id', estimateId);
   const totals = computeTotals(
     allLines || [],

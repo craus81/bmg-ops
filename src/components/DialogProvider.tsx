@@ -99,7 +99,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
             <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
               <button
                 onClick={() => settle(true)}
-                style={{ flex: 1, padding: '11px', borderRadius: '10px', background: destructive ? '#ef4444' : 'var(--navy)', color: '#fff', fontSize: '13px', fontWeight: 800, border: 'none', cursor: 'pointer' }}
+                style={{ flex: 1, padding: '11px', borderRadius: '10px', background: destructive ? '#ef4444' : 'var(--accent)', color: '#fff', fontSize: '13px', fontWeight: 800, border: 'none', cursor: 'pointer' }}
               >{primaryLabel}</button>
               {request.kind !== 'alert' && (
                 <button

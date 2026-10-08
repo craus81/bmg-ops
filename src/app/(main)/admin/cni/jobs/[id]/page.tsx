@@ -17,6 +17,7 @@ import RecordChanges from '@/components/RecordChanges';
 import NumberInput from '@/components/NumberInput';
 import { deepLinks } from '@/lib/deep-links';
 import { closeOnEscape } from '@/lib/modal-escape';
+import CreatedBy from '@/components/CreatedBy';
 
 interface CniJob {
   id: string;
@@ -928,6 +929,7 @@ export default function CniJobDetailPage() {
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             {job.job_number} {job.customer_name ? `• ${job.customer_name}` : ''}
           </div>
+          <CreatedBy userId={job.created_by} at={job.created_at} style={{ display: 'block', fontSize: '11px' }} />
           {sourceInfo && (
             <div style={{ fontSize: '11px', marginTop: '2px' }}>
               <span style={{ color: 'var(--text-muted)' }}>Created from </span>
@@ -974,7 +976,7 @@ export default function CniJobDetailPage() {
               disabled={updating}
               style={{
                 padding: '8px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-                background: 'var(--orange)', color: '#fff', border: 'none',
+                background: 'var(--accent)', color: '#fff', border: 'none',
               }}
             >
               → {STATUS_LABELS[ns]?.split(' ')[0] || ns}
@@ -1031,7 +1033,7 @@ export default function CniJobDetailPage() {
             onClick={loadCompanyList}
             style={{
               width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-              background: 'var(--orange)', color: '#fff', border: 'none',
+              background: 'var(--accent)', color: '#fff', border: 'none',
             }}
           >
             Assign Company
@@ -1063,7 +1065,7 @@ export default function CniJobDetailPage() {
                 disabled={updating}
                 style={{
                   flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                  background: 'var(--orange)', color: '#fff', border: 'none',
+                  background: 'var(--accent)', color: '#fff', border: 'none',
                 }}
               >
                 Publish to Board
@@ -1180,7 +1182,7 @@ export default function CniJobDetailPage() {
                 <button
                   onClick={proposeSchedule}
                   disabled={!schedStart || updating}
-                  style={{ flex: 1, padding: '11px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: schedStart ? 'var(--orange)' : 'var(--text-muted)', color: '#fff', border: 'none' }}
+                  style={{ flex: 1, padding: '11px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: schedStart ? 'var(--accent)' : 'var(--text-muted)', color: '#fff', border: 'none' }}
                 >
                   {updating ? 'Sending...' : 'Propose to Installer'}
                 </button>
@@ -1497,7 +1499,7 @@ export default function CniJobDetailPage() {
             }}>Import Scanned{importCandidates.length > 0 ? ` (${importCandidates.length})` : ''}</button>
             <button onClick={openAddVin} style={{
               padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-              background: 'var(--orange)', color: '#fff', border: 'none',
+              background: 'var(--accent)', color: '#fff', border: 'none',
             }}>+ Add Vehicle</button>
           </div>
         </div>
@@ -1542,7 +1544,7 @@ export default function CniJobDetailPage() {
                   </div>
                   <button onClick={() => openDeviceEditor(v)} style={{
                     flexShrink: 0, padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                    background: hasDevices ? 'var(--subtle-bg)' : 'var(--orange)',
+                    background: hasDevices ? 'var(--subtle-bg)' : 'var(--accent)',
                     color: hasDevices ? 'var(--text-secondary)' : '#fff',
                     border: hasDevices ? '1px solid var(--border)' : 'none',
                   }}>
@@ -1769,7 +1771,7 @@ export default function CniJobDetailPage() {
                       disabled={payoutBusy || !(payoutBillDrafts[p.id] || '').trim()}
                       style={{
                         padding: '7px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-                        background: (payoutBillDrafts[p.id] || '').trim() ? 'var(--orange)' : 'var(--text-muted)',
+                        background: (payoutBillDrafts[p.id] || '').trim() ? 'var(--accent)' : 'var(--text-muted)',
                         color: '#fff', border: 'none',
                       }}
                     >Record Bill</button>
@@ -1814,7 +1816,7 @@ export default function CniJobDetailPage() {
                 disabled={payoutBusy}
                 style={{
                   width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 800,
-                  marginTop: '8px', background: 'var(--orange)', color: '#fff', border: 'none',
+                  marginTop: '8px', background: 'var(--accent)', color: '#fff', border: 'none',
                 }}
               >
                 {payoutBusy ? 'Working...' : 'Generate Payout Statements'}
@@ -2109,7 +2111,7 @@ export default function CniJobDetailPage() {
                             disabled={updating}
                             style={{
                               padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-                              background: m.excluded ? 'var(--border)' : 'var(--orange)', color: '#fff', border: 'none', whiteSpace: 'nowrap',
+                              background: m.excluded ? 'var(--border)' : 'var(--accent)', color: '#fff', border: 'none', whiteSpace: 'nowrap',
                             }}
                           >Invite</button>
                         )}
@@ -2162,7 +2164,7 @@ export default function CniJobDetailPage() {
                           disabled={updating}
                           style={{
                             padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-                            background: 'var(--orange)', color: '#fff', border: 'none',
+                            background: 'var(--accent)', color: '#fff', border: 'none',
                           }}
                         >
                           Invite
@@ -2229,7 +2231,7 @@ export default function CniJobDetailPage() {
             <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
               <button onClick={submitImport} disabled={importBusy || importSel.size === 0} style={{
                 flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 800,
-                background: importBusy || importSel.size === 0 ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+                background: importBusy || importSel.size === 0 ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none',
               }}>{importBusy ? 'Importing...' : `Import ${importSel.size} Vehicle${importSel.size === 1 ? '' : 's'}`}</button>
               <button onClick={() => setImportOpen(false)} disabled={importBusy} style={{ padding: '12px 16px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>Cancel</button>
             </div>
@@ -2267,7 +2269,7 @@ export default function CniJobDetailPage() {
             <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
               <input value={addForm.vin} onChange={e => setAddForm(f => ({ ...f, vin: e.target.value.toUpperCase() }))} placeholder="VIN" maxLength={17}
                 style={{ flex: 1, padding: '10px 12px', borderRadius: '8px', fontSize: '14px', fontFamily: 'monospace', letterSpacing: '0.5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
-              <button onClick={() => setScanReq({ label: 'VIN', apply: v => setAddForm(f => ({ ...f, vin: v.toUpperCase() })) })} title="Scan VIN" style={{ flexShrink: 0, padding: '0 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: 'var(--orange)', color: '#fff', border: 'none' }}>Scan</button>
+              <button onClick={() => setScanReq({ label: 'VIN', apply: v => setAddForm(f => ({ ...f, vin: v.toUpperCase() })) })} title="Scan VIN" style={{ flexShrink: 0, padding: '0 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: 'var(--accent)', color: '#fff', border: 'none' }}>Scan</button>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '8px' }}>
               <input value={addForm.vehicle_year} onChange={e => setAddForm(f => ({ ...f, vehicle_year: e.target.value }))} placeholder="Year" style={{ padding: '8px 10px', borderRadius: '8px', fontSize: '13px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
@@ -2325,7 +2327,7 @@ export default function CniJobDetailPage() {
             <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
               <button onClick={submitAddVin} disabled={addBusy || !addForm.vin.trim() || addCrew.size === 0} style={{
                 flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 800,
-                background: addBusy || !addForm.vin.trim() || addCrew.size === 0 ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+                background: addBusy || !addForm.vin.trim() || addCrew.size === 0 ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none',
               }}>{addBusy ? 'Adding...' : 'Add & Credit Vehicle'}</button>
               <button onClick={() => setAddVinOpen(false)} disabled={addBusy} style={{ padding: '12px 16px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>Cancel</button>
             </div>

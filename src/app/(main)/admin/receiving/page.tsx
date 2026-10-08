@@ -24,6 +24,7 @@ import { theme } from '@/lib/theme';
 import { useFormTelemetry } from '@/lib/use-form-telemetry';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { deepLinks } from '@/lib/deep-links';
+import CreatedBy from '@/components/CreatedBy';
 
 interface PoRow {
   id: string;
@@ -34,6 +35,8 @@ interface PoRow {
   status: string | null;
   status_label: string | null;
   eta_date: string | null;
+  /** NetSuite's Created By (migration 348). */
+  created_by_name: string | null;
 }
 
 interface LineRow {
@@ -108,7 +111,7 @@ export default function ReceivingPage() {
         // hide arrivals.
         fetchAllRows<PoRow>((from, to) => supabase
           .from('netsuite_vendor_pos')
-          .select('id, netsuite_id, tranid, vendor_name, trandate, status, status_label, eta_date')
+          .select('id, netsuite_id, tranid, vendor_name, trandate, status, status_label, eta_date, created_by_name')
           .order('trandate', { ascending: false })
           .order('id')
           .range(from, to)),
@@ -394,6 +397,7 @@ export default function ReceivingPage() {
               <span style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>PO {po.tranid || '?'}</span>
               <span style={{ fontSize: '12px', color: theme.textSecondary }}>{po.vendor_name || 'Unknown vendor'}</span>
               {po.trandate && <span style={{ fontSize: '11px', color: theme.textMuted }}>{fmtDate(po.trandate)}</span>}
+              {po.created_by_name && <CreatedBy compact source="netsuite" name={po.created_by_name} />}
               {po.status_label && <span style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', border: '1px solid rgba(96,165,250,0.35)', borderRadius: '999px', padding: '1px 8px' }}>{po.status_label}</span>}
               {po.eta_date && <span style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa' }}>ETA {fmtDate(po.eta_date)}</span>}
               <span style={{ marginLeft: 'auto', fontSize: '11px', color: theme.textMuted }}>{openQty} to receive {isOpen ? '▾' : '▸'}</span>

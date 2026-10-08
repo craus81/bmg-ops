@@ -336,7 +336,7 @@ export default function AtRiskReportPage() {
                           rows={2}
                           style={{ flex: 1, padding: '8px 10px', borderRadius: '8px', fontSize: '12px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }}
                         />
-                        <button onClick={() => saveNote(r)} disabled={noteSaving} style={{ padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--orange)', color: '#fff', border: 'none', cursor: 'pointer' }}>
+                        <button onClick={() => saveNote(r)} disabled={noteSaving} style={{ padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer' }}>
                           {noteSaving ? 'Saving…' : 'Save'}
                         </button>
                         <button onClick={() => setNoteOpenId(null)} style={{ padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--subtle-bg)', color: 'var(--text-muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>

@@ -45,7 +45,7 @@ const eyebrow: React.CSSProperties = { fontSize: '11px', fontWeight: 800, color:
 const th: React.CSSProperties = { fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', padding: '6px 8px', borderBottom: '1px solid var(--border)', textAlign: 'right', whiteSpace: 'nowrap' };
 const td: React.CSSProperties = { fontSize: '12.5px', padding: '6px 8px', borderBottom: '1px solid var(--border)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' };
 const btn: React.CSSProperties = { padding: '8px 14px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' };
-const primaryBtn: React.CSSProperties = { ...btn, background: theme.orange, border: 'none', color: '#fff' };
+const primaryBtn: React.CSSProperties = { ...btn, background: theme.accent, border: 'none', color: '#fff' };
 const input: React.CSSProperties = { padding: '7px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '16px' };
 
 function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {

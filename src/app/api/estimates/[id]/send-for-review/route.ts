@@ -237,6 +237,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       // A fresh round starts clean — last round's note described an estimate
       // that has since been edited.
       internal_review_note: null,
+      // A fresh request is someone actively asking — last round's snooze
+      // (migration 350) doesn't carry over.
+      internal_review_snoozed_until: null,
+      internal_review_snoozed_by: null,
       updated_at: new Date().toISOString(),
     })
     .eq('id', estimate.id);

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
 import { historySummary, type ApprovalHistory, type HistoryMessage, type HistoryRound } from '@/lib/approval-history';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 interface ProofFile { id: string; file_name: string; storage_path: string; file_type: string | null }
 
@@ -216,7 +217,7 @@ export default function GraphicsApprovalHistory<F extends ProofFile>({ jobId, re
       )}
 
       {viewing && (
-        <div onClick={() => setViewing(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+        <div ref={closeOnEscape(() => setViewing(null))} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div onClick={e => e.stopPropagation()} style={{
             background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', width: '100%', maxWidth: '720px',
             maxHeight: 'calc(88vh / var(--ts))', display: 'flex', flexDirection: 'column', padding: '14px', gap: '10px',

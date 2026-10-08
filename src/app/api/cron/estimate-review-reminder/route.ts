@@ -5,9 +5,9 @@ import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
 import { fetchAllRows } from '@/lib/fetch-all';
-import { shopWorkMs } from '@/lib/shop-hours';
+import { shopWorkMs, isShopClockRunning } from '@/lib/shop-hours';
 import { estimateHeadlineNumber } from '@/lib/estimate-number';
-import { reviewReminderDue, REVIEW_REMINDER_SHOP_HOURS } from '@/lib/estimate-review';
+import { reviewReminderDue, reviewSnoozedUntil, REVIEW_REMINDER_SHOP_HOURS } from '@/lib/estimate-review';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -20,7 +20,9 @@ const service = createServiceClient();
  * review that is still pending after REVIEW_REMINDER_SHOP_HOURS of shop time
  * pings every admin, plus the assigned reviewer, to open it and approve it
  * (any admin can decide a review — canDecideReview). Once per review round;
- * a fresh Send for Review starts a new round.
+ * a fresh Send for Review starts a new round, and so does a snooze running
+ * out (migration 350). Reminders only go out while the shop clock runs, so a
+ * snooze that ends on a Saturday reminds Monday morning.
  *
  * Runs every hour, every day: the shop-hours clock does the gating (a run at
  * night or on a weekend finds nothing newly due), and an hourly heartbeat
@@ -39,13 +41,14 @@ export async function GET(req: NextRequest) {
   try {
     const { data: pending } = await fetchAllRows<any>((from, to) => service
       .from('estimates')
-      .select('id, estimate_number, netsuite_estimate_number, customer_name, grand_total, internal_review_status, internal_reviewer_id, internal_review_requested_at, internal_review_reminded_at')
+      .select('id, estimate_number, netsuite_estimate_number, customer_name, grand_total, internal_review_status, internal_reviewer_id, internal_review_requested_at, internal_review_reminded_at, internal_review_snoozed_until')
       .eq('internal_review_status', 'pending')
       .order('id')
       .range(from, to));
 
     const now = Date.now();
-    const due = (pending || []).filter(e => reviewReminderDue(e, now, shopWorkMs));
+    // Outside shop hours nothing goes out; the next in-hours run picks it up.
+    const due = isShopClockRunning(now) ? (pending || []).filter(e => reviewReminderDue(e, now, shopWorkMs)) : [];
     if (due.length === 0) {
       const syncStateWrite = await recordHeartbeat(service, 'estimate_review_reminder', { status: 'ok', pending: (pending || []).length, reminded: 0 });
       return NextResponse.json({ status: 'ok', pending: (pending || []).length, reminded: 0, syncStateWrite });
@@ -71,6 +74,7 @@ export async function GET(req: NextRequest) {
       if (est.internal_reviewer_id) targets.add(est.internal_reviewer_id);
       const headline = estimateHeadlineNumber(est);
       const who = est.internal_reviewer_id ? reviewerName.get(est.internal_reviewer_id) || 'the reviewer' : 'a reviewer';
+      const afterSnooze = reviewSnoozedUntil(est) != null;
       const waited = Math.floor(shopWorkMs(new Date(est.internal_review_requested_at).getTime(), now) / 3_600_000);
 
       // Stamp first: if the stamp can't be written, skip rather than risk
@@ -91,7 +95,8 @@ export async function GET(req: NextRequest) {
           title: `Estimate #${headline} still needs review`,
           body: `${est.customer_name || 'An estimate'}${est.grand_total ? ` — $${Number(est.grand_total).toLocaleString()}` : ''}`
             + ` has waited ${Math.max(waited, REVIEW_REMINDER_SHOP_HOURS)} shop hours for ${who}'s review and the customer hasn't seen it yet.`
-            + ' Any admin can open it and approve it or send it back.',
+            + (afterSnooze ? ' Its snooze just ended.' : '')
+            + ' Any admin can open it and approve it, send it back, or snooze it.',
           url: deepLinks.estimate(est.id),
         });
       }

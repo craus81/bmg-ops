@@ -182,7 +182,7 @@ export default function RfidCapture({ includeVin, lockedVin, showUnit, onComplet
               }} />
               <button type="button" onClick={submitManual} disabled={!manual.trim()} style={{
                 padding: '14px 20px', borderRadius: '12px', fontSize: '15px', fontWeight: 800,
-                background: !manual.trim() ? theme.border : theme.navy, color: '#fff', border: 'none',
+                background: !manual.trim() ? theme.border : theme.accent, color: '#fff', border: 'none',
                 cursor: !manual.trim() ? 'default' : 'pointer', opacity: !manual.trim() ? 0.5 : 1,
               }}>Next</button>
             </div>

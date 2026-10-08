@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pickReviewer, reviewStateOf, canDecideReview, reviewReminderDue, type StaffOption } from './estimate-review';
+import { pickReviewer, reviewStateOf, canDecideReview, reviewReminderDue, reviewSnoozedUntil, type StaffOption } from './estimate-review';
 import { shopWorkMs } from './shop-hours';
 
 const STAFF: StaffOption[] = [
@@ -123,5 +123,34 @@ describe('reviewReminderDue', () => {
     const now = at('2026-10-09T21:00:00Z');
     expect(reviewReminderDue({ internal_review_status: 'approved', internal_review_requested_at: '2026-10-05T13:00:00Z' }, now, shopWorkMs)).toBe(false);
     expect(reviewReminderDue({ internal_review_status: 'pending', internal_review_requested_at: null }, now, shopWorkMs)).toBe(false);
+  });
+});
+
+describe('review snooze', () => {
+  const at = (iso: string) => new Date(iso).getTime();
+  // Requested Mon 8:00 AM Central; 6 shop hours lands Mon 2:30 PM.
+  const base = {
+    internal_review_status: 'pending',
+    internal_review_requested_at: '2026-10-05T13:00:00Z',
+  };
+
+  it('stays quiet while snoozed, then reminds once more when it runs out', () => {
+    const est = { ...base, internal_review_reminded_at: '2026-10-05T19:30:00Z', internal_review_snoozed_until: '2026-10-08T15:00:00Z' };
+    expect(reviewReminderDue(est, at('2026-10-07T16:00:00Z'), shopWorkMs)).toBe(false); // snoozed
+    expect(reviewReminderDue(est, at('2026-10-08T15:30:00Z'), shopWorkMs)).toBe(true); // snooze ended
+    // Once reminded after the snooze, that round is done.
+    expect(reviewReminderDue({ ...est, internal_review_reminded_at: '2026-10-08T15:30:00Z' }, at('2026-10-08T17:00:00Z'), shopWorkMs)).toBe(false);
+  });
+
+  it('a snooze set before the 6 hours were up still holds the first reminder', () => {
+    const est = { ...base, internal_review_snoozed_until: '2026-10-06T14:00:00Z' };
+    expect(reviewReminderDue(est, at('2026-10-05T20:00:00Z'), shopWorkMs)).toBe(false);
+    expect(reviewReminderDue(est, at('2026-10-06T14:30:00Z'), shopWorkMs)).toBe(true);
+  });
+
+  it('ignores a snooze left over from before the latest Send for Review', () => {
+    const est = { ...base, internal_review_snoozed_until: '2026-10-04T13:00:00Z' };
+    expect(reviewSnoozedUntil(est)).toBeNull();
+    expect(reviewReminderDue(est, at('2026-10-05T19:30:00Z'), shopWorkMs)).toBe(true);
   });
 });

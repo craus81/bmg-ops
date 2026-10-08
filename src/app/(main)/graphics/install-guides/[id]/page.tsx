@@ -1035,7 +1035,7 @@ export default function InstallGuideEditorPage() {
                 disabled={exportingProof}
                 title="Rebuild the uploaded proof PDF with the dimensioned pages in the proof section"
                 style={{
-                  padding: '8px 14px', borderRadius: '10px', background: 'var(--navy)', color: '#fff',
+                  padding: '8px 14px', borderRadius: '10px', background: 'var(--accent)', color: '#fff',
                   fontWeight: 800, fontSize: '12px', border: 'none', cursor: 'pointer',
                   opacity: exportingProof ? 0.6 : 1,
                 }}
@@ -1064,7 +1064,7 @@ export default function InstallGuideEditorPage() {
             disabled={exporting}
             title="Build the standalone BMG install guide deck (cover, best practices, dimensioned pages, schedule)"
             style={{
-              padding: '8px 14px', borderRadius: '10px', background: theme.orange, color: '#fff',
+              padding: '8px 14px', borderRadius: '10px', background: theme.accent, color: '#fff',
               fontWeight: 800, fontSize: '12px', border: 'none', cursor: 'pointer',
               boxShadow: '0 2px 8px rgba(238,49,32,0.3)', opacity: exporting ? 0.6 : 1,
             }}
@@ -1708,7 +1708,7 @@ export default function InstallGuideEditorPage() {
                 onClick={importPdfPages}
                 disabled={pdfImport.selected.size === 0}
                 style={{
-                  ...btnStyle('#fff', theme.orange), border: 'none',
+                  ...btnStyle('#fff', theme.accent), border: 'none',
                   opacity: pdfImport.selected.size === 0 ? 0.5 : 1,
                 }}
               >

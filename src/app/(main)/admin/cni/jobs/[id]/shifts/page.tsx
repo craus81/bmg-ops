@@ -446,7 +446,7 @@ export default function CniJobShiftsPage() {
           </div>
           <button onClick={openBackfill} disabled={busy} style={{
             padding: '10px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 700,
-            background: 'var(--orange)', color: '#fff', border: 'none',
+            background: 'var(--accent)', color: '#fff', border: 'none',
           }}>Back-Pay These Vehicles</button>
         </div>
       )}
@@ -477,7 +477,7 @@ export default function CniJobShiftsPage() {
                   ) : (
                     <button onClick={() => openAssign(v, credits)} disabled={busy} style={{
                       padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, flexShrink: 0,
-                      background: assigned ? 'var(--subtle-bg)' : 'var(--orange)',
+                      background: assigned ? 'var(--subtle-bg)' : 'var(--accent)',
                       color: assigned ? 'var(--text-secondary)' : '#fff',
                       border: assigned ? '1px solid var(--border)' : 'none',
                     }}>{assigned ? 'Reassign' : 'Tag Installer'}</button>
@@ -609,7 +609,7 @@ export default function CniJobShiftsPage() {
             <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
               <button onClick={applyBackfill} disabled={busy || backfillDraft.size === 0} style={{
                 flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 800,
-                background: busy || backfillDraft.size === 0 ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+                background: busy || backfillDraft.size === 0 ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none',
               }}>{busy ? 'Working...' : 'Back-Pay'}</button>
               <button onClick={() => setBackfillOpen(false)} disabled={busy} style={{
                 padding: '12px 16px', borderRadius: '10px', fontSize: '12px', fontWeight: 700,
@@ -636,7 +636,7 @@ export default function CniJobShiftsPage() {
             <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
               <button onClick={applyShiftEdit} disabled={busy || draft.size === 0} style={{
                 flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 800,
-                background: busy || draft.size === 0 ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+                background: busy || draft.size === 0 ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none',
               }}>{busy ? 'Applying...' : 'Apply & Recompute'}</button>
               <button onClick={() => setEditShift(null)} disabled={busy} style={{
                 padding: '12px 16px', borderRadius: '10px', fontSize: '12px', fontWeight: 700,
@@ -665,7 +665,7 @@ export default function CniJobShiftsPage() {
             <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
               <button onClick={applyVehicleEdit} disabled={busy || vehicleDraft.size === 0} style={{
                 flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 800,
-                background: busy || vehicleDraft.size === 0 ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+                background: busy || vehicleDraft.size === 0 ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none',
               }}>{busy ? 'Saving...' : 'Save Split'}</button>
               <button onClick={() => setEditVehicle(null)} disabled={busy} style={{
                 padding: '12px 16px', borderRadius: '10px', fontSize: '12px', fontWeight: 700,
@@ -698,7 +698,7 @@ export default function CniJobShiftsPage() {
             <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
               <button onClick={applyAssign} disabled={busy || assignDraft.size === 0} style={{
                 flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 800,
-                background: busy || assignDraft.size === 0 ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+                background: busy || assignDraft.size === 0 ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none',
               }}>{busy ? 'Saving...' : 'Save'}</button>
               <button onClick={() => setAssignVin(null)} disabled={busy} style={{
                 padding: '12px 16px', borderRadius: '10px', fontSize: '12px', fontWeight: 700,

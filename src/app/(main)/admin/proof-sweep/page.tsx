@@ -194,7 +194,7 @@ export default function ProofSweepPage() {
   const errors = results.filter(r => r.error);
 
   const card: CSSProperties = { background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 12, padding: 16, marginBottom: 16 };
-  const btn: CSSProperties = { background: theme.orange, color: '#fff', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, fontSize: 14, cursor: 'pointer' };
+  const btn: CSSProperties = { background: theme.accent, color: '#fff', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, fontSize: 14, cursor: 'pointer' };
   const ghostBtn: CSSProperties = { ...btn, background: theme.card, color: theme.textPrimary, border: `1px solid ${theme.border}` };
   const input: CSSProperties = { width: '100%', background: theme.inputBg, color: theme.textPrimary, border: `1px solid ${theme.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 13 };
 

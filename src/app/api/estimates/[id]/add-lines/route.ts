@@ -104,7 +104,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     const { data: allLines } = await supabase
       .from('estimate_line_items')
-      .select('quantity, unit_price, labor_hours, taxable')
+      .select('quantity, unit_price, labor_hours, taxable, discount_type, discount_value')
       .eq('estimate_id', params.id);
     const totals = computeTotals(
       allLines || [],
