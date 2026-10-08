@@ -38,6 +38,7 @@ import { pickPrice } from '@/lib/part-suggest';
 import { isAdminRole } from '@/lib/features';
 import { closeOnEscape } from '@/lib/modal-escape';
 import CreatedBy from '@/components/CreatedBy';
+import PoPricingRequestLink from '@/components/PoPricingRequestLink';
 
 type ShipTo = NonNullable<PurchaseOrder['ship_to']>;
 
@@ -1278,6 +1279,9 @@ export default function PoRecordPage() {
           </div>
         </div>
       )}
+
+      {/* New 02 / 06 numbers → the pricing request they came from (migration 352) */}
+      <PoPricingRequestLink poId={po.id} onLinked={load} />
 
       {/* Line items */}
       <div style={card}>
