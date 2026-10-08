@@ -2139,7 +2139,7 @@ export default function CustomerRecordPage() {
           {(customer || (prospect && !prospect.netsuite_id)) && !isVendor && (
             <button onClick={() => router.push(customer ? deepLinks.newEstimate(customer.id) : deepLinks.newEstimate(null, prospect!.id))}
               title="Start a new estimate with this customer pre-selected"
-              style={btnSm}>
+              style={{ ...btnSm, background: 'var(--accent)', border: 'none', color: '#fff' }}>
               + New Estimate
             </button>
           )}

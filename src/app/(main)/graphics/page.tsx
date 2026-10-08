@@ -1299,7 +1299,7 @@ export default function GraphicsPage() {
           )}
           <button
             onClick={() => setShowCreate(true)}
-            style={{ padding: '8px 14px', borderRadius: '10px', background: theme.orange, color: '#fff', fontWeight: 800, fontSize: '12px', border: 'none', cursor: 'pointer', boxShadow: '0 2px 8px rgba(238,49,32,0.3)' }}
+            style={{ padding: '8px 14px', borderRadius: '10px', background: theme.accent, color: '#fff', fontWeight: 800, fontSize: '12px', border: 'none', cursor: 'pointer', boxShadow: '0 2px 8px rgba(238,49,32,0.3)' }}
           >
             + New Job
           </button>

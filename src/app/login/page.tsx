@@ -229,7 +229,7 @@ export default function LoginPage() {
             )}
 
             <button type="submit" disabled={!email || (mode === 'password' || mode === 'signup' ? !password : false) || (mode === 'signup' && !fullName) || loading} style={{
-              width: '100%', padding: '16px', borderRadius: '12px', background: 'var(--orange)',
+              width: '100%', padding: '16px', borderRadius: '12px', background: 'var(--accent)',
               color: '#fff', fontSize: '16px', fontWeight: 700,
               opacity: (email && (mode === 'magic' || mode === 'forgot' || password) && (mode !== 'signup' || fullName) && !loading) ? 1 : 0.5,
               boxShadow: '0 4px 20px rgba(238,49,32,0.3)', transition: 'opacity 0.2s',

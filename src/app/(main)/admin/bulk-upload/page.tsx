@@ -554,7 +554,7 @@ export default function BulkUploadPage() {
             disabled={uploading || selectedTemplateCount === 0}
             style={{
               width: '100%', padding: '14px', borderRadius: '14px', marginTop: '8px',
-              background: 'var(--orange)', color: '#fff', fontWeight: 800, fontSize: '15px',
+              background: 'var(--accent)', color: '#fff', fontWeight: 800, fontSize: '15px',
               border: 'none', opacity: uploading || selectedTemplateCount === 0 ? 0.5 : 1,
               boxShadow: '0 4px 16px rgba(238,49,32,0.3)',
             }}
@@ -684,7 +684,7 @@ export default function BulkUploadPage() {
             disabled={uploading || selectedProofCount === 0}
             style={{
               width: '100%', padding: '14px', borderRadius: '14px', marginTop: '8px',
-              background: 'var(--orange)', color: '#fff', fontWeight: 800, fontSize: '15px',
+              background: 'var(--accent)', color: '#fff', fontWeight: 800, fontSize: '15px',
               border: 'none', opacity: uploading || selectedProofCount === 0 ? 0.5 : 1,
               boxShadow: '0 4px 16px rgba(238,49,32,0.3)',
             }}

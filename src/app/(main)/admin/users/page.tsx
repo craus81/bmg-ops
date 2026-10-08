@@ -755,7 +755,7 @@ export default function UsersPage() {
                         disabled={!newCompanyName.trim()}
                         style={{
                           padding: '10px 16px', borderRadius: '10px',
-                          background: 'var(--navy)', color: '#fff',
+                          background: 'var(--accent)', color: '#fff',
                           fontSize: '12px', fontWeight: 700, border: 'none',
                           opacity: !newCompanyName.trim() ? 0.4 : 1,
                         }}
@@ -885,7 +885,7 @@ export default function UsersPage() {
                         disabled={!newCompanyName.trim()}
                         style={{
                           padding: '8px 14px', borderRadius: '8px',
-                          background: 'var(--navy)', color: '#fff',
+                          background: 'var(--accent)', color: '#fff',
                           fontSize: '11px', fontWeight: 700, border: 'none',
                           opacity: !newCompanyName.trim() ? 0.4 : 1,
                         }}

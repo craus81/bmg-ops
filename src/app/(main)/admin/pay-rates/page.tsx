@@ -243,7 +243,7 @@ export default function PayRatesPage() {
                   disabled={savingPart === np.part_number}
                   style={{
                     padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                    background: savingPart === np.part_number ? 'var(--text-muted)' : 'var(--orange)',
+                    background: savingPart === np.part_number ? 'var(--text-muted)' : 'var(--accent)',
                     color: '#fff', border: 'none', cursor: 'pointer',
                   }}
                 >
@@ -353,7 +353,7 @@ export default function PayRatesPage() {
                     disabled={savingPart === r.part_number || !dirty}
                     style={{
                       padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                      background: savingPart === r.part_number || !dirty ? 'var(--text-muted)' : 'var(--orange)',
+                      background: savingPart === r.part_number || !dirty ? 'var(--text-muted)' : 'var(--accent)',
                       color: '#fff', border: 'none', cursor: dirty ? 'pointer' : 'default',
                       opacity: dirty ? 1 : 0.6,
                     }}
@@ -393,7 +393,7 @@ export default function PayRatesPage() {
               disabled={addingRate || !newPart.trim() || !newRate}
               style={{
                 padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                background: addingRate || !newPart.trim() || !newRate ? 'var(--text-muted)' : 'var(--orange)',
+                background: addingRate || !newPart.trim() || !newRate ? 'var(--text-muted)' : 'var(--accent)',
                 color: '#fff', border: 'none', cursor: 'pointer',
               }}
             >

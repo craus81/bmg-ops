@@ -432,7 +432,7 @@ export default function BidReviewPage() {
                         disabled={assigning}
                         style={{
                           flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                          background: assigning ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+                          background: assigning ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none',
                         }}
                       >
                         {assigning ? 'Assigning...' : 'Accept — Assign This Company'}
@@ -444,7 +444,7 @@ export default function BidReviewPage() {
                           disabled={assigning}
                           style={{
                             flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                            background: assigning ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+                            background: assigning ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none',
                           }}
                         >
                           {assigning ? 'Assigning...' : 'Assign Their Company'}

@@ -202,7 +202,7 @@ export default function CniJobChat({ jobId, userId, backPath, jobNumber, jobTitl
           disabled={!newMsg.trim() || sending}
           style={{
             padding: '10px 16px', borderRadius: '12px', fontSize: '14px', fontWeight: 700,
-            background: newMsg.trim() ? 'var(--orange)' : 'var(--text-muted)',
+            background: newMsg.trim() ? 'var(--accent)' : 'var(--text-muted)',
             color: '#fff', border: 'none', alignSelf: 'flex-end',
           }}
         >

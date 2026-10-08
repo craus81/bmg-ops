@@ -1029,7 +1029,7 @@ export default function UpfitProjectsPage() {
               <button
                 onClick={pullFromNetSuite}
                 disabled={nsLookingUp || !nsLookupNumber.trim()}
-                style={{ padding: '7px 14px', borderRadius: '6px', background: theme.orange, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: nsLookingUp || !nsLookupNumber.trim() ? 0.5 : 1, whiteSpace: 'nowrap' }}
+                style={{ padding: '7px 14px', borderRadius: '6px', background: theme.accent, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: nsLookingUp || !nsLookupNumber.trim() ? 0.5 : 1, whiteSpace: 'nowrap' }}
               >
                 {nsLookingUp ? 'Looking up...' : 'Link'}
               </button>
@@ -1348,7 +1348,7 @@ export default function UpfitProjectsPage() {
           <button
             onClick={addTask}
             disabled={addingTask || !newTaskTitle.trim()}
-            style={{ padding: '7px 14px', borderRadius: '6px', background: theme.orange, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: addingTask || !newTaskTitle.trim() ? 0.5 : 1, whiteSpace: 'nowrap' }}
+            style={{ padding: '7px 14px', borderRadius: '6px', background: theme.accent, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: addingTask || !newTaskTitle.trim() ? 0.5 : 1, whiteSpace: 'nowrap' }}
           >
             + Task
           </button>
@@ -1425,7 +1425,7 @@ export default function UpfitProjectsPage() {
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={uploadingFiles}
-              style={{ padding: '4px 10px', borderRadius: '6px', background: theme.orange, color: '#fff', border: 'none', fontSize: '11px', fontWeight: 700, cursor: 'pointer', opacity: uploadingFiles ? 0.5 : 1 }}
+              style={{ padding: '4px 10px', borderRadius: '6px', background: theme.accent, color: '#fff', border: 'none', fontSize: '11px', fontWeight: 700, cursor: 'pointer', opacity: uploadingFiles ? 0.5 : 1 }}
             >
               {uploadingFiles ? 'Uploading...' : '+ Upload'}
             </button>
@@ -1470,7 +1470,7 @@ export default function UpfitProjectsPage() {
           <button
             onClick={addNote}
             disabled={addingNote || !newNote.trim()}
-            style={{ padding: '8px 14px', borderRadius: '8px', background: theme.orange, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: addingNote || !newNote.trim() ? 0.5 : 1 }}
+            style={{ padding: '8px 14px', borderRadius: '8px', background: theme.accent, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: addingNote || !newNote.trim() ? 0.5 : 1 }}
           >
             Add
           </button>
@@ -1540,7 +1540,7 @@ export default function UpfitProjectsPage() {
         <div style={{ fontSize: '18px', fontWeight: 800, color: theme.textPrimary }}>Upfit Projects</div>
         <button
           onClick={() => setShowCreate(!showCreate)}
-          style={{ padding: '6px 14px', borderRadius: '8px', background: theme.orange, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+          style={{ padding: '6px 14px', borderRadius: '8px', background: theme.accent, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
         >
           + New Project
         </button>
@@ -1595,7 +1595,7 @@ export default function UpfitProjectsPage() {
             </DropZone>
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
               <button onClick={() => { setShowCreate(false); setCreateFiles([]); }} style={{ padding: '6px 12px', borderRadius: '6px', background: 'none', border: `1px solid ${theme.border}`, color: theme.textMuted, fontSize: '12px', cursor: 'pointer' }}>Cancel</button>
-              <button onClick={createProject} disabled={creating || !newName.trim()} style={{ padding: '6px 14px', borderRadius: '6px', background: theme.orange, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: creating || !newName.trim() ? 0.5 : 1 }}>{creating ? 'Creating...' : 'Create'}</button>
+              <button onClick={createProject} disabled={creating || !newName.trim()} style={{ padding: '6px 14px', borderRadius: '6px', background: theme.accent, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: creating || !newName.trim() ? 0.5 : 1 }}>{creating ? 'Creating...' : 'Create'}</button>
             </div>
           </div>
         </div>

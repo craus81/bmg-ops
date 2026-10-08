@@ -907,7 +907,7 @@ export default function ScanPage() {
                 if (n) { setSelectedCustomer({ name: n, label: n }); setStep('part'); }
               }} disabled={!otherCustomer.trim()} style={{
                 width: '100%', padding: '12px', borderRadius: '10px', fontSize: '14px', fontWeight: 800,
-                background: otherCustomer.trim() ? theme.navy : theme.border, color: '#fff', border: 'none',
+                background: otherCustomer.trim() ? theme.accent : theme.border, color: '#fff', border: 'none',
                 cursor: otherCustomer.trim() ? 'pointer' : 'default', opacity: otherCustomer.trim() ? 1 : 0.5,
               }}>Continue</button>
             </div>
@@ -1065,7 +1065,7 @@ export default function ScanPage() {
           {selectedParts.length > 0 && (
             <button onClick={() => { if (!rfidInMulti) setStep('location'); }} disabled={rfidInMulti} style={{
               width: '100%', padding: '14px', borderRadius: '12px', fontSize: '15px', fontWeight: 800,
-              background: rfidInMulti ? theme.border : theme.navy, color: '#fff', border: 'none',
+              background: rfidInMulti ? theme.border : theme.accent, color: '#fff', border: 'none',
               cursor: rfidInMulti ? 'default' : 'pointer', opacity: rfidInMulti ? 0.5 : 1,
               marginTop: '12px', marginBottom: '8px',
             }}>
@@ -1100,7 +1100,7 @@ export default function ScanPage() {
               )}
               <button onClick={() => { if (customJob.trim()) { saveCustomJobDefaults(); setStep('location'); } }} disabled={!customJob.trim()} style={{
                 width: '100%', padding: '12px', borderRadius: '10px', fontSize: '14px', fontWeight: 800,
-                background: customJob.trim() ? theme.navy : theme.border, color: '#fff', border: 'none',
+                background: customJob.trim() ? theme.accent : theme.border, color: '#fff', border: 'none',
                 cursor: customJob.trim() ? 'pointer' : 'default', opacity: customJob.trim() ? 1 : 0.5,
               }}>Continue</button>
             </div>
@@ -1352,7 +1352,7 @@ export default function ScanPage() {
               />
               <button onClick={handleScan} disabled={vinLoading || !vin.trim()} style={{
                 padding: '14px 20px', borderRadius: '12px', fontSize: '15px', fontWeight: 800,
-                background: vinLoading || !vin.trim() ? theme.border : theme.navy,
+                background: vinLoading || !vin.trim() ? theme.border : theme.accent,
                 color: '#fff', border: 'none',
                 cursor: vinLoading || !vin.trim() ? 'default' : 'pointer',
                 opacity: vinLoading || !vin.trim() ? 0.5 : 1,

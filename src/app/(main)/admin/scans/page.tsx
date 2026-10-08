@@ -2371,7 +2371,7 @@ export default function AdminScansPage() {
                 ))}
               </div>
             ))}
-            <button onClick={() => setHeldReview(null)} style={{ width: '100%', marginTop: '14px', padding: '11px', borderRadius: '10px', background: 'var(--navy)', color: '#fff', fontSize: '13px', fontWeight: 800, border: 'none', cursor: 'pointer' }}>Done</button>
+            <button onClick={() => setHeldReview(null)} style={{ width: '100%', marginTop: '14px', padding: '11px', borderRadius: '10px', background: 'var(--accent)', color: '#fff', fontSize: '13px', fontWeight: 800, border: 'none', cursor: 'pointer' }}>Done</button>
           </div>
         </div>
       )}

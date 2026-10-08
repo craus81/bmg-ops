@@ -187,7 +187,7 @@ export default function CniOnboardingPage() {
             onClick={() => router.push('/installer')}
             style={{
               width: '100%', padding: '14px', borderRadius: '12px', fontSize: '15px', fontWeight: 700,
-              background: '#ee3120', color: '#fff', border: 'none', cursor: 'pointer',
+              background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer',
             }}
           >
             Go to My Dashboard
@@ -349,7 +349,7 @@ export default function CniOnboardingPage() {
           disabled={saving}
           style={{
             width: '100%', padding: '16px', borderRadius: '12px', fontSize: '15px', fontWeight: 700,
-            background: saving ? '#666' : '#ee3120', color: '#fff', border: 'none',
+            background: saving ? '#666' : 'var(--accent)', color: '#fff', border: 'none',
             cursor: saving ? 'default' : 'pointer', marginBottom: '16px',
           }}
         >

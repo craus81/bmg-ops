@@ -382,7 +382,7 @@ export default function VinScanner({ onScan, theme, continuous = false, paused =
         <div style={{ color: theme.error, fontSize: '13px', marginBottom: '12px' }}>{cameraError}</div>
         <button
           onClick={() => { setCameraError(''); startCamera(); }}
-          style={{ padding: '10px 20px', borderRadius: '10px', background: theme.navy, color: '#fff', fontWeight: 700, fontSize: '13px', border: 'none', cursor: 'pointer' }}
+          style={{ padding: '10px 20px', borderRadius: '10px', background: theme.accent, color: '#fff', fontWeight: 700, fontSize: '13px', border: 'none', cursor: 'pointer' }}
         >Retry Camera</button>
       </div>
     );

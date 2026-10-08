@@ -775,7 +775,7 @@ export default function SchedulePage() {
                 <div style={{ display: 'flex', gap: '6px' }}>
                   <button onClick={saveCardEdit} disabled={cardBusy || !cardEdit.title.trim() || !cardEdit.event_date} style={{
                     padding: '7px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 800,
-                    background: 'var(--orange)', color: '#fff', border: 'none', cursor: 'pointer',
+                    background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer',
                   }}>{cardBusy ? 'Saving…' : `Save${cardEvent.google_event_id || cardEvent.source === 'google' ? ' & update Google' : ''}`}</button>
                   <button onClick={() => setCardEdit(null)} style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--subtle-bg)', color: 'var(--text-muted)', border: `1px solid ${theme.border}`, cursor: 'pointer' }}>Cancel</button>
                 </div>
@@ -824,7 +824,7 @@ export default function SchedulePage() {
               />
               <button onClick={addCardNote} disabled={!cardNoteDraft.trim()} style={{
                 padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, alignSelf: 'flex-end',
-                background: cardNoteDraft.trim() ? 'var(--orange)' : 'var(--subtle-bg)', color: cardNoteDraft.trim() ? '#fff' : 'var(--text-muted)', border: 'none', cursor: 'pointer',
+                background: cardNoteDraft.trim() ? 'var(--accent)' : 'var(--subtle-bg)', color: cardNoteDraft.trim() ? '#fff' : 'var(--text-muted)', border: 'none', cursor: 'pointer',
               }}>Add</button>
             </div>
 

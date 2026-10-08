@@ -657,7 +657,7 @@ export default function CreateCniJobPage() {
         disabled={saving || !title.trim()}
         style={{
           width: '100%', padding: '16px', borderRadius: '12px',
-          background: saving || !title.trim() ? 'var(--text-muted)' : 'var(--orange)',
+          background: saving || !title.trim() ? 'var(--text-muted)' : 'var(--accent)',
           color: '#fff', fontSize: '15px', fontWeight: 700, border: 'none',
           marginBottom: '100px',
         }}

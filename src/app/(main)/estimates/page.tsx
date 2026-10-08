@@ -3521,7 +3521,7 @@ export default function EstimatesPage() {
           <div style={{ fontSize: '22px', fontWeight: 800 }}>Estimates</div>
           <button
             onClick={() => { openNewEstimate(); }}
-            style={{ padding: '8px 14px', borderRadius: '10px', background: theme.orange, color: '#fff', fontWeight: 800, fontSize: '12px', border: 'none', cursor: 'pointer', boxShadow: '0 2px 8px rgba(238,49,32,0.3)' }}
+            style={{ padding: '8px 14px', borderRadius: '10px', background: theme.accent, color: '#fff', fontWeight: 800, fontSize: '12px', border: 'none', cursor: 'pointer', boxShadow: '0 2px 8px rgba(238,49,32,0.3)' }}
           >
             + New Estimate
           </button>
@@ -5633,7 +5633,7 @@ export default function EstimatesPage() {
                   disabled={draftBusy || draftText.trim().length < 10}
                   style={{
                     padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 800, border: 'none',
-                    background: draftBusy || draftText.trim().length < 10 ? 'var(--text-muted)' : 'var(--orange)',
+                    background: draftBusy || draftText.trim().length < 10 ? 'var(--text-muted)' : 'var(--accent)',
                     color: '#fff', cursor: draftBusy ? 'default' : 'pointer',
                   }}
                 >
@@ -5725,7 +5725,7 @@ export default function EstimatesPage() {
                     disabled={draftPicked.size === 0}
                     style={{
                       marginTop: '10px', width: '100%', padding: '10px', borderRadius: '10px', border: 'none',
-                      background: draftPicked.size === 0 ? 'var(--text-muted)' : 'var(--orange)',
+                      background: draftPicked.size === 0 ? 'var(--text-muted)' : 'var(--accent)',
                       color: '#fff', fontSize: '13px', fontWeight: 800, cursor: draftPicked.size === 0 ? 'default' : 'pointer',
                     }}
                   >

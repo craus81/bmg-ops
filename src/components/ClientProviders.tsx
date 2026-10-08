@@ -27,7 +27,7 @@ function PendingScreen() {
           Your account has been created but hasn&apos;t been approved yet. An admin will review your request shortly.
         </div>
         <button onClick={() => window.location.reload()} style={{
-          padding: '12px 24px', borderRadius: '12px', background: 'var(--navy)',
+          padding: '12px 24px', borderRadius: '12px', background: 'var(--accent)',
           color: '#fff', fontSize: '14px', fontWeight: 700, border: 'none',
           marginBottom: '10px', width: '100%',
         }}>Check Again</button>

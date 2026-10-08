@@ -297,10 +297,10 @@ export default function QuotesPage() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-          <button onClick={() => router.push(deepLinks.newEstimate())} style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', cursor: 'pointer' }}>
+          <button onClick={() => router.push(deepLinks.newEstimate())} style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--accent)', border: 'none', color: '#fff', cursor: 'pointer' }}>
             + New Estimate
           </button>
-          <button onClick={() => router.push('/admin/wrap-quote')} style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', cursor: 'pointer' }}>
+          <button onClick={() => router.push('/admin/wrap-quote')} style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--accent)', border: 'none', color: '#fff', cursor: 'pointer' }}>
             + New Wrap Quote
           </button>
         </div>

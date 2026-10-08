@@ -1547,7 +1547,7 @@ export default function TrackingPage() {
           next step, stranding the user down-page. ?checkin=1 still opens it. */}
       {(isAdmin || hasFeature('fleet_checkin')) && (
         <>
-          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', marginBottom: '14px', overflow: 'hidden' }}>
+          <div style={{ background: 'var(--accent)', borderRadius: '14px', marginBottom: '14px', overflow: 'hidden' }}>
             <button
               onClick={() => setShowCheckIn(true)}
               style={{
@@ -1555,10 +1555,10 @@ export default function TrackingPage() {
                 padding: '13px 16px', background: 'transparent', border: 'none', cursor: 'pointer',
               }}
             >
-              <span style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>
+              <span style={{ fontSize: '14px', fontWeight: 800, color: '#fff' }}>
                 ➕ Check In Vehicle
               </span>
-              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>↗</span>
+              <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.8)' }}>↗</span>
             </button>
           </div>
           {showCheckIn && (
@@ -2771,7 +2771,7 @@ export default function TrackingPage() {
                                   disabled={soSearching || !soSearchTerm.trim()}
                                   style={{
                                     padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                                    background: 'var(--navy)', color: '#fff', border: 'none',
+                                    background: 'var(--accent)', color: '#fff', border: 'none',
                                     opacity: soSearching || !soSearchTerm.trim() ? 0.5 : 1, cursor: 'pointer',
                                   }}
                                 >{soSearching ? '...' : 'Search'}</button>

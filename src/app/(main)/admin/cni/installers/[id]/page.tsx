@@ -623,7 +623,7 @@ export default function CniInstallerDetailPage() {
           <div style={{ display: 'flex', gap: '8px' }}>
             <button onClick={saveEdit} disabled={saving} style={{
               flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-              background: saving ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none', cursor: saving ? 'default' : 'pointer',
+              background: saving ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none', cursor: saving ? 'default' : 'pointer',
             }}>
               {saving ? 'Saving...' : 'Save Changes'}
             </button>
@@ -789,7 +789,7 @@ export default function CniInstallerDetailPage() {
           disabled={saving}
           style={{
             width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-            background: saving ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none', cursor: saving ? 'default' : 'pointer',
+            background: saving ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none', cursor: saving ? 'default' : 'pointer',
           }}
         >
           {saving ? 'Saving...' : 'Save Internal Fields'}
@@ -908,7 +908,7 @@ export default function CniInstallerDetailPage() {
               onClick={addInternalNote}
               style={{
                 padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                background: 'var(--orange)', color: '#fff', border: 'none', cursor: 'pointer',
+                background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer',
               }}
             >
               Add

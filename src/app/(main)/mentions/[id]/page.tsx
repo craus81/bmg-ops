@@ -93,7 +93,7 @@ export default function MentionPage() {
         </div>
         <div style={{ display: 'flex', gap: '8px', marginTop: '14px', flexWrap: 'wrap' }}>
           {canOpen && target && (
-            <button onClick={() => router.push(target)} style={{ padding: '9px 16px', borderRadius: '8px', border: 'none', background: 'var(--navy)', color: '#fff', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}>
+            <button onClick={() => router.push(target)} style={{ padding: '9px 16px', borderRadius: '8px', border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}>
               Open {mention.context_label || 'record'}
             </button>
           )}

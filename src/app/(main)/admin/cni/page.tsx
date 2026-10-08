@@ -174,7 +174,7 @@ export default function CniDashboardPage() {
           onClick={() => router.push('/admin/cni/jobs/new')}
           style={{
             padding: '10px 18px', borderRadius: '10px', flexShrink: 0,
-            background: 'var(--orange)', color: '#fff',
+            background: 'var(--accent)', color: '#fff',
             fontSize: '13px', fontWeight: 700, border: 'none',
           }}
         >
