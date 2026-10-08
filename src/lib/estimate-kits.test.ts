@@ -139,3 +139,32 @@ describe('kitBuildable', () => {
     expect(r.now).toBe(2);
   });
 });
+
+describe('line discounts on customer surfaces (migration 350)', () => {
+  it('a rack shows its parts\' line discounts once, under the rack', () => {
+    const lines = [
+      { kit_group_id: 'g1', kit_item_number: 'AR1', kit_quantity: 1, item_number: 'P1', quantity: 1, unit_price: 100, line_total: 100, discount_type: 'percent', discount_value: 10, discount_amount: 10 },
+      { kit_group_id: 'g1', kit_item_number: 'AR1', kit_quantity: 1, item_number: 'P2', quantity: 1, unit_price: 50, line_total: 50, discount_type: 'percent', discount_value: 10, discount_amount: 5 },
+    ];
+    const out = toKitDisplayLines(lines as any);
+    expect(out[0].kit_header).toBe(true);
+    expect(out[0].discount_amount).toBe(15);
+    expect(out[0].discount_type).toBe('percent');
+    expect(out.slice(1).every((l: any) => l.discount_amount === 0)).toBe(true);
+  });
+
+  it('the emailed document puts a discount row under the line', () => {
+    const html = renderEstimateDocument(
+      { estimate_number: 'EST-1', subtotal: 90, labor_total: 0, tax_amount: 0, grand_total: 90, tax_rate: 0 },
+      [{ item_number: 'BRK-1', quantity: 1, unit_price: 100, line_total: 100, discount_type: 'percent', discount_value: 10, discount_amount: 10 }],
+    );
+    expect(html).toContain('Discount (10%)');
+    expect(html).toContain('&minus;$10.00');
+  });
+
+  it('the approval page gets the line discount', () => {
+    const [l] = publicLines([{ id: 'x', item_number: 'A', quantity: 1, unit_price: 100, discount_type: 'amount', discount_value: 5, discount_amount: 5 }]);
+    expect(l.discount_amount).toBe(5);
+    expect(l.discount_type).toBe('amount');
+  });
+});

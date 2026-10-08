@@ -103,7 +103,25 @@ export async function GET(req: NextRequest) {
     .order('created_at')
     .limit(500);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ success: true, requests: data || [] });
+  const rows = (data || []) as any[];
+  // The Create PO review screen starts each line at the catalog's purchase
+  // price (the same price create-po uses when nobody edits it).
+  if (status === 'pending' && rows.length > 0) {
+    const items = [...new Set(rows.map(r => r.item_number as string))];
+    const cost = new Map<string, number>();
+    for (let i = 0; i < items.length; i += 200) {
+      const { data: parts } = await supabase
+        .from('netsuite_parts')
+        .select('item_number, purchase_price')
+        .in('item_number', items.slice(i, i + 200));
+      for (const p of (parts || []) as any[]) {
+        const price = Number(p.purchase_price) || 0;
+        if (price > 0) cost.set(p.item_number, price);
+      }
+    }
+    for (const r of rows) r.catalog_cost = cost.get(r.item_number) ?? null;
+  }
+  return NextResponse.json({ success: true, requests: rows });
 }
 
 /**

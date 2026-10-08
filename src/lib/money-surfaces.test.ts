@@ -27,6 +27,7 @@ const GATED = /canSeeMoney|showMoney|showPrice|showCost/;
  */
 const ALLOWED: Record<string, string> = {
   // ── Walled by a feature only money roles hold ──
+  'src/components/CreatePoReviewModal.tsx': 'opened only by admins from the Purchasing queue (isAdmin gate; create-po is requireAdmin)',
   'src/app/(main)/admin/ap/page.tsx': 'vendor_payments — finance/admin only',
   'src/app/(main)/admin/credit-applications/page.tsx': 'credit_applications — finance/admin/sales',
   'src/app/(main)/admin/payroll/page.tsx': 'payroll — admin only',

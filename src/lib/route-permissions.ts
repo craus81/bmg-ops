@@ -431,6 +431,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/purchasing/sync-sales-orders/route.ts': admin(),
   'src/app/api/purchase-requests/create-po/route.ts': feature('parts_ordering', 'requireAdmin('),
   'src/app/api/purchase-requests/match-pos/route.ts': feature('parts_ordering', 'requireAdmin('),
+  'src/app/api/purchase-requests/mark-ordered/route.ts': feature('parts_ordering', 'requireAdmin('),
   'src/app/api/purchase-requests/route.ts': feature('parts_ordering'),
   'src/app/api/purchase-requests/unmatch/route.ts': feature('parts_ordering', 'requireAdmin('),
   'src/app/api/push/register-native/route.ts': authScoped('self-scoped push-token registration'),

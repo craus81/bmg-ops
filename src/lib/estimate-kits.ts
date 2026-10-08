@@ -71,6 +71,12 @@ export function toKitDisplayLines<T extends AnyLine>(lines: T[]): KitDisplayLine
       seen.add(g);
       const members = ordered.filter(x => x.kit_group_id === g);
       const total = Math.round(members.reduce((s, m) => s + lineTotal(m), 0) * 100) / 100;
+      // Line discounts (migration 350) on a rack's parts show once, under
+      // the rack: their sum, labelled with the percent when they all share it.
+      const discounted = members.filter(m => num(m.discount_amount) > 0);
+      const discountAmount = Math.round(discounted.reduce((s, m) => s + num(m.discount_amount), 0) * 100) / 100;
+      const sameDiscount = discounted.length > 0 && discounted.length === members.length
+        && discounted.every(m => m.discount_type === discounted[0].discount_type && num(m.discount_value) === num(discounted[0].discount_value));
       const kitQty = num(l.kit_quantity) > 0 ? num(l.kit_quantity) : 1;
       out.push({
         ...l,
@@ -85,10 +91,13 @@ export function toKitDisplayLines<T extends AnyLine>(lines: T[]): KitDisplayLine
         part_image_url: null,
         part_product_url: null,
         image: null,
+        discount_amount: discountAmount,
+        discount_type: sameDiscount ? discounted[0].discount_type : (discountAmount > 0 ? 'amount' : null),
+        discount_value: sameDiscount ? discounted[0].discount_value : (discountAmount > 0 ? discountAmount : null),
         kit_header: true,
       } as KitDisplayLine<T>);
     }
-    out.push({ ...l, unit_price: 0, line_total: 0, kit_component: true });
+    out.push({ ...l, unit_price: 0, line_total: 0, discount_amount: 0, kit_component: true });
   }
   return out;
 }

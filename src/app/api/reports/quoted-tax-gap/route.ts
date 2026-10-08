@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
   const { data: lines, error: lineError } = await fetchAllRows<TaxGapLine>((from, to) =>
     supabase
       .from('estimate_line_items')
-      .select('estimate_id, quantity, unit_price, labor_hours, taxable, part_id, netsuite_item_id, item_number')
+      .select('estimate_id, quantity, unit_price, labor_hours, taxable, discount_type, discount_value, part_id, netsuite_item_id, item_number')
       .order('id')
       .range(from, to) as unknown as PromiseLike<{ data: TaxGapLine[] | null; error: { message: string } | null }>,
   );

@@ -16,6 +16,7 @@ import { theme } from '@/lib/theme';
 import RecordChanges from '@/components/RecordChanges';
 import NumberInput from '@/components/NumberInput';
 import { deepLinks } from '@/lib/deep-links';
+import CreatedBy from '@/components/CreatedBy';
 
 interface CniJob {
   id: string;
@@ -927,6 +928,7 @@ export default function CniJobDetailPage() {
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             {job.job_number} {job.customer_name ? `• ${job.customer_name}` : ''}
           </div>
+          <CreatedBy userId={job.created_by} at={job.created_at} style={{ display: 'block', fontSize: '11px' }} />
           {sourceInfo && (
             <div style={{ fontSize: '11px', marginTop: '2px' }}>
               <span style={{ color: 'var(--text-muted)' }}>Created from </span>

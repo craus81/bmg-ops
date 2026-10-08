@@ -6,9 +6,12 @@
  * has a place to land. Requests arrive from the parts-readiness card's
  * short rows (or the API); admins turn a vendor group into a REAL
  * NetSuite purchase order right here (17B): pick the NetSuite vendor,
- * hit Create PO, and the create-po route places the PO, mirrors it
+ * hit Create PO, review the lines (tick, qty, price, plant, memo), and the
+ * create-po route places the PO, mirrors it
  * locally so readiness flips to "on order" immediately, and stamps the
- * source projects' PO columns. Non-admins keep the queue as a worklist:
+ * source projects' PO columns. Admins can also Mark ordered with the PO
+ * number of a PO placed elsewhere (migration 349). Non-admins keep the
+ * queue as a worklist:
  * fix vendors, adjust quantities, cancel noise.
  *
  * ?req=<id> (deepLinks.purchaseRequests) scroll-flashes one row — the
@@ -26,9 +29,11 @@ import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import NetsuiteVendorSearch from '@/components/NetsuiteVendorSearch';
 import PartsDemandTab from '@/components/PartsDemandTab';
+import CreatePoReviewModal, { type CreatePoResult, type ReviewRequest } from '@/components/CreatePoReviewModal';
 import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
 import { trackingUrl } from '@/lib/tracking-url';
+import CreatedBy from '@/components/CreatedBy';
 
 interface RequestRow {
   id: string;
@@ -57,8 +62,13 @@ interface RequestRow {
     eta_date?: string | null; tracking_number?: string | null; carrier?: string | null;
   } | null;
   ordered_at?: string | null;
-  /** 'auto' = matched to a PO found in NetSuite (migration 331). */
+  /** 'auto' = matched to a PO found in NetSuite (migration 331);
+   *  'manual' = an admin marked it ordered (migration 349). */
   ordered_match?: string | null;
+  /** The PO number typed on Mark ordered, kept until the PO syncs in. */
+  ordered_po_number?: string | null;
+  /** Catalog purchase price, on pending rows — the PO review's start price. */
+  catalog_cost?: number | null;
 }
 
 const UNASSIGNED = 'No vendor — assign one';
@@ -115,7 +125,16 @@ export default function PurchasingQueuePage() {
   const [vendorSel, setVendorSel] = useState<Record<string, { id: string; name: string }>>({});
   const [pickerOpen, setPickerOpen] = useState<string | null>(null);
   const [creatingPo, setCreatingPo] = useState<string | null>(null);
-  const [lastPo, setLastPo] = useState<{ number: string; url: string | null; mirrored: boolean; stamped: boolean } | null>(null);
+  const [lastPo, setLastPo] = useState<CreatePoResult | null>(null);
+  const [review, setReview] = useState<{ vendor: string; gv: { id: string; name: string }; rows: RequestRow[] } | null>(null);
+  // Ticked queue rows, for Mark ordered and to pre-tick the PO review.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [markNotice, setMarkNotice] = useState<string | null>(null);
+  const toggleSelected = (id: string) => setSelected(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   const [onOrder, setOnOrder] = useState<RequestRow[]>([]);
   const [matching, setMatching] = useState(false);
@@ -155,7 +174,10 @@ export default function PurchasingQueuePage() {
   };
 
   const unmatch = async (r: RequestRow) => {
-    if (!(await dialog.confirm(`Put ${r.quantity}× ${r.item_number} back in the queue? It won’t be matched to PO ${r.ordered_po?.tranid || ''} again.`, { confirmLabel: 'Undo match' }))) return;
+    const text = r.ordered_match === 'manual'
+      ? `Put ${r.quantity}× ${r.item_number} back in the queue? It was marked ordered by hand on PO ${r.ordered_po?.tranid || r.ordered_po_number || ''}.`
+      : `Put ${r.quantity}× ${r.item_number} back in the queue? It won’t be matched to PO ${r.ordered_po?.tranid || ''} again.`;
+    if (!(await dialog.confirm(text, { confirmLabel: r.ordered_match === 'manual' ? 'Undo' : 'Undo match' }))) return;
     setBusyId(r.id);
     try {
       const res = await fetch('/api/purchase-requests/unmatch', {
@@ -267,32 +289,57 @@ export default function PurchasingQueuePage() {
     return null;
   };
 
-  const createPo = async (vendor: string, rows: RequestRow[], gv: { id: string; name: string }) => {
-    const ok = await dialog.confirm(
-      `Create a NetSuite purchase order with ${gv.name} for ${rows.length} line${rows.length !== 1 ? 's' : ''}? This places a real PO in NetSuite.`,
-      { confirmLabel: 'Create PO' },
-    );
-    if (!ok) return;
-    setCreatingPo(vendor);
+  // Create PO opens the review screen; the modal itself places the PO.
+  const createPo = (vendor: string, rows: RequestRow[], gv: { id: string; name: string }) => {
+    setReview({ vendor, gv, rows });
+  };
+  const poCreated = async (po: CreatePoResult) => {
+    const vendor = review?.vendor;
+    setLastPo(po);
+    setReview(null);
+    if (vendor) setVendorSel(prev => { const next = { ...prev }; delete next[vendor]; return next; });
+    setSelected(new Set());
+    setCreatingPo(vendor || null);
+    await load();
+    setCreatingPo(null);
+  };
+
+  /** "Project · SO 1234" / "Estimate 55 · Customer" / "stock". */
+  const forLabel = (r: RequestRow): string => r.upfit_projects
+    ? `${r.upfit_projects.project_name || 'Upfit project'}${r.upfit_projects.netsuite_so_number ? ` · SO ${r.upfit_projects.netsuite_so_number}` : ''}`
+    : r.estimates
+      ? `Estimate ${r.estimates.estimate_number || ''}${r.estimates.customer_name ? ` · ${r.estimates.customer_name}` : ''}`
+      : 'stock';
+
+  // An admin marks requests ordered on a PO placed outside the queue. The
+  // PO number is required (Craig, 2026-10-07).
+  const markOrdered = async (rows: RequestRow[]) => {
+    if (rows.length === 0) return;
+    const what = rows.length === 1 ? `${rows[0].quantity}× ${rows[0].item_number}` : `${rows.length} requests`;
+    const raw = await dialog.prompt(`PO number ${what} ${rows.length === 1 ? 'was' : 'were'} ordered on:`, '');
+    if (raw === null) return;
+    const poNumber = raw.trim();
+    if (!poNumber) { await dialog.alert('Mark ordered needs the PO number.'); return; }
+    setBusyId(rows.length === 1 ? rows[0].id : 'bulk');
     try {
-      const res = await fetch('/api/purchase-requests/create-po', {
+      const res = await fetch('/api/purchase-requests/mark-ordered', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ requestIds: rows.map(r => r.id), vendorNetsuiteId: gv.id, vendorName: gv.name }),
+        body: JSON.stringify({ ids: rows.map(r => r.id), poNumber }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
-      setLastPo({
-        number: body.poNumber || (body.poId ? `#${body.poId}` : '(number pending)'),
-        url: body.netsuiteUrl || null,
-        mirrored: !!body.mirrored,
-        stamped: !!body.stamped,
-      });
-      setVendorSel(prev => { const next = { ...prev }; delete next[vendor]; return next; });
+      const notOn: string[] = body.notOnPo || [];
+      setMarkNotice(
+        `Marked ${body.marked} request${body.marked !== 1 ? 's' : ''} ordered on PO ${body.poNumber || poNumber}.`
+        + (body.linked ? '' : ' That PO isn’t in FleetSuite yet, so it links after the next NetSuite sync.')
+        + (notOn.length > 0 ? ` Heads up: ${notOn.join(', ')} ${notOn.length === 1 ? 'isn’t a line' : 'aren’t lines'} on that PO.` : ''),
+      );
+      setSelected(prev => { const next = new Set(prev); rows.forEach(r => next.delete(r.id)); return next; });
       await load();
     } catch (e: any) {
-      await dialog.alert(`PO creation failed: ${e?.message || 'unknown error'}\n\nNothing was ordered — the requests are still in the queue.`);
+      await dialog.alert(`Mark ordered failed: ${e?.message || 'unknown error'}`);
     }
-    setCreatingPo(null);
+    setBusyId(null);
   };
 
   // Group by vendor for the purchaser's eye — one group = one future PO.
@@ -445,7 +492,7 @@ export default function PurchasingQueuePage() {
       <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '18px' }}>
         Parts requested from short readiness cards land here, grouped by vendor.
         {isAdmin
-          ? ' Pick the NetSuite vendor on a group and create the PO right here — readiness cards flip to “on order” immediately.'
+          ? ' Pick the NetSuite vendor on a group and create the PO right here, or tick rows and Mark ordered with the PO number of an order placed elsewhere.'
           : ' An admin turns a vendor group into a NetSuite PO; readiness cards flip to “on order” once it’s placed.'}
         {' '}A PO entered straight in NetSuite for the same part from the same vendor marks the request ordered on its own after the next sync.
       </div>
@@ -457,6 +504,13 @@ export default function PurchasingQueuePage() {
             {matching ? 'Checking NetSuite POs…' : '🔄 Check NetSuite POs now'}
           </button>
           {matchNotice && <span style={{ fontSize: '12px', color: 'var(--text-body)' }}>{matchNotice}</span>}
+          {markNotice && (
+            <span style={{ fontSize: '12px', color: 'var(--text-body)' }}>
+              {markNotice}{' '}
+              <button onClick={() => setMarkNotice(null)} title="Dismiss"
+                style={{ background: 'none', border: 'none', color: theme.textMuted, cursor: 'pointer', fontSize: '12px', padding: 0 }}>✕</button>
+            </span>
+          )}
         </div>
       )}
 
@@ -500,6 +554,7 @@ export default function PurchasingQueuePage() {
         const unassigned = vendor === UNASSIGNED;
         const gv = groupVendor(vendor, rows);
         const noId = rows.filter(r => !r.netsuite_item_id).length;
+        const groupTicked = rows.filter(r => selected.has(r.id));
         return (
           <div key={vendor} style={{ marginBottom: '18px', background: theme.card, border: `1px solid ${unassigned ? 'rgba(251,191,36,0.4)' : theme.border}`, borderRadius: '14px', overflow: 'hidden' }}>
             <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', borderBottom: `1px solid ${theme.border}`, background: unassigned ? 'rgba(251,191,36,0.06)' : 'var(--subtle-bg)' }}>
@@ -529,11 +584,18 @@ export default function PurchasingQueuePage() {
                       Pick NetSuite vendor…
                     </button>
                   )}
+                  {groupTicked.length > 0 && (
+                    <button onClick={() => markOrdered(groupTicked)} disabled={busyId !== null}
+                      title="Already ordered somewhere else? Mark the ticked rows ordered with that PO number"
+                      style={{ padding: '5px 10px', borderRadius: '7px', background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textSecondary, fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                      ✓ Mark {groupTicked.length} ordered
+                    </button>
+                  )}
                   {gv && (
-                    <button onClick={() => createPo(vendor, rows, gv)} disabled={creatingPo !== null || noId > 0}
-                      title={noId > 0 ? `${noId} row${noId !== 1 ? 's have' : ' has'} no NetSuite item id — match in the parts catalog or cancel them first` : `Create a NetSuite PO with ${gv.name}`}
-                      style={{ padding: '5px 12px', borderRadius: '7px', background: noId > 0 ? 'var(--subtle-bg)' : 'rgba(74,222,128,0.12)', border: `1px solid ${noId > 0 ? theme.border : 'rgba(74,222,128,0.4)'}`, color: noId > 0 ? theme.textMuted : '#4ade80', fontSize: '11px', fontWeight: 800, cursor: noId > 0 ? 'not-allowed' : 'pointer' }}>
-                      {creatingPo === vendor ? 'Creating PO…' : '📦 Create PO in NetSuite'}
+                    <button onClick={() => createPo(vendor, rows, gv)} disabled={creatingPo !== null || noId === rows.length}
+                      title={noId === rows.length ? 'No row has a NetSuite item id — match them in the parts catalog first' : `Review and create a NetSuite PO with ${gv.name}`}
+                      style={{ padding: '5px 12px', borderRadius: '7px', background: noId === rows.length ? 'var(--subtle-bg)' : 'rgba(74,222,128,0.12)', border: `1px solid ${noId === rows.length ? theme.border : 'rgba(74,222,128,0.4)'}`, color: noId === rows.length ? theme.textMuted : '#4ade80', fontSize: '11px', fontWeight: 800, cursor: noId === rows.length ? 'not-allowed' : 'pointer' }}>
+                      {creatingPo === vendor ? 'Creating PO…' : '📦 Create PO…'}
                     </button>
                   )}
                 </div>
@@ -557,6 +619,19 @@ export default function PurchasingQueuePage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ color: theme.textMuted, textTransform: 'uppercase', fontSize: '9px', letterSpacing: '0.5px' }}>
+                    {isAdmin && (
+                      <th style={{ padding: '8px 0 8px 14px', width: '18px' }}>
+                        <input type="checkbox" aria-label={`Tick every ${vendor} request`}
+                          checked={groupTicked.length === rows.length}
+                          onChange={() => setSelected(prev => {
+                            const next = new Set(prev);
+                            const all = groupTicked.length === rows.length;
+                            rows.forEach(r => { if (all) next.delete(r.id); else next.add(r.id); });
+                            return next;
+                          })}
+                          style={{ width: '15px', height: '15px', cursor: 'pointer' }} />
+                      </th>
+                    )}
                     <th style={{ textAlign: 'left', padding: '8px 14px' }}>Part</th>
                     <th style={{ textAlign: 'right', padding: '8px 10px' }}>Qty</th>
                     <th style={{ textAlign: 'left', padding: '8px 10px' }}>For</th>
@@ -572,6 +647,13 @@ export default function PurchasingQueuePage() {
                       background: (flashId === r.id || flashIds.has(r.id)) ? 'rgba(96,165,250,0.12)' : 'transparent',
                       transition: 'background 0.6s',
                     }}>
+                      {isAdmin && (
+                        <td style={{ padding: '9px 0 9px 14px' }}>
+                          <input type="checkbox" aria-label={`Tick ${r.item_number}`}
+                            checked={selected.has(r.id)} onChange={() => toggleSelected(r.id)}
+                            style={{ width: '15px', height: '15px', cursor: 'pointer' }} />
+                        </td>
+                      )}
                       <td style={{ padding: '9px 14px' }}>
                         <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{r.item_number}</div>
                         {r.description && <div style={{ fontSize: '11px', color: theme.textSecondary }}>{r.description}</div>}
@@ -611,6 +693,12 @@ export default function PurchasingQueuePage() {
                         )}
                       </td>
                       <td style={{ padding: '9px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        {isAdmin && (
+                          <button onClick={() => markOrdered([r])} disabled={busyId !== null} title="Already ordered? Mark it ordered with the PO number"
+                            style={{ marginRight: '6px', padding: '4px 9px', borderRadius: '6px', background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textSecondary, fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}>
+                            ✓ Ordered
+                          </button>
+                        )}
                         <button onClick={() => editVendor(r)} disabled={busyId === r.id} title="Set/change vendor"
                           style={{ marginRight: '6px', padding: '4px 9px', borderRadius: '6px', background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textSecondary, fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}>
                           Vendor
@@ -661,6 +749,7 @@ export default function PurchasingQueuePage() {
                       <td style={{ padding: '9px 14px' }}>
                         <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{r.item_number}</div>
                         {r.description && <div style={{ fontSize: '11px', color: theme.textSecondary }}>{r.description}</div>}
+                        <CreatedBy compact label="Requested by" name={r.requester?.full_name} at={r.created_at} source={!r.requester?.full_name && r.source === 'auto_reorder' ? 'system' : null} style={{ display: 'block' }} />
                       </td>
                       <td style={{ padding: '9px 10px', textAlign: 'right', fontWeight: 800, color: 'var(--text-primary)' }}>{r.quantity}</td>
                       <td style={{ padding: '9px 10px' }}>
@@ -681,6 +770,9 @@ export default function PurchasingQueuePage() {
                       <td style={{ padding: '9px 10px' }}>
                         {po?.id ? (
                           <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>PO {po.tranid || '—'}</div>
+                        ) : r.ordered_po_number ? (
+                          <div title="Not in FleetSuite yet. It links after the next NetSuite sync."
+                            style={{ fontWeight: 700, color: 'var(--text-primary)' }}>PO {r.ordered_po_number} <span style={{ fontWeight: 400, color: theme.textMuted }}>· syncing…</span></div>
                         ) : <span style={{ color: theme.textMuted }}>syncing…</span>}
                         <div style={{ fontSize: '11px', color: theme.textSecondary }}>
                           {po?.vendor_name || r.vendor_name || ''}
@@ -689,6 +781,11 @@ export default function PurchasingQueuePage() {
                         {r.ordered_match === 'auto' && (
                           <span title="Matched automatically to a PO entered in NetSuite" style={{ fontSize: '9px', fontWeight: 800, padding: '1px 6px', borderRadius: '4px', background: 'rgba(56,189,248,0.12)', border: '1px solid rgba(56,189,248,0.3)', color: '#38bdf8', whiteSpace: 'nowrap' }}>
                             FROM NETSUITE
+                          </span>
+                        )}
+                        {r.ordered_match === 'manual' && (
+                          <span title="Marked ordered by hand with this PO number" style={{ fontSize: '9px', fontWeight: 800, padding: '1px 6px', borderRadius: '4px', background: 'rgba(167,139,250,0.12)', border: '1px solid rgba(167,139,250,0.3)', color: '#a78bfa', whiteSpace: 'nowrap' }}>
+                            MARKED BY HAND
                           </span>
                         )}
                       </td>
@@ -705,7 +802,7 @@ export default function PurchasingQueuePage() {
                         )) : <span style={{ color: theme.textMuted }}>not yet</span>}
                       </td>
                       <td style={{ padding: '9px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                        {isAdmin && r.ordered_match === 'auto' && (
+                        {isAdmin && (r.ordered_match === 'auto' || r.ordered_match === 'manual') && (
                           <button onClick={() => unmatch(r)} disabled={busyId === r.id} title="Wrong PO — put this request back in the queue"
                             style={{ padding: '4px 9px', borderRadius: '6px', background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textSecondary, fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}>
                             Undo
@@ -719,6 +816,19 @@ export default function PurchasingQueuePage() {
             </table>
           </div>
         </div>
+      )}
+      {review && (
+        <CreatePoReviewModal
+          vendor={review.gv}
+          rows={review.rows.map((r): ReviewRequest => ({
+            id: r.id, item_number: r.item_number, netsuite_item_id: r.netsuite_item_id,
+            description: r.description, quantity: Number(r.quantity), catalog_cost: r.catalog_cost ?? null,
+            forLabel: forLabel(r),
+          }))}
+          initiallySelected={new Set(review.rows.filter(r => selected.has(r.id)).map(r => r.id))}
+          onClose={() => setReview(null)}
+          onDone={poCreated}
+        />
       )}
       </>)}
     </div>

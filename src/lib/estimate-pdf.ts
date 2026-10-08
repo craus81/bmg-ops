@@ -34,6 +34,10 @@ export interface EstimatePdfLine {
   part_product_url?: string | null;
   /** Catalog photo, already fetched and inlined. */
   image?: EstimatePdfImage | null;
+  /** This line's own discount (migration 350); amount covers all vehicles. */
+  discount_type?: string | null;
+  discount_value?: number | string | null;
+  discount_amount?: number | string | null;
 }
 
 export interface EstimatePdfGraphics {
@@ -69,7 +73,16 @@ const LINK_LABEL = 'View product';
 export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
   const { estimate: est, company, logo, graphics } = data;
   // Rack kits: one priced rack line, components indented beneath it.
-  const lines = toKitDisplayLines(data.lines);
+  // A line's own discount (migration 350) is its own row under the line.
+  const lines = toKitDisplayLines(data.lines).flatMap((l: any) => (Number(l.discount_amount) > 0
+    ? [l, {
+      discount_row: true,
+      item_number: discountLabel(l.discount_type, l.discount_value),
+      quantity: 0,
+      unit_price: 0,
+      discount_amount: l.discount_amount,
+    } as any]
+    : [l]));
   // Fleet multi-unit (R6-9, migration 304). 1 on every ordinary estimate,
   // which leaves this PDF byte-identical to what it produced before.
   const units = normalizeVehicleCount((est as any).vehicle_count);
@@ -164,9 +177,11 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
     // approval page can never disagree about what a line costs.
     const lineTotal = (Number(l.line_total ?? (Number(l.unit_price) || 0) * (Number(l.quantity) || 0)) || 0) * units;
     const qtyCell = units > 1 ? `${l.quantity ?? ''} x ${units}` : String(l.quantity ?? '');
-    const cells = (l as any).kit_component
-      ? [itemCell(l), qtyCell, '', '']
-      : [itemCell(l), qtyCell, money(l.unit_price), money(lineTotal)];
+    const cells = (l as any).discount_row
+      ? [`    ${l.item_number}`, '', '', `-${money(l.discount_amount)}`]
+      : (l as any).kit_component
+        ? [itemCell(l), qtyCell, '', '']
+        : [itemCell(l), qtyCell, money(l.unit_price), money(lineTotal)];
     if (hasPhotos) cells.unshift('');
     return cells;
   });
@@ -202,12 +217,17 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
         hook.cell.styles.cellPadding = { top: 2, bottom: 2, left: 5, right: 5 };
       }
       if ((line as any)?.kit_header) hook.cell.styles.fontStyle = 'bold';
+      if ((line as any)?.discount_row) {
+        hook.cell.styles.fontSize = 8.5;
+        hook.cell.styles.textColor = [21, 128, 61];
+        hook.cell.styles.cellPadding = { top: 2, bottom: 2, left: 5, right: 5 };
+      }
     },
     didDrawCell: (hook) => {
       if (hook.section !== 'body') return;
       const line = lines[hook.row.index];
       // Components under a rack stay one compact text row: no photo, no link.
-      if (!line || (line as any).kit_component) return;
+      if (!line || (line as any).kit_component || (line as any).discount_row) return;
       if (hasPhotos && hook.column.index === 0 && line.image) {
         try {
           doc.addImage(line.image.dataUrl, line.image.format,

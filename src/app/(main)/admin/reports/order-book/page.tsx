@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 import { downloadCsv } from '@/lib/csv';
+import CreatedBy from '@/components/CreatedBy';
 
 /**
  * Open Order Book (R4-3): every open sales order from the NetSuite mirror —
@@ -20,6 +21,7 @@ interface OrderBookRow {
   customerName: string | null;
   trandate: string | null;
   statusLabel: string | null;
+  createdByName?: string | null;
   total: number;
   unbilled: number;
   billedPct: number;
@@ -157,6 +159,7 @@ export default function OrderBookPage() {
                       <a href={soUrl(r.netsuiteId)} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent, #2563eb)', fontWeight: 700, textDecoration: 'none' }}>
                         {r.tranid || r.netsuiteId} ↗
                       </a>
+                      {r.createdByName && <CreatedBy compact source="netsuite" name={r.createdByName} style={{ display: 'block', fontSize: '10px' }} />}
                     </td>
                     <td style={{ padding: '8px 12px' }}>{r.customerName || '—'}</td>
                     <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>{r.trandate || '—'}</td>

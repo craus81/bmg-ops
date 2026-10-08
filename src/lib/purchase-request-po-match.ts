@@ -174,6 +174,9 @@ const chunk = <T,>(xs: T[], n = 200): T[][] => {
  */
 export async function autoMatchPurchaseRequests(service: SupabaseClient): Promise<AutoMatchResult> {
   const result: AutoMatchResult = { pending: 0, matched: 0, split: 0, errors: 0 };
+  // Hand-marked requests whose PO has just arrived from NetSuite link first,
+  // so the lines they hold count as taken in the match below.
+  await linkManualOrders(service);
   try {
     // Rows claimed by an in-flight Create PO (ordered_by set) are left alone.
     const { data: requests, error: reqErr } = await fetchAllRows<any>((from, to) =>
@@ -380,8 +383,22 @@ export async function unmatchPurchaseRequest(service: SupabaseClient, id: string
   const { data: row, error } = await service.from('purchase_requests').select('*').eq('id', id).maybeSingle();
   if (error) return { ok: false, status: 500, error: error.message };
   if (!row) return { ok: false, status: 404, error: 'That request no longer exists.' };
+  if (row.status === 'ordered' && row.ordered_match === 'manual') {
+    // A hand mark has no split and no PO to block: it just goes back.
+    const { error: upErr } = await service.from('purchase_requests').update({
+      status: 'pending',
+      ordered_po_id: null,
+      ordered_po_number: null,
+      ordered_at: null,
+      ordered_by: null,
+      ordered_match: null,
+      updated_at: new Date().toISOString(),
+    }).eq('id', row.id).eq('status', 'ordered');
+    if (upErr) return { ok: false, status: 500, error: upErr.message };
+    return { ok: true };
+  }
   if (row.status !== 'ordered' || row.ordered_match !== 'auto') {
-    return { ok: false, status: 409, error: 'Only automatically matched requests can be undone here.' };
+    return { ok: false, status: 409, error: 'Only requests matched automatically or marked ordered by hand can be undone here.' };
   }
 
   const root = row.split_from_id || row.id;
@@ -409,4 +426,174 @@ export async function unmatchPurchaseRequest(service: SupabaseClient, id: string
     await service.from('purchase_requests').delete().in('id', pendingSiblings.map(r => r.id));
   }
   return { ok: true };
+}
+
+// ── Mark ordered by hand (migration 349) ──────────────────────────────────
+
+/** "po 1234", "#PO1234" and "PO1234" are all the same PO number. */
+export function normalizePoNumber(raw: string): string {
+  return raw.toUpperCase().replace(/[\s#]/g, '');
+}
+
+/** tranids the typed number could be: as typed, and with or without the
+ *  PO prefix, so "1234" finds PO1234 and "PO1234" finds a bare 1234. */
+export function poNumberCandidates(raw: string): string[] {
+  const n = normalizePoNumber(raw);
+  if (!n) return [];
+  const bare = n.startsWith('PO') ? n.slice(2) : n;
+  return [...new Set([n, bare, `PO${bare}`].filter(Boolean))];
+}
+
+/** The mirrored NetSuite PO a typed number names, newest first if several. */
+export async function findVendorPoByNumber(service: SupabaseClient, raw: string): Promise<MatchPo | null> {
+  const candidates = poNumberCandidates(raw);
+  if (candidates.length === 0) return null;
+  const { data, error } = await service.from('netsuite_vendor_pos')
+    .select('id, netsuite_id, tranid, vendor_name, vendor_netsuite_id, trandate, status')
+    .in('tranid', candidates)
+    .order('trandate', { ascending: false, nullsFirst: false })
+    .limit(1);
+  if (error) throw error;
+  return ((data || []) as MatchPo[])[0] || null;
+}
+
+export interface MarkOrderedResult {
+  marked: number;
+  /** The mirrored PO the requests now point at; null = not synced yet. */
+  po: MatchPo | null;
+  /** Parts that aren't lines on the linked PO — worth a second look. */
+  notOnPo: string[];
+}
+
+/**
+ * An admin marks pending requests ordered on a PO they placed outside the
+ * queue. The PO number is required; when the PO is already mirrored the
+ * requests link to it (and take its vendor), otherwise linkManualOrders
+ * links them once the sync brings it in.
+ */
+export async function markRequestsOrdered(
+  service: SupabaseClient,
+  opts: { ids: string[]; poNumber: string; userId: string },
+): Promise<{ ok: true; result: MarkOrderedResult } | { ok: false; status: number; error: string }> {
+  const poNumber = normalizePoNumber(opts.poNumber);
+  if (!poNumber) return { ok: false, status: 400, error: 'Enter the PO number the parts were ordered on.' };
+
+  const { data: rows, error } = await service.from('purchase_requests').select('*').in('id', opts.ids);
+  if (error) return { ok: false, status: 500, error: error.message };
+  if (!rows || rows.length !== opts.ids.length) {
+    return { ok: false, status: 404, error: 'Some requests no longer exist — refresh the queue.' };
+  }
+  const notPending = (rows as any[]).filter(r => r.status !== 'pending' || r.ordered_by);
+  if (notPending.length > 0) {
+    return { ok: false, status: 409, error: `Already ${notPending[0].status === 'pending' ? 'being ordered' : notPending[0].status}: ${notPending.map(r => r.item_number).join(', ')} — refresh the queue.` };
+  }
+
+  let po: MatchPo | null;
+  try {
+    po = await findVendorPoByNumber(service, poNumber);
+  } catch (err: any) {
+    return { ok: false, status: 500, error: String(err?.message || err) };
+  }
+
+  const nowIso = new Date().toISOString();
+  const { data: stamped, error: upErr } = await service.from('purchase_requests')
+    .update({
+      status: 'ordered',
+      ordered_match: 'manual',
+      ordered_po_number: po?.tranid || poNumber,
+      ordered_po_id: po?.id || null,
+      ordered_at: nowIso,
+      ordered_by: opts.userId,
+      ...(po?.vendor_name ? { vendor_name: po.vendor_name } : {}),
+      ...(po?.vendor_netsuite_id ? { vendor_netsuite_id: po.vendor_netsuite_id } : {}),
+      updated_at: nowIso,
+    })
+    .in('id', opts.ids)
+    .eq('status', 'pending')
+    .is('ordered_by', null)
+    .select('id');
+  if (upErr) return { ok: false, status: 500, error: upErr.message };
+  const stampedIds = new Set(((stamped || []) as any[]).map(r => r.id as string));
+  const marked = (rows as any[]).filter(r => stampedIds.has(r.id));
+
+  let notOnPo: string[] = [];
+  if (po) {
+    const { data: lines } = await service.from('netsuite_vendor_po_lines').select('item_number').eq('po_id', po.id);
+    const onPo = new Set(((lines || []) as any[]).map(l => normalizeItemNumber(l.item_number)));
+    notOnPo = [...new Set(marked.filter(r => !onPo.has(normalizeItemNumber(r.item_number))).map(r => r.item_number as string))];
+    for (const pid of new Set(marked.map(r => r.source_project_id).filter(Boolean))) {
+      await linkProjectToPo(service, pid as string, po);
+    }
+  }
+
+  await notifyOrdered(marked, po?.tranid || poNumber, po?.vendor_name || null, opts.userId);
+  return { ok: true, result: { marked: marked.length, po, notOnPo } };
+}
+
+/**
+ * Hand-marked requests whose PO wasn't mirrored yet: link each to its PO
+ * once the sync has brought it in. Never throws — it runs ahead of the
+ * auto-match on every sync.
+ */
+export async function linkManualOrders(service: SupabaseClient): Promise<number> {
+  let linked = 0;
+  try {
+    const { data: rows, error } = await service.from('purchase_requests')
+      .select('id, ordered_po_number, source_project_id')
+      .eq('status', 'ordered')
+      .eq('ordered_match', 'manual')
+      .is('ordered_po_id', null)
+      .not('ordered_po_number', 'is', null)
+      .limit(500);
+    if (error) throw error;
+    const byNumber = new Map<string, any[]>();
+    for (const r of (rows || []) as any[]) {
+      byNumber.set(r.ordered_po_number, [...(byNumber.get(r.ordered_po_number) || []), r]);
+    }
+    for (const [number, group] of byNumber) {
+      const po = await findVendorPoByNumber(service, number);
+      if (!po) continue;
+      const { error: upErr } = await service.from('purchase_requests')
+        .update({
+          ordered_po_id: po.id,
+          ordered_po_number: po.tranid || number,
+          ...(po.vendor_name ? { vendor_name: po.vendor_name } : {}),
+          ...(po.vendor_netsuite_id ? { vendor_netsuite_id: po.vendor_netsuite_id } : {}),
+          updated_at: new Date().toISOString(),
+        })
+        .in('id', group.map(r => r.id))
+        .is('ordered_po_id', null);
+      if (upErr) { console.error('link-manual-orders: update failed:', upErr); continue; }
+      linked += group.length;
+      for (const pid of new Set(group.map(r => r.source_project_id).filter(Boolean))) {
+        await linkProjectToPo(service, pid as string, po);
+      }
+    }
+  } catch (err) {
+    console.error('link-manual-orders: failed:', err);
+  }
+  return linked;
+}
+
+/** Requesters hear their parts were ordered — one note each, linking the
+ *  exact request when it's their only one (a digest links the queue). */
+async function notifyOrdered(rows: any[], poLabel: string, vendorName: string | null, actorId: string): Promise<void> {
+  const byRequester = new Map<string, any[]>();
+  for (const r of rows) {
+    if (!r.requested_by || r.requested_by === actorId) continue;
+    byRequester.set(r.requested_by, [...(byRequester.get(r.requested_by) || []), r]);
+  }
+  for (const [uid, theirs] of byRequester) {
+    try {
+      await notifyMany([uid], {
+        type: 'purchase_request_ordered',
+        title: `📦 Ordered — PO ${poLabel}${vendorName ? ` (${vendorName})` : ''}`.trim(),
+        body: theirs.map(r => `${r.quantity}× ${r.item_number}`).join(' · ').slice(0, 900),
+        url: deepLinks.purchaseRequests(theirs.length === 1 ? theirs[0].id : null),
+        channels: ['in_app', 'push'] as ('in_app' | 'push')[],
+      });
+    } catch (err) {
+      console.error('mark-ordered: notify failed:', err);
+    }
+  }
 }
