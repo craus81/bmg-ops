@@ -13,6 +13,8 @@ import BriefMeSheet, { type BriefTarget } from '@/components/BriefMeSheet';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { deepLinks } from '@/lib/deep-links';
 import { closeOnEscape } from '@/lib/modal-escape';
+import QuickBooksRecordModal from '@/components/QuickBooksRecordModal';
+import { DEEP_MIN_QUERY } from '@/lib/deep-search';
 
 interface UniversalSearchProps {
   open: boolean;
@@ -27,7 +29,7 @@ const KIND_LABEL: Record<string, string> = {
   customers: 'Customer', quotes: 'Quote', messages: 'Message',
 };
 
-const GROUP_CONFIG: Record<string, { label: string; icon: string; color: string }> = {
+export const GROUP_CONFIG: Record<string, { label: string; icon: string; color: string }> = {
   invoices: { label: 'Invoices', icon: '', color: '#34d399' },
   purchase_orders: { label: 'Purchase Orders', icon: '', color: '#60a5fa' },
   vehicles: { label: 'Vehicles', icon: '', color: '#34d399' },
@@ -39,13 +41,24 @@ const GROUP_CONFIG: Record<string, { label: string; icon: string; color: string 
   cni_installers: { label: 'CNI Installers', icon: '', color: '#f472b6' },
   messages: { label: 'Messages', icon: '', color: '#3b82f6' },
   quotes: { label: 'Quotes', icon: '', color: '#8b5cf6' },
+  // Memos and notes (src/lib/deep-search.ts)
+  qb_history: { label: 'QuickBooks History', icon: '', color: '#2ca01c' },
+  ns_transactions: { label: 'NetSuite Memos', icon: '', color: '#60a5fa' },
+  notes: { label: 'Notes', icon: '', color: '#fbbf24' },
+  bills: { label: 'QuickBooks Bills', icon: '', color: '#2ca01c' },
 };
+
+/** Groups from src/lib/deep-search.ts, whose "more" is the full results page. */
+export const DEEP_GROUPS = new Set(['qb_history', 'ns_transactions', 'notes', 'bills']);
+
+/** The full results page (memos and notes get more rows there, plus bills). */
+export const searchAllUrl = (q: string) => `/search?q=${encodeURIComponent(q)}`;
 
 // Where "View all N →" lands, with the query prefilled — only groups whose
 // list page actually applies a search param (deep-link rule: never a dead
 // click). Quotes/messages have no searchable list page yet, so their
 // headers show the total without a link.
-const VIEW_ALL: Record<string, (q: string) => string> = {
+export const VIEW_ALL: Record<string, (q: string) => string> = {
   purchase_orders: q => `/admin/pos?q=${encodeURIComponent(q)}`,
   vehicles: q => `/tracking?q=${encodeURIComponent(q)}`,
   graphics_jobs: q => `/graphics?q=${encodeURIComponent(q)}`,
@@ -77,7 +90,7 @@ function statusColor(status: string): string {
 // `showMoney` is threaded in rather than read from a hook: this is a plain
 // function, and search results are the one place every entity in the app
 // surfaces at once — a PO total leaking here would undo every other gate.
-function renderResult(group: string, item: any, onSelect: (group: string, item: any) => void, showMoney: boolean) {
+export function renderResult(group: string, item: any, onSelect: (group: string, item: any) => void, showMoney: boolean) {
   // Tapping a result pops out the shared detail view instead of navigating away.
   const select = () => onSelect(group, item);
 
@@ -239,6 +252,83 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
         </button>
       );
 
+    // QuickBooks sales history: opens the read-only record window. No
+    // amount, by the history rule (src/lib/ledger/history.ts rule 2).
+    case 'qb_history':
+      return (
+        <button key={item.id} onClick={select} style={resultBtnStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+            <span style={titleStyle}>QB {item.type_label} #{item.number}</span>
+            {item.date && <span style={{ ...subtitleStyle, fontSize: '10px' }}>{formatDate(item.date)}</span>}
+          </div>
+          <div style={subtitleStyle}>{[item.customer, item.po ? `PO ${item.po}` : ''].filter(Boolean).join(' · ')}</div>
+          {item.snippet && <div style={snippetStyle}>{item.snippet}</div>}
+        </button>
+      );
+
+    case 'ns_transactions':
+      return (
+        <button key={item.id} onClick={select} style={resultBtnStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+            <span style={titleStyle}>{item.kind_label} #{item.number}</span>
+            {item.date && <span style={{ ...subtitleStyle, fontSize: '10px' }}>{formatDate(item.date)}</span>}
+          </div>
+          {item.party && <div style={subtitleStyle}>{item.party}</div>}
+          {item.snippet && <div style={snippetStyle}>{item.snippet}</div>}
+        </button>
+      );
+
+    case 'notes':
+      return (
+        <button key={item.id} onClick={select} style={resultBtnStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: '8px' }}>
+            <span style={titleStyle}>{item.label}</span>
+            <span style={{ ...subtitleStyle, fontSize: '10px', fontWeight: 700, whiteSpace: 'nowrap', marginTop: 0 }}>{item.kind_label}</span>
+          </div>
+          {item.snippet && <div style={snippetStyle}>{item.snippet}</div>}
+          <div style={{ ...subtitleStyle, fontSize: '10px' }}>
+            {[item.sub, item.by, item.date ? formatDate(item.date) : ''].filter(Boolean).join(' · ')}
+          </div>
+        </button>
+      );
+
+    // Bills: ledger readers only, full results page only (the API decides).
+    // Opens the stored QuickBooks PDF when there is one.
+    case 'bills':
+      return (
+        <button key={item.id} onClick={select} style={{ ...resultBtnStyle, cursor: item.pdf_document_id ? 'pointer' : 'default' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+            <span style={titleStyle}>QB {item.type_label}{item.number ? ` #${item.number}` : ''}</span>
+            {showMoney && <span style={valueStyle}>{formatCurrency(item.total)}</span>}
+          </div>
+          <div style={subtitleStyle}>
+            {[item.vendor, item.date ? formatDate(item.date) : '', item.pdf_document_id ? 'PDF' : 'No PDF stored'].filter(Boolean).join(' · ')}
+          </div>
+          {item.snippet && <div style={snippetStyle}>{item.snippet}</div>}
+        </button>
+      );
+
+    default:
+      return null;
+  }
+}
+
+/**
+ * Where a memo/notes result goes. Null when there is nowhere to go (a bill
+ * with no stored PDF); QuickBooks history opens its record window in place.
+ */
+export function deepResultUrl(group: string, item: any, backTo?: string | null): string | null {
+  switch (group) {
+    case 'ns_transactions':
+    case 'notes':
+      return item.url || null;
+    case 'bills':
+      return item.pdf_document_id
+        ? deepLinks.pdfViewer(deepLinks.ledgerDocument(item.pdf_document_id), {
+            name: `QuickBooks ${item.type_label}${item.number ? ` ${item.number}` : ''}`,
+            back: backTo || null, backLabel: backTo ? 'Search' : null,
+          })
+        : null;
     default:
       return null;
   }
@@ -266,6 +356,12 @@ const subtitleStyle: React.CSSProperties = {
 
 const statusBadge: React.CSSProperties = {
   fontSize: '10px', fontWeight: 700, marginLeft: '6px', textTransform: 'capitalize' as any,
+};
+
+// The memo or note text that matched, so a result says why it's here.
+const snippetStyle: React.CSSProperties = {
+  fontSize: '11.5px', color: 'var(--text-secondary)', marginTop: '3px',
+  fontStyle: 'italic', overflowWrap: 'anywhere',
 };
 
 const valueStyle: React.CSSProperties = {
@@ -317,7 +413,10 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Record<string, any[]>>({});
   const [totals, setTotals] = useState<Record<string, number>>({});
+  const [more, setMore] = useState<Record<string, boolean>>({});
   const [searching, setSearching] = useState(false);
+  // A QuickBooks history hit opens its read-only record over the search.
+  const [qbRecordId, setQbRecordId] = useState<string | null>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
   // ── One-tap call logging (R6-3) ──────────────────────────────────────
@@ -380,6 +479,15 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
       router.push(group === 'cni_companies' ? deepLinks.cniCompany(item.id) : deepLinks.cniInstaller(item.id));
       return;
     }
+    // Memos and notes carry their own destination (and no popout type).
+    if (group === 'qb_history') { setQbRecordId(item.id); return; }
+    if (group === 'ns_transactions' || group === 'notes' || group === 'bills') {
+      const url = deepResultUrl(group, item);
+      if (!url) return;
+      onClose();
+      router.push(url);
+      return;
+    }
     const path = pathFor(group as PopoutType, item);
     // Remember it for the recents strip (R6-13). Device-local, never sent
     // anywhere; buildRecent refuses anything it can't name or reach.
@@ -429,6 +537,8 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
       setQuery('');
       setResults({});
       setTotals({});
+      setMore({});
+      setQbRecordId(null);
       setRecents(readRecents());
     }
   }, [open]);
@@ -446,9 +556,11 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
       const data = await res.json();
       setResults(data.results || {});
       setTotals(data.totals || {});
+      setMore(data.more || {});
     } catch {
       setResults({});
       setTotals({});
+      setMore({});
     } finally {
       setSearching(false);
     }
@@ -495,7 +607,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
             type="text"
             value={query}
             onChange={(e) => handleInput(e.target.value)}
-            placeholder="Search POs, invoices, vehicles, jobs, parts, customers, installers..."
+            placeholder="Search POs, invoices, vehicles, jobs, parts, customers, memos, notes..."
             style={{
               flex: 1, background: 'transparent', border: 'none', outline: 'none',
               color: 'var(--text-body)', fontSize: '16px', fontWeight: 600,
@@ -582,7 +694,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
               {shownRecents.length === 0 && (
                 <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-label)' }}>Search everything</div>
               )}
-              <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>POs, invoices, vehicles, graphics jobs, estimates, parts, customers, CNI installers, messages, quotes</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>POs, invoices, vehicles, graphics jobs, estimates, parts, customers, CNI installers, messages, quotes, QuickBooks history, memos and notes</div>
             </div>
           )}
 
@@ -591,8 +703,13 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
             const items = results[group] || [];
             if (items.length === 0) return null;
             const total = totals[group] ?? items.length;
-            const hasMore = total > items.length;
-            const viewAllUrl = hasMore && VIEW_ALL[group] && canViewAll(group) ? VIEW_ALL[group](query) : null;
+            const moreFlag = !!more[group];
+            const hasMore = moreFlag || total > items.length;
+            // Memo/notes groups have no list page of their own: their "more"
+            // is the full results page.
+            const viewAllUrl = !hasMore ? null
+              : VIEW_ALL[group] ? (canViewAll(group) ? VIEW_ALL[group](query) : null)
+              : DEEP_GROUPS.has(group) ? searchAllUrl(query) : null;
 
             return (
               <div key={group}>
@@ -608,7 +725,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
                     {config.label}
                   </span>
                   <span style={{ fontSize: '10px', color: 'var(--text-label)', fontWeight: 600 }}>
-                    ({total}{hasMore ? `, showing ${items.length}` : ''})
+                    ({moreFlag ? `${items.length}+` : total}{hasMore && !moreFlag ? `, showing ${items.length}` : ''})
                   </span>
                   {viewAllUrl && (
                     <button
@@ -619,7 +736,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
                         padding: '2px 4px', whiteSpace: 'nowrap',
                       }}
                     >
-                      View all {total} →
+                      {moreFlag ? 'View all →' : `View all ${total} →`}
                     </button>
                   )}
                 </div>
@@ -648,6 +765,20 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
               </div>
             );
           })}
+
+          {/* The full results page: more memo/notes rows, plus QuickBooks
+              bills for the ledger readers. Kept off the top bar for speed. */}
+          {!searching && query.trim().length >= DEEP_MIN_QUERY && (
+            <div style={{ padding: '14px', textAlign: 'center' }}>
+              <button
+                onClick={() => { onClose(); router.push(searchAllUrl(query.trim())); }}
+                style={{
+                  background: 'transparent', border: '1px solid var(--border)', borderRadius: '8px',
+                  padding: '8px 14px', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                }}
+              >See all results for &ldquo;{query.trim()}&rdquo; →</button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -742,6 +873,8 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
       )}
 
       {briefFor && <BriefMeSheet target={briefFor} onClose={() => setBriefFor(null)} />}
+
+      {qbRecordId && <QuickBooksRecordModal recordId={qbRecordId} onClose={() => setQbRecordId(null)} />}
 
     </div>
   );

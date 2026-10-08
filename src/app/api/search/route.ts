@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireStaff, profileHasFeature } from '@/lib/api-auth';
+import { requireStaff, profileFeatures, getProfileRoles } from '@/lib/api-auth';
+import { canSeeMoney } from '@/lib/money-visibility';
+import { isLedgerReader } from '@/lib/ledger/history';
+import { deepSearch, type DeepSearchResult } from '@/lib/deep-search';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,6 +13,8 @@ const supabase = createClient(
 );
 
 const MAX_PER_GROUP = 5;
+/** Rows per text group (memos, notes) on the full results page (?full=1). */
+const FULL_PER_GROUP = 25;
 
 export async function GET(req: NextRequest) {
   // Staff only. This route runs on the service-role client (bypasses RLS) and
@@ -25,6 +30,23 @@ export async function GET(req: NextRequest) {
   }
 
   const like = `%${q}%`;
+  // ?full=1 is the "See all results" page: more rows per text group, plus
+  // QuickBooks bills, which stay off the top bar to keep it quick.
+  const full = req.nextUrl.searchParams.get('full') === '1';
+
+  // Memos and notes (src/lib/deep-search.ts). Started now, awaited at the
+  // end, so they run alongside the searches below rather than after them.
+  const features = await profileFeatures(auth.user.id, auth.profile);
+  const roles = getProfileRoles(auth.profile);
+  const deepPromise: Promise<DeepSearchResult> = deepSearch(supabase, q, {
+    money: canSeeMoney(roles),
+    ledgerReader: isLedgerReader(roles),
+    features,
+  }, { limit: full ? FULL_PER_GROUP : MAX_PER_GROUP, includeBills: full })
+    .catch(err => {
+      console.error('search: text groups failed:', err);
+      return { results: {}, totals: {}, more: {} };
+    });
 
   // Caller-ID search (audit Stage 1: no phone search existed anywhere).
   // A phone-shaped query — digits with phone punctuation only — searches
@@ -152,7 +174,7 @@ export async function GET(req: NextRequest) {
   let cniInstallerCount = 0;
   let cniCompanies: any[] = [];
   let cniCompanyCount = 0;
-  if (!phoneLike && await profileHasFeature(auth.user.id, auth.profile, 'cni_admin')) {
+  if (!phoneLike && features.has('cni_admin')) {
     const [installerHits, companyHits] = await Promise.all([
       supabase
         .from('profiles')
@@ -398,5 +420,9 @@ export async function GET(req: NextRequest) {
     }));
   }
 
-  return NextResponse.json({ results, totals, query: q });
+  const deep = await deepPromise;
+  Object.assign(results, deep.results);
+  Object.assign(totals, deep.totals);
+
+  return NextResponse.json({ results, totals, more: deep.more, query: q });
 }

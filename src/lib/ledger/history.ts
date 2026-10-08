@@ -66,6 +66,9 @@ export interface HistoryRow {
   customerName: string;
   po: string | null;
   memo: string | null;
+  /** QuickBooks' PrivateNote (the statement memo on an invoice; on the other
+   *  types it is the same text as `memo`). Searched, so a hit can say why. */
+  privateNote: string | null;
   /** Stored QuickBooks PDF, when there is one. */
   pdfDocumentId: string | null;
   /** The line that matched a text search, so a result says why it's here. */
@@ -174,13 +177,13 @@ export function formatHistoryAddress(addr: unknown): string | null {
   return lines.length ? lines.join('\n') : null;
 }
 
-const HEADER_COLS = 'id, doc_type, doc_number, external_ref, doc_date, due_date, total, balance, paid, voided, status, status_label, customer_id, party_name, po_number, memo, customer:customers(company_name)';
+const HEADER_COLS = 'id, doc_type, doc_number, external_ref, doc_date, due_date, total, balance, paid, voided, status, status_label, customer_id, party_name, po_number, memo, private_note, customer:customers(company_name)';
 
 type HeaderRow = {
   id: string; doc_type: string; doc_number: string | null; external_ref: string; doc_date: string; due_date: string | null;
   total: number | string | null; balance: number | string | null; paid: boolean | null; voided: boolean | null;
   status: string | null; status_label: string | null; customer_id: string | null; party_name: string | null;
-  po_number: string | null; memo: string | null; customer?: { company_name: string | null } | { company_name: string | null }[] | null;
+  po_number: string | null; memo: string | null; private_note?: string | null; customer?: { company_name: string | null } | { company_name: string | null }[] | null;
 };
 
 function linkedName(row: HeaderRow): string | null {
@@ -205,6 +208,7 @@ function toRow(h: HeaderRow, pdfByDoc: Map<string, string>, matched: Map<string,
     customerName: linkedName(h) || h.party_name || 'Unknown customer',
     po: h.po_number,
     memo: h.memo,
+    privateNote: h.private_note ?? null,
     pdfDocumentId: pdfByDoc.get(h.id) || null,
     matchedLine: matched.get(h.id) || null,
   };
@@ -276,7 +280,7 @@ async function lineMatches(service: SupabaseClient, terms: string[], customerId:
 export interface HistoryQuery {
   /** FleetSuite customers.id — rule 4: only rows linked to it. */
   customerId?: string | null;
-  /** Free text: number, customer, PO, memo, or any line's words. */
+  /** Free text: number, customer, PO, either memo, or any line's words. */
   q?: string | null;
   types?: HistoryDocType[] | null;
   limit?: number;
@@ -285,7 +289,7 @@ export interface HistoryQuery {
 
 /**
  * One page of QuickBooks history, newest first. With `q`, a document matches
- * when its header (number, customer, PO, memo) contains the whole phrase OR
+ * when its header (number, customer, PO, memo or private note) contains the whole phrase OR
  * one of its lines carries every word, which is how "transit shelving" finds
  * a build without the customer's name.
  */
@@ -318,7 +322,7 @@ export async function listHistory(service: SupabaseClient, query: HistoryQuery):
   } else {
     const phrase = terms.join(' ');
     matched = await lineMatches(service, terms, query.customerId || null);
-    const orHeader = ['doc_number', 'party_name', 'po_number', 'memo']
+    const orHeader = ['doc_number', 'party_name', 'po_number', 'memo', 'private_note']
       // Quoted, so a space or a dot in the phrase stays part of the value.
       .map(c => `${c}.ilike."*${phrase}*"`)
       .join(',');

@@ -320,6 +320,15 @@ export async function requireFeature(req: NextRequest, key: FeatureKey): Promise
  * app's Siri keys, src/lib/siri-keys.ts). `profile` needs role/roles.
  */
 export async function profileHasFeature(userId: string, profile: any, key: FeatureKey): Promise<boolean> {
+  return (await profileFeatures(userId, profile)).has(key);
+}
+
+/**
+ * The user's whole effective feature set, for callers that check several
+ * keys at once (the universal search gates a group per feature) and would
+ * otherwise read user_feature_overrides once per key.
+ */
+export async function profileFeatures(userId: string, profile: any): Promise<Set<FeatureKey>> {
   const service = createClient(supabaseUrl, supabaseServiceKey);
   const { data: overrides } = await service
     .from('user_feature_overrides')
@@ -331,7 +340,7 @@ export async function profileHasFeature(userId: string, profile: any, key: Featu
   // this normalization); without it a 'production'-role account would resolve
   // to zero features here while the UI shows it the graphics set.
   const roles = profileRoles(profile).map(r => (r === 'production' ? 'graphics_production' : r));
-  return resolveFeatures(roles, overrides || []).has(key);
+  return resolveFeatures(roles, overrides || []);
 }
 
 /**

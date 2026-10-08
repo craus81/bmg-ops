@@ -120,11 +120,16 @@ export default function QuickBooksRecordModal({ recordId, onClose, backHref, bac
               )}
             </div>
 
-            {(record.memo || record.customerMemo) && (
+            {(record.memo || record.customerMemo || record.privateNote) && (
               <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '8px', padding: '8px 10px', marginBottom: '12px', whiteSpace: 'pre-wrap' }}>
                 {record.customerMemo || record.memo}
                 {record.customerMemo && record.memo && record.memo !== record.customerMemo && (
                   <div style={{ marginTop: '6px', color: 'var(--text-muted)' }}>Internal: {record.memo}</div>
+                )}
+                {/* QuickBooks' PrivateNote: the statement memo on an invoice.
+                    Search matches it, so a hit has to be able to show it. */}
+                {record.privateNote && record.privateNote !== record.memo && record.privateNote !== record.customerMemo && (
+                  <div style={{ marginTop: (record.customerMemo || record.memo) ? '6px' : 0, color: 'var(--text-muted)' }}>Memo: {record.privateNote}</div>
                 )}
               </div>
             )}
