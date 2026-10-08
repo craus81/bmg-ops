@@ -1,4 +1,4 @@
--- Migration 347: an admin can mark purchase requests ordered by hand.
+-- Migration 349: an admin can mark purchase requests ordered by hand.
 --
 -- Until now a request left the Purchasing queue only through the queue's
 -- Create PO button or the automatic match to a NetSuite PO (migration 331).

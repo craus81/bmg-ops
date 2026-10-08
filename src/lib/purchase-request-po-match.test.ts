@@ -92,7 +92,7 @@ describe('trackingUrl', () => {
   });
 });
 
-// ── Mark ordered by hand (migration 347) ──────────────────────────────────
+// ── Mark ordered by hand (migration 349) ──────────────────────────────────
 
 /** Tiny in-memory stand-in for the Supabase query builder: enough filters
  *  (eq / in / is / not-is) and verbs (select / update / upsert) for the

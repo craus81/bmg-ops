@@ -428,7 +428,7 @@ export async function unmatchPurchaseRequest(service: SupabaseClient, id: string
   return { ok: true };
 }
 
-// ── Mark ordered by hand (migration 347) ──────────────────────────────────
+// ── Mark ordered by hand (migration 349) ──────────────────────────────────
 
 /** "po 1234", "#PO1234" and "PO1234" are all the same PO number. */
 export function normalizePoNumber(raw: string): string {

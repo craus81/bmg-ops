@@ -13,7 +13,7 @@ const Schema = z.object({
 
 /**
  * POST /api/purchase-requests/mark-ordered — an admin marks pending requests
- * ordered on a PO placed outside the queue (migration 347). The PO number is
+ * ordered on a PO placed outside the queue (migration 349). The PO number is
  * required; the requests link to that NetSuite PO now if it's mirrored, or
  * after the next sync if not. Undo is /api/purchase-requests/unmatch.
  */

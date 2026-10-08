@@ -10,7 +10,7 @@
  * create-po route places the PO, mirrors it
  * locally so readiness flips to "on order" immediately, and stamps the
  * source projects' PO columns. Admins can also Mark ordered with the PO
- * number of a PO placed elsewhere (migration 347). Non-admins keep the
+ * number of a PO placed elsewhere (migration 349). Non-admins keep the
  * queue as a worklist:
  * fix vendors, adjust quantities, cancel noise.
  *
@@ -62,7 +62,7 @@ interface RequestRow {
   } | null;
   ordered_at?: string | null;
   /** 'auto' = matched to a PO found in NetSuite (migration 331);
-   *  'manual' = an admin marked it ordered (migration 347). */
+   *  'manual' = an admin marked it ordered (migration 349). */
   ordered_match?: string | null;
   /** The PO number typed on Mark ordered, kept until the PO syncs in. */
   ordered_po_number?: string | null;
