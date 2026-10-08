@@ -745,7 +745,7 @@ export default function InstallerJobDetailPage() {
               </div>
               <button onClick={openCrewPanel} style={{
                 width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-                background: 'var(--orange)', color: '#fff', border: 'none',
+                background: 'var(--accent)', color: '#fff', border: 'none',
               }}>Start Shift — Tag Your Crew</button>
             </>
           )}
@@ -801,7 +801,7 @@ export default function InstallerJobDetailPage() {
             {job.status === 'in_progress' && (
               <button onClick={() => { setScanNewError(''); setScanNewOpen(true); }} style={{
                 padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                background: 'var(--orange)', color: '#fff', border: 'none',
+                background: 'var(--accent)', color: '#fff', border: 'none',
               }}>+ Scan a Vehicle</button>
             )}
           </div>
@@ -897,7 +897,7 @@ export default function InstallerJobDetailPage() {
           onClick={() => router.push('/installer/invoices')}
           style={{
             width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-            background: 'var(--orange)', color: '#fff', border: 'none',
+            background: 'var(--accent)', color: '#fff', border: 'none',
           }}
         >
           Go to My Invoices

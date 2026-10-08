@@ -1348,7 +1348,7 @@ export default function VehicleCheckIn({ onCheckedIn, initialVin, pullInAfter = 
               onClick={() => router.push(deepLinks.pickListPullIn(savedCheckin.vin, savedCheckin.id))}
               style={{
                 width: '100%', padding: '14px', borderRadius: '12px', border: 'none',
-                background: theme.navy, color: '#fff', fontSize: '15px', fontWeight: 800, cursor: 'pointer',
+                background: theme.accent, color: '#fff', fontSize: '15px', fontWeight: 800, cursor: 'pointer',
               }}
             >▶ Pull In &amp; Start Timer</button>
           )}
@@ -1364,12 +1364,12 @@ export default function VehicleCheckIn({ onCheckedIn, initialVin, pullInAfter = 
           {(savedCheckin.customer_name || savedCheckin.sales_order_number) && (
             <button onClick={checkInAnotherSameCustomer} style={{
               width: '100%', padding: '16px', borderRadius: '14px',
-              background: theme.navy, color: '#fff', fontSize: '16px', fontWeight: 800, border: 'none',
+              background: theme.accent, color: '#fff', fontSize: '16px', fontWeight: 800, border: 'none',
             }}>Check in another for {savedCheckin.customer_name || 'same customer'}</button>
           )}
           <button onClick={resetAll} style={{
             width: '100%', padding: '14px', borderRadius: '14px',
-            background: (savedCheckin.customer_name || savedCheckin.sales_order_number) ? 'transparent' : theme.navy,
+            background: (savedCheckin.customer_name || savedCheckin.sales_order_number) ? 'transparent' : theme.accent,
             color: (savedCheckin.customer_name || savedCheckin.sales_order_number) ? theme.textPrimary : '#fff',
             border: (savedCheckin.customer_name || savedCheckin.sales_order_number) ? `1px solid ${theme.border}` : 'none',
             fontSize: '15px', fontWeight: 700,
@@ -1536,7 +1536,7 @@ export default function VehicleCheckIn({ onCheckedIn, initialVin, pullInAfter = 
         {mode === 'text' && !vinLoading && (
           <button onClick={handleVinSubmit} disabled={vin.length < 8} style={{
             width: '100%', padding: '16px', borderRadius: '14px', marginTop: '14px',
-            background: vin.length >= 8 ? theme.navy : theme.border,
+            background: vin.length >= 8 ? theme.accent : theme.border,
             color: '#fff', fontSize: '16px', fontWeight: 800,
             opacity: vin.length >= 8 ? 1 : 0.4, border: 'none',
           }}>{vin.length === 17 ? 'Decode VIN' : (vin.length >= 8 ? 'Look up partial' : 'Decode VIN')}</button>
@@ -1712,7 +1712,7 @@ export default function VehicleCheckIn({ onCheckedIn, initialVin, pullInAfter = 
             onKeyDown={(e) => { if (e.key === 'Enter') searchSalesOrders(); }}
           />
           <button onClick={() => searchSalesOrders()} disabled={soLoading || !customerSearch.trim()} style={{
-            padding: '10px 16px', borderRadius: '10px', background: theme.navy,
+            padding: '10px 16px', borderRadius: '10px', background: theme.accent,
             color: '#fff', fontWeight: 700, fontSize: '13px', border: 'none',
             opacity: soLoading || !customerSearch.trim() ? 0.4 : 1,
           }}>{soLoading ? '...' : 'Search'}</button>
@@ -1935,7 +1935,7 @@ export default function VehicleCheckIn({ onCheckedIn, initialVin, pullInAfter = 
             onClick={() => runProofSearch(proofSearch.trim())}
             style={{
               padding: '10px 14px', borderRadius: '10px', fontWeight: 700, fontSize: '13px',
-              background: theme.navy, color: '#fff', border: 'none', whiteSpace: 'nowrap',
+              background: theme.accent, color: '#fff', border: 'none', whiteSpace: 'nowrap',
             }}
           >Search</button>
         </div>

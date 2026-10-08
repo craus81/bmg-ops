@@ -438,7 +438,7 @@ export default function ImportInstallsPage() {
   const card: CSSProperties = { background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 12, padding: 16, marginBottom: 16 };
   const label: CSSProperties = { display: 'block', fontSize: 12, color: theme.textSecondary, marginBottom: 4, fontWeight: 600 };
   const input: CSSProperties = { width: '100%', background: theme.inputBg, color: theme.textPrimary, border: `1px solid ${theme.border}`, borderRadius: 8, padding: '8px 10px', fontSize: 14 };
-  const btn: CSSProperties = { background: theme.orange, color: '#fff', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, fontSize: 14, cursor: 'pointer' };
+  const btn: CSSProperties = { background: theme.accent, color: '#fff', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, fontSize: 14, cursor: 'pointer' };
 
   return (
     <div style={{ maxWidth: 1040, margin: '0 auto', padding: 16, color: theme.textPrimary }}>
@@ -674,7 +674,7 @@ export default function ImportInstallsPage() {
           </div>
           {lastDuplicates.length > 0 && (
             <div style={{ marginTop: 10 }}>
-              <button onClick={importDuplicatesAnyway} disabled={importing} style={{ ...btn, background: theme.orange, opacity: importing ? 0.5 : 1 }}>
+              <button onClick={importDuplicatesAnyway} disabled={importing} style={{ ...btn, background: theme.accent, opacity: importing ? 0.5 : 1 }}>
                 Log {lastDuplicates.length} flagged duplicate{lastDuplicates.length !== 1 ? 's' : ''} anyway
               </button>
               <span style={{ marginLeft: 10, fontSize: 12, color: theme.textSecondary }}>

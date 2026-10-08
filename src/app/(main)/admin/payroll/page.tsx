@@ -278,7 +278,7 @@ export default function PayrollPage() {
               ) : (
                 <button onClick={() => setConfirmPay(true)} disabled={unpricedTotal > 0} style={{
                   flex: 1, padding: '13px', borderRadius: '10px', fontSize: '13px', fontWeight: 800,
-                  background: unpricedTotal > 0 ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+                  background: unpricedTotal > 0 ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none',
                   opacity: unpricedTotal > 0 ? 0.6 : 1,
                 }}>Mark Period Paid</button>
               )

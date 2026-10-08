@@ -112,7 +112,7 @@ export default function ResetPasswordPage() {
             )}
 
             <button type="submit" disabled={!password || !confirm || loading} style={{
-              width: '100%', padding: '16px', borderRadius: '12px', background: 'var(--orange)',
+              width: '100%', padding: '16px', borderRadius: '12px', background: 'var(--accent)',
               color: '#fff', fontSize: '16px', fontWeight: 700,
               opacity: (password && confirm && !loading) ? 1 : 0.5,
               boxShadow: '0 4px 20px rgba(238,49,32,0.3)', transition: 'opacity 0.2s',

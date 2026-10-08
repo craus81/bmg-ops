@@ -248,7 +248,7 @@ export default function MyHome({ role, embedded = false }: { role: MyHomeRole; e
           {actions.map(a => (
             <button key={a.path} onClick={() => router.push(a.path)} style={{
               flex: a.primary ? 2 : 1, padding: '16px', borderRadius: '12px', fontSize: '16px', fontWeight: 800, cursor: 'pointer',
-              background: a.primary ? 'var(--navy)' : 'var(--card)', color: a.primary ? '#fff' : 'var(--text-primary)',
+              background: a.primary ? 'var(--accent)' : 'var(--card)', color: a.primary ? '#fff' : 'var(--text-primary)',
               border: a.primary ? 'none' : '1px solid var(--border)',
             }}>{a.label}</button>
           ))}

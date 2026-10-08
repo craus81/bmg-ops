@@ -8,6 +8,8 @@ export const theme = {
   orange: 'var(--orange)',
   orangeGlow: 'var(--orange-glow)',
   orangeSoft: 'var(--orange-soft)',
+  // Fill for action buttons (Check In, + New, Save, Create…), white text.
+  accent: 'var(--accent)',
 
   bg: 'var(--bg)',
   card: 'var(--card)',

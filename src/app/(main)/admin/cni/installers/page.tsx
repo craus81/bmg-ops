@@ -185,7 +185,7 @@ export default function CniInstallersPage() {
           onClick={() => { setShowAddModal(true); setInviteResult(null); }}
           style={{
             padding: '8px 16px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-            background: 'var(--orange)', color: '#fff', border: 'none', cursor: 'pointer',
+            background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer',
           }}
         >
           + Add Installer
@@ -287,7 +287,7 @@ export default function CniInstallersPage() {
                 disabled={inviting || !invName.trim() || !invEmail.trim()}
                 style={{
                   flex: 2, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-                  background: inviting ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+                  background: inviting ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none',
                   cursor: inviting ? 'default' : 'pointer',
                 }}
               >

@@ -165,7 +165,7 @@ export default function CniCompaniesPage() {
             onClick={() => { setShowNew(s => !s); setShowNs(false); setCreateError(null); }}
             style={{
               padding: '8px 16px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-              background: showNew ? 'var(--subtle-bg)' : 'var(--orange)',
+              background: showNew ? 'var(--subtle-bg)' : 'var(--accent)',
               color: showNew ? 'var(--text-muted)' : '#fff',
               border: showNew ? '1px solid var(--border)' : 'none', cursor: 'pointer', whiteSpace: 'nowrap',
             }}
@@ -234,7 +234,7 @@ export default function CniCompaniesPage() {
               disabled={creating || !newName.trim()}
               style={{
                 padding: '10px 18px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-                background: creating || !newName.trim() ? 'var(--text-muted)' : 'var(--orange)',
+                background: creating || !newName.trim() ? 'var(--text-muted)' : 'var(--accent)',
                 color: '#fff', border: 'none', cursor: creating ? 'default' : 'pointer',
               }}
             >

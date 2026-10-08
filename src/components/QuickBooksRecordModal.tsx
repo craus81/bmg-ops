@@ -120,7 +120,7 @@ export default function QuickBooksRecordModal({ recordId, onClose, backHref, bac
                 <a
                   href={deepLinks.newEstimate(record.customerId, null, { fromQuickBooks: record.id })}
                   title="Start a new estimate with these lines, matched to today's catalog and prices. You pick which lines to keep."
-                  style={{ ...btn, background: 'var(--orange)', color: '#fff', border: 'none' }}
+                  style={{ ...btn, background: 'var(--accent)', color: '#fff', border: 'none' }}
                 >Copy to new estimate</a>
               )}
             </div>
