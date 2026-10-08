@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  defaultPriceSheetLines, matchScore, newPartPairs, pricingRequestStage, quotedPrices, rankRequestsForPair,
+  defaultPriceSheetLines, marginPct, matchScore, newPartPairs, priceForMargin, pricingRequestStage, quotedPrices, rankRequestsForPair,
   type PoLineForLink,
 } from './pricing-request';
 
@@ -77,5 +77,29 @@ describe('rankRequestsForPair', () => {
       req('5', 'Orkin', 'new'),
     ], pair);
     expect(ranked.map(r => r.id)).toEqual(['2', '5', '1', '3']);
+  });
+});
+
+describe('updated pricing and vendor budget', () => {
+  it('reads Price updated once the new prices are applied', () => {
+    expect(pricingRequestStage({ status: 'open', po_id: null, prices_applied_at: '2026-10-08T12:00:00Z' },
+      { status: 'accepted', customer_approved: true, grand_total: 500 })).toBe('price_updated');
+  });
+
+  it('starts an update price sheet from the catalog parts at today\'s prices', () => {
+    const lines = defaultPriceSheetLines('Orkin', {
+      part: { id: 'p1', item_number: '02T278', sales_price: 400 },
+      install: { id: 'p2', item_number: '06T278', sales_price: 120 },
+    });
+    expect(lines.map(l => [l.item_number, l.unit_price, l.is_custom])).toEqual([['02T278', 400, false], ['06T278', 120, false]]);
+    expect(quotedPrices(lines as any)).toEqual({ part: 400, install: 120 });
+  });
+
+  it('prices for a gross margin and reports the margin a price earns', () => {
+    expect(priceForMargin(300, 40)).toBe(500);
+    expect(priceForMargin(300, null)).toBeNull();
+    expect(priceForMargin(300, 100)).toBeNull();
+    expect(marginPct(500, 300)).toBe(40);
+    expect(marginPct(0, 300)).toBeNull();
   });
 });

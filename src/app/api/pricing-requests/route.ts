@@ -49,6 +49,13 @@ const CreateSchema = z.object({
   received_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   description: z.string().trim().max(5000).nullable().optional(),
   vehicle: z.string().trim().max(200).nullable().optional(),
+  request_type: z.enum(['new', 'update']).optional(),
+  /** Update requests: the existing catalog parts being repriced. */
+  part_id: z.string().uuid().nullable().optional(),
+  install_part_id: z.string().uuid().nullable().optional(),
+  vendor_name: z.string().trim().max(200).nullable().optional(),
+  vendor_cost: z.number().nonnegative().max(1_000_000).nullable().optional(),
+  target_margin_pct: z.number().min(0).lt(100).nullable().optional(),
 });
 
 const fallbackNumber = () => `PRQ-${Date.now().toString(36).toUpperCase()}`;
@@ -66,6 +73,23 @@ export async function POST(req: NextRequest) {
   if (parsed.error) return parsed.error;
   const body = parsed.data;
 
+  const requestType = body.request_type || 'new';
+  // Updated pricing names its catalog parts up front; a new product gets its
+  // numbers from the PO later.
+  let partNumber: string | null = null;
+  let installPartNumber: string | null = null;
+  if (requestType === 'update') {
+    const ids = [body.part_id, body.install_part_id].filter(Boolean) as string[];
+    if (ids.length === 0) {
+      return NextResponse.json({ error: 'Pick the part (and its install) that is getting new pricing.' }, { status: 400 });
+    }
+    const { data: parts } = await service.from('netsuite_parts').select('id, item_number').in('id', ids);
+    const byId = new Map((parts || []).map((p: any) => [p.id, p.item_number as string]));
+    if (ids.some(id => !byId.has(id))) return NextResponse.json({ error: 'Part not found in the catalog' }, { status: 404 });
+    partNumber = body.part_id ? byId.get(body.part_id) || null : null;
+    installPartNumber = body.install_part_id ? byId.get(body.install_part_id) || null : null;
+  }
+
   const match = await matchCustomer(service, body.customer_name).catch(() => null);
 
   let row: any = null;
@@ -82,6 +106,14 @@ export async function POST(req: NextRequest) {
       received_date: body.received_date || new Date().toISOString().slice(0, 10),
       description: body.description || null,
       vehicle: body.vehicle || null,
+      request_type: requestType,
+      part_id: requestType === 'update' ? body.part_id || null : null,
+      install_part_id: requestType === 'update' ? body.install_part_id || null : null,
+      part_number: partNumber,
+      install_part_number: installPartNumber,
+      vendor_name: body.vendor_name || null,
+      vendor_cost: body.vendor_cost ?? null,
+      target_margin_pct: body.target_margin_pct ?? null,
       created_by: auth.user?.id || null,
     }).select(PRICING_REQUEST_SELECT).single();
     row = res.data;

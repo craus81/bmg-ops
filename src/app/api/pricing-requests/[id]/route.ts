@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireFeature } from '@/lib/api-auth';
+import { isAdminRole, requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import type { PricingRequest } from '@/lib/pricing-request';
 import { PRICING_REQUEST_SELECT, customerForNetsuiteId, loadPoNumbers, loadPriceSheets, withStage } from '@/lib/pricing-request-server';
@@ -45,7 +45,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         .order('created_at', { ascending: true }).order('id'),
       customerForNetsuiteId(service, request.customer_netsuite_id),
       service.from('netsuite_parts')
-        .select('id, item_number, netsuite_id, sales_price')
+        .select('id, item_number, netsuite_id, sales_price, purchase_price, vendor')
         .in('id', [request.part_id, request.install_part_id].filter(Boolean) as string[]),
     ]);
 
@@ -69,6 +69,12 @@ const PatchSchema = z.object({
   description: z.string().trim().max(5000).nullable().optional(),
   vehicle: z.string().trim().max(200).nullable().optional(),
   status: z.enum(['open', 'declined', 'closed']).optional(),
+  vendor_name: z.string().trim().max(200).nullable().optional(),
+  vendor_cost: z.number().nonnegative().max(1_000_000).nullable().optional(),
+  target_margin_pct: z.number().min(0).lt(100).nullable().optional(),
+  /** Update requests: the approved prices were written to the catalog
+   *  (the page does that through the admin parts route first). Admin only. */
+  prices_applied: z.literal(true).optional(),
   /** Mark this estimate as the request's price sheet. */
   estimate_id: z.string().uuid().optional(),
 });
@@ -84,7 +90,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const parsed = await validateBody(req, PatchSchema);
   if (parsed.error) return parsed.error;
-  const { estimate_id, ...fields } = parsed.data;
+  const { estimate_id, prices_applied, ...fields } = parsed.data;
 
   const { data: existing } = await service.from('pricing_requests').select('id').eq('id', params.id).maybeSingle();
   if (!existing) return NextResponse.json({ error: 'Pricing request not found' }, { status: 404 });
@@ -106,6 +112,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 
   const update: Record<string, unknown> = {};
+  if (prices_applied) {
+    const roles: string[] = auth.profile?.roles?.length > 0 ? auth.profile.roles : [auth.profile?.role].filter(Boolean);
+    if (!isAdminRole(roles)) return NextResponse.json({ error: 'Only an admin can change catalog prices.' }, { status: 403 });
+    update.prices_applied_at = new Date().toISOString();
+    update.prices_applied_by = auth.user?.id || null;
+  }
   for (const [k, v] of Object.entries(fields)) {
     if (v === undefined) continue;
     update[k] = v === '' ? null : v;

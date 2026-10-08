@@ -18,7 +18,9 @@
 -- When the PO arrives, an admin links its 02 / 06 lines to the request on
 -- the PO page: both numbers become NetSuite items at the quoted prices
 -- (owner: "both", FleetSuite and NetSuite), the PO lines point at them, and
--- the request shows as On PO.
+-- the request shows as On PO. A request for updated pricing on an existing
+-- product names its catalog parts up front instead, and once approved an
+-- admin applies the new prices to them (owner follow-up, same day).
 --
 -- No RLS policies: service role only, behind requireFeature(req, 'estimates')
 -- in /api/pricing-requests.
@@ -39,7 +41,20 @@ CREATE TABLE IF NOT EXISTS pricing_requests (
   -- Manual end states only; every other stage is read off the estimate and
   -- the PO link (src/lib/pricing-request.ts pricingRequestStage).
   status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'declined', 'closed')),
-  -- Filled when the PO arrives and an admin links it.
+  -- 'new': a product Masterack has never ordered (numbers arrive on the PO).
+  -- 'update': new pricing on a product already in the catalog; its 02 / 06
+  -- parts are picked up front and the approved prices are applied to them.
+  request_type TEXT NOT NULL DEFAULT 'new' CHECK (request_type IN ('new', 'update')),
+  -- Vendor budget: what an outsourced graphic costs us and the margin we
+  -- want on it (gross margin on the selling price).
+  vendor_name TEXT,
+  vendor_cost NUMERIC(12, 2) CHECK (vendor_cost IS NULL OR vendor_cost >= 0),
+  target_margin_pct NUMERIC(5, 2) CHECK (target_margin_pct IS NULL OR (target_margin_pct >= 0 AND target_margin_pct < 100)),
+  -- Update requests: when the approved prices were written to the catalog.
+  prices_applied_at TIMESTAMPTZ,
+  prices_applied_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+  -- New requests: filled when the PO arrives and an admin links it.
+  -- Update requests: the existing catalog parts, picked when it is logged.
   part_number TEXT,
   install_part_number TEXT,
   part_id UUID REFERENCES netsuite_parts(id) ON DELETE SET NULL,

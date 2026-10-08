@@ -15,6 +15,14 @@
 import { INSTALL_PREFIX, PART_PREFIX } from '@/lib/po-install-parts';
 
 export type PricingRequestStatus = 'open' | 'declined' | 'closed';
+/** 'new' = a product they've never ordered; 'update' = new pricing on one
+ *  already in the catalog (owner, 2026-10-08). */
+export type PricingRequestType = 'new' | 'update';
+
+export const REQUEST_TYPE_LABELS: Record<PricingRequestType, string> = {
+  new: 'New product',
+  update: 'Updated pricing',
+};
 
 export interface PricingRequest {
   id: string;
@@ -28,6 +36,11 @@ export interface PricingRequest {
   description: string | null;
   vehicle: string | null;
   status: PricingRequestStatus;
+  request_type: PricingRequestType;
+  vendor_name: string | null;
+  vendor_cost: number | null;
+  target_margin_pct: number | null;
+  prices_applied_at: string | null;
   part_number: string | null;
   install_part_number: string | null;
   part_id: string | null;
@@ -59,7 +72,7 @@ export const PRICING_REQUEST_CUSTOMERS = ['Masterack', 'Reading Truck Equipment'
 export const DEFAULT_PRICING_REQUEST_CUSTOMER = PRICING_REQUEST_CUSTOMERS[0];
 
 export type PricingRequestStage =
-  | 'new' | 'pricing' | 'sent' | 'changes_requested' | 'approved' | 'on_po' | 'declined' | 'closed';
+  | 'new' | 'pricing' | 'sent' | 'changes_requested' | 'approved' | 'price_updated' | 'on_po' | 'declined' | 'closed';
 
 export const STAGE_META: Record<PricingRequestStage, { label: string; color: string }> = {
   new: { label: 'New', color: '#60a5fa' },
@@ -67,13 +80,14 @@ export const STAGE_META: Record<PricingRequestStage, { label: string; color: str
   sent: { label: 'Sent', color: '#fbbf24' },
   changes_requested: { label: 'Changes requested', color: '#f97316' },
   approved: { label: 'Approved', color: '#4ade80' },
+  price_updated: { label: 'Price updated', color: '#22d3ee' },
   on_po: { label: 'On PO', color: '#22d3ee' },
   declined: { label: 'Declined', color: '#9ca3af' },
   closed: { label: 'Closed', color: '#94a3b8' },
 };
 
 /** Ordered for the list's filter chips. */
-export const STAGE_ORDER: PricingRequestStage[] = ['new', 'pricing', 'sent', 'changes_requested', 'approved', 'on_po', 'declined', 'closed'];
+export const STAGE_ORDER: PricingRequestStage[] = ['new', 'pricing', 'sent', 'changes_requested', 'approved', 'price_updated', 'on_po', 'declined', 'closed'];
 
 /**
  * Where a request stands. Only Declined / Closed are typed by a person; the
@@ -81,12 +95,13 @@ export const STAGE_ORDER: PricingRequestStage[] = ['new', 'pricing', 'sent', 'ch
  * from what actually happened.
  */
 export function pricingRequestStage(
-  request: Pick<PricingRequest, 'status' | 'po_id'>,
+  request: Pick<PricingRequest, 'status' | 'po_id'> & Partial<Pick<PricingRequest, 'prices_applied_at'>>,
   sheet: Pick<PriceSheetSummary, 'status' | 'customer_approved' | 'grand_total'> | null,
 ): PricingRequestStage {
   if (request.status === 'declined') return 'declined';
   if (request.status === 'closed') return 'closed';
   if (request.po_id) return 'on_po';
+  if (request.prices_applied_at) return 'price_updated';
   if (!sheet) return 'new';
   if (sheet.customer_approved || sheet.status === 'accepted') return 'approved';
   if (sheet.status === 'rejected') return 'changes_requested';
@@ -99,14 +114,50 @@ const money = (n: unknown) => {
   return Number.isFinite(v) ? Math.round(v * 100) / 100 : 0;
 };
 
-/** The two starting lines of a new price sheet: the graphic (becomes the
- *  02 number) and its install (the 06 number). Prices start blank. */
-export function defaultPriceSheetLines(companyName: string) {
+/** A catalog part an update request reprices. */
+export interface CatalogPartRef {
+  id: string;
+  item_number: string;
+  sales_price: number | null;
+}
+
+/**
+ * The starting lines of a price sheet: the graphic (the 02 number) and its
+ * install (the 06 number). A new product starts unpriced; updated pricing on
+ * an existing product starts from the parts themselves at today's prices.
+ */
+export function defaultPriceSheetLines(
+  companyName: string,
+  parts: { part?: CatalogPartRef | null; install?: CatalogPartRef | null } = {},
+) {
   const who = companyName.trim();
-  return [
-    { item_number: null, description: `Graphics: ${who}`, quantity: 1, unit_price: 0, labor_hours: null, is_custom: true },
-    { item_number: null, description: `Install: ${who}`, quantity: 1, unit_price: 0, labor_hours: null, is_custom: true },
-  ];
+  const line = (kind: 'Graphics' | 'Install', p: CatalogPartRef | null | undefined) => p
+    ? { part_id: p.id, item_number: p.item_number, description: `${kind}: ${who} (${p.item_number})`, quantity: 1, unit_price: money(p.sales_price), labor_hours: null, is_custom: false }
+    : { item_number: null, description: `${kind}: ${who}`, quantity: 1, unit_price: 0, labor_hours: null, is_custom: true };
+  if (parts.part || parts.install) {
+    return [parts.part ? line('Graphics', parts.part) : null, parts.install ? line('Install', parts.install) : null].filter(Boolean) as ReturnType<typeof line>[];
+  }
+  return [line('Graphics', null), line('Install', null)];
+}
+
+/**
+ * Vendor budget (owner, 2026-10-08): the price that earns the target margin
+ * on what the vendor charges, as gross margin on the selling price
+ * (price = cost / (1 - margin)). Null when either input is missing.
+ */
+export function priceForMargin(cost: number | null | undefined, marginPct: number | null | undefined): number | null {
+  const c = Number(cost);
+  const m = Number(marginPct);
+  if (cost == null || marginPct == null || !Number.isFinite(c) || !Number.isFinite(m) || c <= 0 || m < 0 || m >= 100) return null;
+  return money(c / (1 - m / 100));
+}
+
+/** Gross margin a price earns over a cost, in percent (one decimal). */
+export function marginPct(price: number | null | undefined, cost: number | null | undefined): number | null {
+  const p = Number(price);
+  const c = Number(cost);
+  if (price == null || cost == null || !Number.isFinite(p) || !Number.isFinite(c) || p <= 0) return null;
+  return Math.round(((p - c) / p) * 1000) / 10;
 }
 
 const isInstallLine = (l: { item_number?: string | null; description?: string | null }) =>
@@ -200,7 +251,7 @@ export function rankRequestsForPair<T extends Pick<PricingRequest, 'company_name
   requests: T[],
   pair: NewPartPair,
 ): T[] {
-  const eligible = requests.filter(r => !r.po_id && r.stage !== 'declined' && r.stage !== 'closed' && r.stage !== 'on_po');
+  const eligible = requests.filter(r => !r.po_id && r.stage !== 'declined' && r.stage !== 'closed' && r.stage !== 'on_po' && r.stage !== 'price_updated');
   const stageRank = (s: PricingRequestStage) => (s === 'approved' ? 0 : 1);
   return eligible
     .map(r => ({ r, score: matchScore(r, pair) }))

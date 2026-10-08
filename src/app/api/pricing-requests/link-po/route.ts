@@ -65,7 +65,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       pairs: newPartPairs(lines, linkedNumbers),
       linked,
-      candidates: shaped.filter(r => !r.po_id && r.status === 'open'),
+      // Updated-pricing requests already have their numbers; only new products wait on a PO.
+      candidates: shaped.filter(r => !r.po_id && r.status === 'open' && r.request_type === 'new'),
     });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message || 'Could not load pricing requests' }, { status: 500 });

@@ -8,7 +8,7 @@ import { pricingRequestStage, type PriceSheetSummary, type PricingRequest } from
  */
 
 export const PRICING_REQUEST_SELECT =
-  'id, request_number, customer_name, customer_netsuite_id, company_name, contact_name, contact_email, received_date, description, vehicle, status, part_number, install_part_number, part_id, install_part_id, part_price, install_price, po_id, linked_at, created_by, created_at, updated_at';
+  'id, request_number, customer_name, customer_netsuite_id, company_name, contact_name, contact_email, received_date, description, vehicle, status, request_type, vendor_name, vendor_cost, target_margin_pct, prices_applied_at, part_number, install_part_number, part_id, install_part_id, part_price, install_price, po_id, linked_at, created_by, created_at, updated_at';
 
 const SHEET_SELECT =
   'id, pricing_request_id, estimate_number, status, customer_approved, customer_rejected_at, customer_rejection_reason, grand_total, created_at';

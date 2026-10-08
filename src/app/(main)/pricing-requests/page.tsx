@@ -12,6 +12,13 @@
  * admin links it on the PO page and the numbers join the parts catalog at
  * the quoted prices.
  *
+ * A request is either a new product or updated pricing on one already in
+ * the catalog (owner, 2026-10-08). Updated pricing names its 02 / 06 parts
+ * up front, starts the price sheet at today's prices, and once Masterack
+ * approves an admin applies the new prices to the catalog and NetSuite.
+ * The vendor budget section works out the price that earns the target
+ * margin on what an outsourced graphic costs us.
+ *
  * URL: ?new=1 opens the form, ?id=<request> opens one request.
  */
 
@@ -24,18 +31,21 @@ import { deepLinks } from '@/lib/deep-links';
 import { theme } from '@/lib/theme';
 import { uploadRecordFile } from '@/lib/record-file-upload';
 import { toJpegIfHeic } from '@/lib/heic';
+import { createClient } from '@/lib/supabase-browser';
+import PartNumberAutocomplete from '@/components/PartNumberAutocomplete';
 import {
-  DEFAULT_PRICING_REQUEST_CUSTOMER, PRICING_REQUEST_CUSTOMERS, STAGE_META, STAGE_ORDER,
-  defaultPriceSheetLines, quotedPrices,
-  type PriceSheetSummary, type PricingRequest, type PricingRequestStage,
+  DEFAULT_PRICING_REQUEST_CUSTOMER, PRICING_REQUEST_CUSTOMERS, REQUEST_TYPE_LABELS, STAGE_META, STAGE_ORDER,
+  defaultPriceSheetLines, marginPct, priceForMargin, quotedPrices,
+  type CatalogPartRef, type PriceSheetSummary, type PricingRequest, type PricingRequestStage, type PricingRequestType,
 } from '@/lib/pricing-request';
+import { INSTALL_PREFIX, PART_PREFIX } from '@/lib/po-install-parts';
 
 type Row = PricingRequest & { stage: PricingRequestStage; sheet: PriceSheetSummary | null; po_number: string | null };
 interface Detail {
   request: Row;
   customer_id: string | null;
   customer_tax_exempt: boolean;
-  parts: { id: string; item_number: string; netsuite_id: string | null; sales_price: number | null }[];
+  parts: { id: string; item_number: string; netsuite_id: string | null; sales_price: number | null; purchase_price: number | null; vendor: string | null }[];
   notes: { id: string; body: string; created_at: string; author_name: string | null }[];
 }
 interface SheetFile { id: string; file_name: string; content_type: string | null; public_url: string }
@@ -56,6 +66,25 @@ const EMPTY_FORM = {
   company_name: '', contact_name: '', contact_email: '', received_date: '', vehicle: '', description: '',
 };
 
+/** A catalog part picked on an updated-pricing request. */
+type PickedPart = CatalogPartRef & { purchase_price?: number | null; vendor?: string | null };
+
+const EMPTY_PRICING = {
+  request_type: 'new' as PricingRequestType,
+  part: null as PickedPart | null,
+  install: null as PickedPart | null,
+  partText: '',
+  installText: '',
+  vendor_name: '',
+  vendor_cost: '',
+  target_margin_pct: '',
+};
+
+const numOrNull = (s: string) => {
+  const v = Number(String(s).replace(/[$,%\s]/g, ''));
+  return String(s).trim() === '' || !Number.isFinite(v) ? null : v;
+};
+
 function StageBadge({ stage }: { stage: PricingRequestStage }) {
   const m = STAGE_META[stage];
   return (
@@ -70,7 +99,7 @@ export default function PricingRequestsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const dialog = useDialog();
-  const { user, hasFeature, loading } = useAuth();
+  const { user, hasFeature, isAdmin, loading } = useAuth();
 
   const [requests, setRequests] = useState<Row[]>([]);
   const [loadingList, setLoadingList] = useState(true);
@@ -80,6 +109,9 @@ export default function PricingRequestsPage() {
 
   const [form, setForm] = useState({ ...EMPTY_FORM });
   const [formFiles, setFormFiles] = useState<File[]>([]);
+  const [pricing, setPricing] = useState({ ...EMPTY_PRICING });
+  const [budget, setBudget] = useState({ vendor_name: '', vendor_cost: '', target_margin_pct: '' });
+  const [applying, setApplying] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const [detail, setDetail] = useState<Detail | null>(null);
@@ -93,6 +125,16 @@ export default function PricingRequestsPage() {
   const [busy, setBusy] = useState(false);
 
   const isNew = searchParams.get('new') === '1';
+
+  // The vendor budget form follows whichever request is open.
+  useEffect(() => {
+    const r = detail?.request;
+    setBudget({
+      vendor_name: r?.vendor_name || '',
+      vendor_cost: r?.vendor_cost != null ? String(r.vendor_cost) : '',
+      target_margin_pct: r?.target_margin_pct != null ? String(r.target_margin_pct) : '',
+    });
+  }, [detail?.request]);
   const openId = searchParams.get('id');
 
   useEffect(() => {
@@ -165,7 +207,10 @@ export default function PricingRequestsPage() {
         status: 'draft',
         tax_exempt: d.customer_tax_exempt,
         vehicle_other: r.vehicle ? r.vehicle.slice(0, 120) : null,
-        line_items: defaultPriceSheetLines(r.company_name),
+        line_items: defaultPriceSheetLines(r.company_name, r.request_type === 'update' ? {
+          part: d.parts.find(p => p.id === r.part_id) || null,
+          install: d.parts.find(p => p.id === r.install_part_id) || null,
+        } : {}),
         created_by: user?.id || null,
       }),
     });
@@ -193,9 +238,23 @@ export default function PricingRequestsPage() {
     if (!form.company_name.trim()) { await dialog.alert('Enter the company the graphics are for.'); return; }
     setSaving(true);
     try {
+      if (pricing.request_type === 'update' && !pricing.part && !pricing.install) {
+        await dialog.alert('Pick the part (and its install) that is getting new pricing.');
+        setSaving(false);
+        return;
+      }
       const res = await apiFetch('/api/pricing-requests', {
         method: 'POST',
-        body: JSON.stringify({ ...form, received_date: form.received_date || today() }),
+        body: JSON.stringify({
+          ...form,
+          received_date: form.received_date || today(),
+          request_type: pricing.request_type,
+          part_id: pricing.request_type === 'update' ? pricing.part?.id || null : null,
+          install_part_id: pricing.request_type === 'update' ? pricing.install?.id || null : null,
+          vendor_name: pricing.vendor_name.trim() || null,
+          vendor_cost: numOrNull(pricing.vendor_cost),
+          target_margin_pct: numOrNull(pricing.target_margin_pct),
+        }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.request) throw new Error(json.error || 'Could not save the request');
@@ -212,6 +271,7 @@ export default function PricingRequestsPage() {
         }
       }
       setForm({ ...EMPTY_FORM });
+      setPricing({ ...EMPTY_PRICING });
       setFormFiles([]);
       await load();
       go({ id });
@@ -274,6 +334,77 @@ export default function PricingRequestsPage() {
       await dialog.alert(err?.message || 'Could not save the note');
     }
     setPostingNote(false);
+  };
+
+  // ── Updated pricing: pick the catalog parts ──
+  // Picking a 02 part also finds its 06 install (same suffix) when the
+  // catalog has it, and carries the part's cost and vendor into the budget.
+  const loadPart = async (id: string): Promise<PickedPart | null> => {
+    const { data } = await createClient().from('netsuite_parts')
+      .select('id, item_number, sales_price, purchase_price, vendor').eq('id', id).maybeSingle();
+    return (data as PickedPart) || null;
+  };
+
+  const pickPart = async (kind: 'part' | 'install', id: string) => {
+    const p = await loadPart(id);
+    if (!p) return;
+    let sibling: PickedPart | null = null;
+    const pn = p.item_number.toUpperCase();
+    if (kind === 'part' && pn.startsWith(PART_PREFIX) && !pricing.install) {
+      const { data } = await createClient().from('netsuite_parts')
+        .select('id, item_number, sales_price, purchase_price, vendor')
+        .ilike('item_number', `${INSTALL_PREFIX}${pn.slice(2)}`).eq('is_active', true).limit(1);
+      sibling = (data?.[0] as PickedPart) || null;
+    }
+    setPricing(prev => ({
+      ...prev,
+      [kind]: p,
+      [`${kind}Text`]: p.item_number,
+      ...(sibling ? { install: sibling, installText: sibling.item_number } : {}),
+      ...(kind === 'part' && !prev.vendor_cost && p.purchase_price ? { vendor_cost: String(p.purchase_price) } : {}),
+      ...(kind === 'part' && !prev.vendor_name && p.vendor ? { vendor_name: p.vendor } : {}),
+    }));
+  };
+
+  // ── Vendor budget on an open request ──
+  const saveBudget = async (id: string) => {
+    const cost = numOrNull(budget.vendor_cost);
+    const margin = numOrNull(budget.target_margin_pct);
+    if (margin != null && (margin < 0 || margin >= 100)) { await dialog.alert('Margin must be between 0 and 99.99%.'); return; }
+    await patch(id, { vendor_name: budget.vendor_name.trim() || null, vendor_cost: cost, target_margin_pct: margin });
+  };
+
+  // ── Updated pricing, approved: write the new prices to the catalog ──
+  const applyPrices = async (d: Detail) => {
+    const r = d.request;
+    const q = quotedPrices(r.sheet?.lines || []);
+    const targets = [
+      r.part_id ? { id: r.part_id, number: r.part_number, price: q.part } : null,
+      r.install_part_id ? { id: r.install_part_id, number: r.install_part_number, price: q.install } : null,
+    ].filter((t): t is { id: string; number: string | null; price: number } => !!t && t.price > 0);
+    if (targets.length === 0) { await dialog.alert('The price sheet has no prices to apply.'); return; }
+    const ok = await dialog.confirm(
+      `Set ${targets.map(t => `${t.number} to ${fmtMoney(t.price)}`).join(' and ')} in the parts catalog and NetSuite?`,
+      { title: 'Apply approved prices', confirmLabel: 'Apply prices' },
+    );
+    if (!ok) return;
+    setApplying(true);
+    const notes: string[] = [];
+    try {
+      for (const t of targets) {
+        const res = await apiFetch(`/api/parts/${t.id}`, { method: 'PATCH', body: JSON.stringify({ sales_price: t.price }) });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(`${t.number}: ${json.error || 'could not update the price'}`);
+        if (json.netsuiteWarning) notes.push(`${t.number}: ${json.netsuiteWarning}`);
+      }
+      const res = await apiFetch(`/api/pricing-requests/${r.id}`, { method: 'PATCH', body: JSON.stringify({ prices_applied: true }) });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || 'Prices updated, but the request could not be marked'); }
+      await refresh(r.id);
+      if (notes.length > 0) await dialog.alert(`Prices updated. Note:\n\n${notes.join('\n')}`);
+    } catch (err: any) {
+      await dialog.alert(err?.message || 'Could not apply the prices');
+    }
+    setApplying(false);
   };
 
   const counts = useMemo(() => {
@@ -356,7 +487,51 @@ export default function PricingRequestsPage() {
       <div style={{ maxWidth: '900px', margin: '0 auto', padding: '16px' }}>
         {header('New pricing request', 'Log the request; FleetSuite starts its price sheet for you.', true)}
         <div style={card}>
+          <label style={label}>Type</label>
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
+            {(['new', 'update'] as PricingRequestType[]).map(t => (
+              <button key={t} onClick={() => setPricing(prev => ({ ...prev, request_type: t }))} style={{
+                ...btn, padding: '7px 12px', fontSize: '12px',
+                ...(pricing.request_type === t ? { background: 'rgba(37,99,235,0.12)', border: '1px solid #2563eb', color: '#60a5fa' } : {}),
+              }}>{t === 'new' ? 'New product' : 'Updated pricing on an existing product'}</button>
+            ))}
+          </div>
+          {pricing.request_type === 'update' && (
+            <div style={{ ...grid2, marginBottom: '12px' }}>
+              {(['part', 'install'] as const).map(kind => (
+                <div key={kind}>
+                  <label style={label}>{kind === 'part' ? 'Graphic part (02…)' : 'Install part (06…)'}</label>
+                  <PartNumberAutocomplete
+                    value={kind === 'part' ? pricing.partText : pricing.installText}
+                    onChange={text => setPricing(prev => ({ ...prev, [`${kind}Text`]: text, [kind]: prev[kind] && prev[kind]!.item_number === text ? prev[kind] : null }))}
+                    onPick={hit => { void pickPart(kind, hit.id); }}
+                    customer={form.customer_name}
+                    placeholder={kind === 'part' ? 'e.g. 02T278' : 'e.g. 06T278'}
+                    style={input}
+                  />
+                  {pricing[kind] && (
+                    <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '3px' }}>
+                      Today: {fmtMoney(pricing[kind]!.sales_price) || 'no price'}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
           {fields(form, setForm, true)}
+          <div style={{ marginTop: '12px' }}>
+            <label style={label}>Vendor budget (outsourced graphics)</label>
+            <div style={grid2}>
+              <input value={pricing.vendor_name} onChange={e => setPricing(p => ({ ...p, vendor_name: e.target.value }))} placeholder="Vendor" style={input} />
+              <input inputMode="decimal" value={pricing.vendor_cost} onChange={e => setPricing(p => ({ ...p, vendor_cost: e.target.value }))} placeholder="Vendor cost $" style={input} />
+              <input inputMode="decimal" value={pricing.target_margin_pct} onChange={e => setPricing(p => ({ ...p, target_margin_pct: e.target.value }))} placeholder="Target margin %" style={input} />
+            </div>
+            {priceForMargin(numOrNull(pricing.vendor_cost), numOrNull(pricing.target_margin_pct)) != null && (
+              <div style={{ fontSize: '12px', color: '#4ade80', marginTop: '6px', fontWeight: 700 }}>
+                Price for that margin: {fmtMoney(priceForMargin(numOrNull(pricing.vendor_cost), numOrNull(pricing.target_margin_pct)))}
+              </div>
+            )}
+          </div>
           <div style={{ marginTop: '12px' }}>
             <label style={label}>Pictures or proofs</label>
             <input type="file" multiple accept="image/*,application/pdf,.heic,.heif,.ai,.eps" onChange={e => setFormFiles(Array.from(e.target.files || []))} style={{ fontSize: '13px', color: theme.textSecondary }} />
@@ -393,7 +568,7 @@ export default function PricingRequestsPage() {
 
     return (
       <div style={{ maxWidth: '900px', margin: '0 auto', padding: '16px' }}>
-        {header(`${r.company_name}`, `${r.request_number} · from ${r.customer_name}${r.contact_name ? ` (${r.contact_name})` : ''} · received ${fmtDate(r.received_date)}`, true)}
+        {header(`${r.company_name}`, `${r.request_number} · ${REQUEST_TYPE_LABELS[r.request_type]} · from ${r.customer_name}${r.contact_name ? ` (${r.contact_name})` : ''} · received ${fmtDate(r.received_date)}`, true)}
 
         <div style={{ ...card, display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
           <StageBadge stage={r.stage} />
@@ -402,7 +577,10 @@ export default function PricingRequestsPage() {
             {r.stage === 'pricing' && 'Set the prices on the price sheet, then Send for Approval from there.'}
             {r.stage === 'sent' && 'Pricing sent. Waiting on Masterack to approve or ask for changes.'}
             {r.stage === 'changes_requested' && `Masterack asked for changes${sheet?.customer_rejection_reason ? `: "${sheet.customer_rejection_reason}"` : '.'}`}
-            {r.stage === 'approved' && 'Approved. When their PO arrives, link it on the PO page to add the 02 / 06 numbers to the catalog.'}
+            {r.stage === 'approved' && (r.request_type === 'update'
+              ? 'Approved. Apply the new prices to the catalog below.'
+              : 'Approved. When their PO arrives, link it on the PO page to add the 02 / 06 numbers to the catalog.')}
+            {r.stage === 'price_updated' && 'New prices are in the catalog.'}
             {r.stage === 'on_po' && `On PO ${r.po_number || ''}.`}
             {r.stage === 'declined' && 'Declined.'}
             {r.stage === 'closed' && 'Closed.'}
@@ -532,10 +710,71 @@ export default function PricingRequestsPage() {
           )}
         </div>
 
+        {/* Vendor budget */}
+        {(() => {
+          const cost = numOrNull(budget.vendor_cost);
+          const target = numOrNull(budget.target_margin_pct);
+          const suggested = priceForMargin(cost, target);
+          const quotedMargin = quoted.part > 0 ? marginPct(quoted.part, cost) : null;
+          const dirty = budget.vendor_name !== (r.vendor_name || '')
+            || budget.vendor_cost !== (r.vendor_cost != null ? String(r.vendor_cost) : '')
+            || budget.target_margin_pct !== (r.target_margin_pct != null ? String(r.target_margin_pct) : '');
+          return (
+            <div style={card}>
+              <div style={label}>Vendor budget</div>
+              <div style={{ ...grid2, marginTop: '6px' }}>
+                <div>
+                  <label style={label}>Vendor</label>
+                  <input value={budget.vendor_name} onChange={e => setBudget(b => ({ ...b, vendor_name: e.target.value }))} style={input} />
+                </div>
+                <div>
+                  <label style={label}>Vendor cost</label>
+                  <input inputMode="decimal" value={budget.vendor_cost} onChange={e => setBudget(b => ({ ...b, vendor_cost: e.target.value }))} placeholder="$" style={input} />
+                </div>
+                <div>
+                  <label style={label}>Target margin %</label>
+                  <input inputMode="decimal" value={budget.target_margin_pct} onChange={e => setBudget(b => ({ ...b, target_margin_pct: e.target.value }))} placeholder="%" style={input} />
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginTop: '10px', fontSize: '13px', color: theme.textSecondary, alignItems: 'center' }}>
+                {suggested != null && <div>Price for {target}% margin: <b style={{ color: '#4ade80' }}>{fmtMoney(suggested)}</b></div>}
+                {quotedMargin != null && <div>Quoted graphic {fmtMoney(quoted.part)} earns <b style={{ color: quotedMargin < (target ?? 0) ? '#fbbf24' : '#4ade80' }}>{quotedMargin}%</b></div>}
+                {dirty && <button style={{ ...primaryBtn, padding: '6px 12px', fontSize: '12px', marginLeft: 'auto' }} disabled={busy} onClick={() => saveBudget(r.id)}>Save budget</button>}
+              </div>
+              <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '6px' }}>Margin is profit as a share of the selling price: price = cost ÷ (1 − margin).</div>
+            </div>
+          );
+        })()}
+
         {/* PO and catalog */}
         <div style={card}>
-          <div style={label}>PO & catalog</div>
-          {r.po_id ? (
+          <div style={label}>{r.request_type === 'update' ? 'Catalog' : 'PO & catalog'}</div>
+          {r.request_type === 'update' ? (
+            <div style={{ fontSize: '13px', color: theme.textSecondary, display: 'grid', gap: '6px', marginTop: '6px' }}>
+              {[{ id: r.part_id, kind: 'Graphic', q: quoted.part }, { id: r.install_part_id, kind: 'Install', q: quoted.install }].filter(x => x.id).map(x => {
+                const part = detail.parts.find(p => p.id === x.id);
+                return (
+                  <div key={x.kind}>
+                    <b>{x.kind}:</b> {part?.item_number || '—'} · catalog {fmtMoney(part?.sales_price) || 'no price'}
+                    {x.q > 0 && Math.abs(x.q - Number(part?.sales_price || 0)) >= 0.01 && <> → quoted <b>{fmtMoney(x.q)}</b></>}
+                  </div>
+                );
+              })}
+              {r.prices_applied_at ? (
+                <div style={{ color: '#22d3ee' }}>New prices applied {fmtWhen(r.prices_applied_at)}.</div>
+              ) : r.stage === 'approved' ? (
+                isAdmin ? (
+                  <div>
+                    <button style={{ ...primaryBtn, padding: '7px 12px', fontSize: '12px', opacity: applying ? 0.6 : 1 }} disabled={applying} onClick={() => applyPrices(detail)}>
+                      {applying ? 'Applying…' : 'Apply approved prices to catalog & NetSuite'}
+                    </button>
+                  </div>
+                ) : <div style={{ color: theme.textMuted }}>Approved. An admin applies the new prices to the catalog.</div>
+              ) : (
+                <div style={{ color: theme.textMuted }}>Once Masterack approves, an admin applies the new prices to these parts.</div>
+              )}
+            </div>
+          ) : r.po_id ? (
             <div style={{ fontSize: '13px', color: theme.textSecondary, display: 'grid', gap: '6px', marginTop: '6px' }}>
               <div><b>PO:</b> <a href={deepLinks.po(r.po_id)} style={{ color: '#60a5fa' }}>{r.po_number || 'Open PO'}</a>{r.linked_at ? ` · linked ${fmtWhen(r.linked_at)}` : ''}</div>
               {r.part_number && <div><b>Graphic:</b> {r.part_number} at {fmtMoney(r.part_price)}</div>}
