@@ -42,6 +42,9 @@ jobs:
         run: npm run build
         env:
           NEXT_TELEMETRY_DISABLED: '1'
+          # next build's type-check phase outgrew Node's default ~4GB heap
+          # (OOM on PR #1102, 2026-10-08). Runners have 16GB.
+          NODE_OPTIONS: --max-old-space-size=6144
           # Production envs aren't present in CI; build only needs NEXT_PUBLIC_*
           # placeholders so static analysis succeeds.
           NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
