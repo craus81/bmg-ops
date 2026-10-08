@@ -39,3 +39,14 @@ describe('soContentHash and the estimate discount (migration 342)', () => {
     expect(twelvePct).not.toBe(tenPct);
   });
 });
+
+describe('soContentHash and line discounts (migration 350)', () => {
+  const estimate = { labor_hours: 0, labor_rate: 120, estimate_number: 'EST-1', vin: '' };
+  const line = { item_number: 'A', quantity: 1, unit_price: 100, sort_order: 0 };
+  it('a line with no discount hashes exactly as before', () => {
+    expect(soContentHash(estimate, [{ ...line, discount_type: null, discount_value: null }])).toBe(soContentHash(estimate, [line]));
+  });
+  it('adding a line discount marks the sales order out of date', () => {
+    expect(soContentHash(estimate, [{ ...line, discount_type: 'percent', discount_value: 5 }])).not.toBe(soContentHash(estimate, [line]));
+  });
+});

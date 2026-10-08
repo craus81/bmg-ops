@@ -7,7 +7,7 @@ import { resolveLaborItem } from '@/lib/labor-item';
 import { resolveOrPromoteByName } from '@/lib/promote-prospect';
 import { kitTaggedDescription } from '@/lib/estimate-kits';
 import { nsItemLine, type NsPushLine } from '@/lib/netsuite';
-import { buildDiscountLines, estimateDiscountSplit, resolveDiscountItem } from '@/lib/discount-item';
+import { buildDiscountLines, buildLineDiscountLine, estimateNeedsDiscountItem, resolveDiscountItem, type DiscountItem } from '@/lib/discount-item';
 import { untaxedFlag } from '@/lib/so-sync';
 import { normalizeVehicleCount } from '@/lib/estimate-totals';
 
@@ -390,6 +390,32 @@ export async function POST(req: NextRequest) {
     // signed total covered the fleet.
     const units = normalizeVehicleCount(estimate.vehicle_count);
 
+    // Discounts (migration 342 whole-job, 350 per line) push as lines on the
+    // NetSuite discount item (src/lib/discount-item). No discount item means
+    // NetSuite would quote the full price, so the push stops and says so
+    // instead of sending a copy that disagrees.
+    const discountNeeded = estimateNeedsDiscountItem(estimate, lines);
+    let discountItem: DiscountItem | null = null;
+    if (discountNeeded > 0) {
+      const { item, error: discountErr } = await resolveDiscountItem(supabase);
+      if (!item) {
+        await releaseClaim();
+        return NextResponse.json({
+          error: discountErr
+            ? `This estimate has $${discountNeeded.toFixed(2)} of discounts, but looking up the NetSuite discount item failed (${discountErr}). Nothing was pushed.`
+            : `This estimate has $${discountNeeded.toFixed(2)} of discounts, but NetSuite has no discount item. Create a Discount item in NetSuite (or name one in Settings → NetSuite Discount Item), then push again. Nothing was pushed.`,
+          step: 'discount_item',
+        }, { status: 409 });
+      }
+      discountItem = item;
+    }
+    // A line's own discount goes right under it (NetSuite applies a discount
+    // line to the line above).
+    const pushLineDiscount = (line: any) => {
+      const d = discountItem ? buildLineDiscountLine(line, estimate, discountItem) : null;
+      if (d) nsLineItems.push(d);
+    };
+
     for (const line of lines) {
       // A qty-0 line totals to $0 on the customer's document — never send
       // it to NetSuite, where it previously landed as one unit at full
@@ -403,6 +429,7 @@ export async function POST(req: NextRequest) {
           description: kitTaggedDescription(line.description || undefined, line),
           ...untaxedFlag(line),
         });
+        pushLineDiscount(line);
         continue;
       }
 
@@ -421,6 +448,7 @@ export async function POST(req: NextRequest) {
         description: kitTaggedDescription(line.notes ? `${label} (${line.notes})` : label, line),
         ...untaxedFlag(line),
       });
+      pushLineDiscount(line);
       customLineDescriptions.push(label);
     }
 
@@ -451,24 +479,9 @@ export async function POST(req: NextRequest) {
         console.warn('Could not resolve a NetSuite labor item — labor not pushed');
       }
     }
-    // The discount (migration 342) goes last, as a taxed line for its share
-    // on taxed parts and an untaxed line for the rest (src/lib/discount-item).
-    // No discount item means NetSuite would quote the full price, so the
-    // push stops and says so instead of sending a copy that disagrees.
-    const discountSplitNow = estimateDiscountSplit(estimate, lines);
-    if (discountSplitNow.amount > 0) {
-      const { item: discountItem, error: discountErr } = await resolveDiscountItem(supabase);
-      if (!discountItem) {
-        await releaseClaim();
-        return NextResponse.json({
-          error: discountErr
-            ? `This estimate has a $${discountSplitNow.amount.toFixed(2)} discount, but looking up the NetSuite discount item failed (${discountErr}). Nothing was pushed.`
-            : `This estimate has a $${discountSplitNow.amount.toFixed(2)} discount, but NetSuite has no discount item. Create a Discount item in NetSuite (or name one in Settings → NetSuite Discount Item), then push again. Nothing was pushed.`,
-          step: 'discount_item',
-        }, { status: 409 });
-      }
-      nsLineItems.push(...buildDiscountLines(estimate, lines, discountItem));
-    }
+    // The whole-job discount (migration 342) goes last, as a taxed line for
+    // its share on taxed parts and an untaxed line for the rest.
+    if (discountItem) nsLineItems.push(...buildDiscountLines(estimate, lines, discountItem));
 
     // Echoed on both responses so the builder can name the money that did
     // not make it (or the item it billed to).

@@ -21,7 +21,7 @@ const service = createServiceClient();
  * pings every admin, plus the assigned reviewer, to open it and approve it
  * (any admin can decide a review — canDecideReview). Once per review round;
  * a fresh Send for Review starts a new round, and so does a snooze running
- * out (migration 347). Reminders only go out while the shop clock runs, so a
+ * out (migration 350). Reminders only go out while the shop clock runs, so a
  * snooze that ends on a Saturday reminds Monday morning.
  *
  * Runs every hour, every day: the shop-hours clock does the gating (a run at

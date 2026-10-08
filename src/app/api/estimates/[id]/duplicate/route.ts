@@ -162,6 +162,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         taxable: l.taxable ?? null,
         notes: l.notes ?? null,
         wrap_quote_id: l.wrap_quote_id ?? null,
+        discount_type: l.discount_type ?? null,
+        discount_value: l.discount_value ?? null,
+        discount_amount: l.discount_amount ?? 0,
         ...kitLineColumns(l),
       }));
       const { error: lineErr } = await supabase.from('estimate_line_items').insert(lineRows);

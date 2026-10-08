@@ -18,7 +18,7 @@ import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
 import { estimatePdfFilename } from '@/lib/estimate-pdf';
 import { validateBody, z } from '@/lib/validate';
 import { computeQuotedMargin, estimateDiscountRatio, getMarginFloorPct } from '@/lib/quoted-margin';
-import { normalizeVehicleCount } from '@/lib/estimate-totals';
+import { netUnitPrice, normalizeVehicleCount } from '@/lib/estimate-totals';
 import { getShopLaborRate } from '@/lib/shop-labor';
 import { logAudit } from '@/lib/audit';
 import { notify, notifyMany, getSuperAdminIds } from '@/lib/notify';
@@ -286,7 +286,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     (rawLineItems || []).map((l: any) => ({
       item_number: l.item_number ?? null,
       quantity: (Number(l.quantity) || 0) * marginUnits,
-      unit_price: Number(l.unit_price) || 0,
+      // After the line's own discount (migration 350): that is what it earns.
+      unit_price: netUnitPrice(l, marginUnits),
       purchase_price: l.part_id ? (costByPart.get(l.part_id)?.purchase_price ?? null) : null,
       avg_install_cost: l.part_id ? (costByPart.get(l.part_id)?.avg_install_cost ?? null) : null,
     })),
