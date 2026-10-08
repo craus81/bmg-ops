@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { logAudit } from '@/lib/audit';
 import { validateBody, z } from '@/lib/validate';
-import { computeTotals, normalizeDiscount, normalizeVehicleCount } from '@/lib/estimate-totals';
+import { computeTotals, lineDiscountColumns, normalizeDiscount, normalizeVehicleCount } from '@/lib/estimate-totals';
 import { resolveLineTaxability } from '@/lib/line-taxability';
 import { getSalesTaxRate } from '@/lib/sales-tax';
 import { getDefaultLaborRate, toLaborRate } from '@/lib/labor-rate';
@@ -29,6 +29,9 @@ const LineItemSchema = z.object({
   // Which wrap quote produced the line (Add Graphics flow) — must survive
   // the builder's save round trip or re-adding an edited quote duplicates.
   wrap_quote_id: z.string().uuid().optional().nullable(),
+  // This line's own discount (migration 350). null/absent = none.
+  discount_type: z.enum(['percent', 'amount']).optional().nullable(),
+  discount_value: z.union([z.number(), z.string()]).optional().nullable(),
   // Rack kit grouping (migration 332) — must survive the save round trip.
   ...kitLineSchemaFields,
 });
@@ -374,6 +377,7 @@ export async function POST(req: NextRequest) {
           taxable: l.taxable,
           notes: l.notes || null,
           wrap_quote_id: l.wrap_quote_id || null,
+          ...lineDiscountColumns(l, units),
           ...kitLineColumns(l),
         }));
         // Checked: the delete above already ran, so a discarded insert error
@@ -403,6 +407,7 @@ export async function POST(req: NextRequest) {
           salesOrderNumber = after.netsuite_so_number || null;
           const nowHash = soContentHash(after, lines.map((l: any, idx: number) => ({
             item_number: l.item_number || null, quantity: l.quantity, unit_price: l.unit_price, sort_order: idx, taxable: l.taxable,
+            discount_type: l.discount_type, discount_value: l.discount_value,
           })));
           // A null pushed hash (converted before migration 259) is unknown,
           // not "in sync" — offer the push with the softer wording client-side.
@@ -494,6 +499,7 @@ export async function POST(req: NextRequest) {
           taxable: l.taxable,
           notes: l.notes || null,
           wrap_quote_id: l.wrap_quote_id || null,
+          ...lineDiscountColumns(l, units),
           ...kitLineColumns(l),
         }));
         // Checked for the same reason as the update path above.

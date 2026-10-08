@@ -73,6 +73,10 @@ export function publicLines(lines: any[]) {
     product_url: l.part_product_url || null,
     kit_header: !!l.kit_header,
     kit_component: !!l.kit_component,
+    // The line's own discount (migration 350), shown as a row under it.
+    discount_type: l.discount_type ?? null,
+    discount_value: l.discount_value ?? null,
+    discount_amount: Number(l.discount_amount) || 0,
   }));
 }
 

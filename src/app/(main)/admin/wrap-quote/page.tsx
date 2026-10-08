@@ -55,6 +55,7 @@ import { summarizeAudits, applyCoverageNorm, type TemplateAudit, type AuditSumma
 import { referenceDimensions, calibrationDelta, type PanelDimension } from '@/lib/wrap-reference';
 import { estimateHeadlineNumber } from '@/lib/estimate-number';
 import { ROOF_ORDER } from '@/lib/template-facets';
+import CreatedBy from '@/components/CreatedBy';
 import {
   DEFAULT_ROLL,
   MAX_ROLLS_PER_FILM,
@@ -201,6 +202,7 @@ interface Measurement {
 interface WrapQuote {
   id: string;
   quote_number: string;
+  created_by?: string | null;
   template_id: string | null;
   vehicle_description: string | null;
   customer_id: string | null;
@@ -4242,6 +4244,7 @@ export default function WrapQuotePage() {
                     <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '8px' }}>{q.quote_number}</span>
                   </div>
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{q.vehicle_description || '—'}{q.project_type ? ` · ${q.project_type}` : ''}</div>
+                  <CreatedBy compact userId={q.created_by} at={q.created_at} style={{ display: 'block', fontSize: '10px' }} />
                 </div>
                 {q.netsuite_estimate_number && (
                   <button
@@ -4336,7 +4339,8 @@ export default function WrapQuotePage() {
         <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={closeViewQuote}>
           <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '640px', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto' }}>
             {quotePreview(viewQuote)}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px', marginTop: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px', marginTop: '8px', alignItems: 'center' }}>
+              <CreatedBy userId={viewQuote.created_by} at={viewQuote.created_at} style={{ marginRight: 'auto', color: 'var(--text-secondary)' }} />
               <button onClick={() => loadQuoteForEdit(viewQuote, 'estimator')} title="Reopen this quote on the drawing to change its boxes" style={btnStyle('#60a5fa', 'var(--card)')}>Edit</button>
               <button onClick={() => loadQuoteForEdit(viewQuote, 'quote')} title="Reopen this quote on the Quote tab to send it again" style={btnStyle('#60a5fa', 'var(--card)')}>Resend</button>
               <button

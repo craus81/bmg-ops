@@ -69,7 +69,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       .eq('context_entity_type', 'graphics_job')
       .eq('context_entity_id', jobId),
   ]);
-  // sms_log is new (migration 347); an unmigrated database just has no texts.
+  // sms_log is new (migration 350); an unmigrated database just has no texts.
   if (roundsRes.error) return NextResponse.json({ error: roundsRes.error.message }, { status: 500 });
   if (emailsRes.error) return NextResponse.json({ error: emailsRes.error.message }, { status: 500 });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeTotals, discountLabel, discountSplit, normalizeDiscount, roundCentsHalfEven, normalizeVehicleCount } from './estimate-totals';
+import { computeTotals, discountLabel, discountSplit, lineDiscountColumns, lineMoney, netUnitPrice, normalizeDiscount, roundCentsHalfEven, normalizeVehicleCount } from './estimate-totals';
 
 // Characterization tests: these lock in the production behavior of the
 // estimate money math. If one of these fails, pricing changed — make sure
@@ -21,6 +21,7 @@ describe('computeTotals', () => {
       labor_total: 332.5,
       discount_amount: 0,
       discount_taxed: 0,
+      line_discount_total: 0,
       tax_amount: 20,
       grand_total: 602.5,
     });
@@ -48,6 +49,7 @@ describe('computeTotals', () => {
       labor_total: 332.5,
       discount_amount: 0,
       discount_taxed: 0,
+      line_discount_total: 0,
       tax_amount: 0,
       grand_total: 582.5,
     });
@@ -93,6 +95,7 @@ describe('computeTotals', () => {
       labor_total: 0,
       discount_amount: 0,
       discount_taxed: 0,
+      line_discount_total: 0,
       tax_amount: 0,
       grand_total: 0,
     });
@@ -315,6 +318,7 @@ describe('estimate discount (migration 342)', () => {
       labor_total: 332.5,
       discount_amount: 58.25,
       discount_taxed: 25,
+      line_discount_total: 0,
       tax_amount: 18,
       grand_total: 542.25,
     });
@@ -390,5 +394,47 @@ describe('discountLabel', () => {
     expect(discountLabel('percent', 10)).toBe('Discount (10%)');
     expect(discountLabel('percent', '12.5')).toBe('Discount (12.5%)');
     expect(discountLabel('amount', 250)).toBe('Discount');
+  });
+});
+
+describe('line discount (migration 350)', () => {
+  it('takes a percent or dollars off one line, capped at the line', () => {
+    expect(lineMoney({ quantity: 2, unit_price: 100, discount_type: 'percent', discount_value: 10 })).toEqual({ gross: 200, discount: 20, net: 180 });
+    expect(lineMoney({ quantity: 2, unit_price: 100, discount_type: 'amount', discount_value: 25 })).toEqual({ gross: 200, discount: 25, net: 175 });
+    expect(lineMoney({ quantity: 1, unit_price: 10, discount_type: 'amount', discount_value: 25 })).toEqual({ gross: 10, discount: 10, net: 0 });
+    expect(lineMoney({ quantity: 1, unit_price: 10 })).toEqual({ gross: 10, discount: 0, net: 10 });
+  });
+
+  it('a dollar line discount on a fleet estimate is for the whole line, all vehicles', () => {
+    expect(lineMoney({ quantity: 1, unit_price: 100, discount_type: 'amount', discount_value: 30 }, 3)).toEqual({ gross: 300, discount: 30, net: 270 });
+    expect(lineMoney({ quantity: 1, unit_price: 100, discount_type: 'percent', discount_value: 10 }, 3).discount).toBe(30);
+  });
+
+  it('comes off the subtotal and lowers that line\'s tax only', () => {
+    const r = computeTotals([
+      { quantity: 1, unit_price: 500, discount_type: 'percent', discount_value: 20 }, // taxed: 400 net
+      { quantity: 1, unit_price: 100, taxable: false, discount_type: 'amount', discount_value: 10 }, // untaxed: 90 net
+    ], 0.1, false, 0, null);
+    expect(r.subtotal).toBe(490);
+    expect(r.line_discount_total).toBe(110);
+    expect(r.tax_amount).toBe(40); // 50 - 10, nothing from the untaxed line
+    expect(r.grand_total).toBe(530);
+  });
+
+  it('the whole-job discount applies after line discounts', () => {
+    const r = computeTotals(
+      [{ quantity: 1, unit_price: 500, discount_type: 'percent', discount_value: 20 }],
+      0, false, 0, null, 1, { type: 'percent', value: 10 },
+    );
+    expect(r.subtotal).toBe(400);
+    expect(r.discount_amount).toBe(40);
+    expect(r.grand_total).toBe(360);
+  });
+
+  it('stores the columns and nets the unit price for margins', () => {
+    const l = { quantity: 4, unit_price: 50, discount_type: 'percent', discount_value: '25' };
+    expect(lineDiscountColumns(l)).toEqual({ discount_type: 'percent', discount_value: 25, discount_amount: 50 });
+    expect(lineDiscountColumns({ quantity: 1, unit_price: 5 })).toEqual({ discount_type: null, discount_value: null, discount_amount: 0 });
+    expect(netUnitPrice(l)).toBe(37.5);
   });
 });

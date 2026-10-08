@@ -135,17 +135,26 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
   const units = normalizeVehicleCount(est.vehicle_count);
   const perVehicle = perVehicleAmount(est.grand_total, est.vehicle_count);
   // Rack kits: one priced rack line, components indented beneath it.
-  const rows: QuoteDocRow[] = toKitDisplayLines(lines).map((l: any) => {
+  const rows: QuoteDocRow[] = toKitDisplayLines(lines).flatMap((l: any): QuoteDocRow[] => {
+    // A line's own discount (migration 350) is a row under it.
+    const withDiscount = (row: QuoteDocRow): QuoteDocRow[] => (Number(l.discount_amount) > 0
+      ? [row, {
+        itemHtml: `<div style="padding-left:18px;font-size:12px;color:#15803d;">${escHtml(discountLabel(l.discount_type, l.discount_value))}</div>`,
+        qtyHtml: '',
+        rateHtml: '',
+        totalHtml: `<span style="color:#15803d;">&minus;${money(l.discount_amount)}</span>`,
+      }]
+      : [row]);
     if (l.kit_component) {
       const qty = units > 1 ? `${escHtml(l.quantity)} &times; ${units}` : escHtml(l.quantity);
       const desc = l.description && l.description !== l.item_number
         ? ` <span style="color:#6b7280;">${escHtml(l.description)}</span>` : '';
-      return {
+      return [{
         itemHtml: `<div style="padding-left:18px;font-size:12px;color:#374151;">&#8627; ${escHtml(l.item_number || l.description || 'Part')}${desc}</div>`,
         qtyHtml: `<span style="font-size:12px;color:#374151;">${qty}</span>`,
         rateHtml: '',
         totalHtml: '',
-      };
+      }];
     }
     // Fleet estimates (R6-9): quantities are per vehicle, line totals are
     // for the whole order. Showing per-vehicle line totals under a fleet
@@ -171,7 +180,7 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
     const qtyHtml = units > 1
       ? `${escHtml(l.quantity)} &times; ${units}`
       : escHtml(l.quantity);
-    return { itemHtml, qtyHtml, rateHtml: money(l.unit_price), totalHtml: money(lineTotal) };
+    return withDiscount({ itemHtml, qtyHtml, rateHtml: money(l.unit_price), totalHtml: money(lineTotal) });
   });
 
   const laborHours = est.labor_hours_override ?? est.labor_hours;
