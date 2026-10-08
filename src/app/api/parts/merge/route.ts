@@ -37,6 +37,9 @@ interface PartRow {
   graphic_package: string | null;
   customer: string | null;
   proof_pages: number | null;
+  outsource_vendor: string | null;
+  vendor_cost: number | null;
+  target_margin_pct: number | null;
 }
 
 // Merge duplicate catalog rows (same part number) into a single keeper. Folds
@@ -123,6 +126,9 @@ export async function POST(req: NextRequest) {
     fillNum('purchase_price', firstPos((p) => p.purchase_price));
     fillNum('labor_hours', firstPos((p) => p.labor_hours));
     fillNum('proof_pages', firstPos((p) => p.proof_pages));
+    fillText('outsource_vendor', firstText((p) => p.outsource_vendor));
+    fillNum('vendor_cost', firstPos((p) => p.vendor_cost));
+    fillNum('target_margin_pct', firstPos((p) => p.target_margin_pct));
 
     if (Object.keys(fill).length > 0) {
       fill.updated_at = new Date().toISOString();

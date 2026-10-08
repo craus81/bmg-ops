@@ -18,6 +18,7 @@ import PartTransactionsModal from '@/components/PartTransactionsModal';
 import PartPosModal from '@/components/PartPosModal';
 import { loadBillableCustomers, type BillableCustomer } from '@/lib/billable-customers';
 import { isPartTaxable, partTaxReason } from '@/lib/line-taxability';
+import { marginPct, priceForMargin } from '@/lib/pricing-request';
 
 interface Part {
   id: string;
@@ -54,6 +55,12 @@ interface Part {
   // vendor_invoice_lines, maintained by recompute_part_install_cost)
   avg_install_cost: number | null;
   install_cost_count: number | null;
+  // Outsourced parts (migration 353): what the vendor charges and the margin
+  // BMG aims for, loaded from Admin → Vendor Costs. FleetSuite only, and a
+  // reference: the sales price is still whatever was quoted.
+  outsource_vendor: string | null;
+  vendor_cost: number | null;
+  target_margin_pct: number | null;
   // Catalog-browser assets (FleetSuite-owned; stocked by the vendor-asset
   // import or manual upload in the visual catalog)
   image_path: string | null;
@@ -1248,6 +1255,20 @@ export default function PartsPage() {
                         onClick={() => setPoModal({ partNumber: part.item_number, mode: 'all' })} />
                       {margin && (
                         <DetailField label="Margin" value={`${margin}%`} color={parseFloat(margin) > 30 ? '#34d399' : '#f59e0b'} />
+                      )}
+                      {showCost && part.vendor_cost != null && (
+                        <DetailField
+                          label={part.outsource_vendor ? `Vendor Cost (${part.outsource_vendor})` : 'Vendor Cost'}
+                          value={`${formatCurrency(Number(part.vendor_cost))}${marginPct(part.sales_price, Number(part.vendor_cost)) != null ? ` · earns ${marginPct(part.sales_price, Number(part.vendor_cost))}%` : ''}`}
+                          color="#f59e0b"
+                        />
+                      )}
+                      {showCost && part.target_margin_pct != null && (
+                        <DetailField
+                          label="Target Margin"
+                          value={`${Number(part.target_margin_pct)}%${priceForMargin(part.vendor_cost, part.target_margin_pct) != null ? ` · ${formatCurrency(priceForMargin(part.vendor_cost, part.target_margin_pct)!)}` : ''}`}
+                          color="#f59e0b"
+                        />
                       )}
                       {showCost && part.avg_install_cost != null && (
                         <DetailField

@@ -171,7 +171,7 @@ export async function promoteManualTwins(
   while (hasMore) {
     const { data: batch } = await service
       .from('netsuite_parts')
-      .select('id, item_number, vehicle_type, graphic_package, customer, proof_pages, billable_customer')
+      .select('id, item_number, vehicle_type, graphic_package, customer, proof_pages, billable_customer, outsource_vendor, vendor_cost, target_margin_pct, vendor_cost_updated_at, vendor_cost_updated_by')
       .eq('source', 'manual')
       .order('id')
       .range(page * 1000, (page + 1) * 1000 - 1);
@@ -189,7 +189,7 @@ export async function promoteManualTwins(
     // The freshly-synced twin (source='netsuite', same item number).
     const { data: twins } = await service
       .from('netsuite_parts')
-      .select('id, vehicle_type, graphic_package, customer, proof_pages, billable_customer')
+      .select('id, vehicle_type, graphic_package, customer, proof_pages, billable_customer, vendor_cost')
       .eq('source', 'netsuite')
       .ilike('item_number', m.item_number)
       .limit(1);
@@ -204,6 +204,14 @@ export async function promoteManualTwins(
       proof_pages: twin.proof_pages ?? m.proof_pages,
       billable_customer: (twin.billable_customer && twin.billable_customer !== '')
         ? twin.billable_customer : m.billable_customer,
+      // Uploaded vendor cost (migration 353) travels as one set.
+      ...(twin.vendor_cost == null && m.vendor_cost != null ? {
+        outsource_vendor: m.outsource_vendor,
+        vendor_cost: m.vendor_cost,
+        target_margin_pct: m.target_margin_pct,
+        vendor_cost_updated_at: m.vendor_cost_updated_at,
+        vendor_cost_updated_by: m.vendor_cost_updated_by,
+      } : {}),
       catalog: 'graphics',
       updated_at: now,
     }).eq('id', twin.id);
