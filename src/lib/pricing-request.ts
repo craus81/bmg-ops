@@ -152,6 +152,20 @@ export function priceForMargin(cost: number | null | undefined, marginPct: numbe
   return money(c / (1 - m / 100));
 }
 
+/**
+ * The reverse (vendor budget): the most a vendor can charge for a price to
+ * still earn the margin (cost = price × (1 - margin)).
+ */
+export function costForMargin(price: number | null | undefined, marginPct: number | null | undefined): number | null {
+  const p = Number(price);
+  const m = Number(marginPct);
+  if (price == null || marginPct == null || !Number.isFinite(p) || !Number.isFinite(m) || p <= 0 || m < 0 || m >= 100) return null;
+  return money(p * (1 - m / 100));
+}
+
+/** Margins the calculator lists by default (owner: "margin options"). */
+export const MARGIN_OPTIONS = [20, 25, 30, 35, 40, 45, 50];
+
 /** Gross margin a price earns over a cost, in percent (one decimal). */
 export function marginPct(price: number | null | undefined, cost: number | null | undefined): number | null {
   const p = Number(price);

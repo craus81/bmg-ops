@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  defaultPriceSheetLines, marginPct, matchScore, newPartPairs, priceForMargin, pricingRequestStage, quotedPrices, rankRequestsForPair,
+  costForMargin, defaultPriceSheetLines, marginPct, matchScore, newPartPairs, priceForMargin, pricingRequestStage, quotedPrices, rankRequestsForPair,
   type PoLineForLink,
 } from './pricing-request';
 
@@ -101,5 +101,7 @@ describe('updated pricing and vendor budget', () => {
     expect(priceForMargin(300, 100)).toBeNull();
     expect(marginPct(500, 300)).toBe(40);
     expect(marginPct(0, 300)).toBeNull();
+    expect(costForMargin(500, 40)).toBe(300);
+    expect(costForMargin(null, 40)).toBeNull();
   });
 });

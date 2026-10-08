@@ -33,6 +33,7 @@ import { uploadRecordFile } from '@/lib/record-file-upload';
 import { toJpegIfHeic } from '@/lib/heic';
 import { createClient } from '@/lib/supabase-browser';
 import PartNumberAutocomplete from '@/components/PartNumberAutocomplete';
+import MarginCalculator from '@/components/MarginCalculator';
 import {
   DEFAULT_PRICING_REQUEST_CUSTOMER, PRICING_REQUEST_CUSTOMERS, REQUEST_TYPE_LABELS, STAGE_META, STAGE_ORDER,
   defaultPriceSheetLines, marginPct, priceForMargin, quotedPrices,
@@ -526,11 +527,12 @@ export default function PricingRequestsPage() {
               <input inputMode="decimal" value={pricing.vendor_cost} onChange={e => setPricing(p => ({ ...p, vendor_cost: e.target.value }))} placeholder="Vendor cost $" style={input} />
               <input inputMode="decimal" value={pricing.target_margin_pct} onChange={e => setPricing(p => ({ ...p, target_margin_pct: e.target.value }))} placeholder="Target margin %" style={input} />
             </div>
-            {priceForMargin(numOrNull(pricing.vendor_cost), numOrNull(pricing.target_margin_pct)) != null && (
-              <div style={{ fontSize: '12px', color: '#4ade80', marginTop: '6px', fontWeight: 700 }}>
-                Price for that margin: {fmtMoney(priceForMargin(numOrNull(pricing.vendor_cost), numOrNull(pricing.target_margin_pct)))}
-              </div>
-            )}
+            <MarginCalculator
+              cost={numOrNull(pricing.vendor_cost)}
+              price={pricing.request_type === 'update' ? pricing.part?.sales_price ?? null : null}
+              targetMargin={numOrNull(pricing.target_margin_pct)}
+              onPickMargin={m => setPricing(p => ({ ...p, target_margin_pct: String(m) }))}
+            />
           </div>
           <div style={{ marginTop: '12px' }}>
             <label style={label}>Pictures or proofs</label>
@@ -741,7 +743,13 @@ export default function PricingRequestsPage() {
                 {quotedMargin != null && <div>Quoted graphic {fmtMoney(quoted.part)} earns <b style={{ color: quotedMargin < (target ?? 0) ? '#fbbf24' : '#4ade80' }}>{quotedMargin}%</b></div>}
                 {dirty && <button style={{ ...primaryBtn, padding: '6px 12px', fontSize: '12px', marginLeft: 'auto' }} disabled={busy} onClick={() => saveBudget(r.id)}>Save budget</button>}
               </div>
-              <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '6px' }}>Margin is profit as a share of the selling price: price = cost ÷ (1 − margin).</div>
+              <MarginCalculator
+                cost={cost}
+                price={quoted.part > 0 ? quoted.part : null}
+                targetMargin={target}
+                onPickMargin={m => setBudget(b => ({ ...b, target_margin_pct: String(m) }))}
+              />
+              <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '6px' }}>Margin is profit as a share of the selling price: price = cost ÷ (1 − margin). Tap a row to make it the target. The catalog price is always what was quoted.</div>
             </div>
           );
         })()}
