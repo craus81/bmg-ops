@@ -30,6 +30,8 @@ export interface CoverageBox {
   qty?: number;
   /** wrap_substrates.id — the film this panel prints on. */
   substrate_id?: string | null;
+  /** Vinyl price for one of this panel, typed by the rep; null = by area. */
+  price_override?: number | null;
   /** Real dimensions. Measured from the photo's calibration, unless `manual`. */
   width_in?: number | null;
   height_in?: number | null;
@@ -273,6 +275,7 @@ export function sanitizeCoverageBoxes(raw: any): CoverageBox[] {
       rect,
       qty: qty && qty > 0 ? Math.round(qty) : 1,
       substrate_id: typeof b?.substrate_id === 'string' ? b.substrate_id : null,
+      price_override: b?.price_override != null && Number.isFinite(Number(b.price_override)) && Number(b.price_override) >= 0 ? Number(b.price_override) : null,
       width_in: num(b?.width_in),
       height_in: num(b?.height_in),
       area_in2: num(b?.area_in2),

@@ -45,6 +45,8 @@ interface Props {
   /** Patch the active photo (boxes and/or calibration). */
   onChange: (patch: Partial<PhotoProof>) => void;
   films: ProofFilmOption[];
+  /** Roll pricing is on, so a box can't carry its own price. */
+  rollPriced?: boolean;
   /** Film given to newly drawn boxes — the last one the user picked. */
   defaultFilmId?: string | null;
   onPickFilm?: (filmId: string | null) => void;
@@ -53,6 +55,10 @@ interface Props {
   suggestedLineInches?: number | null;
   /** What to tell the user to drag the known length along. */
   lineHint?: string | null;
+  /** Boxes checked for a bulk film change (the board owns the selection,
+   *  since it spans every photo on the quote). */
+  checkedIds?: Set<string>;
+  onToggleChecked?: (id: string, on: boolean) => void;
 }
 
 type Tool = 'box' | 'select' | 'calibrate-line' | 'calibrate-plane';
@@ -148,7 +154,7 @@ export function CoverageProofPreview({ src, boxes, caption }: { src: string; box
   );
 }
 
-export default function PhotoCoverageProof({ src, proof, onChange, films, defaultFilmId, onPickFilm, suggestedLineInches, lineHint }: Props) {
+export default function PhotoCoverageProof({ src, proof, onChange, films, rollPriced, defaultFilmId, onPickFilm, suggestedLineInches, lineHint, checkedIds, onToggleChecked }: Props) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [dim, setDim] = useState<{ w: number; h: number } | null>(null);
   const [tool, setTool] = useState<Tool>('box');
@@ -725,6 +731,16 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
             background: b.id === selectedId ? 'rgba(245,158,11,0.12)' : 'var(--subtle-bg)',
             border: `1px solid ${b.id === selectedId ? 'rgba(245,158,11,0.4)' : 'transparent'}`,
           }}>
+            {onToggleChecked && (
+              <input
+                type="checkbox"
+                checked={!!checkedIds?.has(b.id)}
+                onClick={e => e.stopPropagation()}
+                onChange={e => onToggleChecked(b.id, e.target.checked)}
+                aria-label={`Select ${b.label || 'box'}`}
+                style={{ margin: 0, flexShrink: 0 }}
+              />
+            )}
             <span style={{ width: '10px', height: '10px', borderRadius: '3px', background: b.color, flexShrink: 0 }} />
             <span style={{ flex: 1, fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {b.label || 'Untitled'}
@@ -813,6 +829,16 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, defaul
                 </select>
               </div>
             </div>
+            <div style={labelStyle}>Price each ($)</div>
+            <input
+              type="number" min={0} step="0.01"
+              value={selected.price_override ?? ''}
+              disabled={rollPriced}
+              onChange={e => update(selected.id, { price_override: e.target.value.trim() === '' ? null : Math.max(0, parseFloat(e.target.value) || 0) })}
+              placeholder={rollPriced ? 'roll priced' : 'auto (by area)'}
+              title={rollPriced ? 'Roll pricing is on — vinyl prices from the roll layout. Turn it off to price boxes one by one.' : 'Type a vinyl price for one of this box; clear it to price by area again'}
+              style={{ ...inputStyle, marginBottom: '8px', opacity: rollPriced ? 0.5 : 1 }}
+            />
             <div style={labelStyle}>Color</div>
             <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginBottom: '8px' }}>
               {COVERAGE_COLORS.map(c => (
