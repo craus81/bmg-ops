@@ -1098,7 +1098,10 @@ export default function GraphicsJobRecordPage() {
             >#{workRank.position} of {workRank.total}</span>
           )}
           {category !== 'production' && <span style={chip(GRAPHICS_CATEGORY_COLORS[category])}>{GRAPHICS_CATEGORY_LABELS[category]}</span>}
-          <span style={chip(statusColor)}>{GRAPHICS_STATUS_LABELS[job.status]}</span>
+          <span
+            style={chip(statusColor)}
+            title={job.status === 'cancelled' ? "Archived: off the board but kept. Find it under Filters → Other → Archived / Cancelled; change the status to bring it back." : undefined}
+          >{GRAPHICS_STATUS_LABELS[job.status]}{job.status === 'cancelled' ? ' · Archived' : ''}</span>
           {/* Pre-invoice pick/pack sheet (Stage 5): the invoice-based packing
               list only exists after billing — the bench needs one at the
               packing stage, so this renders from the job + material log. */}
@@ -1248,6 +1251,7 @@ export default function GraphicsJobRecordPage() {
           {isAdmin && (
             <button
               onClick={deleteJob}
+              title="Permanently delete this job. To keep it on file, use Cancel Job instead."
               style={{ padding: '10px 14px', borderRadius: '8px', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
             >
               Delete
@@ -1256,6 +1260,7 @@ export default function GraphicsJobRecordPage() {
           {job.status !== 'cancelled' && (
             <button
               onClick={() => promptStatusChange('cancelled')}
+              title="Take this job off the board. It's kept, not deleted: find it under Filters → Other → Archived / Cancelled."
               style={{ padding: '10px 14px', borderRadius: '8px', background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)', color: '#6b7280', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
             >
               Cancel Job
@@ -2109,6 +2114,11 @@ export default function GraphicsJobRecordPage() {
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
               {job.title} — <span style={{ color: GRAPHICS_STATUS_COLORS[job.status] }}>{GRAPHICS_STATUS_LABELS[job.status]}</span> → <span style={{ color: GRAPHICS_STATUS_COLORS[pendingStatus], fontWeight: 700 }}>{GRAPHICS_STATUS_LABELS[pendingStatus]}</span>
             </div>
+            {pendingStatus === 'cancelled' && (
+              <div style={{ fontSize: '12px', color: 'var(--text-body)', marginBottom: '10px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)' }}>
+                This job comes off the board but isn&apos;t deleted. Find it any time on the Graphics Production board under <b>Filters → Other → Archived / Cancelled</b>, and bring it back by changing its status.
+              </div>
+            )}
             {pendingStatus === 'shipped' && (
               <div style={{ marginBottom: '10px' }}>
                 <div style={labelStyle}>Tracking #</div>
@@ -2128,7 +2138,7 @@ export default function GraphicsJobRecordPage() {
               autoFocus
               value={statusComment}
               onChange={setStatusComment}
-              placeholder={pendingStatus === 'shipped' ? 'Shipping notes (optional)... @name to tag' : 'Add a comment (optional)... @name to tag'}
+              placeholder={pendingStatus === 'shipped' ? 'Shipping notes (optional)... @name to tag' : pendingStatus === 'cancelled' ? 'Why? e.g. customer went quiet (optional)... @name to tag' : 'Add a comment (optional)... @name to tag'}
               style={{
                 width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px',
                 background: 'var(--input-bg)', border: '1px solid var(--border)',
