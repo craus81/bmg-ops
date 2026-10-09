@@ -18,6 +18,8 @@ import { theme } from '@/lib/theme';
 import { RollNesting, RollFilmInfo } from '@/components/RollNesting';
 import NumberInput from '@/components/NumberInput';
 import { CoverageProofPreview, type ProofFilmOption } from '@/components/PhotoCoverageProof';
+import BulkFilmBar from '@/components/BulkFilmBar';
+import { parseFinalPrice, parseRateMap, readPricingOverrides, scaleQuoteSnapshot } from '@/lib/wrap-quote-price-override';
 import PhotoProofBoard from '@/components/PhotoProofBoard';
 import {
   allProofBoxes,
@@ -198,10 +200,14 @@ interface Measurement {
   dim2_in: number;
   qty: number;
   substrate_id: string | null;
+  /** Vinyl price for one of this shape, typed by the rep; null = by area. */
+  price_override?: number | null;
 }
 
 interface WrapQuote {
   id: string;
+  /** Manual pricing as typed (migration 356); null on older quotes. */
+  pricing_overrides?: any;
   quote_number: string;
   created_by?: string | null;
   template_id: string | null;
@@ -511,6 +517,7 @@ export default function WrapQuotePage() {
         dim2_in: num(b.height_in),
         qty: Math.max(1, num(b.qty) || 1),
         substrate_id: b.substrate_id || null,
+        price_override: b.price_override ?? null,
       })));
   }, [photoProofs]);
 
@@ -519,6 +526,8 @@ export default function WrapQuotePage() {
   // business.
   const measurements = photoMode ? photoMeasurements : drawnMeasurements;
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Shapes checked in the Measurements list for a bulk film change.
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   // Film applied to newly drawn shapes: sticks to the last film the user
   // picked instead of resetting to the first film in the list on every box.
   const [lastFilmId, setLastFilmId] = useState<string | null>(null);
@@ -1009,13 +1018,26 @@ export default function WrapQuotePage() {
   };
 
   // ----- Pricing math -----
+  // Per-quote vinyl price overrides ($/sqft), keyed by film id. Empty
+  // string = the film's price from the Pricing tab.
+  const [vinylRates, setVinylRates] = useState<Record<string, string>>({});
+  const quoteFilmRate = (f: Film) => {
+    const o = vinylRates[f.id];
+    return o !== undefined && o !== '' ? num(o) : filmRate(f);
+  };
+  // Manual pre-tax price for the whole quote ('' = calculated). Every line
+  // the customer sees scales to it, so the quote still reads normally.
+  const [finalPriceText, setFinalPriceText] = useState('');
+
   const measurementPricing = (m: Measurement) => {
     const sub = substrateById(m.substrate_id);
     const bleed = sub ? num(sub.bleed_in) : 0;
     const trimArea = unitAreaSqft(m, 0);
     const billedArea = unitAreaSqft(m, bleed);
-    const unitPrice = billedArea * (sub ? filmRate(sub) : 0);
-    return { sub, trimArea, billedArea, unitPrice, lineTotal: unitPrice * Math.max(1, num(m.qty)) };
+    const calcUnitPrice = billedArea * (sub ? quoteFilmRate(sub) : 0);
+    const priced = m.price_override != null && Number.isFinite(m.price_override);
+    const unitPrice = priced ? Math.max(0, num(m.price_override)) : calcUnitPrice;
+    return { sub, trimArea, billedArea, unitPrice, calcUnitPrice, priced, lineTotal: unitPrice * Math.max(1, num(m.qty)) };
   };
 
   // Film choices for the photo proof sidebar — same active films and rates
@@ -1023,10 +1045,11 @@ export default function WrapQuotePage() {
   const proofFilms = useMemo<ProofFilmOption[]>(
     () => activeSubstrates.map(f => ({
       id: f.id,
-      label: `${filmLabel(f)} ($${fmt(filmRate(f))}/ft²)`,
-      ratePerSqft: filmRate(f),
+      label: `${filmLabel(f)} ($${fmt(quoteFilmRate(f))}/ft²)`,
+      ratePerSqft: quoteFilmRate(f),
     })),
-    [activeSubstrates],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- quoteFilmRate reads vinylRates
+    [activeSubstrates, vinylRates],
   );
 
   // Stable per-film color for canvas shapes; stored color wins, else palette.
@@ -1125,11 +1148,11 @@ export default function WrapQuotePage() {
     const used = new Set(measurements.map(m => m.substrate_id || ''));
     const out: RollFilmInfo[] = substrates
       .filter(s => used.has(s.id))
-      .map(s => ({ key: s.id, label: filmLabel(s), color: filmColor(s.id), ratePerSqft: filmRate(s) }));
+      .map(s => ({ key: s.id, label: filmLabel(s), color: filmColor(s.id), ratePerSqft: quoteFilmRate(s) }));
     if (used.has('')) out.push({ key: '', label: 'No film', color: '#94a3b8', ratePerSqft: 0 });
     return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- filmColor reads substrates
-  }, [measurements, substrates]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- filmColor reads substrates, quoteFilmRate reads vinylRates
+  }, [measurements, substrates, vinylRates]);
 
   // Keep the layout in step with the drawing: new pieces pack into the
   // gaps, deleted shapes free their spots, manual arrangements stay put.
@@ -1194,7 +1217,7 @@ export default function WrapQuotePage() {
       for (const [filmKey, row] of nestFilmBilling) {
         const film = substrateById(filmKey || null);
         if (!film) continue;
-        rollMaterials += (row.rollSqft + row.extraSqft) * filmRate(film);
+        rollMaterials += (row.rollSqft + row.extraSqft) * quoteFilmRate(film);
         nestedRollSqft += row.rollSqft;
       }
       materials = rollMaterials;
@@ -1221,14 +1244,19 @@ export default function WrapQuotePage() {
     const discountPct = discountPctOverride.trim() === ''
       ? tierPct
       : Math.min(100, Math.max(0, num(discountPctOverride)));
-    const discount = preSubtotal * discountPct / 100;
+    // A typed final price replaces the discount and shop minimum outright —
+    // it IS the pre-tax number the customer pays.
+    const finalPrice = preSubtotal > 0 ? parseFinalPrice(finalPriceText) : null;
+    const priceOverride = finalPrice != null;
+    const discount = priceOverride ? 0 : preSubtotal * discountPct / 100;
 
     // Shop minimum: no job quotes below the pre-tax floor — the bump covers
     // the fixed time a job takes regardless of its square footage.
     const minCharge = num(settings.min_job_charge);
     const afterDiscount = preSubtotal - discount;
-    const minBump = preSubtotal > 0 && afterDiscount < minCharge ? minCharge - afterDiscount : 0;
-    const subtotal = afterDiscount + minBump;
+    const minBump = !priceOverride && preSubtotal > 0 && afterDiscount < minCharge ? minCharge - afterDiscount : 0;
+    const calcSubtotal = afterDiscount + minBump;
+    const subtotal = finalPrice ?? calcSubtotal;
     // Fold the adjustments into materials/labor proportionally: the NetSuite
     // estimate and invoice read materials_total + labor_total directly, so
     // those two must always sum to what the customer was actually quoted.
@@ -1258,13 +1286,14 @@ export default function WrapQuotePage() {
       kitQty, kitArea, kitMaterials,
       area, billedArea, materials, filmTotals, filmLabor, design, prep, install, labor,
       preSubtotal, tierPct, discountPct, discount, minCharge, minBump,
+      priceOverride, calcSubtotal, adjust,
       adjMaterials: materials * adjust, adjLabor: labor * adjust,
       subtotal, tax, total: subtotal + tax,
       materialCost, uncostedFilms: [...uncostedFilms],
       nested, nestedRollSqft,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- substrates feed measurementPricing
-  }, [measurements, settings, substrates, laborRates, packageQty, discountPctOverride, useRollPricing, nestPieces, nestFilmBilling]);
+  }, [measurements, settings, substrates, laborRates, vinylRates, finalPriceText, packageQty, discountPctOverride, useRollPricing, nestPieces, nestFilmBilling]);
 
   // ----- Canvas drawing -----
   const svgPoint = (e: { clientX: number; clientY: number }): { x: number; y: number } | null => {
@@ -1504,6 +1533,14 @@ export default function WrapQuotePage() {
     setTool('select');
   };
 
+  // Bulk film change from the Measurements list: only the film moves, so
+  // pricing, nesting and box colors follow exactly as a one-by-one change.
+  const setFilmOnChecked = (filmId: string) => {
+    setLastFilmId(filmId);
+    setDrawnMeasurements(prev => prev.map(m => (checkedIds.has(m.id) ? { ...m, substrate_id: filmId } : m)));
+    setCheckedIds(new Set());
+  };
+
   const updateMeasurement = (id: string, patch: Partial<Measurement>) => {
     // Remember the last film explicitly chosen so new shapes default to it.
     if (patch.substrate_id) setLastFilmId(patch.substrate_id);
@@ -1648,6 +1685,9 @@ export default function WrapQuotePage() {
     setQuoteNumber('');
     setPackageQty('1');
     setDiscountPctOverride('');
+    setFinalPriceText('');
+    setVinylRates({});
+    setCheckedIds(new Set());
     setPlacements({});
     setUseRollPricing(false);
   };
@@ -1675,11 +1715,13 @@ export default function WrapQuotePage() {
         perimeter_in: m.perimeter_in ?? null,
         // Snapshot stores the combined film+laminate label and effective rate
         // so quote history, preview, and the emailed document all match.
-        substrate: p.sub ? { id: p.sub.id, name: filmLabel(p.sub), price_per_sqft: filmRate(p.sub), bleed_in: num(p.sub.bleed_in), film_name: p.sub.name, laminate_name: p.sub.laminate_name } : null,
+        substrate: p.sub ? { id: p.sub.id, name: filmLabel(p.sub), price_per_sqft: quoteFilmRate(p.sub), bleed_in: num(p.sub.bleed_in), film_name: p.sub.name, laminate_name: p.sub.laminate_name } : null,
         trim_area_sqft: p.trimArea,
         billed_area_sqft: p.billedArea,
         unit_price: nested ? null : p.unitPrice,
         line_total: nested ? null : p.lineTotal,
+        // The rep's typed price for one, so reopening restores it (staff only).
+        price_override: !nested && p.priced ? p.unitPrice : null,
         // Canvas geometry (template-image pixels) so a saved quote can be
         // reopened in the estimator with its shapes intact.
         geometry: { rect: m.rect || null, line1: m.line1 || null, line2: m.line2 || null, poly: m.points || null },
@@ -1713,7 +1755,7 @@ export default function WrapQuotePage() {
         sets: kitSets,
         films: [...nestFilmBilling.entries()].map(([filmKey, row]) => {
           const film = substrateById(filmKey || null);
-          const rate = film ? filmRate(film) : 0;
+          const rate = film ? quoteFilmRate(film) : 0;
           return {
             film_id: filmKey || null,
             label: film ? filmLabel(film) : 'No film',
@@ -1729,7 +1771,7 @@ export default function WrapQuotePage() {
         placements: placementRows,
       };
     }
-    return {
+    const snap = {
       quote_number: quoteNumber || legacyJobNumber.wq(),
       // A customer-proof quote keeps its template — the vehicle the rep
       // picked, whose wheelbase the pages were scaled by; a plain photo quote
@@ -1780,7 +1822,18 @@ export default function WrapQuotePage() {
       tax_rate: num(settings.tax_rate),
       tax_amount: totals.tax,
       total: totals.total,
+      // What the rep typed, so reopening restores it; the snapshot above is
+      // what the customer sees.
+      pricing_overrides: {
+        final_price: totals.priceOverride ? totals.subtotal : null,
+        vinyl_rates: parseRateMap(vinylRates),
+        labor_rates: parseRateMap(laborRates),
+        discount_pct: discountPctOverride.trim(),
+      },
     };
+    // A typed final price: scale every customer-visible line to it so the
+    // quote reads normally and still adds up.
+    return totals.priceOverride ? scaleQuoteSnapshot(snap, totals.adjust) : snap;
   };
 
   // Rasterize the estimator canvas (template outline + drawn shapes, colored
@@ -2169,6 +2222,7 @@ export default function WrapQuotePage() {
         points: l.geometry?.poly || undefined,
         area_in2: l.area_in2 != null ? num(l.area_in2) : undefined,
         perimeter_in: l.perimeter_in != null ? num(l.perimeter_in) : undefined,
+        price_override: l.price_override != null && Number.isFinite(Number(l.price_override)) ? Number(l.price_override) : null,
       };
       // Freeform shapes missing their cached metrics (hand-edited rows)
       // recompute from the outline when the template is calibrated.
@@ -2218,12 +2272,20 @@ export default function WrapQuotePage() {
     setProjectType(q.project_type || '');
     setProjectNotes(q.project_notes || '');
     setAttachments(q.attachments || []);
-    // Per-film install-labor overrides come back from the labor snapshot
-    setLaborRates(Object.fromEntries(((q.labor?.films || []) as any[]).filter((f: any) => f.id).map((f: any) => [f.id, f.rate == null ? '' : String(f.rate)])));
+    // Manual pricing comes back from pricing_overrides (the snapshot may be
+    // scaled to a final price). Older quotes: per-film install-labor
+    // overrides come back from the labor snapshot.
+    const po = readPricingOverrides(q.pricing_overrides);
+    const asText = (m: Record<string, number>) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, String(v)]));
+    setLaborRates(po
+      ? asText(po.labor_rates)
+      : Object.fromEntries(((q.labor?.films || []) as any[]).filter((f: any) => f.id).map((f: any) => [f.id, f.rate == null ? '' : String(f.rate)])));
+    setVinylRates(po ? asText(po.vinyl_rates) : {});
+    setFinalPriceText(po?.final_price != null ? String(po.final_price) : '');
     setPackageQty(String(Math.max(1, num(q.package_qty) || 1)));
     // Pin the saved discount % (clearing the field re-derives from the
     // settings tiers); older quotes have no adjustments and stay on auto.
-    setDiscountPctOverride(q.adjustments?.discount_pct != null ? String(q.adjustments.discount_pct) : '');
+    setDiscountPctOverride(po ? po.discount_pct : q.adjustments?.discount_pct != null ? String(q.adjustments.discount_pct) : '');
     // Restore the roll-nesting layout: placements were saved by measurement
     // index, so re-key them onto the freshly minted measurement ids.
     const n = q.nesting;
@@ -2271,6 +2333,8 @@ export default function WrapQuotePage() {
     setProjectNotes('');
     setAttachments([]);
     setLaborRates({});
+    setVinylRates({});
+    setFinalPriceText('');
   };
 
   // ----- Email attachments (proofs, vinyl specs, …) -----
@@ -3585,6 +3649,13 @@ export default function WrapQuotePage() {
 
                 <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '6px' }}>Measurements</div>
                 {measurements.length === 0 && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '8px' }}>Nothing measured yet.</div>}
+                <BulkFilmBar
+                  total={measurements.length}
+                  checked={measurements.filter(m => checkedIds.has(m.id)).length}
+                  onToggleAll={all => setCheckedIds(all ? new Set(measurements.map(m => m.id)) : new Set())}
+                  films={activeSubstrates.map(f => ({ id: f.id, label: `${filmLabel(f)} ($${fmt(quoteFilmRate(f))}/ft²)` }))}
+                  onApply={setFilmOnChecked}
+                />
                 {measurements.map(m => (
                   <div key={m.id} onClick={() => setSelectedId(m.id)} style={{
                     display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 8px', borderRadius: '6px', marginBottom: '3px', cursor: 'pointer',
@@ -3592,8 +3663,23 @@ export default function WrapQuotePage() {
                     border: selectedId === m.id ? '1px solid rgba(6,182,212,0.35)' : '1px solid var(--border)',
                   }}>
                     <span style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                      <input
+                        type="checkbox"
+                        checked={checkedIds.has(m.id)}
+                        onClick={e => e.stopPropagation()}
+                        onChange={e => setCheckedIds(prev => {
+                          const next = new Set(prev);
+                          if (e.target.checked) next.add(m.id); else next.delete(m.id);
+                          return next;
+                        })}
+                        aria-label={`Select ${m.name}`}
+                        style={{ margin: 0, flexShrink: 0 }}
+                      />
                       <span style={{ width: '9px', height: '9px', borderRadius: '3px', background: filmColor(m.substrate_id), flexShrink: 0 }} />
                       <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</span>
+                      {m.price_override != null && !totals.nested && (
+                        <span title="Price typed by hand" style={{ flexShrink: 0, fontSize: '8px', fontWeight: 800, color: '#f59e0b' }}>$ SET</span>
+                      )}
                     </span>
                     <span style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
                       <button onClick={e => { e.stopPropagation(); duplicateMeasurement(m.id); }} title="Duplicate" style={{ background: 'none', border: 'none', color: '#06b6d4', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>⧉</button>
@@ -3618,8 +3704,18 @@ export default function WrapQuotePage() {
                       <div style={labelStyle}>Film</div>
                       <select value={selected.substrate_id || ''} onChange={e => updateMeasurement(selected.id, { substrate_id: e.target.value || null })} style={{ ...inputStyle, marginBottom: '6px' }}>
                         <option value="">— none —</option>
-                        {activeSubstrates.map(s => <option key={s.id} value={s.id}>{filmLabel(s)} (${fmt(filmRate(s))}/ft²)</option>)}
+                        {activeSubstrates.map(s => <option key={s.id} value={s.id}>{filmLabel(s)} (${fmt(quoteFilmRate(s))}/ft²)</option>)}
                       </select>
+                      <div style={labelStyle}>Price each ($)</div>
+                      <input
+                        type="number" min={0} step="0.01"
+                        value={selected.price_override ?? ''}
+                        disabled={totals.nested}
+                        onChange={e => updateMeasurement(selected.id, { price_override: e.target.value.trim() === '' ? null : Math.max(0, num(e.target.value)) })}
+                        placeholder={totals.nested ? 'roll priced' : `auto ${fmt(p.calcUnitPrice)}`}
+                        title={totals.nested ? 'Roll pricing is on — vinyl prices from the roll layout. Turn it off to price shapes one by one.' : 'Type a vinyl price for one of this shape; clear it to price by area again'}
+                        style={{ ...inputStyle, marginBottom: '6px', opacity: totals.nested ? 0.5 : 1 }}
+                      />
                       <div style={{ display: 'flex', gap: '6px', margin: '2px 0 8px', flexWrap: 'wrap' }}>
                         <button onClick={() => duplicateMeasurement(selected.id)} style={btnStyle('#06b6d4', 'rgba(6,182,212,0.08)')}>⧉ Duplicate</button>
                         {selected.type === 'poly' && (
@@ -3958,6 +4054,7 @@ export default function WrapQuotePage() {
                 onRemovePhoto={removeCoveragePhoto}
                 uploading={photoUploading || !!proofBusy}
                 films={proofFilms}
+                rollPriced={totals.nested}
                 defaultFilmId={lastFilmId}
                 onPickFilm={setLastFilmId}
                 accept={proofMode ? PROOF_ACCEPT : undefined}
@@ -4092,6 +4189,29 @@ export default function WrapQuotePage() {
               )}
             </div>
             {totals.filmTotals.length > 0 && (<>
+              {sectionHead('Vinyl Price (per film)')}
+              {totals.filmTotals.map(f => {
+                const sub = substrateById(f.id);
+                return (
+                  <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                    <span style={{ flex: 1, fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', minWidth: 0 }}>
+                      {f.label}
+                      <span style={{ color: 'var(--text-muted)', fontWeight: 600, marginLeft: '6px' }}>{fmt(f.sqft)} ft²</span>
+                    </span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>$</span>
+                    <input type="number" min="0" step="0.01" value={vinylRates[f.id] ?? (sub ? String(filmRate(sub)) : '')}
+                      onChange={e => setVinylRates(prev => ({ ...prev, [f.id]: e.target.value }))}
+                      placeholder={sub ? fmt(filmRate(sub)) : '0'} style={{ ...inputStyle, width: '70px' }} />
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', width: '34px' }}>/ft²</span>
+                    <span style={{ width: '70px' }} />
+                  </div>
+                );
+              })}
+              <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                Changes this quote only — the Pricing tab keeps each film&apos;s normal price. Shapes with their own typed price keep it.
+              </div>
+            </>)}
+            {totals.filmTotals.length > 0 && (<>
               {sectionHead('Install Labor (per film)')}
               {totals.filmTotals.map(f => (
                 <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
@@ -4125,6 +4245,18 @@ export default function WrapQuotePage() {
             {totals.kitQty > 1 && (
               <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
                 One kit = {fmt(totals.kitArea)} ft² / ${fmt(totals.kitMaterials)} materials · × {totals.kitQty} kits
+              </div>
+            )}
+            <div style={{ marginBottom: '6px' }}>
+              <div style={labelStyle}>Final Price (before tax)</div>
+              <input type="number" min="0" step="0.01" value={finalPriceText}
+                onChange={e => setFinalPriceText(e.target.value)}
+                placeholder={`calculated ${fmt(totals.calcSubtotal)}`}
+                style={{ ...inputStyle, width: '140px' }} />
+            </div>
+            {totals.priceOverride && (
+              <div style={{ fontSize: '10px', fontWeight: 700, color: '#f59e0b', marginBottom: '4px' }}>
+                Manual price — calculated was ${fmt(totals.calcSubtotal)}. Every line on the quote scales to match, so the customer sees a normal quote; the discount and shop minimum don&apos;t apply. Clear it to go back.
               </div>
             )}
             {totals.discount > 0.005 && (

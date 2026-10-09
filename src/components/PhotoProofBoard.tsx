@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { theme } from '@/lib/theme';
 import { DropZone } from '@/components/DropZone';
+import BulkFilmBar from '@/components/BulkFilmBar';
 import PhotoCoverageProof, { type ProofFilmOption } from '@/components/PhotoCoverageProof';
 import { MAX_PHOTO_PROOFS, proofLabel, type PhotoProof } from '@/lib/coverage-proof';
 import { isCalibrated, sqft } from '@/lib/photo-scale';
@@ -22,6 +23,8 @@ interface Props {
   onRemovePhoto: (proof: PhotoProof) => void | Promise<void>;
   uploading?: boolean;
   films: ProofFilmOption[];
+  /** Roll pricing is on, so a box can't carry its own price. */
+  rollPriced?: boolean;
   defaultFilmId?: string | null;
   onPickFilm?: (filmId: string | null) => void;
   /** File types the add controls take; photos by default, PDFs too for a customer proof. */
@@ -37,10 +40,13 @@ interface Props {
 }
 
 export default function PhotoProofBoard({
-  proofs, onChange, imageUrl, onAddPhotos, onRemovePhoto, uploading, films, defaultFilmId, onPickFilm,
+  proofs, onChange, imageUrl, onAddPhotos, onRemovePhoto, uploading, films, rollPriced, defaultFilmId, onPickFilm,
   accept = 'image/*', emptyState, addLabel = '+ Add photo', labelPlaceholder, pageExtras, suggestedLineInches, lineHint,
 }: Props) {
   const [activeId, setActiveId] = useState<string | null>(proofs[0]?.id || null);
+  // Boxes checked for a bulk film change — across every photo, so "Select
+  // all" really is the whole quote.
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const lastCount = useRef(proofs.length);
 
   // Follow the list: a photo just uploaded becomes the active one (you add it
@@ -72,6 +78,20 @@ export default function PhotoProofBoard({
   };
 
   const full = proofs.length >= MAX_PHOTO_PROOFS;
+
+  const allBoxIds = proofs.flatMap(p => p.boxes.map(b => b.id));
+  const toggleChecked = (id: string, on: boolean) => setCheckedIds(prev => {
+    const next = new Set(prev);
+    if (on) next.add(id); else next.delete(id);
+    return next;
+  });
+  const setFilmOnChecked = (filmId: string) => {
+    onChange(proofs.map(p => (p.boxes.some(b => checkedIds.has(b.id))
+      ? { ...p, boxes: p.boxes.map(b => (checkedIds.has(b.id) ? { ...b, substrate_id: filmId } : b)) }
+      : p)));
+    onPickFilm?.(filmId);
+    setCheckedIds(new Set());
+  };
 
   const addTile = (
     <label
@@ -201,16 +221,28 @@ export default function PhotoProofBoard({
 
           {pageExtras?.(active, activeIndex)}
 
+          <BulkFilmBar
+            total={allBoxIds.length}
+            checked={allBoxIds.filter(id => checkedIds.has(id)).length}
+            onToggleAll={all => setCheckedIds(all ? new Set(allBoxIds) : new Set())}
+            films={films}
+            onApply={setFilmOnChecked}
+            noun={proofs.length > 1 ? 'boxes (on every photo)' : 'boxes'}
+          />
+
           <PhotoCoverageProof
             key={active.id}
             src={imageUrl(active.path)}
             proof={active}
             onChange={patchActive}
             films={films}
+            rollPriced={rollPriced}
             defaultFilmId={defaultFilmId}
             onPickFilm={onPickFilm}
             suggestedLineInches={suggestedLineInches}
             lineHint={lineHint}
+            checkedIds={checkedIds}
+            onToggleChecked={toggleChecked}
           />
         </>
       )}
