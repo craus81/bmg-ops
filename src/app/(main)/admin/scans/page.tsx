@@ -12,6 +12,7 @@ import { useAddToCatalog, AddToCatalogRow, offerAddToCatalog } from '@/component
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import PhoneInput from '@/components/PhoneInput';
 import BillableCustomerField, { BillableCustomerChips } from '@/components/BillableCustomerField';
+import VendorInstallerPicker, { type VendorCompanyOption } from '@/components/VendorInstallerPicker';
 import { theme } from '@/lib/theme';
 import { locationBillingOverride } from '@/lib/scan-billing';
 import { shipToCityLabel } from '@/lib/graphics-job-from-po';
@@ -199,10 +200,13 @@ export default function AdminScansPage() {
   const [bulkPartSearch, setBulkPartSearch] = useState('');
   const [bulkLocation, setBulkLocation] = useState<string>('');
   const [bulkCustomer, setBulkCustomer] = useState('');
-  // Vendor (CNI company) doing the installs — stamps installer_name on the
+  // Vendor (CNI company) name doing the installs — stamps installer_name on the
   // bulk-created scans so costs and reports attribute correctly.
   const [bulkVendor, setBulkVendor] = useState('');
-  const [vendorCompanies, setVendorCompanies] = useState<{ id: string; name: string }[]>([]);
+  const [vendorCompanies, setVendorCompanies] = useState<VendorCompanyOption[]>([]);
+  // A vendor/installer created or linked from a picker joins the list at once.
+  const addVendorCompany = (c: VendorCompanyOption) => setVendorCompanies(prev =>
+    prev.some(x => x.id === c.id) ? prev.map(x => x.id === c.id ? c : x) : [...prev, c].sort((a, b) => a.name.localeCompare(b.name)));
   const [custMatches, setCustMatches] = useState<{ id: string; company_name: string; entity_id: string | null }[]>([]);
   const [showCustDropdown, setShowCustDropdown] = useState(false);
   const [createItemFor, setCreateItemFor] = useState<string | null>(null);
@@ -333,7 +337,7 @@ export default function AdminScansPage() {
         .range(from, to)),
       // Vendor companies for the bulk tab's vendor picker (same list the
       // vendor-invoice flow uses).
-      supabase.from('companies').select('id, name').order('name'),
+      supabase.from('companies').select('id, name, netsuite_vendor_id').order('name'),
       // Live pay credits — who was actually credited for each scanned vehicle.
       // Ordered so the pagination is stable; paginated like the other
       // per-vehicle tables since this grows with every completed install.
@@ -350,7 +354,7 @@ export default function AdminScansPage() {
       .map(({ requires_po_match: _r, is_active: _a, ...p }: any) => p) as typeof allParts);
     setAllLocations((locsRes.data || []) as typeof allLocations);
     setAllPOs((posRes.data || []) as typeof allPOs);
-    setVendorCompanies((companiesRes.data || []) as { id: string; name: string }[]);
+    setVendorCompanies((companiesRes.data || []) as VendorCompanyOption[]);
 
     setScans((scansRes.data || []) as ScanLog[]);
     setArchivedScans((archivedRes.data || []) as ScanLog[]);
@@ -1047,6 +1051,8 @@ export default function AdminScansPage() {
   const [bulkEditCustomer, setBulkEditCustomer] = useState('');
   const [bulkEditLocation, setBulkEditLocation] = useState('');
   const [bulkEditPO, setBulkEditPO] = useState('');
+  // Vendor / installer who did the work (scan_logs.installer_name).
+  const [bulkEditInstaller, setBulkEditInstaller] = useState('');
   // The vehicle it is, the unit it wears and the Verizon device on it. These
   // belong to one row, so they are only shown — and only written — when the
   // panel is open on exactly one scan.
@@ -1096,6 +1102,7 @@ export default function AdminScansPage() {
     setBulkEditCustomer(one?.billable_customer || '');
     setBulkEditLocation(one?.location_id || '');
     setBulkEditPO(one?.po_id || '');
+    setBulkEditInstaller(one?.installer_name || '');
     setBulkEditVin(one?.vin || '');
     setBulkEditYear(one?.vehicle_year || '');
     setBulkEditMake(one?.vehicle_make || '');
@@ -1172,6 +1179,13 @@ export default function AdminScansPage() {
         const loc = allLocations.find(l => l.id === bulkEditLocation);
         if (loc) { updates.location_id = loc.id; updates.location_name = loc.name; }
       }
+    }
+
+    // Vendor / installer: one scan writes it when it changed (an emptied box
+    // clears it); several scans only take a vendor that was picked.
+    const installer = bulkEditInstaller.trim();
+    if (single ? installer !== (single.installer_name || '').trim() : !!installer) {
+      updates.installer_name = installer || null;
     }
 
     if (bulkEditPO !== (single ? single.po_id || '' : '')) {
@@ -1267,6 +1281,7 @@ export default function AdminScansPage() {
     setBulkEditCustomer('');
     setBulkEditLocation('');
     setBulkEditPO('');
+    setBulkEditInstaller('');
     setBulkEditVin('');
     setBulkEditYear('');
     setBulkEditMake('');
@@ -1359,7 +1374,7 @@ export default function AdminScansPage() {
             unit_number: unitByVin[vin] || null,
             location_id: selectedLoc?.id || null,
             location_name: selectedLoc?.name || null,
-            installer_name: vendorCompanies.find(c => c.id === bulkVendor)?.name || null,
+            installer_name: bulkVendor.trim() || null,
             scanned_by: user?.id,
           });
           if (error) totalFailed++; else totalInserted++;
@@ -1447,7 +1462,7 @@ export default function AdminScansPage() {
       billable_customer: bulkCustomer.trim() || locationOverrideCustomer || part?.customer || null,
       location_id: selectedLoc?.id || null,
       location_name: selectedLoc?.name || null,
-      installer_name: vendorCompanies.find(c => c.id === bulkVendor)?.name || null,
+      installer_name: bulkVendor.trim() || null,
       scanned_by: user?.id,
     }));
     for (let i = 0; i < rows.length; i += 50) {
@@ -2302,6 +2317,23 @@ export default function AdminScansPage() {
                 <div style={{ fontSize: '9px', color: '#fbbf24', marginTop: '3px' }}>No POs found with part {poPart}</div>
               )}
             </div>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Vendor / Installer</div>
+              <VendorInstallerPicker
+                companies={vendorCompanies}
+                value={bulkEditInstaller}
+                onChange={name => setBulkEditInstaller(name)}
+                onCompanyAdded={addVendorCompany}
+                canAdd={!!isAdmin}
+                emptyLabel={single ? 'No vendor' : 'No change'}
+                inputStyle={{ padding: '8px', borderRadius: '6px', fontSize: '11px' }}
+              />
+              {single?.vendor_invoice_id && bulkEditInstaller.trim() !== (single.installer_name || '').trim() && (
+                <div style={{ fontSize: '9px', color: '#fbbf24', marginTop: '3px' }}>
+                  This scan is on a recorded vendor invoice. Changing the vendor here does not change that invoice or its NetSuite bill.
+                </div>
+              )}
+            </div>
           </div>
 
           {showDeviceFields && (
@@ -2746,10 +2778,13 @@ export default function AdminScansPage() {
             </div>
             <div>
               <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Vendor / Installer</div>
-              <select value={bulkVendor} onChange={e => setBulkVendor(e.target.value)} title="Who performed the installs — stamps the vendor on every scan in this batch" style={{ width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px' }}>
-                <option value="">— No vendor —</option>
-                {vendorCompanies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+              <VendorInstallerPicker
+                companies={vendorCompanies}
+                value={bulkVendor}
+                onChange={name => setBulkVendor(name)}
+                onCompanyAdded={addVendorCompany}
+                canAdd={!!isAdmin}
+              />
             </div>
             <div style={{ position: 'relative' }}>
               <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Customer</div>
