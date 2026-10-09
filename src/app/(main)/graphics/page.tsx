@@ -1644,7 +1644,7 @@ export default function GraphicsPage() {
           <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
             <button
               onClick={toggleArchived}
-              title={showArchived ? 'Hide installed & cancelled jobs' : 'Show installed & cancelled (archived) jobs'}
+              title={showArchived ? 'Hide installed & cancelled jobs' : 'Show installed & cancelled (archived) jobs. Cancelled jobs are kept here, not deleted.'}
               style={{
                 padding: '4px 9px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
                 background: showArchived ? 'rgba(148,163,184,0.22)' : 'var(--subtle-bg)',
