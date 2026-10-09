@@ -46,6 +46,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               document.documentElement.setAttribute('data-textsize', ts);
             }
           } catch (e) {}
+          // Scrolling over a focused number box would change its value
+          // (e.g. a quantity). Blur it instead so the page just scrolls.
+          document.addEventListener('wheel', function() {
+            var el = document.activeElement;
+            if (el && el.tagName === 'INPUT' && el.type === 'number') el.blur();
+          }, { passive: true });
           if ('serviceWorker' in navigator) {
             window.addEventListener('load', function() {
               navigator.serviceWorker.register('/sw.js').catch(function(err) {

@@ -220,6 +220,19 @@ input, select, textarea, button {
   outline: none;
 }
 
+/* No up/down spinner arrows on number boxes (Valarie, 2026-10-09: they
+   changed quantities by accident). Typing still works; the layout script
+   in layout.tsx also stops the scroll wheel from changing a focused one. */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
 button {
   border: none;
   background: none;
