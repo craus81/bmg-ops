@@ -8,8 +8,10 @@ import {
   boxCaption,
   labelPill,
   measureBoxes,
-  savedLabelFontSize,
-  LABEL_FONT_FAMILY,
+    LABEL_FONT_FAMILY,
+  BADGE_FILL,
+  BADGE_RIM,
+  PARTS_TABLE_COLUMNS,
   type BoxLegend,
   type CoverageBox,
   type PhotoProof,
@@ -25,6 +27,14 @@ import {
   type Point,
 } from '@/lib/photo-scale';
 import { applyLegendSize, usesLegendSize } from '@/lib/proof-sizing';
+import {
+  badgeRadius,
+  badgeSpots,
+  partSizeText,
+  withPartSize,
+  type PartRow,
+  type ProofPartsIndex,
+} from '@/lib/proof-parts';
 
 // Draw coverage boxes onto a photo of what's being covered — a vehicle, or a
 // building's storefront, windows and doors — and, once the photo is
@@ -59,6 +69,9 @@ interface Props {
    *  since it spans every photo on the quote). */
   checkedIds?: Set<string>;
   onToggleChecked?: (id: string, on: boolean) => void;
+  /** Part numbers and evened-out sizes across every page of the quote
+   *  (src/lib/proof-parts.ts) — the board owns it since it spans pages. */
+  parts?: ProofPartsIndex;
 }
 
 type Tool = 'box' | 'select' | 'calibrate-line' | 'calibrate-plane';
@@ -105,8 +118,9 @@ function labelTextWidth(text: string, fontSize: number): number {
 // solid label pill, since plain colored text over a photo is unreadable.
 // fontSize is in photo pixels — the editor passes one that works out to a
 // fixed size on screen, the preview the saved picture's size.
-function CoverageBoxShape({ box, photoW, fontSize, stroke }: { box: CoverageBox; photoW: number; fontSize: number; stroke?: string }) {
-  const label = boxCaption(box);
+function CoverageBoxShape({ box, photoW, fontSize, stroke, number }: { box: CoverageBox; photoW: number; fontSize: number; stroke?: string; number?: number }) {
+  const caption = boxCaption(box);
+  const label = number != null ? (caption ? `${number} · ${caption}` : String(number)) : caption;
   const pill = label ? labelPill(box.rect, fontSize, labelTextWidth(label, fontSize), photoW) : null;
   return (
     <>
@@ -126,35 +140,86 @@ function CoverageBoxShape({ box, photoW, fontSize, stroke }: { box: CoverageBox;
 
 /**
  * Read-only render of one photo proof — used by the quote preview so an
- * unsaved quote shows the same picture the customer will get.
+ * unsaved quote shows the same picture the customer will get: the photo with
+ * a number beside each piece and the parts table under it (see
+ * renderCoverageProofBlob in src/lib/coverage-proof.ts for the saved JPEG).
  */
-export function CoverageProofPreview({ src, boxes, caption }: { src: string; boxes: CoverageBox[]; caption?: string }) {
+export function CoverageProofPreview({ src, boxes, caption, numberOf, rows }: {
+  src: string;
+  boxes: CoverageBox[];
+  caption?: string;
+  numberOf: (boxId: string) => number | undefined;
+  rows: PartRow[];
+}) {
   const [dim, setDim] = useState<{ w: number; h: number } | null>(null);
+  const r = dim ? badgeRadius(dim.w) : 0;
+  const cell: React.CSSProperties = { padding: '4px 6px', textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+  const pct = (a: number, b: number) => `${((b - a) * 100).toFixed(0)}%`;
+  const C = PARTS_TABLE_COLUMNS;
   return (
     <div style={{ marginBottom: '10px' }}>
       {caption && (
         <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>{caption}</div>
       )}
-      <div style={{ position: 'relative', background: '#000', border: `1px solid ${theme.border}`, borderRadius: '8px', overflow: 'hidden' }}>
-        {/* eslint-disable-next-line @next/next/no-img-element -- photo dimensions are unknown; next/image needs fixed sizes */}
-        <img
-          src={src}
-          alt={caption || 'Coverage areas'}
-          onLoad={e => setDim({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
-          style={{ width: '100%', display: 'block' }}
-          draggable={false}
-        />
-        {dim && (
-          <svg viewBox={`0 0 ${dim.w} ${dim.h}`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
-            {boxes.map(b => <CoverageBoxShape key={b.id} box={b} photoW={dim.w} fontSize={savedLabelFontSize(dim.w)} />)}
-          </svg>
+      <div style={{ background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '8px', overflow: 'hidden' }}>
+        <div style={{ position: 'relative', background: '#000' }}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- photo dimensions are unknown; next/image needs fixed sizes */}
+          <img
+            src={src}
+            alt={caption || 'Coverage areas'}
+            onLoad={e => setDim({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+            style={{ width: '100%', display: 'block' }}
+            draggable={false}
+          />
+          {dim && (
+            <svg viewBox={`0 0 ${dim.w} ${dim.h}`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
+              {badgeSpots(boxes, numberOf, dim.w, dim.h).map(s => (
+                <g key={s.boxId}>
+                  <circle cx={s.x} cy={s.y} r={r} fill={BADGE_FILL} stroke={BADGE_RIM} strokeWidth={Math.max(1.5, r * 0.18)} />
+                  <text x={s.x} y={s.y + r * 0.06} fill="#fff" fontSize={r * (String(s.number).length > 1 ? 1.05 : 1.25)} fontFamily={LABEL_FONT_FAMILY} fontWeight={700} textAnchor="middle" dominantBaseline="middle">{s.number}</text>
+                </g>
+              ))}
+            </svg>
+          )}
+        </div>
+        {rows.length > 0 && (
+          <div style={{ padding: '8px 3%', color: '#111827' }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, marginBottom: '4px' }}>Parts on this proof</div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: '10px' }}>
+              <colgroup>
+                <col style={{ width: pct(0, C.part) }} />
+                <col style={{ width: pct(C.part, C.size) }} />
+                <col style={{ width: pct(C.size, C.film) }} />
+                <col style={{ width: pct(C.film, C.qty) }} />
+                <col style={{ width: pct(C.qty, 1) }} />
+              </colgroup>
+              <thead>
+                <tr style={{ background: '#f3f4f6', color: '#4b5563' }}>
+                  <th style={cell}>#</th><th style={cell}>Part</th><th style={cell}>Size (W × H)</th><th style={cell}>Film</th><th style={{ ...cell, textAlign: 'right' }}>Qty</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(row => (
+                  <tr key={row.number} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                    <td style={cell}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: '15px', height: '15px', borderRadius: '8px', background: BADGE_FILL, color: '#fff', fontSize: '9px', fontWeight: 700 }}>{row.number}</span>
+                    </td>
+                    <td style={cell} title={row.name}>{row.name}</td>
+                    <td style={cell}>{row.size || '—'}</td>
+                    <td style={cell} title={row.film}>{row.film || '—'}</td>
+                    <td style={{ ...cell, textAlign: 'right' }}>{row.qty}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>
   );
 }
 
-export default function PhotoCoverageProof({ src, proof, onChange, films, rollPriced, defaultFilmId, onPickFilm, suggestedLineInches, lineHint, checkedIds, onToggleChecked }: Props) {
+export default function PhotoCoverageProof({ src, proof, onChange, films, rollPriced, defaultFilmId, onPickFilm, suggestedLineInches, lineHint, checkedIds, onToggleChecked, parts }: Props) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [dim, setDim] = useState<{ w: number; h: number } | null>(null);
   const [tool, setTool] = useState<Tool>('box');
@@ -743,6 +808,7 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, rollPr
             )}
             <span style={{ width: '10px', height: '10px', borderRadius: '3px', background: b.color, flexShrink: 0 }} />
             <span style={{ flex: 1, fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {parts?.partOf.get(b.id) ? <span style={{ color: 'var(--text-muted)' }}>{parts.partOf.get(b.id)!.number} · </span> : null}
               {b.label || 'Untitled'}
               {b.area_in2 ? <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}> · {sqft(b.area_in2).toFixed(1)} ft²</span> : null}
             </span>
@@ -793,6 +859,20 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, rollPr
               {sizeStatus(selected)}
               {selected.area_in2 ? ` · ${sqft(selected.area_in2).toFixed(2)} ft² each` : ''}
             </div>
+            {(() => {
+              // Matching pieces share one size — say so when this box's own
+              // numbers aren't the ones being priced.
+              const part = parts?.partOf.get(selected.id);
+              const shared = parts?.sizeOf.get(selected.id);
+              if (!part || !shared || part.boxIds.length < 2) return null;
+              if (shared.width_in === selected.width_in && shared.height_in === selected.height_in) return null;
+              const others = part.boxIds.length - 1;
+              return (
+                <div style={{ fontSize: '10px', color: '#22c55e', marginBottom: '8px', lineHeight: 1.5 }}>
+                  Priced at {partSizeText(part.size)} to match {others === 1 ? 'the other' : `the ${others} other`} #{part.number} piece{others === 1 ? '' : 's'}. Type a size here to set it for all of them.
+                </div>
+              );
+            })()}
             {(() => {
               const gap = usesLegendSize(selected) ? legendGapPct(selected) : null;
               return gap != null && gap > DISAGREEMENT_WARN_PCT ? (
@@ -911,7 +991,7 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, rollPr
               const sel = b.id === selectedId;
               return (
                 <g key={b.id} onPointerDown={e => beginEdit(e, b, 'move')} style={{ cursor: tool === 'select' ? 'move' : 'crosshair' }}>
-                  <CoverageBoxShape box={b} photoW={dim.w} fontSize={TAG_FONT_PX * k} stroke={sel ? '#f59e0b' : undefined} />
+                  <CoverageBoxShape box={parts ? withPartSize(b, parts) : b} number={parts?.partOf.get(b.id)?.number} photoW={dim.w} fontSize={TAG_FONT_PX * k} stroke={sel ? '#f59e0b' : undefined} />
                   {sel && tool === 'select' && (
                     <g onPointerDown={e => beginEdit(e, b, 'resize')} style={{ cursor: 'nwse-resize' }}>
                       <rect

@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { theme } from '@/lib/theme';
 import { DropZone } from '@/components/DropZone';
 import BulkFilmBar from '@/components/BulkFilmBar';
 import PhotoCoverageProof, { type ProofFilmOption } from '@/components/PhotoCoverageProof';
 import { MAX_PHOTO_PROOFS, proofLabel, type PhotoProof } from '@/lib/coverage-proof';
 import { isCalibrated, sqft } from '@/lib/photo-scale';
+import { proofParts } from '@/lib/proof-parts';
 
 // The photo side of the wrap estimator: several views of one job — a vehicle
 // (driver side, passenger side, rear) or a building (storefront, front
@@ -48,6 +49,8 @@ export default function PhotoProofBoard({
   // all" really is the whole quote.
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const lastCount = useRef(proofs.length);
+  // Numbered across every page, so a piece keeps its number on any photo.
+  const parts = useMemo(() => proofParts(proofs), [proofs]);
 
   // Follow the list: a photo just uploaded becomes the active one (you add it
   // to draw on it), and a removed active photo hands off rather than leaving
@@ -243,6 +246,7 @@ export default function PhotoProofBoard({
             lineHint={lineHint}
             checkedIds={checkedIds}
             onToggleChecked={toggleChecked}
+            parts={parts}
           />
         </>
       )}
