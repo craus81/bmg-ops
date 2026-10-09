@@ -8,6 +8,8 @@ import { ROLE_DEFAULT_FEATURES } from '@/lib/features';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import type { Profile, Conversation, Message } from '@/lib/types';
+import OrderChatsList from '@/components/OrderChatsList';
+import { deepLinks } from '@/lib/deep-links';
 
 interface ConversationWithDetails extends Conversation {
   otherUser: Profile;
@@ -61,6 +63,9 @@ export default function MessagesPage() {
   };
 
   const EMOJI_LIST = ['👍', '👎', '😀', '😂', '🤣', '😊', '🙏', '🔥', '❤️', '💯', '✅', '❌', '⚡', '🎉', '👀', '💪', '🚚', '🔧', '📋', '📞', '📧', '⏰', '📍', '🏗️'];
+
+  // List tab: direct messages, or order team chats (?tab=orders).
+  const [listTab, setListTab] = useState<'people' | 'orders'>(searchParams.get('tab') === 'orders' ? 'orders' : 'people');
 
   // New conversation
   const [showNewConvo, setShowNewConvo] = useState(false);
@@ -645,8 +650,28 @@ export default function MessagesPage() {
         </button>
       </div>
 
+      {/* People (direct messages) | Orders (order team chats, migration 357) */}
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+        {(['people', 'orders'] as const).map(t => (
+          <button
+            key={t}
+            onClick={() => { setListTab(t); router.replace(t === 'orders' ? deepLinks.orderChats() : '/messages'); }}
+            style={{
+              padding: '6px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 800, cursor: 'pointer',
+              border: `1px solid ${listTab === t ? 'rgba(59,130,246,0.5)' : 'var(--border)'}`,
+              background: listTab === t ? 'rgba(59,130,246,0.12)' : 'transparent',
+              color: listTab === t ? '#3b82f6' : 'var(--text-secondary)',
+            }}
+          >
+            {t === 'people' ? 'People' : 'Orders'}
+          </button>
+        ))}
+      </div>
+
+      {listTab === 'orders' && <OrderChatsList />}
+
       {/* Conversation list */}
-      {conversations.length === 0 && !showNewConvo && (
+      {listTab === 'people' && conversations.length === 0 && !showNewConvo && (
         <div style={{ textAlign: 'center', padding: '40px 0' }}>
           <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>--</div>
           <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-body)', marginBottom: '4px' }}>No messages yet</div>
@@ -654,7 +679,7 @@ export default function MessagesPage() {
         </div>
       )}
 
-      {conversations.length > 0 && (
+      {listTab === 'people' && conversations.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
           {conversations.map(convo => (
             <button

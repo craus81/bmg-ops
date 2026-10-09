@@ -63,6 +63,14 @@ export const deepLinks = {
    *  the Quotes page instead of the Estimates list. */
   estimate: (estimateId: string, opts?: { flashNotes?: boolean; from?: 'quotes' }) =>
     `/estimates?id=${estimateId}${opts?.flashNotes ? '&note=field' : ''}${opts?.from ? `&from=${opts.from}` : ''}`,
+  /** An order's team chat (migration 357), keyed by the estimate id — the
+   *  same record once the estimate becomes a sales order. Its own page so
+   *  every internal role can open it, Estimates access or not; `message`
+   *  scroll-flashes one message. */
+  orderChat: (estimateId: string, messageId?: string | null) =>
+    `/order-chat/${estimateId}${messageId ? `?message=${messageId}` : ''}`,
+  /** Messages → Orders tab: every order chat you're in. */
+  orderChats: () => '/messages?tab=orders',
   /** Estimates page — opens the builder on a fresh estimate, optionally
    *  pre-selecting a customer (local customers.id) or a CRM lead
    *  (prospects.id, for records not yet promoted to NetSuite). The straight
@@ -433,6 +441,8 @@ export function mentionSourceUrl(
       return deepLinks.upfitProject(sourceId);
     case 'estimate_note':
       return deepLinks.estimate(sourceId);
+    case 'order_chat':
+      return deepLinks.orderChat(sourceId);
     case 'calendar_event_note':
       return deepLinks.scheduleCard(sourceId);
     case 'customer_note':

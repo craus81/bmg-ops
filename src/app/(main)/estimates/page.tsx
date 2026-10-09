@@ -48,6 +48,7 @@ import { bounceNextStep, bounceIsAmbiguous, recipientsLabel } from '@/lib/email-
 import EstimatePartsRequestModal from '@/components/EstimatePartsRequestModal';
 import { closeOnEscape } from '@/lib/modal-escape';
 import CreatedBy from '@/components/CreatedBy';
+import OrderTeamChat from '@/components/OrderTeamChat';
 
 interface Part {
   id: string;
@@ -4235,6 +4236,15 @@ export default function EstimatesPage() {
           </div>
         )}
       </div>
+
+      {/* Team chat — a running conversation about this order (migration
+          357); carries over when the estimate becomes an SO. Needs a saved
+          estimate to hang on. */}
+      {editingId && (
+        <div style={{ marginBottom: '12px' }}>
+          <OrderTeamChat estimateId={editingId} />
+        </div>
+      )}
 
       {/* Customer defaults modal */}
       {editingCustomerDefaults && customerId && (

@@ -40,6 +40,7 @@ import MyWorkList from '@/components/MyWorkList';
 import PersonalListsModal from '@/components/PersonalListsModal';
 import { closeOnEscape } from '@/lib/modal-escape';
 import CreatedBy from '@/components/CreatedBy';
+import OrderTeamChat from '@/components/OrderTeamChat';
 
 type FilterStatus = VehicleRowKey | 'all';
 
@@ -107,6 +108,8 @@ export default function TrackingPage() {
   // (source_estimate_id — written since migration 080, displayed nowhere
   // until now).
   const [linkedEstimates, setLinkedEstimates] = useState<{ id: string; estimate_number: string; title: string | null; status: string; grand_total: number | null }[]>([]);
+  // Which linked estimate's team chat is showing (the first by default).
+  const [chatEstimateId, setChatEstimateId] = useState<string | null>(null);
   const [statusHistory, setStatusHistory] = useState<VehicleStatusHistory[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
@@ -2526,6 +2529,33 @@ export default function TrackingPage() {
                             </span>
                           </button>
                         ))}
+                        {/* The order's team chat (migration 357). One linked
+                            estimate opens it straight away; with several,
+                            pick which order to talk about. */}
+                        {linkedEstimates.length > 1 && (
+                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', margin: '4px 0 6px' }}>
+                            {linkedEstimates.map(est => {
+                              const active = (linkedEstimates.some(x => x.id === chatEstimateId) ? chatEstimateId : linkedEstimates[0].id) === est.id;
+                              return (
+                                <button
+                                  key={est.id}
+                                  onClick={(e) => { e.stopPropagation(); setChatEstimateId(est.id); }}
+                                  style={{
+                                    padding: '4px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                                    border: `1px solid ${active ? 'rgba(96,165,250,0.5)' : 'var(--border)'}`,
+                                    background: active ? 'rgba(96,165,250,0.12)' : 'transparent',
+                                    color: active ? '#60a5fa' : 'var(--text-secondary)',
+                                  }}
+                                >
+                                  💬 {est.estimate_number}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                        <div onClick={(e) => e.stopPropagation()} style={{ marginTop: '6px' }}>
+                          <OrderTeamChat estimateId={linkedEstimates.some(x => x.id === chatEstimateId) ? chatEstimateId! : linkedEstimates[0].id} />
+                        </div>
                       </div>
                     )}
 
