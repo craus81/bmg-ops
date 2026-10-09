@@ -312,7 +312,11 @@ export function computeOverbillProblems(
  * flow from re-billing units an invoice — synced or app-created — already
  * covered.
  */
-export async function verifyPoInvoiceQuantities(service: SupabaseClient, poIds?: string[]): Promise<PoInvoiceVerifyResult> {
+export async function verifyPoInvoiceQuantities(
+  service: SupabaseClient,
+  poIds?: string[],
+  opts: { openOnly?: boolean } = {},
+): Promise<PoInvoiceVerifyResult> {
   // Paginated: the whole-book sweep is past PostgREST's 1000-row cap, and
   // POs beyond it kept a stale invoice_check_status forever (Round 3
   // CRITICAL, R3-1). The embedded line/invoice arrays are per-PO and small.
@@ -324,6 +328,10 @@ export async function verifyPoInvoiceQuantities(service: SupabaseClient, poIds?:
     // Scoped mode: recheck just these POs (the per-PO "Recheck billing"
     // button) instead of sweeping the whole book.
     if (poIds && poIds.length > 0) query = query.in('id', poIds);
+    // Light sweep (the netsuite-sync cron's intra-day runs): only POs still
+    // open — where new invoices land. The once-a-day full sweep covers the
+    // rest of the book, so re-reading every PO ever 12×/day isn't needed.
+    if (opts.openOnly) query = query.eq('status', 'open');
     return query.order('id').range(from, to);
   });
   if (posErr) {

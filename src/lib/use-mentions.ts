@@ -8,7 +8,7 @@
  * drift on URL rebuilding or read-state rules.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { mentionSourceUrl } from '@/lib/deep-links';
@@ -51,8 +51,23 @@ export function useMentions() {
   const [mentions, setMentions] = useState<Mention[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
 
-  const load = useCallback(async () => {
+  const lastFingerprint = useRef<string | null>(null);
+
+  // `ifChanged` (the header's 30 s poll) first reads the unread count and
+  // newest unread id — a few bytes — and skips re-downloading the 50-row
+  // list when neither moved.
+  const load = useCallback(async (opts: { ifChanged?: boolean } = {}) => {
     if (!user?.id) return;
+    const { data: newest, count, error: fpErr } = await supabase
+      .from('note_mentions')
+      .select('id', { count: 'exact' })
+      .eq('mentioned_user_id', user.id)
+      .is('read_at', null)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    const fp = fpErr ? null : `${user.id}|${count ?? ''}|${(newest as any[])?.[0]?.id ?? ''}`;
+    if (opts.ifChanged && fp && fp === lastFingerprint.current) return;
+    lastFingerprint.current = fp;
     const { data } = await supabase
       .from('note_mentions')
       .select('id, mentioned_by, source_type, source_id, context_label, context_url, note_excerpt, read_at, created_at')

@@ -84,6 +84,19 @@ async function loadUnifiedCatalog(
   return all.map(partToCatalogItem);
 }
 
+/** Few-byte "has the catalog changed?" check: active-part count plus the
+ *  newest edit anywhere in the table (deactivations bump updated_at too). */
+async function partsCatalogFingerprint(
+  supabase: ReturnType<typeof createClient>,
+): Promise<string | null> {
+  const [active, newest] = await Promise.all([
+    supabase.from('netsuite_parts').select('id', { count: 'exact', head: true }).eq('is_active', true),
+    supabase.from('netsuite_parts').select('updated_at').order('updated_at', { ascending: false, nullsFirst: false }).limit(1),
+  ]);
+  if (active.error || newest.error) return null;
+  return `${active.count ?? ''}|${(newest.data as any[])?.[0]?.updated_at ?? ''}`;
+}
+
 // ── Billed dollars for the list's Billed column ──────────────────────────
 // po_invoices has NO amount column; the verify-invoices check stores per-part
 // billed QUANTITIES on purchase_orders.invoice_check.lines, so dollars are
@@ -170,10 +183,19 @@ export default function POsPage() {
   // adds bump the seq), and a failed load (null) never replaces a good
   // copy with an empty one.
   const catalogSeq = useRef(0);
-  const refreshCatalog = async (): Promise<CatalogItem[] | null> => {
+  // Background refreshes pass ifChanged: they first read a few-byte
+  // fingerprint (active count + newest edit) and skip re-downloading the
+  // whole catalog when nothing moved.
+  const catalogFingerprint = useRef<string | null>(null);
+  const refreshCatalog = async (opts: { ifChanged?: boolean } = {}): Promise<CatalogItem[] | null> => {
     const seq = ++catalogSeq.current;
+    const fp = await partsCatalogFingerprint(supabase);
+    if (opts.ifChanged && fp && fp === catalogFingerprint.current) return null;
     const fresh = await loadUnifiedCatalog(supabase);
-    if (fresh && catalogSeq.current === seq) setCatalog(fresh);
+    if (fresh && catalogSeq.current === seq) {
+      setCatalog(fresh);
+      catalogFingerprint.current = fp;
+    }
     return fresh;
   };
   const [loading, setLoading] = useState(true);
@@ -637,12 +659,14 @@ export default function POsPage() {
   // tab regains focus.
   useEffect(() => {
     if (!isAdmin) return;
+    // Hidden tabs skip the timer; returning to the tab catches up at once.
     const tick = () => {
+      if (document.visibilityState !== 'visible') return;
       refreshPendingPOs();
       refreshGmailStatus();
-      refreshCatalog();
+      refreshCatalog({ ifChanged: true });
     };
-    const onVisible = () => { if (document.visibilityState === 'visible') tick(); };
+    const onVisible = tick;
     const timer = setInterval(tick, 3 * 60 * 1000);
     window.addEventListener('focus', onVisible);
     document.addEventListener('visibilitychange', onVisible);

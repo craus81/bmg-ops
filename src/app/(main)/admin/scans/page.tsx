@@ -76,6 +76,9 @@ type ViewTab = 'all' | 'ready' | 'waiting' | 'exported' | 'archived' | 'invoices
 
 // Local calendar date (YYYY-MM-DD) — scan date filters work in the user's day,
 // matching how the dashboard counts "scans today".
+const ARCHIVE_WINDOW_DAYS = 365;
+const archiveWindowStart = () => new Date(Date.now() - ARCHIVE_WINDOW_DAYS * 86_400_000).toISOString();
+
 const toLocalDateStr = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
@@ -94,6 +97,13 @@ export default function AdminScansPage() {
 
   const [scans, setScans] = useState<ScanLog[]>([]);
   const [archivedScans, setArchivedScans] = useState<ScanLog[]>([]);
+  // Archived history is the bulk of the log and grows forever, and loadAll
+  // re-runs after most actions — so by default only the last
+  // ARCHIVE_WINDOW_DAYS of archived scans load; "Load older" lifts it for
+  // the rest of the visit.
+  const [archivedAllHistory, setArchivedAllHistory] = useState(false);
+  const archivedAllHistoryRef = useRef(false);
+  archivedAllHistoryRef.current = archivedAllHistory;
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<ViewTab>('ready');
   // Waiting for PO grouping. By part is how POs get matched (select every VIN
@@ -173,6 +183,11 @@ export default function AdminScansPage() {
       const to = searchParams.get('to');
       if (from) setDateFrom(from);
       if (to) setDateTo(to);
+      // A link into older history loads it from the first read.
+      if (from && from < archiveWindowStart().slice(0, 10)) {
+        archivedAllHistoryRef.current = true;
+        setArchivedAllHistory(true);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- read the URL once on mount
   }, []);
@@ -233,6 +248,18 @@ export default function AdminScansPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { loadAll(); }, []);
 
+  // Picking a date range that reaches past the archive window pulls in the
+  // older history it needs.
+  useEffect(() => {
+    if (!dateFrom || archivedAllHistoryRef.current) return;
+    if (dateFrom < archiveWindowStart().slice(0, 10)) {
+      archivedAllHistoryRef.current = true;
+      setArchivedAllHistory(true);
+      loadAll();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- loadAll reads current state via refs
+  }, [dateFrom]);
+
   // Debounced NetSuite customer search for the bulk-upload Customer field
   useEffect(() => {
     const q = bulkCustomer.trim();
@@ -254,7 +281,7 @@ export default function AdminScansPage() {
   const loadAll = async () => {
     setLoading(true);
     loadBillableCustomers(supabase).then(setBillableCustomers);
-    const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes, posRes, cniVinsRes, companiesRes, creditsRes] = await Promise.all([
+    const [scansRes, archivedRes, profilesRes, partsRes, locsRes, posRes, cniVinsRes, companiesRes, creditsRes] = await Promise.all([
       // Paginated — the active log can exceed the 1000-row cap (.limit doesn't
       // lift it), which silently hid older un-archived scans from every tab.
       fetchAllRows<any>((from, to) => supabase
@@ -264,22 +291,24 @@ export default function AdminScansPage() {
         .order('id')
         .range(from, to)),
       // Paginate archived scans — Supabase caps responses at 1000 rows by default
-      fetchAllRows<any>((from, to) => supabase
-        .from('scan_logs').select('*')
-        .not('archived_at', 'is', null)
-        .order('archived_at', { ascending: false })
-        .order('id')
-        .range(from, to)),
+      fetchAllRows<any>((from, to) => {
+        let q = supabase
+          .from('scan_logs').select('*')
+          .not('archived_at', 'is', null);
+        if (!archivedAllHistoryRef.current) q = q.gte('archived_at', archiveWindowStart());
+        return q
+          .order('archived_at', { ascending: false })
+          .order('id')
+          .range(from, to);
+      }),
       supabase.from('profiles').select('id, full_name, role, roles, is_field_installer, company_id'),
+      // One catalog read serves both the PO-required map (every part, so a
+      // scan of an inactive part still resolves) and the active-part picker.
       // Paginated: a truncated map shows "Waiting on PO" for scans whose
       // no-PO part sorts past the 1000-row cap.
-      fetchAllRows<{ item_number: string; requires_po_match: boolean | null }>((from, to) =>
-        supabase.from('netsuite_parts').select('item_number, requires_po_match').order('id').range(from, to)),
-      // All active parts — paginate to get all
       fetchAllRows<any>((from, to) => supabase
         .from('netsuite_parts')
-        .select('id, item_number, display_name, billable_customer, vehicle_type, graphic_package')
-        .eq('is_active', true)
+        .select('id, item_number, display_name, billable_customer, vehicle_type, graphic_package, requires_po_match, is_active')
         .order('item_number')
         .order('id')
         .range(from, to)),
@@ -316,7 +345,9 @@ export default function AdminScansPage() {
         .order('id')
         .range(from, to)),
     ]);
-    setAllParts((fullPartsRes.data || []) as typeof allParts);
+    setAllParts((partsRes.data || [])
+      .filter((p: any) => p.is_active === true)
+      .map(({ requires_po_match: _r, is_active: _a, ...p }: any) => p) as typeof allParts);
     setAllLocations((locsRes.data || []) as typeof allLocations);
     setAllPOs((posRes.data || []) as typeof allPOs);
     setVendorCompanies((companiesRes.data || []) as { id: string; name: string }[]);
@@ -1546,6 +1577,16 @@ export default function AdminScansPage() {
           }}>{t.label}</button>
         ))}
       </div>
+
+      {(tab === 'archived' || tab === 'invoices' || tab === 'all') && !archivedAllHistory && (
+        <div style={{ fontSize: '12px', color: theme.textMuted, marginBottom: '10px' }}>
+          Showing archived scans from the last 12 months.{' '}
+          <button onClick={() => { setArchivedAllHistory(true); archivedAllHistoryRef.current = true; loadAll(); }}
+            style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '12px', cursor: 'pointer', textDecoration: 'underline' }}>
+            Load older
+          </button>
+        </div>
+      )}
 
       {/* Search */}
       {isScanListTab && <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search VIN, part, customer, location, PO, CNI job, installer, company..."

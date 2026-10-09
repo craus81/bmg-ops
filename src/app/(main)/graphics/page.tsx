@@ -113,6 +113,9 @@ export default function GraphicsPage() {
   const [showArchived, setShowArchived] = useState(false);
   const showArchivedRef = useRef(false);
   showArchivedRef.current = showArchived;
+  // Last board fingerprint loaded — the background refresh skips the full
+  // reload while it hasn't moved (see boardFingerprint).
+  const lastFingerprint = useRef<string | null>(null);
   // Metric-tile filter: clicking Overdue / Due in 7 days / Stuck narrows the
   // board to just those jobs; clicking the active tile again clears it.
   const [metricFilter, setMetricFilter] = useState<MetricFilter | null>(null);
@@ -343,7 +346,12 @@ export default function GraphicsPage() {
   // while the tab is visible and refresh on focus/return.
   useEffect(() => {
     if (!user) return;
-    const refresh = () => { if (document.visibilityState === 'visible') loadJobs(); };
+    // The poll and the focus/visibility events only ask "did anything
+    // change?" (a few-byte fingerprint) and reload the board when it did:
+    // a full reload is the whole active board plus its rounds, history and
+    // views, and re-downloading it every minute per open tab was the app's
+    // biggest source of database egress.
+    const refresh = () => { if (document.visibilityState === 'visible') loadJobs(showArchivedRef.current, { ifChanged: true }); };
     const timer = setInterval(refresh, 60_000);
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', refresh);
@@ -651,7 +659,34 @@ export default function GraphicsPage() {
     setLinkSearch('');
   };
 
-  const loadJobs = async (includeArchived: boolean = showArchivedRef.current) => {
+  // Cheap change check for the background refresh: newest edit + row count
+  // on the board's jobs, newest view, and the proof-round count. Anything
+  // that moves a job (status, notes, proof outcome via status) bumps
+  // graphics_jobs.updated_at through its trigger.
+  const boardFingerprint = async (includeArchived: boolean): Promise<string | null> => {
+    try {
+      let jq = supabase.from('graphics_jobs').select('updated_at', { count: 'exact' });
+      if (!includeArchived) jq = jq.not('status', 'in', '("installed","cancelled")');
+      const [jobsRes, viewsRes, roundsRes] = await Promise.all([
+        jq.order('updated_at', { ascending: false }).limit(1),
+        supabase.from('graphics_job_views').select('last_viewed_at').order('last_viewed_at', { ascending: false }).limit(1),
+        supabase.from('graphics_proof_rounds').select('id', { count: 'exact', head: true }),
+      ]);
+      if (jobsRes.error) return null;
+      return [
+        includeArchived ? 'a' : 'o',
+        jobsRes.count ?? '',
+        jobsRes.data?.[0]?.updated_at ?? '',
+        viewsRes.data?.[0]?.last_viewed_at ?? '',
+        roundsRes.count ?? '',
+      ].join('|');
+    } catch {
+      return null;
+    }
+  };
+  const loadJobs = async (includeArchived: boolean = showArchivedRef.current, opts: { ifChanged?: boolean } = {}) => {
+    const fp = await boardFingerprint(includeArchived);
+    if (opts.ifChanged && fp && fp === lastFingerprint.current) return;
     // Exclude installed/cancelled by default — they're archived off the active
     // board. The archive toggle brings them back; with them included the set
     // grows unboundedly, so paginate past PostgREST's 1000-row cap (a plain
@@ -666,6 +701,7 @@ export default function GraphicsPage() {
     // overwriting it with a truncated or empty set — this runs on the 60s/focus
     // poll too, so a transient failure must not blank a working board.
     if (jobsErr) { setLoading(false); return; }
+    lastFingerprint.current = fp;
     setJobs(jobsData);
     setLoading(false);
 
@@ -673,15 +709,21 @@ export default function GraphicsPage() {
     // board is already painted: a missing count costs a chip, never the
     // board itself.
     try {
-      const rounds = await fetchAllRows<any>((from, to) => supabase
-        .from('graphics_proof_rounds')
-        .select('job_id, round_number, outcome, addressing, rejection_reason')
-        .order('job_id').order('round_number').range(from, to));
-      if (!rounds.error) {
-        const byJob: Record<string, any[]> = {};
+      // Only the jobs on the board — the table holds every round ever.
+      const ids = jobsData.map(j => j.id);
+      const byJob: Record<string, any[]> = {};
+      let ok = true;
+      for (let i = 0; i < ids.length && ok; i += 200) {
+        const chunk = ids.slice(i, i + 200);
+        const rounds = await fetchAllRows<any>((from, to) => supabase
+          .from('graphics_proof_rounds')
+          .select('job_id, round_number, outcome, addressing, rejection_reason')
+          .in('job_id', chunk)
+          .order('job_id').order('round_number').range(from, to));
+        if (rounds.error) { ok = false; break; }
         for (const r of rounds.data) (byJob[r.job_id] ||= []).push(r);
-        setProofRounds(byJob);
       }
+      if (ok) setProofRounds(byJob);
     } catch { /* chips are decoration */ }
 
     // Time-in-stage: latest real status TRANSITION per job (note rows write
@@ -719,13 +761,22 @@ export default function GraphicsPage() {
       // One row per (user, opened job): unbounded, so paginate past the
       // 1000-row cap or the unread dots silently misfire for some jobs
       // once the table fills up. id gives the deterministic unique order.
-      const { data: viewsData } = await fetchAllRows<GraphicsJobView>((from, to) =>
-        supabase
-          .from('graphics_job_views')
-          .select('*')
-          .order('id')
-          .range(from, to)
-      );
+      // Only the jobs on the board — one row per (user, job) ever opened.
+      const ids = jobsData.map(j => j.id);
+      const viewsData: GraphicsJobView[] = [];
+      for (let i = 0; i < ids.length; i += 200) {
+        const chunk = ids.slice(i, i + 200);
+        const { data, error } = await fetchAllRows<GraphicsJobView>((from, to) =>
+          supabase
+            .from('graphics_job_views')
+            .select('*')
+            .in('job_id', chunk)
+            .order('id')
+            .range(from, to)
+        );
+        if (error) throw error;
+        viewsData.push(...data);
+      }
       setJobViews(groupViewsByJob(viewsData));
     } catch (e) {
       console.warn('graphics_job_views unavailable:', e);
