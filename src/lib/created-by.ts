@@ -6,7 +6,8 @@
  *   NetSuite, name known → "Created in NetSuite by Jane Doe · Oct 7, 2026"
  *   NetSuite, no name    → "Created in NetSuite · Oct 7, 2026"
  *   QuickBooks history   → "Imported from QuickBooks · Mar 2, 2023"
- *   Read from email      → "Auto-imported from email · Oct 7, 2026"
+ *   Read from email      → "Imported from email by Jane Doe · Oct 7, 2026"
+ *                          ("Imported from email · …" when nobody is known)
  *   nothing known        → null (show nothing rather than guess)
  */
 
@@ -37,7 +38,7 @@ export function createdByText(opts: {
       head = 'Imported from QuickBooks';
       break;
     case 'email':
-      head = 'Auto-imported from email';
+      head = name ? `Imported from email by ${name}` : 'Imported from email';
       break;
     case 'system':
       head = name ? `${opts.label || 'Created by'} ${name}` : 'Created automatically';
@@ -47,4 +48,19 @@ export function createdByText(opts: {
   }
   if (!head) return null;
   return date ? `${head} · ${date}` : head;
+}
+
+/**
+ * Tag inputs for a customer PO (purchase_orders). Gmail imports read as
+ * "Imported from email by …"; an import with no known importer
+ * ('email_unattributed', migration 358) carries a placeholder admin in
+ * created_by that must never be shown as the creator.
+ */
+export function poCreatedBy(po: { created_by?: string | null; created_source?: string | null }): {
+  userId: string | null;
+  source: CreatedBySource | null;
+} {
+  if (po.created_source === 'email_unattributed') return { userId: null, source: 'email' };
+  if (po.created_source === 'email') return { userId: po.created_by || null, source: 'email' };
+  return { userId: po.created_by || null, source: null };
 }

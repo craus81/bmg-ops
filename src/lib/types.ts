@@ -85,6 +85,8 @@ export interface PurchaseOrder {
   confirmation_sent_at?: string | null;
   confirmation_sent_to?: string[] | null;
   created_by: string;
+  /** NULL = made by hand; 'email' / 'email_unattributed' = Gmail import (migration 358). */
+  created_source?: string | null;
   created_at: string;
   line_items?: POLineItem[];
   /** Invoiced-quantity check verdict (null = unchecked). */
