@@ -16,6 +16,7 @@ import CatalogHealthPanel from '@/components/CatalogHealthPanel';
 import InstalledPhotosGrid from '@/components/InstalledPhotosGrid';
 import PartTransactionsModal from '@/components/PartTransactionsModal';
 import PartPosModal from '@/components/PartPosModal';
+import OrderPartModal from '@/components/OrderPartModal';
 import { loadBillableCustomers, type BillableCustomer } from '@/lib/billable-customers';
 import { isPartTaxable, partTaxReason } from '@/lib/line-taxability';
 import { marginPct, priceForMargin } from '@/lib/pricing-request';
@@ -145,6 +146,10 @@ export default function PartsPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   // Transactions modal: every invoice/SO/estimate the part appears on.
   const [txPart, setTxPart] = useState<Part | null>(null);
+  // "Order this part": the Purchasing queue for anyone who orders parts,
+  // plus Order now (a NetSuite PO through the review screen) for admins.
+  const canOrderParts = isAdmin || hasFeature('parts_ordering');
+  const [orderPart, setOrderPart] = useState<Part | null>(null);
   // PO list modal: every PO the part appears on ("click the counters").
   const [poModal, setPoModal] = useState<{ partNumber: string; mode: 'open' | 'all' } | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -1212,8 +1217,20 @@ export default function PartsPage() {
                 {/* Expanded detail */}
                 {isExpanded && (
                   <div style={{ padding: '0 12px 12px', borderTop: '1px solid var(--border)' }}>
-                    {isRealNsPart(part) && (
-                      <div style={{ marginTop: '10px' }}>
+                    {(isRealNsPart(part) || canOrderParts) && (
+                      <div style={{ marginTop: '10px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        {canOrderParts && (
+                          <button
+                            onClick={() => setOrderPart(part)}
+                            title={isAdmin
+                              ? 'Add this part to the Purchasing queue, or create a NetSuite PO for it now'
+                              : 'Add this part to the Purchasing queue'}
+                            style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(74,222,128,0.08)', border: '1px solid rgba(74,222,128,0.3)', color: '#4ade80' }}
+                          >
+                            🛒 Order this part
+                          </button>
+                        )}
+                        {isRealNsPart(part) && (
                         <button
                           onClick={() => setTxPart(part)}
                           title="Every invoice, sales order, and estimate this part appears on — open the PDF or print a packing list for any of them"
@@ -1221,6 +1238,7 @@ export default function PartsPage() {
                         >
                           📄 Transactions
                         </button>
+                        )}
                       </div>
                     )}
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '10px' }}>
@@ -1747,6 +1765,13 @@ export default function PartsPage() {
 
       {/* Every invoice / SO / estimate this part appears on — with PDF
           view and per-order packing list. */}
+      {orderPart && (
+        <OrderPartModal
+          part={{ ...orderPart, netsuite_id: isRealNsPart(orderPart) ? orderPart.netsuite_id : null }}
+          canCreatePo={isAdmin}
+          onClose={() => setOrderPart(null)}
+        />
+      )}
       {txPart && (
         <PartTransactionsModal
           partNumber={txPart.item_number}
