@@ -14,6 +14,7 @@
 // calibration a box is still a picture, which is all the first version of
 // this feature promised.
 
+import { badgeRadius, badgeSpots, type BadgeSpot, type PartRow } from './proof-parts';
 import {
   measureRect,
   type PhotoCalibration,
@@ -198,40 +199,117 @@ export function labelPill(rect: PixelRect, fontSize: number, textW: number, phot
   return { x, y, w, h, padX };
 }
 
-/**
- * Paint the boxes onto a 2D context sized to the photo's pixels. Shared by the
- * on-screen SVG's raster twin and the saved proof so the emailed picture is
- * exactly what the estimator drew.
- */
-function paintBoxes(ctx: CanvasRenderingContext2D, boxes: CoverageBox[], w: number) {
-  const fontSize = savedLabelFontSize(w);
-  ctx.lineWidth = Math.max(2, w / 350);
+/** Number badge colors on the customer's picture — dark with a white rim reads on any artwork. */
+export const BADGE_FILL = '#111827';
+export const BADGE_RIM = '#ffffff';
+
+/** Table text size under the saved picture, in photo pixels. */
+export const partsTableFontSize = (photoW: number) => Math.max(14, Math.round(photoW / 75));
+
+/** Height the parts table adds under a picture `photoW` wide with `rows` rows. */
+export function partsTableHeight(photoW: number, rows: number): number {
+  if (rows === 0) return 0;
+  const f = partsTableFontSize(photoW);
+  return Math.round(f * 2.2 /* title */ + f * 2 * (rows + 1) /* header + rows */ + f * 1.2 /* bottom pad */);
+}
+
+function paintBadges(ctx: CanvasRenderingContext2D, spots: BadgeSpot[], w: number) {
+  const r = badgeRadius(w);
+  ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  for (const b of boxes) {
-    const { x, y, w: bw, h: bh } = b.rect;
-    ctx.strokeStyle = b.color;
-    ctx.fillStyle = b.color + '33';
-    ctx.fillRect(x, y, bw, bh);
-    ctx.strokeRect(x, y, bw, bh);
-    const label = boxCaption(b);
-    if (!label) continue;
-    // A photo backdrop is busy, so the label rides a solid pill in the box's
-    // own color — plain colored text on a photo is unreadable.
-    ctx.font = `700 ${fontSize}px ${LABEL_FONT_FAMILY}`;
-    const pill = labelPill(b.rect, fontSize, ctx.measureText(label).width, w, ctx.lineWidth);
-    ctx.fillStyle = b.color;
-    ctx.fillRect(pill.x, pill.y, pill.w, pill.h);
+  for (const s of spots) {
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = BADGE_FILL;
+    ctx.fill();
+    ctx.lineWidth = Math.max(1.5, r * 0.18);
+    ctx.strokeStyle = BADGE_RIM;
+    ctx.stroke();
+    const digits = String(s.number).length;
+    ctx.font = `700 ${Math.round(r * (digits > 1 ? 1.05 : 1.25))}px ${LABEL_FONT_FAMILY}`;
     ctx.fillStyle = '#fff';
-    ctx.fillText(label, pill.x + pill.padX, pill.y + pill.h / 2);
+    ctx.fillText(String(s.number), s.x, s.y + r * 0.06);
+  }
+  ctx.textAlign = 'left';
+}
+
+/** Shorten `text` with an ellipsis until it fits `maxW` at the current font. */
+function fitText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+  return t + '…';
+}
+
+/** Column x positions (fractions of the width) shared by the canvas and the preview table. */
+export const PARTS_TABLE_COLUMNS = { part: 0.07, size: 0.56, film: 0.72, qty: 0.95 } as const;
+
+function paintPartsTable(ctx: CanvasRenderingContext2D, rows: PartRow[], w: number, top: number) {
+  const f = partsTableFontSize(w);
+  const pad = Math.round(w * 0.03);
+  const inner = w - pad * 2;
+  const col = (k: keyof typeof PARTS_TABLE_COLUMNS) => pad + inner * PARTS_TABLE_COLUMNS[k];
+  const rowH = f * 2;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, top, w, partsTableHeight(w, rows.length));
+  ctx.textBaseline = 'middle';
+  let y = top + f * 1.3;
+  ctx.font = `700 ${Math.round(f * 1.15)}px ${LABEL_FONT_FAMILY}`;
+  ctx.fillStyle = '#111827';
+  ctx.fillText('Parts on this proof', pad, y);
+  y += f * 0.9;
+  // Header band.
+  ctx.fillStyle = '#f3f4f6';
+  ctx.fillRect(pad, y, inner, rowH);
+  ctx.font = `600 ${Math.round(f * 0.85)}px ${LABEL_FONT_FAMILY}`;
+  ctx.fillStyle = '#4b5563';
+  const mid = (yy: number) => yy + rowH / 2;
+  ctx.fillText('#', pad + f * 0.4, mid(y));
+  ctx.fillText('Part', col('part'), mid(y));
+  ctx.fillText('Size (W × H)', col('size'), mid(y));
+  ctx.fillText('Film', col('film'), mid(y));
+  ctx.textAlign = 'right';
+  ctx.fillText('Qty', pad + inner - f * 0.4, mid(y));
+  ctx.textAlign = 'left';
+  y += rowH;
+  const r = f * 0.62;
+  for (const row of rows) {
+    // The same dark badge as on the picture, so the eye matches them.
+    ctx.beginPath();
+    ctx.arc(pad + f * 0.4 + r * 0.6, mid(y), r, 0, Math.PI * 2);
+    ctx.fillStyle = BADGE_FILL;
+    ctx.fill();
+    ctx.textAlign = 'center';
+    ctx.font = `700 ${Math.round(r * (String(row.number).length > 1 ? 1.05 : 1.25))}px ${LABEL_FONT_FAMILY}`;
+    ctx.fillStyle = '#fff';
+    ctx.fillText(String(row.number), pad + f * 0.4 + r * 0.6, mid(y) + r * 0.06);
+    ctx.textAlign = 'left';
+    ctx.font = `400 ${f}px ${LABEL_FONT_FAMILY}`;
+    ctx.fillStyle = '#111827';
+    ctx.fillText(fitText(ctx, row.name, col('size') - col('part') - f), col('part'), mid(y));
+    ctx.fillText(fitText(ctx, row.size || '—', col('film') - col('size') - f), col('size'), mid(y));
+    ctx.fillText(fitText(ctx, row.film || '—', col('qty') - col('film') - f * 2), col('film'), mid(y));
+    ctx.textAlign = 'right';
+    ctx.fillText(String(row.qty), pad + inner - f * 0.4, mid(y));
+    ctx.textAlign = 'left';
+    y += rowH;
+    ctx.fillStyle = '#e5e7eb';
+    ctx.fillRect(pad, y - 1, inner, Math.max(1, f / 14));
   }
 }
 
 /**
- * Rasterize photo + boxes to a JPEG blob for storage. Returns null when the
- * photo can't be loaded (offline, deleted object) — callers treat a missing
- * proof as non-fatal, exactly like the template coverage diagram.
+ * Rasterize the customer's copy of a proof page: the untouched photo with a
+ * number beside each piece (no boxes — those are the estimator's working
+ * marks) and the parts table under it. Returns null when the photo can't be
+ * loaded (offline, deleted object) — callers treat a missing proof as
+ * non-fatal, exactly like the template coverage diagram.
  */
-export async function renderCoverageProofBlob(photoUrl: string, boxes: CoverageBox[]): Promise<Blob | null> {
+export async function renderCoverageProofBlob(
+  photoUrl: string,
+  boxes: CoverageBox[],
+  parts: { numberOf: (boxId: string) => number | undefined; rows: PartRow[] },
+): Promise<Blob | null> {
   if (!photoUrl || boxes.length === 0) return null;
   let img: HTMLImageElement;
   try {
@@ -243,11 +321,12 @@ export async function renderCoverageProofBlob(photoUrl: string, boxes: CoverageB
   if (!w || !h) return null;
   const canvas = document.createElement('canvas');
   canvas.width = w;
-  canvas.height = h;
+  canvas.height = h + partsTableHeight(w, parts.rows.length);
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
   ctx.drawImage(img, 0, 0);
-  paintBoxes(ctx, boxes, w);
+  paintBadges(ctx, badgeSpots(boxes, parts.numberOf, w, h), w);
+  if (parts.rows.length) paintPartsTable(ctx, parts.rows, w, h);
   return await toBlob(canvas, 'image/jpeg', 0.92);
 }
 
