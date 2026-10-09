@@ -61,6 +61,10 @@
       "schedule": "15 14 * * *"
     },
     {
+      "path": "/api/cron/ar-past-due",
+      "schedule": "7 12,13 * * 1-5"
+    },
+    {
       "path": "/api/cron/stale-purchase-requests",
       "schedule": "30 14 * * *"
     },

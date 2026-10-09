@@ -10,9 +10,11 @@ import { r2PublicUrl } from '@/lib/r2';
 import { getEmailSignature, renderSignatureHtml, type EmailSignature } from '@/lib/email-signature';
 import { generateStatementPdf } from '@/lib/statement-pdf-server';
 import { statementPdfFilename } from '@/lib/statement-pdf-doc';
+import { mergePdfs, mapWithConcurrency } from '@/lib/pdf-merge';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+// Combined mode fetches every open invoice's PDF (Masterack carries 25-50).
+export const maxDuration = 300;
 
 /**
  * POST /api/netsuite/email-statement
@@ -27,6 +29,11 @@ export const maxDuration = 60;
  *
  * Body: { customerId: <NetSuite internal id>, recipients: string[] (1-10),
  *         customBody?: string, attachInvoices?: boolean (default true),
+ *         invoiceIds?: string[] (attach only these open invoices),
+ *         combineInvoices?: boolean (one merged PDF of up to 100 invoices
+ *           instead of up to 10 separate files — the Past Due page uses it
+ *           for customers like Masterack with dozens open),
+ *         reminder?: boolean (past-due reminder wording + subject),
  *         bccSelf?: boolean, preview?: boolean }
  *
  * preview: true renders the exact email — { to, subject, html, attachments }
@@ -40,6 +47,10 @@ export const maxDuration = 60;
  */
 
 const MAX_ATTACH = 10;
+/** Invoices merged into the one combined PDF. */
+const MAX_COMBINED = 100;
+/** Resend's limit is 40 MB per email; stay well clear of it. */
+const MAX_COMBINED_BYTES = 25 * 1024 * 1024;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const esc = (s: string) => s.replace(/[&<>"']/g, c => (
@@ -54,7 +65,7 @@ const fmtD = (iso: string | null) => {
 
 interface Letterhead { company: any; logoUrl: string | null }
 
-function statementEmailHtml(customer: string, invoices: StatementInvoice[], scope: StatementScope, rangeNote: string, lh: Letterhead, customBody?: string, attachNote?: string, signature?: EmailSignature | null): string {
+function statementEmailHtml(customer: string, invoices: StatementInvoice[], scope: StatementScope, rangeNote: string, lh: Letterhead, customBody?: string, attachNote?: string, signature?: EmailSignature | null, reminder?: boolean): string {
   const total = invoices.reduce((s, i) => s + i.unpaid, 0);
   const pastDue = invoices.reduce((s, i) => s + (i.daysPastDue > 0 ? i.unpaid : 0), 0);
   const td = 'padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#111827;';
@@ -74,7 +85,9 @@ function statementEmailHtml(customer: string, invoices: StatementInvoice[], scop
 
   const intro = customBody && customBody.trim()
     ? esc(customBody).replace(/\n/g, '<br>')
-    : `Please find your current statement below${invoices.some(i => i.status === 'open') ? ' — open invoices are attached as PDFs' : ''}.`;
+    : reminder
+      ? `This is a friendly reminder that your account has invoices past due. Your current statement is below${attachNote && /invoice/i.test(attachNote) ? ', with copies of the invoices attached' : ''}. If payment is already on its way, thank you, and please disregard this note.`
+      : `Please find your current statement below${invoices.some(i => i.status === 'open') ? ' — open invoices are attached as PDFs' : ''}.`;
 
   const co = lh.company || {};
   const coName = co.name || 'BMG Fleet';
@@ -168,14 +181,16 @@ export async function POST(req: NextRequest) {
     // attachment note and the preview's attachment list come from it — but
     // only a real send pays for the NetSuite PDF fetches.
     const attachInvoices = body?.attachInvoices !== false;
-    const toAttach = attachInvoices
-      ? invoices.filter(i => i.status === 'open')
-          .sort((a, b) => b.daysPastDue - a.daysPastDue || (a.date || '').localeCompare(b.date || ''))
-          .slice(0, MAX_ATTACH)
-      : [];
+    const combine = body?.combineInvoices === true;
+    const pick: Set<string> | null = Array.isArray(body?.invoiceIds) ? new Set(body.invoiceIds.map((x: any) => String(x))) : null;
+    const attachable = invoices.filter(i => i.status === 'open' && (!pick || pick.has(i.id)))
+      .sort((a, b) => b.daysPastDue - a.daysPastDue || (a.date || '').localeCompare(b.date || ''));
+    const toAttach = attachInvoices ? attachable.slice(0, combine ? MAX_COMBINED : MAX_ATTACH) : [];
+    const combinedFilename = `Invoices_${customerName.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'Customer'}.pdf`;
     const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
     const statementFilename = statementPdfFilename(customerName);
     const attachments: { filename: string; content: Buffer; contentType: string }[] = [];
+    let combinedCount = 0;
     const failedAttachments: string[] = [];
     if (!preview) {
       // The statement's own PDF rides first. Unlike the invoice PDFs it is
@@ -194,25 +209,43 @@ export async function POST(req: NextRequest) {
       }
       attachments.push({ filename: statementPdf.filename, content: statementPdf.buffer, contentType: 'application/pdf' });
 
-      for (const inv of toAttach) {
+      // A few at a time: one by one, 50 invoices outrun the time limit;
+      // all at once trips NetSuite's concurrency limit.
+      type FetchedPdf = { inv: StatementInvoice; filename: string; content: Buffer | null };
+      const fetched = await mapWithConcurrency(toAttach, 5, async (inv): Promise<FetchedPdf> => {
         const pdf = await getNetSuitePdf('invoice', inv.id);
-        if (pdf.success && pdf.pdfBase64) {
-          attachments.push({
-            filename: pdf.filename || `Invoice_${inv.tranid}.pdf`,
-            content: Buffer.from(pdf.pdfBase64, 'base64'),
-            contentType: 'application/pdf',
-          });
-        } else {
-          failedAttachments.push(inv.tranid);
+        return {
+          inv,
+          filename: pdf.filename || `Invoice_${inv.tranid}.pdf`,
+          content: pdf.success && pdf.pdfBase64 ? Buffer.from(pdf.pdfBase64, 'base64') : null,
+        };
+      });
+      for (const f of fetched) if (!f.content) failedAttachments.push(f.inv.tranid);
+      const good = fetched.filter(f => !!f.content) as (FetchedPdf & { content: Buffer })[];
+      if (combine && good.length > 0) {
+        let merged: Buffer;
+        try {
+          merged = await mergePdfs(good.map(f => f.content));
+        } catch (err: any) {
+          return NextResponse.json({ error: `Could not combine the invoice PDFs (${err?.message || 'merge failed'}). Nothing was sent — try separate files.` }, { status: 502 });
         }
+        if (merged.length > MAX_COMBINED_BYTES) {
+          return NextResponse.json({ error: `The combined invoice PDF is ${(merged.length / 1048576).toFixed(1)} MB, too big to email. Nothing was sent — pick fewer invoices.` }, { status: 400 });
+        }
+        combinedCount = good.length;
+        attachments.push({ filename: combinedFilename, content: merged, contentType: 'application/pdf' });
+      } else {
+        for (const f of good) attachments.push({ filename: f.filename, content: f.content, contentType: 'application/pdf' });
       }
     }
     const openCount = invoices.filter(i => i.status === 'open').length;
     // Invoice PDFs only — the statement PDF is always the first attachment.
-    const invoicesAttached = preview ? toAttach.length : Math.max(0, attachments.length - 1);
+    const invoicesAttached = preview ? toAttach.length : combine ? combinedCount : Math.max(0, attachments.length - 1);
     const attachNote = [
       'A PDF copy of this statement is attached.',
-      attachInvoices && openCount > MAX_ATTACH ? `The ${Math.min(MAX_ATTACH, invoicesAttached)} most overdue invoices are attached; the table above covers all ${invoices.length}.` : '',
+      combine && invoicesAttached > 0 ? `${invoicesAttached} invoice${invoicesAttached === 1 ? ' is' : 's are'} attached as one PDF (${combinedFilename}).` : '',
+      attachInvoices && toAttach.length < (pick ? attachable.length : openCount) && invoicesAttached > 0
+        ? `The ${invoicesAttached} most overdue invoices are attached; the table above covers all ${invoices.length}.` : '',
       failedAttachments.length ? `PDFs unavailable for: ${failedAttachments.join(', ')}.` : '',
     ].filter(Boolean).join(' ');
 
@@ -224,8 +257,9 @@ export async function POST(req: NextRequest) {
 
     // Sender's signature — in the preview too, so what they see is what goes.
     const signature = await getEmailSignature(supabase, auth.user?.id);
-    const html = statementEmailHtml(customerName, invoices, scope, rangeNote, lh, body?.customBody, attachNote, signature);
-    const subject = `Statement — ${customerName} — ${new Date().toLocaleDateString('en-US')}`;
+    const reminder = body?.reminder === true;
+    const html = statementEmailHtml(customerName, invoices, scope, rangeNote, lh, body?.customBody, attachNote, signature, reminder);
+    const subject = `${reminder ? 'Past due reminder' : 'Statement'} — ${customerName} — ${new Date().toLocaleDateString('en-US')}`;
 
     // Preview: the exact email that would go out — nothing sends, nothing
     // is logged. Attachment names are predicted (real filenames come from
@@ -236,7 +270,7 @@ export async function POST(req: NextRequest) {
         to: recipients.join(', ') || null,
         subject,
         html,
-        attachments: [statementFilename, ...toAttach.map(i => `Invoice_${i.tranid}.pdf`)],
+        attachments: [statementFilename, ...(combine ? (toAttach.length ? [`${combinedFilename} (${toAttach.length} invoices)`] : []) : toAttach.map(i => `Invoice_${i.tranid}.pdf`))],
       });
     }
 
@@ -259,7 +293,7 @@ export async function POST(req: NextRequest) {
     // 'email' activity with the log row attached, so the bespoke insert
     // that used to live here would double-log.
 
-    return NextResponse.json({ success: true, sent: recipients, statementPdf: statementFilename, attached: invoicesAttached, failedAttachments });
+    return NextResponse.json({ success: true, sent: recipients, statementPdf: statementFilename, attached: invoicesAttached, combined: combine && combinedCount > 0 ? combinedFilename : null, failedAttachments });
   } catch (e: any) {
     if (e instanceof SqlSafeError) {
       return NextResponse.json({ error: e.message }, { status: 400 });

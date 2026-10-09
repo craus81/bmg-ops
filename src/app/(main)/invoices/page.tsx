@@ -637,10 +637,16 @@ export default function InvoicingHubPage() {
             Create NetSuite invoices from finished work and email them to customers — all in one place.
           </div>
         </div>
-        <button
-          onClick={() => router.push('/invoices/bulk-download')}
-          style={smallBtn('#60a5fa', 'rgba(59,130,246,0.08)', 'rgba(59,130,246,0.25)')}
-        >Download Invoices (ZIP) →</button>
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          <button
+            onClick={() => router.push('/invoices/past-due')}
+            style={smallBtn('#f87171', 'rgba(239,68,68,0.08)', 'rgba(239,68,68,0.25)')}
+          >Past Due →</button>
+          <button
+            onClick={() => router.push('/invoices/bulk-download')}
+            style={smallBtn('#60a5fa', 'rgba(59,130,246,0.08)', 'rgba(59,130,246,0.25)')}
+          >Download Invoices (ZIP) →</button>
+        </div>
       </div>
 
       {/* Tabs */}
