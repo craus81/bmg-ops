@@ -5,6 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { notify } from '@/lib/notify';
 import { mentionSourceUrl, deepLinks, cniJobLinkFor } from '@/lib/deep-links';
 import { resolveFeatures } from '@/lib/features';
+import { mentionableStaff, resolveMentionIds } from '@/lib/mention-resolve';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,29 +49,8 @@ export async function POST(req: NextRequest) {
     .from('profiles')
     .select('id, full_name, role, roles')
     .eq('status', 'approved');
-  const staff = (profiles || []).filter(p => {
-    const roles: string[] = p.roles?.length ? p.roles : [p.role];
-    // Only customer-ONLY accounts are un-mentionable; a multi-role account
-    // (e.g. admin + customer) is still staff — same semantics as
-    // /api/scans/log and /api/parts.
-    return !(roles.includes('customer') && roles.length === 1);
-  });
-
-  // Resolve "@Jessie" / "@Jessie Smith" tokens (up to two words) to profile
-  // ids: exact full-name match first, then unique first-name.
-  const resolveMentions = (body: string): Set<string> => {
-    const tokens = [...body.matchAll(/@([A-Za-z][A-Za-z'.-]*(?: [A-Za-z][A-Za-z'.-]*)?)/g)].map(m => m[1]);
-    const ids = new Set<string>();
-    for (const token of tokens) {
-      const t = token.toLowerCase();
-      const full = staff.filter(p => (p.full_name || '').toLowerCase() === t);
-      if (full.length === 1) { ids.add(full[0].id); continue; }
-      const firstWord = t.split(' ')[0];
-      const firsts = staff.filter(p => (p.full_name || '').toLowerCase().split(' ')[0] === firstWord);
-      if (firsts.length === 1) ids.add(firsts[0].id);
-    }
-    return ids;
-  };
+  const staff = mentionableStaff(profiles || []);
+  const resolveMentions = (body: string) => resolveMentionIds(body, staff);
 
   const mentionedIds = resolveMentions(text);
   for (const id of userIds || []) {

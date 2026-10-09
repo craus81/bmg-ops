@@ -195,6 +195,13 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     fixedChannels: {
       email: { reason: 'Set by the "Email me when I\'m mentioned" switch (on unless you turn it off).', on: p => p?.email_mentions !== false },
     } },
+  // Order team chat (migration 357): push + in-app only, no email (Craig,
+  // 2026-10-09). Sent to the rep, past posters and followers; anyone
+  // @tagged gets the 'mention' row above instead.
+  { type: 'order_chat', label: 'Order team chat', description: 'A teammate posted in the team chat on an order you sold, posted in or follow.', area: 'messages', defaultChannels: ['in_app', 'push'],
+    fixedChannels: {
+      email: { reason: 'Never emailed: open the chat from the push or the bell.', on: () => false },
+    } },
 ];
 
 const BY_TYPE = new Map(NOTIFICATION_TYPES.map(t => [t.type, t]));
