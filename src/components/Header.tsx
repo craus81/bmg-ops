@@ -138,8 +138,19 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
     if (!user) return;
     loadUnreadCount();
     loadMentions();
-    const interval = setInterval(() => { loadUnreadCount(); loadMentions(); }, 30000);
-    return () => clearInterval(interval);
+    // Hidden tabs don't poll (a tab left open overnight used to keep
+    // querying every 30 s); coming back to the tab catches up at once.
+    const poll = () => {
+      if (document.visibilityState !== 'visible') return;
+      loadUnreadCount();
+      loadMentions({ ifChanged: true });
+    };
+    const interval = setInterval(poll, 30000);
+    document.addEventListener('visibilitychange', poll);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', poll);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user]);
 
@@ -159,7 +170,9 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
   useEffect(() => {
     if (!user || !hasFeature('messages')) return;
     loadUnreadMessages();
-    const interval = setInterval(loadUnreadMessages, 30000);
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') loadUnreadMessages();
+    }, 30000);
 
     // Subscribe to new messages for instant badge updates
     const channel = supabase

@@ -430,7 +430,22 @@ export default function ScanPage() {
   // (it carries upstream NetSuite/PO billing context).
   const loadParts = async () => {
     try {
-      const netsuiteParts = await loadNetsuiteParts();
+      // Send the version of the list this phone already has; the server
+      // answers "unchanged" instead of the whole catalog when it matches.
+      let cachedVersion = '';
+      let cached: Part[] = [];
+      try {
+        cachedVersion = localStorage.getItem('cached_parts_version') || '';
+        const c = JSON.parse(localStorage.getItem('cached_parts') || '[]');
+        if (Array.isArray(c)) cached = c;
+      } catch {}
+      const result = await loadNetsuiteParts(cached.length > 0 ? cachedVersion : '');
+      if (result.unchanged) {
+        setParts(cached);
+        setPartsError('');
+        return;
+      }
+      const netsuiteParts = result.parts;
       const byItem = new Map<string, Part>();
       for (const p of netsuiteParts) {
         const key = p.item_number.toUpperCase();
@@ -444,7 +459,10 @@ export default function ScanPage() {
       );
       setParts(all);
       setPartsError('');
-      try { localStorage.setItem('cached_parts', JSON.stringify(all)); } catch {}
+      try {
+        localStorage.setItem('cached_parts', JSON.stringify(all));
+        localStorage.setItem('cached_parts_version', result.version || '');
+      } catch {}
     } catch (err: any) {
       // Fall back to the last good list (also covers working offline), and
       // surface the failure so it doesn't read as an empty catalog.
@@ -460,11 +478,11 @@ export default function ScanPage() {
   // read of netsuite_parts: techs' and installers' sessions hit RLS variance
   // on that table, and a client-side read failure was silent — the picker
   // just looked empty. The API errors loudly instead.
-  const loadNetsuiteParts = async (): Promise<Part[]> => {
-    const res = await fetch('/api/parts');
+  const loadNetsuiteParts = async (version: string): Promise<{ parts: Part[]; version: string; unchanged: boolean }> => {
+    const res = await fetch(version ? `/api/parts?v=${encodeURIComponent(version)}` : '/api/parts');
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `Failed to load parts (${res.status})`);
-    return (data.parts || []) as Part[];
+    return { parts: (data.parts || []) as Part[], version: data.version || '', unchanged: data.unchanged === true };
   };
 
   const loadPartProofs = async (part: Part) => {

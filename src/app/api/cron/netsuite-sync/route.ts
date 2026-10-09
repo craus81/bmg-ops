@@ -539,10 +539,15 @@ export async function GET(req: NextRequest) {
   // ═══════════ 4. INVOICED-QUANTITY CHECK ═══════════
   // Compare every PO's ordered quantities against its linked invoices' line
   // quantities and flag mismatches, so billing problems surface on the PO
-  // page without anyone clicking "Check Billing".
+  // page without anyone clicking "Check Billing". The whole book is swept
+  // once a day (the 08:52 UTC run); the other runs recheck open POs only,
+  // which is where new invoices land — the full read every 2 h was one of
+  // the biggest database egress costs.
   try {
-    const check = await verifyPoInvoiceQuantities(supabase);
+    const fullSweep = new Date().getUTCHours() === 8;
+    const check = await verifyPoInvoiceQuantities(supabase, undefined, { openOnly: !fullSweep });
     results.invoiceCheck = {
+      fullSweep,
       posChecked: check.posChecked,
       flagged: check.flagged,
       cleared: check.cleared,

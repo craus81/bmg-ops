@@ -25,6 +25,21 @@ export async function GET(req: NextRequest) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
   );
 
+  // Catalog version: active count + newest edit (migration 355 keeps
+  // updated_at current on every write). A caller that already holds this
+  // version gets { unchanged: true } instead of the whole list.
+  const [activeRes, newestRes] = await Promise.all([
+    supabase.from('netsuite_parts').select('id', { count: 'exact', head: true }).eq('is_active', true),
+    supabase.from('netsuite_parts').select('updated_at').order('updated_at', { ascending: false, nullsFirst: false }).limit(1),
+  ]);
+  const version = activeRes.error || newestRes.error
+    ? ''
+    : `${activeRes.count ?? ''}|${newestRes.data?.[0]?.updated_at ?? ''}`;
+  const have = req.nextUrl.searchParams.get('v');
+  if (version && have && have === version) {
+    return NextResponse.json({ unchanged: true, version });
+  }
+
   const parts: any[] = [];
   for (let offset = 0; ; offset += 1000) {
     const { data, error } = await supabase
@@ -41,5 +56,5 @@ export async function GET(req: NextRequest) {
     if (data.length < 1000) break;
   }
 
-  return NextResponse.json({ parts });
+  return NextResponse.json({ parts, version });
 }
