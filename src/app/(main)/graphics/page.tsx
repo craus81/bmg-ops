@@ -1653,7 +1653,7 @@ export default function GraphicsPage() {
                 whiteSpace: 'nowrap',
               }}
             >
-              Archived{showArchived ? ' ✓' : ''}
+              Archived / Cancelled{showArchived ? ' ✓' : ''}
             </button>
           </div>
         </FilterButton>

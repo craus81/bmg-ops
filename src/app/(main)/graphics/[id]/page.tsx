@@ -1100,7 +1100,7 @@ export default function GraphicsJobRecordPage() {
           {category !== 'production' && <span style={chip(GRAPHICS_CATEGORY_COLORS[category])}>{GRAPHICS_CATEGORY_LABELS[category]}</span>}
           <span
             style={chip(statusColor)}
-            title={job.status === 'cancelled' ? "Archived: off the board but kept. Find it under Filters → Other → Archived; change the status to bring it back." : undefined}
+            title={job.status === 'cancelled' ? "Archived: off the board but kept. Find it under Filters → Other → Archived / Cancelled; change the status to bring it back." : undefined}
           >{GRAPHICS_STATUS_LABELS[job.status]}{job.status === 'cancelled' ? ' · Archived' : ''}</span>
           {/* Pre-invoice pick/pack sheet (Stage 5): the invoice-based packing
               list only exists after billing — the bench needs one at the
@@ -1260,7 +1260,7 @@ export default function GraphicsJobRecordPage() {
           {job.status !== 'cancelled' && (
             <button
               onClick={() => promptStatusChange('cancelled')}
-              title="Take this job off the board. It's kept, not deleted: find it under Filters → Other → Archived."
+              title="Take this job off the board. It's kept, not deleted: find it under Filters → Other → Archived / Cancelled."
               style={{ padding: '10px 14px', borderRadius: '8px', background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)', color: '#6b7280', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
             >
               Cancel Job
@@ -2116,7 +2116,7 @@ export default function GraphicsJobRecordPage() {
             </div>
             {pendingStatus === 'cancelled' && (
               <div style={{ fontSize: '12px', color: 'var(--text-body)', marginBottom: '10px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)' }}>
-                This job comes off the board but isn&apos;t deleted. Find it any time on the Graphics Production board under <b>Filters → Other → Archived</b>, and bring it back by changing its status.
+                This job comes off the board but isn&apos;t deleted. Find it any time on the Graphics Production board under <b>Filters → Other → Archived / Cancelled</b>, and bring it back by changing its status.
               </div>
             )}
             {pendingStatus === 'shipped' && (
