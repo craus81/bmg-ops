@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { openJobOrder } from '@/lib/job-order-pdf';
 
 interface NetSuitePdfProps {
   type: 'salesOrder' | 'invoice';
@@ -22,6 +23,7 @@ export default function NetSuitePdf({ type, recordId, recordNumber, label }: Net
   const [collapsed, setCollapsed] = useState(true);
   const [thumbExpanded, setThumbExpanded] = useState(false);
   const rendered = useRef(false);
+  const [jobOrderBusy, setJobOrderBusy] = useState(false);
 
   const prefix = label || (type === 'invoice' ? 'INV' : 'SO');
 
@@ -139,6 +141,29 @@ export default function NetSuitePdf({ type, recordId, recordNumber, label }: Net
             </>
           )}
         </button>
+
+        {/* Job Order: the same SO printed as a pick ticket, no pricing. */}
+        {type === 'salesOrder' && (
+          <button
+            onClick={async () => {
+              setJobOrderBusy(true);
+              setError('');
+              const r = await openJobOrder(recordId);
+              setJobOrderBusy(false);
+              if (!r.ok) setError(`Could not open the Job Order: ${r.error}`);
+            }}
+            disabled={jobOrderBusy}
+            title="Print this sales order as a Job Order pick ticket (no pricing)"
+            style={{
+              flexShrink: 0, padding: '10px 12px', borderRadius: '10px',
+              border: '1px solid var(--border)', background: 'var(--card)',
+              color: jobOrderBusy ? 'var(--text-muted)' : '#60a5fa',
+              fontSize: '12px', fontWeight: 700, cursor: jobOrderBusy ? 'wait' : 'pointer',
+            }}
+          >
+            {jobOrderBusy ? 'Opening…' : '🖨 Job Order'}
+          </button>
+        )}
 
         {/* Expandable thumbnail */}
         {thumbSrc && (

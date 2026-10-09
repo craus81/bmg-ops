@@ -19,6 +19,7 @@ import { shopWorkMs, shopClockResumeLabel } from '@/lib/shop-hours';
 import ConditionReportCard from '@/components/ConditionReportCard';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { openJobOrder } from '@/lib/job-order-pdf';
 
 interface VehicleData {
   id: string;
@@ -640,6 +641,20 @@ export default function VehiclePickListPage() {
           </span>
           {vehicle.sales_order_number && (
             <span style={{ color: 'var(--text-muted)' }}>SO: {vehicle.sales_order_number}</span>
+          )}
+          {vehicle.netsuite_sales_order_id && (
+            <button
+              onClick={async () => {
+                const r = await openJobOrder(String(vehicle.netsuite_sales_order_id));
+                if (!r.ok) await dialog.alert(`Could not open the Job Order: ${r.error}`);
+              }}
+              title="Print this vehicle's sales order as a Job Order pick ticket (no pricing)"
+              style={{
+                padding: '2px 8px', borderRadius: '8px', border: '1px solid var(--border)',
+                background: 'transparent', color: 'var(--accent, #2563eb)',
+                fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+              }}
+            >🖨 Print Job Order</button>
           )}
           {vehicle.scheduled_upfit_date && (
             <span style={{ color: 'var(--text-muted)' }}>Install: {formatDate(vehicle.scheduled_upfit_date)}</span>
