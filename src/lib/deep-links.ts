@@ -153,6 +153,10 @@ export const deepLinks = {
   /** Opens a NetSuite vendor record in NetSuite (a redirect route, since
    *  the account id behind the NetSuite URL lives in server env only). */
   netsuiteVendor: (vendorId: string) => `/api/cni/vendor-link?id=${encodeURIComponent(vendorId)}`,
+  /** Past Due invoices (A/R reminders, migration 357) — every customer with
+   *  past-due invoices; `customer` (NetSuite entity id) opens and flashes
+   *  that customer's row. */
+  pastDue: (entityId?: string | null) => `/invoices/past-due${entityId ? `?customer=${encodeURIComponent(entityId)}` : ''}`,
   /** Dedicated prospect / customer record page. */
   prospect: (prospectId: string) => `/admin/prospects/${prospectId}`,
   /** The same record page with the standard customer compose screen already

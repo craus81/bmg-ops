@@ -23,6 +23,12 @@ const REPORTS: ReportLink[] = [
     source: 'NetSuite',
   },
   {
+    title: 'Past Due Invoices',
+    blurb: 'Every customer with past-due invoices. Pick customers and email each a past-due statement, with the invoices attached as one PDF. The 7 AM weekday reminder links here.',
+    href: '/invoices/past-due',
+    source: 'NetSuite',
+  },
+  {
     title: 'Download Open Invoices',
     blurb: 'Pull every open invoice PDF for a customer from NetSuite and download them as one ZIP. Capped at 60 invoices per pull.',
     href: '/invoices/bulk-download',
