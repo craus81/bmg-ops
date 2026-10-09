@@ -21,6 +21,7 @@ import { CoverageProofPreview, type ProofFilmOption } from '@/components/PhotoCo
 import BulkFilmBar from '@/components/BulkFilmBar';
 import { parseFinalPrice, parseRateMap, readPricingOverrides, scaleQuoteSnapshot } from '@/lib/wrap-quote-price-override';
 import PhotoProofBoard from '@/components/PhotoProofBoard';
+import { partRowsForPage, proofParts, withPartSize } from '@/lib/proof-parts';
 import {
   allProofBoxes,
   measureBoxes,
@@ -504,9 +505,14 @@ export default function WrapQuotePage() {
   // the photo is calibrated and it HAS real inches — an uncalibrated proof
   // stays what it was before sizes existed: a picture, priced at nothing,
   // rather than a $0 line pretending to be measured.
+  // Part numbers across every page, with matching pieces (the logo on each
+  // door) evened out to one size — what's priced is what the customer's
+  // parts table says.
+  const proofPartsIndex = useMemo(() => proofParts(photoProofs), [photoProofs]);
   const photoMeasurements = useMemo<Measurement[]>(() => {
     const many = photoProofs.length > 1;
     return photoProofs.flatMap((proof, pi) => proof.boxes
+      .map(b => withPartSize(b, proofPartsIndex))
       .filter(b => num(b.width_in) > 0 && num(b.height_in) > 0)
       .map(b => ({
         id: b.id,
@@ -519,7 +525,7 @@ export default function WrapQuotePage() {
         substrate_id: b.substrate_id || null,
         price_override: b.price_override ?? null,
       })));
-  }, [photoProofs]);
+  }, [photoProofs, proofPartsIndex]);
 
   // The one array every downstream reader uses — totals, roll nesting, the
   // quote lines, the NetSuite push. Which surface filled it is not their
@@ -1916,6 +1922,15 @@ export default function WrapQuotePage() {
     }
   };
 
+  // The customer's numbers and parts table for one page.
+  const proofPageParts = (proof: PhotoProof) => ({
+    numberOf: (id: string) => proofPartsIndex.partOf.get(id)?.number,
+    rows: partRowsForPage(proof.boxes, proofPartsIndex, id => {
+      const f = substrateById(id);
+      return f ? filmLabel(f) : '';
+    }),
+  });
+
   // Flatten EVERY photo proof to its own picture, in order. Each proof keeps
   // its own diagram_path so the emailed quote can show all the views; the
   // first one also becomes the quote's diagram_path, which is what the
@@ -1926,7 +1941,7 @@ export default function WrapQuotePage() {
       let path = proof.diagram_path || null;
       try {
         const blob = proof.boxes.length > 0
-          ? await renderCoverageProofBlob(imageUrl(proof.path), proof.boxes)
+          ? await renderCoverageProofBlob(imageUrl(proof.path), proof.boxes, proofPageParts(proof))
           : null;
         if (blob) {
           const target = `quote-diagrams/${qn}-${i + 1}-${Date.now()}.jpg`;
@@ -3110,6 +3125,7 @@ export default function WrapQuotePage() {
               key={p.id}
               src={imageUrl(p.path)}
               boxes={p.boxes}
+              {...proofPageParts(p)}
               caption={shown.length > 1 ? proofLabel(p, photoProofs.indexOf(p)) : undefined}
             />
           ))}
