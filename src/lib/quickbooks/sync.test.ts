@@ -140,6 +140,11 @@ describe('refresh-ahead', () => {
 });
 
 describe('the CDC window', () => {
+  // A watermark a few days back, inside the 30-day CDC look-back on any day
+  // the suite runs. A fixed date here aged out of the window and sent these
+  // runs down the paged path instead.
+  const recentWatermark = () => iso(-3 * 86_400_000);
+
   function realRun(over: { state?: any; capabilities?: any; importStartedAt?: string } = {}): FakeService {
     return makeFakeService({
       quickbooks_tokens: [tokenRow({ capabilities: over.capabilities ?? {} })],
@@ -182,18 +187,19 @@ describe('the CDC window', () => {
   });
 
   it('a LATER run derives since from cdcThrough − 1 day', async () => {
+    const cdcThrough = recentWatermark();
     stubClient();
     const svc = realRun({
       state: {
         sync_type: 'ledger_qbo_sync',
-        last_result: { cdcThrough: '2026-09-10T09:57:00.000Z' },
-        last_synced_at: '2026-09-10T09:57:00.000Z',
-        updated_at: '2026-09-10T09:57:30.000Z',
+        last_result: { cdcThrough },
+        last_synced_at: cdcThrough,
+        updated_at: cdcThrough,
       },
     });
     await runLedgerQboSync(svc as any, opts());
     const run = svc.tables.ledger_import_runs.find(r => r.mode === 'cdc')!;
-    expect(run.config.since).toBe('2026-09-09T09:57:00.000Z');
+    expect(run.config.since).toBe(new Date(Date.parse(cdcThrough) - 86_400_000).toISOString());
   });
 
   it('a DRAINED run advances the watermark to the instant it opened the window', async () => {
@@ -208,6 +214,7 @@ describe('the CDC window', () => {
   it('a PARTIAL run carries the PREVIOUS cdcThrough forward unchanged', async () => {
     // last_result is replaced wholesale, so carrying it forward is what keeps
     // the watermark alive at all — and a half-swept window must not advance.
+    const cdcThrough = recentWatermark();
     stubClient({
       cdc: vi.fn().mockImplementation(async () => {
         // Burn the budget so the loop stops after the first group.
@@ -219,15 +226,15 @@ describe('the CDC window', () => {
     const svc = realRun({
       state: {
         sync_type: 'ledger_qbo_sync',
-        last_result: { cdcThrough: '2026-09-10T09:57:00.000Z' },
-        last_synced_at: '2026-09-10T09:57:00.000Z',
-        updated_at: '2026-09-10T09:57:30.000Z',
+        last_result: { cdcThrough },
+        last_synced_at: cdcThrough,
+        updated_at: cdcThrough,
       },
     });
     const result = await runLedgerQboSync(svc as any, { startedAt: Date.now(), deadline: Date.now() + 150_000 });
     vi.useRealTimers();
     expect(result.payload.partial).toBe(true);
-    expect(result.payload.cdcThrough).toBe('2026-09-10T09:57:00.000Z');
+    expect(result.payload.cdcThrough).toBe(cdcThrough);
     expect(lastHeartbeat()[3]).toMatchObject({ touchLastSyncedAt: false });
     expect(lastHeartbeat()[3]).not.toHaveProperty('lastSyncedAt');
   });
@@ -267,6 +274,7 @@ describe('the CDC window', () => {
     // paged fallback has 17 entities and a 30-day window to walk in 150 s.
     // Throwing away the fallback's stop marker would report the window swept
     // and jump the watermark to now.
+    const cdcThrough = recentWatermark();
     const page = vi.fn().mockResolvedValue({ items: [], orderBy: 'MetaData.LastUpdatedTime' });
     stubClient({
       cdc: vi.fn().mockImplementation(async () => {
@@ -280,9 +288,9 @@ describe('the CDC window', () => {
     const svc = realRun({
       state: {
         sync_type: 'ledger_qbo_sync',
-        last_result: { cdcThrough: '2026-09-10T09:57:00.000Z' },
-        last_synced_at: '2026-09-10T09:57:00.000Z',
-        updated_at: '2026-09-10T09:57:30.000Z',
+        last_result: { cdcThrough },
+        last_synced_at: cdcThrough,
+        updated_at: cdcThrough,
       },
     });
     const result = await runLedgerQboSync(svc as any, { startedAt: Date.now(), deadline: Date.now() + 150_000 });
@@ -290,7 +298,7 @@ describe('the CDC window', () => {
 
     expect(page).not.toHaveBeenCalled();
     expect(result.payload.partial).toBe(true);
-    expect(result.payload.cdcThrough).toBe('2026-09-10T09:57:00.000Z');
+    expect(result.payload.cdcThrough).toBe(cdcThrough);
     expect(result.payload.resume).toMatchObject({ entity: 'Invoice', startPosition: 1 });
     expect(lastHeartbeat()[3]).toMatchObject({ touchLastSyncedAt: false });
     expect(lastHeartbeat()[3]).not.toHaveProperty('lastSyncedAt');
