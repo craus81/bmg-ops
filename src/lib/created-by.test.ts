@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createdByText, fmtCreatedDate } from './created-by';
+import { createdByText, fmtCreatedDate, poCreatedBy } from './created-by';
 
 describe('createdByText', () => {
   it('names the FleetSuite creator with the date', () => {
@@ -22,7 +22,8 @@ describe('createdByText', () => {
 
   it('labels QuickBooks and email imports', () => {
     expect(createdByText({ source: 'quickbooks', at: '2023-03-02' })).toBe('Imported from QuickBooks · Mar 2, 2023');
-    expect(createdByText({ source: 'email' })).toBe('Auto-imported from email');
+    expect(createdByText({ source: 'email' })).toBe('Imported from email');
+    expect(createdByText({ source: 'email', name: 'Jane Doe', at: '2026-10-09' })).toBe('Imported from email by Jane Doe · Oct 9, 2026');
   });
 });
 
@@ -33,5 +34,17 @@ describe('fmtCreatedDate', () => {
   it('ignores junk', () => {
     expect(fmtCreatedDate('nope')).toBeNull();
     expect(fmtCreatedDate(null)).toBeNull();
+  });
+});
+
+describe('poCreatedBy', () => {
+  it('never shows the placeholder admin on an unattributed email import', () => {
+    expect(poCreatedBy({ created_by: 'admin-1', created_source: 'email_unattributed' })).toEqual({ userId: null, source: 'email' });
+  });
+  it('names the importer on an attributed email import', () => {
+    expect(poCreatedBy({ created_by: 'u1', created_source: 'email' })).toEqual({ userId: 'u1', source: 'email' });
+  });
+  it('keeps hand-made POs as before', () => {
+    expect(poCreatedBy({ created_by: 'u1', created_source: null })).toEqual({ userId: 'u1', source: null });
   });
 });

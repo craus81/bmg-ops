@@ -683,10 +683,14 @@ export async function POST(req: NextRequest) {
         buyer_email: buyerEmail(extracted),
       };
       // The person who confirmed the import is the PO's creator (its
-      // "Created by" tag); the first admin stays the fallback for a
-      // server-to-server create with no person behind it.
+      // "Imported from email by …" tag). A server-to-server create has no
+      // person: the first admin is only a placeholder for created_by, and
+      // 'email_unattributed' keeps the tag from showing that admin's name
+      // (migration 358 — it had credited POs to an admin who never
+      // imported anything).
       const creatorId = actorId || adminUser?.id;
       if (creatorId) insertPayload.created_by = creatorId;
+      insertPayload.created_source = actorId ? 'email' : 'email_unattributed';
 
       const { data: newPO, error: poError } = await supabase.from('purchase_orders').insert(insertPayload).select().single();
       if (poError || !newPO) {
