@@ -32,6 +32,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { apiErrorMessage } from '@/lib/api-error-message';
 import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
+import { openJobOrder } from '@/lib/job-order-pdf';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
 import { discountLabel, discountSplit, lineMoney, netUnitPrice, normalizeDiscount, roundCentsHalfEven, normalizeVehicleCount, perVehicleAmount } from '@/lib/estimate-totals';
 import { resolveLineTaxability } from '@/lib/line-taxability';
@@ -2263,6 +2264,16 @@ export default function EstimatesPage() {
     const { ok, error } = await openNetSuitePdf('salesOrder', soId);
     if (!ok) await dialog.alert(`Could not open the sales order PDF: ${error}`);
     setViewingSoPdf(false);
+  };
+
+  // ── Print the same sales order as a Job Order pick ticket (no pricing) ──
+  const [printingJobOrder, setPrintingJobOrder] = useState(false);
+  const printJobOrder = async (soId: string) => {
+    if (printingJobOrder) return;
+    setPrintingJobOrder(true);
+    const { ok, error } = await openJobOrder(soId);
+    if (!ok) await dialog.alert(`Could not open the Job Order: ${error}`);
+    setPrintingJobOrder(false);
   };
 
   /**
@@ -6204,6 +6215,14 @@ export default function EstimatesPage() {
                 }}
               >
                 {viewingSoPdf ? 'Opening sales order PDF…' : `Sales Order: SO #${est.netsuite_so_number || est.netsuite_so_id}`}
+              </button>
+              <button
+                onClick={() => printJobOrder(String(est.netsuite_so_id))}
+                disabled={printingJobOrder}
+                title="Print this sales order as a Job Order pick ticket (no pricing)"
+                style={{ padding: '5px 10px', borderRadius: '7px', border: '1px solid rgba(96,165,250,0.5)', background: 'rgba(96,165,250,0.12)', color: '#60a5fa', fontSize: '11px', fontWeight: 800, cursor: printingJobOrder ? 'wait' : 'pointer' }}
+              >
+                {printingJobOrder ? 'Opening Job Order…' : '🖨 Print Job Order'}
               </button>
               {stale && <span>— out of date with this estimate</span>}
               {stale && (

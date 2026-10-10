@@ -374,6 +374,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/netsuite/fix-invoice-po/route.ts': role(),
   'src/app/api/netsuite/invoice-vehicles/route.ts': role(),
   'src/app/api/netsuite/invoices/route.ts': staff(),
+  'src/app/api/netsuite/job-order/[id]/route.ts': staff(),
   'src/app/api/netsuite/lookup-transaction/route.ts': staff(),
   'src/app/api/netsuite/pdf/route.ts': staff(),
   'src/app/api/netsuite/sales-order-lines/[id]/route.ts': staff(),
