@@ -71,6 +71,8 @@ const webhook = (why: string, verifyMarker: string): RouteGuard =>
 const pub = (why: string): RouteGuard => ({ kind: 'public', contains: [], why });
 
 export const ROUTE_GUARDS: Record<string, RouteGuard> = {
+  // FleetSuite's own books, built hidden for the owner (docs/books.md).
+  'src/app/api/admin/books/accounts/route.ts': superAdmin(),
   'src/app/api/admin/bulk-upload-proofs/route.ts': admin(),
   'src/app/api/admin/bulk-upload-templates/route.ts': admin(),
   'src/app/api/admin/calibrate-templates/route.ts': staff(),

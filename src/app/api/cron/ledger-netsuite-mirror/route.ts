@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { runNetSuiteMirror } from '@/lib/ledger/netsuite-mirror';
+import { syncBooksAccounts } from '@/lib/books/netsuite-accounts';
 
 export const dynamic = 'force-dynamic';
 // 300 is the platform backstop; the job's OWN deadline is 240 s below, so a
@@ -25,6 +26,9 @@ const MIRROR_BUDGET_MS = 240_000;
  * resumable by design: a partial run saves its cursor and the next run
  * continues, so a first pass over years of history drains across many runs
  * while the newest transactions land in the very first one.
+ *
+ * Before the mirror, the same run copies NetSuite's chart of accounts into
+ * FleetSuite's own books (src/lib/books/netsuite-accounts.ts).
  */
 export async function GET(req: NextRequest) {
   // Allow Vercel Cron with the shared secret; anyone else needs an admin
@@ -38,11 +42,26 @@ export async function GET(req: NextRequest) {
     if (auth.error) return auth.error;
   }
 
+  const service = createServiceClient();
+  const startedAt = Date.now();
+
+  // FleetSuite's own books follow NetSuite's chart of accounts until the
+  // changeover (docs/books.md). It goes first because it takes seconds and
+  // the mirror below is the job that stops itself on the deadline and
+  // resumes. The books are visible only to the owner, so how it went stays
+  // on the Books page; this response says only whether it worked.
+  let booksAccounts: 'ok' | 'failed' = 'failed';
   try {
-    const result = await runNetSuiteMirror(createServiceClient(), {
-      deadline: Date.now() + MIRROR_BUDGET_MS,
+    booksAccounts = (await syncBooksAccounts(service)).error ? 'failed' : 'ok';
+  } catch (e: any) {
+    console.error('[books] NetSuite account sync threw:', e?.message || e);
+  }
+
+  try {
+    const result = await runNetSuiteMirror(service, {
+      deadline: startedAt + MIRROR_BUDGET_MS,
     });
-    return NextResponse.json(result);
+    return NextResponse.json({ ...result, booksAccounts });
   } catch (e: any) {
     // runNetSuiteMirror writes its own heartbeat for every outcome it can
     // name; this is the last resort for a thrown bug.
