@@ -258,8 +258,10 @@ function netsuite(): FakeNetSuite {
       { id: 902, itemid: 'GR-1', itemtype: 'NonInvtPart', isinactive: 'F', incomeaccount: 42, expenseaccount: 51 },
     ],
   };
-  // NetSuite won't give the tax codes' rates or agencies, nor let the role see classes.
+  // NetSuite won't give the tax codes' rates or agencies, nor let the role see
+  // classes, and answers 500 for an item's COGS account as this account does.
   ns.refuse = { salestaxitem: ['rate', 'taxagency'] };
+  ns.failing = { item: ['cogsaccount'] };
   ns.hidden = new Set(['classification']);
   ns.taxLines = [
     { tax_code_id: 12, account_id: 23, line_count: 40 },
@@ -322,6 +324,7 @@ describe('the copy job against the real functions', () => {
       item: { received: 3, added: 3 },
     });
     expect(r.lists.class?.error).toMatch(/Record 'classification' was not found/);
+    // Nothing about the items' COGS account, which NetSuite fails on: the copy doesn't ask for it.
     expect(r.notes).toEqual([
       "NetSuite's integration role can't see classes, so they aren't copied. The role needs permission to view them.",
       "NetSuite wouldn't give the tax codes' rates and tax agencies, so they're left out.",
@@ -348,7 +351,7 @@ describe('the copy job against the real functions', () => {
       details: { entity_id: 'V-50', expense_account: '60', payables_account: '20', terms_id: '4' },
     });
     expect(await rows('item')).toEqual([
-      { id: '900', name: 'RD-100', active: true, gone: false, details: { item_type: 'InvtPart', display_name: 'Roof rack', income_account: '40', cogs_account: '50', asset_account: '12' } },
+      { id: '900', name: 'RD-100', active: true, gone: false, details: { item_type: 'InvtPart', display_name: 'Roof rack', income_account: '40', asset_account: '12' } },
       { id: '901', name: 'LABOR', active: true, gone: false, details: { item_type: 'Service', income_account: '41' } },
       { id: '902', name: 'GR-1', active: true, gone: false, details: { item_type: 'NonInvtPart', income_account: '42', expense_account: '51' } },
     ]);
@@ -367,32 +370,32 @@ describe('the copy job against the real functions', () => {
   it('follows NetSuite\'s changes: a renamed location, a new account on an item, an item no longer listed', async () => {
     const ns = netsuite();
     ns.records.location[1] = { ...ns.records.location[1], name: 'Kansas City plant' };
-    ns.records.item = [{ ...ns.records.item[0], cogsaccount: 52 }, ns.records.item[2]];
+    ns.records.item = [{ ...ns.records.item[0], assetaccount: 13 }, ns.records.item[2]];
     const r = await run(ns);
     expect(r.lists.location).toMatchObject({ changed: 1, gone: 0 });
     expect(r.lists.item).toMatchObject({ received: 2, changed: 1, gone: 1 });
     const items = await rows('item');
-    expect(items.find((i) => i.id === '900')?.details.cogs_account).toBe('52');
+    expect(items.find((i) => i.id === '900')?.details.asset_account).toBe('13');
     expect(items.find((i) => i.id === '901')).toMatchObject({ gone: true, active: true });
   });
 
   it('notes a field NetSuite stops giving, and leaves it out of every row', async () => {
     const ns = netsuite();
-    ns.refuse.item = ['cogsaccount'];
+    ns.refuse.item = ['assetaccount'];
     const r = await run(ns);
-    expect(r.lists.item).toMatchObject({ missing: ['cogs_account'] });
-    expect(r.notes).toContain("NetSuite wouldn't give the items' COGS accounts, so they're left out.");
-    expect((await rows('item')).find((i) => i.id === '900')?.details).not.toHaveProperty('cogs_account');
+    expect(r.lists.item).toMatchObject({ missing: ['asset_account'] });
+    expect(r.notes).toContain("NetSuite wouldn't give the items' asset accounts, so they're left out.");
+    expect((await rows('item')).find((i) => i.id === '900')?.details).not.toHaveProperty('asset_account');
   });
 
   it('reads field by field when NetSuite answers 500, leaving out only the field that fails', async () => {
     const ns = netsuite();
-    ns.failing = { item: ['cogsaccount'], vendor: ['entityid'] };
+    ns.failing = { item: ['cogsaccount', 'assetaccount'], vendor: ['entityid'] };
     const r = await run(ns);
-    expect(r.lists.item).toMatchObject({ received: 3, missing: ['cogs_account'] });
-    expect(r.notes).toContain("NetSuite wouldn't give the items' COGS accounts, so they're left out.");
+    expect(r.lists.item).toMatchObject({ received: 3, missing: ['asset_account'] });
+    expect(r.notes).toContain("NetSuite wouldn't give the items' asset accounts, so they're left out.");
     expect((await rows('item')).map((i) => i.details)).toEqual([
-      { item_type: 'InvtPart', display_name: 'Roof rack', income_account: '40', asset_account: '12' },
+      { item_type: 'InvtPart', display_name: 'Roof rack', income_account: '40' },
       { item_type: 'Service', income_account: '41' },
       { item_type: 'NonInvtPart', income_account: '42', expense_account: '51' },
     ]);

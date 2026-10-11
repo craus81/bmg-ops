@@ -84,7 +84,7 @@ const SINGULAR: Record<Kind, string> = {
 
 /** The accounts each item and vendor posts to, in the order the page shows them. */
 const ACCOUNT_FIELDS: Record<'item' | 'vendor', [string, string][]> = {
-  item: [['income_account', 'Income account'], ['cogs_account', 'COGS account'], ['asset_account', 'Asset account'], ['expense_account', 'Expense account']],
+  item: [['income_account', 'Income account'], ['asset_account', 'Asset account'], ['expense_account', 'Expense account']],
   vendor: [['expense_account', 'Default expense account'], ['payables_account', 'Payables account']],
 };
 

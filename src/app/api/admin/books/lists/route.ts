@@ -15,7 +15,7 @@ const ROW_COLUMNS = 'kind, netsuite_id, name, parent_netsuite_id, active, detail
 const SHORT_LISTS = ['location', 'department', 'class', 'term', 'tax_code'];
 /** The account fields a lookup can filter on, per list. */
 const ACCOUNT_FIELDS: Record<string, string[]> = {
-  item: ['income_account', 'cogs_account', 'asset_account', 'expense_account'],
+  item: ['income_account', 'asset_account', 'expense_account'],
   vendor: ['expense_account', 'payables_account'],
 };
 const LOOKUP_LIMIT = 50;
