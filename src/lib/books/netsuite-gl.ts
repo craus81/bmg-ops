@@ -226,6 +226,24 @@ export function transactionLinesQuery(txnId: string, f: PostingFilter, c: LineCo
     `;
 }
 
+/**
+ * GL lines in the linked subsidiaries that carry an amount but no account,
+ * counted by transaction type, so their note can say where in NetSuite
+ * they are.
+ */
+export function noAccountQuery(f: PostingFilter, subsidiaries: string[]): string {
+  const ids = subsidiaries.filter((id) => /^\d+$/.test(id));
+  if (!ids.length) throw new Error('No NetSuite subsidiary to count lines in');
+  return `
+      SELECT t.type AS tran_type, COUNT(*) AS line_count${GL_FROM}
+      WHERE ${postingWhere(f)}
+        AND tal.account IS NULL
+        AND (NVL(tal.debit, 0) <> 0 OR NVL(tal.credit, 0) <> 0)
+        AND tl.subsidiary IN (${ids.join(', ')})
+      GROUP BY t.type
+    `;
+}
+
 // ── NetSuite's totals ──────────────────────────────────────────────────────
 
 export interface AmountRow {
@@ -304,6 +322,42 @@ export function summarizeTotals(
     unlinked,
     unplaced,
   };
+}
+
+/** NetSuite's transaction type codes, named as its screens name them. Any other code shows as it is. */
+const TRAN_TYPE_NAMES: Record<string, string> = {
+  Build: 'Assembly Build', CardChrg: 'Credit Card', CardRfnd: 'Credit Card Refund', CashRfnd: 'Cash Refund',
+  CashSale: 'Cash Sale', Check: 'Check', CustCred: 'Credit Memo', CustDep: 'Customer Deposit', CustInvc: 'Invoice',
+  CustPymt: 'Payment', CustRfnd: 'Customer Refund', DepAppl: 'Deposit Application', Deposit: 'Deposit',
+  ExpRept: 'Expense Report', FxReval: 'Currency Revaluation', InvAdjst: 'Inventory Adjustment',
+  InvTrnfr: 'Inventory Transfer', ItemRcpt: 'Item Receipt', ItemShip: 'Item Fulfillment', Journal: 'Journal',
+  Transfer: 'Transfer', Unbuild: 'Assembly Unbuild', VendBill: 'Bill', VendCred: 'Bill Credit', VendPymt: 'Bill Payment',
+};
+
+/** How many transaction types the note names before it lumps the rest together. */
+const NOTE_TYPES = 6;
+
+/**
+ * The note about lines in NetSuite with an amount but no account (or
+ * month). With noAccountQuery's counts it names the transaction types
+ * they're on; without them it gives the totals' count alone.
+ */
+export function noAccountNote(unplaced: number, byType: Row[] | null): string {
+  const types = (byType ?? [])
+    .map((r) => ({ type: text(r.tran_type) || 'Unknown', lines: Math.max(0, Math.trunc(Number(r.line_count) || 0)) }))
+    .filter((t) => t.lines > 0)
+    .sort((a, b) => b.lines - a.lines || a.type.localeCompare(b.type));
+  if (!types.length) {
+    const one = unplaced === 1;
+    return `${glLines(unplaced)} in NetSuite with no account or month ${one ? "isn't" : "aren't"} copied, though ${one ? 'it carries an amount' : 'they carry amounts'}.`;
+  }
+  const n = types.reduce((sum, t) => sum + t.lines, 0);
+  const named = types.slice(0, NOTE_TYPES).map((t) => `${TRAN_TYPE_NAMES[t.type] ?? t.type} ${t.lines.toLocaleString('en-US')}`);
+  const rest = types.slice(NOTE_TYPES).reduce((sum, t) => sum + t.lines, 0);
+  if (rest) named.push(`other types ${rest.toLocaleString('en-US')}`);
+  const one = n === 1;
+  return `${glLines(n)} in NetSuite ${one ? 'carries' : 'carry'} an amount but no account, so ${one ? "it isn't" : "they aren't"} copied. `
+    + `By transaction type: ${named.join(', ')}.`;
 }
 
 /** Months whose totals differ between NetSuite and the copy, oldest first. */
@@ -583,8 +637,14 @@ export async function copyNetSuiteGl(
         : `${glLines(n)} in NetSuite with no subsidiary ${n === 1 ? 'is' : 'are'} not copied.`);
     }
     if (totals.unplaced) {
-      const one = totals.unplaced === 1;
-      notes.push(`${glLines(totals.unplaced)} in NetSuite with no account or month ${one ? "isn't" : "aren't"} copied, though ${one ? 'it carries an amount' : 'they carry amounts'}.`);
+      // Which transactions they're on, when NetSuite will count them; the note does without otherwise.
+      let byType: Row[] | null = null;
+      try {
+        byType = await query(noAccountQuery(posting, [...links.keys()]));
+      } catch {
+        byType = null;
+      }
+      notes.push(noAccountNote(totals.unplaced, byType));
     }
     if (totals.opening.length === 0 && totals.months.length === 0) {
       throw new Error("NetSuite returned no GL lines for BMG or 1084, so nothing was changed. If that's wrong, check that the integration role can still see every transaction type.");
