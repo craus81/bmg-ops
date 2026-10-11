@@ -125,7 +125,7 @@ cron, and from **Sync now** on the lists page:
 | Terms | `term` | days until due, early payment discount and its days |
 | Tax codes | `salestaxitem` | description, rate, tax type, tax agency |
 | Vendors | `vendor` | default expense account, payables account, terms |
-| Items | `item` | type, display name, income, COGS, asset and expense accounts |
+| Items | `item` | type, display name, income, asset and expense accounts |
 
 Every row also keeps its NetSuite id, name, parent and inactive flag. They
 all live in `gl_netsuite_lists` (migration 363), one row per list and
@@ -133,6 +133,13 @@ NetSuite id, and accounts are kept as NetSuite account ids, which
 `gl_accounts.netsuite_account_id` names. Items leave out what never posts
 (descriptions, subtotals, item groups) and the tax items, which are the tax
 codes.
+
+Items' COGS accounts aren't copied (owner decision 2026-10-11). NetSuite
+answers 500 for `item.cogsaccount` every time in this account, and asking
+for it sent every run into the slow field-by-field read below. Where an
+item's cost posts will come from NetSuite's own fulfillments, with that
+posting rule. Until then `details.cogs_account`, which migration 363 names,
+stays empty.
 
 How a copy works:
 
@@ -147,7 +154,7 @@ How a copy works:
   and why. When NetSuite refuses a field by name, the list is read again
   without it and the page says what's missing. When it refuses without
   naming one, or answers 500 UNEXPECTED_ERROR (this account does that for
-  some columns, and did for the items on the first copy), the list is read
+  some columns, as it did for the items' COGS account), the list is read
   field by field: the required fields, then each optional field on its
   own, so only the fields that fail are left out. SuiteQL shows little of
   tax codes, so every field of theirs but the id may be refused.

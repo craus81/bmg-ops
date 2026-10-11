@@ -50,10 +50,16 @@ describe('the list queries', () => {
     );
   });
 
+  it('doesn\'t ask for an item\'s COGS account, which NetSuite answers 500 for every time', () => {
+    expect(listQuery(def('item'))).toBe(
+      "SELECT r.id, r.itemid, r.itemtype, r.isinactive, r.displayname, r.incomeaccount, r.assetaccount, r.expenseaccount FROM item r WHERE r.itemtype NOT IN ('Description', 'Subtotal', 'Group', 'EndGroup', 'TaxItem', 'TaxGroup') ORDER BY r.id",
+    );
+  });
+
   it('reads one field on its own for the rows that have it', () => {
-    const cogs = def('item').optional.find((o) => o.field === 'cogsaccount')!;
-    expect(fieldQuery(def('item'), cogs)).toBe(
-      "SELECT r.id, r.cogsaccount FROM item r WHERE (r.itemtype NOT IN ('Description', 'Subtotal', 'Group', 'EndGroup', 'TaxItem', 'TaxGroup')) AND r.cogsaccount IS NOT NULL ORDER BY r.id",
+    const asset = def('item').optional.find((o) => o.field === 'assetaccount')!;
+    expect(fieldQuery(def('item'), asset)).toBe(
+      "SELECT r.id, r.assetaccount FROM item r WHERE (r.itemtype NOT IN ('Description', 'Subtotal', 'Group', 'EndGroup', 'TaxItem', 'TaxGroup')) AND r.assetaccount IS NOT NULL ORDER BY r.id",
     );
     expect(fieldQuery(def('term'), def('term').optional[0])).toBe(
       'SELECT r.id, r.daysuntilnetdue FROM term r WHERE r.daysuntilnetdue IS NOT NULL ORDER BY r.id',
@@ -73,9 +79,9 @@ describe('the list queries', () => {
 
 describe('reading a list NetSuite only partly gives', () => {
   it('knows the field a refusal names, quoted or after an alias, and not a word in the message', () => {
-    expect(namesField(refused("Search error occurred: Field 'cogsaccount' for record 'item' was not found."), 'cogsaccount')).toBe(true);
+    expect(namesField(refused("Search error occurred: Field 'assetaccount' for record 'item' was not found."), 'assetaccount')).toBe(true);
     expect(namesField(refused("Unknown identifier 'r.rate'."), 'rate')).toBe(true);
-    expect(namesField(refused("Search error occurred: Field 'cogsaccount' for record 'item' was not found."), 'description')).toBe(false);
+    expect(namesField(refused("Search error occurred: Field 'assetaccount' for record 'item' was not found."), 'description')).toBe(false);
     expect(namesField(refused("Field 'expenseaccount' was not found."), 'account')).toBe(false);
   });
 
@@ -88,15 +94,15 @@ describe('reading a list NetSuite only partly gives', () => {
     const asked: string[] = [];
     const query = vi.fn(async (q: string) => {
       asked.push(q);
-      if (q.includes('r.cogsaccount')) throw refused("Search error occurred: Field 'cogsaccount' for record 'item' was not found.");
+      if (q.includes('r.assetaccount')) throw refused("Search error occurred: Field 'assetaccount' for record 'item' was not found.");
       if (q.includes('r.expenseaccount')) throw refused("Unknown identifier 'r.expenseaccount'.");
       return [{ id: 1, itemid: 'A-1' }];
     });
     const { rows, dropped } = await readList(query, def('item'));
     expect(rows).toEqual([{ id: 1, itemid: 'A-1' }]);
-    expect(dropped.map((o) => o.field)).toEqual(['cogsaccount', 'expenseaccount']);
+    expect(dropped.map((o) => o.field)).toEqual(['assetaccount', 'expenseaccount']);
     expect(asked).toHaveLength(3);
-    expect(asked[2]).toContain('r.incomeaccount, r.assetaccount FROM item');
+    expect(asked[2]).toContain('r.displayname, r.incomeaccount FROM item');
   });
 
   it('reads field by field when the refusal names no field, and fails if the required fields are refused too', async () => {
@@ -118,18 +124,18 @@ describe('reading a list NetSuite only partly gives', () => {
     const asked: string[] = [];
     const query = vi.fn(async (q: string) => {
       asked.push(q);
-      if (q.includes('r.cogsaccount')) throw unexpected();
+      if (q.includes('r.assetaccount')) throw unexpected();
       if (q.startsWith('SELECT r.id, r.incomeaccount ')) return [{ id: 900, incomeaccount: 40 }, { id: 901, incomeaccount: 41 }, { id: 999, incomeaccount: 49 }];
-      if (q.startsWith('SELECT r.id, r.assetaccount ')) return [{ id: 900, assetaccount: 12 }];
+      if (q.startsWith('SELECT r.id, r.expenseaccount ')) return [{ id: 901, expenseaccount: 61 }];
       if (q.includes('IS NOT NULL')) return [];
       return [{ id: 900, itemid: 'RD-100', itemtype: 'InvtPart', isinactive: 'F' }, { id: 901, itemid: 'LABOR', itemtype: 'Service', isinactive: 'F' }];
     });
     const { rows, dropped } = await readList(query, def('item'));
-    expect(dropped.map((o) => o.field)).toEqual(['cogsaccount']);
+    expect(dropped.map((o) => o.field)).toEqual(['assetaccount']);
     // An id only a field read lists (added in between) isn't invented.
     expect(rows).toEqual([
-      { id: 900, itemid: 'RD-100', itemtype: 'InvtPart', isinactive: 'F', incomeaccount: 40, assetaccount: 12 },
-      { id: 901, itemid: 'LABOR', itemtype: 'Service', isinactive: 'F', incomeaccount: 41 },
+      { id: 900, itemid: 'RD-100', itemtype: 'InvtPart', isinactive: 'F', incomeaccount: 40 },
+      { id: 901, itemid: 'LABOR', itemtype: 'Service', isinactive: 'F', incomeaccount: 41, expenseaccount: 61 },
     ]);
     // The whole read, the required fields, then each optional field once.
     expect(asked).toHaveLength(2 + def('item').optional.length);
@@ -186,13 +192,13 @@ describe('mapping NetSuite rows', () => {
     expect(mapListRow(def('vendor'), { id: 51, entityid: 'Pat Example', isinactive: 'F' })).toMatchObject({ name: 'Pat Example', details: {} });
   });
 
-  it('keeps an item\'s type and every account it posts to', () => {
+  it('keeps an item\'s type and the accounts it posts to', () => {
     expect(mapListRow(def('item'), {
       id: 900, itemid: 'RD-100', itemtype: 'InvtPart', isinactive: 'F', displayname: 'Roof rack',
-      incomeaccount: '401', cogsaccount: '501', assetaccount: '121', expenseaccount: null,
+      incomeaccount: '401', assetaccount: '121', expenseaccount: null,
     })).toEqual({
       netsuite_id: '900', name: 'RD-100', parent_netsuite_id: null, active: true,
-      details: { item_type: 'InvtPart', display_name: 'Roof rack', income_account: '401', cogs_account: '501', asset_account: '121' },
+      details: { item_type: 'InvtPart', display_name: 'Roof rack', income_account: '401', asset_account: '121' },
     });
   });
 

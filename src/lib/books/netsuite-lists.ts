@@ -133,13 +133,15 @@ export const LISTS: readonly ListDef[] = [
   },
   {
     // Lines that never post (descriptions, subtotals, item groups) and the
-    // tax items, which are the tax codes above, are left out.
+    // tax items, which are the tax codes above, are left out. So is the COGS
+    // account: this account answers 500 for it every time (2026-10-11), which
+    // sent every run into the slow field-by-field read. Where an item's cost
+    // posts comes from NetSuite's fulfillments, with that posting rule.
     kind: 'item', label: 'items', singular: 'Item', record: 'item',
     required: ['id', 'itemid', 'itemtype', 'isinactive'],
     optional: [
       { field: 'displayname', key: 'display_name', label: 'display names' },
       { field: 'incomeaccount', key: 'income_account', label: 'income accounts' },
-      { field: 'cogsaccount', key: 'cogs_account', label: 'COGS accounts' },
       { field: 'assetaccount', key: 'asset_account', label: 'asset accounts' },
       { field: 'expenseaccount', key: 'expense_account', label: 'expense accounts' },
     ],
@@ -184,9 +186,8 @@ const isRejectedQuery = (err: unknown) => isSuiteqlError(err) && err.status === 
 /**
  * A 500 that outlived the query's retries. This account answers 500
  * UNEXPECTED_ERROR for some columns instead of refusing them (a transaction's
- * createdfrom, src/lib/so-invoices.ts), and the first copy's items read
- * answered it every time (2026-10-11), so it's treated like a refusal that
- * names no field.
+ * createdfrom, src/lib/so-invoices.ts; an item's cogsaccount, 2026-10-11,
+ * no longer read), so it's treated like a refusal that names no field.
  */
 const isColumnFailure = (err: unknown) => isSuiteqlError(err) && err.status === 500;
 
@@ -294,7 +295,6 @@ export function mapListRow(def: ListDef, row: Row): ListRow | null {
       put('item_type', text(row.itemtype));
       if (text(row.displayname) !== name) put('display_name', text(row.displayname));
       put('income_account', numericId(row.incomeaccount));
-      put('cogs_account', numericId(row.cogsaccount));
       put('asset_account', numericId(row.assetaccount));
       put('expense_account', numericId(row.expenseaccount));
       break;
