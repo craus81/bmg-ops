@@ -11,8 +11,8 @@ import { apiFetch } from '@/lib/api-client';
  *
  * The lists FleetSuite's posting rules need, copied from NetSuite every two
  * hours (or on "Sync now"): locations, departments, classes, terms and tax
- * codes, plus the accounts each item and vendor posts to. Read-only, super
- * admins only and with no menu link, while the books are built.
+ * codes, plus the accounts each item and vendor posts to. Read-only and
+ * super admins only while the books are built, linked from the accounts page.
  */
 
 type Kind = 'location' | 'department' | 'class' | 'term' | 'tax_code' | 'vendor' | 'item';
