@@ -398,7 +398,7 @@ const byTxnLine = (a: NsLine, b: NsLine) => a.txn - b.txn || a.line - b.line;
  */
 class FakeNetSuite {
   lines: NsLine[];
-  refuse = { periods: false, txnPosting: false, extraColumns: false };
+  refuse = { periods: false, txnPosting: false, extraColumns: false, noAccountTypes: false };
   /** Transactions the line reads miss though the totals count them. */
   unreadable = new Set<number>();
   /** A line the line reads return twice, as with a second accounting book. */
@@ -434,6 +434,16 @@ class FakeNetSuite {
     if (q === PERIODS_QUERY) {
       if (this.refuse.periods) throw rejected("Record 'accountingperiod' was not found.");
       return NS_PERIODS;
+    }
+    if (q.includes('tal.account IS NULL')) {
+      if (this.refuse.noAccountTypes) throw rejected('Search error occurred: Invalid or unsupported search.');
+      const subs = q.match(/tl\.subsidiary IN \(([\d, ]+)\)/)?.[1].split(',').map((s) => Number(s.trim())) ?? [];
+      const counts = new Map<string, number>();
+      for (const l of this.posted(q)) {
+        if (l.account !== null || !(l.debit || l.credit) || !subs.includes(l.sub ?? -1)) continue;
+        counts.set(l.type ?? 'Journal', (counts.get(l.type ?? 'Journal') ?? 0) + 1);
+      }
+      return [...counts].map(([tran_type, line_count]) => ({ tran_type, line_count }));
     }
     if (q.includes('GROUP BY')) {
       const groups = new Map<string, Row & { debit: number; credit: number; line_count: number }>();
@@ -771,19 +781,28 @@ describe('the copy job against the real functions', () => {
       await startOver();
       const ns = new FakeNetSuite([
         ...BOOKS,
-        { txn: 15, line: 0, sub: 2, account: 50, debit: 5, date: '2025-03-07', period: 104 },
-        { txn: 15, line: 1, sub: 2, account: 10, credit: 5, date: '2025-03-07', period: 104 },
-        { txn: 15, line: 2, sub: 2, account: null, debit: 5, date: '2025-03-07', period: 104 },
+        { txn: 15, line: 0, sub: 2, account: 50, debit: 5, date: '2025-03-07', period: 104, type: 'ItemShip' },
+        { txn: 15, line: 1, sub: 2, account: 10, credit: 5, date: '2025-03-07', period: 104, type: 'ItemShip' },
+        { txn: 15, line: 2, sub: 2, account: null, debit: 5, date: '2025-03-07', period: 104, type: 'ItemShip' },
+        // In a subsidiary no company is linked to: counted with that subsidiary's lines instead.
+        { txn: 16, line: 0, sub: 9, account: null, debit: 5, date: '2025-03-08', period: 104 },
       ]);
       const r = await run(ns);
       expect(r.error).toBeUndefined();
-      expect(r.notes).toContain("1 GL line in NetSuite with no account or month isn't copied, though it carries an amount.");
+      expect(r.notes).toContain("1 GL line in NetSuite carries an amount but no account, so it isn't copied. By transaction type: Item Fulfillment 1.");
       expect(await outOfStep()).toEqual([]);
       expect((await copied()).filter((row) => row.txn === '15').map((row) => row.line)).toEqual(['0', '1']);
       // Without the filter, NetSuite would send them and the copy would stop on the first.
       const reads = ns.queries.filter((q) => q !== PERIODS_QUERY && !q.includes('GROUP BY'));
       expect(reads.length).toBeGreaterThan(0);
       expect(reads.every((q) => q.includes('tal.account IS NOT NULL'))).toBe(true);
+
+      // When NetSuite won't count them by type, the note gives the count alone.
+      ns.refuse.noAccountTypes = true;
+      clock += 2 * HOUR;
+      const next = await run(ns);
+      expect(next.error).toBeUndefined();
+      expect(next.notes).toContain("1 GL line in NetSuite with no account or month isn't copied, though it carries an amount.");
     });
 
     it('filters on the line\'s posting flag alone when NetSuite won\'t take the transaction\'s', async () => {

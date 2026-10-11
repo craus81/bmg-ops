@@ -11,6 +11,8 @@ import {
   monthsBetween,
   monthsThatDiffer,
   nextMonth,
+  noAccountNote,
+  noAccountQuery,
   parseGlState,
   periodMonths,
   postingMonth,
@@ -178,6 +180,40 @@ describe('summarizeTotals', () => {
     expect(t.months.find((r) => r.netsuite_account_id === '10')).toMatchObject({ debit: '25.10', line_count: 2 });
     // With no periods, a line with no date month has nowhere to go.
     expect(t.unplaced).toBe(5);
+  });
+});
+
+describe('lines with an amount but no account', () => {
+  it('counts them by transaction type in the linked subsidiaries', () => {
+    const q = noAccountQuery('transaction_and_line', ['2', '5', 'x']);
+    expect(q).toContain("t.posting = 'T' AND tal.posting = 'T'");
+    expect(q).toContain('AND tal.account IS NULL');
+    expect(q).toContain('AND (NVL(tal.debit, 0) <> 0 OR NVL(tal.credit, 0) <> 0)');
+    expect(q).toContain('AND tl.subsidiary IN (2, 5)');
+    expect(q).toContain('GROUP BY t.type');
+    expect(() => noAccountQuery('line', ['1 OR 1=1'])).toThrow(/No NetSuite subsidiary/);
+  });
+
+  it('names the transaction types they are on, most first', () => {
+    expect(noAccountNote(45, [
+      { tran_type: 'CustInvc', line_count: '8' },
+      { tran_type: 'ItemShip', line_count: 1200 },
+      { tran_type: 'Zzz', line_count: 2 },
+      { tran_type: 'VendBill', line_count: 0 },
+    ])).toBe("1,210 GL lines in NetSuite carry an amount but no account, so they aren't copied. By transaction type: Item Fulfillment 1,200, Invoice 8, Zzz 2.");
+    expect(noAccountNote(3, [{ tran_type: 'Journal', line_count: 1 }]))
+      .toBe("1 GL line in NetSuite carries an amount but no account, so it isn't copied. By transaction type: Journal 1.");
+  });
+
+  it('lumps together the types past the sixth', () => {
+    const rows = ['CustInvc', 'ItemShip', 'VendBill', 'Journal', 'Check', 'Deposit', 'CashSale', 'ItemRcpt']
+      .map((tran_type, i) => ({ tran_type, line_count: 10 - i }));
+    expect(noAccountNote(60, rows)).toMatch(/: Invoice 10, Item Fulfillment 9, Bill 8, Journal 7, Check 6, Deposit 5, other types 7\.$/);
+  });
+
+  it('gives the count alone when NetSuite wouldn\'t break it down', () => {
+    expect(noAccountNote(40, null)).toBe("40 GL lines in NetSuite with no account or month aren't copied, though they carry amounts.");
+    expect(noAccountNote(1, [])).toBe("1 GL line in NetSuite with no account or month isn't copied, though it carries an amount.");
   });
 });
 

@@ -158,7 +158,8 @@ Safeguards:
   says how many there are.
 - Lines with no account aren't copied either. NetSuite has them on posting
   transactions for lines that post nowhere; the page notes only those that
-  carry an amount.
+  carry an amount, counted by transaction type so they can be found in
+  NetSuite.
 - Two GL lines for the same transaction line stop the copy. That would mean
   NetSuite keeps more than one accounting book; the copy takes one.
 
