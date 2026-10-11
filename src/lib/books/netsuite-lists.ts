@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { isSuiteqlError, suiteqlQueryAll } from '@/lib/netsuite';
+import { compactSuiteqlError } from '@/lib/sales-order-sync';
 import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 import { COPY_FROM } from './netsuite-gl';
 
@@ -150,7 +151,7 @@ export const LISTS: readonly ListDef[] = [
 const text = (v: unknown): string => (v === null || v === undefined ? '' : String(v).trim());
 const isTrue = (v: unknown): boolean => v === true || text(v).toUpperCase() === 'T';
 const numericId = (v: unknown): string | null => (/^\d+$/.test(text(v)) ? text(v) : null);
-const reason = (err: unknown) => String((err as any)?.message || err).slice(0, 300);
+const reason = (err: unknown) => compactSuiteqlError(err);
 
 /** A count or percentage as a number ('2%' → 2); anything else is left out. */
 function amount(v: unknown): number | null {
@@ -173,7 +174,21 @@ export function listQuery(def: ListDef, optional: readonly OptionalField[] = def
   return `SELECT ${fields} FROM ${def.record} r${def.where ? ` WHERE ${def.where}` : ''} ORDER BY r.id`;
 }
 
+/** One optional field, for every row that has it (readFieldByField). */
+export function fieldQuery(def: ListDef, o: OptionalField): string {
+  const where = [def.where && `(${def.where})`, `r.${o.field} IS NOT NULL`].filter(Boolean).join(' AND ');
+  return `SELECT r.id, r.${o.field} FROM ${def.record} r WHERE ${where} ORDER BY r.id`;
+}
+
 const isRejectedQuery = (err: unknown) => isSuiteqlError(err) && err.status === 400;
+/**
+ * A 500 that outlived the query's retries. This account answers 500
+ * UNEXPECTED_ERROR for some columns instead of refusing them (a transaction's
+ * createdfrom, src/lib/so-invoices.ts), and the first copy's items read
+ * answered it every time (2026-10-11), so it's treated like a refusal that
+ * names no field.
+ */
+const isColumnFailure = (err: unknown) => isSuiteqlError(err) && err.status === 500;
 
 /**
  * SuiteQL's way of saying the integration role can't see a record type at
@@ -191,25 +206,50 @@ export function namesField(err: unknown, field: string): boolean {
 type SuiteqlAll = (query: string) => Promise<Row[]>;
 
 /**
- * Every row of a list. When NetSuite refuses the query, the optional fields
- * it names are dropped and the read is tried again, or all of them when it
- * names none. A refusal with no optional field left, a record the role
- * can't see, or any other failure is thrown.
+ * Every row of a list. When NetSuite refuses the query naming optional
+ * fields, those are dropped and the read is tried again. When it refuses
+ * without naming one, or answers 500, the list is read field by field
+ * instead, so only the fields that fail are left out. A record the role
+ * can't see, a failure with no optional field left to blame, or any other
+ * failure is thrown.
  */
 export async function readList(query: SuiteqlAll, def: ListDef): Promise<{ rows: Row[]; dropped: OptionalField[] }> {
   let optional = [...def.optional];
   const dropped = new Set<OptionalField>();
+  const read = (rows: Row[]) => ({ rows, dropped: def.optional.filter((o) => dropped.has(o)) });
   for (;;) {
     try {
-      const rows = await query(listQuery(def, optional));
-      return { rows, dropped: def.optional.filter((o) => dropped.has(o)) };
+      return read(await query(listQuery(def, optional)));
     } catch (err) {
-      if (!isRejectedQuery(err) || recordNotFound(err) || optional.length === 0) throw err;
-      const named = optional.filter((o) => namesField(err, o.field));
-      for (const o of named.length ? named : optional) dropped.add(o);
+      if (!(isRejectedQuery(err) || isColumnFailure(err)) || recordNotFound(err) || optional.length === 0) throw err;
+      const named = isRejectedQuery(err) ? optional.filter((o) => namesField(err, o.field)) : [];
+      if (named.length === 0) return read(await readFieldByField(query, def, optional, dropped));
+      for (const o of named) dropped.add(o);
       optional = optional.filter((o) => !dropped.has(o));
     }
   }
+}
+
+/**
+ * The required fields alone, then each optional field in a read of its own,
+ * merged by id. A field NetSuite refuses or answers 500 for joins `dropped`;
+ * the required read failing fails the list.
+ */
+async function readFieldByField(query: SuiteqlAll, def: ListDef, optional: OptionalField[], dropped: Set<OptionalField>): Promise<Row[]> {
+  const rows = await query(listQuery(def, []));
+  const byId = new Map(rows.map((row) => [text(row.id), row]));
+  for (const o of optional) {
+    try {
+      for (const value of await query(fieldQuery(def, o))) {
+        const row = byId.get(text(value.id));
+        if (row) row[o.field] = value[o.field];
+      }
+    } catch (err) {
+      if (!(isRejectedQuery(err) || isColumnFailure(err))) throw err;
+      dropped.add(o);
+    }
+  }
+  return rows;
 }
 
 /** One NetSuite row as gl_netsuite_lists_apply takes it, or null without an id. */

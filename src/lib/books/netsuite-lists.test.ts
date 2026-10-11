@@ -10,6 +10,7 @@ vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok
 import {
   LISTS,
   TAX_ACCOUNTS_QUERY,
+  fieldQuery,
   joinWords,
   listQuery,
   mapList,
@@ -29,6 +30,11 @@ const refused = (detail: string) => Object.assign(
   new Error(`NetSuite SuiteQL error (400): {"o:errorDetails":[{"detail":"Invalid search query. Detailed unprocessed description follows. ${detail}"}]}`),
   { status: 400 },
 );
+/** What this account answers for some columns instead of refusing them. */
+const unexpected = () => Object.assign(
+  new Error('NetSuite SuiteQL error (500): {"title":"Internal Server Error","status":500,"o:errorDetails":[{"detail":"An unexpected error occurred. Error ID: abc123","o:errorCode":"UNEXPECTED_ERROR"}]}'),
+  { status: 500 },
+);
 
 describe('the list queries', () => {
   it('reads every field, ordered by id so the pages neither skip nor repeat rows', () => {
@@ -41,6 +47,16 @@ describe('the list queries', () => {
   it('leaves the items that never post, and the tax items, out of the items', () => {
     expect(listQuery(def('item'), [])).toBe(
       "SELECT r.id, r.itemid, r.itemtype, r.isinactive FROM item r WHERE r.itemtype NOT IN ('Description', 'Subtotal', 'Group', 'EndGroup', 'TaxItem', 'TaxGroup') ORDER BY r.id",
+    );
+  });
+
+  it('reads one field on its own for the rows that have it', () => {
+    const cogs = def('item').optional.find((o) => o.field === 'cogsaccount')!;
+    expect(fieldQuery(def('item'), cogs)).toBe(
+      "SELECT r.id, r.cogsaccount FROM item r WHERE (r.itemtype NOT IN ('Description', 'Subtotal', 'Group', 'EndGroup', 'TaxItem', 'TaxGroup')) AND r.cogsaccount IS NOT NULL ORDER BY r.id",
+    );
+    expect(fieldQuery(def('term'), def('term').optional[0])).toBe(
+      'SELECT r.id, r.daysuntilnetdue FROM term r WHERE r.daysuntilnetdue IS NOT NULL ORDER BY r.id',
     );
   });
 
@@ -83,17 +99,47 @@ describe('reading a list NetSuite only partly gives', () => {
     expect(asked[2]).toContain('r.incomeaccount, r.assetaccount FROM item');
   });
 
-  it('drops every optional field when the refusal names none, and fails if the rest is refused too', async () => {
+  it('reads field by field when the refusal names no field, and fails if the required fields are refused too', async () => {
     const query = vi.fn(async (q: string) => {
       if (q.includes('r.parent')) throw refused('Something NetSuite does not explain.');
-      return [{ id: 7, name: 'Upfit' }];
+      if (q.includes('r.fullname')) return [{ id: 7, fullname: 'Shop : Upfit' }];
+      return [{ id: 7, name: 'Upfit', isinactive: 'F' }];
     });
-    const { dropped } = await readList(query, def('class'));
-    expect(dropped.map((o) => o.field)).toEqual(['parent', 'fullname']);
+    const { rows, dropped } = await readList(query, def('class'));
+    expect(dropped.map((o) => o.field)).toEqual(['parent']);
+    expect(rows).toEqual([{ id: 7, name: 'Upfit', isinactive: 'F', fullname: 'Shop : Upfit' }]);
 
     const never = vi.fn(async () => { throw refused("Field 'name' for record 'term' was not found."); });
     await expect(readList(never, def('term'))).rejects.toThrow(/'name'/);
     expect(never).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads field by field when NetSuite answers 500, keeping every field that works on its own', async () => {
+    const asked: string[] = [];
+    const query = vi.fn(async (q: string) => {
+      asked.push(q);
+      if (q.includes('r.cogsaccount')) throw unexpected();
+      if (q.startsWith('SELECT r.id, r.incomeaccount ')) return [{ id: 900, incomeaccount: 40 }, { id: 901, incomeaccount: 41 }, { id: 999, incomeaccount: 49 }];
+      if (q.startsWith('SELECT r.id, r.assetaccount ')) return [{ id: 900, assetaccount: 12 }];
+      if (q.includes('IS NOT NULL')) return [];
+      return [{ id: 900, itemid: 'RD-100', itemtype: 'InvtPart', isinactive: 'F' }, { id: 901, itemid: 'LABOR', itemtype: 'Service', isinactive: 'F' }];
+    });
+    const { rows, dropped } = await readList(query, def('item'));
+    expect(dropped.map((o) => o.field)).toEqual(['cogsaccount']);
+    // An id only a field read lists (added in between) isn't invented.
+    expect(rows).toEqual([
+      { id: 900, itemid: 'RD-100', itemtype: 'InvtPart', isinactive: 'F', incomeaccount: 40, assetaccount: 12 },
+      { id: 901, itemid: 'LABOR', itemtype: 'Service', isinactive: 'F', incomeaccount: 41 },
+    ]);
+    // The whole read, the required fields, then each optional field once.
+    expect(asked).toHaveLength(2 + def('item').optional.length);
+    expect(asked[1]).toBe(listQuery(def('item'), []));
+  });
+
+  it('fails the list when NetSuite answers 500 even for the required fields', async () => {
+    const query = vi.fn(async () => { throw unexpected(); });
+    await expect(readList(query, def('vendor'))).rejects.toThrow(/UNEXPECTED_ERROR/);
+    expect(query).toHaveBeenCalledTimes(2);
   });
 
   it('gives up at once when the role can\'t see the record, or NetSuite fails for another reason', async () => {

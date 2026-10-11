@@ -206,6 +206,8 @@ type NsRow = Record<string, unknown>;
 class FakeNetSuite {
   records: Record<string, NsRow[]> = {};
   refuse: Record<string, string[]> = {};
+  /** Fields this account answers 500 UNEXPECTED_ERROR for instead of refusing. */
+  failing: Record<string, string[]> = {};
   hidden = new Set<string>();
   taxLines: NsRow[] = [];
   down = false;
@@ -222,6 +224,11 @@ class FakeNetSuite {
     const fields = /^SELECT (.+?) FROM/.exec(q)![1].split(', ').map((f) => f.replace(/^r\./, ''));
     const refused = fields.find((f) => (this.refuse[record] ?? []).includes(f));
     if (refused) throw fail(`Search error occurred: Field '${refused}' for record '${record}' was not found.`);
+    if (fields.some((f) => (this.failing[record] ?? []).includes(f))) {
+      throw Object.assign(new Error(
+        'NetSuite SuiteQL error (500): {"title":"Internal Server Error","status":500,"o:errorDetails":[{"detail":"An unexpected error occurred. Error ID: fake1","o:errorCode":"UNEXPECTED_ERROR"}]}',
+      ), { status: 500 });
+    }
     return (this.records[record] ?? []).map((row) => Object.fromEntries(fields.map((f) => [f, row[f] ?? null])));
   };
 }
@@ -376,6 +383,24 @@ describe('the copy job against the real functions', () => {
     expect(r.lists.item).toMatchObject({ missing: ['cogs_account'] });
     expect(r.notes).toContain("NetSuite wouldn't give the items' COGS accounts, so they're left out.");
     expect((await rows('item')).find((i) => i.id === '900')?.details).not.toHaveProperty('cogs_account');
+  });
+
+  it('reads field by field when NetSuite answers 500, leaving out only the field that fails', async () => {
+    const ns = netsuite();
+    ns.failing = { item: ['cogsaccount'], vendor: ['entityid'] };
+    const r = await run(ns);
+    expect(r.lists.item).toMatchObject({ received: 3, missing: ['cogs_account'] });
+    expect(r.notes).toContain("NetSuite wouldn't give the items' COGS accounts, so they're left out.");
+    expect((await rows('item')).map((i) => i.details)).toEqual([
+      { item_type: 'InvtPart', display_name: 'Roof rack', income_account: '40', asset_account: '12' },
+      { item_type: 'Service', income_account: '41' },
+      { item_type: 'NonInvtPart', income_account: '42', expense_account: '51' },
+    ]);
+    // A 500 even for the required fields fails that list alone, in short words.
+    expect(r.notes).toContain(
+      "NetSuite wouldn't list its vendors (NetSuite SuiteQL error (500): UNEXPECTED_ERROR — An unexpected error occurred. Error ID: fake1).",
+    );
+    expect((await rows('vendor')).every((v) => !v.gone)).toBe(true);
   });
 
   it('leaves the lists it has no time for to the next run', async () => {

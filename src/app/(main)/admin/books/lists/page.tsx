@@ -77,6 +77,10 @@ const PLURAL: Record<Kind, string> = {
   location: 'locations', department: 'departments', class: 'classes', term: 'terms',
   tax_code: 'tax codes', vendor: 'vendors', item: 'items',
 };
+const SINGULAR: Record<Kind, string> = {
+  location: 'location', department: 'department', class: 'class', term: 'term',
+  tax_code: 'tax code', vendor: 'vendor', item: 'item',
+};
 
 /** The accounts each item and vendor posts to, in the order the page shows them. */
 const ACCOUNT_FIELDS: Record<'item' | 'vendor', [string, string][]> = {
@@ -85,6 +89,8 @@ const ACCOUNT_FIELDS: Record<'item' | 'vendor', [string, string][]> = {
 };
 
 const n = (v: number) => v.toLocaleString('en-US');
+/** "1 department", "18 classes". */
+const howMany = (v: number, kind: Kind) => `${n(v)} ${v === 1 ? SINGULAR[kind] : PLURAL[kind]}`;
 
 function ago(iso: string): string {
   const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -414,7 +420,7 @@ export default function BooksListsPage() {
     return (
       <>
         <div style={{ ...muted, marginBottom: '8px' }}>
-          {count ? `${n(count.listed)} ${PLURAL[kind]} in NetSuite, ${n(count.active)} active.` : `No ${PLURAL[kind]} copied from NetSuite yet.`}
+          {count ? `${howMany(count.listed, kind)} in NetSuite, ${n(count.active)} active.` : `No ${PLURAL[kind]} copied from NetSuite yet.`}
           {' '}The accounts below are counted over the active ones.
         </div>
         {ACCOUNT_FIELDS[kind].map(([field, label]) => {
@@ -445,7 +451,7 @@ export default function BooksListsPage() {
                           </span>
                         )}
                       </span>
-                      <span style={{ fontVariantNumeric: 'tabular-nums' }}>{n(b.rows)} {b.rows === 1 ? (kind === 'item' ? 'item' : 'vendor') : PLURAL[kind]}</span>
+                      <span style={{ fontVariantNumeric: 'tabular-nums' }}>{howMany(b.rows, kind)}</span>
                       <button
                         onClick={() => runLookup(
                           { kind, field, account: account ?? 'none' },
@@ -511,7 +517,7 @@ export default function BooksListsPage() {
 
   const summary = TABS
     .filter(([k]) => lists[k]?.received !== undefined)
-    .map(([k]) => `${n(lists[k]!.received!)} ${PLURAL[k]}`);
+    .map(([k]) => howMany(lists[k]!.received!, k));
   const sums = Object.values(lists).reduce<{ added: number; changed: number; gone: number }>(
     (s, l) => ({ added: s.added + (l?.added ?? 0), changed: s.changed + (l?.changed ?? 0), gone: s.gone + (l?.gone ?? 0) }),
     { added: 0, changed: 0, gone: 0 },
