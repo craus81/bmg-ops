@@ -132,9 +132,10 @@ export const LISTS: readonly ListDef[] = [
     minLeftMs: 20_000,
   },
   {
-    // Lines that never post (descriptions, subtotals, item groups) and the
-    // tax items, which are the tax codes above, are left out. So is the COGS
-    // account: this account answers 500 for it every time (2026-10-11), which
+    // The tax items are the tax codes above, so they're left out. Items that
+    // never post (descriptions, subtotals, item groups) are kept, so the
+    // invoice rule can tell their lines from a sale. The COGS account isn't
+    // read: this account answers 500 for it every time (2026-10-11), which
     // sent every run into the slow field-by-field read. Where an item's cost
     // posts comes from NetSuite's fulfillments, with that posting rule.
     kind: 'item', label: 'items', singular: 'Item', record: 'item',
@@ -145,7 +146,7 @@ export const LISTS: readonly ListDef[] = [
       { field: 'assetaccount', key: 'asset_account', label: 'asset accounts' },
       { field: 'expenseaccount', key: 'expense_account', label: 'expense accounts' },
     ],
-    where: "r.itemtype NOT IN ('Description', 'Subtotal', 'Group', 'EndGroup', 'TaxItem', 'TaxGroup')",
+    where: "r.itemtype NOT IN ('TaxItem', 'TaxGroup')",
     minLeftMs: 40_000,
   },
 ];

@@ -175,6 +175,8 @@ export default function BooksTrialBalancePage() {
             Visible only to super admins. <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
             {' · '}
             <Link href="/admin/books/lists" style={{ color: 'var(--text-secondary)' }}>NetSuite lists</Link>
+            {' · '}
+            <Link href="/admin/books/invoices" style={{ color: 'var(--text-secondary)' }}>Invoices vs NetSuite</Link>
           </div>
         </div>
         <button
