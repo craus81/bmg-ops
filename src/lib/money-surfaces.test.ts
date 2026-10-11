@@ -50,6 +50,7 @@ const ALLOWED: Record<string, string> = {
   'src/components/QuickBooksRecordModal.tsx': 'loads from /api/ledger/history/[id], which is requireMoney; its openers only fetch history when canSeeMoney',
   'src/components/FinancialsDashboard.tsx': 'financials — super_admin/executive only',
   'src/app/(main)/admin/books/trial-balance/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
+  'src/app/(main)/admin/books/invoices/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
 
   // ── CNI admin console ──
   'src/app/(main)/admin/cni/jobs/[id]/page.tsx': 'cni_admin — admin only',

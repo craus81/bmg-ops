@@ -24,8 +24,8 @@ export type RevenueBucket = 'upfit' | 'graphics' | 'unsplit' | 'excluded';
 export const GRAPHICS_ITEMS = new Set(['3M VINYL', 'GRAPHICS INSTALL LABOR', 'GRAPHICS REMOVAL']);
 export const GRAPHICS_ITEM_PREFIX = '06';
 
-/** NetSuite item types that are layout, not a sale. */
-const LAYOUT_TYPES = new Set(['Subtotal', 'EndGroup', 'Group', 'Description']);
+/** NetSuite item types that are layout, not a sale: they post nothing (the invoice rule skips them too). */
+export const LAYOUT_TYPES: ReadonlySet<string> = new Set(['Subtotal', 'EndGroup', 'Group', 'Description']);
 const isFreight = (num: string, type: string) => type === 'ShipItem' || /FREIGHT|SHIPPING/.test(num);
 
 export function revenueBucket(itemNumber: string | null | undefined, itemType: string | null | undefined): RevenueBucket {

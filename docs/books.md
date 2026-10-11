@@ -8,12 +8,13 @@ Installations LLC and 1084 Cool Springs LLC, which owns the building.
 
 This file covers part 1, the ledger core, part 2, the chart of accounts
 copied from NetSuite, part 3, NetSuite's general ledger from 2025 copied
-and checked month by month, and part 4, the NetSuite lists the posting
-rules need. The screens are the accounts page at `/admin/books`, the trial
-balance at `/admin/books/trial-balance` and the lists at
-`/admin/books/lists`, which only super admins can open. Only they see the
-Books entry on the More page (Admin), which opens the accounts page; the
-other two are linked from there.
+and checked month by month, part 4, the NetSuite lists the posting rules
+need, and part 5, the invoice rule, checked against NetSuite before it
+posts. The screens are the accounts page at `/admin/books`, the trial
+balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`
+and the invoices at `/admin/books/invoices`, which only super admins can
+open. Only they see the Books entry on the More page (Admin), which opens
+the accounts page; the others are linked from there.
 
 | Piece | Where |
 | --- | --- |
@@ -29,6 +30,9 @@ other two are linked from there.
 | NetSuite's lists, copied | `migrations/363-books-netsuite-lists.sql`, `src/lib/books/netsuite-lists.ts` |
 | Lists page and its API | `src/app/(main)/admin/books/lists/page.tsx`, `src/app/api/admin/books/lists/route.ts` |
 | Lists tests | `src/lib/books/netsuite-lists.test.ts`, `src/lib/books/netsuite-lists-sql.test.ts` |
+| Invoice rule and its check | `src/lib/books/invoice-rule.ts`, `src/lib/books/invoice-check.ts`, `migrations/364-books-invoice-check.sql` |
+| Invoices page and its API | `src/app/(main)/admin/books/invoices/page.tsx`, `src/app/api/admin/books/invoices/route.ts` |
+| Invoice tests | `src/lib/books/invoice-rule.test.ts`, `src/lib/books/invoice-check.test.ts`, `src/lib/books/invoice-check-sql.test.ts` |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
 QuickBooks and NetSuite history that importers replace wholesale. They stay
@@ -130,9 +134,10 @@ cron, and from **Sync now** on the lists page:
 Every row also keeps its NetSuite id, name, parent and inactive flag. They
 all live in `gl_netsuite_lists` (migration 363), one row per list and
 NetSuite id, and accounts are kept as NetSuite account ids, which
-`gl_accounts.netsuite_account_id` names. Items leave out what never posts
-(descriptions, subtotals, item groups) and the tax items, which are the tax
-codes.
+`gl_accounts.netsuite_account_id` names. Items leave out the tax items,
+which are the tax codes. They keep the items that never post (descriptions,
+subtotals, item groups), so the invoice rule can tell those lines from a
+sale.
 
 Items' COGS accounts aren't copied (owner decision 2026-10-11). NetSuite
 answers 500 for `item.cogsaccount` every time in this account, and asking
@@ -259,6 +264,60 @@ Both columns come from NetSuite through the same integration role, so a
 transaction type the role can't see would be missing from both. To prove the
 role sees everything, compare one month's NetSuite column with NetSuite's
 own Reports → Financial → Trial Balance for the same subsidiary and period.
+
+## Invoices
+
+The first posting rule, `invoice@1` (`src/lib/books/invoice-rule.ts`), is
+the plan's: accounts receivable takes the invoice's total, each line goes to
+its item's income account, and sales tax goes to the account its tax code
+posts to. During 2027 FleetSuite copies NetSuite's account choices exactly,
+so the accounts come from the copied lists: each item's income account and,
+for each tax code, the account its sales tax posted to most since 2025. The
+receivable is the one receivable account the company can use. With more
+than one, it's the one NetSuite's invoices used most that month, and the
+page says so.
+
+- Lines that post nothing are skipped: a line of $0, and subtotal,
+  description and item group lines, which repeat amounts. That's why the
+  items copy keeps the items that never post.
+- A discount line comes out as a debit to the discount item's account.
+- Each line is filed Upfit or Graphics by the owner's rule of 2026-10-06
+  (`src/lib/division-revenue.ts`). Tax, discounts, freight and the
+  receivable get no division.
+- An invoice posts whole or not at all. When a line can't be worked out (an
+  item not in the copy yet, an item with no income account, a tax code whose
+  account isn't known, a line with an amount but no item, no receivable
+  account), the rule says why and posts nothing.
+
+Nothing posts yet (owner's choice 2026-10-11: check first). For every
+NetSuite invoice, `/admin/books/invoices` works out the rule's entry and
+checks it line by line against the GL lines NetSuite posted for the same
+invoice, to the cent: the receivable against NetSuite's main line (line 0),
+every other line by NetSuite's line id. Migration 364's
+`gl_invoice_month(company, month)` reads one month: the invoices dated in it
+from the ledger mirror (migration 314) with their lines, NetSuite's GL lines
+for each from the copy (migration 361), and the copied items and tax codes
+the lines name. The page shows how many invoices match, differ, can't be
+worked out or are waiting on a copy, why the others don't match, and each
+invoice side by side with NetSuite. **Check every month** runs the same
+count for every month from January 2025.
+
+- An invoice is a company's when NetSuite posted a GL line of it to that
+  company. Invoices with no GL line in the copy (waiting for approval, which
+  doesn't post, or newer than the last copy) are named in a note, not
+  counted.
+- An invoice that wasn't fulfilled first relieves the stock itself: NetSuite
+  books its cost on lines of their own, one to a cost of goods sold account
+  and one to the item's inventory asset account. FleetSuite will post that
+  cost with the fulfillment rule, so the check recognizes those lines by
+  those two accounts (unless the line goes to its item's own income
+  account), leaves them out of the invoice's entry and doesn't compare them.
+  The page counts the invoices that have them.
+- The mirror keeps NetSuite's signed `netamount` in each line's `raw`, where
+  a sale is negative. A line whose amount it didn't keep can't be worked
+  out.
+- Credit memos aren't checked yet. They're the plan's mirror image of this
+  rule: revenue and sales tax debited, receivables credited.
 
 ## Posting
 

@@ -44,22 +44,22 @@ describe('the list queries', () => {
     expect(listQuery(def('class'))).toBe('SELECT r.id, r.name, r.isinactive, r.parent, r.fullname FROM classification r ORDER BY r.id');
   });
 
-  it('leaves the items that never post, and the tax items, out of the items', () => {
+  it('leaves the tax items out of the items, but keeps the ones that never post, so the invoice rule knows them', () => {
     expect(listQuery(def('item'), [])).toBe(
-      "SELECT r.id, r.itemid, r.itemtype, r.isinactive FROM item r WHERE r.itemtype NOT IN ('Description', 'Subtotal', 'Group', 'EndGroup', 'TaxItem', 'TaxGroup') ORDER BY r.id",
+      "SELECT r.id, r.itemid, r.itemtype, r.isinactive FROM item r WHERE r.itemtype NOT IN ('TaxItem', 'TaxGroup') ORDER BY r.id",
     );
   });
 
   it('doesn\'t ask for an item\'s COGS account, which NetSuite answers 500 for every time', () => {
     expect(listQuery(def('item'))).toBe(
-      "SELECT r.id, r.itemid, r.itemtype, r.isinactive, r.displayname, r.incomeaccount, r.assetaccount, r.expenseaccount FROM item r WHERE r.itemtype NOT IN ('Description', 'Subtotal', 'Group', 'EndGroup', 'TaxItem', 'TaxGroup') ORDER BY r.id",
+      "SELECT r.id, r.itemid, r.itemtype, r.isinactive, r.displayname, r.incomeaccount, r.assetaccount, r.expenseaccount FROM item r WHERE r.itemtype NOT IN ('TaxItem', 'TaxGroup') ORDER BY r.id",
     );
   });
 
   it('reads one field on its own for the rows that have it', () => {
     const asset = def('item').optional.find((o) => o.field === 'assetaccount')!;
     expect(fieldQuery(def('item'), asset)).toBe(
-      "SELECT r.id, r.assetaccount FROM item r WHERE (r.itemtype NOT IN ('Description', 'Subtotal', 'Group', 'EndGroup', 'TaxItem', 'TaxGroup')) AND r.assetaccount IS NOT NULL ORDER BY r.id",
+      "SELECT r.id, r.assetaccount FROM item r WHERE (r.itemtype NOT IN ('TaxItem', 'TaxGroup')) AND r.assetaccount IS NOT NULL ORDER BY r.id",
     );
     expect(fieldQuery(def('term'), def('term').optional[0])).toBe(
       'SELECT r.id, r.daysuntilnetdue FROM term r WHERE r.daysuntilnetdue IS NOT NULL ORDER BY r.id',
