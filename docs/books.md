@@ -11,8 +11,9 @@ copied from NetSuite, part 3, NetSuite's general ledger from 2025 copied
 and checked month by month, and part 4, the NetSuite lists the posting
 rules need. The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance` and the lists at
-`/admin/books/lists`, which only super admins can open and no menu links to
-yet.
+`/admin/books/lists`, which only super admins can open. Only they see the
+Books entry on the More page (Admin), which opens the accounts page; the
+other two are linked from there.
 
 | Piece | Where |
 | --- | --- |

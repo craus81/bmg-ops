@@ -9,8 +9,9 @@ import { apiFetch } from '@/lib/api-client';
 /**
  * Books → Chart of accounts (migrations 359/360, docs/books.md).
  *
- * FleetSuite's own books are built hidden: super admins only, and no menu
- * links here yet. Read-only — until the changeover the accounts are copied
+ * FleetSuite's own books are built hidden: only super admins can open them,
+ * and only they see the Books entry on the More page (Admin), which opens
+ * this page. Read-only — until the changeover the accounts are copied
  * from NetSuite every two hours (or on "Sync now"), so they're added and
  * changed there.
  */

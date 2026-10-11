@@ -11,8 +11,8 @@ import { apiFetch } from '@/lib/api-client';
  *
  * NetSuite's general ledger from January 2025 is copied into FleetSuite every
  * two hours (or on "Copy now"), and each company's month-end balances are
- * shown next to NetSuite's own. Super admins only, with no menu link, while
- * the books are built.
+ * shown next to NetSuite's own. Super admins only while the books are built,
+ * linked from the accounts page.
  */
 
 interface Company {
