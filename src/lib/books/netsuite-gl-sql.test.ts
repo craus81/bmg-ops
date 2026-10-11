@@ -1,5 +1,5 @@
 // Migration 361 keeps a copy of NetSuite's general ledger from 2025 beside
-// the journal. This runs migrations 359–361 in an in-memory Postgres
+// the journal. This runs migrations 359–362 in an in-memory Postgres
 // (PGlite) as the app's server login and holds the functions' rules, then
 // runs the whole copy job against them with a fake NetSuite that answers
 // the job's own SuiteQL.
@@ -24,7 +24,7 @@ import { BOOKS_GL_SYNC, PERIODS_QUERY, copyNetSuiteGl, monthsThatDiffer, type Mo
 import { monthStatuses, trialBalance, type TbData } from './trial-balance';
 
 // A fresh database with Supabase's API roles and default grants, migrations
-// 359–361 run twice as the owner, 1084 linked to subsidiary 5 (as the
+// 359–362 run twice as the owner, 1084 linked to subsidiary 5 (as the
 // account sync does), then the app's server login.
 async function freshDb(): Promise<PGlite> {
   const pg = new PGlite();
@@ -37,7 +37,10 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
   `);
-  for (const file of ['359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql']) {
+  for (const file of [
+    '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
+    '362-books-netsuite-gl-store-totals-where.sql',
+  ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
     await pg.exec(sql); // must be safe to re-run
@@ -45,6 +48,51 @@ async function freshDb(): Promise<PGlite> {
   await pg.exec(`UPDATE gl_companies SET netsuite_subsidiary_id = '5' WHERE code = '1084'`);
   await pg.exec('SET ROLE service_role');
   return pg;
+}
+
+/**
+ * The DELETE and UPDATE statements in a function body that have no WHERE
+ * of their own. Supabase's API connections load the safeupdate extension,
+ * which fails those even inside a function called through rpc; PGlite
+ * doesn't have it, so the bodies are read for them instead.
+ */
+function unguardedWrites(body: string): string[] {
+  // Comments and quoted text out first, keeping the code's shape.
+  let code = '';
+  for (let i = 0; i < body.length;) {
+    if (body.startsWith('--', i)) {
+      const end = body.indexOf('\n', i);
+      i = end < 0 ? body.length : end;
+    } else if (body.startsWith('/*', i)) {
+      const end = body.indexOf('*/', i + 2);
+      i = end < 0 ? body.length : end + 2;
+    } else if (body[i] === "'") {
+      let j = i + 1;
+      while (j < body.length && !(body[j] === "'" && body[j + 1] !== "'")) j += body[j] === "'" ? 2 : 1;
+      i = j + 1;
+      code += "''";
+    } else {
+      code += body[i++];
+    }
+  }
+  const found: string[] = [];
+  const writes = /\b(?:DELETE\s+FROM\s+[\w."]+|UPDATE\s+(?:ONLY\s+)?[\w."]+(?:\s+(?:AS\s+)?(?!SET\b)\w+)?\s+SET)\b/gi;
+  for (const m of code.matchAll(writes)) {
+    // ON CONFLICT ... DO UPDATE belongs to an INSERT, which safeupdate leaves alone.
+    if (/\bDO\s*$/i.test(code.slice(0, m.index))) continue;
+    // The statement runs to its ';', or to the ')' that closes it inside a WITH.
+    let depth = 0;
+    let own = '';
+    for (let i = m.index! + m[0].length; i < code.length; i++) {
+      const ch = code[i];
+      if (ch === '(') depth++;
+      else if (ch === ')' && --depth < 0) break;
+      else if (ch === ';' && depth === 0) break;
+      else if (depth === 0) own += ch;
+    }
+    if (!/\bWHERE\b/i.test(own)) found.push(m[0].replace(/\s+/g, ' '));
+  }
+  return found;
 }
 
 type Applied = { received: number; replaced: number; unchanged: number; lines: number };
@@ -231,6 +279,33 @@ describe('the copy\'s functions', () => {
     expect(rls.rows.every((r) => r.relrowsecurity)).toBe(true);
     expect(rls.rows).toHaveLength(tables.length);
   });
+
+  // The first copy in production stopped at migration 361's
+  // gl_netsuite_store_totals: "DELETE requires a WHERE clause".
+  it('gives every DELETE and UPDATE in the books functions a WHERE, as Supabase\'s API requires', async () => {
+    const functions = (await db.query<{ name: string; body: string }>(
+      `SELECT p.proname AS name, p.prosrc AS body FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public' AND p.proname LIKE 'gl\\_%' ORDER BY p.proname`,
+    )).rows;
+    expect(functions.map((f) => f.name)).toContain('gl_netsuite_store_totals');
+    expect(functions.flatMap((f) => unguardedWrites(f.body).map((w) => `${f.name}: ${w}`))).toEqual([]);
+  });
+
+  it('finds a DELETE or UPDATE with no WHERE of its own', () => {
+    const migration361 = readFileSync(path.resolve(__dirname, '../../../migrations/361-books-netsuite-gl.sql'), 'utf8');
+    expect(unguardedWrites(migration361)).toEqual(['DELETE FROM public.gl_netsuite_opening', 'DELETE FROM public.gl_netsuite_month_totals']);
+    expect(unguardedWrites(`
+      DELETE FROM a;
+      delete from b where true;
+      UPDATE public.c x SET n = (SELECT 1 FROM d WHERE d.id = x.id);
+      UPDATE e SET n = 1 WHERE id = 2;
+      INSERT INTO f VALUES (1) ON CONFLICT (id) DO UPDATE SET n = 2;
+      WITH g AS (DELETE FROM h RETURNING *) SELECT 1 FROM g WHERE true;
+      SELECT 1 FROM i WHERE n = 1 FOR UPDATE;
+      -- DELETE FROM j;
+      RAISE EXCEPTION 'DELETE FROM k; it''s refused';
+    `)).toEqual(['DELETE FROM a', 'UPDATE public.c x SET', 'DELETE FROM h']);
+  });
 });
 
 // ── The whole job ──────────────────────────────────────────────────────────
@@ -265,6 +340,8 @@ const BOOKS: NsLine[] = [
   // January 2025, including one dated December but posted to January.
   { txn: 3, line: 0, sub: 2, account: 20, debit: 200, date: '2025-01-10', period: 102, type: 'CustInvc' },
   { txn: 3, line: 1, sub: 2, account: 40, credit: 200, date: '2025-01-10', period: 102, type: 'CustInvc', memo: 'Upfit' },
+  // A line that posts nowhere: no account, no amount. Not copied, and no note.
+  { txn: 3, line: 2, sub: 2, account: null, date: '2025-01-10', period: 102, type: 'CustInvc' },
   { txn: 4, line: 0, sub: 2, account: 10, debit: 200, date: '2025-01-20', period: 102, type: 'CustPymt' },
   { txn: 4, line: 1, sub: 2, account: 20, credit: 200, date: '2025-01-20', period: 102, type: 'CustPymt' },
   { txn: 5, line: 0, sub: 2, account: 50, debit: 50, date: '2024-12-31', period: 102 },
@@ -339,7 +416,8 @@ class FakeNetSuite {
     if (both && this.refuse.txnPosting) throw rejected("Search error occurred: Field 'posting' for record 'transaction' was not found.");
     if (q.includes('tl.memo') && this.refuse.extraColumns) throw rejected("Search error occurred: Field 'memo' was not found.");
     if (!q.includes("tal.posting = 'T'")) throw new Error('every GL read filters on the line\'s posting flag');
-    return this.lines.filter((l) => l.posting !== false && (!both || l.txnPosting !== false));
+    const withAccount = q.includes('tal.account IS NOT NULL');
+    return this.lines.filter((l) => l.posting !== false && (!both || l.txnPosting !== false) && (!withAccount || l.account !== null));
   }
 
   private row(l: NsLine, q: string): Row {
@@ -652,12 +730,60 @@ describe('the copy job against the real functions', () => {
       ns.refuse.periods = true;
       const r = await run(ns);
       expect(r).toMatchObject({ monthsBy: 'transaction_date', swept: [JAN, FEB, MAR] });
-      expect(r.notes?.[0]).toMatch(/wouldn't list its accounting periods/);
+      // SuiteQL's answer when the role lacks the permission, so the note says which one.
+      expect(r.notes?.[0]).toBe(
+        "NetSuite's integration role can't see accounting periods, so each transaction counts in the month of its date rather than "
+        + 'the month it was posted to. Giving the role Manage Accounting Periods (View) on its Setup tab fixes that.',
+      );
       expect(await outOfStep()).toEqual([]);
       // Dated December, so it's in the starting entry now.
       expect((await copied()).some((row) => row.txn === '5')).toBe(false);
       expect((await totals('BMG')).opening.find((o) => o.netsuite_account_id === '50')).toMatchObject({ debit: '50.00' });
       expect(ns.queries.some((q) => q.includes('postingperiod IN'))).toBe(false);
+
+      // Once the role can see them, the next run puts it back in January.
+      ns.refuse.periods = false;
+      clock += 2 * HOUR;
+      const next = await run(ns);
+      expect(next).toMatchObject({ monthsBy: 'posting_period', monthsDiffering: [JAN] });
+      expect((next.notes ?? []).some((n) => /accounting periods/.test(n))).toBe(false);
+      expect(await outOfStep()).toEqual([]);
+      expect((await copied()).filter((row) => row.txn === '5').map((row) => row.month)).toEqual([JAN, JAN]);
+    });
+
+    it('says what went wrong when the periods fail for another reason', async () => {
+      await startOver();
+      const ns = new FakeNetSuite(BOOKS);
+      const query = ns.query;
+      ns.query = async (q) => {
+        if (q === PERIODS_QUERY) throw Object.assign(new Error('NetSuite SuiteQL error (500): UNEXPECTED_ERROR'), { status: 500 });
+        return query(q);
+      };
+      const r = await run(ns);
+      expect(r).toMatchObject({ monthsBy: 'transaction_date', swept: [JAN, FEB, MAR] });
+      expect(r.notes?.[0]).toBe(
+        "NetSuite wouldn't list its accounting periods (NetSuite SuiteQL error (500): UNEXPECTED_ERROR), so each transaction counts "
+        + 'in the month of its date rather than the month it was posted to.',
+      );
+    });
+
+    it('skips lines with no account, noting the ones that carry an amount', async () => {
+      await startOver();
+      const ns = new FakeNetSuite([
+        ...BOOKS,
+        { txn: 15, line: 0, sub: 2, account: 50, debit: 5, date: '2025-03-07', period: 104 },
+        { txn: 15, line: 1, sub: 2, account: 10, credit: 5, date: '2025-03-07', period: 104 },
+        { txn: 15, line: 2, sub: 2, account: null, debit: 5, date: '2025-03-07', period: 104 },
+      ]);
+      const r = await run(ns);
+      expect(r.error).toBeUndefined();
+      expect(r.notes).toContain("1 GL line in NetSuite with no account or month isn't copied, though it carries an amount.");
+      expect(await outOfStep()).toEqual([]);
+      expect((await copied()).filter((row) => row.txn === '15').map((row) => row.line)).toEqual(['0', '1']);
+      // Without the filter, NetSuite would send them and the copy would stop on the first.
+      const reads = ns.queries.filter((q) => q !== PERIODS_QUERY && !q.includes('GROUP BY'));
+      expect(reads.length).toBeGreaterThan(0);
+      expect(reads.every((q) => q.includes('tal.account IS NOT NULL'))).toBe(true);
     });
 
     it('filters on the line\'s posting flag alone when NetSuite won\'t take the transaction\'s', async () => {

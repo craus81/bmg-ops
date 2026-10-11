@@ -63,7 +63,7 @@ const text = (v: unknown): string => (v === null || v === undefined ? '' : Strin
 const isTrue = (v: unknown): boolean => v === true || text(v).toUpperCase() === 'T';
 const numericId = (v: unknown): string | null => (/^\d+$/.test(text(v)) ? text(v) : null);
 const reason = (err: unknown) => String((err as any)?.message || err).slice(0, 300);
-const glLines = (n: number) => (n === 1 ? '1 GL line' : `${n} GL lines`);
+const glLines = (n: number) => (n === 1 ? '1 GL line' : `${n.toLocaleString('en-US')} GL lines`);
 
 // ── Money ──────────────────────────────────────────────────────────────────
 
@@ -148,6 +148,15 @@ export const LINE_COLUMNS: readonly LineColumns[] = ['full', 'basic'];
 const postingWhere = (f: PostingFilter) =>
   f === 'transaction_and_line' ? `t.posting = 'T' AND tal.posting = 'T'` : `tal.posting = 'T'`;
 
+/**
+ * The line reads also skip lines with no account. NetSuite has those on
+ * posting transactions, for lines that post nowhere, and with no account
+ * they're on no balance. The totals still read them, so one that carries
+ * an amount gets a note (summarizeTotals).
+ */
+const linesWhere = (f: PostingFilter) => `${postingWhere(f)}
+        AND tal.account IS NOT NULL`;
+
 const GL_FROM = `
       FROM transactionaccountingline tal
       JOIN transaction t ON t.id = tal.transaction
@@ -200,7 +209,7 @@ export function monthLinesQuery(
   const after = afterTxn && /^\d+$/.test(afterTxn) ? `\n        AND tal.transaction > ${afterTxn}` : '';
   return `
       SELECT ${lineColumns(c)}${GL_FROM}
-      WHERE ${postingWhere(f)}
+      WHERE ${linesWhere(f)}
         AND ${monthFilter(month, periods)}${after}
       ORDER BY tal.transaction, tal.transactionline
     `;
@@ -211,7 +220,7 @@ export function transactionLinesQuery(txnId: string, f: PostingFilter, c: LineCo
   if (!/^\d+$/.test(txnId)) throw new Error(`Not a NetSuite id: ${txnId}`);
   return `
       SELECT ${lineColumns(c)}${GL_FROM}
-      WHERE ${postingWhere(f)}
+      WHERE ${linesWhere(f)}
         AND tal.transaction = ${txnId}
       ORDER BY tal.transactionline
     `;
@@ -239,7 +248,7 @@ export interface NetSuiteTotals {
   months: MonthRow[];
   /** GL lines in subsidiaries no company is linked to, by subsidiary id ('' = none given). */
   unlinked: Record<string, number>;
-  /** Lines with no account or no month NetSuite could place. */
+  /** Lines with no account or no month NetSuite could place, counted only where they carry an amount. */
   unplaced: number;
 }
 
@@ -273,12 +282,13 @@ export function summarizeTotals(
     const account = numericId(row.account_id);
     const dateMonth = /^\d{4}-\d{2}$/.test(text(row.date_month)) ? `${text(row.date_month)}-01` : null;
     const month = postingMonth(row.period_id, dateMonth, periods);
-    if (!account || !month) {
-      unplaced += lines;
-      continue;
-    }
     const debit = toCents(row.debit);
     const credit = toCents(row.credit);
+    if (!account || !month) {
+      // With no amount they change no balance, NetSuite's or the copy's.
+      if (debit !== 0 || credit !== 0) unplaced += lines;
+      continue;
+    }
     if (month < COPY_FROM) add(opening, `${company}|${account}`, debit, credit, lines);
     else add(months, `${company}|${account}|${month}`, debit, credit, lines);
   }
@@ -555,7 +565,11 @@ export async function copyNetSuiteGl(
       periods = periodMonths(await query(PERIODS_QUERY));
       if (periods.size === 0) periods = null;
     } catch (err) {
-      notes.push(`NetSuite wouldn't list its accounting periods (${reason(err)}), so each transaction counts in the month of its date rather than the month it was posted to.`);
+      const byDate = 'so each transaction counts in the month of its date rather than the month it was posted to';
+      // SuiteQL's way of saying the role lacks the permission.
+      notes.push(/Record 'accountingperiod' was not found/i.test(String((err as any)?.message || err))
+        ? `NetSuite's integration role can't see accounting periods, ${byDate}. Giving the role Manage Accounting Periods (View) on its Setup tab fixes that.`
+        : `NetSuite wouldn't list its accounting periods (${reason(err)}), ${byDate}.`);
     }
     result.monthsBy = periods ? 'posting_period' : 'transaction_date';
 
@@ -569,7 +583,8 @@ export async function copyNetSuiteGl(
         : `${glLines(n)} in NetSuite with no subsidiary ${n === 1 ? 'is' : 'are'} not copied.`);
     }
     if (totals.unplaced) {
-      notes.push(`${glLines(totals.unplaced)} in NetSuite with no account or month ${totals.unplaced === 1 ? 'is' : 'are'} not copied.`);
+      const one = totals.unplaced === 1;
+      notes.push(`${glLines(totals.unplaced)} in NetSuite with no account or month ${one ? "isn't" : "aren't"} copied, though ${one ? 'it carries an amount' : 'they carry amounts'}.`);
     }
     if (totals.opening.length === 0 && totals.months.length === 0) {
       throw new Error("NetSuite returned no GL lines for BMG or 1084, so nothing was changed. If that's wrong, check that the integration role can still see every transaction type.");
@@ -649,7 +664,7 @@ export async function copyNetSuiteGl(
       // looks cut short.
       const expected = expectedLines.get(month) ?? 0;
       if (expected > 0 && cursor.lines * 2 < expected) {
-        notes.push(`The copy of ${monthLabel(month)} read ${cursor.lines} of NetSuite's ${glLines(expected)}, so nothing was removed from it this time.`);
+        notes.push(`The copy of ${monthLabel(month)} read ${cursor.lines.toLocaleString('en-US')} of NetSuite's ${glLines(expected)}, so nothing was removed from it this time.`);
       } else {
         const finished = await service.rpc('gl_netsuite_finish_month', { p_month: month, p_sweep: cursor.sweep });
         if (finished.error) throw new Error(finished.error.message);

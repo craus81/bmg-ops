@@ -125,8 +125,11 @@ It runs every two hours (`/api/cron/books-netsuite-gl`, :26 on odd hours)
 and from **Copy now** on the trial balance page (`copyNetSuiteGl`):
 
 1. Read NetSuite's accounting periods, so a transaction counts in the month
-   it was posted to, as on NetSuite's reports. If the periods can't be read,
-   months follow the transaction date and the page says so.
+   it was posted to, as on NetSuite's reports. SuiteQL lists them only when
+   the integration role has Manage Accounting Periods (View, on the role's
+   Setup tab). If the periods can't be read, months follow the transaction
+   date and the page says so; once they can, the next run copies again
+   every month a transaction moves into or out of.
 2. Read NetSuite's own totals per subsidiary, account and month, over all of
    its history, and store them. Everything before 2025 becomes the starting
    entry (`gl_netsuite_opening`); the rest (`gl_netsuite_month_totals`) is
@@ -153,6 +156,9 @@ Safeguards:
   removes nothing.
 - Lines in a subsidiary no company is linked to aren't copied, and the page
   says how many there are.
+- Lines with no account aren't copied either. NetSuite has them on posting
+  transactions for lines that post nowhere; the page notes only those that
+  carry an amount.
 - Two GL lines for the same transaction line stop the copy. That would mean
   NetSuite keeps more than one accounting book; the copy takes one.
 
