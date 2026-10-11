@@ -144,9 +144,13 @@ How a copy works:
   row comes back if NetSuite lists it again. A list that looks cut short
   (none, or under half of what's here) marks nothing.
 - A list NetSuite won't give doesn't stop the others; the page says which
-  and why. When NetSuite refuses a field, the list is read again without it
-  and the page says what's missing. SuiteQL shows little of tax codes, so
-  every field of theirs but the id may be refused.
+  and why. When NetSuite refuses a field by name, the list is read again
+  without it and the page says what's missing. When it refuses without
+  naming one, or answers 500 UNEXPECTED_ERROR (this account does that for
+  some columns, and did for the items on the first copy), the list is read
+  field by field: the required fields, then each optional field on its
+  own, so only the fields that fail are left out. SuiteQL shows little of
+  tax codes, so every field of theirs but the id may be refused.
 - In the cron the lists get the first 90 seconds of the run, items last, so
   the ledger mirror after them keeps most of its time. A list there wasn't
   time to start is copied by the next run.
