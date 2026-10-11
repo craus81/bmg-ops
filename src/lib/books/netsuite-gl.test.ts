@@ -128,6 +128,12 @@ describe('queries', () => {
     expect(totalsQuery('line')).toContain('GROUP BY tl.subsidiary, tal.account, t.postingperiod');
     expect(transactionLinesQuery('77', 'line', 'basic')).toContain('tal.transaction = 77');
   });
+
+  it('reads only lines with an account, while the totals count every line', () => {
+    expect(monthLinesQuery('2025-01-01', PERIODS, '12', 'transaction_and_line', 'full')).toContain('AND tal.account IS NOT NULL');
+    expect(transactionLinesQuery('77', 'line', 'basic')).toContain('AND tal.account IS NOT NULL');
+    expect(totalsQuery('transaction_and_line')).not.toContain('tal.account IS');
+  });
 });
 
 describe('summarizeTotals', () => {
@@ -145,6 +151,10 @@ describe('summarizeTotals', () => {
     { subsidiary_id: null, account_id: 10, period_id: 102, date_month: '2025-01', debit: 10, credit: 0, line_count: 1 },
     { subsidiary_id: 2, account_id: null, period_id: 102, date_month: '2025-01', debit: 10, credit: 0, line_count: 2 },
     { subsidiary_id: 2, account_id: 10, period_id: null, date_month: null, debit: 10, credit: 0, line_count: 3 },
+    // Lines that post nowhere: no account (or month) and no amount.
+    { subsidiary_id: 2, account_id: null, period_id: 103, date_month: '2025-02', debit: 0, credit: 0, line_count: 40 },
+    { subsidiary_id: 5, account_id: null, period_id: 101, date_month: '2024-12', line_count: 7 },
+    { subsidiary_id: 5, account_id: 40, period_id: null, date_month: null, debit: '0.00', credit: '0.00', line_count: 6 },
   ];
 
   it('splits NetSuite\'s totals into the starting entry and months from 2025', () => {
@@ -158,6 +168,7 @@ describe('summarizeTotals', () => {
       { company: '1084', netsuite_account_id: '40', month: '2025-02-01', debit: '0.00', credit: '75.00', line_count: 1 },
     ]);
     expect(t.unlinked).toEqual({ 9: 4, '': 1 });
+    // Only the unplaced lines that carry an amount count.
     expect(t.unplaced).toBe(5);
   });
 

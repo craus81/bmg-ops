@@ -62,6 +62,14 @@ date. After that, `npm run migrate` applies only genuinely new files.
 - Write idempotent SQL where practical (`IF NOT EXISTS`, `CREATE OR REPLACE`)
   — the historical files follow this convention.
 - Don't renumber or edit files that have already been applied somewhere.
+- Give every `DELETE` and `UPDATE` inside a function a `WHERE` (`WHERE true`
+  to empty a table). Functions the app calls through `rpc`, and triggers on
+  tables it writes, run on Supabase's API connections, which load the
+  `safeupdate` extension: there a `DELETE` or `UPDATE` without a `WHERE`
+  fails with "DELETE requires a WHERE clause". PGlite doesn't load it, so
+  a test only catches one by reading the function bodies, as
+  `src/lib/books/netsuite-gl-sql.test.ts` does for the books functions
+  (migration 362 fixed one that reached production).
 
 ## History notes (June 2026 cleanup)
 
