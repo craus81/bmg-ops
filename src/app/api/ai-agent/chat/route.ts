@@ -5,7 +5,7 @@ import { requireAuth } from '@/lib/api-auth';
 import { logAudit } from '@/lib/audit';
 import {
   rolesOf, canQueryNetSuite as canQueryNetSuiteFor, canSeeFinancials as canSeeFinancialsFor,
-  touchesFinancialData, touchesForbiddenData, stripFinancialGuidance,
+  canSeeBooks as canSeeBooksFor, touchesBooksData, touchesFinancialData, touchesForbiddenData, stripFinancialGuidance,
 } from '@/lib/ai-agent-access';
 import { validateBody, z } from '@/lib/validate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
@@ -1112,6 +1112,7 @@ export async function POST(req: NextRequest) {
   const roles = rolesOf(auth.profile);
   const canQueryNetSuite = canQueryNetSuiteFor(roles);
   const canSeeFinancials = canSeeFinancialsFor(roles);
+  const canSeeBooks = canSeeBooksFor(roles);
 
   // Customers (and any account with no recognized role) don't get the data
   // assistant at all — it queries company-wide operational data.
@@ -1278,6 +1279,8 @@ export async function POST(req: NextRequest) {
           blocked = 'NetSuite access is not available for your role. Use the knowledge base or app database instead.';
         } else if (src === 'action' && !canQueryNetSuite) {
           blocked = 'Actions (creating jobs or estimates, sending messages) aren\'t available for your role.';
+        } else if (!canSeeBooks && touchesBooksData(src, q.sql)) {
+          blocked = 'Those tables aren\'t available to the assistant. Ask about jobs, parts, customers, vehicles, or schedules instead.';
         } else if (!canSeeFinancials && touchesFinancialData(src, q.sql)) {
           blocked = src === 'supabase'
             ? 'That involves pay or audit data, which is restricted to leadership.'

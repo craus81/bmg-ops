@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
@@ -176,7 +177,8 @@ export default function BooksAccountsPage() {
           <div style={{ fontSize: '20px', fontWeight: 800 }}>Chart of accounts</div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             FleetSuite&apos;s own books, visible only to super admins while they&apos;re built. Until the changeover these
-            accounts are copied from NetSuite every two hours, so add or change an account in NetSuite.
+            accounts are copied from NetSuite every two hours, so add or change an account in NetSuite.{' '}
+            <Link href="/admin/books/trial-balance" style={{ color: 'var(--text-secondary)' }}>Trial balance vs NetSuite</Link>
           </div>
         </div>
         <button

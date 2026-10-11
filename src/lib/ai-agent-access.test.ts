@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  rolesOf, canQueryNetSuite, canSeeFinancials, touchesFinancialData, touchesForbiddenData, stripFinancialGuidance,
+  rolesOf, canQueryNetSuite, canSeeBooks, canSeeFinancials, touchesBooksData, touchesFinancialData, touchesForbiddenData,
+  stripFinancialGuidance,
 } from './ai-agent-access';
 
 describe('rolesOf', () => {
@@ -42,6 +43,39 @@ describe('canSeeFinancials', () => {
     for (const r of ['admin', 'sales', 'graphics_production', 'finance', 'shop_tech', 'installer']) {
       expect(canSeeFinancials([r])).toBe(false);
     }
+  });
+});
+
+// FleetSuite's own books (migrations 359 on) are built hidden for the owner,
+// and 1084's are open only to its owners, the bookkeeper and the CPA: an
+// executive doesn't get them through the assistant either.
+describe('canSeeBooks', () => {
+  it('admits only super_admin', () => {
+    expect(canSeeBooks(['super_admin'])).toBe(true);
+    expect(canSeeBooks(['sales', 'super_admin'])).toBe(true);
+    for (const r of ['executive', 'admin', 'finance', 'sales']) {
+      expect(canSeeBooks([r])).toBe(false);
+    }
+    expect(canSeeBooks([])).toBe(false);
+  });
+});
+
+describe('touchesBooksData', () => {
+  it('catches every books table and function, in any case', () => {
+    for (const sql of [
+      'SELECT * FROM gl_netsuite_lines',
+      'select debit, credit from public.GL_NETSUITE_OPENING',
+      'SELECT a.name FROM gl_accounts a JOIN gl_lines l ON l.account_id = a.id',
+      'SELECT gl_netsuite_totals(NULL)',
+    ]) {
+      expect(touchesBooksData('supabase', sql), sql).toBe(true);
+    }
+  });
+  it('leaves other tables, part numbers and NetSuite queries alone', () => {
+    expect(touchesBooksData('supabase', 'SELECT job_number, status FROM graphics_jobs')).toBe(false);
+    expect(touchesBooksData('supabase', "SELECT * FROM netsuite_parts WHERE item_number LIKE 'ANGL_%'")).toBe(false);
+    expect(touchesBooksData('netsuite', 'SELECT * FROM gl_accounts')).toBe(false);
+    expect(touchesBooksData('supabase', undefined)).toBe(false);
   });
 });
 

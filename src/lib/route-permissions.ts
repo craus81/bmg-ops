@@ -62,7 +62,7 @@ const featureDynamic = (verbatimCall: string, why: string): RouteGuard =>
   ({ kind: 'feature', contains: [verbatimCall], why });
 const authScoped = (why: string, ...alsoContains: string[]): RouteGuard =>
   ({ kind: 'authScoped', contains: ['requireAuth(', ...alsoContains], why });
-const cron = (manualFallback: 'requireAdmin(' | 'requireStaff('): RouteGuard =>
+const cron = (manualFallback: 'requireAdmin(' | 'requireStaff(' | 'requireSuperAdmin('): RouteGuard =>
   ({ kind: 'cron', contains: ['CRON_SECRET', manualFallback], why: 'fires on the cron secret; the listed guard covers manual triggering' });
 const token = (why: string, credentialMarker: string): RouteGuard =>
   ({ kind: 'token', contains: [credentialMarker], why });
@@ -73,6 +73,8 @@ const pub = (why: string): RouteGuard => ({ kind: 'public', contains: [], why })
 export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // FleetSuite's own books, built hidden for the owner (docs/books.md).
   'src/app/api/admin/books/accounts/route.ts': superAdmin(),
+  'src/app/api/admin/books/trial-balance/route.ts': superAdmin(),
+  'src/app/api/cron/books-netsuite-gl/route.ts': cron('requireSuperAdmin('),
   'src/app/api/admin/bulk-upload-proofs/route.ts': admin(),
   'src/app/api/admin/bulk-upload-templates/route.ts': admin(),
   'src/app/api/admin/calibrate-templates/route.ts': staff(),

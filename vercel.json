@@ -9,6 +9,10 @@
       "schedule": "35 */2 * * *"
     },
     {
+      "path": "/api/cron/books-netsuite-gl",
+      "schedule": "26 1,3,5,7,9,11,13,15,17,19,21,23 * * *"
+    },
+    {
       "path": "/api/cron/metric-snapshots",
       "schedule": "30 4 * * *"
     },
