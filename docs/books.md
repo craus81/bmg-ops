@@ -7,10 +7,12 @@ books from 2028-01-01 (owner decision 2026-10-09/10; the full plan is the
 Installations LLC and 1084 Cool Springs LLC, which owns the building.
 
 This file covers part 1, the ledger core, part 2, the chart of accounts
-copied from NetSuite, and part 3, NetSuite's general ledger from 2025 copied
-and checked month by month. The screens are the accounts page at
-`/admin/books` and the trial balance at `/admin/books/trial-balance`, which
-only super admins can open and no menu links to yet.
+copied from NetSuite, part 3, NetSuite's general ledger from 2025 copied
+and checked month by month, and part 4, the NetSuite lists the posting
+rules need. The screens are the accounts page at `/admin/books`, the trial
+balance at `/admin/books/trial-balance` and the lists at
+`/admin/books/lists`, which only super admins can open and no menu links to
+yet.
 
 | Piece | Where |
 | --- | --- |
@@ -23,6 +25,9 @@ only super admins can open and no menu links to yet.
 | NetSuite's general ledger, copied | `migrations/361-books-netsuite-gl.sql`, `src/lib/books/netsuite-gl.ts`, `src/app/api/cron/books-netsuite-gl/route.ts` |
 | Trial balance check | `src/lib/books/trial-balance.ts`, `src/app/(main)/admin/books/trial-balance/page.tsx`, `src/app/api/admin/books/trial-balance/route.ts` |
 | Copy and check tests | `src/lib/books/netsuite-gl.test.ts`, `src/lib/books/netsuite-gl-sql.test.ts`, `src/lib/books/trial-balance.test.ts` |
+| NetSuite's lists, copied | `migrations/363-books-netsuite-lists.sql`, `src/lib/books/netsuite-lists.ts` |
+| Lists page and its API | `src/app/(main)/admin/books/lists/page.tsx`, `src/app/api/admin/books/lists/route.ts` |
+| Lists tests | `src/lib/books/netsuite-lists.test.ts`, `src/lib/books/netsuite-lists-sql.test.ts` |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
 QuickBooks and NetSuite history that importers replace wholesale. They stay
@@ -103,6 +108,62 @@ that lists the accounts.
 
 At the changeover the sync is switched off, and accounts are kept in
 FleetSuite from then on.
+
+## NetSuite's lists
+
+The posting rules pick accounts the way NetSuite does, so they need what
+NetSuite picks from (owner decision 2026-10-11). `syncBooksLists` copies
+these lists, every two hours right after the chart of accounts in the same
+cron, and from **Sync now** on the lists page:
+
+| List | From NetSuite | Kept in `details` |
+| --- | --- | --- |
+| Locations | `location` | full name, subsidiary |
+| Departments | `department` | full name |
+| Classes | `classification` | full name |
+| Terms | `term` | days until due, early payment discount and its days |
+| Tax codes | `salestaxitem` | description, rate, tax type, tax agency |
+| Vendors | `vendor` | default expense account, payables account, terms |
+| Items | `item` | type, display name, income, COGS, asset and expense accounts |
+
+Every row also keeps its NetSuite id, name, parent and inactive flag. They
+all live in `gl_netsuite_lists` (migration 363), one row per list and
+NetSuite id, and accounts are kept as NetSuite account ids, which
+`gl_accounts.netsuite_account_id` names. Items leave out what never posts
+(descriptions, subtotals, item groups) and the tax items, which are the tax
+codes.
+
+How a copy works:
+
+- Each list is read whole with SuiteQL and handed to
+  `gl_netsuite_lists_apply` in pages. A new row is added, and a row is
+  rewritten only when something NetSuite holds for it changed.
+- Once a list has been read whole, `gl_netsuite_lists_finish` marks what
+  NetSuite no longer lists as gone (`gone_at`). Nothing is deleted, and a
+  row comes back if NetSuite lists it again. A list that looks cut short
+  (none, or under half of what's here) marks nothing.
+- A list NetSuite won't give doesn't stop the others; the page says which
+  and why. When NetSuite refuses a field, the list is read again without it
+  and the page says what's missing. SuiteQL shows little of tax codes, so
+  every field of theirs but the id may be refused.
+- In the cron the lists get the first 90 seconds of the run, items last, so
+  the ledger mirror after them keeps most of its time. A list there wasn't
+  time to start is copied by the next run.
+- Which account a tax code posts to comes from what sales tax actually
+  posted to: the copy counts sales tax's GL lines since 2025 (its tax lines)
+  by tax code and account. That goes in the run's record, not the table.
+
+The record of each run is `sync_state` `books_netsuite_lists`. Like the other
+books jobs it is not a System Health monitor, and it carries counts, never
+amounts.
+
+The page also shows how many copied GL lines carry each location, department
+and class, and which accounts the active items and vendors post to, so the
+posting rules can be checked against what NetSuite actually does. Which of
+the departments or classes FleetSuite's divisions (upfit, graphics, shared)
+follow is decided with the posting rules.
+
+Like the accounts, these are changed in NetSuite until the changeover.
 
 ## NetSuite's general ledger, copied
 

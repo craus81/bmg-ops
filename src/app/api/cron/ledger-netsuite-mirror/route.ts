@@ -3,6 +3,7 @@ import { requireAdmin } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { runNetSuiteMirror } from '@/lib/ledger/netsuite-mirror';
 import { syncBooksAccounts } from '@/lib/books/netsuite-accounts';
+import { syncBooksLists } from '@/lib/books/netsuite-lists';
 
 export const dynamic = 'force-dynamic';
 // 300 is the platform backstop; the job's OWN deadline is 240 s below, so a
@@ -12,6 +13,8 @@ export const maxDuration = 300;
 
 /** The run's own budget, inside maxDuration. The phase caps sum to 225 s. */
 const MIRROR_BUDGET_MS = 240_000;
+/** How far into the run the books' NetSuite lists may start one more list. */
+const BOOKS_LISTS_BUDGET_MS = 90_000;
 
 /**
  * GET /api/cron/ledger-netsuite-mirror — :35 on even UTC hours.
@@ -28,7 +31,8 @@ const MIRROR_BUDGET_MS = 240_000;
  * while the newest transactions land in the very first one.
  *
  * Before the mirror, the same run copies NetSuite's chart of accounts into
- * FleetSuite's own books (src/lib/books/netsuite-accounts.ts).
+ * FleetSuite's own books (src/lib/books/netsuite-accounts.ts), then the
+ * NetSuite lists those books need (src/lib/books/netsuite-lists.ts).
  */
 export async function GET(req: NextRequest) {
   // Allow Vercel Cron with the shared secret; anyone else needs an admin
@@ -56,12 +60,22 @@ export async function GET(req: NextRequest) {
   } catch (e: any) {
     console.error('[books] NetSuite account sync threw:', e?.message || e);
   }
+  // Then the lists the posting rules need (locations, terms, tax codes, the
+  // accounts items and vendors post to). It stops starting lists past its
+  // own deadline, and the mirror's deadline below counts from the start of
+  // the run, so the mirror simply resumes sooner.
+  let booksLists: 'ok' | 'failed' = 'failed';
+  try {
+    booksLists = (await syncBooksLists(service, { deadline: startedAt + BOOKS_LISTS_BUDGET_MS })).error ? 'failed' : 'ok';
+  } catch (e: any) {
+    console.error('[books] NetSuite lists copy threw:', e?.message || e);
+  }
 
   try {
     const result = await runNetSuiteMirror(service, {
       deadline: startedAt + MIRROR_BUDGET_MS,
     });
-    return NextResponse.json({ ...result, booksAccounts });
+    return NextResponse.json({ ...result, booksAccounts, booksLists });
   } catch (e: any) {
     // runNetSuiteMirror writes its own heartbeat for every outcome it can
     // name; this is the last resort for a thrown bug.

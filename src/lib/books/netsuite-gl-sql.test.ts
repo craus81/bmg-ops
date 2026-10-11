@@ -1,5 +1,5 @@
 // Migration 361 keeps a copy of NetSuite's general ledger from 2025 beside
-// the journal. This runs migrations 359–362 in an in-memory Postgres
+// the journal. This runs migrations 359–363 in an in-memory Postgres
 // (PGlite) as the app's server login and holds the functions' rules, then
 // runs the whole copy job against them with a fake NetSuite that answers
 // the job's own SuiteQL.
@@ -24,7 +24,7 @@ import { BOOKS_GL_SYNC, PERIODS_QUERY, copyNetSuiteGl, monthsThatDiffer, type Mo
 import { monthStatuses, trialBalance, type TbData } from './trial-balance';
 
 // A fresh database with Supabase's API roles and default grants, migrations
-// 359–362 run twice as the owner, 1084 linked to subsidiary 5 (as the
+// 359–363 run twice as the owner, 1084 linked to subsidiary 5 (as the
 // account sync does), then the app's server login.
 async function freshDb(): Promise<PGlite> {
   const pg = new PGlite();
@@ -39,7 +39,7 @@ async function freshDb(): Promise<PGlite> {
   `);
   for (const file of [
     '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
-    '362-books-netsuite-gl-store-totals-where.sql',
+    '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -287,7 +287,7 @@ describe('the copy\'s functions', () => {
       `SELECT p.proname AS name, p.prosrc AS body FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public' AND p.proname LIKE 'gl\\_%' ORDER BY p.proname`,
     )).rows;
-    expect(functions.map((f) => f.name)).toContain('gl_netsuite_store_totals');
+    expect(functions.map((f) => f.name)).toEqual(expect.arrayContaining(['gl_netsuite_store_totals', 'gl_netsuite_lists_finish']));
     expect(functions.flatMap((f) => unguardedWrites(f.body).map((w) => `${f.name}: ${w}`))).toEqual([]);
   });
 
