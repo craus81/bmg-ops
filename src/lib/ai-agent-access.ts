@@ -34,6 +34,11 @@ export function canSeeFinancials(roles: string[]): boolean {
   return roles.includes('super_admin') || roles.includes('executive');
 }
 
+/** FleetSuite's own books — the same wall as the Books pages: super admin only. */
+export function canSeeBooks(roles: string[]): boolean {
+  return roles.includes('super_admin');
+}
+
 // SuiteQL touching GL accounts, customer/vendor balances, credit limits, or
 // payment/bill/journal transactions — the "bank-balance-like figures" the
 // audit flagged. Revenue via SalesOrd/foreigntotal is intentionally NOT here
@@ -68,6 +73,17 @@ export const SUPABASE_FINANCIAL_PATTERNS: RegExp[] = [
   // Paychex payroll (migration 340): per-person wages, employer taxes and
   // benefits. Every payroll_* table, present and future, same tier.
   /\bpayroll_[a-z_]+\b/i,
+];
+
+// FleetSuite's own books (migrations 359 on): every gl_* table and function,
+// present and future — the journal, the chart of accounts, and the copy of
+// NetSuite's general ledger with both companies' balances. They're built
+// hidden for the owner, and 1084's books are open only to its owners, the
+// bookkeeper and the CPA, so this is narrower than the financials tier: an
+// executive doesn't get them either. Same stopgap caveat as below (a regex
+// over the SQL string, not a privilege boundary).
+export const BOOKS_PATTERNS: RegExp[] = [
+  /\bgl_[a-z_]+\b/i,
 ];
 
 // Secrets and forgery material: blocked for EVERY role, including
@@ -118,6 +134,12 @@ export const ALWAYS_BLOCKED_PATTERNS: RegExp[] = [
 export function touchesForbiddenData(sql: string | undefined): boolean {
   if (!sql) return false;
   return ALWAYS_BLOCKED_PATTERNS.some(re => re.test(sql));
+}
+
+/** True when a service-role SQL query reaches FleetSuite's own books. */
+export function touchesBooksData(source: string, sql: string | undefined): boolean {
+  if (!sql || source !== 'supabase') return false;
+  return BOOKS_PATTERNS.some(re => re.test(sql));
 }
 
 /** True when a query reaches financial data for the given source. */
