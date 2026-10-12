@@ -30,9 +30,9 @@ the accounts page; the others are linked from there.
 | NetSuite's lists, copied | `migrations/363-books-netsuite-lists.sql`, `src/lib/books/netsuite-lists.ts` |
 | Lists page and its API | `src/app/(main)/admin/books/lists/page.tsx`, `src/app/api/admin/books/lists/route.ts` |
 | Lists tests | `src/lib/books/netsuite-lists.test.ts`, `src/lib/books/netsuite-lists-sql.test.ts` |
-| Invoice rule and its check | `src/lib/books/invoice-rule.ts`, `src/lib/books/invoice-check.ts`, `migrations/364-books-invoice-check.sql` |
+| Invoice rule and its check | `src/lib/books/invoice-rule.ts`, `src/lib/books/invoice-check.ts`, `src/lib/books/invoice-line-facts.ts`, `migrations/364-books-invoice-check.sql` |
 | Invoices page and its API | `src/app/(main)/admin/books/invoices/page.tsx`, `src/app/api/admin/books/invoices/route.ts` |
-| Invoice tests | `src/lib/books/invoice-rule.test.ts`, `src/lib/books/invoice-check.test.ts`, `src/lib/books/invoice-check-sql.test.ts` |
+| Invoice tests | `src/lib/books/invoice-rule.test.ts`, `src/lib/books/invoice-check.test.ts`, `src/lib/books/invoice-line-facts.test.ts`, `src/lib/books/invoice-check-sql.test.ts` |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
 QuickBooks and NetSuite history that importers replace wholesale. They stay
@@ -279,8 +279,21 @@ page says so.
 
 - Lines that post nothing are skipped: a line of $0, and subtotal,
   description and item group lines, which repeat amounts. That's why the
-  items copy keeps the items that never post.
+  items copy keeps the items that never post. NetSuite's own lines, its
+  subtotal say, carry an item id below 1 (the subtotal is item -2): none is
+  a real item, so no item list has them, and they're skipped too.
 - A discount line comes out as a debit to the discount item's account.
+- A discount or markup set at the top of an invoice, a card fee say, posts
+  on a line of its own in NetSuite, to its item's account, while every
+  other line posts at its own amount. NetSuite's net amount on each line
+  (`netamount`, what the mirror keeps) already carries the line's share of
+  it, though. So for such an invoice each line takes its own amount
+  (`foreignamount`) and the discount's line the shares the others carried,
+  which leaves the total as it was (`withTopDiscount` in
+  `invoice-check.ts`). Tax, lines that never post (a subtotal repeats the
+  shares it adds up) and lines of $0 stay as they are. So does an invoice
+  with more than one such line, or whose own amounts don't read the way the
+  net amounts do.
 - Each line is filed Upfit or Graphics by the owner's rule of 2026-10-06
   (`src/lib/division-revenue.ts`). Tax, discounts, freight and the
   receivable get no division.
@@ -307,12 +320,24 @@ count for every month from January 2025.
   doesn't post, or newer than the last copy) are named in a note, not
   counted.
 - An invoice that wasn't fulfilled first relieves the stock itself: NetSuite
-  books its cost on lines of their own, one to a cost of goods sold account
-  and one to the item's inventory asset account. FleetSuite will post that
-  cost with the fulfillment rule, so the check recognizes those lines by
-  those two accounts (unless the line goes to its item's own income
-  account), leaves them out of the invoice's entry and doesn't compare them.
-  The page counts the invoices that have them.
+  books its cost on lines of their own, one to a cost of goods account and
+  one to an inventory asset account. FleetSuite will post that cost with the
+  fulfillment rule, so the check leaves those lines out of the invoice's
+  entry and doesn't compare them. They're the lines NetSuite flags itself
+  (`iscogs`), and any NetSuite posts to a cost of goods sold account or to
+  the item's inventory asset account (unless the line goes to its item's
+  own income account), which covers them when the flag can't be read. The
+  page counts the invoices that have them.
+- Which lines are cost of goods, which line is a discount set at the top,
+  and each line's own amount aren't in the copy of the invoice: the
+  mirror's line read doesn't ask for them, and having it ask would mean
+  reading every invoice again. So each time a month is checked, the API asks
+  NetSuite for them, for that month's invoices
+  (`src/lib/books/invoice-line-facts.ts`, `transactionline.iscogs`,
+  `transactiondiscount` and `foreignamount`). A column NetSuite won't give is
+  left out, and when NetSuite can't be asked at all the check goes without;
+  the page says which. Before invoices post, the mirror will have to keep
+  them.
 - The mirror keeps NetSuite's signed `netamount` in each line's `raw`, where
   a sale is negative. A line whose amount it didn't keep can't be worked
   out.

@@ -74,6 +74,19 @@ export interface RuleResult {
   problems: RuleProblem[];
 }
 
+/**
+ * A line that never posts: a subtotal, description or item group line, which
+ * repeats amounts, or one of NetSuite's own lines, its subtotal say. Those
+ * carry an item id below 1 (the subtotal is item -2): none is a real item,
+ * so no item list has them.
+ */
+export function isLayoutLine(line: InvoiceLine, items: Map<string, RuleItem>): boolean {
+  if (line.tax || !line.itemId) return false;
+  if (/^(-\d+|0+)$/.test(line.itemId)) return true;
+  const type = items.get(line.itemId)?.type;
+  return !!type && LAYOUT_TYPES.has(type);
+}
+
 export function invoiceEntry(lines: InvoiceLine[], accounts: RuleAccounts): RuleResult {
   const out: RuleLine[] = [];
   const problems: RuleProblem[] = [];
@@ -102,13 +115,12 @@ export function invoiceEntry(lines: InvoiceLine[], accounts: RuleAccounts): Rule
       problems.push({ kind: 'no_item', lineId: line.lineId });
       continue;
     }
+    if (isLayoutLine(line, accounts.items)) continue;
     const item = accounts.items.get(line.itemId);
     if (!item) {
       problems.push({ kind: 'not_copied', lineId: line.lineId, itemId: line.itemId, itemNumber: line.itemNumber });
       continue;
     }
-    // Subtotals, descriptions and item group lines repeat amounts; they post nothing.
-    if (item.type && LAYOUT_TYPES.has(item.type)) continue;
     const itemNumber = line.itemNumber || item.number;
     if (!item.incomeAccount) {
       problems.push({ kind: 'no_income_account', lineId: line.lineId, itemId: line.itemId, itemNumber });

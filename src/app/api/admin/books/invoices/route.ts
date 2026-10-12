@@ -5,9 +5,14 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import { COPY_FROM, monthOfDate, monthsBetween } from '@/lib/books/netsuite-gl';
 import { BOOKS_LISTS_SYNC } from '@/lib/books/netsuite-lists';
 import { INVOICE_RULE } from '@/lib/books/invoice-rule';
-import { checkMonth, type ChartAccount, type InvoiceMonthData, type TaxAccountCount } from '@/lib/books/invoice-check';
+import { checkMonth, type ChartAccount, type InvoiceMonthData, type LineFactsRead, type TaxAccountCount } from '@/lib/books/invoice-check';
+import { readLineFacts } from '@/lib/books/invoice-line-facts';
+import { suiteqlQueryAll } from '@/lib/netsuite';
+import { compactSuiteqlError } from '@/lib/sales-order-sync';
 
 export const dynamic = 'force-dynamic';
+// It asks NetSuite about the month's invoice lines.
+export const maxDuration = 60;
 
 /**
  * GET /api/admin/books/invoices?company=BMG&month=2026-09 — one company's
@@ -15,6 +20,11 @@ export const dynamic = 'force-dynamic';
  * invoice rule works out for it next to the GL lines NetSuite posted
  * (migration 364), and why any differ. With `summary=1` only the counts come
  * back, for checking every month in turn.
+ *
+ * What the copy of the invoices' lines doesn't keep (which lines are cost of
+ * goods, a discount or markup set at the top, each line's own amount) is
+ * asked of NetSuite each time (src/lib/books/invoice-line-facts.ts); when it
+ * can't be, the check goes without and says so.
  *
  * Super admin only: the books are being built hidden, for the owner, until
  * they're ready (docs/books.md). It only reads; nothing is posted.
@@ -59,13 +69,24 @@ export async function GET(req: NextRequest) {
   if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
   const data = (res.data ?? {}) as Partial<InvoiceMonthData>;
 
+  const invoices = data.invoices ?? [];
+  let facts: LineFactsRead | { error: string } | null = null;
+  if (invoices.length) {
+    try {
+      facts = await readLineFacts((q) => suiteqlQueryAll(q, 1000, { retries: 1 }), invoices.map((i) => i.netsuite_id));
+    } catch (err) {
+      facts = { error: compactSuiteqlError(err) };
+    }
+  }
+
   const lastLists = (lists.data?.last_result ?? null) as { taxAccounts?: TaxAccountCount[] } | null;
   const check = checkMonth(
-    { invoices: data.invoices ?? [], items: data.items ?? [] },
+    { invoices, items: data.items ?? [] },
     {
       company,
       chart: accounts.data.map(({ company_id, ...a }) => ({ ...a, company: company_id ? codeOf.get(company_id) ?? null : null })),
       taxAccounts: Array.isArray(lastLists?.taxAccounts) ? lastLists.taxAccounts : null,
+      facts,
     },
   );
 
