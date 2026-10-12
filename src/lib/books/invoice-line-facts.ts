@@ -6,7 +6,8 @@ import type { LineFacts, LineFactsRead } from './invoice-check';
  * What the copy of an invoice's lines doesn't keep, asked of NetSuite each
  * time invoices are checked (docs/books.md "Invoices"): which lines NetSuite
  * itself flags as cost of goods, which line is a discount or markup set at
- * the top of the invoice, and each line's own amount.
+ * the top of the invoice, and each line's own amount, quantity and rate (the
+ * last two only to show).
  *
  * The ledger mirror's line read (src/lib/ledger/netsuite-mirror.ts) doesn't
  * ask for these, and having it ask would mean reading every invoice again.
@@ -26,6 +27,8 @@ export const FACT_COLUMNS: ReadonlyArray<{ fact: Fact; column: string }> = [
   { fact: 'cogs', column: 'iscogs' },
   { fact: 'topDiscount', column: 'transactiondiscount' },
   { fact: 'amount', column: 'foreignamount' },
+  { fact: 'quantity', column: 'quantity' },
+  { fact: 'rate', column: 'rate' },
 ];
 
 /** Transactions per query: their ids ride in the SQL. */
@@ -55,8 +58,8 @@ function put(lines: Map<string, LineFacts>, rows: Row[], read: ReadonlyArray<{ f
     const facts = lines.get(key) ?? {};
     for (const { fact, column } of read) {
       const value = row[column];
-      if (fact === 'amount') facts.amount = value === null || value === undefined || value === '' ? null : String(value);
-      else facts[fact] = isTrue(value);
+      if (fact === 'cogs' || fact === 'topDiscount') facts[fact] = isTrue(value);
+      else facts[fact] = value === null || value === undefined || value === '' ? null : String(value);
     }
     lines.set(key, facts);
   }

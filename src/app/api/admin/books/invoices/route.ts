@@ -22,9 +22,10 @@ export const maxDuration = 60;
  * back, for checking every month in turn.
  *
  * What the copy of the invoices' lines doesn't keep (which lines are cost of
- * goods, a discount or markup set at the top, each line's own amount) is
- * asked of NetSuite each time (src/lib/books/invoice-line-facts.ts); when it
- * can't be, the check goes without and says so.
+ * goods, a discount or markup set at the top, each line's own amount,
+ * quantity and rate) is asked of NetSuite each time
+ * (src/lib/books/invoice-line-facts.ts); when it can't be, the check goes
+ * without and says so.
  *
  * Super admin only: the books are being built hidden, for the owner, until
  * they're ready (docs/books.md). It only reads; nothing is posted.

@@ -31,6 +31,16 @@ interface Amount {
   cents: number;
 }
 
+/** What NetSuite says about a line; amounts in cents, a charge positive. */
+interface Says {
+  net: number | null;
+  own: number | null;
+  quantity: string | null;
+  rate: string | null;
+  topDiscount: boolean;
+  cogs: boolean;
+}
+
 interface Row {
   lineId: string;
   label: string;
@@ -39,6 +49,7 @@ interface Row {
   netsuite: Amount | null;
   cost: boolean;
   same: boolean;
+  says?: Says;
 }
 
 interface Invoice {
@@ -50,6 +61,7 @@ interface Invoice {
   voided: boolean;
   status: Status;
   waiting?: 'lines' | 'gl';
+  amounts?: 'own' | 'unfit';
   reasons: string[];
   rows: Row[];
 }
@@ -77,6 +89,7 @@ interface Payload {
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const fmt = (cents: number) => money.format(cents / 100);
+const rateMoney = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 5 });
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const monthName = (month: string) => `${MONTH_NAMES[Number(month.slice(5, 7)) - 1]} ${month.slice(0, 4)}`;
@@ -136,12 +149,35 @@ function Side({ amount, accounts }: { amount: Amount | null; accounts: Record<st
   );
 }
 
+/** A line as NetSuite has it: its own amount, its net amount, quantity × rate, and what it's flagged as. */
+function saysText(says: Says): string {
+  const parts: string[] = [];
+  if (says.own !== null) parts.push(`amount ${fmt(says.own)}`);
+  if (says.net !== null) parts.push(`net ${fmt(says.net)}`);
+  const quantity = Number(says.quantity);
+  if (says.quantity !== null && says.rate !== null && Number.isFinite(quantity) && quantity !== 0) {
+    const rate = Number(says.rate);
+    parts.push(`${Math.abs(quantity).toLocaleString('en-US', { maximumFractionDigits: 4 })} × ${Number.isFinite(rate) ? rateMoney.format(rate) : says.rate}`);
+  }
+  if (says.topDiscount) parts.push('set at the top');
+  if (says.cogs) parts.push('cost of goods');
+  return `NetSuite: ${parts.join(', ')}`;
+}
+
+const AMOUNTS: Record<NonNullable<Invoice['amounts']>, string> = {
+  own: "NetSuite spread a discount or markup over this invoice's lines, so FleetSuite takes each line at its own amount, as NetSuite posts it.",
+  unfit: "NetSuite's own amounts for this invoice's lines don't add up to it, so FleetSuite took each line at its net amount.",
+};
+
 function InvoiceDetail({ invoice, accounts }: { invoice: Invoice; accounts: Record<string, string> }) {
   return (
     <div style={{ padding: '8px 10px 12px', background: 'var(--bg)' }}>
       {invoice.reasons.map((r) => (
         <div key={r} style={{ fontSize: '12px', color: invoice.status === 'unworkable' ? AMBER : RED, marginBottom: '4px' }}>{r}</div>
       ))}
+      {invoice.amounts && (
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>{AMOUNTS[invoice.amounts]}</div>
+      )}
       {invoice.rows.length === 0 ? (
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
           {invoice.waiting === 'lines' ? "This invoice's lines haven't been copied from NetSuite yet." : 'Nothing posts on either side.'}
@@ -167,6 +203,7 @@ function InvoiceDetail({ invoice, accounts }: { invoice: Invoice; accounts: Reco
                     {r.label}
                     {r.division && <span style={{ ...chip(GREY), marginLeft: '6px' }}>{r.division === 'upfit' ? 'Upfit' : 'Graphics'}</span>}
                     {r.cost && <span style={{ ...chip(GREY), marginLeft: '6px' }}>Cost of goods, for the fulfillment rule</span>}
+                    {r.says && <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{saysText(r.says)}</div>}
                   </td>
                   <Side amount={r.fleetsuite} accounts={accounts} />
                   <Side amount={r.netsuite} accounts={accounts} />

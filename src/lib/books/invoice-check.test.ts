@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  centsOf, checkInvoice, checkMonth, costLines, invoiceReasons, pickReceivable, problemReason, summarize, withTopDiscount,
+  centsOf, checkInvoice, checkMonth, costLines, invoiceReasons, pickReceivable, problemReason, summarize, withOwnAmounts,
   type ChartAccount, type CheckContext, type InvoiceMonthData, type LineFacts, type NetSuitePosting, type ReasonNames,
 } from './invoice-check';
 import type { InvoiceLine, RuleItem } from './invoice-rule';
@@ -113,40 +113,62 @@ describe('checkInvoice', () => {
   });
 });
 
-describe('withTopDiscount', () => {
+describe('withOwnAmounts', () => {
   // A card fee of 3% set at the top: NetSuite's net amounts carry each line's share of it.
   const NET = [line('1', '11', 10300), line('2', '13', 5150), line('3', '19', 0, { itemNumber: 'CARD FEE' }), line('4', '900', 1200, { tax: true })];
   const own = (amount: string | null, fields: Partial<LineFacts> = {}): LineFacts => ({ cogs: false, topDiscount: false, amount, ...fields });
   const FACTS = [own('-100.00'), own('-50.00'), own('-4.50', { topDiscount: true }), own('-12.00')];
-  const cents = (lines: ReturnType<typeof withTopDiscount>) => lines.map((l) => [l.lineId, l.cents]);
-  const spread = (lines: InvoiceLine[], facts: Array<LineFacts | undefined>) => withTopDiscount(lines, facts, CTX.items);
+  const spread = (lines: InvoiceLine[], facts: Array<LineFacts | undefined>) => withOwnAmounts(lines, facts, CTX.items);
+  const cents = (r: ReturnType<typeof withOwnAmounts>) => [r.amounts, r.lines.map((l) => [l.lineId, l.cents])];
 
-  it('gives each line its own amount and the discount\'s line the shares the others carried, keeping the total', () => {
-    expect(cents(spread(NET, FACTS))).toEqual([['1', 10000], ['2', 5000], ['3', 450], ['4', 1200]]);
+  it('takes each line at its own amount, the fee\'s own line included, so the total stays the same', () => {
+    expect(cents(spread(NET, FACTS))).toEqual(['own', [['1', 10000], ['2', 5000], ['3', 450], ['4', 1200]]]);
   });
 
-  it('works out the discount from the shares, whatever amount its own line gives', () => {
-    expect(cents(spread(NET, [FACTS[0], FACTS[1], own(null, { topDiscount: true }), FACTS[3]])))
-      .toEqual([['1', 10000], ['2', 5000], ['3', 450], ['4', 1200]]);
+  it('does the same for a discount on a line under the lines it applies to, which NetSuite doesn\'t flag as set at the top', () => {
+    const net = [line('1', '11', 9000), line('2', '13', 4500), line('3', '14', 0, { itemNumber: 'DISCOUNT' })];
+    expect(cents(spread(net, [own('-100.00'), own('-50.00'), own('15.00')]))).toEqual(['own', [['1', 10000], ['2', 5000], ['3', -1500]]]);
   });
 
-  it('takes a discount off the same way', () => {
-    const net = [line('1', '11', 9000), line('2', '14', 0, { itemNumber: 'DISCOUNT' })];
-    expect(cents(spread(net, [own('-100.00'), own('10.00', { topDiscount: true })]))).toEqual([['1', 10000], ['2', -1000]]);
+  it('gives a discount set at the top with no amount of its own what the other lines carried', () => {
+    for (const top of [own(null, { topDiscount: true }), own('0.00', { topDiscount: true })]) {
+      expect(cents(spread(NET, [FACTS[0], FACTS[1], top, FACTS[3]]))).toEqual(['own', [['1', 10000], ['2', 5000], ['3', 450], ['4', 1200]]]);
+    }
   });
 
-  it('leaves alone a line whose own amount wasn\'t read, a subtotal, which repeats the shares, and lines of $0 like cost of goods', () => {
-    const net = [...NET, line('5', '-2', 15450), line('6', '11', 0)];
-    const facts = [FACTS[0], own(null), FACTS[2], FACTS[3], own('-150.00'), own('-30.00', { cogs: true })];
-    expect(cents(spread(net, facts))).toEqual([['1', 10000], ['2', 5150], ['3', 300], ['4', 1200], ['5', 15450], ['6', 0]]);
+  it('leaves alone tax, a subtotal, which repeats the shares, cost of goods, and a stock item\'s line of $0', () => {
+    const net = [...NET, line('5', '-2', 15450), line('6', '11', 0), line('7', '11', 0)];
+    const facts = [...FACTS, own('-150.00'), own('-30.00', { cogs: true }), own('25.00')];
+    expect(cents(spread(net, facts)))
+      .toEqual(['own', [['1', 10000], ['2', 5000], ['3', 450], ['4', 1200], ['5', 15450], ['6', 0], ['7', 0]]]);
   });
 
-  it('changes nothing without exactly one discount at the top, or when an own amount reads the other way or as nothing', () => {
-    expect(spread(NET, [FACTS[0], FACTS[1], own('-4.50'), FACTS[3]])).toBe(NET);
-    expect(spread(NET, [own('-100.00', { topDiscount: true }), FACTS[1], FACTS[2], FACTS[3]])).toBe(NET);
-    expect(spread(NET, [own('100.00'), own('50.00'), FACTS[2], FACTS[3]])).toBe(NET);
-    expect(spread(NET, [own('0.00'), FACTS[1], FACTS[2], FACTS[3]])).toBe(NET);
-    expect(spread(NET, [undefined, undefined, undefined, undefined])).toBe(NET);
+  it('changes nothing when each line\'s own amount is its net amount, or NetSuite gave none', () => {
+    const plain = [line('1', '11', 10000), line('2', '13', 5000)];
+    for (const [lines, facts] of [
+      [plain, [own('-100.00'), own('-50.00')]],
+      [NET, [undefined, undefined, undefined, undefined]],
+      [NET, [own(null), own(null), own(null, { topDiscount: true }), own(null)]],
+    ] as Array<[InvoiceLine[], Array<LineFacts | undefined>]>) {
+      const r = spread(lines, facts);
+      expect([r.amounts, r.lines]).toEqual(['net', lines]);
+      expect(r.lines).toBe(lines);
+    }
+  });
+
+  it('keeps every net amount when the own amounts don\'t add up, or one reads the other way round, as nothing, or not at all', () => {
+    for (const facts of [
+      [FACTS[0], FACTS[1], own(null), FACTS[3]],
+      [FACTS[0], FACTS[1], own('-3.00', { topDiscount: true }), FACTS[3]],
+      [FACTS[0], own('-50.00', { topDiscount: true }), own(null, { topDiscount: true }), FACTS[3]],
+      [own('100.00'), own('50.00'), FACTS[2], FACTS[3]],
+      [own('0.00'), FACTS[1], FACTS[2], FACTS[3]],
+      [own('a lot'), FACTS[1], FACTS[2], FACTS[3]],
+    ]) {
+      const r = spread(NET, facts);
+      expect(r.amounts).toBe('unfit');
+      expect(r.lines).toBe(NET);
+    }
   });
 });
 
@@ -314,7 +336,7 @@ describe('checkMonth', () => {
 
     expect(checkMonth({ invoices: [fee, stock], items }, opts).invoices.map((i) => i.status)).toEqual(['differs', 'differs']);
     const m = checkMonth({ invoices: [fee, stock], items }, { ...opts, facts });
-    expect(m.invoices.map((i) => i.status)).toEqual(['matches', 'matches']);
+    expect(m.invoices.map((i) => [i.status, i.amounts])).toEqual([['matches', 'own'], ['matches', undefined]]);
     expect(m.invoices[0].rows.map((r) => [r.label, r.fleetsuite?.account, r.fleetsuite?.cents])).toEqual([
       ['Receivable', '120', 16650], ['PART-A', '400', -10000], ['INSTALL LABOR', '400', -5000], ['Sales tax, Some County', '220', -1200], ['CARD FEE', '410', -450],
     ]);
@@ -322,16 +344,62 @@ describe('checkMonth', () => {
     expect(m.summary).toMatchObject({ invoices: 2, matches: 2, withCost: 1 });
   });
 
+  it('takes a discount on a line under the ones it applies to at each line\'s own amount, and shows what NetSuite says', () => {
+    const items = [...ITEMS, { kind: 'item' as const, netsuite_id: '14', name: 'DISCOUNT', item_type: 'Discount', income_account: '410', asset_account: null }];
+    // 5% off the part and the labor, on a line under them: NetSuite's net amounts carry each line's share; it posts the discount on its own line.
+    const discounted = (number: string) => invoice(number, {
+      total: '154.50',
+      lines: [
+        ...invoice('X').lines.map((l) => ({ ...l, netamount: l.line_id === '1' ? '-95.00' : l.line_id === '2' ? '-47.50' : l.netamount })),
+        { line_id: '4', line_no: 4, kind: 'item', item_id: '14', item_number: 'DISCOUNT', amount: '0.00', netamount: '0' },
+      ],
+      netsuite: [
+        { line_id: '0', account: '120', debit: '154.50', credit: '0.00' },
+        ...invoice('X').netsuite.slice(1),
+        { line_id: '4', account: '410', debit: '7.50', credit: '0.00' },
+      ],
+    });
+    const said = (txn: string, lineId: string, amount: string, f: Partial<LineFacts> = {}): [string, LineFacts] =>
+      [`${txn}:${lineId}`, { cogs: false, topDiscount: false, amount, quantity: null, rate: null, ...f }];
+    const facts = {
+      lines: new Map([
+        said('108', '1', '-100.00', { quantity: '-2', rate: '50.00' }), said('108', '2', '-50.00'), said('108', '3', '-12.00'), said('108', '4', '7.50'),
+        // INV109's discount line gives no amount of its own, so its lines can't be taken at theirs.
+        said('109', '1', '-100.00'), said('109', '2', '-50.00'), said('109', '3', '-12.00'),
+      ]),
+      missing: [],
+    };
+    const m = checkMonth({ invoices: [discounted('INV108'), discounted('INV109')], items }, { company: 'BMG', chart: CHART, taxAccounts: TAX, facts });
+
+    expect(m.invoices.map((i) => [i.number, i.status, i.amounts])).toEqual([['INV108', 'matches', 'own'], ['INV109', 'differs', 'unfit']]);
+    expect(m.invoices[0].rows.map((r) => [r.label, r.fleetsuite?.cents, r.says?.net, r.says?.own])).toEqual([
+      ['Receivable', 15450, undefined, undefined],
+      ['PART-A', -10000, 9500, 10000],
+      ['INSTALL LABOR', -5000, 4750, 5000],
+      ['Sales tax, Some County', -1200, 1200, 1200],
+      ['DISCOUNT', 750, 0, -750],
+    ]);
+    expect(m.invoices[0].rows[1].says).toEqual({ net: 9500, own: 10000, quantity: '-2', rate: '50.00', topDiscount: false, cogs: false });
+    expect(m.invoices[1].rows.find((r) => r.lineId === '4')?.says).toBeUndefined();
+    expect(m.notes).toEqual([
+      "On 1 invoice NetSuite's own amounts for the lines don't add up to the invoice, so FleetSuite went by their net amounts: INV109. "
+      + 'Open it to see what NetSuite says about each line.',
+    ]);
+  });
+
   it('says when NetSuite couldn\'t be asked about the lines, or wouldn\'t say everything', () => {
     const opts = { company: 'BMG', chart: CHART, taxAccounts: TAX };
     const month = { invoices: [invoice('INV101')], items: ITEMS };
     expect(checkMonth(month, { ...opts, facts: { error: 'NetSuite SuiteQL error (500): timed out' } }).notes).toEqual([
       "NetSuite couldn't be asked about these invoices' lines just now (NetSuite SuiteQL error (500): timed out), so cost of goods is "
-      + "recognized by the accounts it went to, and a discount or markup set at the top of an invoice isn't separated from its lines.",
+      + "recognized by the accounts it went to, and a discount or markup spread over an invoice's lines isn't separated from them.",
     ]);
     expect(checkMonth(month, { ...opts, facts: { lines: new Map(), missing: ['cogs', 'amount'] } }).notes).toEqual([
       "NetSuite wouldn't say which lines are cost of goods and the lines' own amounts on these invoices, so cost of goods is recognized "
-      + "by the accounts it went to and a discount or markup set at the top of an invoice isn't separated from its lines.",
+      + "by the accounts it went to and a discount or markup spread over an invoice's lines isn't separated from them.",
+    ]);
+    expect(checkMonth(month, { ...opts, facts: { lines: new Map(), missing: ['quantity', 'rate'] } }).notes).toEqual([
+      "NetSuite wouldn't say the lines' quantities and the lines' rates on these invoices, so a line's quantity and rate aren't shown.",
     ]);
     expect(checkMonth(month, { ...opts, facts: { lines: new Map(), missing: [] } }).notes).toEqual([]);
   });

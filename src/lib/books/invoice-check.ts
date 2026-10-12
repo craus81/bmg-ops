@@ -32,6 +32,9 @@ export interface LineFacts {
   topDiscount?: boolean;
   /** The line's own amount, signed like netamount, a sale negative (transactionline.foreignamount). */
   amount?: string | null;
+  /** As NetSuite gives them, only to show (transactionline.quantity, .rate). */
+  quantity?: string | null;
+  rate?: string | null;
 }
 
 export interface LineFactsRead {
@@ -354,6 +357,18 @@ export interface AccountAmount {
   cents: number;
 }
 
+/** What NetSuite says about a line, to show next to it. Amounts are whole cents, a charge positive. */
+export interface LineSays {
+  /** The line's net amount, as the copy of the invoice has it. */
+  net: number | null;
+  /** The line's own amount; null when NetSuite gave none. */
+  own: number | null;
+  quantity: string | null;
+  rate: string | null;
+  topDiscount: boolean;
+  cogs: boolean;
+}
+
 export interface InvoiceRowView {
   lineId: string;
   label: string;
@@ -362,6 +377,8 @@ export interface InvoiceRowView {
   netsuite: AccountAmount | null;
   cost: boolean;
   same: boolean;
+  /** Present when NetSuite was asked about the invoice's lines and said something about this one. */
+  says?: LineSays;
 }
 
 export interface InvoiceView {
@@ -373,6 +390,8 @@ export interface InvoiceView {
   voided: boolean;
   status: CheckStatus;
   waiting?: 'lines' | 'gl';
+  /** How its lines were taken, when not simply at their net amounts (withOwnAmounts). */
+  amounts?: Exclude<LineAmounts, 'net'>;
   reasons: string[];
   rows: InvoiceRowView[];
 }
@@ -396,38 +415,63 @@ export function centsOf(v: unknown): number | null {
 }
 
 /**
- * An invoice with a discount or markup set at the top, a card fee say, as
- * NetSuite posts it. NetSuite's net amount on each line already carries the
- * line's share of that discount, yet NetSuite posts each line at its own
- * amount and the discount on a line of its own. So each sale line takes its
- * own amount, and the discount's line the shares they carried: the total
- * doesn't change. Lines that never post (a subtotal repeats the shares it
- * adds up), tax, and lines of $0 such as cost of goods are left as they are.
- * So is the whole invoice without exactly one such line, or when a line's
- * own amount doesn't read the way its net amount does.
+ * How an invoice's lines were taken: at their net amounts ('net'), at their
+ * own amounts ('own'), or at their net amounts because the own amounts
+ * don't fit them ('unfit').
  */
-export function withTopDiscount(lines: InvoiceLine[], facts: Array<LineFacts | undefined>, items: Map<string, RuleItem>): InvoiceLine[] {
-  const tops = lines.filter((_, i) => facts[i]?.topDiscount);
-  if (tops.length !== 1 || tops[0].cents === null) return lines;
-  const [top] = tops;
-  const own = new Map<string, number>();
-  let shares = 0;
+export type LineAmounts = 'net' | 'own' | 'unfit';
+
+/** A line's own amount from what NetSuite says, a charge positive; null when it gave none or it can't be read. */
+const ownCents = (facts: LineFacts | undefined): number | null => {
+  if (facts?.amount === undefined || facts.amount === null) return null;
+  const signed = centsOf(facts.amount);
+  return signed === null ? null : signed === 0 ? 0 : -signed;
+};
+
+/**
+ * Each line at its own amount, as NetSuite posts it. NetSuite spreads a
+ * discount or markup over the lines it applies to, whether it's a line under
+ * them or set at the top of the invoice (a card fee say): each line's net
+ * amount carries its share, and the discount's own line reads $0 net. Yet
+ * NetSuite posts each line at its own amount and the discount on its own
+ * line. So each sale and discount line takes its own amount.
+ *
+ * The total can't change. When the own amounts don't add up to the net
+ * ones, a discount set at the top with no amount of its own takes the
+ * difference; without one, or when an own amount reads the other way round
+ * from its net amount, every line keeps its net amount ('unfit'). Tax, lines
+ * that never post, the cost of goods NetSuite flags, and a stock item's line
+ * of $0, where NetSuite may book the stock's cost, keep theirs too.
+ */
+export function withOwnAmounts(
+  lines: InvoiceLine[],
+  facts: Array<LineFacts | undefined>,
+  items: Map<string, RuleItem>,
+): { lines: InvoiceLine[]; amounts: LineAmounts } {
+  const out = [...lines];
+  let net = 0;
+  let own = 0;
+  const tops: number[] = [];
   for (const [i, line] of lines.entries()) {
-    const amount = facts[i]?.amount;
-    if (line === top || line.tax || !line.cents || facts[i]?.cogs || isLayoutLine(line, items) || amount === undefined || amount === null) continue;
-    const signed = centsOf(amount);
-    if (signed === null) return lines;
-    const cents = signed === 0 ? 0 : -signed;
+    const f = facts[i];
+    if (line.tax || line.cents === null || f?.cogs || isLayoutLine(line, items)) continue;
+    if (f?.topDiscount) tops.push(i);
+    if (f?.amount === undefined || f.amount === null) continue;
+    const cents = ownCents(f);
+    if (cents === null) return { lines, amounts: 'unfit' };
+    if (line.cents === 0 && cents !== 0 && line.itemId && items.get(line.itemId)?.assetAccount) continue;
     // A sale is negative in both, so an own amount of the other sign, or of nothing, isn't one to go by.
-    if (Math.sign(cents) !== Math.sign(line.cents)) return lines;
-    own.set(line.lineId, cents);
-    shares += line.cents - cents;
+    if (line.cents !== 0 && Math.sign(cents) !== Math.sign(line.cents)) return { lines, amounts: 'unfit' };
+    net += line.cents;
+    own += cents;
+    if (cents !== line.cents) out[i] = { ...line, cents };
   }
-  return lines.map((l) => {
-    if (l === top) return { ...l, cents: (l.cents ?? 0) + shares };
-    const cents = own.get(l.lineId);
-    return cents === undefined ? l : { ...l, cents };
-  });
+  if (net !== own) {
+    const [top] = tops;
+    if (tops.length !== 1 || out[top].cents !== 0) return { lines, amounts: 'unfit' };
+    out[top] = { ...out[top], cents: net - own };
+  }
+  return out.some((l, i) => l !== lines[i]) ? { lines: out, amounts: 'own' } : { lines, amounts: 'net' };
 }
 
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
@@ -436,8 +480,10 @@ const andList = (words: string[]) => (words.length <= 1 ? words.join('') : `${wo
 /** What a fact NetSuite wouldn't give leaves the check to do instead. */
 const WITHOUT_FACT: Record<keyof LineFacts, { what: string; so: string }> = {
   cogs: { what: 'which lines are cost of goods', so: 'cost of goods is recognized by the accounts it went to' },
-  topDiscount: { what: 'which line is a discount or markup set at the top', so: "a discount or markup set at the top of an invoice isn't separated from its lines" },
-  amount: { what: "the lines' own amounts", so: "a discount or markup set at the top of an invoice isn't separated from its lines" },
+  topDiscount: { what: 'which line is a discount or markup set at the top', so: "a discount or markup set at the top with no amount of its own isn't separated from the lines it's spread over" },
+  amount: { what: "the lines' own amounts", so: "a discount or markup spread over an invoice's lines isn't separated from them" },
+  quantity: { what: "the lines' quantities", so: "a line's quantity and rate aren't shown" },
+  rate: { what: "the lines' rates", so: "a line's quantity and rate aren't shown" },
 };
 
 /**
@@ -489,11 +535,12 @@ export function checkMonth(
   const checked: Array<{ number: string; checked: CheckedInvoice }> = [];
   const invoices: InvoiceView[] = [];
   const notInGl: string[] = [];
+  const unfit: string[] = [];
   const used = new Set<string>();
   for (const inv of data.invoices) {
     const number = inv.number || `NetSuite ${inv.netsuite_id}`;
     const lineFacts = inv.lines.map((l) => facts?.lines.get(`${inv.netsuite_id}:${l.line_id}`));
-    const lines = withTopDiscount(inv.lines.map((l) => {
+    const netLines: InvoiceLine[] = inv.lines.map((l) => {
       // NetSuite's netamount is signed, a sale negative; the mirror's amount isn't, so it only says "nothing".
       let cents: number | null;
       if (l.netamount !== null) {
@@ -503,7 +550,8 @@ export function checkMonth(
         cents = centsOf(l.amount) === 0 ? 0 : null;
       }
       return { lineId: l.line_id, itemId: l.item_id, itemNumber: l.item_number, tax: l.kind === 'tax', cents };
-    }), lineFacts, items);
+    });
+    const { lines, amounts } = withOwnAmounts(netLines, lineFacts, items);
     const cogs = lineFacts.some((f) => f?.cogs !== undefined)
       ? new Set(inv.lines.filter((_, i) => lineFacts[i]?.cogs).map((l) => l.line_id))
       : null;
@@ -514,6 +562,21 @@ export function checkMonth(
       continue;
     }
     checked.push({ number, checked: c });
+    if (amounts === 'unfit') unfit.push(number);
+
+    const says = new Map<string, LineSays>();
+    for (const [i, l] of netLines.entries()) {
+      const f = lineFacts[i];
+      if (!f) continue;
+      says.set(l.lineId, {
+        net: l.cents,
+        own: ownCents(f),
+        quantity: f.quantity ?? null,
+        rate: f.rate ?? null,
+        topDiscount: !!f.topDiscount,
+        cogs: !!f.cogs,
+      });
+    }
 
     const rows = c.rows.map((r): InvoiceRowView => {
       const label = r.lineId === MAIN_LINE ? 'Receivable'
@@ -530,6 +593,7 @@ export function checkMonth(
         netsuite: r.netsuite ? { account: r.netsuite.account, cents: r.netsuite.cents } : null,
         cost: r.cost,
         same: r.same,
+        ...(says.has(r.lineId) ? { says: says.get(r.lineId) } : {}),
       };
     });
     invoices.push({
@@ -541,6 +605,7 @@ export function checkMonth(
       voided: inv.voided,
       status: c.status,
       ...(c.waiting ? { waiting: c.waiting } : {}),
+      ...(amounts !== 'net' ? { amounts } : {}),
       reasons: invoiceReasons(c, names).map((r) => r.text),
       rows,
     });
@@ -552,10 +617,16 @@ export function checkMonth(
   if (!opts.taxAccounts) notes.push("Where sales tax posts hasn't been read yet. Sync now on the NetSuite lists page reads it.");
   if (opts.facts && 'error' in opts.facts) {
     notes.push(`NetSuite couldn't be asked about these invoices' lines just now (${opts.facts.error}), so cost of goods is recognized by `
-      + "the accounts it went to, and a discount or markup set at the top of an invoice isn't separated from its lines.");
+      + "the accounts it went to, and a discount or markup spread over an invoice's lines isn't separated from them.");
   } else if (facts?.missing.length) {
     const sos = [...new Set(facts.missing.map((m) => WITHOUT_FACT[m].so))];
     notes.push(`NetSuite wouldn't say ${andList(facts.missing.map((m) => WITHOUT_FACT[m].what))} on these invoices, so ${andList(sos)}.`);
+  }
+  if (unfit.length) {
+    const shown = unfit.slice(0, 10).join(', ');
+    notes.push(`On ${plural(unfit.length, 'invoice', 'invoices')} NetSuite's own amounts for the lines don't add up to the invoice, `
+      + `so FleetSuite went by their net amounts: ${shown}${unfit.length > 10 ? ', …' : ''}. `
+      + `Open ${unfit.length === 1 ? 'it' : 'one'} to see what NetSuite says about each line.`);
   }
   if (summary.withCost) {
     notes.push(`${plural(summary.withCost, 'invoice also books', 'invoices also book')} the cost of the stock sold, as NetSuite does when an `
