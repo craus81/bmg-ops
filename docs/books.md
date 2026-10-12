@@ -283,17 +283,24 @@ page says so.
   subtotal say, carry an item id below 1 (the subtotal is item -2): none is
   a real item, so no item list has them, and they're skipped too.
 - A discount line comes out as a debit to the discount item's account.
-- A discount or markup set at the top of an invoice, a card fee say, posts
-  on a line of its own in NetSuite, to its item's account, while every
-  other line posts at its own amount. NetSuite's net amount on each line
+- A discount or markup posts on a line of its own in NetSuite, to its
+  item's account, while every other line posts at its own amount. That's
+  so whether it's a line under the lines it applies to or set at the top of
+  the invoice (a card fee say). NetSuite's net amount on each line
   (`netamount`, what the mirror keeps) already carries the line's share of
-  it, though. So for such an invoice each line takes its own amount
-  (`foreignamount`) and the discount's line the shares the others carried,
-  which leaves the total as it was (`withTopDiscount` in
-  `invoice-check.ts`). Tax, lines that never post (a subtotal repeats the
-  shares it adds up) and lines of $0 stay as they are. So does an invoice
-  with more than one such line, or whose own amounts don't read the way the
-  net amounts do.
+  it, though, and the discount's own line reads $0 net. So every line takes
+  its own amount (`foreignamount`), as long as the own amounts add up to the
+  net ones, so the total stays as it was (`withOwnAmounts` in
+  `invoice-check.ts`). When they don't, a discount set at the top
+  (`transactiondiscount`) with no amount of its own takes the difference;
+  without one, or when an own amount reads the other way round from its net
+  amount, the invoice keeps its net amounts and the page names it. Tax,
+  lines that never post (a subtotal repeats the shares it adds up), the cost
+  of goods NetSuite flags and a stock item's line of $0 keep their amounts.
+  Opening an invoice shows what NetSuite says about each line: its own
+  amount, its net amount, quantity × rate and its flags. That reading of
+  NetSuite's columns was worked out from the first checks, not from
+  NetSuite's documentation.
 - Each line is filed Upfit or Graphics by the owner's rule of 2026-10-06
   (`src/lib/division-revenue.ts`). Tax, discounts, freight and the
   receivable get no division.
@@ -334,7 +341,8 @@ count for every month from January 2025.
   reading every invoice again. So each time a month is checked, the API asks
   NetSuite for them, for that month's invoices
   (`src/lib/books/invoice-line-facts.ts`, `transactionline.iscogs`,
-  `transactiondiscount` and `foreignamount`). A column NetSuite won't give is
+  `transactiondiscount` and `foreignamount`, plus `quantity` and `rate`,
+  only to show). A column NetSuite won't give is
   left out, and when NetSuite can't be asked at all the check goes without;
   the page says which. Before invoices post, the mirror will have to keep
   them.

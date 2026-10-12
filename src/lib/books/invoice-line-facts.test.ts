@@ -6,9 +6,9 @@ const suiteqlError = (status: number, detail: string) =>
 
 /** A made-up NetSuite: two invoices' lines, answering whichever columns it's asked for. */
 const LINES: Record<string, unknown>[] = [
-  { txn_id: 101, line_id: 1, iscogs: 'F', transactiondiscount: 'F', foreignamount: -100 },
-  { txn_id: 101, line_id: 2, iscogs: 'F', transactiondiscount: 'T', foreignamount: '-4.5' },
-  { txn_id: 102, line_id: 1, iscogs: 'T', transactiondiscount: false, foreignamount: null },
+  { txn_id: 101, line_id: 1, iscogs: 'F', transactiondiscount: 'F', foreignamount: -100, quantity: -2, rate: 50 },
+  { txn_id: 101, line_id: 2, iscogs: 'F', transactiondiscount: 'T', foreignamount: '-4.5', quantity: null, rate: '-4.5' },
+  { txn_id: 102, line_id: 1, iscogs: 'T', transactiondiscount: false, foreignamount: null, quantity: '-1', rate: '30.00' },
 ];
 
 function fakeNetSuite(refuse: (columns: string[]) => Error | null = () => null) {
@@ -43,15 +43,15 @@ describe('factsQuery', () => {
 });
 
 describe('readLineFacts', () => {
-  it('says, line by line, which lines are cost of goods, which is the discount at the top, and each one\'s own amount', async () => {
+  it('says, line by line, which lines are cost of goods, which is the discount at the top, and each one\'s own amount, quantity and rate', async () => {
     const ns = fakeNetSuite();
     const read = await readLineFacts(ns.query, ['101', '102', '101', 'CustInvc/9']);
     expect(ns.asked).toHaveLength(1);
     expect(read).toEqual({
       lines: new Map([
-        ['101:1', { cogs: false, topDiscount: false, amount: '-100' }],
-        ['101:2', { cogs: false, topDiscount: true, amount: '-4.5' }],
-        ['102:1', { cogs: true, topDiscount: false, amount: null }],
+        ['101:1', { cogs: false, topDiscount: false, amount: '-100', quantity: '-2', rate: '50' }],
+        ['101:2', { cogs: false, topDiscount: true, amount: '-4.5', quantity: null, rate: '-4.5' }],
+        ['102:1', { cogs: true, topDiscount: false, amount: null, quantity: '-1', rate: '30.00' }],
       ]),
       missing: [],
     });
@@ -72,7 +72,7 @@ describe('readLineFacts', () => {
       : null));
     const read = await readLineFacts(ns.query, ['101']);
     expect(read.missing).toEqual(['topDiscount']);
-    expect(read.lines.get('101:2')).toEqual({ cogs: false, amount: '-4.5' });
+    expect(read.lines.get('101:2')).toEqual({ cogs: false, amount: '-4.5', quantity: null, rate: '-4.5' });
     expect(ns.asked).toHaveLength(2);
   });
 
@@ -80,8 +80,8 @@ describe('readLineFacts', () => {
     const ns = fakeNetSuite((columns) => (columns.length > 1 || columns.includes('iscogs') ? suiteqlError(500, 'UNEXPECTED_ERROR') : null));
     const read = await readLineFacts(ns.query, ['101', '102']);
     expect(read.missing).toEqual(['cogs']);
-    expect(read.lines.get('101:2')).toEqual({ topDiscount: true, amount: '-4.5' });
-    expect(ns.asked).toHaveLength(4);
+    expect(read.lines.get('101:2')).toEqual({ topDiscount: true, amount: '-4.5', quantity: null, rate: '-4.5' });
+    expect(ns.asked).toHaveLength(6);
   });
 
   it('fails on anything else', async () => {
