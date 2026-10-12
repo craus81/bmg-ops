@@ -136,6 +136,20 @@ describe('withOwnAmounts', () => {
     }
   });
 
+  it('takes a discount or payment bigger than the line it applies to, which leaves that line\'s net amount a credit', () => {
+    // $205 off $200 of labor: NetSuite's net amount on the labor is a $5 credit.
+    const discounted = [line('1', '13', -500), line('2', '14', 0, { itemNumber: 'DISCOUNT' })];
+    expect(cents(spread(discounted, [own('-200.00'), own('205.00')]))).toEqual(['own', [['1', 20000], ['2', -20500]]]);
+
+    // A $400 prepayment under $20 of freight, on an invoice with a part too. A payment item can carry an account
+    // of its own, unlike stock it isn't a line of $0 to leave alone.
+    const items = new Map([...CTX.items, ['16', item('PREPAYMENT', 'Payment', null, '110')]]);
+    const paid = [line('1', '11', 30000), line('2', '15', -38000, { itemNumber: 'FREIGHT' }), line('3', '16', 0, { itemNumber: 'PREPAYMENT' })];
+    const r = withOwnAmounts(paid, [own('-300.00'), own('-20.00'), own('400.00')], items);
+    expect(cents(r)).toEqual(['own', [['1', 30000], ['2', 2000], ['3', -40000]]]);
+    expect(r.lines[0]).toBe(paid[0]);
+  });
+
   it('leaves alone tax, a subtotal, which repeats the shares, cost of goods, and a stock item\'s line of $0', () => {
     const net = [...NET, line('5', '-2', 15450), line('6', '11', 0), line('7', '11', 0)];
     const facts = [...FACTS, own('-150.00'), own('-30.00', { cogs: true }), own('25.00')];
@@ -156,7 +170,7 @@ describe('withOwnAmounts', () => {
     }
   });
 
-  it('keeps every net amount when the own amounts don\'t add up, or one reads the other way round, as nothing, or not at all', () => {
+  it('keeps every net amount when the own amounts don\'t add up, or one can\'t be read', () => {
     for (const facts of [
       [FACTS[0], FACTS[1], own(null), FACTS[3]],
       [FACTS[0], FACTS[1], own('-3.00', { topDiscount: true }), FACTS[3]],
