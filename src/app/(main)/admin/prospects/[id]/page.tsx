@@ -192,6 +192,9 @@ interface TxnOrigin {
   kind: 'estimate' | 'wrapQuote' | 'graphicsJob';
   id: string;
   number: string;
+  /** The estimate's title, shown under the number so a rep can spot the
+   *  job without opening each one. */
+  title?: string | null;
   /** Deep link to that exact record. */
   url: string;
   /** Server-rendered FleetSuite PDF, when the record has one (a graphics
@@ -308,6 +311,9 @@ function Kpi({ label, value, sub }: { label: string; value: string; sub?: string
 export default function CustomerRecordPage() {
   const router = useRouter();
   const params = useParams();
+  // This page's own route id (prospects uuid or ns-<id>) — estimates opened
+  // from here carry it so their back button returns to this customer.
+  const recordRouteId = String(params?.id || '');
   const { user, profile, isAdmin, hasFeature, canSeeMoney, loading: authLoading } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
@@ -1843,8 +1849,8 @@ export default function CustomerRecordPage() {
     const m = new Map<string, TxnOrigin>();
     for (const e of estimatesList || []) {
       const origin: TxnOrigin = {
-        kind: 'estimate', id: e.id, number: e.estimate_number,
-        url: deepLinks.estimate(e.id), pdfUrl: deepLinks.estimatePdf(e.id),
+        kind: 'estimate', id: e.id, number: e.estimate_number, title: e.title,
+        url: deepLinks.estimate(e.id, { fromCustomer: recordRouteId }), pdfUrl: deepLinks.estimatePdf(e.id),
       };
       if (e.netsuite_estimate_id) m.set(`estimate-${e.netsuite_estimate_id}`, origin);
       if (e.netsuite_so_id) m.set(`salesOrder-${e.netsuite_so_id}`, origin);
@@ -1864,7 +1870,7 @@ export default function CustomerRecordPage() {
       });
     }
     return m;
-  }, [estimatesList, wrapQuotes, graphicsJobs]);
+  }, [estimatesList, wrapQuotes, graphicsJobs, recordRouteId]);
 
   const txns = useMemo<Txn[]>(() => {
     const rows: Txn[] = [];
@@ -1894,8 +1900,8 @@ export default function CustomerRecordPage() {
         statusNorm: 'other', daysPastDue: 0, total: e.grand_total || 0,
         nsId: null, nsPdfType: null,
         origin: {
-          kind: 'estimate', id: e.id, number: e.estimate_number,
-          url: deepLinks.estimate(e.id), pdfUrl: deepLinks.estimatePdf(e.id),
+          kind: 'estimate', id: e.id, number: e.estimate_number, title: e.title,
+          url: deepLinks.estimate(e.id, { fromCustomer: recordRouteId }), pdfUrl: deepLinks.estimatePdf(e.id),
         },
         qbo: null,
       });
@@ -1944,7 +1950,7 @@ export default function CustomerRecordPage() {
       });
     }
     return rows;
-  }, [docs, payments, estimatesList, wrapQuotes, originByNsDoc, qbRows]);
+  }, [docs, payments, estimatesList, wrapQuotes, originByNsDoc, qbRows, recordRouteId]);
 
   // Transactions: filter chips + search narrow the loaded set; headers sort it.
   const filteredTxns = useMemo(() => {
@@ -1964,7 +1970,8 @@ export default function CustomerRecordPage() {
       list = list.filter(t =>
         t.number.toLowerCase().includes(q)
         || t.status.toLowerCase().includes(q)
-        || (t.origin?.number || '').toLowerCase().includes(q));
+        || (t.origin?.number || '').toLowerCase().includes(q)
+        || (t.origin?.title || '').toLowerCase().includes(q));
     }
     return list;
   }, [txns, docFilter, docStatus, docSearch]);
@@ -2138,7 +2145,7 @@ export default function CustomerRecordPage() {
             </button>
           )}
           {(customer || (prospect && !prospect.netsuite_id)) && !isVendor && (
-            <button onClick={() => router.push(customer ? deepLinks.newEstimate(customer.id) : deepLinks.newEstimate(null, prospect!.id))}
+            <button onClick={() => router.push(customer ? deepLinks.newEstimate(customer.id, null, { fromCustomer: recordRouteId }) : deepLinks.newEstimate(null, prospect!.id, { fromCustomer: recordRouteId }))}
               title="Start a new estimate with this customer pre-selected"
               style={{ ...btnSm, background: 'var(--accent)', border: 'none', color: '#fff' }}>
               + New Estimate
@@ -2960,6 +2967,11 @@ export default function CustomerRecordPage() {
                           {t.qbo ? (
                             <button onClick={() => setQbOpenId(t.qbo!.id)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 'inherit', fontWeight: 700, color: 'var(--text-primary)' }}>{t.number}</button>
                           ) : t.number}
+                          {t.origin?.title && (
+                            <div title={t.origin.title} style={{ fontSize: '10.5px', fontWeight: 500, color: 'var(--text-label)', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {t.origin.title}
+                            </div>
+                          )}
                         </td>
                         <td style={{ ...docTd, whiteSpace: 'nowrap' }}>
                           {/* Built in FleetSuite? The link opens THAT record —

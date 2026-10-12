@@ -951,12 +951,22 @@ export default function EstimatesPage() {
   // Opened from the Quotes page (&from=quotes): the builder's back buttons
   // return to that row there rather than to the Estimates list.
   const [returnToQuotesFor, setReturnToQuotesFor] = useState<string | null>(null);
+  // Opened from a customer's page (&fromCustomer=<route id>, on an existing
+  // estimate or a new one): the builder's back buttons return to that
+  // customer instead of the Estimates list. Only a prospects uuid or
+  // `ns-<id>` is accepted, so the param can't steer the button anywhere else.
+  const [returnToCustomer, setReturnToCustomer] = useState<string | null>(null);
+  const customerReturnParam = () => {
+    const v = searchParams.get('fromCustomer');
+    return v && /^(ns-\d+|[0-9a-f-]{36})$/i.test(v) ? v : null;
+  };
   useEffect(() => {
     if (loading) return;
     const estId = searchParams.get('id');
     if (estId && handledEstimateId.current !== estId) {
       handledEstimateId.current = estId;
       setReturnToQuotesFor(searchParams.get('from') === 'quotes' ? estId : null);
+      setReturnToCustomer(customerReturnParam());
       const focus = (est: any) => {
         openEstimate(est);
         // A mention on the Internal Notes field (&note=field) scroll-flashes
@@ -992,6 +1002,7 @@ export default function EstimatesPage() {
     if (loading || handledNewParam.current) return;
     if (searchParams.get('new') !== '1' || searchParams.get('id')) return;
     handledNewParam.current = true;
+    setReturnToCustomer(customerReturnParam());
     const applyPick = async () => {
       // Resolve who the link names BEFORE touching the builder, so the
       // restore prompt below can name them.
@@ -3782,10 +3793,17 @@ export default function EstimatesPage() {
   // NetSuite's number once it exists, FleetSuite's beside it.
   const editingNumber = editingId ? estimateHeadlineNumber(editingEst) : '';
   const backToQuotes = !!editingId && returnToQuotesFor === editingId;
+  const backToCustomer = !backToQuotes && !!returnToCustomer;
   const leaveBuilder = () => {
     if (backToQuotes) {
       setReturnToQuotesFor(null);
       router.push(deepLinks.quoteFollowUps('estimate', editingId!));
+      return;
+    }
+    if (backToCustomer) {
+      const to = returnToCustomer!;
+      setReturnToCustomer(null);
+      router.push(deepLinks.prospect(to));
       return;
     }
     setView('list');
@@ -3800,7 +3818,7 @@ export default function EstimatesPage() {
           onClick={leaveBuilder}
           style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}
         >
-          {backToQuotes ? '← Back to Quotes' : '← Back to Estimates'}
+          {backToQuotes ? '← Back to Quotes' : backToCustomer ? `← Back to ${customerName || 'Customer'}` : '← Back to Estimates'}
         </button>
         {editingId && editingNumber ? (
           <div style={{ textAlign: 'right', minWidth: 0 }}>

@@ -60,9 +60,11 @@ export const deepLinks = {
   /** Estimates page — opens the estimate in the builder view; flashNotes
    *  scroll-flashes the Internal Notes field (estimate-note mentions).
    *  from: 'quotes' makes the builder's back button return to that row on
-   *  the Quotes page instead of the Estimates list. */
-  estimate: (estimateId: string, opts?: { flashNotes?: boolean; from?: 'quotes' }) =>
-    `/estimates?id=${estimateId}${opts?.flashNotes ? '&note=field' : ''}${opts?.from ? `&from=${opts.from}` : ''}`,
+   *  the Quotes page instead of the Estimates list; fromCustomer (the
+   *  customer record's route id — a prospects.id or `ns-<id>`) sends it
+   *  back to that customer's page. */
+  estimate: (estimateId: string, opts?: { flashNotes?: boolean; from?: 'quotes'; fromCustomer?: string | null }) =>
+    `/estimates?id=${estimateId}${opts?.flashNotes ? '&note=field' : ''}${opts?.from ? `&from=${opts.from}` : ''}${opts?.fromCustomer ? `&fromCustomer=${encodeURIComponent(opts.fromCustomer)}` : ''}`,
   /** An order's team chat (migration 357), keyed by the estimate id — the
    *  same record once the estimate becomes a sales order. Its own page so
    *  every internal role can open it, Estimates access or not; `message`
@@ -75,9 +77,11 @@ export const deepLinks = {
    *  pre-selecting a customer (local customers.id) or a CRM lead
    *  (prospects.id, for records not yet promoted to NetSuite). The straight
    *  path from entering a new client to quoting them. `fromQuickBooks` (a
-   *  ledger_invoices id) opens the review grid on that old record's lines. */
-  newEstimate: (customerId?: string | null, prospectId?: string | null, opts?: { fromQuickBooks?: string | null }) =>
-    `/estimates?new=1${customerId ? `&customer=${customerId}` : ''}${!customerId && prospectId ? `&prospect=${prospectId}` : ''}${opts?.fromQuickBooks ? `&qbo=${opts.fromQuickBooks}` : ''}`,
+   *  ledger_invoices id) opens the review grid on that old record's lines.
+   *  `fromCustomer` works as on `estimate`: the builder's back button
+   *  returns to that customer's page. */
+  newEstimate: (customerId?: string | null, prospectId?: string | null, opts?: { fromQuickBooks?: string | null; fromCustomer?: string | null }) =>
+    `/estimates?new=1${customerId ? `&customer=${customerId}` : ''}${!customerId && prospectId ? `&prospect=${prospectId}` : ''}${opts?.fromQuickBooks ? `&qbo=${opts.fromQuickBooks}` : ''}${opts?.fromCustomer ? `&fromCustomer=${encodeURIComponent(opts.fromCustomer)}` : ''}`,
   /** Signed E-SIGN snapshot viewer — the frozen approval document with its
    *  integrity verdict (type: estimate | wrap_quote | proof). */
   signedDocument: (type: 'estimate' | 'wrap_quote' | 'proof', id: string) =>

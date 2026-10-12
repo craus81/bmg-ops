@@ -151,3 +151,19 @@ describe('deepLinks.systemHealthUsage', () => {
       .toBe('/admin/system-health?tab=usage&form=vehicle_checkin&days=30');
   });
 });
+
+describe('deepLinks.estimate / newEstimate fromCustomer', () => {
+  it('carries the customer record the builder returns to', () => {
+    const url = deepLinks.estimate('est-1', { fromCustomer: 'ns-1234' });
+    expect(new URLSearchParams(url.split('?')[1]).get('fromCustomer')).toBe('ns-1234');
+    const fresh = deepLinks.newEstimate('cust-1', null, { fromCustomer: 'ns-1234' });
+    const p = new URLSearchParams(fresh.split('?')[1]);
+    expect(p.get('customer')).toBe('cust-1');
+    expect(p.get('fromCustomer')).toBe('ns-1234');
+  });
+
+  it('leaves the plain links unchanged', () => {
+    expect(deepLinks.estimate('est-1')).toBe('/estimates?id=est-1');
+    expect(deepLinks.newEstimate('cust-1')).toBe('/estimates?new=1&customer=cust-1');
+  });
+});

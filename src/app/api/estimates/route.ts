@@ -3,6 +3,7 @@ import { soContentHash } from '@/lib/so-sync';
 import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { logAudit } from '@/lib/audit';
+import { isAdminRole } from '@/lib/features';
 import { validateBody, z } from '@/lib/validate';
 import { computeTotals, lineDiscountColumns, normalizeDiscount, normalizeVehicleCount } from '@/lib/estimate-totals';
 import { resolveLineTaxability } from '@/lib/line-taxability';
@@ -527,6 +528,16 @@ export async function DELETE(req: NextRequest) {
   if (parsed.error) return parsed.error;
   const { id, overrideReason } = parsed.data;
 
+  // Deleting an estimate is admin-only (owner decision 2026-10-12). The
+  // builder and list only show Delete to admins; without this check a sales
+  // login could still delete any draft or sent estimate straight through
+  // the API.
+  const roles: string[] = auth.profile?.roles?.length > 0 ? auth.profile.roles : [auth.profile?.role];
+  const isAdminActor = isAdminRole(roles);
+  if (!isAdminActor) {
+    return NextResponse.json({ error: 'Only an admin can delete an estimate.' }, { status: 403 });
+  }
+
   try {
     const supabase = getSupabase();
 
@@ -544,16 +555,12 @@ export async function DELETE(req: NextRequest) {
     // hash so the evidence stays recoverable after the row is gone.
     const locked = !!(estimate && (estimate.customer_approved || estimate.status === 'accepted' || estimate.netsuite_so_id));
     if (locked) {
-      const roles: string[] = auth.profile?.roles?.length > 0 ? auth.profile.roles : [auth.profile?.role];
-      const isAdminActor = roles.includes('admin') || roles.includes('super_admin');
       const reason = overrideReason?.trim() || '';
-      if (!isAdminActor || !reason) {
+      if (!reason) {
         return NextResponse.json({
-          error: isAdminActor
-            ? 'This estimate was accepted (or already has a Sales Order) — deleting it destroys the signed record. Provide an override reason to delete anyway.'
-            : 'This estimate was accepted (or already has a Sales Order) and cannot be deleted. Ask an admin to override with a recorded reason.',
+          error: 'This estimate was accepted (or already has a Sales Order) — deleting it destroys the signed record. Provide an override reason to delete anyway.',
           step: 'accepted_locked',
-          canOverride: isAdminActor,
+          canOverride: true,
         }, { status: 409 });
       }
       await logAudit(supabase, {
