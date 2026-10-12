@@ -59,6 +59,14 @@ describe('invoiceEntry (invoice@1)', () => {
     ]);
   });
 
+  it('skips NetSuite\'s own lines, like its subtotal, which are in no item list and post nothing', () => {
+    expect(posted([line('1', '11', 10000), line('2', '-2', 10000), line('3', '0', 10000), line('4', '13', 500)])).toEqual([
+      [MAIN_LINE, '120', 10500],
+      ['1', '400', -10000],
+      ['4', '400', -500],
+    ]);
+  });
+
   it('files each line Upfit or Graphics by the owner\'s rule, and nothing else', () => {
     const r = invoiceEntry([
       line('1', '11', 100), line('2', '12', 100), line('3', '16', 100, { itemNumber: 'FREIGHT' }), line('4', '14', -50), tax('5', '900', 10),

@@ -1,4 +1,4 @@
-import { invoiceEntry, MAIN_LINE, type InvoiceLine, type RuleAccounts, type RuleItem, type RuleLine, type RuleProblem } from './invoice-rule';
+import { invoiceEntry, isLayoutLine, MAIN_LINE, type InvoiceLine, type RuleAccounts, type RuleItem, type RuleLine, type RuleProblem } from './invoice-rule';
 
 /**
  * Each NetSuite invoice checked against NetSuite (docs/books.md "Invoices"):
@@ -17,6 +17,28 @@ export interface NetSuitePosting {
 export interface CheckContext extends RuleAccounts {
   /** NetSuite account id → its type in the chart of accounts (gl_accounts.account_type). */
   accountTypes: Map<string, string>;
+}
+
+/**
+ * What NetSuite says about an invoice line that the copy of the invoice
+ * doesn't keep, asked when the invoice is checked
+ * (src/lib/books/invoice-line-facts.ts). What NetSuite wouldn't say is left
+ * out.
+ */
+export interface LineFacts {
+  /** NetSuite booked cost of goods on the line (transactionline.iscogs). */
+  cogs?: boolean;
+  /** The line is the discount or markup set at the top of the invoice, a card fee say (transactionline.transactiondiscount). */
+  topDiscount?: boolean;
+  /** The line's own amount, signed like netamount, a sale negative (transactionline.foreignamount). */
+  amount?: string | null;
+}
+
+export interface LineFactsRead {
+  /** `${NetSuite transaction id}:${line id}` → what NetSuite says about the line. */
+  lines: Map<string, LineFacts>;
+  /** What NetSuite wouldn't say. */
+  missing: Array<keyof LineFacts>;
 }
 
 export type CheckStatus = 'matches' | 'differs' | 'unworkable' | 'waiting';
@@ -42,12 +64,12 @@ export interface CheckedInvoice {
 }
 
 /**
- * The lines NetSuite booked cost of goods on. An invoice that wasn't
- * fulfilled first relieves the stock itself, on lines of its own: one to a
- * cost of goods sold account, one to the item's inventory asset account.
- * FleetSuite posts that cost with the fulfillment rule, so the invoice rule
- * leaves those lines out. A line that posts to its item's own income
- * account is a sale, whatever that account is.
+ * The lines NetSuite booked cost of goods on, by the accounts they went to.
+ * An invoice that wasn't fulfilled first relieves the stock itself, on lines
+ * of its own: one to a cost of goods sold account, one to the item's
+ * inventory asset account. FleetSuite posts that cost with the fulfillment
+ * rule, so the invoice rule leaves those lines out. A line that posts to its
+ * item's own income account is a sale, whatever that account is.
  */
 export function costLines(lines: InvoiceLine[], netsuite: Map<string, NetSuitePosting>, ctx: CheckContext): Set<string> {
   const out = new Set<string>();
@@ -69,8 +91,13 @@ const byLineId = (a: string, b: string) => {
   return x - y || a.localeCompare(b);
 };
 
+/**
+ * One invoice. Its cost of goods lines are the ones NetSuite itself flags
+ * (`cogs`, when that could be read), and any it posts to the accounts cost
+ * goes to (costLines), which also covers a flag NetSuite doesn't set.
+ */
 export function checkInvoice(
-  invoice: { lines: InvoiceLine[]; linesCopied: boolean; netsuite: NetSuitePosting[] },
+  invoice: { lines: InvoiceLine[]; linesCopied: boolean; netsuite: NetSuitePosting[]; cogs?: Set<string> | null },
   ctx: CheckContext,
 ): CheckedInvoice {
   if (!invoice.linesCopied) return { status: 'waiting', waiting: 'lines', problems: [], rows: [] };
@@ -79,7 +106,7 @@ export function checkInvoice(
   const netsuite = new Map<string, NetSuitePosting>();
   for (const p of invoice.netsuite) if (p.cents !== 0) netsuite.set(p.lineId, p);
 
-  const cost = costLines(invoice.lines, netsuite, ctx);
+  const cost = new Set([...(invoice.cogs ?? []), ...costLines(invoice.lines, netsuite, ctx)]);
   const entry = invoiceEntry(invoice.lines.filter((l) => !cost.has(l.lineId)), ctx);
   const fleetsuite = new Map(entry.lines.map((l) => [l.lineId, l]));
 
@@ -368,12 +395,60 @@ export function centsOf(v: unknown): number | null {
   return cents === 0 ? 0 : cents;
 }
 
-const plural = (n: number, one: string, many: string) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+/**
+ * An invoice with a discount or markup set at the top, a card fee say, as
+ * NetSuite posts it. NetSuite's net amount on each line already carries the
+ * line's share of that discount, yet NetSuite posts each line at its own
+ * amount and the discount on a line of its own. So each sale line takes its
+ * own amount, and the discount's line the shares they carried: the total
+ * doesn't change. Lines that never post (a subtotal repeats the shares it
+ * adds up), tax, and lines of $0 such as cost of goods are left as they are.
+ * So is the whole invoice without exactly one such line, or when a line's
+ * own amount doesn't read the way its net amount does.
+ */
+export function withTopDiscount(lines: InvoiceLine[], facts: Array<LineFacts | undefined>, items: Map<string, RuleItem>): InvoiceLine[] {
+  const tops = lines.filter((_, i) => facts[i]?.topDiscount);
+  if (tops.length !== 1 || tops[0].cents === null) return lines;
+  const [top] = tops;
+  const own = new Map<string, number>();
+  let shares = 0;
+  for (const [i, line] of lines.entries()) {
+    const amount = facts[i]?.amount;
+    if (line === top || line.tax || !line.cents || facts[i]?.cogs || isLayoutLine(line, items) || amount === undefined || amount === null) continue;
+    const signed = centsOf(amount);
+    if (signed === null) return lines;
+    const cents = signed === 0 ? 0 : -signed;
+    // A sale is negative in both, so an own amount of the other sign, or of nothing, isn't one to go by.
+    if (Math.sign(cents) !== Math.sign(line.cents)) return lines;
+    own.set(line.lineId, cents);
+    shares += line.cents - cents;
+  }
+  return lines.map((l) => {
+    if (l === top) return { ...l, cents: (l.cents ?? 0) + shares };
+    const cents = own.get(l.lineId);
+    return cents === undefined ? l : { ...l, cents };
+  });
+}
 
+const plural = (n: number, one: string, many: string) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+const andList = (words: string[]) => (words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`);
+
+/** What a fact NetSuite wouldn't give leaves the check to do instead. */
+const WITHOUT_FACT: Record<keyof LineFacts, { what: string; so: string }> = {
+  cogs: { what: 'which lines are cost of goods', so: 'cost of goods is recognized by the accounts it went to' },
+  topDiscount: { what: 'which line is a discount or markup set at the top', so: "a discount or markup set at the top of an invoice isn't separated from its lines" },
+  amount: { what: "the lines' own amounts", so: "a discount or markup set at the top of an invoice isn't separated from its lines" },
+};
+
+/**
+ * `facts` is what NetSuite said about the month's invoice lines, or why it
+ * couldn't be asked; null when it wasn't.
+ */
 export function checkMonth(
   data: InvoiceMonthData,
-  opts: { company: string; chart: ChartAccount[]; taxAccounts: TaxAccountCount[] | null },
+  opts: { company: string; chart: ChartAccount[]; taxAccounts: TaxAccountCount[] | null; facts?: LineFactsRead | { error: string } | null },
 ): MonthCheck {
+  const facts = opts.facts && 'lines' in opts.facts ? opts.facts : null;
   const items = new Map<string, RuleItem>();
   const taxNames = new Map<string, string>();
   for (const it of data.items) {
@@ -417,7 +492,8 @@ export function checkMonth(
   const used = new Set<string>();
   for (const inv of data.invoices) {
     const number = inv.number || `NetSuite ${inv.netsuite_id}`;
-    const lines: InvoiceLine[] = inv.lines.map((l) => {
+    const lineFacts = inv.lines.map((l) => facts?.lines.get(`${inv.netsuite_id}:${l.line_id}`));
+    const lines = withTopDiscount(inv.lines.map((l) => {
       // NetSuite's netamount is signed, a sale negative; the mirror's amount isn't, so it only says "nothing".
       let cents: number | null;
       if (l.netamount !== null) {
@@ -427,8 +503,11 @@ export function checkMonth(
         cents = centsOf(l.amount) === 0 ? 0 : null;
       }
       return { lineId: l.line_id, itemId: l.item_id, itemNumber: l.item_number, tax: l.kind === 'tax', cents };
-    });
-    const c = checkInvoice({ lines, linesCopied: inv.lines_copied, netsuite: postings(inv) }, ctx);
+    }), lineFacts, items);
+    const cogs = lineFacts.some((f) => f?.cogs !== undefined)
+      ? new Set(inv.lines.filter((_, i) => lineFacts[i]?.cogs).map((l) => l.line_id))
+      : null;
+    const c = checkInvoice({ lines, linesCopied: inv.lines_copied, netsuite: postings(inv), cogs }, ctx);
     if (inv.companies.length === 0) {
       // In neither company's GL copy: only worth a word when FleetSuite would post it.
       if (c.status !== 'matches') notInGl.push(number);
@@ -471,6 +550,13 @@ export function checkMonth(
   const notes: string[] = [];
   if (receivable.note) notes.push(receivable.note);
   if (!opts.taxAccounts) notes.push("Where sales tax posts hasn't been read yet. Sync now on the NetSuite lists page reads it.");
+  if (opts.facts && 'error' in opts.facts) {
+    notes.push(`NetSuite couldn't be asked about these invoices' lines just now (${opts.facts.error}), so cost of goods is recognized by `
+      + "the accounts it went to, and a discount or markup set at the top of an invoice isn't separated from its lines.");
+  } else if (facts?.missing.length) {
+    const sos = [...new Set(facts.missing.map((m) => WITHOUT_FACT[m].so))];
+    notes.push(`NetSuite wouldn't say ${andList(facts.missing.map((m) => WITHOUT_FACT[m].what))} on these invoices, so ${andList(sos)}.`);
+  }
   if (summary.withCost) {
     notes.push(`${plural(summary.withCost, 'invoice also books', 'invoices also book')} the cost of the stock sold, as NetSuite does when an `
       + "invoice isn't fulfilled first. FleetSuite will post that cost with the fulfillment rule, so those lines aren't compared here.");
