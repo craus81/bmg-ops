@@ -165,7 +165,7 @@ function saysText(says: Says): string {
 }
 
 const AMOUNTS: Record<NonNullable<Invoice['amounts']>, string> = {
-  own: "NetSuite spread a discount or markup over this invoice's lines, so FleetSuite takes each line at its own amount, as NetSuite posts it.",
+  own: "NetSuite spread a discount, markup or payment over this invoice's lines, so FleetSuite takes each line at its own amount, as NetSuite posts it.",
   unfit: "NetSuite's own amounts for this invoice's lines don't add up to it, so FleetSuite took each line at its net amount.",
 };
 

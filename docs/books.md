@@ -283,20 +283,23 @@ page says so.
   subtotal say, carry an item id below 1 (the subtotal is item -2): none is
   a real item, so no item list has them, and they're skipped too.
 - A discount line comes out as a debit to the discount item's account.
-- A discount or markup posts on a line of its own in NetSuite, to its
-  item's account, while every other line posts at its own amount. That's
-  so whether it's a line under the lines it applies to or set at the top of
-  the invoice (a card fee say). NetSuite's net amount on each line
+- A discount, markup or payment posts on a line of its own in NetSuite, to
+  its item's account, while every other line posts at its own amount.
+  That's so whether it's a line under the lines it applies to or set at the
+  top of the invoice (a card fee say). NetSuite's net amount on each line
   (`netamount`, what the mirror keeps) already carries the line's share of
   it, though, and the discount's own line reads $0 net. So every line takes
   its own amount (`foreignamount`), as long as the own amounts add up to the
   net ones, so the total stays as it was (`withOwnAmounts` in
-  `invoice-check.ts`). When they don't, a discount set at the top
-  (`transactiondiscount`) with no amount of its own takes the difference;
-  without one, or when an own amount reads the other way round from its net
-  amount, the invoice keeps its net amounts and the page names it. Tax,
-  lines that never post (a subtotal repeats the shares it adds up), the cost
-  of goods NetSuite flags and a stock item's line of $0 keep their amounts.
+  `invoice-check.ts`). A discount or payment bigger than the line it applies
+  to leaves that line's net amount a credit, the other way round from its
+  own amount; that's fine. When the own amounts don't add up, a discount set
+  at the top (`transactiondiscount`) with no amount of its own takes the
+  difference; without one, the invoice keeps its net amounts and the page
+  names it. Tax, lines that never post (a subtotal repeats the shares it
+  adds up), the cost of goods NetSuite flags and a stock item's line of $0
+  (an inventory or assembly item, where NetSuite may book the stock's cost)
+  keep their amounts.
   Opening an invoice shows what NetSuite says about each line: its own
   amount, its net amount, quantity × rate and its flags. That reading of
   NetSuite's columns was worked out from the first checks, not from

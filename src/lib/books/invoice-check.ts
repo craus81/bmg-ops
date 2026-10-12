@@ -428,20 +428,26 @@ const ownCents = (facts: LineFacts | undefined): number | null => {
   return signed === null ? null : signed === 0 ? 0 : -signed;
 };
 
+/** NetSuite's item types for stock it keeps, which a sale relieves. */
+const STOCK_TYPES = new Set(['InvtPart', 'Assembly']);
+
 /**
  * Each line at its own amount, as NetSuite posts it. NetSuite spreads a
- * discount or markup over the lines it applies to, whether it's a line under
- * them or set at the top of the invoice (a card fee say): each line's net
- * amount carries its share, and the discount's own line reads $0 net. Yet
- * NetSuite posts each line at its own amount and the discount on its own
- * line. So each sale and discount line takes its own amount.
+ * discount, markup or payment over the lines it applies to, whether it's a
+ * line under them or set at the top of the invoice (a card fee say): each
+ * line's net amount carries its share, and the discount's own line reads $0
+ * net. Yet NetSuite posts each line at its own amount and the discount on
+ * its own line. So each sale and discount line takes its own amount. A
+ * discount or payment bigger than the line it applies to leaves that line's
+ * net amount a credit, the other way round from its own amount, and that's
+ * fine too.
  *
  * The total can't change. When the own amounts don't add up to the net
  * ones, a discount set at the top with no amount of its own takes the
- * difference; without one, or when an own amount reads the other way round
- * from its net amount, every line keeps its net amount ('unfit'). Tax, lines
- * that never post, the cost of goods NetSuite flags, and a stock item's line
- * of $0, where NetSuite may book the stock's cost, keep theirs too.
+ * difference; without one, every line keeps its net amount ('unfit'). Tax,
+ * lines that never post, the cost of goods NetSuite flags, and a stock
+ * item's line of $0, where NetSuite may book the stock's cost, keep theirs
+ * too.
  */
 export function withOwnAmounts(
   lines: InvoiceLine[],
@@ -459,9 +465,7 @@ export function withOwnAmounts(
     if (f?.amount === undefined || f.amount === null) continue;
     const cents = ownCents(f);
     if (cents === null) return { lines, amounts: 'unfit' };
-    if (line.cents === 0 && cents !== 0 && line.itemId && items.get(line.itemId)?.assetAccount) continue;
-    // A sale is negative in both, so an own amount of the other sign, or of nothing, isn't one to go by.
-    if (line.cents !== 0 && Math.sign(cents) !== Math.sign(line.cents)) return { lines, amounts: 'unfit' };
+    if (line.cents === 0 && cents !== 0 && STOCK_TYPES.has(items.get(line.itemId ?? '')?.type ?? '')) continue;
     net += line.cents;
     own += cents;
     if (cents !== line.cents) out[i] = { ...line, cents };
