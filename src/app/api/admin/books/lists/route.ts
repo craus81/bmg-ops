@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireSuperAdmin } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { fetchAllRows } from '@/lib/fetch-all';
-import { escapeIlike } from '@/lib/customer-dupes';
+import { looseOrFilter } from '@/lib/loose-search';
 import { BOOKS_LISTS_SYNC, syncBooksLists } from '@/lib/books/netsuite-lists';
 
 export const dynamic = 'force-dynamic';
@@ -59,8 +59,10 @@ export async function GET(req: NextRequest) {
     } else {
       const q = (params.get('q') || '').trim().slice(0, 100);
       if (!q) return NextResponse.json({ rows: [], total: 0 });
-      const byName = `%${escapeIlike(q)}%`;
-      lookup = /^\d+$/.test(q) ? lookup.or(`name.ilike.${byName},netsuite_id.eq.${q}`) : lookup.ilike('name', byName);
+      // Forgiving name match (src/lib/loose-search.ts), or the exact NetSuite id.
+      const byName = looseOrFilter(['name'], q, /^\d+$/.test(q) ? [`netsuite_id.eq.${q}`] : []);
+      if (!byName) return NextResponse.json({ rows: [], total: 0 });
+      lookup = lookup.or(byName);
     }
     const { data, count, error } = await lookup
       .order('name', { ascending: true })

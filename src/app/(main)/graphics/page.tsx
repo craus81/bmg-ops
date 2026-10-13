@@ -56,6 +56,7 @@ import {
   GRAPHICS_SHIP_SPEED_OPTIONS, DEFAULT_GRAPHICS_SHIP_SPEED,
 } from '@/lib/types';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { looseMatcher, looseSearchRegex } from '@/lib/loose-search';
 
 type FilterStatus = GraphicsJobStatus | 'all' | 'active' | 'awaiting';
 type FilterCategory = GraphicsJobCategory | 'all';
@@ -278,12 +279,13 @@ export default function GraphicsPage() {
     setCustomerSearch(query);
     setCreateForm(f => ({ ...f, customer: query }));
     if (customerTimeout.current) clearTimeout(customerTimeout.current);
-    if (query.length < 2) { setCustomerResults([]); return; }
+    const re = looseSearchRegex(query);
+    if (query.length < 2 || !re) { setCustomerResults([]); return; }
     customerTimeout.current = setTimeout(async () => {
       const { data } = await supabase
         .from('customers')
         .select('company_name')
-        .ilike('company_name', `%${query}%`)
+        .filter('company_name', 'imatch', re)
         .eq('active', true)
         .order('company_name')
         .limit(8);
@@ -1179,6 +1181,7 @@ export default function GraphicsPage() {
     : 'in the work order';
 
   // Filter jobs
+  const matchSearch = looseMatcher(search);
   const filteredJobs = jobs.filter(j => {
     // Flagged jobs only visible to admins
     if (j.status === 'flagged' && !isAdmin) return false;
@@ -1193,17 +1196,7 @@ export default function GraphicsPage() {
     if (metricFilter && !metricPredicates[metricFilter](j)) return false;
     // Status filter (Active / All tabs + the popover's per-status select)
     if (!inStatusScope(j.status, filterStatus)) return false;
-    if (search) {
-      const s = search.toLowerCase();
-      return (
-        j.title?.toLowerCase().includes(s) ||
-        j.part_number?.toLowerCase().includes(s) ||
-        j.customer?.toLowerCase().includes(s) ||
-        j.job_number?.toLowerCase().includes(s) ||
-        j.po_number?.toLowerCase().includes(s) ||
-        j.content?.toLowerCase().includes(s)
-      );
-    }
+    if (search) return matchSearch(j.title, j.part_number, j.customer, j.job_number, j.po_number, j.content);
     return true;
   });
 
@@ -1925,12 +1918,8 @@ export default function GraphicsPage() {
             />
             <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
               {(() => {
-                const q = linkSearch.trim().toLowerCase();
-                const matches = jobs.filter(j => !q
-                  || (j.title || '').toLowerCase().includes(q)
-                  || (j.customer || '').toLowerCase().includes(q)
-                  || (j.po_number || '').toLowerCase().includes(q)
-                  || (j.job_number || '').toLowerCase().includes(q));
+                const match = looseMatcher(linkSearch);
+                const matches = jobs.filter(j => match(j.title, j.customer, j.po_number, j.job_number));
                 if (matches.length === 0) {
                   return <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', padding: '16px' }}>No jobs match — clear the search or use + Create instead.</div>;
                 }

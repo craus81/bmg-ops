@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { looseOrFilter } from '@/lib/loose-search';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,9 +31,9 @@ export async function GET(req: NextRequest) {
     .order('created_at', { ascending: false })
     .limit(20);
 
-  if (q.length >= 2) {
-    query = query.or(`po_number.ilike.%${q}%,customer.ilike.%${q}%`);
-  }
+  // Forgiving match (src/lib/loose-search.ts); a query with no words filters nothing.
+  const qFilter = q.length >= 2 ? looseOrFilter(['po_number', 'customer'], q) : null;
+  if (qFilter) query = query.or(qFilter);
 
   const { data, error } = await query;
 

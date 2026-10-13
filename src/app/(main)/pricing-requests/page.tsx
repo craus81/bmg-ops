@@ -40,6 +40,7 @@ import {
   type CatalogPartRef, type PriceSheetSummary, type PricingRequest, type PricingRequestStage, type PricingRequestType,
 } from '@/lib/pricing-request';
 import { INSTALL_PREFIX, PART_PREFIX } from '@/lib/po-install-parts';
+import { looseMatcher } from '@/lib/loose-search';
 
 type Row = PricingRequest & { stage: PricingRequestStage; sheet: PriceSheetSummary | null; po_number: string | null };
 interface Detail {
@@ -415,13 +416,11 @@ export default function PricingRequestsPage() {
   }, [requests]);
 
   const shown = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const match = looseMatcher(search);
     return requests.filter(r => {
       if (stageFilter === 'active' && (r.stage === 'declined' || r.stage === 'closed')) return false;
       if (stageFilter !== 'active' && stageFilter !== 'all' && r.stage !== stageFilter) return false;
-      if (!q) return true;
-      return [r.request_number, r.company_name, r.customer_name, r.contact_name || '', r.vehicle || '', r.part_number || '', r.install_part_number || '', r.po_number || '', r.sheet?.estimate_number || '']
-        .some(v => v.toLowerCase().includes(q));
+      return match(r.request_number, r.company_name, r.customer_name, r.contact_name, r.vehicle, r.part_number, r.install_part_number, r.po_number, r.sheet?.estimate_number);
     });
   }, [requests, search, stageFilter]);
 

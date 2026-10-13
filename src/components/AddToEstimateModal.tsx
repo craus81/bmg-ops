@@ -9,6 +9,7 @@ import type { BrowsePart } from '@/components/PartCatalogBrowser';
 import { kitEstimateLines, type KitWithMembers } from '@/lib/part-kits';
 import { estimateHeadlineNumber, estimateNumberMatches } from '@/lib/estimate-number';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { looseMatcher } from '@/lib/loose-search';
 
 /**
  * "Add to estimate" chooser for the standalone catalog (the /parts Visual
@@ -86,11 +87,9 @@ export default function AddToEstimateModal({ part, kit, onClose }: {
   const filtered = useMemo(() => {
     const s = search.trim().toLowerCase();
     const list = estimates || [];
+    const match = looseMatcher(s);
     const matched = s
-      ? list.filter(e =>
-          estimateNumberMatches(e, s) ||
-          e.title?.toLowerCase().includes(s) ||
-          e.customer_name?.toLowerCase().includes(s))
+      ? list.filter(e => estimateNumberMatches(e, s) || match(e.title, e.customer_name))
       : list;
     return matched.slice(0, 40);
   }, [estimates, search]);

@@ -20,6 +20,7 @@ import { flashNote } from '@/lib/focus-note';
 import { expiryLabel, type ExpiryState } from '@/lib/quote-expiry';
 import { viewLabel, type ViewSummary } from '@/lib/quote-views';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { looseMatcher } from '@/lib/loose-search';
 
 interface FollowUpNote {
   id: string;
@@ -262,15 +263,11 @@ export default function QuotesPage() {
   };
 
   // Base = type / mine / search filters; the status chips count within it.
-  const q = search.trim().toLowerCase();
+  const matchSearch = looseMatcher(search);
   const base = items
     .filter(i => typeFilter === 'all' || i.type === typeFilter)
     .filter(i => !mineOnly || i.repId === user?.id)
-    .filter(i => !q
-      || i.number.toLowerCase().includes(q)
-      || (i.altNumber || '').toLowerCase().includes(q)
-      || i.customer.toLowerCase().includes(q)
-      || i.title.toLowerCase().includes(q));
+    .filter(i => matchSearch(i.number, i.altNumber, i.customer, i.title));
   const groupCounts = base.reduce((m, i) => { m[groupOf(i)] = (m[groupOf(i)] || 0) + 1; return m; }, {} as Record<Group, number>);
 
   const visible = base

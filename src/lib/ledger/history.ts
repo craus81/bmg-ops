@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { looseOrFilter, looseSearchRegex, searchWords } from '@/lib/loose-search';
 
 /**
  * QuickBooks history, as FleetSuite's own lists show it.
@@ -252,11 +253,12 @@ async function storedPdfs(service: SupabaseClient, ids: string[]): Promise<Map<s
 /**
  * Documents whose LINES carry every search word, with the line that matched.
  * Two passes (description, then item name) because one line can hold all the
- * words in either column; each pass ANDs the words within its column. The
+ * words in either column; each pass ANDs the words within its column, each
+ * word matched loosely (src/lib/loose-search.ts: "st" finds "Saint"). The
  * inner join scopes lines to the history set up front, so NetSuite's mirrored
  * lines and post-cutover rows can't use up the match cap.
  */
-async function lineMatches(service: SupabaseClient, terms: string[], customerId: string | null): Promise<Map<string, string>> {
+async function lineMatches(service: SupabaseClient, words: string[], customerId: string | null): Promise<Map<string, string>> {
   const matched = new Map<string, string>();
   for (const col of ['description', 'item_name'] as const) {
     let q = service.from('ledger_invoice_lines')
@@ -266,7 +268,7 @@ async function lineMatches(service: SupabaseClient, terms: string[], customerId:
       .eq('doc.voided', false)
       .is('doc.deleted_at', null);
     if (customerId) q = q.eq('doc.customer_id', customerId);
-    for (const t of terms) q = q.ilike(col, `%${t}%`);
+    for (const w of words) q = q.filter(col, 'imatch', looseSearchRegex(w)!);
     const { data, error } = await q.limit(LINE_MATCH_CAP);
     if (error) throw new Error(`Line search failed: ${error.message}`);
     for (const r of (data || []) as unknown as Array<Record<string, string | null>>) {
@@ -298,6 +300,9 @@ export async function listHistory(service: SupabaseClient, query: HistoryQuery):
   const offset = Math.max(0, Math.floor(query.offset || 0));
   const types = (query.types || []).filter(isHistoryDocType);
   const terms = historySearchTerms(query.q);
+  // The header phrase, matched loosely: "St Charles" finds "St. Charles" and
+  // "Saint Charles", "ofallon" finds "O'Fallon". Null when it has no words.
+  const orHeader = looseOrFilter(['doc_number', 'party_name', 'po_number', 'memo', 'private_note'], query.q);
 
   const scoped = (cols: string) => {
     let b = historyBase(service, cols);
@@ -319,13 +324,13 @@ export async function listHistory(service: SupabaseClient, query: HistoryQuery):
     headers = (data || []) as unknown as HeaderRow[];
     hasMore = headers.length > limit;
     headers = headers.slice(0, limit);
+  } else if (!orHeader) {
+    // Typed something, but nothing word-like ("..."): nothing can match.
+    headers = [];
+    hasMore = false;
   } else {
-    const phrase = terms.join(' ');
-    matched = await lineMatches(service, terms, query.customerId || null);
-    const orHeader = ['doc_number', 'party_name', 'po_number', 'memo', 'private_note']
-      // Quoted, so a space or a dot in the phrase stays part of the value.
-      .map(c => `${c}.ilike."*${phrase}*"`)
-      .join(',');
+    // Each line word on its own (same cap as historySearchTerms).
+    matched = await lineMatches(service, searchWords(query.q).slice(0, 6), query.customerId || null);
     // Header matches and line matches, merged and ordered here: an .or()
     // spanning a second table isn't something PostgREST can express.
     const window = offset + limit + 1;

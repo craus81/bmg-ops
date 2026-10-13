@@ -17,6 +17,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import type { PortalData, PortalPo } from '@/lib/po-portal';
 import type { PortalAction } from '@/lib/portal-actions';
+import { looseMatcher } from '@/lib/loose-search';
 
 type PageStatus = 'loading' | 'ready' | 'invalid' | 'error';
 
@@ -648,10 +649,11 @@ export default function PoPortalPage() {
   const filtered = useMemo(() => {
     if (!data) return [];
     if (!q) return data.pos;
+    const match = looseMatcher(q);
     return data.pos.filter(p =>
-      p.poNumber.toLowerCase().includes(q)
-      || p.lines.some(l => l.partNumber.toLowerCase().includes(q) || (l.description || '').toLowerCase().includes(q) || l.vehicles.some(v => v.vin.toLowerCase().includes(q)))
-      || p.jobs.some(j => (j.trackingNumber || '').toLowerCase().includes(q)),
+      match(p.poNumber)
+      || p.lines.some(l => match(l.partNumber, l.description, l.vehicles.map(v => v.vin)))
+      || p.jobs.some(j => match(j.trackingNumber)),
     );
   }, [data, q]);
   const active = filtered.filter(p => p.status === 'open');

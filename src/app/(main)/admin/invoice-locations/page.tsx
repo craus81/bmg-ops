@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
+import { looseMatcher } from '@/lib/loose-search';
 
 const ENDPOINT = '/api/netsuite/backfill-invoice-locations';
 // NetSuite invoice PATCHes are slow (several seconds each) and the function has
@@ -192,10 +193,10 @@ export default function InvoiceLocationsPage() {
   }
 
   const visible = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const match = looseMatcher(search);
     const rows = invoices.filter((inv) => {
       if (filter !== 'all' && statusOf(inv) !== filter) return false;
-      if (q && !(`${inv.invoiceNumber || ''} ${inv.customer || ''} ${inv.memo || ''}`.toLowerCase().includes(q))) return false;
+      if (!match(inv.invoiceNumber, inv.customer, inv.memo)) return false;
       return true;
     });
     // Cluster invoices from the same PO together so the shared location is obvious.

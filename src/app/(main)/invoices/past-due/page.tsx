@@ -25,6 +25,7 @@ import { closeOnEscape } from '@/lib/modal-escape';
 import EmailComposeModal, { parseEmailList, type EmailComposeFields } from '@/components/EmailComposeModal';
 import { normalizeSteps } from '@/lib/ar-reminders';
 import { theme } from '@/lib/theme';
+import { looseMatcher } from '@/lib/loose-search';
 
 interface PastDueInvoice {
   id: string;
@@ -146,8 +147,8 @@ export default function PastDuePage() {
   }, [rows, linked]);
 
   const visible = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return (rows || []).filter(r => r.oldestDays >= minDays && (!q || r.customer.toLowerCase().includes(q) || r.invoices.some(i => i.tranid.toLowerCase().includes(q) || (i.po || '').toLowerCase().includes(q))));
+    const match = looseMatcher(search);
+    return (rows || []).filter(r => r.oldestDays >= minDays && (match(r.customer) || r.invoices.some(i => match(i.tranid, i.po))));
   }, [rows, search, minDays]);
 
   const totals = useMemo(() => ({

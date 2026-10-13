@@ -10,6 +10,7 @@ import { isVerizonRfidPart, validateSerial, validateImei, validateIccid, VERIZON
 import { parsePastedText, parseSpreadsheetFile, looksLikeVin, type ImportRow as Row, type ParseOutcome } from '@/lib/import-installs-parse';
 import { loadCompaniesWithCounts, type CompanyOption } from '@/lib/cni-companies';
 import CustomerPicker from '@/components/CustomerPicker';
+import { looseMatcher } from '@/lib/loose-search';
 
 const CHUNK = 100;
 
@@ -38,7 +39,8 @@ function CompanyNameField({ value, onChange, companies, inputStyle }: {
   }, []);
 
   const q = value.trim().toLowerCase();
-  const matches = (q ? companies.filter((c) => c.name.toLowerCase().includes(q)) : companies).slice(0, 8);
+  const match = looseMatcher(q);
+  const matches = (q ? companies.filter((c) => match(c.name)) : companies).slice(0, 8);
   const exact = q ? companies.find((c) => c.name.toLowerCase() === q) : undefined;
 
   return (

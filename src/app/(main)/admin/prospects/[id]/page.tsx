@@ -56,6 +56,7 @@ import QuickBooksRecordModal from '@/components/QuickBooksRecordModal';
 import type { HistoryRow } from '@/lib/ledger/history';
 import { uploadRecordFile } from '@/lib/record-file-upload';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { looseMatcher, looseSearchRegex } from '@/lib/loose-search';
 
 interface Prospect {
   id: string;
@@ -858,10 +859,11 @@ export default function CustomerRecordPage() {
   const searchParents = async (term: string) => {
     setParentSearch(term);
     setParentChoice(null);
-    if (term.trim().length < 2) { setParentResults([]); return; }
+    const re = looseSearchRegex(term);
+    if (term.trim().length < 2 || !re) { setParentResults([]); return; }
     const { data } = await supabase.from('customers')
       .select('id, company_name, netsuite_id')
-      .ilike('company_name', `%${term.trim()}%`)
+      .filter('company_name', 'imatch', re)
       .neq('id', customer?.id || '')
       .order('company_name').limit(12);
     setParentResults((data || []) as any[]);
@@ -1965,13 +1967,9 @@ export default function CustomerRecordPage() {
     // row badge still distinguishes them.
     if (docStatus === 'open') list = list.filter(t => t.statusNorm === 'open' || t.statusNorm === 'pastdue');
     else if (docStatus !== 'all') list = list.filter(t => t.statusNorm === docStatus);
-    const q = docSearch.trim().toLowerCase();
-    if (q) {
-      list = list.filter(t =>
-        t.number.toLowerCase().includes(q)
-        || t.status.toLowerCase().includes(q)
-        || (t.origin?.number || '').toLowerCase().includes(q)
-        || (t.origin?.title || '').toLowerCase().includes(q));
+    if (docSearch.trim()) {
+      const match = looseMatcher(docSearch);
+      list = list.filter(t => match(t.number, t.status, t.origin?.number, t.origin?.title));
     }
     return list;
   }, [txns, docFilter, docStatus, docSearch]);

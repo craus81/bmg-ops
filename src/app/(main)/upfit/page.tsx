@@ -15,6 +15,7 @@ import { flashNote } from '@/lib/focus-note';
 import { fetchAllRows } from '@/lib/fetch-all';
 import RecordChanges from '@/components/RecordChanges';
 import CreatedBy from '@/components/CreatedBy';
+import { looseMatcher } from '@/lib/loose-search';
 
 interface UpfitNote {
   id: string;
@@ -818,14 +819,12 @@ export default function UpfitProjectsPage() {
 
   // Filter logic
   const activeStatuses = ['opportunity', 'estimate', 'sold', 'parts_ordered', 'parts_arrived', 'parts_in_stock', 'scheduled_dropoff', 'scheduled_build', 'in_progress', 'scheduled_pickup'];
+  const matchSearch = looseMatcher(search);
   const filtered = projects.filter(p => {
     if (filter === 'active' && !activeStatuses.includes(p.status)) return false;
     if (filter === 'completed' && p.status !== 'completed') return false;
     if (filter === 'cancelled' && p.status !== 'cancelled') return false;
-    if (search) {
-      const q = search.toLowerCase();
-      if (!p.project_name.toLowerCase().includes(q) && !(p.customer_name || '').toLowerCase().includes(q)) return false;
-    }
+    if (search && !matchSearch(p.project_name, p.customer_name)) return false;
     return true;
   });
 

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin, requireRole } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { logAudit } from '@/lib/audit';
-import { escapeIlike } from '@/lib/customer-dupes';
+import { looseSearchRegex } from '@/lib/loose-search';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -52,10 +52,13 @@ export async function GET(req: NextRequest) {
   // `?q=` is a customers SEARCH, for the reviewer hunting the right row by
   // hand — a different question from "what is in the queue".
   if (q) {
+    // Forgiving match (src/lib/loose-search.ts): "St Charles" finds "Saint Charles".
+    const re = looseSearchRegex(q);
+    if (!re) return NextResponse.json({ customers: [] });
     const { data } = await service
       .from('customers')
       .select('id, company_name, entity_id, netsuite_id, email, phone')
-      .ilike('company_name', `%${escapeIlike(q)}%`)
+      .filter('company_name', 'imatch', re)
       .eq('active', true)
       .order('company_name')
       .limit(20);

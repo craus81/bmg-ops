@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateSearchParams, z } from '@/lib/validate';
 import { wheelbaseAccepts } from '@/lib/vehicle-fitment';
+import { looseOrFilter } from '@/lib/loose-search';
 
 export const dynamic = 'force-dynamic';
 
@@ -73,10 +74,9 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    if (q) {
-      const s = q.replace(/[%_,()]/g, ' ').trim();
-      if (s) query = query.or(`item_number.ilike.%${s}%,display_name.ilike.%${s}%,description.ilike.%${s}%`);
-    }
+    // Forgiving match (src/lib/loose-search.ts); a query with no words filters nothing.
+    const qFilter = looseOrFilter(['item_number', 'display_name', 'description'], q);
+    if (qFilter) query = query.or(qFilter);
     if (categoryId) query = query.eq('product_category_id', categoryId);
     else if (uncategorized) query = query.is('product_category_id', null);
     if (vendor) query = query.eq('vendor', vendor);

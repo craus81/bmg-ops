@@ -20,6 +20,7 @@ import OrderPartModal from '@/components/OrderPartModal';
 import { loadBillableCustomers, type BillableCustomer } from '@/lib/billable-customers';
 import { isPartTaxable, partTaxReason } from '@/lib/line-taxability';
 import { marginPct, priceForMargin } from '@/lib/pricing-request';
+import { looseMatcher } from '@/lib/loose-search';
 
 interface Part {
   id: string;
@@ -841,14 +842,10 @@ export default function PartsPage() {
     return { completed, remaining };
   }, [parts, completedByPart, poRemainingByPart]);
 
+  const matchSearch = looseMatcher(search);
   const filtered = parts.filter(p => {
     if (!search) return true;
-    const s = search.toLowerCase();
-    return (
-      p.item_number.toLowerCase().includes(s) ||
-      p.display_name?.toLowerCase().includes(s) ||
-      p.description?.toLowerCase().includes(s)
-    );
+    return matchSearch(p.item_number, p.display_name, p.description);
   }).sort((a, b) => {
     const av = a[sortCol] ?? 0;
     const bv = b[sortCol] ?? 0;

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useDialog } from '@/components/DialogProvider';
 import PhoneInput from '@/components/PhoneInput';
 import { theme } from '@/lib/theme';
+import { looseMatcher } from '@/lib/loose-search';
 
 export interface VendorCompanyOption { id: string; name: string; netsuite_vendor_id?: string | null }
 
@@ -168,7 +169,8 @@ export default function VendorInstallerPicker({
   const rowBtn: React.CSSProperties = { display: 'block', width: '100%', padding: '7px 9px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' };
 
   const q = query.trim().toLowerCase();
-  const matches = (q ? companies.filter(c => c.name.toLowerCase().includes(q)) : companies).slice(0, 8);
+  const match = looseMatcher(q);
+  const matches = (q ? companies.filter(c => match(c.name)) : companies).slice(0, 8);
   const linkedNsIds = new Set(companies.map(c => c.netsuite_vendor_id).filter(Boolean));
   const nsMatches = nsVendors.filter(v => !linkedNsIds.has(v.id)).slice(0, 6);
 

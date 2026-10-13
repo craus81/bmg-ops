@@ -25,6 +25,7 @@ import { useFormTelemetry } from '@/lib/use-form-telemetry';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { deepLinks } from '@/lib/deep-links';
 import CreatedBy from '@/components/CreatedBy';
+import { looseMatcher } from '@/lib/loose-search';
 
 interface PoRow {
   id: string;
@@ -253,11 +254,8 @@ export default function ReceivingPage() {
     setBusyReceipt(null);
   };
 
-  const q = search.trim().toLowerCase();
-  const visible = pos.filter(p => !q
-    || (p.tranid || '').toLowerCase().includes(q)
-    || (p.vendor_name || '').toLowerCase().includes(q)
-    || (linesByPo.get(p.id) || []).some(l => l.item_number.toLowerCase().includes(q)));
+  const match = looseMatcher(search);
+  const visible = pos.filter(p => match(p.tranid, p.vendor_name, (linesByPo.get(p.id) || []).map(l => l.item_number)));
 
   const localFor = (poId: string, item: string) => {
     let posted = 0, manual = 0;

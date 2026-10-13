@@ -8,6 +8,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import { cleanImei, formatImei, type CameraInstall } from '@/lib/camera-install';
 import { theme } from '@/lib/theme';
+import { looseOrFilter } from '@/lib/loose-search';
 
 /**
  * Camera install capture (migration 343): customer → scan VIN → scan camera
@@ -113,11 +114,12 @@ export default function CameraInstallCapture({ startCustomer, initial, onSaved, 
     const q = draft.customer_name.trim();
     if (draft.customer_id || q.length < 2) { setCustMatches([]); return; }
     const t = setTimeout(async () => {
-      const escaped = q.replace(/[%,()]/g, ' ');
+      const filter = looseOrFilter(['company_name', 'entity_id'], q);
+      if (!filter) { setCustMatches([]); return; }
       const { data } = await supabase
         .from('customers')
         .select('id, company_name, entity_id')
-        .or(`company_name.ilike.%${escaped}%,entity_id.ilike.%${escaped}%`)
+        .or(filter)
         .order('company_name')
         .limit(8);
       setCustMatches((data || []) as typeof custMatches);

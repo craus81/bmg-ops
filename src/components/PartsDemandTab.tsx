@@ -20,6 +20,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import BuyListModal from '@/components/BuyListModal';
 import { buildBuyList } from '@/lib/buy-list';
+import { looseMatcher } from '@/lib/loose-search';
 
 interface DemandSourceRef {
   kind: 'sales_order' | 'estimate';
@@ -267,15 +268,13 @@ export default function PartsDemandTab({ onQueued, onBatchQueued }: {
 
   const dismissedCount = rows.filter(r => r.dismissed).length;
 
+  const matchSearch = looseMatcher(search);
   const filtered = rows.filter(r => {
     if (r.dismissed && !showDismissed) return false;
     if (hideCovered && r.on_order + r.requested >= r.needed) return false;
     if (!search.trim()) return true;
-    const q = search.trim().toLowerCase();
-    return r.item_number.toLowerCase().includes(q)
-      || (r.description || '').toLowerCase().includes(q)
-      || (r.vendor || '').toLowerCase().includes(q)
-      || r.sources.some(s => s.label.toLowerCase().includes(q) || (s.customerName || '').toLowerCase().includes(q));
+    return matchSearch(r.item_number, r.description, r.vendor)
+      || r.sources.some(s => matchSearch(s.label, s.customerName));
   });
 
   const downloadCsv = () => {
