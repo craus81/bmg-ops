@@ -57,6 +57,7 @@ import type { HistoryRow } from '@/lib/ledger/history';
 import { uploadRecordFile } from '@/lib/record-file-upload';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { looseMatcher, looseSearchRegex } from '@/lib/loose-search';
+import { CustomerHoldBanner, OnHoldBadge } from '@/components/CustomerHold';
 
 interface Prospect {
   id: string;
@@ -2043,6 +2044,7 @@ export default function CustomerRecordPage() {
         })()}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
           <div style={{ fontSize: '24px', fontWeight: 800, letterSpacing: '-0.5px', color: 'var(--text-primary)' }}>{name}</div>
+          <OnHoldBadge netsuiteId={customer?.netsuite_id || prospect?.netsuite_id} customerId={customer?.id} />
           {prospect ? (
             isVendor ? (
               <span title="Supplier/partner contact — FleetSuite only, never created in NetSuite as a customer" style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>Vendor</span>
@@ -2105,6 +2107,15 @@ export default function CustomerRecordPage() {
             </span>
           ) : null}
         </div>
+        {/* Past-due hold (migration 366): admins and A/R hold/release here. */}
+        {(customer?.netsuite_id || prospect?.netsuite_id) && !isVendor && (
+          <CustomerHoldBanner
+            netsuiteId={customer?.netsuite_id || prospect?.netsuite_id}
+            customerId={customer?.id}
+            customerName={name}
+            controls
+          />
+        )}
         {(prospect?.contact_name || customer?.entity_id) && (
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
             {prospect?.contact_name}{prospect?.contact_name && customer?.entity_id ? ' · ' : ''}{customer?.entity_id ? `NetSuite ${customer.entity_id}` : ''}

@@ -15,6 +15,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { closeOnEscape } from '@/lib/modal-escape';
 import QuickBooksRecordModal from '@/components/QuickBooksRecordModal';
 import { DEEP_MIN_QUERY } from '@/lib/deep-search';
+import { OnHoldBadge } from '@/components/CustomerHold';
 
 interface UniversalSearchProps {
   open: boolean;
@@ -198,6 +199,7 @@ export function renderResult(group: string, item: any, onSelect: (group: string,
       return (
         <button key={item.id} onClick={select} style={resultBtnStyle}>
           <span style={titleStyle}>{item.company_name}</span>
+          {item.netsuite_id && <>{' '}<OnHoldBadge netsuiteId={String(item.netsuite_id)} /></>}
           <div style={subtitleStyle}>
             {[item.contact_name, item.email, item.phone].filter(Boolean).join(' · ')}
           </div>

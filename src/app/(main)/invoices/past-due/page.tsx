@@ -26,6 +26,7 @@ import EmailComposeModal, { parseEmailList, type EmailComposeFields } from '@/co
 import { normalizeSteps } from '@/lib/ar-reminders';
 import { theme } from '@/lib/theme';
 import { looseMatcher } from '@/lib/loose-search';
+import { CustomerHoldBanner, OnHoldBadge } from '@/components/CustomerHold';
 
 interface PastDueInvoice {
   id: string;
@@ -338,10 +339,13 @@ export default function PastDuePage() {
                   title={sendable(r) ? 'Include in the next send' : 'Not linked to a NetSuite customer'} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
-                    <button onClick={() => setExpanded(s => toggle(s, r.key))}
-                      style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left', color: theme.textPrimary, fontSize: '15px', fontWeight: 800 }}>
-                      {open ? '▾' : '▸'} {r.customer}
-                    </button>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <button onClick={() => setExpanded(s => toggle(s, r.key))}
+                        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left', color: theme.textPrimary, fontSize: '15px', fontWeight: 800 }}>
+                        {open ? '▾' : '▸'} {r.customer}
+                      </button>
+                      <OnHoldBadge netsuiteId={r.entityId} />
+                    </span>
                     <div style={{ fontSize: '14px', fontWeight: 800, color: stepColor(r.oldestDays) }}>{usd(r.pastDue)} past due</div>
                   </div>
                   <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '2px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
@@ -372,6 +376,9 @@ export default function PastDuePage() {
                     <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '3px' }}>No billing email saved; this is the main company email.</div>
                   )}
 
+                  {open && r.entityId && (
+                    <CustomerHoldBanner netsuiteId={r.entityId} customerName={r.customer} controls />
+                  )}
                   {open && (
                     <div style={{ marginTop: '10px', overflowX: 'auto' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '520px' }}>

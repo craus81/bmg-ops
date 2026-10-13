@@ -18,6 +18,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
+import { holdAwareFetch } from '@/lib/hold-aware-fetch';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 import { resolvePoCustomer } from '@/lib/customer-match';
 import { formatShipTo, shipToCityLabel } from '@/lib/graphics-job-from-po';
@@ -788,11 +789,13 @@ export default function PoRecordPage() {
     if (!po || creatingSO) return;
     setCreatingSO(true);
     try {
-      const res = await fetch('/api/netsuite/create-sales-order', {
+      // Customer on hold (migration 366): admin / A/R give a reason, others are told who can.
+      const res = await holdAwareFetch(dialog, '/api/netsuite/create-sales-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ poId: po.id }),
       });
+      if (!res) { setCreatingSO(false); return; }
       const data = await res.json();
 
       if (!res.ok || data.error) {

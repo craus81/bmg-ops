@@ -81,6 +81,8 @@ import {
 } from '@/lib/roll-nesting';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { looseOrFilter } from '@/lib/loose-search';
+import { holdAwareFetch } from '@/lib/hold-aware-fetch';
+import { CustomerHoldBanner, OnHoldBadge } from '@/components/CustomerHold';
 
 // Manual wrap-quote estimator (WrapUP-style): pick a 1:20 vehicle outline
 // template, draw measurement shapes over it, price by substrate + labor,
@@ -557,7 +559,7 @@ export default function WrapQuotePage() {
   const [customer, setCustomer] = useState<any>({ name: '', address: '', city: '', state: '', zip: '', phone: '', email: '', email_cc: '' });
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [custSearch, setCustSearch] = useState('');
-  const [custMatches, setCustMatches] = useState<{ id: string; company_name: string; entity_id: string | null; email: string | null; phone: string | null; address: string | null }[]>([]);
+  const [custMatches, setCustMatches] = useState<{ id: string; company_name: string; entity_id: string | null; netsuite_id: string | null; email: string | null; phone: string | null; address: string | null }[]>([]);
   const [projectType, setProjectType] = useState('');
   const [projectNotes, setProjectNotes] = useState('');
   const [savedQuoteId, setSavedQuoteId] = useState<string | null>(null);
@@ -816,7 +818,7 @@ export default function WrapQuotePage() {
       if (!filter) { setCustMatches([]); return; }
       const { data } = await supabase
         .from('customers')
-        .select('id, company_name, entity_id, email, phone, address')
+        .select('id, company_name, entity_id, netsuite_id, email, phone, address')
         .or(filter)
         .order('company_name')
         .limit(8);
@@ -2064,7 +2066,8 @@ export default function WrapQuotePage() {
     const coverageOnly = !sendInclude.pricing && !sendInclude.netsuitePdf;
     setSending(true);
     try {
-      const res = await apiFetch('/api/wrap-quote/send', {
+      // Customer on hold (migration 366): admin / A/R give a reason, others are told who can.
+      const res = await holdAwareFetch(dialog, '/api/wrap-quote/send', {
         method: 'POST',
         body: JSON.stringify({
           quoteId: emailQuoteId,
@@ -2074,7 +2077,8 @@ export default function WrapQuotePage() {
           bccSelf: fields.bccSelf, cc: fields.cc,
           attachmentPaths: fields.attachmentIds,
         }),
-      });
+      }, apiFetch);
+      if (!res) return { ok: false };
       const data = await res.json();
       const sentTo = fields.emails.join(', ');
       if (!res.ok || !data.success) {
@@ -4178,6 +4182,7 @@ export default function WrapQuotePage() {
                     }} style={{ display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '12px', color: 'var(--text-primary)' }}>
                       <span style={{ fontWeight: 700 }}>{c.company_name}</span>
                       {c.entity_id && <span style={{ color: 'var(--text-muted)', marginLeft: '6px', fontSize: '10px' }}>{c.entity_id}</span>}
+                      {' '}<OnHoldBadge netsuiteId={c.netsuite_id} customerId={c.id} />
                     </button>
                   ))}
                 </div>
@@ -4192,6 +4197,7 @@ export default function WrapQuotePage() {
                 <input value={customer[k] || ''} onChange={e => { const v = k === 'phone' ? formatPhoneInput(e.target.value) : e.target.value; setCustomer({ ...customer, [k]: v }); if (k === 'name') setCustomerId(null); }} style={inputStyle} />
               </div>
             ))}
+            {customerId && <CustomerHoldBanner customerId={customerId} customerName={customer.name} />}
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '10px' }}>
               {customerId ? (
                 <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>

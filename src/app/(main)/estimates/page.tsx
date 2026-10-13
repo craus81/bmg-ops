@@ -52,6 +52,8 @@ import { closeOnEscape } from '@/lib/modal-escape';
 import CreatedBy from '@/components/CreatedBy';
 import OrderTeamChat from '@/components/OrderTeamChat';
 import { looseMatcher, looseOrFilter, looseSearchRegex } from '@/lib/loose-search';
+import { holdAwareFetch } from '@/lib/hold-aware-fetch';
+import { CustomerHoldBanner, OnHoldBadge } from '@/components/CustomerHold';
 
 interface Part {
   id: string;
@@ -2728,9 +2730,12 @@ export default function EstimatesPage() {
     // Below-floor sends 409 once with the numbers; a typed reason retries
     // the same send (recorded on the estimate + audit log, owner notified).
     let floorReason: string | undefined;
+    // Customer on hold (migration 366): the reason is asked once and rides
+    // on the below-floor retry too.
+    const holdCtx: { reason?: string } = {};
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
-        const res = await fetch(`/api/estimates/${editingId}/send-for-approval`, {
+        const res = await holdAwareFetch(dialog, `/api/estimates/${editingId}/send-for-approval`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -2741,7 +2746,8 @@ export default function EstimatesPage() {
             attachmentFileIds: fields.attachmentIds,
             ...(floorReason ? { floorReason } : {}),
           }),
-        });
+        }, fetch, holdCtx);
+        if (!res) return { ok: false };
         data = await res.json();
         if (res.ok) break;
         if (res.status === 409 && data.belowFloor && attempt === 0) {
@@ -2970,22 +2976,29 @@ export default function EstimatesPage() {
 
     setConvertingToSO(true);
     try {
-      let res = await fetch('/api/estimates/convert-to-so', {
+      // Customer on hold (migration 366): an admin / A/R reason, asked once,
+      // rides on the retry below too.
+      const holdCtx: { reason?: string } = {};
+      const firstRes = await holdAwareFetch(dialog, '/api/estimates/convert-to-so', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ estimateId: editingId, ...(overrideReason ? { overrideReason } : {}) }),
-      });
+      }, fetch, holdCtx);
+      if (!firstRes) { setConvertingToSO(false); return; }
+      let res: Response = firstRes;
       let data = await res.json();
       // Graphics gate: the server refuses when graphics lines have no linked
       // graphics job. "Convert anyway" is a conscious choice, not a default.
       if (res.status === 409 && data.step === 'graphics_job_missing' && data.canSkip) {
         const anyway = await dialog.confirm(`${data.error}`, { confirmLabel: 'Convert anyway', destructive: true });
         if (!anyway) { setConvertingToSO(false); return; }
-        res = await fetch('/api/estimates/convert-to-so', {
+        const retry = await holdAwareFetch(dialog, '/api/estimates/convert-to-so', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ estimateId: editingId, skipGraphicsCheck: true, ...(overrideReason ? { overrideReason } : {}) }),
-        });
+        }, fetch, holdCtx);
+        if (!retry) { setConvertingToSO(false); return; }
+        res = retry;
         data = await res.json();
       }
       if (res.ok && data.status === 'created') {
@@ -3962,7 +3975,12 @@ export default function EstimatesPage() {
               </button>
             )}
           </div>
-        ) : (
+        ) : null}
+        {customerName && customerNsId && (
+          // Past-due hold (migration 366): sending and SO creation will ask for an override.
+          <CustomerHoldBanner netsuiteId={customerNsId} customerId={customerId} customerName={customerName} />
+        )}
+        {customerName ? null : (
           <div>
             <input
               placeholder="Search customers..."
@@ -3997,7 +4015,7 @@ export default function EstimatesPage() {
                       cursor: 'pointer', borderBottom: '1px solid var(--border)',
                     }}
                   >
-                    <div style={{ fontWeight: 700 }}>{c.company_name}</div>
+                    <div style={{ fontWeight: 700 }}>{c.company_name}{!c.isLead && c.netsuite_id && <>{' '}<OnHoldBadge netsuiteId={c.netsuite_id} /></>}</div>
                     <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>
                       {c.isLead ? 'Prospect — not in NetSuite yet' : `${c.entity_id} · NS #${c.netsuite_id}`}
                     </div>

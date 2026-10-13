@@ -346,6 +346,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/installer/ready-for-install/route.ts': authScoped('field installer flow; vehicle status transition validated in-route'),
   'src/app/api/invoices/backfill-emails/route.ts': admin(),
   'src/app/api/invoices/past-due/route.ts': money(),
+  'src/app/api/customer-holds/route.ts': staff(),
   'src/app/api/jobs/assign/route.ts': staff(),
   'src/app/api/work-lists/route.ts': authScoped('"My List" read for the caller\'s own assigned jobs (external installers hold vehicle assignments too, so not a staff wall); another person\'s list, the people roster and every save require admin', 'isAdminRole('),
   'src/app/api/knowledge/reprocess/route.ts': admin(),
