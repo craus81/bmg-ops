@@ -116,7 +116,7 @@ export default function EstimateApprovalDocument({ estimate: est, lines, graphic
             {/* The line's own discount (migration 350), a row under it. */}
             {Number(l.discount_amount) > 0 && (
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '0 0 6px 18px', fontSize: '12px', color: '#15803d' }}>
-                <span>{discountLabel(l.discount_type, l.discount_value)}</span>
+                <span>{discountLabel(l.discount_type, l.discount_value, l.discount_description)}</span>
                 <span style={{ fontWeight: 600 }}>−${Number(l.discount_amount).toFixed(2)}</span>
               </div>
             )}
@@ -126,7 +126,7 @@ export default function EstimateApprovalDocument({ estimate: est, lines, graphic
         <div style={{ borderTop: '2px solid #cbd5e1', marginTop: '10px', paddingTop: '10px', fontSize: '13px', color: '#0f172a' }}>
           <Row label="Subtotal" value={`$${subtotal.toFixed(2)}`} />
           {est.labor_total > 0 && <Row label={`Labor (${est.labor_hours_override ?? est.labor_hours} hrs @ $${est.labor_rate}/hr)`} value={`$${Number(est.labor_total).toFixed(2)}`} />}
-          {Number(est.discount_amount) > 0 && <Row label={discountLabel(est.discount_type, est.discount_value)} value={`−$${Number(est.discount_amount).toFixed(2)}`} />}
+          {Number(est.discount_amount) > 0 && <Row label={discountLabel(est.discount_type, est.discount_value, est.discount_description)} value={`−$${Number(est.discount_amount).toFixed(2)}`} />}
           {!est.tax_exempt && est.tax_amount > 0 && <Row label={`Tax (${(est.tax_rate * 100).toFixed(2)}%)`} value={`$${Number(est.tax_amount).toFixed(2)}`} />}
           <Row label="Total" value={`$${Number(est.grand_total).toFixed(2)}`} bold />
         </div>

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireFeature } from '@/lib/api-auth';
+import { requireFeature, getProfileRoles } from '@/lib/api-auth';
+import { checkDiscountApproval } from '@/lib/discount-approval';
 import { validateBody, z } from '@/lib/validate';
 import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
 import { sendEmailDetailed, buildNotificationEmail } from '@/lib/resend';
@@ -104,6 +105,26 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   // Preview: the exact email that would go out — nothing generated or sent.
   if (body.preview) {
     return NextResponse.json({ preview: true, to: emailList.join(', ') || null, subject, html });
+  }
+
+  // Discounts over the admin-approval limit (migration 365): the PDF is the
+  // quote too, so it waits for the admin like the approval send does.
+  {
+    const { data: full } = await supabase
+      .from('estimates')
+      .select('id, estimate_number, labor_total, vehicle_count, discount_type, discount_value, discount_approved_at, discount_approved_pct')
+      .eq('id', estimate.id)
+      .single();
+    const { data: discountLines } = await supabase
+      .from('estimate_line_items')
+      .select('quantity, unit_price, discount_type, discount_value')
+      .eq('estimate_id', estimate.id);
+    const discountBlock = full
+      ? await checkDiscountApproval(supabase, full, discountLines || [], { id: auth.user.id, roles: getProfileRoles(auth.profile) }, 'sent')
+      : null;
+    if (discountBlock) {
+      return NextResponse.json({ error: discountBlock.error, step: 'discount_approval', discountApproval: discountBlock.status }, { status: 409 });
+    }
   }
 
   if (emailList.length === 0) {

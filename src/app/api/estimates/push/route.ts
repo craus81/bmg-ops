@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { PRICING_REQUEST_PUSH_BLOCKED } from '@/lib/pricing-request';
 import { createClient } from '@supabase/supabase-js';
-import { requireFeature } from '@/lib/api-auth';
+import { requireFeature, getProfileRoles } from '@/lib/api-auth';
+import { checkDiscountApproval } from '@/lib/discount-approval';
 import { validateBody, z } from '@/lib/validate';
 import { estimateContextMemo } from '@/lib/estimate-document';
 import { resolveLaborItem } from '@/lib/labor-item';
@@ -400,6 +401,14 @@ export async function POST(req: NextRequest) {
     // NetSuite discount item (src/lib/discount-item). No discount item means
     // NetSuite would quote the full price, so the push stops and says so
     // instead of sending a copy that disagrees.
+    // Discounts over the admin-approval limit (migration 365) wait for an
+    // admin; an admin pushing is their approval.
+    const discountBlock = await checkDiscountApproval(supabase, estimate, lines, { id: auth.user.id, roles: getProfileRoles(auth.profile) }, 'pushed');
+    if (discountBlock) {
+      await releaseClaim();
+      return NextResponse.json({ error: discountBlock.error, step: 'discount_approval', discountApproval: discountBlock.status }, { status: 409 });
+    }
+
     const discountNeeded = estimateNeedsDiscountItem(estimate, lines);
     let discountItem: DiscountItem | null = null;
     if (discountNeeded > 0) {

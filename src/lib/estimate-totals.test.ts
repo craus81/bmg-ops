@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeTotals, discountLabel, discountSplit, lineDiscountColumns, lineMoney, netUnitPrice, normalizeDiscount, roundCentsHalfEven, normalizeVehicleCount } from './estimate-totals';
+import { computeTotals, discountLabel, discountSplit, jobDiscountShare, lineDiscountColumns, lineMoney, netUnitPrice, normalizeDiscount, normalizeDiscountDescription, roundCentsHalfEven, normalizeVehicleCount } from './estimate-totals';
 
 // Characterization tests: these lock in the production behavior of the
 // estimate money math. If one of these fails, pricing changed — make sure
@@ -433,8 +433,53 @@ describe('line discount (migration 350)', () => {
 
   it('stores the columns and nets the unit price for margins', () => {
     const l = { quantity: 4, unit_price: 50, discount_type: 'percent', discount_value: '25' };
-    expect(lineDiscountColumns(l)).toEqual({ discount_type: 'percent', discount_value: 25, discount_amount: 50 });
-    expect(lineDiscountColumns({ quantity: 1, unit_price: 5 })).toEqual({ discount_type: null, discount_value: null, discount_amount: 0 });
+    expect(lineDiscountColumns(l)).toEqual({ discount_type: 'percent', discount_value: 25, discount_amount: 50, discount_description: null });
+    expect(lineDiscountColumns({ quantity: 1, unit_price: 5 })).toEqual({ discount_type: null, discount_value: null, discount_amount: 0, discount_description: null });
     expect(netUnitPrice(l)).toBe(37.5);
+  });
+});
+
+describe('discount descriptions (migration 365)', () => {
+  it('replaces "Discount" in the label with the rep\'s words', () => {
+    expect(discountLabel('percent', 10, 'Fleet loyalty')).toBe('Fleet loyalty (10%)');
+    expect(discountLabel('amount', 250, '  Repeat   customer ')).toBe('Repeat customer');
+    expect(discountLabel('percent', 10, '   ')).toBe('Discount (10%)');
+    expect(discountLabel('percent', 10, null)).toBe('Discount (10%)');
+  });
+
+  it('trims, collapses spaces and caps the length', () => {
+    expect(normalizeDiscountDescription(' a  b ')).toBe('a b');
+    expect(normalizeDiscountDescription('')).toBeNull();
+    expect(normalizeDiscountDescription(42)).toBeNull();
+    expect(normalizeDiscountDescription('x'.repeat(200))!.length).toBe(80);
+  });
+
+  it('stores a line\'s words only when the line has a discount', () => {
+    expect(lineDiscountColumns({ quantity: 1, unit_price: 100, discount_type: 'percent', discount_value: 10, discount_description: 'Promo' }).discount_description).toBe('Promo');
+    expect(lineDiscountColumns({ quantity: 1, unit_price: 100, discount_description: 'Promo' }).discount_description).toBeNull();
+  });
+});
+
+describe('jobDiscountShare (admin approval limit, migration 365)', () => {
+  it('adds line discounts and the whole-job discount against the job before discounts', () => {
+    // Parts 1000 gross, 100 off one line; labor 200; 10% whole-job on 1100 = 110.
+    const r = jobDiscountShare(
+      [
+        { quantity: 1, unit_price: 500, discount_type: 'percent', discount_value: 20 },
+        { quantity: 1, unit_price: 500 },
+      ],
+      200, 1, { type: 'percent', value: 10 },
+    );
+    expect(r).toEqual({ base: 1200, amount: 210, pct: 17.5 });
+  });
+
+  it('counts every vehicle on a fleet estimate', () => {
+    const r = jobDiscountShare([{ quantity: 1, unit_price: 100, discount_type: 'percent', discount_value: 5 }], 0, 3, null);
+    expect(r).toEqual({ base: 300, amount: 15, pct: 5 });
+  });
+
+  it('is zero with no discounts or an empty job', () => {
+    expect(jobDiscountShare([{ quantity: 1, unit_price: 100 }], 0, 1, null)).toEqual({ base: 100, amount: 0, pct: 0 });
+    expect(jobDiscountShare([], 0, 1, { type: 'amount', value: 50 })).toEqual({ base: 0, amount: 0, pct: 0 });
   });
 });

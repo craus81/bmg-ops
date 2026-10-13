@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireFeature } from '@/lib/api-auth';
+import { requireFeature, getProfileRoles } from '@/lib/api-auth';
+import { checkDiscountApproval } from '@/lib/discount-approval';
 import { generateToken, approvalContentHash } from '@/lib/magic-link-approval';
 import { reconcileLinkedWrapQuotes } from '@/lib/wrap-quote-reconcile';
 import { sendEmailDetailed } from '@/lib/resend';
@@ -254,6 +255,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       attachmentNames,
     });
     return NextResponse.json({ preview: true, to: emailList.join(', ') || null, subject, html, attachments: [pdfFilename] });
+  }
+
+  // Discounts over the admin-approval limit (migration 365) stop here until
+  // an admin approves them; an admin sending is their approval.
+  const discountBlock = await checkDiscountApproval(supabase, estimate, rawLineItems || [], { id: auth.user.id, roles: getProfileRoles(auth.profile) }, 'sent');
+  if (discountBlock) {
+    return NextResponse.json({ error: discountBlock.error, step: 'discount_approval', discountApproval: discountBlock.status }, { status: 409 });
   }
 
   // ── Quoted-margin freeze + floor gate (R5-3, migration 275) ──

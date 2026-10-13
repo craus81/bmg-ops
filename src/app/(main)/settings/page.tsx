@@ -179,6 +179,9 @@ export default function SettingsPage() {
   const [discountBusy, setDiscountBusy] = useState(false);
   const [discountSaved, setDiscountSaved] = useState(false);
   const [discountError, setDiscountError] = useState('');
+  // Discounts above this percent of the job need an admin (migration 365).
+  const [approvalPctInput, setApprovalPctInput] = useState('');
+  const [approvalPctSaved, setApprovalPctSaved] = useState(false);
 
   // Push notification state
   const [pushSupported, setPushSupported] = useState(false);
@@ -508,6 +511,7 @@ export default function SettingsPage() {
       if (!res.ok) { setDiscountError(data?.error || 'Could not read the discount item.'); return; }
       setDiscountItem(data);
       setDiscountItemInput(data.configured_item_number || '');
+      if (data.approval_pct != null) setApprovalPctInput(String(data.approval_pct));
     } catch (e: any) {
       setDiscountError(e?.message || 'Could not read the discount item.');
     } finally {
@@ -537,6 +541,29 @@ export default function SettingsPage() {
     // Re-read so the panel shows what the push will actually use, not what
     // was typed.
     await loadDiscountItem();
+  };
+
+  const handleSaveApprovalPct = async () => {
+    const pct = parseFloat(approvalPctInput);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) { setDiscountError('The approval limit must be a percent from 0 to 100.'); return; }
+    setDiscountBusy(true);
+    setDiscountError('');
+    try {
+      const res = await apiFetch('/api/admin/discount-item', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approval_pct: pct }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setDiscountError(data?.error || 'Could not save the approval limit.'); return; }
+      setApprovalPctInput(String(data.approval_pct));
+      setApprovalPctSaved(true);
+      setTimeout(() => setApprovalPctSaved(false), 2500);
+    } catch (e: any) {
+      setDiscountError(e?.message || 'Could not save the approval limit.');
+    } finally {
+      setDiscountBusy(false);
+    }
   };
 
   const handleSaveSignature = async () => {
@@ -1073,6 +1100,38 @@ export default function SettingsPage() {
                 Other discount items in NetSuite: {discountItem!.candidates.slice(1, 6).map(c => c.itemNumber).join(', ')}
               </div>
             )}
+
+            <div style={{ ...labelStyle, marginTop: '14px' }}>Admin approval above</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '6px' }}>
+              When an estimate's discounts (line discounts plus the whole-job one) add up to more than this
+              percent of the job, an admin has to approve them before it can be sent to the customer or pushed
+              to NetSuite. Reps get an "Ask an admin" button; an admin sending or pushing approves it.
+            </div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={0.5}
+                value={approvalPctInput}
+                onChange={e => setApprovalPctInput(e.target.value)}
+                placeholder="5"
+                style={{ ...inputStyle, width: '90px' }}
+              />
+              <span style={{ fontSize: '12px', color: 'var(--text-label)' }}>% of the job</span>
+              <button
+                onClick={handleSaveApprovalPct}
+                disabled={discountBusy || approvalPctInput.trim() === ''}
+                style={{
+                  padding: '8px 16px', borderRadius: '8px', border: 'none',
+                  background: approvalPctSaved ? '#22c55e' : '#3b82f6', color: '#fff',
+                  fontSize: '12px', fontWeight: 800,
+                  cursor: discountBusy ? 'default' : 'pointer', opacity: discountBusy ? 0.5 : 1,
+                }}
+              >
+                {approvalPctSaved ? 'Saved!' : 'Save Limit'}
+              </button>
+            </div>
             {discountError && (
               <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{discountError}</div>
             )}

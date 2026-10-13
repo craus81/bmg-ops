@@ -77,7 +77,7 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
   const lines = toKitDisplayLines(data.lines).flatMap((l: any) => (Number(l.discount_amount) > 0
     ? [l, {
       discount_row: true,
-      item_number: discountLabel(l.discount_type, l.discount_value),
+      item_number: discountLabel(l.discount_type, l.discount_value, l.discount_description),
       quantity: 0,
       unit_price: 0,
       discount_amount: l.discount_amount,
@@ -264,7 +264,7 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
     totals.push([`Labor (${laborHours} hrs @ $${est.labor_rate}/hr)`, money(est.labor_total), false]);
   }
   if (Number((est as any).discount_amount) > 0) {
-    totals.push([discountLabel((est as any).discount_type, (est as any).discount_value), `-${money((est as any).discount_amount)}`, false]);
+    totals.push([discountLabel((est as any).discount_type, (est as any).discount_value, (est as any).discount_description), `-${money((est as any).discount_amount)}`, false]);
   }
   if (!est.tax_exempt && Number(est.tax_amount) > 0) {
     totals.push([`Tax (${(Number(est.tax_rate) * 100).toFixed(2)}%)`, money(est.tax_amount), false]);
