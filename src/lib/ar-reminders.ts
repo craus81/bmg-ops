@@ -26,6 +26,8 @@ export interface ArReminderSettings {
   enabled: boolean;
   stepDays: number[];
   recipientIds: string[];
+  /** Any invoice this many days past due puts the customer on hold (migration 366). */
+  holdDays: number;
 }
 
 /** Clean a step list: positive whole days, unique, ascending. Falls back to the defaults when empty. */
@@ -40,6 +42,7 @@ export function resolveArSettings(row: any): ArReminderSettings {
     enabled: row?.enabled !== false,
     stepDays: normalizeSteps(row?.step_days),
     recipientIds: Array.isArray(row?.recipient_ids) ? row.recipient_ids.filter((id: any) => typeof id === 'string') : [],
+    holdDays: Number.isInteger(Number(row?.hold_days)) && Number(row?.hold_days) > 0 ? Number(row.hold_days) : 60,
   };
 }
 

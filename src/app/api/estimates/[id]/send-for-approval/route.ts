@@ -23,6 +23,7 @@ import { netUnitPrice, normalizeVehicleCount } from '@/lib/estimate-totals';
 import { getShopLaborRate } from '@/lib/shop-labor';
 import { logAudit } from '@/lib/audit';
 import { notify, notifyMany, getSuperAdminIds } from '@/lib/notify';
+import { enforceCustomerHold } from '@/lib/customer-hold-server';
 
 // R3-22: proof images inlined in the approval email are presigned at the
 // 7-day SigV4 maximum — the actionable window. Beyond it the attached PDF
@@ -108,6 +109,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   (estimate as any).vehicle_platform_label = (estimate as any).vehicle_platforms?.label || null;
   if (estimate.customer_approved) {
     return NextResponse.json({ error: 'Already approved' }, { status: 409 });
+  }
+
+  // Customer on hold for past-due invoices (migration 366): the real send
+  // needs an admin / A/R override with a reason. Previews still render.
+  if (!body.preview) {
+    const held = await enforceCustomerHold(req, supabase, auth, {
+      netsuiteId: estimate.customer_netsuite_id, customerId: estimate.customer_id,
+      customerName: estimate.customer_name, action: 'estimate_send', recordId: estimate.id,
+    });
+    if (held) return held;
   }
 
   // Resolve delivery targets. Explicit compose recipients win; otherwise

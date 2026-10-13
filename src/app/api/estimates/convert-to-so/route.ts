@@ -14,6 +14,7 @@ import { ensureUpfitProjectForSo } from '@/lib/upfit-projects';
 import { estimateContextMemo } from '@/lib/estimate-document';
 import { resolveOrPromoteByName } from '@/lib/promote-prospect';
 import { isGraphicsLine } from '@/lib/graphics-lines';
+import { enforceCustomerHold } from '@/lib/customer-hold-server';
 
 const ConvertSchema = z.object({
   estimateId: z.string().uuid(),
@@ -67,6 +68,14 @@ export async function POST(req: NextRequest) {
         message: `Sales Order already exists (SO #${estimate.netsuite_so_number || estimate.netsuite_so_id})`,
       });
     }
+
+    // ── Customer hold (migration 366) ──
+    // Past-due customers need an admin / A/R override with a reason.
+    const held = await enforceCustomerHold(req, supabase, auth, {
+      netsuiteId: estimate.customer_netsuite_id, customerId: estimate.customer_id,
+      customerName: estimate.customer_name, action: 'sales_order', recordId: estimateId,
+    });
+    if (held) return held;
 
     // ── Graphics gate ──
     // The estimate builder's "spawn graphics job" panel is only a prompt;

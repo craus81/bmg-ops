@@ -11,6 +11,7 @@ import { getEmailSignature } from '@/lib/email-signature';
 import { renderQuoteDocument } from '@/lib/quote-document';
 import { wrapQuoteDocModel, wrapDocTitle } from '@/lib/wrap-quote-document';
 import { generateWrapQuotePdf, wrapQuotePdfFilename } from '@/lib/wrap-quote-pdf-server';
+import { enforceCustomerHold } from '@/lib/customer-hold-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -108,6 +109,17 @@ export async function POST(req: NextRequest) {
   }
   if (flags.netsuitePdf && !quote.netsuite_estimate_id) {
     return NextResponse.json({ error: 'This quote isn\'t in NetSuite yet — use "Create Quote in NetSuite" first.' }, { status: 400 });
+  }
+
+  // Customer on hold for past-due invoices (migration 366): a priced quote
+  // needs an admin / A/R override with a reason. Previews still render, and
+  // a coverage-only send carries no price to hold back.
+  if (!parsed.data.preview && carriesQuote) {
+    const held = await enforceCustomerHold(req, supabase, auth, {
+      netsuiteId: quote.customer_netsuite_id || null, customerId: quote.customer_id || null,
+      customerName: quote.customer?.company || quote.customer?.name || null, action: 'wrap_quote_send', recordId: quote.id,
+    });
+    if (held) return held;
   }
 
   // Compose-screen recipients win; the quote's stored customer email + cc

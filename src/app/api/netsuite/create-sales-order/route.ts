@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { ensureUpfitProjectForSo } from '@/lib/upfit-projects';
+import { enforceCustomerHold } from '@/lib/customer-hold-server';
 
 const Schema = z.object({ poId: z.string().uuid() });
 
@@ -64,6 +65,13 @@ export async function POST(req: NextRequest) {
       // Use the first matching customer
       nsCustomer = customerResult.customers[0];
     }
+
+    // Customer on hold for past-due invoices (migration 366): needs an
+    // admin / A/R override with a reason.
+    const held = await enforceCustomerHold(req, supabase, auth, {
+      netsuiteId: nsCustomer.id, customerName: nsCustomer.name, action: 'sales_order', recordId: poId,
+    });
+    if (held) return held;
 
     // Step 2: Look up item IDs in NetSuite by part number
     const partNumbers = lineItems.map((li: any) => li.part_number).filter(Boolean);

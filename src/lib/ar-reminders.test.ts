@@ -80,7 +80,7 @@ describe('settings', () => {
   it('cleans step lists and falls back to the defaults', () => {
     expect(normalizeSteps(['30', 1, 1, -4, 'x', 15])).toEqual([1, 15, 30]);
     expect(normalizeSteps([])).toEqual(STEPS);
-    expect(resolveArSettings(null)).toEqual({ enabled: true, stepDays: STEPS, recipientIds: [] });
+    expect(resolveArSettings(null)).toEqual({ enabled: true, stepDays: STEPS, recipientIds: [], holdDays: 60 });
   });
 });
 

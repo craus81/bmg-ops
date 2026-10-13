@@ -15,6 +15,7 @@ import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInv
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { deepLinks } from '@/lib/deep-links';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { holdAwareFetch } from '@/lib/hold-aware-fetch';
 
 interface Task {
   id: string;
@@ -93,6 +94,7 @@ export default function CompletionModal({
   const supabase = createClient();
   const { user, profile } = useAuth();
   const dialog = useDialog();
+  const holdCtxRef = useRef<Record<string, { reason?: string }>>({});
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -239,11 +241,15 @@ export default function CompletionModal({
     setInvWorking(est.id);
     setInvError(null);
     try {
-      const res = await fetch('/api/estimates/convert-to-so', {
+      // Customer on hold (migration 366): the hold reason is kept per
+      // estimate so the approval-override retry doesn't ask for it again.
+      const holdCtx = (holdCtxRef.current[est.id] ||= {});
+      const res = await holdAwareFetch(dialog, '/api/estimates/convert-to-so', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ estimateId: est.id, ...(reason ? { overrideReason: reason } : {}) }),
-      });
+      }, fetch, holdCtx);
+      if (!res) return;
       const data = await res.json();
       if (res.status === 409 && data.step === 'not_approved') {
         if (data.canOverride) { setOverrideFor(est.id); setOverrideReason(''); }
