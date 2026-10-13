@@ -4,7 +4,7 @@ import { requireFeature, getProfileRoles } from '@/lib/api-auth';
 import { checkDiscountApproval } from '@/lib/discount-approval';
 import { validateBody, z } from '@/lib/validate';
 import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
-import { sendEmailDetailed, buildNotificationEmail } from '@/lib/resend';
+import { sendEmailDetailed, repFromName, buildNotificationEmail } from '@/lib/resend';
 import { getEmailSignature } from '@/lib/email-signature';
 import { estimatePdfFilename } from '@/lib/estimate-pdf';
 import { deepLinks } from '@/lib/deep-links';
@@ -161,6 +161,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       kind: 'estimate_pdf',
       cc: body.cc,
       sentBy: auth.user?.id,
+      fromName: repFromName((auth.profile as any)?.full_name),
       contextUrl: deepLinks.estimate(estimate.id),
       customerId: estimate.customer_id,
       netsuiteCustomerId: estimate.customer_netsuite_id,

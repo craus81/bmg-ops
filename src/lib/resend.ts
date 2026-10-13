@@ -50,6 +50,27 @@ export interface EmailMeta {
    *  signature (already eight positional args) didn't grow a ninth; the
    *  send layer passes it to Resend as cc. */
   cc?: string[] | null;
+  /** Display name for the From line on this send — repFromName() for a
+   *  send a person composed, so the customer sees the rep they know in
+   *  their inbox list. The address never changes. */
+  fromName?: string | null;
+}
+
+/**
+ * "Craig George via BMG Fleet" — the From display name for a customer email
+ * a staff member composed. A From line the customer recognises is opened
+ * (and not reported) far more than a plain company name, and it is what a
+ * filter learns from. Characters that would break an unquoted display
+ * name are dropped; no usable name means the default From.
+ */
+export function repFromName(fullName: string | null | undefined): string | undefined {
+  const name = String(fullName || '').replace(/[\r\n"<>,;:\\]/g, ' ').replace(/\s+/g, ' ').trim();
+  return name ? `${name} via ${fromName}` : undefined;
+}
+
+function fromHeader(customName?: string | null): string {
+  const name = String(customName || '').replace(/[\r\n"<>,;:\\]/g, ' ').replace(/\s+/g, ' ').trim();
+  return `${name || fromName} <${fromEmail}>`;
 }
 
 /** Email kinds whose body is never stored or shown on Sent Emails — an
@@ -168,6 +189,47 @@ export function qpProofHtml(html: string): string {
   return html.replace(/=(?=[0-9A-Fa-f]{2})/g, '&#61;');
 }
 
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
+  mdash: '—', ndash: '–', middot: '·', hellip: '…', rsquo: '’', lsquo: '‘',
+  rdquo: '”', ldquo: '“', bull: '•', copy: '©', reg: '®', trade: '™', rarr: '→', larr: '←',
+};
+
+/**
+ * The plain-text part of every email. It used to be the HTML with its tags
+ * stripped: no line breaks, every link gone (an approval email's text part
+ * had no way to approve), entities left as "&amp;". Spam filters compare the
+ * two parts, and a text part that doesn't match the HTML counts against the
+ * message. This keeps the structure (blocks and <br> become line breaks,
+ * table cells stay on one line) and writes each link as "label (url)".
+ */
+export function htmlToText(html: string): string {
+  const decode = (t: string) => t
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&([a-z]+);/gi, (m, n) => NAMED_ENTITIES[n.toLowerCase()] ?? m);
+  let t = html
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(head|style|script|title)\b[\s\S]*?<\/\1>/gi, '')
+    .replace(/<a\b[^>]*?href\s*=\s*(["'])(.*?)\1[^>]*>([\s\S]*?)<\/a>/gi, (_, _q, href: string, inner: string) => {
+      const label = decode(inner.replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim();
+      const url = decode(href).trim();
+      if (!url || /^(mailto:|tel:|#)/i.test(url)) return label || url.replace(/^(mailto:|tel:)/i, '');
+      return label && label !== url ? `${label} (${url})` : url;
+    })
+    .replace(/<img\b[^>]*?alt\s*=\s*(["'])(.*?)\1[^>]*>/gi, (_, _q, alt: string) => (alt.trim() ? `[${alt.trim()}]` : ''))
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(td|th)>/gi, '  ')
+    .replace(/<li\b[^>]*>/gi, '\n• ')
+    .replace(/<\/?(p|div|tr|table|h[1-6]|ul|ol|li|blockquote|section|header|footer|hr)\b[^>]*>/gi, '\n')
+    .replace(/<[^>]*>/g, '');
+  t = decode(t)
+    .replace(/[ \t\u00a0]+/g, ' ')
+    .replace(/ *\n */g, '\n')
+    .replace(/\n{3,}/g, '\n\n');
+  return t.trim();
+}
+
 function enqueueSend<T>(task: () => Promise<T>): Promise<T> {
   const run = sendQueue.then(async () => {
     const wait = lastSendAt + MIN_SEND_INTERVAL_MS - Date.now();
@@ -214,13 +276,13 @@ export async function sendEmailDetailed(
     result = await enqueueSend(async () => {
       for (let attempt = 0; ; attempt++) {
         const { data, error } = await resend!.emails.send({
-          from: `${fromName} <${fromEmail}>`,
+          from: fromHeader(meta?.fromName),
           to,
           subject,
           html: qpProofHtml(htmlBody),
           // The plain-text part derives from the RAW html — text has no
           // entity escape mechanism, so armoring can't help it there.
-          text: textBody || htmlBody.replace(/<[^>]*>/g, ''),
+          text: textBody || htmlToText(htmlBody),
           ...(effectiveReplyTo ? { replyTo: effectiveReplyTo } : {}),
           ...(effectiveBcc ? { bcc: effectiveBcc } : {}),
           ...(effectiveCc.length > 0 ? { cc: effectiveCc } : {}),

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { sendEmailDetailed, buildNotificationEmail } from '@/lib/resend';
+import { sendEmailDetailed, repFromName, buildNotificationEmail } from '@/lib/resend';
 import { getEmailSignature } from '@/lib/email-signature';
 import { deepLinks } from '@/lib/deep-links';
 import { loadEstimateAttachmentRows, fetchEstimateAttachments, type EstimateFileRow } from '@/lib/estimate-attachments';
@@ -194,6 +194,7 @@ export async function POST(req: NextRequest) {
       kind: 'quote_followup',
       cc: parsed.data.cc,
       sentBy: auth.user?.id,
+      fromName: repFromName((auth.profile as any)?.full_name),
       contextUrl: isEstimate ? deepLinks.estimate(id) : deepLinks.wrapQuote(id),
       customerId: quote.customer_id || null,
     },

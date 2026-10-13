@@ -285,3 +285,19 @@ export async function inlineDiagrams(
   }
   return out;
 }
+
+/**
+ * Point the approval EMAIL's proof pictures at our own domain
+ * (/api/approve/estimate/[token]/proof/[fileId]) instead of presigned
+ * storage links: a long signed URL on <account>.r2.cloudflarestorage.com
+ * is the kind of foreign link spam filters score as phishing. PDF proofs
+ * keep their url — the document lists them by name, never as an <img>.
+ */
+export function proofBlocksForEmail(blocks: EstimateProofBlock[], appUrl: string, token: string): EstimateProofBlock[] {
+  return blocks.map(b => ({
+    ...b,
+    files: b.files.map(f => f.isPdf
+      ? f
+      : { ...f, url: `${appUrl}/api/approve/estimate/${encodeURIComponent(token)}/proof/${encodeURIComponent(f.id)}` }),
+  }));
+}

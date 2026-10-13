@@ -74,6 +74,9 @@ export interface ApprovalShellProps {
    *  your drop-off" — the token page is the natural next step after an
    *  approval). Receives the magic-link token from the URL. */
   acceptedCta?: (token: string, data: any) => { url: string; label: string; note?: string } | null;
+  /** Files the customer can still download on the decided screens (the
+   *  estimate flow: its PDF and the files the approval email carried). */
+  downloads?: (data: any) => Array<{ name: string; url: string }> | null;
 }
 
 export default function ApprovalPageShell({
@@ -87,6 +90,7 @@ export default function ApprovalPageShell({
   canAccept,
   renderDocument,
   acceptedCta,
+  downloads,
 }: ApprovalShellProps) {
   const params = useParams<{ token: string }>();
   const searchParams = useSearchParams();
@@ -179,6 +183,7 @@ export default function ApprovalPageShell({
           docLabel={docLabel(data)}
           timestamp={acceptedAt(data)}
           cta={acceptedCta ? acceptedCta(token, data) : null}
+          downloads={downloads ? downloads(data) : null}
         />
       </ApprovalFrame>
     );
@@ -191,6 +196,7 @@ export default function ApprovalPageShell({
           title={status === 'submitted_rejected' ? (copy?.rejectedTitle || 'Thanks — we’ll follow up') : 'Changes requested'}
           docLabel={docLabel(data)}
           timestamp={null}
+          downloads={downloads ? downloads(data) : null}
         />
       </ApprovalFrame>
     );
@@ -262,9 +268,10 @@ export default function ApprovalPageShell({
 }
 
 /** The already-decided / just-submitted screens. */
-function Decided({ tone, title, docLabel, timestamp, cta }: {
+function Decided({ tone, title, docLabel, timestamp, cta, downloads }: {
   tone: 'accepted' | 'rejected'; title: string; docLabel: string | null; timestamp: string | null;
   cta?: { url: string; label: string; note?: string } | null;
+  downloads?: Array<{ name: string; url: string }> | null;
 }) {
   const accepted = tone === 'accepted';
   return (
@@ -290,6 +297,17 @@ function Decided({ tone, title, docLabel, timestamp, cta }: {
             background: '#1d4ed8', color: '#fff', fontSize: '14px', fontWeight: 800, textDecoration: 'none',
           }}>{cta.label}</a>
           {cta.note && <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '8px' }}>{cta.note}</div>}
+        </div>
+      )}
+      {downloads && downloads.length > 0 && (
+        <div style={{ marginTop: '20px', textAlign: 'left', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '12px 14px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Downloads</div>
+          {downloads.map(d => (
+            <a key={d.url} href={d.url} download style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '8px 0', borderTop: '1px solid #e2e8f0', color: '#0f172a', fontSize: '13px', fontWeight: 600, textDecoration: 'none' }}>
+              <span style={{ overflowWrap: 'anywhere' }}>{d.name}</span>
+              <span style={{ color: '#1d4ed8', fontSize: '12px', fontWeight: 700, whiteSpace: 'nowrap' }}>Download ↓</span>
+            </a>
+          ))}
         </div>
       )}
       <Footer />

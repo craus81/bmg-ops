@@ -118,10 +118,14 @@ export interface EstimateDocumentOptions {
    *  customer approves design + price on ONE document. Frozen snapshots
    *  must pass inlineProofImages output — the R2 objects are mutable. */
   proofs?: QuoteDocProofBlock[] | null;
-  /** Files riding along on the email (estimate_files picked on the compose
-   *  screen). Listed as their own section so the customer knows what came
-   *  with the estimate — the document itself can't show them. */
-  attachmentNames?: string[] | null;
+  /** Files riding along on the email (the estimate PDF and estimate_files
+   *  picked on the compose screen). Listed as their own section so the
+   *  customer knows what came with the estimate — the document itself can't
+   *  show them. With a url the name is a download link (the token-gated
+   *  download routes, src/lib/estimate-approval-downloads.ts), so a
+   *  stripped or forwarded-without-attachments email still delivers the
+   *  files; the compose preview passes bare names since no token exists yet. */
+  attachmentNames?: Array<string | { name: string; url?: string | null }> | null;
 }
 
 /**
@@ -225,9 +229,16 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
   if (est.delivery_preferences) sections.push({ title: 'Delivery', bodyHtml: escHtml(est.delivery_preferences) });
   if (est.notes) sections.push({ title: 'Notes', bodyHtml: escHtml(est.notes) });
   if (opts.attachmentNames && opts.attachmentNames.length > 0) {
+    const items = opts.attachmentNames.map(a => (typeof a === 'string' ? { name: a, url: null } : a));
+    const linked = items.some(a => a.url);
     sections.push({
       title: 'Attached',
-      bodyHtml: opts.attachmentNames.map(n => escHtml(n)).join(' &middot; '),
+      bodyHtml: items
+        .map(a => (a.url
+          ? `<a href="${escHtml(a.url)}" style="color:#1d4ed8;font-weight:600;text-decoration:underline;">${escHtml(a.name)}</a>`
+          : escHtml(a.name)))
+        .join(' &middot; ')
+        + (linked ? `<div style="margin-top:6px;font-size:11px;color:#64748b;">Click a name to download a copy. The links work as long as your approval link does.</div>` : ''),
     });
   }
 

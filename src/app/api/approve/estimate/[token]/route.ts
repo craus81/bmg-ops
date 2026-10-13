@@ -26,6 +26,7 @@ import { renderEstimateDocument, escHtml } from '@/lib/estimate-document';
 import { publicEstimate, publicLines, publicProofs, loadApprovalLines } from '@/lib/estimate-approval-view';
 import { r2GetBytes, r2Upload } from '@/lib/r2';
 import { recordQuoteView } from '@/lib/quote-view-recorder';
+import { loadApprovalDownloads } from '@/lib/estimate-approval-downloads';
 
 export const dynamic = 'force-dynamic';
 
@@ -78,11 +79,14 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
   const expiry = validateExpiry(estimate.approval_token_expires_at);
   if (!expiry.ok) return NextResponse.json({ status: 'expired' }, { status: 410 });
 
+  // Download links (the estimate PDF and the files the email carried) stay
+  // on the decided screens too: a customer who approved last week and
+  // wants the PDF again should not have to dig out the email.
   if (estimate.customer_approved) {
-    return NextResponse.json({ status: 'already_approved', estimate: publicEstimate(estimate) });
+    return NextResponse.json({ status: 'already_approved', estimate: publicEstimate(estimate), downloads: await loadApprovalDownloads(supabase, estimate, [], '', params.token) });
   }
   if (estimate.customer_rejected_at) {
-    return NextResponse.json({ status: 'already_rejected', estimate: publicEstimate(estimate) });
+    return NextResponse.json({ status: 'already_rejected', estimate: publicEstimate(estimate), downloads: await loadApprovalDownloads(supabase, estimate, [], '', params.token) });
   }
 
   // Wrap content from linked wrap quotes (estimate_attach) — the customer
@@ -114,6 +118,8 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
     graphics,
     proofs: publicProofs(proofs),
     lines: publicLines(lines),
+    // Same-origin links (appUrl '') so a preview deploy serves its own.
+    downloads: await loadApprovalDownloads(supabase, estimate, proofs, '', params.token),
   });
 }
 
