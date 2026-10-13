@@ -5,6 +5,7 @@ import { storage } from '@/lib/storage';
 import { toJpegIfHeic } from '@/lib/heic';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { createClient } from '@/lib/supabase-browser';
+import { looseOrFilter } from '@/lib/loose-search';
 
 export interface CreatedPart {
   id: string;
@@ -75,12 +76,13 @@ export function CreateNetsuiteItemModal({
     if (vendor || q.length < 2) { setVendorResults([]); return; }
     let cancelled = false;
     const t = setTimeout(async () => {
-      const like = `%${q.replace(/[%_,()]/g, ' ')}%`;
+      const filter = looseOrFilter(['company_name', 'entity_id'], q);
+      if (!filter) { if (!cancelled) setVendorResults([]); return; }
       const { data } = await createClient()
         .from('netsuite_vendors')
         .select('netsuite_id, company_name, entity_id')
         .eq('is_inactive', false)
-        .or(`company_name.ilike.${like},entity_id.ilike.${like}`)
+        .or(filter)
         .order('company_name')
         .limit(10);
       if (!cancelled) {

@@ -31,6 +31,7 @@ import { apiFetch } from '@/lib/api-client';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { theme } from '@/lib/theme';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { looseMatcher } from '@/lib/loose-search';
 
 interface CustomerRow {
   id: string;
@@ -168,11 +169,10 @@ export default function CustomerNotificationsPage() {
     }
   };
 
+  const matchSearch = looseMatcher(search);
   const visible = rows.filter(r => {
     if (subscribedOnly && r.notify_status_emails !== true && r.weekly_digest !== true && !(r.portal_invoice_contact_ids?.length)) return false;
-    const s = search.trim().toLowerCase();
-    if (!s) return true;
-    return r.company_name?.toLowerCase().includes(s) || (r.email || '').toLowerCase().includes(s);
+    return matchSearch(r.company_name, r.email);
   });
 
   const toggle = (row: CustomerRow, flag: 'notify_status_emails' | 'weekly_digest') => {

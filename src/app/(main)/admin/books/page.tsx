@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
+import { looseMatcher } from '@/lib/loose-search';
 
 /**
  * Books → Chart of accounts (migrations 359/360, docs/books.md).
@@ -163,9 +164,9 @@ export default function BooksAccountsPage() {
   }, [accounts]);
 
   const visible = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const match = looseMatcher(search);
     return accounts.filter((a) => (showInactive || a.active)
-      && (!q || `${a.number ?? ''} ${a.name}`.toLowerCase().includes(q)));
+      && match(`${a.number ?? ''} ${a.name}`));
   }, [accounts, search, showInactive]);
 
   const result = lastSync?.result;

@@ -48,6 +48,7 @@ import {
 } from '@/lib/dimension-scale';
 import { buildInstallGuidePdf, installGuideFileName, type RenderedGuidePage } from '@/lib/install-guide-pdf';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { looseMatcher } from '@/lib/loose-search';
 
 type Tool = 'select' | 'dim' | 'note' | 'calibrate';
 
@@ -960,6 +961,8 @@ export default function InstallGuideEditorPage() {
   };
 
   // ---- Render ----
+  const matchJobPicker = looseMatcher(jobPicker?.search);
+
   if (authLoading || (hasAccess && loading)) {
     return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading...</div>;
   }
@@ -1582,11 +1585,7 @@ export default function InstallGuideEditorPage() {
             />
             <div style={{ overflowY: 'auto', display: 'grid', gap: '6px' }}>
               {jobPicker.jobs
-                .filter(j => {
-                  const q = jobPicker.search.trim().toLowerCase();
-                  if (!q) return true;
-                  return [j.job_number, j.title, j.customer_name || ''].some(s => s.toLowerCase().includes(q));
-                })
+                .filter(j => matchJobPicker(j.job_number, j.title, j.customer_name))
                 .slice(0, 40)
                 .map(j => (
                   <button

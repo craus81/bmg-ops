@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 import { DropZone } from '@/components/DropZone';
+import { looseMatcher } from '@/lib/loose-search';
 
 interface KnowledgeDoc {
   id: string;
@@ -500,12 +501,10 @@ export default function KnowledgePage() {
     setTimeout(() => setBgStatus(prev => prev?.type === 'success' ? null : prev), 5000);
   };
 
+  const matchSearch = looseMatcher(search);
   const filtered = docs.filter(d => {
     if (filterCat && d.category !== filterCat) return false;
-    if (search) {
-      const s = search.toLowerCase();
-      return d.title.toLowerCase().includes(s) || d.content.toLowerCase().includes(s) || d.tags?.some(t => t.toLowerCase().includes(s)) || d.file_name?.toLowerCase().includes(s);
-    }
+    if (search) return matchSearch(d.title, d.content, d.tags, d.file_name);
     return true;
   });
 

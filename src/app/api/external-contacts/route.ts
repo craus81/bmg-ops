@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { samePerson } from '@/lib/primary-contact';
+import { looseMatcher, looseOrFilter } from '@/lib/loose-search';
 
 export const dynamic = 'force-dynamic';
 
@@ -103,7 +104,9 @@ export async function GET(req: NextRequest) {
     .order('name', { ascending: true })
     .limit(200);
   if (customerId) query = query.eq('customer_id', customerId);
-  if (q) query = query.or(`name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`);
+  // Forgiving match (src/lib/loose-search.ts); a query with no words filters nothing.
+  const qFilter = looseOrFilter(['name', 'phone', 'email'], q);
+  if (qFilter) query = query.or(qFilter);
 
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -118,9 +121,9 @@ export async function GET(req: NextRequest) {
     crm = await crmContactsForCustomer(customerId);
   } catch { /* fall through with the external half */ }
 
-  const needle = (q || '').trim().toLowerCase();
-  const matchesQ = (c: any) => !needle
-    || [c.name, c.email, c.phone].some(v => String(v || '').toLowerCase().includes(needle));
+  // The same forgiving match as the query above (empty query matches all).
+  const hit = looseMatcher(q);
+  const matchesQ = (c: any) => hit(c.name, c.email, c.phone);
 
   const merged = [...external];
   for (const c of crm) {

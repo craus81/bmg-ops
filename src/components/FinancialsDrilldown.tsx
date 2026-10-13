@@ -27,6 +27,7 @@ import { fetchCompanyLetterhead, type CompanyLetterhead } from '@/lib/company-pr
 import type { OpenArInvoice, OpenVendorBill, AccountBalance, AgingBucketKey } from '@/lib/financials-data';
 import type { FinancialsData } from './FinancialsDashboard';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { looseMatcher } from '@/lib/loose-search';
 
 export const AGE_META: { key: AgingBucketKey; label: string; shortLabel: string; color: string }[] = [
   { key: 'current', label: 'Current — not yet due', shortLabel: 'Current', color: 'var(--success)' },
@@ -177,8 +178,10 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
     if (customer) list = list.filter(i => keyOf(i) === customer.key);
     if (bucket === 'pastdue') list = list.filter(i => i.daysPastDue > 0);
     else if (bucket !== 'all') list = list.filter(i => i.bucket === bucket);
-    const q = search.trim().toLowerCase();
-    if (q) list = list.filter(i => i.customer.toLowerCase().includes(q) || i.tranid.toLowerCase().includes(q) || (i.po || '').toLowerCase().includes(q));
+    if (search.trim()) {
+      const match = looseMatcher(search);
+      list = list.filter(i => match(i.customer, i.tranid, i.po));
+    }
     return list;
   }, [invoices, customer, bucket, search]);
 

@@ -2,18 +2,20 @@ import { describe, it, expect } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { deepSearch, deepSearchPhrase, excerpt, type DeepSearchAccess } from '@/lib/deep-search';
 import type { FeatureKey } from '@/lib/features';
+import { looseSearchRegex } from '@/lib/loose-search';
 
-/** A query-builder stand-in: records the tables read, answers every query empty. */
+/** A query-builder stand-in: records the tables read and the calls made, answers every query empty. */
 function fakeService() {
   const tables: string[] = [];
+  const calls: [string, unknown[]][] = [];
   const chain: any = new Proxy({}, {
     get(_t, prop) {
       if (prop === 'then') return (resolve: (v: unknown) => void) => resolve({ data: [], count: 0, error: null });
-      return () => chain;
+      return (...args: unknown[]) => { calls.push([String(prop), args]); return chain; };
     },
   });
   const service = { from: (t: string) => { tables.push(t); return chain; } } as unknown as SupabaseClient;
-  return { service, tables };
+  return { service, tables, calls };
 }
 
 const access = (over: { money?: boolean; ledgerReader?: boolean; features?: FeatureKey[] } = {}): DeepSearchAccess => ({
@@ -32,6 +34,10 @@ describe('deepSearchPhrase', () => {
   it('strips characters that would break a PostgREST filter', () => {
     expect(deepSearchPhrase('Ford, (Transit) "148"')).toBe('ford transit 148');
   });
+
+  it('needs at least one word, not just three characters', () => {
+    expect(deepSearchPhrase('...')).toBeNull();
+  });
 });
 
 describe('excerpt', () => {
@@ -45,6 +51,11 @@ describe('excerpt', () => {
     expect(out).toContain('ladder rack');
     expect(out.startsWith('…')).toBe(true);
     expect(out.endsWith('…')).toBe(true);
+  });
+
+  it('centers on a word when the text spells the phrase differently', () => {
+    const text = 'x'.repeat(200) + ' Saint Charles yard ' + 'y'.repeat(200);
+    expect(excerpt(text, 'st. charles', 60)!).toContain('Charles');
   });
 
   it('is null for empty text', () => {
@@ -90,5 +101,16 @@ describe('deepSearch access', () => {
     await deepSearch(full.service, 'transit', access({ money: true, ledgerReader: true }), { limit: 25, includeBills: true });
     expect(full.tables).toContain('ledger_bills');
     expect(full.tables).toContain('ledger_bill_lines');
+  });
+});
+
+describe('deepSearch matching', () => {
+  it('matches loosely, the same rule as every search box', async () => {
+    const { service, calls } = fakeService();
+    await deepSearch(service, 'St Charles', access({ money: true, features: ['in_shop'] }), { limit: 5, includeBills: false });
+    const re = looseSearchRegex('St Charles')!;
+    expect(calls).toContainEqual(['filter', ['note', 'imatch', re]]);
+    expect(calls).toContainEqual(['or', [`memo.imatch."${re}",po_number.imatch."${re}"`]]);
+    expect(calls.some(([m]) => m === 'ilike')).toBe(false);
   });
 });

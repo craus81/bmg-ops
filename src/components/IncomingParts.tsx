@@ -24,6 +24,7 @@ import {
   type RawPoLine,
   type RawPart,
 } from '@/lib/incoming-parts';
+import { looseMatcher } from '@/lib/loose-search';
 
 type Bucket = 'overdue' | 'week' | 'month' | 'later' | 'none';
 const BUCKET_ORDER: Bucket[] = ['overdue', 'week', 'month', 'later', 'none'];
@@ -120,17 +121,14 @@ export default function IncomingParts({ refreshKey = 0 }: { refreshKey?: number 
   useEffect(() => { load(); }, [load, refreshKey]);
 
   const todayMs = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); })();
-  const q = search.trim().toUpperCase();
+  const match = looseMatcher(search);
   const visible = rows.filter(r => {
     if (filter === 'attention' && r.state !== 'short') return false;
     if (filter === 'week') {
       const b = bucketOf(r.soonest_eta, todayMs);
       if (b !== 'overdue' && b !== 'week') return false;
     }
-    if (q) {
-      const hay = `${r.item_number} ${r.display_name || ''} ${r.shipments.map(s => `${s.vendor || ''} ${s.tranid || ''}`).join(' ')}`.toUpperCase();
-      if (!hay.includes(q)) return false;
-    }
+    if (!match(r.item_number, r.display_name, r.shipments.map(s => [s.vendor, s.tranid]))) return false;
     return true;
   });
   const arrivingThisWeek = rows.filter(r => {

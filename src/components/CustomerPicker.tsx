@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { createClient } from '@/lib/supabase-browser';
+import { looseOrFilter } from '@/lib/loose-search';
 
 interface CustomerMatch {
   id: string;
@@ -41,13 +42,14 @@ export default function CustomerPicker({ value, netsuiteId, onChange, placeholde
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     const q = value.trim();
-    if (q.length < 2) { setResults([]); return; }
+    const filter = looseOrFilter(['company_name', 'entity_id'], q);
+    if (q.length < 2 || !filter) { setResults([]); return; }
     debounceRef.current = setTimeout(async () => {
       setSearching(true);
       const { data } = await supabase
         .from('customers')
         .select('id, netsuite_id, company_name, entity_id')
-        .or(`company_name.ilike.%${q}%,entity_id.ilike.%${q}%`)
+        .or(filter)
         .limit(8);
       setResults((data as CustomerMatch[]) || []);
       setSearching(false);

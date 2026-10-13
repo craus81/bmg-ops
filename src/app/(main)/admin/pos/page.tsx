@@ -29,6 +29,7 @@ import PartNumberAutocomplete, { lastPoLabel, type LastPoPrice, type PickedPartH
 import { pickPrice } from '@/lib/part-suggest';
 import CreatedBy from '@/components/CreatedBy';
 import { poCreatedBy } from '@/lib/created-by';
+import { looseMatcher } from '@/lib/loose-search';
 
 interface ImportLine extends ParsedPOLine {
   catalog_match: CatalogItem | null;
@@ -1826,15 +1827,14 @@ export default function POsPage() {
   for (const p of tabPos) poCustomerCounts.set(p.customer, (poCustomerCounts.get(p.customer) || 0) + 1);
   const poCustomerOptions = Array.from(poCustomerCounts.keys()).sort((a, b) => a.localeCompare(b));
 
+  const matchPoSearch = looseMatcher(poSearch);
   const filteredPos = tabPos
     .filter(po => matchesPoFilter(po, poFilter) && matchesPoDateRange(po))
     .filter(po => poCustomerFilter === 'all' || po.customer === poCustomerFilter)
     .filter((po) => {
       if (!poSearch.trim()) return true;
-      const q = poSearch.toLowerCase();
-      if (po.po_number.toLowerCase().includes(q)) return true;
-      if (po.customer.toLowerCase().includes(q)) return true;
-      if (po.line_items.some((li) => li.part_number.toLowerCase().includes(q) || li.description?.toLowerCase().includes(q))) return true;
+      if (matchPoSearch(po.po_number, po.customer)) return true;
+      if (po.line_items.some((li) => matchPoSearch(li.part_number, li.description))) return true;
       return false;
     });
 

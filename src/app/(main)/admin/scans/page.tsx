@@ -29,6 +29,7 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import { type EmailedInfo, fetchEmailedByNumber, isBadDelivery } from '@/lib/invoice-emails';
 import { InvoiceEmailedBadge } from '@/components/InvoiceEmailedBadge';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { looseMatcher, looseOrFilter } from '@/lib/loose-search';
 
 /** One completion photo (K8, migration 190) attached to a scan. */
 interface ScanPhoto {
@@ -269,11 +270,12 @@ export default function AdminScansPage() {
     const q = bulkCustomer.trim();
     if (q.length < 2) { setCustMatches([]); return; }
     const t = setTimeout(async () => {
-      const escaped = q.replace(/[%,()]/g, ' ');
+      const filter = looseOrFilter(['company_name', 'entity_id'], q);
+      if (!filter) { setCustMatches([]); return; }
       const { data } = await supabase
         .from('customers')
         .select('id, company_name, entity_id')
-        .or(`company_name.ilike.%${escaped}%,entity_id.ilike.%${escaped}%`)
+        .or(filter)
         .order('company_name')
         .limit(8);
       setCustMatches((data || []) as { id: string; company_name: string; entity_id: string | null }[]);
@@ -544,6 +546,7 @@ export default function AdminScansPage() {
   const NO_LOCATION = '__none__';
   const locationOptions = [...new Set(allLoadedScans.map(s => s.location_name).filter(Boolean) as string[])].sort();
 
+  const matchSearch = looseMatcher(search);
   const tabScans = getTabScans().filter(s => {
     // Source filter: CNI scans are the ones a cni_job_vins row points at.
     if (sourceFilter === 'cni' && !cniByScanId[s.id]) return false;
@@ -568,19 +571,20 @@ export default function AdminScansPage() {
       if (dateTo && day > dateTo) return false;
     }
     if (!search) return true;
-    const q = search.toLowerCase();
-    return s.vin.toLowerCase().includes(q) ||
-      s.part_number?.toLowerCase().includes(q) ||
-      s.billable_customer?.toLowerCase().includes(q) ||
-      s.unit_number?.toLowerCase().includes(q) ||
-      s.location_name?.toLowerCase().includes(q) ||
-      s.po_number?.toLowerCase().includes(q) ||
-      (cniByScanId[s.id] || '').toLowerCase().includes(q) ||
-      installerNamesOf(s).join(' ').toLowerCase().includes(q) ||
-      (installerCompanyOf(s) || '').toLowerCase().includes(q) ||
-      (profiles[s.scanned_by || ''] || '').toLowerCase().includes(q) ||
-      (s.scanned_by_company || '').toLowerCase().includes(q) ||
-      [s.vehicle_year, s.vehicle_make, s.vehicle_model].filter(Boolean).join(' ').toLowerCase().includes(q);
+    return matchSearch(
+      s.vin,
+      s.part_number,
+      s.billable_customer,
+      s.unit_number,
+      s.location_name,
+      s.po_number,
+      cniByScanId[s.id],
+      installerNamesOf(s).join(' '),
+      installerCompanyOf(s),
+      profiles[s.scanned_by || ''],
+      s.scanned_by_company,
+      [s.vehicle_year, s.vehicle_make, s.vehicle_model].filter(Boolean).join(' '),
+    );
   });
 
   // Narrowing the list drops the selection that's no longer shown — the bulk
@@ -706,12 +710,8 @@ export default function AdminScansPage() {
     }
     return [...byNumber.values()];
   })();
-  const invoiceSearch = search.trim().toLowerCase();
-  const visibleInvoiceRows = invoiceRows.filter(r =>
-    !invoiceSearch
-    || r.invoiceNumber.toLowerCase().includes(invoiceSearch)
-    || r.customer.toLowerCase().includes(invoiceSearch)
-    || r.pos.some(p => p.toLowerCase().includes(invoiceSearch)));
+  const matchInvoice = looseMatcher(search);
+  const visibleInvoiceRows = invoiceRows.filter(r => matchInvoice(r.invoiceNumber, r.customer, r.pos));
 
   const toggleInvoices = (numbers: string[]) => {
     setSelectedInvoices(prev => {
@@ -2044,11 +2044,8 @@ export default function AdminScansPage() {
               />
               {bulkEditPart.length >= 2 && !bulkEditPartPicked && (() => {
                 const q = bulkEditPart.toLowerCase();
-                const matches = allParts.filter(p =>
-                  p.item_number.toLowerCase().includes(q) ||
-                  p.display_name?.toLowerCase().includes(q) ||
-                  p.billable_customer?.toLowerCase().includes(q)
-                ).slice(0, 8);
+                const match = looseMatcher(bulkEditPart);
+                const matches = allParts.filter(p => match(p.item_number, p.display_name, p.billable_customer)).slice(0, 8);
                 const showAdd = addToCatalog.canAdd && offerAddToCatalog(bulkEditPart, allParts.filter(p => p.item_number.toLowerCase() === q).map(p => p.item_number));
                 if (matches.length === 0 && !showAdd) return null;
                 return (
@@ -2129,13 +2126,12 @@ export default function AdminScansPage() {
                   setBulkExtraInput('');
                 };
                 const q = bulkExtraInput.trim().toLowerCase();
+                const matchExtra = looseMatcher(q);
                 // The exact match stays in the list, pinned first and ticked, so
                 // typing the full number shows which part it is before adding.
                 const extraMatches = q.length >= 2
                   ? allParts
-                      .filter(p =>
-                        p.item_number.toLowerCase().includes(q) ||
-                        p.display_name?.toLowerCase().includes(q))
+                      .filter(p => matchExtra(p.item_number, p.display_name))
                       .sort((a, b) => Number(b.item_number.toLowerCase() === q) - Number(a.item_number.toLowerCase() === q))
                       .slice(0, 6)
                   : [];
@@ -2721,7 +2717,7 @@ export default function AdminScansPage() {
               <div>
                 <input value={bulkPartSearch} onChange={e => setBulkPartSearch(e.target.value)} placeholder="Search to add part..." style={{ width: '100%', padding: bulkParts.length > 0 ? '6px 8px' : '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: bulkParts.length > 0 ? '11px' : '13px' }} />
                 {bulkPartSearch.length >= 2 && (() => {
-                  const q = bulkPartSearch.toLowerCase();
+                  const match = looseMatcher(bulkPartSearch);
                   const selectedIds = new Set(bulkParts.map(bp => bp.id));
                   // Single source: netsuite_parts is the unified catalog
                   // (migration 117 folded the legacy graphics catalog into it
@@ -2729,7 +2725,7 @@ export default function AdminScansPage() {
                   // vehicle_type/graphic_package keep the graphics-specific
                   // search terms the old catalog matched on.
                   const matches = allParts
-                    .filter(p => !selectedIds.has(p.id) && (p.item_number.toLowerCase().includes(q) || p.display_name?.toLowerCase().includes(q) || p.billable_customer?.toLowerCase().includes(q) || p.vehicle_type?.toLowerCase().includes(q) || p.graphic_package?.toLowerCase().includes(q)))
+                    .filter(p => !selectedIds.has(p.id) && match(p.item_number, p.display_name, p.billable_customer, p.vehicle_type, p.graphic_package))
                     .slice(0, 12)
                     .map(p => ({
                       key: `part:${p.id}`,
@@ -4243,8 +4239,8 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
                 </div>
               )}
               {showVendorDropdown && review.vendorName.trim().length >= 1 && !selectedCompany && (() => {
-                const q = review.vendorName.trim().toLowerCase();
-                const matches = companies.filter(c => c.name.toLowerCase().includes(q)).slice(0, 8);
+                const match = looseMatcher(review.vendorName);
+                const matches = companies.filter(c => match(c.name)).slice(0, 8);
                 const linkedNsIds = new Set(companies.map(c => c.netsuite_vendor_id).filter(Boolean));
                 const nsMatches = nsVendors.filter(v => !linkedNsIds.has(v.id)).slice(0, 6);
                 return (
@@ -4389,12 +4385,8 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
                   style={{ ...inputStyle, fontSize: '11px', padding: '6px 8px' }}
                 />
                 {defaultPartSearch.length >= 2 && (() => {
-                  const q = defaultPartSearch.toLowerCase();
-                  const matches = allParts.filter(p =>
-                    p.item_number.toLowerCase().includes(q) ||
-                    p.display_name?.toLowerCase().includes(q) ||
-                    p.billable_customer?.toLowerCase().includes(q)
-                  ).slice(0, 8);
+                  const match = looseMatcher(defaultPartSearch);
+                  const matches = allParts.filter(p => match(p.item_number, p.display_name, p.billable_customer)).slice(0, 8);
                   if (matches.length === 0) {
                     return (
                       <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', marginTop: '2px' }}>
@@ -4544,12 +4536,8 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
                     style={{ ...inputStyle, fontSize: '11px', padding: '6px 8px' }}
                   />
                   {showApplyPartDropdown && applyPartSearch.length >= 2 && (() => {
-                    const q = applyPartSearch.toLowerCase();
-                    const matches = allParts.filter(p =>
-                      p.item_number.toLowerCase().includes(q) ||
-                      p.display_name?.toLowerCase().includes(q) ||
-                      p.billable_customer?.toLowerCase().includes(q)
-                    ).slice(0, 8);
+                    const match = looseMatcher(applyPartSearch);
+                    const matches = allParts.filter(p => match(p.item_number, p.display_name, p.billable_customer)).slice(0, 8);
                     return (
                       <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '180px', overflowY: 'auto', marginTop: '2px' }}>
                         {matches.map(p => (
@@ -4649,12 +4637,9 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustome
                 />
                 {partSearchKey === line.key && line.partNumber.length >= 2 && (() => {
                   const q = line.partNumber.toLowerCase();
+                  const match = looseMatcher(line.partNumber);
                   const matches = allParts.filter(p =>
-                    p.item_number.toLowerCase() !== q && (
-                      p.item_number.toLowerCase().includes(q) ||
-                      p.display_name?.toLowerCase().includes(q) ||
-                      p.billable_customer?.toLowerCase().includes(q)
-                    )
+                    p.item_number.toLowerCase() !== q && match(p.item_number, p.display_name, p.billable_customer)
                   ).slice(0, 8);
                   const exactLocal = allParts.some(p => p.item_number.toLowerCase() === q);
                   return (

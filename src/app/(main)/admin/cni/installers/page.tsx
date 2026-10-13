@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import PhoneInput from '@/components/PhoneInput';
 import { theme } from '@/lib/theme';
+import { looseMatcher } from '@/lib/loose-search';
 
 interface CniInstaller {
   user_id: string;
@@ -145,16 +146,9 @@ export default function CniInstallersPage() {
     setInviting(false);
   };
 
+  const matchSearch = looseMatcher(search);
   const filtered = installers.filter(i => {
-    if (search) {
-      const s = search.toLowerCase();
-      const match = (i.full_name?.toLowerCase().includes(s) ||
-            i.company_name?.toLowerCase().includes(s) ||
-            i.email?.toLowerCase().includes(s) ||
-            i.business_address?.city?.toLowerCase().includes(s) ||
-            i.business_address?.state?.toLowerCase().includes(s));
-      if (!match) return false;
-    }
+    if (search && !matchSearch(i.full_name, i.company_name, i.email, i.business_address?.city, i.business_address?.state)) return false;
     if (availFilter !== 'all' && i.availability_status !== availFilter) return false;
     if (capFilter !== 'all' && !i.service_types.includes(capFilter)) return false;
     if (tagFilter === 'preferred' && !i.risk_tags.includes('preferred')) return false;

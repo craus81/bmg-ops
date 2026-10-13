@@ -22,6 +22,7 @@ import { exportCameraInstallPDF } from '@/lib/camera-install-pdf';
 import { CAMERA_INSTALL_CSV_HEADERS, cameraInstallCsvRow, formatImei, vehicleLabel, type CameraInstall } from '@/lib/camera-install';
 import { deepLinks } from '@/lib/deep-links';
 import { theme } from '@/lib/theme';
+import { looseMatcher } from '@/lib/loose-search';
 
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', year: 'numeric' });
@@ -71,11 +72,12 @@ export default function CameraInstallsPage() {
 
   const shown = useMemo(() => {
     const q = search.trim().toUpperCase().replace(/\s+/g, '');
+    const match = looseMatcher(search);
     return installs.filter(i => {
       if (customerFilter && i.customer_name !== customerFilter) return false;
       if (!q) return true;
-      return [i.vin, i.camera_imei, i.go9b_imei, i.customer_name, i.license_plate || '', vehicleLabel(i)]
-        .some(v => v.toUpperCase().replace(/\s+/g, '').includes(q));
+      const fields = [i.vin, i.camera_imei, i.go9b_imei, i.customer_name, i.license_plate || '', vehicleLabel(i)];
+      return match(fields) || fields.some(v => v.toUpperCase().replace(/\s+/g, '').includes(q));
     });
   }, [installs, search, customerFilter]);
 

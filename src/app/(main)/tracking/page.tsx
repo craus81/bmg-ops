@@ -41,6 +41,7 @@ import PersonalListsModal from '@/components/PersonalListsModal';
 import { closeOnEscape } from '@/lib/modal-escape';
 import CreatedBy from '@/components/CreatedBy';
 import OrderTeamChat from '@/components/OrderTeamChat';
+import { looseMatcher, looseOrFilter } from '@/lib/loose-search';
 
 type FilterStatus = VehicleRowKey | 'all';
 
@@ -292,11 +293,12 @@ export default function TrackingPage() {
     const q = custEditSearch.trim();
     if (!custEditFor || q.length < 2) { setCustEditMatches([]); return; }
     const t = setTimeout(async () => {
-      const escaped = q.replace(/[%,()]/g, ' ');
+      const filter = looseOrFilter(['company_name', 'entity_id'], q);
+      if (!filter) { setCustEditMatches([]); return; }
       const { data } = await supabase
         .from('customers')
         .select('id, company_name, entity_id')
-        .or(`company_name.ilike.%${escaped}%,entity_id.ilike.%${escaped}%`)
+        .or(filter)
         .order('company_name')
         .limit(8);
       setCustEditMatches((data || []) as typeof custEditMatches);
@@ -1407,6 +1409,7 @@ export default function TrackingPage() {
   const activeVehicles = vehicles.filter(v => !(v as any).archived_at);
   const archivedVehicles = vehicles.filter(v => !!(v as any).archived_at);
 
+  const matchSearch = looseMatcher(searchTerm);
   const filtered = (showArchived ? archivedVehicles : activeVehicles).filter(v => {
     const key = vehicleRowKey(v);
     if (filterStatus !== 'all') return key === filterStatus;
@@ -1414,9 +1417,8 @@ export default function TrackingPage() {
     return key !== 'shipped';
   }).filter(v => {
     if (!searchTerm) return true;
-    const s = searchTerm.toLowerCase();
-    const title = [v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ').toLowerCase();
-    return v.vin.toLowerCase().includes(s) || title.includes(s) || (v.customer_name || '').toLowerCase().includes(s);
+    const title = [v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ');
+    return matchSearch(v.vin, title, v.customer_name);
   });
 
   // Pipeline counts (active vehicles only)

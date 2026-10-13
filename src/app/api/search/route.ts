@@ -4,6 +4,7 @@ import { requireStaff, profileFeatures, getProfileRoles } from '@/lib/api-auth';
 import { canSeeMoney } from '@/lib/money-visibility';
 import { isLedgerReader } from '@/lib/ledger/history';
 import { deepSearch, type DeepSearchResult } from '@/lib/deep-search';
+import { looseOrFilter, looseSearchRegex } from '@/lib/loose-search';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,7 +30,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ results: {} });
   }
 
-  const like = `%${q}%`;
+  // Forgiving match (src/lib/loose-search.ts): "St. Charles" = "St Charles"
+  // = "Saint Charles", "ofallon" finds "O'Fallon". The helpers build the
+  // filter from the query's words only, so raw text never reaches .or().
+  const re = looseSearchRegex(q);
+  if (!re) return NextResponse.json({ results: {} });
+  const anyOf = (cols: string[]) => looseOrFilter(cols, q)!;
   // ?full=1 is the "See all results" page: more rows per text group, plus
   // QuickBooks bills, which stay off the top bar to keep it quick.
   const full = req.nextUrl.searchParams.get('full') === '1';
@@ -76,7 +82,7 @@ export async function GET(req: NextRequest) {
     supabase
       .from('purchase_orders')
       .select('id, po_number, customer, status, ordered_date, created_at, ship_to, po_line_items(id, part_number, description, quantity, unit_price, installed)', { count: 'exact' })
-      .or(`po_number.ilike.${like},customer.ilike.${like}`)
+      .or(anyOf(['po_number', 'customer']))
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
 
@@ -84,7 +90,7 @@ export async function GET(req: NextRequest) {
     supabase
       .from('fleet_checkins')
       .select('id, vin, vehicle_year, vehicle_make, vehicle_model, vehicle_trim, customer_name, sales_order_number, status, created_at', { count: 'exact' })
-      .or(`vin.ilike.${like},vehicle_make.ilike.${like},vehicle_model.ilike.${like},customer_name.ilike.${like},sales_order_number.ilike.${like}`)
+      .or(anyOf(['vin', 'vehicle_make', 'vehicle_model', 'customer_name', 'sales_order_number']))
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
 
@@ -92,7 +98,7 @@ export async function GET(req: NextRequest) {
     supabase
       .from('graphics_jobs')
       .select('id, job_number, title, part_number, customer, status, priority, due_date, created_at', { count: 'exact' })
-      .or(`job_number.ilike.${like},title.ilike.${like},part_number.ilike.${like},customer.ilike.${like}`)
+      .or(anyOf(['job_number', 'title', 'part_number', 'customer']))
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
 
@@ -101,7 +107,7 @@ export async function GET(req: NextRequest) {
     supabase
       .from('estimates')
       .select('id, estimate_number, netsuite_estimate_number, customer_id, title, status, total, created_at', { count: 'exact' })
-      .or(`estimate_number.ilike.${like},netsuite_estimate_number.ilike.${like},title.ilike.${like}`)
+      .or(anyOf(['estimate_number', 'netsuite_estimate_number', 'title']))
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
 
@@ -110,7 +116,7 @@ export async function GET(req: NextRequest) {
       .from('netsuite_parts')
       .select('id, item_number, display_name, billable_customer, vehicle_type, graphic_package, sales_price, catalog', { count: 'exact' })
       .eq('is_active', true)
-      .or(`item_number.ilike.${like},display_name.ilike.${like},billable_customer.ilike.${like},vehicle_type.ilike.${like},graphic_package.ilike.${like}`)
+      .or(anyOf(['item_number', 'display_name', 'billable_customer', 'vehicle_type', 'graphic_package']))
       .limit(MAX_PER_GROUP * 4),
 
     // Customers — search by company name, contact, email; phone-shaped
@@ -125,7 +131,7 @@ export async function GET(req: NextRequest) {
       : supabase
           .from('prospects')
           .select('id, company_name, contact_name, email, phone, netsuite_id', { count: 'exact' })
-          .or(`company_name.ilike.${like},contact_name.ilike.${like},email.ilike.${like}`)
+          .or(anyOf(['company_name', 'contact_name', 'email']))
           .order('company_name')
           .limit(MAX_PER_GROUP),
 
@@ -134,7 +140,7 @@ export async function GET(req: NextRequest) {
       .from('messages')
       .select('id, conversation_id, sender_id, body, created_at', { count: 'exact' })
       .in('conversation_id', scopedConvoIds)
-      .ilike('body', like)
+      .filter('body', 'imatch', re)
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
 
@@ -142,7 +148,7 @@ export async function GET(req: NextRequest) {
     supabase
       .from('wrap_quotes')
       .select('id, quote_number, customer, vehicle_description, status, total, created_at', { count: 'exact' })
-      .or(`quote_number.ilike.${like},customer->>name.ilike.${like},vehicle_description.ilike.${like}`)
+      .or(anyOf(['quote_number', 'customer->>name', 'vehicle_description']))
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
 
@@ -151,18 +157,18 @@ export async function GET(req: NextRequest) {
     supabase
       .from('po_invoices')
       .select('id, netsuite_invoice_id, netsuite_invoice_number, created_at, purchase_orders(id, po_number, customer)')
-      .ilike('netsuite_invoice_number', like)
+      .filter('netsuite_invoice_number', 'imatch', re)
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
     supabase
       .from('graphics_jobs')
       .select('id, title, customer, netsuite_invoice_id, netsuite_invoice_number, invoiced_at')
-      .ilike('netsuite_invoice_number', like)
+      .filter('netsuite_invoice_number', 'imatch', re)
       .limit(MAX_PER_GROUP),
     supabase
       .from('scan_logs')
       .select('invoice_number, billable_customer, po_number, date_invoiced')
-      .ilike('invoice_number', like)
+      .filter('invoice_number', 'imatch', re)
       .limit(MAX_PER_GROUP * 10),
   ]);
 
@@ -180,13 +186,13 @@ export async function GET(req: NextRequest) {
         .from('profiles')
         .select('id, full_name, email, company_id, deactivated', { count: 'exact' })
         .or('role.eq.installer,roles.cs.{installer}')
-        .or(`full_name.ilike.${like},email.ilike.${like}`)
+        .or(anyOf(['full_name', 'email']))
         .order('full_name')
         .limit(MAX_PER_GROUP),
       supabase
         .from('companies')
         .select('id, name, email, phone, netsuite_vendor_id', { count: 'exact' })
-        .or(`name.ilike.${like},email.ilike.${like}`)
+        .or(anyOf(['name', 'email']))
         .order('name')
         .limit(MAX_PER_GROUP),
     ]);
@@ -213,7 +219,7 @@ export async function GET(req: NextRequest) {
   const { data: poLineMatches } = await supabase
     .from('po_line_items')
     .select('id, po_id, part_number, description, quantity, unit_price')
-    .ilike('part_number', like)
+    .filter('part_number', 'imatch', re)
     .limit(MAX_PER_GROUP);
 
   // If we got line item matches, fetch their parent POs (deduplicated)

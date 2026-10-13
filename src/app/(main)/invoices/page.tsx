@@ -35,6 +35,7 @@ import { InvoiceEmailedBadge } from '@/components/InvoiceEmailedBadge';
 import QuickBooksRecordModal from '@/components/QuickBooksRecordModal';
 import { deepLinks } from '@/lib/deep-links';
 import { HISTORY_MIN_QUERY, historySearchTerms, type HistoryRow } from '@/lib/ledger/history';
+import { looseMatcher } from '@/lib/loose-search';
 
 type HubTab = 'graphics' | 'scans' | 'sent';
 
@@ -371,14 +372,10 @@ export default function InvoicingHubPage() {
 
   // ── Graphics tab derivations ──
   const doneJobs = uninvoicedJobs.filter(j => DONE_STATUSES.includes(j.status));
+  const matchSearch = looseMatcher(search);
   const graphicsJobs = (graphicsFilter === 'done' ? doneJobs : uninvoicedJobs).filter(j => {
     if (!search) return true;
-    const q = search.toLowerCase();
-    return (j.title || '').toLowerCase().includes(q)
-      || (j.customer || '').toLowerCase().includes(q)
-      || (j.job_number || '').toLowerCase().includes(q)
-      || (j.po_number || '').toLowerCase().includes(q)
-      || (j.part_number || '').toLowerCase().includes(q);
+    return matchSearch(j.title, j.customer, j.job_number, j.po_number, j.part_number);
   });
 
   // ── Scans tab derivations: one group per customer + PO (one invoice each) ──
@@ -397,10 +394,8 @@ export default function InvoicingHubPage() {
 
   const visibleScanGroups = scanGroups.filter(g => {
     if (!search) return true;
-    const q = search.toLowerCase();
-    return g.customer.toLowerCase().includes(q)
-      || (g.po || '').toLowerCase().includes(q)
-      || g.scans.some(s => (s.part_number || '').toLowerCase().includes(q) || s.vin.toLowerCase().includes(q));
+    return matchSearch(g.customer, g.po)
+      || g.scans.some(s => matchSearch(s.part_number, s.vin));
   });
 
   const selectedScanIds = scanGroups
@@ -490,6 +485,7 @@ export default function InvoicingHubPage() {
       rangeStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
       rangeEnd = new Date(now.getFullYear(), now.getMonth(), 1);
     }
+    const match = looseMatcher(search);
     const filtered = sentInvoices.filter(r => {
       if (rangeStart) {
         if (!r.date) return false;
@@ -498,10 +494,7 @@ export default function InvoicingHubPage() {
         if (rangeEnd && dt >= rangeEnd) return false;
       }
       if (!search) return true;
-      const q = search.toLowerCase();
-      return r.customer.toLowerCase().includes(q)
-        || r.invoiceNumber.toLowerCase().includes(q)
-        || (r.po || '').toLowerCase().includes(q);
+      return match(r.customer, r.invoiceNumber, r.po);
     });
     // QuickBooks matches skip the window and the text filter: they are all
     // older than any window, and the server already matched them, often on

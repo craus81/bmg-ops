@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import NetsuiteVendorSearch from '@/components/NetsuiteVendorSearch';
+import { looseMatcher } from '@/lib/loose-search';
 
 interface Installer {
   user_id: string;
@@ -104,20 +105,14 @@ export default function CniVendorIdsPage() {
 
   const activeMissing = installers.filter(i => !i.deactivated && !i.netsuite_vendor_id).length;
 
+  const matchSearch = looseMatcher(search);
   const filtered = installers.filter(i => {
     if (!showDeactivated && i.deactivated) return false;
     if (companyFilter === 'independent' && i.company_id) return false;
     if (companyFilter !== 'all' && companyFilter !== 'independent' && i.company_id !== companyFilter) return false;
     if (idFilter === 'missing' && i.netsuite_vendor_id) return false;
     if (idFilter === 'has' && !i.netsuite_vendor_id) return false;
-    if (search) {
-      const s = search.toLowerCase();
-      const match = i.full_name?.toLowerCase().includes(s) ||
-        i.company_name?.toLowerCase().includes(s) ||
-        i.email?.toLowerCase().includes(s) ||
-        i.netsuite_vendor_id?.toLowerCase().includes(s);
-      if (!match) return false;
-    }
+    if (search && !matchSearch(i.full_name, i.company_name, i.email, i.netsuite_vendor_id)) return false;
     return true;
   });
 

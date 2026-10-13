@@ -51,6 +51,7 @@ import EstimatePartsRequestModal from '@/components/EstimatePartsRequestModal';
 import { closeOnEscape } from '@/lib/modal-escape';
 import CreatedBy from '@/components/CreatedBy';
 import OrderTeamChat from '@/components/OrderTeamChat';
+import { looseMatcher, looseOrFilter, looseSearchRegex } from '@/lib/loose-search';
 
 interface Part {
   id: string;
@@ -1100,7 +1101,8 @@ export default function EstimatesPage() {
 
   // ── Customer search ──
   const searchCustomers = useCallback(async (q: string) => {
-    if (q.length < 2) { setCustResults([]); return; }
+    const re = looseSearchRegex(q);
+    if (q.length < 2 || !re) { setCustResults([]); return; }
     setCustSearching(true);
     // Two sources: the NetSuite mirror, and CRM leads (lead tier — records
     // not yet promoted). A lead's estimate rides on the name; pushing it to
@@ -1109,12 +1111,12 @@ export default function EstimatesPage() {
       supabase
         .from('customers')
         .select('id, netsuite_id, company_name, entity_id')
-        .or(`company_name.ilike.%${q}%,entity_id.ilike.%${q}%`)
+        .or(looseOrFilter(['company_name', 'entity_id'], q)!)
         .limit(8),
       supabase
         .from('prospects')
         .select('id, company_name')
-        .ilike('company_name', `%${q}%`)
+        .filter('company_name', 'imatch', re)
         .is('netsuite_id', null)
         .neq('record_type', 'vendor')
         .limit(5),
@@ -1359,12 +1361,13 @@ export default function EstimatesPage() {
       .sort((a, b) => Number(normItem(b.item_number) === needle) - Number(normItem(a.item_number) === needle)
         || String(a.item_number).localeCompare(String(b.item_number)))
       .slice(0, 8));
-    const { data } = await supabase
+    const partFilter = looseOrFilter(['item_number', 'display_name', 'description'], q);
+    const { data } = partFilter ? await supabase
       .from('netsuite_parts')
       .select('id, netsuite_id, item_number, display_name, description, sales_price, labor_hours, catalog, purchase_price, avg_install_cost')
       .eq('is_active', true)
-      .or(`item_number.ilike.%${q}%,display_name.ilike.%${q}%,description.ilike.%${q}%`)
-      .limit(10);
+      .or(partFilter)
+      .limit(10) : { data: [] };
     setPartResults((data as Part[]) || []);
     setPartSearching(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
@@ -1378,12 +1381,13 @@ export default function EstimatesPage() {
 
   // ── Match a custom line to a real NetSuite item ──
   const searchLineMatch = useCallback(async (q: string) => {
-    if (q.length < 2) { setLineMatchResults([]); return; }
+    const filter = looseOrFilter(['item_number', 'display_name', 'description'], q);
+    if (q.length < 2 || !filter) { setLineMatchResults([]); return; }
     const { data } = await supabase
       .from('netsuite_parts')
       .select('id, netsuite_id, item_number, display_name, description, sales_price, labor_hours, catalog, purchase_price, avg_install_cost')
       .eq('is_active', true)
-      .or(`item_number.ilike.%${q}%,display_name.ilike.%${q}%,description.ilike.%${q}%`)
+      .or(filter)
       .limit(10);
     setLineMatchResults((data as Part[]) || []);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
@@ -3298,10 +3302,10 @@ export default function EstimatesPage() {
   // Picker rows: text filter, best matches first — the estimate's VIN, then
   // its customer, then shop recency (openCheckinPicker's load order).
   const checkinMatches = useMemo(() => {
-    const q = checkinSearch.trim().toLowerCase();
+    const match = looseMatcher(checkinSearch);
     return checkinOptions
-      .filter(c => !q || [c.vin, c.customer_name, c.vehicle_year, c.vehicle_make, c.vehicle_model]
-        .filter(Boolean).join(' ').toLowerCase().includes(q))
+      .filter(c => match([c.vin, c.customer_name, c.vehicle_year, c.vehicle_make, c.vehicle_model]
+        .filter(Boolean).join(' ')))
       .map(c => ({
         ...c,
         vinMatch: !!vin.trim() && sameVehicleVin(vin, c.vin),
@@ -3363,13 +3367,14 @@ export default function EstimatesPage() {
   };
 
   const searchGraphicsJobs = useCallback(async (q: string) => {
-    if (q.length < 2) { setGraphicsPickerResults([]); return; }
+    const filter = looseOrFilter(['job_number', 'title', 'customer'], q);
+    if (q.length < 2 || !filter) { setGraphicsPickerResults([]); return; }
     const { data } = await supabase
       .from('graphics_jobs')
       .select('id, job_number, title, status, assigned_to, estimate_id')
       .is('estimate_id', null)
       .not('status', 'in', '("installed","cancelled")')
-      .or(`job_number.ilike.%${q}%,title.ilike.%${q}%,customer.ilike.%${q}%`)
+      .or(filter)
       .order('created_at', { ascending: false })
       .limit(10);
     setGraphicsPickerResults((data as LinkedGraphicsJob[]) || []);
@@ -3615,16 +3620,11 @@ export default function EstimatesPage() {
 
   // ═══════════ LIST VIEW ═══════════
   if (view === 'list') {
+    const s = search.toLowerCase();
+    const matchSearch = looseMatcher(search);
     const searchedEstimates = estimates.filter(e => {
       if (!search) return true;
-      const s = search.toLowerCase();
-      return (
-        estimateNumberMatches(e, s) ||
-        e.customer_name?.toLowerCase().includes(s) ||
-        e.title?.toLowerCase().includes(s) ||
-        e.vin?.toLowerCase().includes(s) ||
-        e.unit_number?.toLowerCase().includes(s)
-      );
+      return estimateNumberMatches(e, s) || matchSearch(e.customer_name, e.title, e.vin, e.unit_number);
     });
     // Counts come off the searched set, so a chip's number always matches
     // what clicking it shows.

@@ -29,6 +29,7 @@ import {
   type GraphicsJob, type Profile,
 } from '@/lib/types';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { looseMatcher } from '@/lib/loose-search';
 
 const priorityColor = (p: string) => {
   switch (p) {
@@ -122,11 +123,8 @@ export default function GraphicsWorkOrderModal({ jobs, profiles = [], onClose }:
   const ranked = order.map(id => byId.get(id)).filter((j): j is GraphicsJob => !!j);
   const rankedIds = new Set(order);
   // Unranked jobs are offered soonest-due first — the most likely next pick.
-  const pool = unrankedPool(workable, rankedIds).filter(j => {
-    const term = poolSearch.trim().toLowerCase();
-    if (!term) return true;
-    return [j.title, j.customer, j.job_number, j.po_number].some(v => v?.toLowerCase().includes(term));
-  });
+  const matchPool = looseMatcher(poolSearch);
+  const pool = unrankedPool(workable, rankedIds).filter(j => matchPool(j.title, j.customer, j.job_number, j.po_number));
 
   const move = (id: string, delta: number) => {
     const i = order.indexOf(id);

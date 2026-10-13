@@ -20,6 +20,7 @@ import NumberInput from '@/components/NumberInput';
 import type { GraphicsJob } from '@/lib/types';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { looseOrFilter } from '@/lib/loose-search';
 
 interface CustomerRow {
   id: string;
@@ -154,14 +155,15 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
 
   // ── Customer search (debounced) ──
   useEffect(() => {
-    if (!editingCustomer || custSearch.length < 2) { setCustResults([]); return; }
+    const filter = looseOrFilter(['company_name', 'entity_id'], custSearch);
+    if (!editingCustomer || custSearch.length < 2 || !filter) { setCustResults([]); return; }
     let cancelled = false;
     setCustSearching(true);
     const t = setTimeout(async () => {
       const { data } = await supabase
         .from('customers')
         .select('id, netsuite_id, company_name, entity_id')
-        .or(`company_name.ilike.%${custSearch}%,entity_id.ilike.%${custSearch}%`)
+        .or(filter)
         .limit(8);
       if (!cancelled) {
         setCustResults((data as CustomerRow[]) || []);
@@ -173,7 +175,8 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
 
   // ── Part search (debounced, only for the row being edited) ──
   useEffect(() => {
-    if (!activePartRow || partSearch.length < 2) { setPartResults([]); return; }
+    const filter = looseOrFilter(['item_number', 'display_name', 'description'], partSearch);
+    if (!activePartRow || partSearch.length < 2 || !filter) { setPartResults([]); return; }
     let cancelled = false;
     setPartSearching(true);
     const t = setTimeout(async () => {
@@ -181,7 +184,7 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
         .from('netsuite_parts')
         .select('id, netsuite_id, item_number, display_name, description, sales_price')
         .eq('is_active', true)
-        .or(`item_number.ilike.%${partSearch}%,display_name.ilike.%${partSearch}%,description.ilike.%${partSearch}%`)
+        .or(filter)
         .limit(10);
       if (!cancelled) {
         setPartResults((data as PartRow[]) || []);

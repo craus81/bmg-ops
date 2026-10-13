@@ -13,6 +13,7 @@ import Link from 'next/link';
 import { createClient } from '@/lib/supabase-browser';
 import { useRequireFeature } from '@/components/AuthProvider';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { looseMatcher } from '@/lib/loose-search';
 
 // Mirrors normalizeItemNumber in vendor-po-sync (server-only import there):
 // NetSuite sub-items are "PARENT : CHILD" — compare on the last segment.
@@ -112,11 +113,11 @@ export default function InventoryPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const q = search.trim().toUpperCase();
+  const match = looseMatcher(search);
   const visible = rows.filter(r => {
     if (filter === 'allocated' && r.allocated <= 0) return false;
     if (filter === 'on_order' && r.on_order <= 0) return false;
-    if (q && !r.item_number.toUpperCase().includes(q) && !(r.display_name || '').toUpperCase().includes(q)) return false;
+    if (!match(r.item_number, r.display_name)) return false;
     return true;
   });
 

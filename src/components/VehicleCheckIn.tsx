@@ -23,6 +23,7 @@ import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
 import ProofViewer from '@/components/ProofViewer';
 import { useFormTelemetry } from '@/lib/use-form-telemetry';
+import { looseOrFilter } from '@/lib/loose-search';
 
 // ─── Step indicator ────────────────────────────────────────────
 function StepIndicator({ current }: { current: number }) {
@@ -713,11 +714,12 @@ export default function VehicleCheckIn({ onCheckedIn, initialVin, pullInAfter = 
     const q = manualCustomerName.trim();
     if (manualCustomerId || q.length < 2) { setManualCustMatches([]); return; }
     const t = setTimeout(async () => {
-      const escaped = q.replace(/[%,()]/g, ' ');
+      const filter = looseOrFilter(['company_name', 'entity_id'], q);
+      if (!filter) { setManualCustMatches([]); return; }
       const { data } = await supabase
         .from('customers')
         .select('id, company_name, entity_id')
-        .or(`company_name.ilike.%${escaped}%,entity_id.ilike.%${escaped}%`)
+        .or(filter)
         .order('company_name')
         .limit(8);
       setManualCustMatches((data || []) as typeof manualCustMatches);

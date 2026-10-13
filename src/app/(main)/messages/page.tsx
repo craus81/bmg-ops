@@ -10,6 +10,7 @@ import { theme } from '@/lib/theme';
 import type { Profile, Conversation, Message } from '@/lib/types';
 import OrderChatsList from '@/components/OrderChatsList';
 import { deepLinks } from '@/lib/deep-links';
+import { looseMatcher } from '@/lib/loose-search';
 
 interface ConversationWithDetails extends Conversation {
   otherUser: Profile;
@@ -409,11 +410,11 @@ export default function MessagesPage() {
   const getActiveConvo = () => conversations.find(c => c.id === activeConvoId);
   const totalUnread = conversations.reduce((sum, c) => sum + c.unreadCount, 0);
 
+  const matchUser = looseMatcher(userSearch);
   const filteredUsers = profiles.filter(p => {
     if (p.id === user?.id) return false;
     if (!userSearch) return true;
-    const s = userSearch.toLowerCase();
-    return p.full_name?.toLowerCase().includes(s) || p.email?.toLowerCase().includes(s);
+    return matchUser(p.full_name, p.email);
   });
 
   const formatTime = (dateStr: string) => {

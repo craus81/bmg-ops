@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 import { downloadCsv } from '@/lib/csv';
 import { BUCKET_LABEL, BUCKET_HELP, type RecoveryBucket } from '@/lib/never-invoiced';
+import { looseMatcher } from '@/lib/loose-search';
 
 /**
  * Never-Invoiced Recovery Queue (R6-12) — the drill-down behind the
@@ -127,15 +128,10 @@ export default function NeverInvoicedPage() {
     </div>
   );
 
-  const q = search.trim().toLowerCase();
+  const match = looseMatcher(search);
   const rows = (report?.rows || []).filter(r =>
     (bucket === 'all' || r.bucket === bucket)
-    && (!q
-      || r.vin.toLowerCase().includes(q)
-      || (r.vehicle || '').toLowerCase().includes(q)
-      || (r.customerName || '').toLowerCase().includes(q)
-      || r.salesOrders.some(s => (s.number || '').toLowerCase().includes(q))
-      || r.estimates.some(e => (e.number || '').toLowerCase().includes(q))));
+    && match(r.vin, r.vehicle, r.customerName, r.salesOrders.map(s => s.number), r.estimates.map(e => e.number)));
 
   const paperTrail = (r: Row) => {
     const openSos = r.salesOrders.filter(s => !s.invoiced);

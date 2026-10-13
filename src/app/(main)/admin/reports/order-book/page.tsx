@@ -6,6 +6,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 import { downloadCsv } from '@/lib/csv';
 import CreatedBy from '@/components/CreatedBy';
+import { looseMatcher } from '@/lib/loose-search';
 
 /**
  * Open Order Book (R4-3): every open sales order from the NetSuite mirror —
@@ -95,11 +96,8 @@ export default function OrderBookPage() {
   );
 
   const q = search.trim().toLowerCase();
-  const rows = (report?.rows || []).filter(r =>
-    !q
-    || (r.tranid || '').toLowerCase().includes(q)
-    || (r.customerName || '').toLowerCase().includes(q)
-    || (r.statusLabel || '').toLowerCase().includes(q));
+  const match = looseMatcher(q);
+  const rows = (report?.rows || []).filter(r => match(r.tranid, r.customerName, r.statusLabel));
 
   if (authLoading || (!isAdmin && !isSales)) return null;
 

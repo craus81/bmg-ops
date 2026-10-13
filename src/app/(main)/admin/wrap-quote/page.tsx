@@ -80,6 +80,7 @@ import {
   splitOutlineForRoll,
 } from '@/lib/roll-nesting';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { looseOrFilter } from '@/lib/loose-search';
 
 // Manual wrap-quote estimator (WrapUP-style): pick a 1:20 vehicle outline
 // template, draw measurement shapes over it, price by substrate + labor,
@@ -811,11 +812,12 @@ export default function WrapQuotePage() {
     const q = custSearch.trim();
     if (q.length < 2) { setCustMatches([]); return; }
     const t = setTimeout(async () => {
-      const escaped = q.replace(/[%,()]/g, ' ');
+      const filter = looseOrFilter(['company_name', 'entity_id'], q);
+      if (!filter) { setCustMatches([]); return; }
       const { data } = await supabase
         .from('customers')
         .select('id, company_name, entity_id, email, phone, address')
-        .or(`company_name.ilike.%${escaped}%,entity_id.ilike.%${escaped}%`)
+        .or(filter)
         .order('company_name')
         .limit(8);
       setCustMatches((data || []) as typeof custMatches);

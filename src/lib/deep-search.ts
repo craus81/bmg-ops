@@ -29,6 +29,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FeatureKey } from '@/lib/features';
 import { deepLinks } from '@/lib/deep-links';
 import { historySearchTerms, listHistory } from '@/lib/ledger/history';
+import { looseMatcher, looseOrFilter, looseSearchRegex, searchWords } from '@/lib/loose-search';
 
 /** Shortest query the text groups run on (trigram indexes need three). */
 export const DEEP_MIN_QUERY = 3;
@@ -63,7 +64,8 @@ export interface DeepSearchResult {
  */
 export function deepSearchPhrase(q: string | null | undefined): string | null {
   const phrase = historySearchTerms(q).join(' ');
-  return phrase.length >= DEEP_MIN_QUERY ? phrase : null;
+  // Words to match, too: "..." is three characters but nothing to search for.
+  return phrase.length >= DEEP_MIN_QUERY && searchWords(phrase).length > 0 ? phrase : null;
 }
 
 /**
@@ -75,22 +77,29 @@ export function excerpt(text: string | null | undefined, phrase: string, width =
   const t = String(text || '').replace(/\s+/g, ' ').trim();
   if (!t) return null;
   if (t.length <= width) return t;
-  const at = t.toLowerCase().indexOf(phrase.toLowerCase());
+  // The phrase as typed, else its first word ("St Charles" in "Saint Charles").
+  const lower = t.toLowerCase();
+  let at = lower.indexOf(phrase.toLowerCase());
+  if (at < 0) { const w = searchWords(phrase).find(x => lower.includes(x)); if (w) at = lower.indexOf(w); }
   if (at < 0) return t.slice(0, width - 1).trimEnd() + '…';
   const start = Math.max(0, Math.min(at - Math.floor((width - phrase.length) / 2), t.length - width));
   const end = Math.min(t.length, start + width);
   return (start > 0 ? '…' : '') + t.slice(start, end).trim() + (end < t.length ? '…' : '');
 }
 
-/** The first of `fields` that contains the phrase, for the excerpt. */
+/** The first of `fields` the phrase matches (loosely, as the query did), for the excerpt. */
 function firstHit(phrase: string, ...fields: (string | null | undefined)[]): string | null {
-  const p = phrase.toLowerCase();
-  return fields.find(f => !!f && f.toLowerCase().includes(p)) || null;
+  const hit = looseMatcher(phrase);
+  return fields.find(f => !!f && hit(f)) || null;
 }
 
-const contains = (phrase: string) => `%${phrase}%`;
-/** An `.or()` of ilike on several columns, values quoted so spaces survive. */
-const orIlike = (cols: string[], phrase: string) => cols.map(c => `${c}.ilike."*${phrase}*"`).join(',');
+// The forgiving match every search box uses (src/lib/loose-search.ts):
+// "St. Charles" = "Saint Charles", "ofallon" finds "O'Fallon". deepSearchPhrase
+// only passes a phrase with words, so neither is ever null here.
+/** The phrase as a regex for one column's `imatch`. */
+const looseRe = (phrase: string) => looseSearchRegex(phrase)!;
+/** An `.or()` of the loose match on several columns. */
+const orLoose = (cols: string[], phrase: string) => looseOrFilter(cols, phrase)!;
 
 const one = <T,>(v: T | T[] | null | undefined): T | null => (Array.isArray(v) ? v[0] ?? null : v ?? null);
 
@@ -120,19 +129,19 @@ async function nsTransactions(service: SupabaseClient, phrase: string, limit: nu
       ? service.from('ledger_invoices')
           .select('id, doc_number, external_ref, doc_date, party_name, po_number, memo', { count: 'exact' })
           .eq('source', 'netsuite').eq('doc_type', 'invoice').eq('voided', false).is('deleted_at', null)
-          .or(orIlike(['memo', 'po_number'], phrase))
+          .or(orLoose(['memo', 'po_number'], phrase))
           .order('doc_date', { ascending: false }).limit(limit)
       : null,
     access.money
       ? service.from('netsuite_sales_orders')
           .select('id, tranid, trandate, customer_name, customer_netsuite_id, memo, otherrefnum, vin, estimate_id', { count: 'exact' })
-          .or(orIlike(['memo', 'otherrefnum'], phrase))
+          .or(orLoose(['memo', 'otherrefnum'], phrase))
           .order('trandate', { ascending: false, nullsFirst: false }).limit(limit)
       : null,
     wantVendorPos
       ? service.from('netsuite_vendor_pos')
           .select('id, tranid, trandate, vendor_name, memo', { count: 'exact' })
-          .or(orIlike(['memo', 'vendor_name'], phrase))
+          .or(orLoose(['memo', 'vendor_name'], phrase))
           .order('trandate', { ascending: false, nullsFirst: false }).limit(limit)
       : null,
   ]);
@@ -181,7 +190,7 @@ async function nsTransactions(service: SupabaseClient, phrase: string, limit: nu
 
 async function notes(service: SupabaseClient, phrase: string, limit: number, access: DeepSearchAccess) {
   const f = access.features;
-  const like = contains(phrase);
+  const re = looseRe(phrase);
   const vehicles = f.has('in_shop') || f.has('fleet_checkin');
   const pos = f.has('purchase_orders');
   const graphics = f.has('graphics');
@@ -192,33 +201,33 @@ async function notes(service: SupabaseClient, phrase: string, limit: number, acc
     vehicles
       ? service.from('vehicle_notes')
           .select('id, vehicle_id, note, created_by_name, created_at, vehicle:fleet_checkins(vehicle_year, vehicle_make, vehicle_model, vin, customer_name)', { count: 'exact' })
-          .ilike('note', like).order('created_at', { ascending: false }).limit(limit)
+          .filter('note', 'imatch', re).order('created_at', { ascending: false }).limit(limit)
       : null,
     pos
       ? service.from('po_notes')
           .select('id, po_id, body, created_at, po:purchase_orders(po_number, customer)', { count: 'exact' })
-          .ilike('body', like).order('created_at', { ascending: false }).limit(limit)
+          .filter('body', 'imatch', re).order('created_at', { ascending: false }).limit(limit)
       : null,
     graphics
       ? service.from('graphics_status_history')
           .select('id, job_id, note, created_at, job:graphics_jobs(job_number, title, customer)', { count: 'exact' })
-          .ilike('note', like).order('created_at', { ascending: false }).limit(limit)
+          .filter('note', 'imatch', re).order('created_at', { ascending: false }).limit(limit)
       : null,
     graphics
       ? service.from('graphics_jobs')
           .select('id, job_number, title, customer, notes, created_at', { count: 'exact' })
-          .ilike('notes', like).order('created_at', { ascending: false }).limit(limit)
+          .filter('notes', 'imatch', re).order('created_at', { ascending: false }).limit(limit)
       : null,
     upfit
       ? service.from('upfit_project_notes')
           .select('id, project_id, content, created_at, project:upfit_projects(project_name, customer_name)', { count: 'exact' })
           .eq('note_type', 'note')
-          .ilike('content', like).order('created_at', { ascending: false }).limit(limit)
+          .filter('content', 'imatch', re).order('created_at', { ascending: false }).limit(limit)
       : null,
     estimates
       ? service.from('estimates')
           .select('id, estimate_number, netsuite_estimate_number, title, notes, created_at', { count: 'exact' })
-          .ilike('notes', like).order('created_at', { ascending: false }).limit(limit)
+          .filter('notes', 'imatch', re).order('created_at', { ascending: false }).limit(limit)
       : null,
   ]);
 
@@ -297,12 +306,12 @@ async function bills(service: SupabaseClient, phrase: string, limit: number) {
 
   // Header hits and line hits, merged here: PostgREST can't .or() across tables.
   const [byHeader, lineHits] = await Promise.all([
-    base().or(orIlike(['vendor_name', 'doc_number', 'memo', 'private_note'], phrase))
+    base().or(orLoose(['vendor_name', 'doc_number', 'memo', 'private_note'], phrase))
       .order('doc_date', { ascending: false }).limit(limit + 1),
     service.from('ledger_bill_lines')
       .select('document_id, description, doc:ledger_bills!inner(source, voided, deleted_at)')
       .eq('doc.source', 'quickbooks').eq('doc.voided', false).is('doc.deleted_at', null)
-      .ilike('description', contains(phrase))
+      .filter('description', 'imatch', looseRe(phrase))
       .limit(200),
   ]);
   if (byHeader.error) throw new Error(`Bill search failed: ${byHeader.error.message}`);

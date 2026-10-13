@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { fetchAllRows } from '@/lib/fetch-all';
-import { escapeIlike } from '@/lib/customer-dupes';
+import { looseOrFilter } from '@/lib/loose-search';
 import type { CameraInstall } from '@/lib/camera-install';
 import { CAMERA_INSTALL_SELECT, cameraInstallFields, findCheckinId, imeiConflicts, withInstallerName } from '@/lib/camera-install-server';
 
@@ -24,17 +24,13 @@ export async function GET(req: NextRequest) {
 
   const customer = req.nextUrl.searchParams.get('customer')?.trim() || '';
   const q = (req.nextUrl.searchParams.get('q') || '').trim().slice(0, 60);
+  // Forgiving match (src/lib/loose-search.ts); a query with no words filters nothing.
+  const qFilter = looseOrFilter(['vin', 'camera_imei', 'go9b_imei', 'customer_name', 'license_plate'], q);
 
   const { data, error } = await fetchAllRows<any>((from, to) => {
     let query = service.from('camera_installs').select(CAMERA_INSTALL_SELECT);
     if (customer) query = query.eq('customer_name', customer);
-    if (q) {
-      const e = escapeIlike(q).replace(/[,()]/g, ' ');
-      query = query.or([
-        `vin.ilike.%${e}%`, `camera_imei.ilike.%${e}%`, `go9b_imei.ilike.%${e}%`,
-        `customer_name.ilike.%${e}%`, `license_plate.ilike.%${e}%`,
-      ].join(','));
-    }
+    if (qFilter) query = query.or(qFilter);
     return query.order('installed_at', { ascending: false }).order('id').range(from, to);
   });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

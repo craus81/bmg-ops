@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { looseSearchRegex } from '@/lib/loose-search';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,7 +35,8 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url);
   const partial = (searchParams.get('partial') || '').toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
-  const customer = searchParams.get('customer') || '';
+  // The customer narrows loosely ("St Charles" = "Saint Charles"); no words, no narrowing.
+  const customerRe = looseSearchRegex(searchParams.get('customer'));
 
   if (partial.length < 6) {
     return NextResponse.json({ error: 'partial must be at least 6 characters' }, { status: 400 });
@@ -51,8 +53,8 @@ export async function GET(req: NextRequest) {
     .is('archived_at', null)
     .order('created_at', { ascending: false })
     .limit(20);
-  if (customer) {
-    fleetQuery = fleetQuery.ilike('customer_name', `%${customer}%`);
+  if (customerRe) {
+    fleetQuery = fleetQuery.filter('customer_name', 'imatch', customerRe);
   }
   const { data: fleetRows } = await fleetQuery;
 
@@ -63,8 +65,8 @@ export async function GET(req: NextRequest) {
     .ilike('vin', `%${partial}`)
     .order('scanned_at', { ascending: false })
     .limit(20);
-  if (customer) {
-    scanQuery = scanQuery.ilike('billable_customer', `%${customer}%`);
+  if (customerRe) {
+    scanQuery = scanQuery.filter('billable_customer', 'imatch', customerRe);
   }
   const { data: scanRows } = await scanQuery;
 

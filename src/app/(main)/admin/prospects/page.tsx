@@ -44,6 +44,7 @@ import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { SKIP_LABEL, type SkippedRecipient } from '@/lib/segment-blast';
 import { useFormTelemetry } from '@/lib/use-form-telemetry';
+import { looseMatcher } from '@/lib/loose-search';
 
 interface Prospect {
   id: string;
@@ -645,6 +646,7 @@ export default function ProspectsPage() {
   // shows only its own kind. The dashboard's pipeline-stage deep links are
   // about deals, which prospects have as often as customers, so while one
   // is active the Customers and Prospects tabs both show either kind.
+  const matchSearch = looseMatcher(search);
   const filtered = prospects.filter(p => {
     const kind = kindOf(p);
     const pipelineSpan = !!stageFilter && crmTab !== 'vendors' && kind !== 'vendors';
@@ -664,10 +666,7 @@ export default function ProspectsPage() {
       const threshold = spendTierFilter === '10k' ? 10000 : spendTierFilter === '50k' ? 50000 : 100000;
       if (ytd < threshold) return false;
     }
-    if (search) {
-      const s = search.toLowerCase();
-      return p.company_name.toLowerCase().includes(s) || (p.contact_name || '').toLowerCase().includes(s) || (p.email || '').toLowerCase().includes(s) || (p.notes || '').toLowerCase().includes(s);
-    }
+    if (search) return matchSearch(p.company_name, p.contact_name, p.email, p.notes);
     return true;
   });
 
@@ -960,8 +959,8 @@ export default function ProspectsPage() {
           {!contactsLoaded ? (
             <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>Loading contacts...</div>
           ) : (() => {
-            const q = contactSearch.toLowerCase();
-            const matches = q ? allContacts.filter(c => c.name?.toLowerCase().includes(q) || c.email?.toLowerCase().includes(q) || c.phone?.toLowerCase().includes(q) || c.company_name?.toLowerCase().includes(q) || c.title?.toLowerCase().includes(q)) : allContacts;
+            const match = looseMatcher(contactSearch);
+            const matches = contactSearch ? allContacts.filter(c => match(c.name, c.email, c.phone, c.company_name, c.title)) : allContacts;
             return matches.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>No contacts found</div>
             ) : (
@@ -1122,9 +1121,8 @@ export default function ProspectsPage() {
           {search && crmTab !== 'vendors' && (() => {
             // A search (often a ?q= deep link from global search) can be for
             // a record on the other tab — offer the jump instead of a dead end.
-            const s = search.toLowerCase();
             const other = crmTab === 'prospects' ? 'customers' : 'prospects';
-            const n = prospects.filter(p => kindOf(p) === other && (p.company_name.toLowerCase().includes(s) || (p.contact_name || '').toLowerCase().includes(s) || (p.email || '').toLowerCase().includes(s))).length;
+            const n = prospects.filter(p => kindOf(p) === other && matchSearch(p.company_name, p.contact_name, p.email)).length;
             return n > 0 ? (
               <button onClick={() => setCrmTab(other)} style={{ marginTop: '10px', padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)', color: '#60a5fa' }}>
                 {n} match{n === 1 ? '' : 'es'} in {other === 'prospects' ? 'Prospects' : 'Customers'} →
