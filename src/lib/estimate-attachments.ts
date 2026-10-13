@@ -10,7 +10,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { shrinkImageForEmail } from './email-image';
+import { emailImageFilename, shrinkImageForEmail } from './email-image';
 import {
   MAX_ATTACHMENT_BYTES,
   fetchEmailAttachments,
@@ -89,13 +89,17 @@ export async function fetchEstimateAttachments(
   if (rows.length === 0) return { ok: true, attachments: [] };
   const fetched = await fetchEmailAttachments(ESTIMATE_FILE_PREFIX, rows, budgetBytes);
   if (!fetched.ok) return fetched;
-  // Photos go out at email size (src/lib/email-image.ts): a camera-size
-  // JPEG on top of the estimate PDF is what pushes these emails into
-  // customers' junk folders.
+  // Pictures go out at email size (src/lib/email-image.ts): a camera-size
+  // JPEG, or a photo saved as a PNG, on top of the estimate PDF is what
+  // pushes these emails into customers' junk folders. A PNG that went out
+  // as a JPEG is renamed .jpg; the email's download link still serves the
+  // full-size original.
   const attachments: EmailAttachment[] = [];
   for (const a of fetched.attachments) {
     const small = await shrinkImageForEmail(a.content, a.contentType || '');
-    attachments.push(small.shrunk ? { ...a, content: small.bytes } : a);
+    attachments.push(small.shrunk
+      ? { ...a, content: small.bytes, contentType: small.contentType, filename: emailImageFilename(a.filename, small.contentType) }
+      : a);
   }
   return { ok: true, attachments };
 }

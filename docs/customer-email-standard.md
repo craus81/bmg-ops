@@ -87,6 +87,15 @@ out). A staff member who has a reason can still send.
   preview returns its filename in `attachments` so the compose screen can
   say so (`intro` slot), and a render failure fails the send before any
   side effect rather than emailing a body that promises a file.
+- **Pictures at email size:** every picture that rides on a customer email
+  — a picked estimate file, a graphics proof, a coverage diagram, a PDF's
+  line thumbnail — goes through `shrinkImageForEmail`
+  (`src/lib/email-image.ts`): 1600 px on the long side, and a photo or
+  screenshot saved as PNG is re-encoded as a JPEG and renamed `.jpg`
+  (`emailImageFilename`), because a lossless 1600 px photo is still 1–3 MB
+  and four of them put an estimate back in the junk folder. Flat line art
+  stays a PNG. The body's download links serve the full-size originals.
+  Never attach a picture to a customer email without this.
 
 ## Where each flow stands
 

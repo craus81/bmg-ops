@@ -169,7 +169,11 @@ export async function requireAuth(req: NextRequest): Promise<AuthResult> {
     const service = createClient(supabaseUrl, supabaseServiceKey);
     const { data: profile } = await service
       .from('profiles')
-      .select('id, role, roles, status, deactivated')
+      // full_name rides along for the From line on customer emails
+      // ("Craig George via BMG Fleet", src/lib/resend.ts repFromName) and
+      // for "who sent this" notices; without it those fell back to the
+      // company name and the sender's email address.
+      .select('id, role, roles, status, deactivated, full_name')
       .eq('id', user.id)
       .single();
 

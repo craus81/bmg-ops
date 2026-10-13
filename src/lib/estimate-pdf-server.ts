@@ -43,10 +43,14 @@ async function fetchImage(url: string, remainingBudget: number): Promise<{ image
     if (raw.byteLength === 0 || raw.byteLength > MAX_IMAGE_BYTES) return null;
     // Line thumbnails print about an inch wide — a catalog photo at full
     // size was most of the PDF's weight.
-    const buf = (await shrinkImageForEmail(raw, ct, THUMB_MAX_PX)).bytes;
+    const small = await shrinkImageForEmail(raw, ct, THUMB_MAX_PX);
+    const buf = small.bytes;
     if (buf.byteLength > remainingBudget) return null;
+    // A photo stored as PNG comes back a JPEG (src/lib/email-image.ts), so
+    // the embed format follows the shrunk bytes, not the fetched type.
+    const outFormat: EstimatePdfImage['format'] = small.contentType.includes('png') ? 'PNG' : 'JPEG';
     return {
-      image: { dataUrl: `data:${format === 'PNG' ? 'image/png' : 'image/jpeg'};base64,${buf.toString('base64')}`, format },
+      image: { dataUrl: `data:${outFormat === 'PNG' ? 'image/png' : 'image/jpeg'};base64,${buf.toString('base64')}`, format: outFormat },
       bytes: buf.byteLength,
     };
   } catch {
@@ -64,7 +68,10 @@ async function readImage(
 ): Promise<{ image: EstimatePdfImage; bytes: number } | null> {
   const raw = await r2GetBytes(prefix, path, MAX_IMAGE_BYTES);
   if (!raw) return null;
-  const got = { contentType: raw.contentType, bytes: (await shrinkImageForEmail(raw.bytes, raw.contentType, THUMB_MAX_PX)).bytes };
+  // The format follows the shrunk bytes: a photo stored as PNG comes back
+  // a JPEG (src/lib/email-image.ts).
+  const small = await shrinkImageForEmail(raw.bytes, raw.contentType, THUMB_MAX_PX);
+  const got = { contentType: small.contentType, bytes: small.bytes };
   if (got.bytes.byteLength > remainingBudget) return null;
   const format: EstimatePdfImage['format'] | null =
     got.contentType.includes('png') ? 'PNG'
