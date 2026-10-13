@@ -81,6 +81,23 @@ describe('invoiceEntry (invoice@1)', () => {
     expect(r.lines.slice(1).map((l) => [l.itemNumber, l.division])).toEqual([['06ABC', 'graphics'], ['PART-A', 'upfit']]);
   });
 
+  it('posts an item with no income account, a payment say, to where NetSuite posts it, filed under neither division', () => {
+    const items = new Map([
+      ...ACCOUNTS.items,
+      ['18', { ...item('PREPAYMENT', 'Payment', null), postedAccount: '110' }],
+      ['19', { ...item('PART-B', 'InvtPart', '410'), postedAccount: '110' }],
+    ]);
+    const r = invoiceEntry([line('1', '11', 50000), line('2', '19', 2000), line('3', '18', -40000)], { ...ACCOUNTS, items });
+    expect(r.problems).toEqual([]);
+    // An income account still comes first.
+    expect(r.lines.map((l) => [l.lineId, l.account, l.cents, l.division])).toEqual([
+      [MAIN_LINE, '120', 12000, null],
+      ['1', '400', -50000, 'upfit'],
+      ['2', '410', -2000, 'upfit'],
+      ['3', '110', 40000, null],
+    ]);
+  });
+
   it('posts a tax line with no tax code to where such lines post', () => {
     expect(posted([line('1', '11', 1000), tax('2', null, 80)])).toEqual([[MAIN_LINE, '120', 1080], ['1', '400', -1000], ['2', '221', -80]]);
   });

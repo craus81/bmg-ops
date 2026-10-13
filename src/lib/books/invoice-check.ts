@@ -71,8 +71,10 @@ export interface CheckedInvoice {
  * An invoice that wasn't fulfilled first relieves the stock itself, on lines
  * of its own: one to a cost of goods sold account, one to the item's
  * inventory asset account. FleetSuite posts that cost with the fulfillment
- * rule, so the invoice rule leaves those lines out. A line that posts to its
- * item's own income account is a sale, whatever that account is.
+ * rule, so the invoice rule leaves those lines out. A line that posts to the
+ * account the rule posts its item to (its income account, or for an item
+ * with none the account NetSuite posts it to) is a sale, whatever that
+ * account is.
  */
 export function costLines(lines: InvoiceLine[], netsuite: Map<string, NetSuitePosting>, ctx: CheckContext): Set<string> {
   const out = new Set<string>();
@@ -80,7 +82,7 @@ export function costLines(lines: InvoiceLine[], netsuite: Map<string, NetSuitePo
     const posted = netsuite.get(line.lineId);
     if (!posted || line.tax || !line.itemId) continue;
     const item = ctx.items.get(line.itemId);
-    if (item?.incomeAccount === posted.account) continue;
+    if ((item?.incomeAccount ?? item?.postedAccount) === posted.account) continue;
     if (ctx.accountTypes.get(posted.account) === 'cost_of_goods_sold' || item?.assetAccount === posted.account) {
       out.add(line.lineId);
     }
@@ -163,7 +165,11 @@ export function problemReason(p: RuleProblem, names: ReasonNames): Reason {
         text: `${p.itemNumber || `Item ${p.itemId}`} isn't in the copy of NetSuite's items yet. Sync now on the NetSuite lists page copies it.`,
       };
     case 'no_income_account':
-      return { key: `no_income|${p.itemId}`, text: `${p.itemNumber} has no income account in the copy of NetSuite's items.` };
+      return {
+        key: `no_income|${p.itemId}`,
+        text: `${p.itemNumber} has no income account in the copy of NetSuite's items, and FleetSuite doesn't know where NetSuite posts it yet. `
+          + "It learns that from NetSuite's invoices since January 2025, as of the last copy of the NetSuite lists.",
+      };
     case 'no_tax_account':
       return {
         key: `no_tax|${p.taxCode}`,
@@ -351,6 +357,26 @@ export interface TaxAccountCount {
   lines: number;
 }
 
+/** Where an item with no income account posted on invoices, as the lists copy counted it (src/lib/books/netsuite-lists.ts). */
+export interface ItemAccountCount {
+  item_id: string;
+  account_id: string;
+  lines: number;
+}
+
+/** For each key, the account with the most lines; the first listed wins a tie. */
+function mostUsed(counts: Array<{ key: string; account: string; lines: number }>): Map<string, string> {
+  const out = new Map<string, string>();
+  const best = new Map<string, number>();
+  for (const c of counts) {
+    if ((best.get(c.key) ?? -1) < c.lines) {
+      best.set(c.key, c.lines);
+      out.set(c.key, c.account);
+    }
+  }
+  return out;
+}
+
 export interface AccountAmount {
   account: string;
   /** Debit positive. */
@@ -496,26 +522,33 @@ const WITHOUT_FACT: Record<keyof LineFacts, { what: string; so: string }> = {
  */
 export function checkMonth(
   data: InvoiceMonthData,
-  opts: { company: string; chart: ChartAccount[]; taxAccounts: TaxAccountCount[] | null; facts?: LineFactsRead | { error: string } | null },
+  opts: {
+    company: string;
+    chart: ChartAccount[];
+    taxAccounts: TaxAccountCount[] | null;
+    /** Where items with no income account posted; null or left out when it hasn't been read. */
+    itemAccounts?: ItemAccountCount[] | null;
+    facts?: LineFactsRead | { error: string } | null;
+  },
 ): MonthCheck {
   const facts = opts.facts && 'lines' in opts.facts ? opts.facts : null;
+
+  // An item with no income account goes to the account NetSuite posted its invoice lines to most.
+  const posted = mostUsed((opts.itemAccounts ?? []).map((a) => ({ key: a.item_id, account: a.account_id, lines: a.lines })));
   const items = new Map<string, RuleItem>();
   const taxNames = new Map<string, string>();
   for (const it of data.items) {
     if (it.kind === 'tax_code') taxNames.set(it.netsuite_id, it.name);
-    else items.set(it.netsuite_id, { number: it.name, type: it.item_type, incomeAccount: it.income_account, assetAccount: it.asset_account });
+    else {
+      items.set(it.netsuite_id, {
+        number: it.name, type: it.item_type, incomeAccount: it.income_account, assetAccount: it.asset_account,
+        ...(posted.has(it.netsuite_id) ? { postedAccount: posted.get(it.netsuite_id) } : {}),
+      });
+    }
   }
 
   // The tax code's most used account.
-  const taxAccounts = new Map<string, string>();
-  const best = new Map<string, number>();
-  for (const t of opts.taxAccounts ?? []) {
-    const code = t.tax_code_id ?? '';
-    if ((best.get(code) ?? -1) < t.lines) {
-      best.set(code, t.lines);
-      taxAccounts.set(code, t.account_id);
-    }
-  }
+  const taxAccounts = mostUsed((opts.taxAccounts ?? []).map((t) => ({ key: t.tax_code_id ?? '', account: t.account_id, lines: t.lines })));
 
   const accountTypes = new Map<string, string>();
   const accountNames = new Map<string, string>();

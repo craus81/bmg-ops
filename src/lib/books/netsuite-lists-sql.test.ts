@@ -201,7 +201,8 @@ type NsRow = Record<string, unknown>;
 /**
  * Answers the job's SuiteQL the way NetSuite would: only the fields asked
  * for, a refusal for a field it won't give or a record the role can't see,
- * and the sales tax lines counted by tax code and account.
+ * the sales tax lines counted by tax code and account, and the invoice lines
+ * of items with no income account counted by item and account.
  */
 class FakeNetSuite {
   records: Record<string, NsRow[]> = {};
@@ -210,11 +211,13 @@ class FakeNetSuite {
   failing: Record<string, string[]> = {};
   hidden = new Set<string>();
   taxLines: NsRow[] = [];
+  itemLines: NsRow[] = [];
   down = false;
 
   query = async (q: string): Promise<NsRow[]> => {
     if (this.down) throw Object.assign(new Error('NetSuite SuiteQL error (503): unavailable'), { status: 503 });
     if (q.includes("tl.taxline = 'T'")) return this.taxLines;
+    if (q.includes('i.incomeaccount IS NULL')) return this.itemLines;
     const record = /FROM (\w+) r\b/.exec(q)?.[1] ?? '';
     const fail = (detail: string) => Object.assign(
       new Error(`NetSuite SuiteQL error (400): {"o:errorDetails":[{"detail":"Invalid search query. Detailed unprocessed description follows. ${detail}"}]}`),
@@ -267,6 +270,7 @@ function netsuite(): FakeNetSuite {
     { tax_code_id: 12, account_id: 23, line_count: 40 },
     { tax_code_id: null, account_id: 23, line_count: 2 },
   ];
+  ns.itemLines = [{ item_id: 903, item_name: 'PREPAYMENT', account_id: 11, line_count: 2 }];
   return ns;
 }
 
@@ -333,6 +337,7 @@ describe('the copy job against the real functions', () => {
       { tax_code_id: '12', account_id: '23', lines: 40 },
       { tax_code_id: null, account_id: '23', lines: 2 },
     ]);
+    expect(r.itemAccounts).toEqual([{ item_id: '903', item_name: 'PREPAYMENT', account_id: '11', lines: 2 }]);
 
     expect(await rows('location')).toEqual([
       { id: '1', name: "O'Fallon", active: true, details: { subsidiary_id: '2' }, gone: false },
@@ -406,11 +411,12 @@ describe('the copy job against the real functions', () => {
     expect((await rows('vendor')).every((v) => !v.gone)).toBe(true);
   });
 
-  it('leaves the lists it has no time for to the next run', async () => {
+  it('leaves the lists it has no time for to the next run, still reading where things post', async () => {
     const r = await run(netsuite(), 30_000);
     expect(r.lists.vendor).toMatchObject({ received: 2 });
     expect(r.lists.item).toEqual({ skipped: true });
     expect(r.notes).toContain("There wasn't time left to copy the items; the next run will.");
+    expect(r.itemAccounts).toEqual([{ item_id: '903', item_name: 'PREPAYMENT', account_id: '11', lines: 2 }]);
   });
 
   it('fails the run only when NetSuite gives none of the lists', async () => {
@@ -420,6 +426,7 @@ describe('the copy job against the real functions', () => {
     expect(r.error).toBe("NetSuite wouldn't give any of the lists.");
     expect(r.lists.item?.error).toMatch(/503/);
     expect(r.notes).toContain("NetSuite wouldn't say which accounts sales tax posts to (NetSuite SuiteQL error (503): unavailable).");
+    expect(r.notes).toContain("NetSuite wouldn't say where items with no income account post (NetSuite SuiteQL error (503): unavailable).");
     // Nothing was marked gone by a run that read nothing.
     expect((await rows('location')).every((l) => !l.gone)).toBe(true);
   });

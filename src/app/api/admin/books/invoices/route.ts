@@ -5,7 +5,7 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import { COPY_FROM, monthOfDate, monthsBetween } from '@/lib/books/netsuite-gl';
 import { BOOKS_LISTS_SYNC } from '@/lib/books/netsuite-lists';
 import { INVOICE_RULE } from '@/lib/books/invoice-rule';
-import { checkMonth, type ChartAccount, type InvoiceMonthData, type LineFactsRead, type TaxAccountCount } from '@/lib/books/invoice-check';
+import { checkMonth, type ChartAccount, type InvoiceMonthData, type ItemAccountCount, type LineFactsRead, type TaxAccountCount } from '@/lib/books/invoice-check';
 import { readLineFacts } from '@/lib/books/invoice-line-facts';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { compactSuiteqlError } from '@/lib/sales-order-sync';
@@ -80,13 +80,14 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const lastLists = (lists.data?.last_result ?? null) as { taxAccounts?: TaxAccountCount[] } | null;
+  const lastLists = (lists.data?.last_result ?? null) as { taxAccounts?: TaxAccountCount[]; itemAccounts?: ItemAccountCount[] } | null;
   const check = checkMonth(
     { invoices, items: data.items ?? [] },
     {
       company,
       chart: accounts.data.map(({ company_id, ...a }) => ({ ...a, company: company_id ? codeOf.get(company_id) ?? null : null })),
       taxAccounts: Array.isArray(lastLists?.taxAccounts) ? lastLists.taxAccounts : null,
+      itemAccounts: Array.isArray(lastLists?.itemAccounts) ? lastLists.itemAccounts : null,
       facts,
     },
   );
