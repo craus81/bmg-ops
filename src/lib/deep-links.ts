@@ -144,6 +144,10 @@ export const deepLinks = {
    *  submitted" alert has to land. `cniJob` drops the reader on the job and
    *  makes them hunt for the tile holding the thing they were told about. */
   cniJobPhotos: (jobId: string) => `/admin/cni/jobs/${jobId}/photos`,
+  /** Completion Photos: finished-work photos from every job, filterable. */
+  completionPhotos: () => '/completion-photos',
+  /** Public page for photos shared with a customer (the token is the credential). */
+  sharedPhotos: (token: string) => `/shared-photos/${encodeURIComponent(token)}`,
   /** The vehicle record for one VIN — what was installed outside the shop,
    *  where, for whom, and every photo of it. */
   vehicleRecord: (vin: string) => `/vehicles/${encodeURIComponent(vin.trim().toUpperCase())}`,
