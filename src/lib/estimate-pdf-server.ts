@@ -16,6 +16,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { enrichLinesWithPartAssets } from './estimate-line-parts';
 import { coveragePictures, loadEstimateGraphics, loadEstimateProofs, type EstimateProofBlock } from './estimate-graphics';
 import { r2GetBytes } from './r2';
+import { shrinkImageForEmail } from './email-image';
 import { buildEstimatePdf, estimatePdfFilename, type EstimatePdfGraphics, type EstimatePdfImage, type EstimatePdfLine } from './estimate-pdf';
 
 // Keep the PDF (and the serverless memory bill) bounded: skip any single
@@ -23,6 +24,9 @@ import { buildEstimatePdf, estimatePdfFilename, type EstimatePdfGraphics, type E
 // lines past the budget still render, just without their thumbnail.
 const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 const MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024;
+// Thumbnails and the letterhead logo never print bigger than a couple of
+// inches; 600 px keeps them crisp.
+const THUMB_MAX_PX = 600;
 
 /** Fetch an image URL into the {dataUrl, format} shape jsPDF embeds.
  *  Returns null (never throws) for anything unusable: bad status, a
@@ -35,8 +39,12 @@ async function fetchImage(url: string, remainingBudget: number): Promise<{ image
     const format: EstimatePdfImage['format'] | null =
       ct.includes('png') ? 'PNG' : (ct.includes('jpeg') || ct.includes('jpg')) ? 'JPEG' : null;
     if (!format) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.byteLength === 0 || buf.byteLength > Math.min(MAX_IMAGE_BYTES, remainingBudget)) return null;
+    const raw = Buffer.from(await res.arrayBuffer());
+    if (raw.byteLength === 0 || raw.byteLength > MAX_IMAGE_BYTES) return null;
+    // Line thumbnails print about an inch wide — a catalog photo at full
+    // size was most of the PDF's weight.
+    const buf = (await shrinkImageForEmail(raw, ct, THUMB_MAX_PX)).bytes;
+    if (buf.byteLength > remainingBudget) return null;
     return {
       image: { dataUrl: `data:${format === 'PNG' ? 'image/png' : 'image/jpeg'};base64,${buf.toString('base64')}`, format },
       bytes: buf.byteLength,
@@ -54,8 +62,10 @@ async function readImage(
   path: string,
   remainingBudget: number,
 ): Promise<{ image: EstimatePdfImage; bytes: number } | null> {
-  const got = await r2GetBytes(prefix, path, Math.min(MAX_IMAGE_BYTES, remainingBudget));
-  if (!got) return null;
+  const raw = await r2GetBytes(prefix, path, MAX_IMAGE_BYTES);
+  if (!raw) return null;
+  const got = { contentType: raw.contentType, bytes: (await shrinkImageForEmail(raw.bytes, raw.contentType, THUMB_MAX_PX)).bytes };
+  if (got.bytes.byteLength > remainingBudget) return null;
   const format: EstimatePdfImage['format'] | null =
     got.contentType.includes('png') ? 'PNG'
       : (got.contentType.includes('jpeg') || got.contentType.includes('jpg')) ? 'JPEG'
@@ -185,7 +195,10 @@ async function mergeWrapAssets(base: Buffer, quotes: any[], proofBlocks: Estimat
 
   const addImagePage = async (bytes: Buffer, contentType: string, caption: string) => {
     if (appended >= MAX_APPENDED_PAGES) return;
-    const img = contentType.includes('png') ? await out.embedPng(bytes) : await out.embedJpg(bytes);
+    // Camera-size photos made approval emails 5–12 MB, and customer mail
+    // filters quietly junk messages that big (src/lib/email-image.ts).
+    const small = await shrinkImageForEmail(bytes, contentType);
+    const img = small.contentType.includes('png') ? await out.embedPng(small.bytes) : await out.embedJpg(small.bytes);
     const page = out.addPage([PAGE_W, PAGE_H]);
     const maxW = PAGE_W - PAGE_MARGIN * 2;
     const maxH = PAGE_H - PAGE_MARGIN * 2 - 24;

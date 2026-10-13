@@ -203,7 +203,8 @@ describe('sendEmail', () => {
     expect(await result).toBe(true);
     expect(sendMock.mock.calls[0][0]).toMatchObject({
       html: '<a href="https://app/tracking?vehicle&#61;5fe1ac28-e6ab">Open</a>',
-      text: 'Open',
+      // The text part keeps the link (htmlToText) — unarmored.
+      text: 'Open (https://app/tracking?vehicle=5fe1ac28-e6ab)',
     });
   });
 });

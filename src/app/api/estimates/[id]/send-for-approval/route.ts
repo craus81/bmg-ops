@@ -10,7 +10,7 @@ import { sendSMS } from '@/lib/sms-provider';
 import { renderEstimateDocument } from '@/lib/estimate-document';
 import { getEmailSignature } from '@/lib/email-signature';
 import { enrichLinesWithPartAssets } from '@/lib/estimate-line-parts';
-import { loadEstimateGraphics, loadEstimateProofs, type EstimateProofBlock } from '@/lib/estimate-graphics';
+import { loadEstimateGraphics, loadEstimateProofs, proofBlocksForEmail, type EstimateProofBlock } from '@/lib/estimate-graphics';
 import { r2PublicUrl } from '@/lib/r2';
 import { loadEstimateAttachmentRows, fetchEstimateAttachments } from '@/lib/estimate-attachments';
 import { resolveEstimateEmail, resolveEstimatePhone } from '@/lib/estimate-recipients';
@@ -25,9 +25,10 @@ import { logAudit } from '@/lib/audit';
 import { notify, notifyMany, getSuperAdminIds } from '@/lib/notify';
 import { enforceCustomerHold } from '@/lib/customer-hold-server';
 
-// R3-22: proof images inlined in the approval email are presigned at the
-// 7-day SigV4 maximum — the actionable window. Beyond it the attached PDF
-// (proofs inlined as bytes) and the approval page carry the artwork.
+// R3-22: proof images are presigned at the 7-day SigV4 maximum. Only the
+// compose preview shows those links now — the sent email points its proof
+// pictures at our own token-gated route (proofBlocksForEmail), because
+// foreign signed storage URLs push the email toward customers' junk folders.
 const EMAIL_PRESIGN_SECONDS = 7 * 24 * 3600;
 
 export const dynamic = 'force-dynamic';
@@ -462,7 +463,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       ctaNote: `This link expires in ${expiryDays} days.`,
       signature,
       graphics: approvalGraphics,
-      proofs: proofBlocks,
+      proofs: proofBlocksForEmail(proofBlocks, appUrl, token),
       attachmentNames,
     });
     const bcc = body.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
