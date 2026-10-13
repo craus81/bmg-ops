@@ -3,7 +3,8 @@ import { PRICING_REQUEST_PUSH_BLOCKED } from '@/lib/pricing-request';
 import { createSalesOrder, findLocation, closeNetSuiteEstimate } from '@/lib/netsuite';
 import { buildSoLineItems, soContentHash } from '@/lib/so-sync';
 import { createClient } from '@supabase/supabase-js';
-import { requireFeature } from '@/lib/api-auth';
+import { requireFeature, getProfileRoles } from '@/lib/api-auth';
+import { checkDiscountApproval } from '@/lib/discount-approval';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
 import { notifyMany } from '@/lib/notify';
@@ -166,6 +167,13 @@ export async function POST(req: NextRequest) {
         error: `This estimate has a $${discountAmount.toFixed(2)} discount, but NetSuite has no discount item to carry it. Create a Discount item in NetSuite (or name one in Settings → NetSuite Discount Item), then convert again. No sales order was created.`,
         step: 'discount_item',
       }, { status: 409 });
+    }
+
+    // Discounts over the admin-approval limit (migration 365) wait for an
+    // admin; an admin converting is their approval.
+    const discountBlock = await checkDiscountApproval(supabase, estimate, lineItems, { id: auth.user.id, roles: getProfileRoles(auth.profile) }, 'converted');
+    if (discountBlock) {
+      return NextResponse.json({ error: discountBlock.error, step: 'discount_approval', discountApproval: discountBlock.status }, { status: 409 });
     }
 
     if (soLineItems.length === 0) {

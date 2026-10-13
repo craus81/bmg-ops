@@ -5,7 +5,7 @@ import { requireFeature } from '@/lib/api-auth';
 import { logAudit } from '@/lib/audit';
 import { isAdminRole } from '@/lib/features';
 import { validateBody, z } from '@/lib/validate';
-import { computeTotals, lineDiscountColumns, normalizeDiscount, normalizeVehicleCount } from '@/lib/estimate-totals';
+import { computeTotals, lineDiscountColumns, normalizeDiscount, normalizeDiscountDescription, normalizeVehicleCount } from '@/lib/estimate-totals';
 import { resolveLineTaxability } from '@/lib/line-taxability';
 import { getSalesTaxRate } from '@/lib/sales-tax';
 import { getDefaultLaborRate, toLaborRate } from '@/lib/labor-rate';
@@ -33,6 +33,8 @@ const LineItemSchema = z.object({
   // This line's own discount (migration 350). null/absent = none.
   discount_type: z.enum(['percent', 'amount']).optional().nullable(),
   discount_value: z.union([z.number(), z.string()]).optional().nullable(),
+  // Customer-facing words for it (migration 365), e.g. "Fleet loyalty".
+  discount_description: z.string().max(200).optional().nullable(),
   // Rack kit grouping (migration 332) — must survive the save round trip.
   ...kitLineSchemaFields,
 });
@@ -60,6 +62,7 @@ const UpsertEstimateSchema = z.object({
   // Off the whole job, before tax (migration 342). null/absent = no discount.
   discount_type: z.enum(['percent', 'amount']).optional().nullable(),
   discount_value: z.union([z.number(), z.string()]).optional().nullable(),
+  discount_description: z.string().max(200).optional().nullable(),
   line_items: z.array(LineItemSchema).max(500).optional(),
   created_by: z.string().uuid().optional().nullable(),
   install_instructions: z.string().max(5000).optional().nullable(),
@@ -173,7 +176,7 @@ export async function POST(req: NextRequest) {
     title, notes, status,
     tax_exempt, vehicle_count,
     labor_rate, labor_hours_override,
-    discount_type, discount_value,
+    discount_type, discount_value, discount_description,
     line_items, // array of line item objects
     created_by,
     // T1.6 install context
@@ -332,6 +335,7 @@ export async function POST(req: NextRequest) {
           discount_type: discount?.type ?? null,
           discount_value: discount?.value ?? null,
           discount_amount: totals.discount_amount,
+          discount_description: discount ? normalizeDiscountDescription(discount_description) : null,
           tax_amount: totals.tax_amount,
           grand_total: totals.grand_total,
           install_instructions: install_instructions || null,
@@ -451,6 +455,7 @@ export async function POST(req: NextRequest) {
           discount_type: discount?.type ?? null,
           discount_value: discount?.value ?? null,
           discount_amount: totals.discount_amount,
+          discount_description: discount ? normalizeDiscountDescription(discount_description) : null,
           tax_amount: totals.tax_amount,
           grand_total: totals.grand_total,
           install_instructions: install_instructions || null,

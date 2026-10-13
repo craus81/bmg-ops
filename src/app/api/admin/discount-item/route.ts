@@ -4,6 +4,7 @@ import { requireAdmin, requireSuperAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
 import { resolveDiscountItem } from '@/lib/discount-item';
+import { DEFAULT_DISCOUNT_APPROVAL_PCT } from '@/lib/discount-approval';
 import { suiteqlQuery } from '@/lib/netsuite';
 
 export const dynamic = 'force-dynamic';
@@ -30,7 +31,7 @@ export async function GET(req: NextRequest) {
   const supabase = getSupabase();
   const { data: settings } = await supabase
     .from('quote_settings')
-    .select('netsuite_discount_item_id, netsuite_discount_item_number')
+    .select('netsuite_discount_item_id, netsuite_discount_item_number, discount_approval_pct')
     .eq('id', 1)
     .maybeSingle();
 
@@ -43,6 +44,7 @@ export async function GET(req: NextRequest) {
     reason: resolution.reason,
     error: resolution.error,
     candidates: resolution.candidates || [],
+    approval_pct: settings?.discount_approval_pct != null ? Number(settings.discount_approval_pct) : DEFAULT_DISCOUNT_APPROVAL_PCT,
   });
 }
 
@@ -50,6 +52,9 @@ const UpdateSchema = z.object({
   // The NetSuite item NAME (itemid), e.g. "Discount". Empty clears the
   // setting and falls back to the ranked search.
   item_number: z.string().max(120).nullable().optional(),
+  // Discounts above this percent of the job need an admin (migration 365).
+  // Sent alone, it changes only the limit.
+  approval_pct: z.number().min(0).max(100).optional(),
 });
 
 export async function PUT(req: NextRequest) {
@@ -60,6 +65,27 @@ export async function PUT(req: NextRequest) {
   if (parsed.error) return parsed.error;
 
   const supabase = getSupabase();
+
+  if (parsed.data.approval_pct !== undefined && parsed.data.item_number === undefined) {
+    const pct = Math.round(parsed.data.approval_pct * 100) / 100;
+    const { data: prev } = await supabase.from('quote_settings').select('discount_approval_pct').eq('id', 1).maybeSingle();
+    const { error } = await supabase.from('quote_settings').upsert({
+      id: 1,
+      discount_approval_pct: pct,
+      updated_at: new Date().toISOString(),
+      updated_by: auth.user.id,
+    });
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    await logAudit(supabase, {
+      actorId: auth.user.id,
+      table: 'quote_settings',
+      recordId: '1',
+      action: 'discount_approval_limit_changed',
+      detail: { from: prev?.discount_approval_pct ?? null, to: pct },
+    });
+    return NextResponse.json({ approval_pct: pct });
+  }
+
   const raw = (parsed.data.item_number || '').trim();
 
   const { data: before } = await supabase

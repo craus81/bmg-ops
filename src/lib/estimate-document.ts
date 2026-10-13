@@ -139,7 +139,7 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
     // A line's own discount (migration 350) is a row under it.
     const withDiscount = (row: QuoteDocRow): QuoteDocRow[] => (Number(l.discount_amount) > 0
       ? [row, {
-        itemHtml: `<div style="padding-left:18px;font-size:12px;color:#15803d;">${escHtml(discountLabel(l.discount_type, l.discount_value))}</div>`,
+        itemHtml: `<div style="padding-left:18px;font-size:12px;color:#15803d;">${escHtml(discountLabel(l.discount_type, l.discount_value, l.discount_description))}</div>`,
         qtyHtml: '',
         rateHtml: '',
         totalHtml: `<span style="color:#15803d;">&minus;${money(l.discount_amount)}</span>`,
@@ -189,7 +189,7 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
     totals.push({ labelHtml: `Labor (${escHtml(laborHours)} hrs @ $${escHtml(est.labor_rate)}/hr)`, valueHtml: money(est.labor_total) });
   }
   if (Number(est.discount_amount) > 0) {
-    totals.push({ labelHtml: escHtml(discountLabel(est.discount_type, est.discount_value)), valueHtml: `&minus;${money(est.discount_amount)}` });
+    totals.push({ labelHtml: escHtml(discountLabel(est.discount_type, est.discount_value, est.discount_description)), valueHtml: `&minus;${money(est.discount_amount)}` });
   }
   // Estimate tax_rate is a FRACTION — rendered as (rate*100)%.
   if (!est.tax_exempt && Number(est.tax_amount) > 0) {

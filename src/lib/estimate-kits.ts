@@ -77,6 +77,9 @@ export function toKitDisplayLines<T extends AnyLine>(lines: T[]): KitDisplayLine
       const discountAmount = Math.round(discounted.reduce((s, m) => s + num(m.discount_amount), 0) * 100) / 100;
       const sameDiscount = discounted.length > 0 && discounted.length === members.length
         && discounted.every(m => m.discount_type === discounted[0].discount_type && num(m.discount_value) === num(discounted[0].discount_value));
+      // The words (migration 365) carry over only when every discounted part shares them.
+      const sameWords = discounted.length > 0
+        && discounted.every(m => (m.discount_description || null) === (discounted[0].discount_description || null));
       const kitQty = num(l.kit_quantity) > 0 ? num(l.kit_quantity) : 1;
       out.push({
         ...l,
@@ -94,6 +97,7 @@ export function toKitDisplayLines<T extends AnyLine>(lines: T[]): KitDisplayLine
         discount_amount: discountAmount,
         discount_type: sameDiscount ? discounted[0].discount_type : (discountAmount > 0 ? 'amount' : null),
         discount_value: sameDiscount ? discounted[0].discount_value : (discountAmount > 0 ? discountAmount : null),
+        discount_description: sameWords ? (discounted[0].discount_description || null) : null,
         kit_header: true,
       } as KitDisplayLine<T>);
     }

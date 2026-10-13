@@ -26,6 +26,13 @@ const DROP_FIELDS = new Set([
   'updated_by',
   'expiration_date', // a copied quote gets a fresh clock, not a stale one
   'supersedes_estimate_id', // set explicitly below
+  // An admin's discount approval (migration 365) covers the estimate they
+  // looked at; a copy asks again.
+  'discount_approval_requested_at',
+  'discount_approval_requested_by',
+  'discount_approved_at',
+  'discount_approved_by',
+  'discount_approved_pct',
 ]);
 
 // Lifecycle column FAMILIES, stripped by prefix so additions to a family
@@ -165,6 +172,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         discount_type: l.discount_type ?? null,
         discount_value: l.discount_value ?? null,
         discount_amount: l.discount_amount ?? 0,
+        discount_description: l.discount_description ?? null,
         ...kitLineColumns(l),
       }));
       const { error: lineErr } = await supabase.from('estimate_line_items').insert(lineRows);

@@ -34,7 +34,8 @@ import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { openJobOrder } from '@/lib/job-order-pdf';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
-import { discountLabel, discountSplit, lineMoney, netUnitPrice, normalizeDiscount, roundCentsHalfEven, normalizeVehicleCount, perVehicleAmount } from '@/lib/estimate-totals';
+import { discountLabel, discountSplit, jobDiscountShare, lineMoney, netUnitPrice, normalizeDiscount, normalizeDiscountDescription, roundCentsHalfEven, normalizeVehicleCount, perVehicleAmount } from '@/lib/estimate-totals';
+import { DEFAULT_DISCOUNT_APPROVAL_PCT } from '@/lib/discount-approval';
 import { resolveLineTaxability } from '@/lib/line-taxability';
 import { deltaLabel, type EstimateDiff } from '@/lib/estimate-diff';
 import { type DraftLine } from '@/lib/paste-to-estimate';
@@ -167,6 +168,8 @@ interface LineItem extends KitLineFields {
    *  open, still-empty discount row. Value kept as typed text. */
   discount_type?: 'percent' | 'amount' | null;
   discount_value?: string | number | null;
+  /** Customer-facing words for it (migration 365), e.g. "Fleet loyalty". */
+  discount_description?: string | null;
 }
 
 /** A line's catalog identity for the tax lookup (part, NetSuite item, number). */
@@ -280,6 +283,11 @@ interface Estimate {
   discount_type?: 'percent' | 'amount' | null;
   discount_value?: number | null;
   discount_amount?: number | null;
+  /** Migration 365: the discount's words, and an admin's approval over the limit. */
+  discount_description?: string | null;
+  discount_approved_at?: string | null;
+  discount_approved_pct?: number | null;
+  discount_approval_requested_at?: string | null;
   tax_amount: number;
   grand_total: number;
   netsuite_estimate_id: string | null;
@@ -574,6 +582,13 @@ export default function EstimatesPage() {
   // text so "12." survives while typing; blank = no discount.
   const [discountType, setDiscountType] = useState<'percent' | 'amount'>('percent');
   const [discountInput, setDiscountInput] = useState('');
+  const [discountDescription, setDiscountDescription] = useState('');
+  // Discounts over this percent of the job need an admin (migration 365),
+  // and the saved estimate's approval stamps.
+  const [discountApprovalLimit, setDiscountApprovalLimit] = useState(DEFAULT_DISCOUNT_APPROVAL_PCT);
+  const [discountApproval, setDiscountApproval] = useState<{ approvedAt: string | null; approvedPct: number | null; requestedAt: string | null }>({ approvedAt: null, approvedPct: null, requestedAt: null });
+  const [discountApprovalBusy, setDiscountApprovalBusy] = useState(false);
+  const [discountApprovalMsg, setDiscountApprovalMsg] = useState('');
   const [lines, setLines] = useState<LineItem[]>([]);
   // Margin floor (%) below which a quote gets flagged — admin-set, shared
   // with the wrap-quote builder via the quote_settings singleton.
@@ -1122,9 +1137,10 @@ export default function EstimatesPage() {
   }, [custSearch]);
 
   useEffect(() => {
-    supabase.from('quote_settings').select('margin_floor_pct, sales_tax_rate_pct, default_labor_rate').eq('id', 1).maybeSingle()
+    supabase.from('quote_settings').select('margin_floor_pct, sales_tax_rate_pct, default_labor_rate, discount_approval_pct').eq('id', 1).maybeSingle()
       .then(({ data }: any) => {
         if (data?.margin_floor_pct != null) setMarginFloor(Number(data.margin_floor_pct));
+        if (data?.discount_approval_pct != null) setDiscountApprovalLimit(Number(data.discount_approval_pct));
         if (data?.sales_tax_rate_pct != null) {
           const rate = pctToRate(data.sales_tax_rate_pct);
           setCompanyTaxRate(rate);
@@ -1159,7 +1175,7 @@ export default function EstimatesPage() {
   // save retires it. See src/lib/estimate-draft.ts.
   const draftFields = {
     editingId, title, notes, customerId, prospectId, customerName, customerNsId,
-    taxRate, taxExempt, vehicleCount, laborRate, laborOverride, discountType, discountInput, lines,
+    taxRate, taxExempt, vehicleCount, laborRate, laborOverride, discountType, discountInput, discountDescription, lines,
     vin, unitNumber, vehiclePlatformId, vehicleOther, vehicleOtherMode,
     vehicleYear, vehicleWheelbase, vehicleRoof, vehicleCab, vehicleBed,
     installInstructions, onSiteContactName, onSiteContactPhone,
@@ -1241,6 +1257,7 @@ export default function EstimatesPage() {
     setLaborOverride(typeof f.laborOverride === 'number' ? f.laborOverride : null);
     setDiscountType(f.discountType === 'amount' ? 'amount' : 'percent');
     setDiscountInput(typeof f.discountInput === 'string' ? f.discountInput : '');
+    setDiscountDescription(typeof (f as any).discountDescription === 'string' ? (f as any).discountDescription : '');
     setLines(Array.isArray(f.lines)
       ? f.lines.map((l: any) => ({ ...l, key: l.key || genKey() }))
       : []);
@@ -1697,6 +1714,11 @@ export default function EstimatesPage() {
   const discountCalc = discountSplit(subtotal + laborTotal, taxableAmount, discount);
   const taxAmount = taxExempt ? 0 : lineTaxAmount - roundCentsHalfEven(discountCalc.taxedPortion * taxRate);
   const grandTotal = subtotal + laborTotal - discountCalc.amount + taxAmount;
+  // All discounts together against the admin-approval limit (migration
+  // 365), the same figure the server's send and push checks use.
+  const discountShare = jobDiscountShare(lines, laborTotal, units, discount);
+  const discountApprovedNow = discountApproval.approvedAt != null && discountApproval.approvedPct != null
+    && discountShare.pct <= discountApproval.approvedPct;
   const perVehicle = perVehicleAmount(grandTotal, units);
 
   // Refresh which lines are untaxed whenever the line-up of items changes.
@@ -1884,6 +1906,7 @@ export default function EstimatesPage() {
         labor_hours_override: laborOverride,
         discount_type: discount ? discount.type : null,
         discount_value: discount ? discount.value : null,
+        discount_description: discount ? normalizeDiscountDescription(discountDescription) : null,
         install_instructions: installInstructions,
         on_site_contact_name: onSiteContactName,
         on_site_contact_phone: onSiteContactPhone,
@@ -1915,6 +1938,7 @@ export default function EstimatesPage() {
           wrap_quote_id: l.wrap_quote_id || null,
           discount_type: normalizeDiscount(l.discount_type, l.discount_value)?.type ?? null,
           discount_value: normalizeDiscount(l.discount_type, l.discount_value)?.value ?? null,
+          discount_description: normalizeDiscount(l.discount_type, l.discount_value) ? normalizeDiscountDescription(l.discount_description) : null,
           kit_group_id: l.kit_group_id || null,
           kit_id: l.kit_id || null,
           kit_item_number: l.kit_item_number || null,
@@ -2150,6 +2174,34 @@ export default function EstimatesPage() {
   // wrap screen is a navigation away — then hands off to the wrap-quote
   // builder, which returns here via /estimates?id= with the graphics lines
   // already written by /api/estimates/[id]/add-wrap-quote.
+  // Ask an admin to approve discounts over the limit, or (admin) approve
+  // them. Saves first: the server judges the saved estimate.
+  const discountApprovalAction = async (action: 'request' | 'approve') => {
+    setDiscountApprovalBusy(true);
+    setDiscountApprovalMsg('');
+    try {
+      const currentStatus = estimates.find(e => e.id === editingId)?.status || 'draft';
+      const id = await saveEstimate(currentStatus);
+      if (!id) return;
+      const res = await fetch(`/api/estimates/${id}/discount-approval`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setDiscountApprovalMsg(data?.error || 'That did not go through. Try again.'); return; }
+      if (action === 'approve' || data.alreadyApproved) {
+        setDiscountApproval(prev => ({ ...prev, approvedAt: new Date().toISOString(), approvedPct: data.discountApproval?.pct ?? null }));
+        setDiscountApprovalMsg('Approved. It can be sent or pushed now.');
+      } else {
+        setDiscountApproval(prev => ({ ...prev, requestedAt: new Date().toISOString() }));
+        setDiscountApprovalMsg(data.notified > 0 ? `Sent to ${data.notified} admin${data.notified === 1 ? '' : 's'}. You'll get a notification when it's approved.` : 'Saved, but no admin account was found to notify.');
+      }
+    } finally {
+      setDiscountApprovalBusy(false);
+    }
+  };
+
   const addGraphics = async () => {
     // Preserve the record's current status — the bare saveEstimate() default
     // is 'draft', which silently demoted a pushed estimate (dropping it from
@@ -3051,6 +3103,13 @@ export default function EstimatesPage() {
     setLaborOverride(est.labor_hours_override);
     setDiscountType(est.discount_type === 'amount' ? 'amount' : 'percent');
     setDiscountInput(est.discount_type && est.discount_value != null ? String(Number(est.discount_value)) : '');
+    setDiscountDescription(est.discount_description || '');
+    setDiscountApproval({
+      approvedAt: est.discount_approved_at || null,
+      approvedPct: est.discount_approved_pct != null ? Number(est.discount_approved_pct) : null,
+      requestedAt: est.discount_approval_requested_at || null,
+    });
+    setDiscountApprovalMsg('');
     setVin(est.vin || '');
     setUnitNumber(est.unit_number || '');
     setVehiclePlatformId(est.vehicle_platform_id || null);
@@ -3118,6 +3177,7 @@ export default function EstimatesPage() {
       wrap_quote_id: l.wrap_quote_id || null,
       discount_type: l.discount_type === 'percent' || l.discount_type === 'amount' ? l.discount_type : null,
       discount_value: l.discount_value != null ? String(Number(l.discount_value)) : null,
+      discount_description: l.discount_description || null,
       kit_group_id: l.kit_group_id || null,
       kit_id: l.kit_id || null,
       kit_item_number: l.kit_item_number || null,
@@ -3360,6 +3420,9 @@ export default function EstimatesPage() {
     setLaborOverride(null);
     setDiscountType('percent');
     setDiscountInput('');
+    setDiscountDescription('');
+    setDiscountApproval({ approvedAt: null, approvedPct: null, requestedAt: null });
+    setDiscountApprovalMsg('');
     setLines([]);
     setPartSearch('');
     setPartResults([]);
@@ -4856,12 +4919,21 @@ export default function EstimatesPage() {
                         placeholder={line.discount_type === 'percent' ? 'e.g. 10' : 'e.g. 50'}
                         style={{ ...inputStyle, width: '90px', padding: '3px 6px', fontSize: '11px' }}
                       />
+                      <input
+                        type="text"
+                        maxLength={80}
+                        value={line.discount_description ?? ''}
+                        onChange={e => setDisc({ discount_description: e.target.value })}
+                        placeholder="Description the customer sees (optional)"
+                        title='Shows on the quote in place of "Discount", e.g. "Fleet loyalty (10%)"'
+                        style={{ ...inputStyle, flex: '1 1 160px', minWidth: '140px', padding: '3px 6px', fontSize: '11px' }}
+                      />
                       <span style={{ fontSize: '11px', fontWeight: 800, color: '#22c55e', marginLeft: 'auto' }}>
                         {m.discount > 0 ? `−${fmt(m.discount)}` : ''}
                       </span>
                       <button
                         type="button"
-                        onClick={() => setDisc({ discount_type: null, discount_value: null })}
+                        onClick={() => setDisc({ discount_type: null, discount_value: null, discount_description: null })}
                         title="Remove this line's discount"
                         style={{ background: 'transparent', border: 'none', color: '#f87171', fontSize: '13px', cursor: 'pointer', padding: '0 2px' }}
                       >
@@ -5349,6 +5421,60 @@ export default function EstimatesPage() {
                 : 'Comes off the whole job (parts + labor), before tax.'}
             />
           </div>
+          {discount && (
+            <input
+              type="text"
+              maxLength={80}
+              style={{ ...inputStyle, marginTop: '6px' }}
+              value={discountDescription}
+              onChange={e => setDiscountDescription(e.target.value)}
+              placeholder="Description the customer sees (optional), e.g. Fleet loyalty"
+              title='Shows on the quote in place of "Discount", e.g. "Fleet loyalty (10%)"'
+            />
+          )}
+          {/* Discounts over the admin-approval limit (migration 365): all the
+              discounts together, as a percent of the job before discounts. */}
+          {discountShare.amount > 0 && discountShare.pct > discountApprovalLimit && (
+            <div style={{
+              marginTop: '8px', padding: '8px 10px', borderRadius: '8px', fontSize: '11px',
+              background: discountApprovedNow ? 'rgba(34,197,94,0.08)' : 'rgba(251,191,36,0.10)',
+              border: `1px solid ${discountApprovedNow ? 'rgba(34,197,94,0.3)' : 'rgba(251,191,36,0.4)'}`,
+              color: 'var(--text-body)',
+            }}>
+              <div style={{ fontWeight: 700, marginBottom: discountApprovedNow ? 0 : '6px' }}>
+                {discountApprovedNow
+                  ? `✓ Discounts (${discountShare.pct}% of the job) approved by an admin.`
+                  : `Discounts come to ${discountShare.pct}% of the job (${fmt(discountShare.amount)}), over the ${discountApprovalLimit}% limit. An admin has to approve before this can be sent or pushed to NetSuite.`}
+              </div>
+              {!discountApprovedNow && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  {isAdmin ? (
+                    <button
+                      type="button"
+                      onClick={() => discountApprovalAction('approve')}
+                      disabled={discountApprovalBusy}
+                      style={{ padding: '5px 12px', borderRadius: '6px', border: 'none', background: '#22c55e', color: '#fff', fontSize: '11px', fontWeight: 800, cursor: 'pointer', opacity: discountApprovalBusy ? 0.5 : 1 }}
+                    >
+                      {discountApprovalBusy ? 'Saving…' : 'Save & approve discount'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => discountApprovalAction('request')}
+                      disabled={discountApprovalBusy}
+                      style={{ padding: '5px 12px', borderRadius: '6px', border: 'none', background: '#3b82f6', color: '#fff', fontSize: '11px', fontWeight: 800, cursor: 'pointer', opacity: discountApprovalBusy ? 0.5 : 1 }}
+                    >
+                      {discountApprovalBusy ? 'Saving…' : discountApproval.requestedAt ? 'Ask again' : 'Ask an admin'}
+                    </button>
+                  )}
+                  {!isAdmin && discountApproval.requestedAt && (
+                    <span style={{ color: 'var(--text-label)' }}>Asked {new Date(discountApproval.requestedAt).toLocaleString()}</span>
+                  )}
+                </div>
+              )}
+              {discountApprovalMsg && <div style={{ marginTop: '6px', color: 'var(--text-label)' }}>{discountApprovalMsg}</div>}
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
@@ -5464,7 +5590,7 @@ export default function EstimatesPage() {
           </div>
           {discountCalc.amount > 0 && (
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#22c55e', marginBottom: '4px' }}>
-              <span>{discountLabel(discount?.type, discount?.value)}</span>
+              <span>{discountLabel(discount?.type, discount?.value, discountDescription)}</span>
               <span>−{fmt(discountCalc.amount)}</span>
             </div>
           )}

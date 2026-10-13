@@ -89,10 +89,21 @@ export function normalizeDiscount(type: unknown, value: unknown): EstimateDiscou
   return { type, value: type === 'percent' ? Math.min(n, 100) : n };
 }
 
-/** "Discount (10%)" / "Discount": the label documents and NetSuite share. */
-export function discountLabel(type: unknown, value: unknown): string {
+/** A discount's customer-facing description (migration 365), or null. */
+export function normalizeDiscountDescription(value: unknown): string | null {
+  const s = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, 80) : '';
+  return s || null;
+}
+
+/**
+ * "Discount (10%)" / "Discount": the label documents and NetSuite share.
+ * With a description (migration 365) the rep's words replace "Discount":
+ * "Fleet loyalty (10%)".
+ */
+export function discountLabel(type: unknown, value: unknown, description?: unknown): string {
   const d = normalizeDiscount(type, value);
-  return d?.type === 'percent' ? `Discount (${+d.value.toFixed(2)}%)` : 'Discount';
+  const name = normalizeDiscountDescription(description) || 'Discount';
+  return d?.type === 'percent' ? `${name} (${+d.value.toFixed(2)}%)` : name;
 }
 
 /**
@@ -160,7 +171,38 @@ export function lineDiscountColumns(line: any, units: unknown = 1) {
     discount_type: d?.type ?? null,
     discount_value: d?.value ?? null,
     discount_amount: lineMoney(line, units).discount,
+    discount_description: d ? normalizeDiscountDescription(line?.discount_description) : null,
   };
+}
+
+/**
+ * How big an estimate's discounts are, all together: every line discount
+ * plus the whole-job discount, as dollars and as a percent of the job
+ * before any discount (parts + labor). This is the figure the admin
+ * approval limit (migration 365, src/lib/discount-approval.ts) is held to.
+ */
+export function jobDiscountShare(
+  lines: any[],
+  laborTotal: unknown,
+  units: unknown,
+  discount: EstimateDiscount,
+): { base: number; amount: number; pct: number } {
+  const n = normalizeVehicleCount(units);
+  const labor = parseFloat(String(laborTotal ?? 0)) || 0;
+  let gross = 0;
+  let net = 0;
+  let lineDiscounts = 0;
+  for (const l of lines || []) {
+    const m = lineMoney(l, n);
+    gross += m.gross;
+    net += m.net;
+    lineDiscounts += m.discount;
+  }
+  const whole = discountSplit(net + labor, 0, discount).amount;
+  const base = Math.round((gross + labor) * 100) / 100;
+  const amount = Math.round((lineDiscounts + whole) * 100) / 100;
+  const pct = base > 0 ? Math.round((amount / base) * 10000) / 100 : 0;
+  return { base, amount, pct };
 }
 
 export function computeTotals(

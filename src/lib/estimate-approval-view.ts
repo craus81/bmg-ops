@@ -45,6 +45,7 @@ export function publicEstimate(est: any) {
     discount_type: est.discount_type,
     discount_value: est.discount_value,
     discount_amount: est.discount_amount,
+    discount_description: est.discount_description ?? null,
     subtotal: est.subtotal,
     grand_total: est.grand_total,
     notes: est.notes,
@@ -77,6 +78,7 @@ export function publicLines(lines: any[]) {
     discount_type: l.discount_type ?? null,
     discount_value: l.discount_value ?? null,
     discount_amount: Number(l.discount_amount) || 0,
+    discount_description: l.discount_description ?? null,
   }));
 }
 

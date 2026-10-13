@@ -148,7 +148,7 @@ export function buildDiscountLines(
 ): DiscountNsLine[] {
   const split = estimateDiscountSplit(estimate, lines);
   if (!(split.amount > 0)) return [];
-  const label = discountLabel(estimate.discount_type, estimate.discount_value);
+  const label = discountLabel(estimate.discount_type, estimate.discount_value, (estimate as any).discount_description);
   const isDiscountType = item.itemType === 'Discount';
   const make = (dollars: number, taxed: boolean, suffix: string): DiscountNsLine => ({
     itemId: item.id,
@@ -188,7 +188,7 @@ export function buildLineDiscountLine(
     itemId: item.id,
     ...(item.itemType === 'Discount' ? { discountItem: true as const } : { quantity: 1 }),
     rate: -discount,
-    description: `${discountLabel(line.discount_type, line.discount_value)}${what ? ` - ${what}` : ''}`,
+    description: `${discountLabel(line.discount_type, line.discount_value, line.discount_description)}${what ? ` - ${what}` : ''}`,
     discount: true,
     ...(taxed ? (estimate.tax_exempt ? {} : { taxable: true }) : { taxable: false }),
   };
