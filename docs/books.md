@@ -9,8 +9,9 @@ Installations LLC and 1084 Cool Springs LLC, which owns the building.
 This file covers part 1, the ledger core, part 2, the chart of accounts
 copied from NetSuite, part 3, NetSuite's general ledger from 2025 copied
 and checked month by month, part 4, the NetSuite lists the posting rules
-need, and part 5, the invoice rule, checked against NetSuite before it
-posts. The screens are the accounts page at `/admin/books`, the trial
+need, part 5, the invoice rule, checked against NetSuite, and part 6, every
+BMG invoice since 2025 posted to FleetSuite's own journal with it. The
+screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`
 and the invoices at `/admin/books/invoices`, which only super admins can
 open. Only they see the Books entry on the More page (Admin), which opens
@@ -33,6 +34,8 @@ the accounts page; the others are linked from there.
 | Invoice rule and its check | `src/lib/books/invoice-rule.ts`, `src/lib/books/invoice-check.ts`, `src/lib/books/invoice-line-facts.ts`, `migrations/364-books-invoice-check.sql` |
 | Invoices page and its API | `src/app/(main)/admin/books/invoices/page.tsx`, `src/app/api/admin/books/invoices/route.ts` |
 | Invoice tests | `src/lib/books/invoice-rule.test.ts`, `src/lib/books/invoice-check.test.ts`, `src/lib/books/invoice-line-facts.test.ts`, `src/lib/books/invoice-check-sql.test.ts` |
+| Invoices posted to the journal | `migrations/367-books-invoice-posting.sql`, `src/lib/books/invoice-posting.ts`, `src/app/api/cron/books-invoice-posting/route.ts` |
+| Invoice posting tests | `src/lib/books/invoice-posting.test.ts`, `src/lib/books/invoice-posting-sql.test.ts` |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
 QuickBooks and NetSuite history that importers replace wholesale. They stay
@@ -320,8 +323,9 @@ one NetSuite's invoices used most that month, and the page says so.
   known, a line with an amount but no item, no receivable account), the rule
   says why and posts nothing.
 
-Nothing posts yet (owner's choice 2026-10-11: check first). For every
-NetSuite invoice, `/admin/books/invoices` works out the rule's entry and
+The check came first (owner's choice 2026-10-11), and invoices post once
+it showed every BMG invoice since 2025 matching NetSuite (2026-10-13; see
+Posting invoices below). For every NetSuite invoice, `/admin/books/invoices` works out the rule's entry and
 checks it line by line against the GL lines NetSuite posted for the same
 invoice, to the cent: the receivable against NetSuite's main line (line 0),
 every other line by NetSuite's line id. Migration 364's
@@ -355,13 +359,74 @@ count for every month from January 2025.
   `transactiondiscount` and `foreignamount`, plus `quantity` and `rate`,
   only to show). A column NetSuite won't give is
   left out, and when NetSuite can't be asked at all the check goes without;
-  the page says which. Before invoices post, the mirror will have to keep
-  them.
+  the page says which. Posting asks NetSuite the same way, and leaves a
+  month alone when it can't.
 - The mirror keeps NetSuite's signed `netamount` in each line's `raw`, where
   a sale is negative. A line whose amount it didn't keep can't be worked
   out.
 - Credit memos aren't checked yet. They're the plan's mirror image of this
   rule: revenue and sales tax debited, receivables credited.
+
+## Posting invoices
+
+Every BMG invoice dated from January 2025 that the rule can work out posts
+to FleetSuite's own journal once, as Invoices vs NetSuite shows it, whether
+it matches NetSuite or not (owner decision 2026-10-13): during 2027 the
+differences are what the side-by-side run is for. 1084's invoices join once
+they've been checked against NetSuite (`POSTING_COMPANIES` in
+`src/lib/books/invoice-posting.ts`). Nothing is written to NetSuite.
+
+It runs every two hours (`/api/cron/books-invoice-posting`, :48 on odd
+hours, after the GL copy at :26 and the ledger mirror's invoices at :35 on
+even hours) and from **Post now** on the invoices page. Each run goes
+through every month again:
+
+- An invoice with no entry gets one, dated as the invoice is and keyed
+  `invoice:<NetSuite id>:1`.
+- An invoice whose entry no longer fits what the rule works out now (an
+  account, amount, division, line, customer or date changed in NetSuite, or
+  in the copies of its lines, items or GL) has its entry reversed and the
+  new one posted under the next generation's key, in one transaction
+  (`gl_repost_entry`, migration 367), so an invoice is never left with its
+  old entry reversed and no new one. A new memo or item name alone changes
+  nothing.
+- An invoice NetSuite voids or deletes has its entry reversed, dated as the
+  entry was. So does one that now comes to nothing.
+- An invoice the rule can't work out yet, whose lines aren't copied yet, or
+  whose lines in the copy don't add up to its total (caught mid-refresh)
+  keeps whatever it has, and the next run looks again. The run's notes name
+  the ones that don't add up.
+- A month whose invoice lines NetSuite couldn't be asked about, or where it
+  wouldn't say which lines are cost of goods, which is a discount set at
+  the top, or the lines' own amounts, is left as it is, since its entries
+  could come out different without them. The run's notes say which months.
+- An invoice posting to an account the chart doesn't have yet, or one the
+  journal refuses (an account made inactive since, say), isn't posted. The
+  run lists a few by number, with why.
+
+The receivable line carries the invoice's customer in FleetSuite, as the
+ledger mirror matched it (`customer_id`, which `gl_invoice_month` now
+returns). Migration 367's `gl_invoice_postings` reads what the journal holds
+for each invoice: the entry that stands and its lines, every earlier entry
+and what reversed it, and whether the copy of NetSuite's invoices says it's
+deleted or voided. Should a second entry ever stand for one invoice, the
+older is reversed.
+
+The run takes the GL copy's lock (`gl_netsuite_claim_copy`): it reads that
+copy, so it never runs while the copy changes it, and two runs never
+overlap. Whichever comes second does nothing and says "Another books job is
+running." The first run posts every invoice since 2025 and may take more
+than one run: a run stops within its budget between months, or before a
+write with under five seconds left, and the next carries on from the month
+it stopped at (`sync_state` `books_invoice_posting`). Like the other books
+jobs that record isn't a System Health monitor, and neither it nor the
+cron's response carries any amount.
+
+On the invoices page each invoice shows its entry ("Entry 12") and what the
+next run will do to it: post, replace or reverse. Opening it lists its
+earlier entries and what reversed them. Until a company's books go live the
+journal can be emptied (`resetJournal`), and the next run posts every
+invoice again.
 
 ## Posting
 

@@ -11,8 +11,10 @@ import { apiFetch } from '@/lib/api-client';
  *
  * FleetSuite works out its own entry for every NetSuite invoice with the
  * invoice rule and checks it line by line against what NetSuite posted for
- * the same invoice. Nothing is posted yet. Super admins only while the books
- * are built, linked from the other books pages.
+ * the same invoice, and shows what its own books hold for each: the posting
+ * job (src/lib/books/invoice-posting.ts) posts BMG's every two hours, or on
+ * "Post now". Super admins only while the books are built, linked from the
+ * other books pages.
  */
 
 type Status = 'matches' | 'differs' | 'unworkable' | 'waiting';
@@ -24,6 +26,31 @@ interface Summary {
   unworkable: number;
   waiting: number;
   withCost: number;
+  /** When the company's invoices post. */
+  posted?: number;
+  pending?: number;
+}
+
+/** What FleetSuite's books hold for an invoice, and what the next posting run does about it. */
+interface Books {
+  entryNo: number | null;
+  next: 'post' | 'replace' | 'reverse' | null;
+  earlier: Array<{ entryNo: number; reversedBy: number | null }>;
+}
+
+/** How the last posting run went (src/lib/books/invoice-posting.ts); counts only. */
+interface PostingRun {
+  months?: string[];
+  posted?: number;
+  replaced?: number;
+  reversed?: number;
+  unchanged?: number;
+  left?: number;
+  failedCount?: number;
+  failed?: Array<{ number: string; reason: string }>;
+  partial?: boolean;
+  notes?: string[];
+  error?: string;
 }
 
 interface Amount {
@@ -64,6 +91,7 @@ interface Invoice {
   amounts?: 'own' | 'unfit';
   reasons: string[];
   rows: Row[];
+  books?: Books;
 }
 
 interface Reason {
@@ -80,6 +108,9 @@ interface Payload {
   month: string;
   months: string[];
   listsCopiedAt: string | null;
+  /** Whether this company's invoices post to FleetSuite's books yet. */
+  posts: boolean;
+  lastRun: { at: string; result: PostingRun } | null;
   summary: Summary;
   reasons: Reason[];
   notes: string[];
@@ -119,6 +150,43 @@ const waitingLabel = (inv: Invoice) =>
   inv.waiting === 'lines' ? 'Lines not copied yet' : inv.waiting === 'gl' ? "Not in NetSuite's GL yet" : STATUS[inv.status].label;
 
 const allMatch = (s: Summary) => s.differs + s.unworkable + s.waiting === 0;
+
+const count = (n: number, one: string, many: string) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+
+/** A posting run's counts in words, the ones that aren't zero. */
+function runCounts(run: PostingRun): string {
+  const parts = [
+    run.posted ? `${count(run.posted, 'invoice', 'invoices')} posted` : '',
+    run.replaced ? `${count(run.replaced, 'entry', 'entries')} replaced` : '',
+    run.reversed ? `${count(run.reversed, 'entry', 'entries')} reversed` : '',
+    run.unchanged ? `${count(run.unchanged, 'entry', 'entries')} unchanged` : '',
+    run.left ? `${count(run.left, 'invoice', 'invoices')} left as they were` : '',
+  ].filter(Boolean);
+  return parts.length ? parts.join(', ') : 'nothing to post';
+}
+
+/** The Books chip for an invoice. */
+function booksChip(books: Books): { label: string; color: string } {
+  if (books.entryNo !== null) {
+    if (books.next === 'replace') return { label: `Entry ${books.entryNo} · to replace`, color: AMBER };
+    if (books.next === 'reverse') return { label: `Entry ${books.entryNo} · to reverse`, color: AMBER };
+    return { label: `Entry ${books.entryNo}`, color: GREEN };
+  }
+  return books.next === 'post' ? { label: 'To post', color: GREY } : { label: 'Not posted', color: GREY };
+}
+
+/** What the books hold for an invoice, in a sentence or two. */
+function booksText(books: Books): string {
+  const now = books.entryNo !== null ? `In FleetSuite's books as entry ${books.entryNo}.` : "Not in FleetSuite's books.";
+  const next = books.next === 'post' ? ' The next posting run posts it.'
+    : books.next === 'replace' ? ' It no longer fits what the rule works out, so the next posting run reverses it and posts the new entry.'
+      : books.next === 'reverse' ? ' NetSuite voided it or it comes to nothing now, so the next posting run reverses it.'
+        : '';
+  const earlier = books.earlier.length
+    ? ` Earlier: ${books.earlier.map((e) => (e.reversedBy ? `entry ${e.entryNo}, reversed by ${e.reversedBy}` : `entry ${e.entryNo}`)).join('; ')}.`
+    : '';
+  return `${now}${next}${earlier}`;
+}
 
 const banner = (color: string): React.CSSProperties => ({
   padding: '10px 14px', borderRadius: '8px', marginBottom: '10px', fontSize: '12px', fontWeight: 600,
@@ -172,6 +240,9 @@ const AMOUNTS: Record<NonNullable<Invoice['amounts']>, string> = {
 function InvoiceDetail({ invoice, accounts }: { invoice: Invoice; accounts: Record<string, string> }) {
   return (
     <div style={{ padding: '8px 10px 12px', background: 'var(--bg)' }}>
+      {invoice.books && (
+        <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>{booksText(invoice.books)}</div>
+      )}
       {invoice.reasons.map((r) => (
         <div key={r} style={{ fontSize: '12px', color: invoice.status === 'unworkable' ? AMBER : RED, marginBottom: '4px' }}>{r}</div>
       ))}
@@ -230,6 +301,8 @@ export default function BooksInvoicesPage() {
   // Results of "Check every month", for the company they were checked for.
   const [monthly, setMonthly] = useState<{ company: string; months: Record<string, Summary> }>({ company: '', months: {} });
   const [checking, setChecking] = useState<string | null>(null);
+  const [posting, setPosting] = useState(false);
+  const [postError, setPostError] = useState('');
 
   const load = useCallback(async (nextCompany: string, nextMonth: string) => {
     try {
@@ -283,12 +356,36 @@ export default function BooksInvoicesPage() {
     setChecking(null);
   };
 
+  // How the run went is recorded either way and shows in the banners after
+  // the reload; postError is only for a request that never got that far.
+  const postNow = async () => {
+    setPosting(true);
+    setPostError('');
+    try {
+      const res = await apiFetch('/api/admin/books/invoices', { method: 'POST' });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `Posting failed (${res.status})`);
+      if (json.skipped) setPostError(`${json.skipped} Try again in a few minutes.`);
+    } catch (e: any) {
+      setPostError(e?.message || 'Posting failed');
+    }
+    await load(company, month);
+    setPosting(false);
+  };
+
   const s = data?.summary;
   const years = [...new Set((data?.months ?? []).map((m) => m.slice(0, 4)))];
   const checkedMonths = monthly.company === company ? monthly.months : {};
   const checkedCount = Object.keys(checkedMonths).length;
   const matchingMonths = Object.values(checkedMonths).filter(allMatch).length;
-  const shown = (data?.invoices ?? []).filter((inv) => !onlyProblems || inv.status !== 'matches');
+  const checkedInvoices = Object.values(checkedMonths).reduce((n, r) => n + r.invoices, 0);
+  const checkedPosted = Object.values(checkedMonths).reduce((n, r) => n + (r.posted ?? 0), 0);
+  // A matching invoice needs a look when the next run changes its entry, or when it has none though it should
+  // (not voided, not $0): NetSuite couldn't say enough about its lines, say, or its copy is mid-refresh.
+  const needsLook = (inv: Invoice) => inv.status !== 'matches' || (!!inv.books
+    && (inv.books.next !== null || (inv.books.entryNo === null && !inv.voided && inv.total !== 0)));
+  const shown = (data?.invoices ?? []).filter((inv) => !onlyProblems || needsLook(inv));
+  const run = data?.lastRun?.result;
 
   return (
     <div>
@@ -298,40 +395,84 @@ export default function BooksInvoicesPage() {
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             For every NetSuite invoice FleetSuite works out its own entry: receivables take the total, each line goes to its
             item&apos;s income account, and sales tax to the account its tax code posts to. Each entry is checked line by line
-            against what NetSuite posted for the same invoice. Nothing is posted to FleetSuite&apos;s books yet. Visible only to
-            super admins. <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
+            against what NetSuite posted for the same invoice. Every two hours each BMG invoice FleetSuite can work out is posted
+            to its own books, once. When NetSuite changes an invoice its entry is reversed and the new one posted, and a voided
+            or deleted one is reversed. Until the books go live they can be emptied and posted again. Visible only to super
+            admins. <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
             {' · '}
             <Link href="/admin/books/trial-balance" style={{ color: 'var(--text-secondary)' }}>Trial balance vs NetSuite</Link>
             {' · '}
             <Link href="/admin/books/lists" style={{ color: 'var(--text-secondary)' }}>NetSuite lists</Link>
           </div>
         </div>
-        <button
-          onClick={checkEveryMonth}
-          disabled={!!checking || loading || !data}
-          style={{
-            padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)',
-            color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: checking ? 'wait' : 'pointer',
-          }}
-        >
-          {checking ? `Checking ${monthName(checking)}…` : 'Check every month'}
-        </button>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button
+            onClick={checkEveryMonth}
+            disabled={!!checking || posting || loading || !data}
+            style={{
+              padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)',
+              color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: checking ? 'wait' : 'pointer',
+            }}
+          >
+            {checking ? `Checking ${monthName(checking)}…` : 'Check every month'}
+          </button>
+          {data?.posts && (
+            <button
+              onClick={postNow}
+              disabled={posting || !!checking || loading}
+              style={{
+                padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)',
+                color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: posting ? 'wait' : 'pointer',
+              }}
+            >
+              {posting ? 'Posting… up to 4 minutes' : 'Post now'}
+            </button>
+          )}
+        </div>
       </div>
 
       {error && <div style={banner(RED)}>{error}</div>}
+      {postError && <div style={banner(RED)}>{postError}</div>}
+      {data?.posts && (
+        <>
+          {!data.lastRun && (
+            <div style={banner(GREY)}>
+              Nothing has been posted to FleetSuite&apos;s books yet. Posting runs every two hours, or press Post now. The first
+              run posts every invoice since January 2025 and may take more than one run.
+            </div>
+          )}
+          {run?.error && <div style={banner(RED)}>The last posting run failed {ago(data.lastRun!.at)}: {run.error}</div>}
+          {data.lastRun && !run?.error && (
+            <div style={banner(run?.partial ? AMBER : GREEN)}>
+              {run?.partial
+                ? `Still posting: the last run, ${ago(data.lastRun.at)}, went through ${count(run.months?.length ?? 0, 'month', 'months')} and stopped for time (${runCounts(run)}). It carries on at the next run, or press Post now.`
+                : `Posted ${ago(data.lastRun.at)}: ${runCounts(run ?? {})}.`}
+            </div>
+          )}
+          {!!run?.failedCount && (
+            <div style={banner(RED)}>
+              {count(run.failedCount, 'invoice', 'invoices')} couldn&apos;t be posted or changed
+              {run.failed?.length ? `: ${run.failed.map((f) => `${f.number} (${f.reason})`).join('; ')}` : ''}
+              {run.failed && run.failedCount > run.failed.length ? '; …' : ''}
+            </div>
+          )}
+          {(run?.notes ?? []).map((n) => <div key={n} style={banner(AMBER)}>{n}</div>)}
+        </>
+      )}
 
       {data && s && (
         <>
           {!checking && checkedCount === data.months.length && (
             <div style={banner(matchingMonths === checkedCount ? GREEN : AMBER)}>
               Every invoice matches NetSuite in {matchingMonths} of {checkedCount} months.
+              {data.posts && ` FleetSuite's books hold ${checkedPosted.toLocaleString('en-US')} of these ${checkedInvoices.toLocaleString('en-US')} invoices.`}
             </div>
           )}
           {data.notes.map((n) => <div key={n} style={banner(AMBER)}>{n}</div>)}
 
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
             {data.companies.map((c) => (
-              <button key={c.code} onClick={() => pick(c.code, month)} disabled={loading || !!checking} style={button(c.code === company)}>
+              <button key={c.code} onClick={() => pick(c.code, month)} disabled={loading || !!checking || posting} style={button(c.code === company)}>
                 {c.name}
               </button>
             ))}
@@ -348,7 +489,7 @@ export default function BooksInvoicesPage() {
                     <button
                       key={m}
                       onClick={() => pick(company, m)}
-                      disabled={loading || !!checking}
+                      disabled={loading || !!checking || posting}
                       title={!r ? 'Not checked yet' : allMatch(r) ? 'Every invoice matches NetSuite' : `${r.invoices - r.matches} invoice(s) don't match`}
                       style={{ ...button(m === month), borderColor: m === month ? 'var(--text-primary)' : `${color}88`, color: r ? color : 'var(--text-primary)' }}
                     >
@@ -367,10 +508,13 @@ export default function BooksInvoicesPage() {
             {s.differs > 0 && <span style={chip(RED)}>{s.differs.toLocaleString('en-US')} differ</span>}
             {s.unworkable > 0 && <span style={chip(AMBER)}>{s.unworkable.toLocaleString('en-US')} can&apos;t be worked out</span>}
             {s.waiting > 0 && <span style={chip(GREY)}>{s.waiting.toLocaleString('en-US')} waiting on a copy</span>}
+            {s.posted !== undefined && <span style={chip(GREEN)}>{s.posted.toLocaleString('en-US')} in FleetSuite&apos;s books</span>}
+            {!!s.pending && <span style={chip(AMBER)}>{s.pending.toLocaleString('en-US')} for the next posting run</span>}
           </div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
             Invoices dated this month that NetSuite posted to this company, checked with rule {data.rule}.
             {data.listsCopiedAt && ` Items and tax codes as copied from NetSuite ${ago(data.listsCopiedAt)}.`}
+            {!data.posts && " This company's invoices aren't posted to FleetSuite's books yet; they will be once they've been checked."}
           </div>
 
           {data.reasons.length > 0 && (
@@ -393,7 +537,7 @@ export default function BooksInvoicesPage() {
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>
             <label style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', gap: '6px', alignItems: 'center' }}>
               <input type="checkbox" checked={onlyProblems} onChange={(e) => setOnlyProblems(e.target.checked)} />
-              Only invoices that don&apos;t match
+              {data.posts ? "Only invoices that don't match or aren't posted as they should be" : "Only invoices that don't match"}
             </label>
           </div>
 
@@ -406,12 +550,14 @@ export default function BooksInvoicesPage() {
                   <th style={{ ...cell, textAlign: 'left' }}>Customer</th>
                   <th style={cell}>Total</th>
                   <th style={{ ...cell, textAlign: 'left' }}>Check</th>
+                  {data.posts && <th style={{ ...cell, textAlign: 'left' }}>Books</th>}
                 </tr>
               </thead>
               <tbody>
                 {shown.length === 0 && (
-                  <tr><td colSpan={5} style={{ padding: '12px', color: 'var(--text-muted)' }}>
-                    {s.invoices === 0 ? 'No invoices for this company this month.' : 'Every invoice matches NetSuite.'}
+                  <tr><td colSpan={data.posts ? 6 : 5} style={{ padding: '12px', color: 'var(--text-muted)' }}>
+                    {s.invoices === 0 ? 'No invoices for this company this month.'
+                      : data.posts ? "Every invoice matches NetSuite and is in FleetSuite's books." : 'Every invoice matches NetSuite.'}
                   </td></tr>
                 )}
                 {shown.map((inv) => (
@@ -428,9 +574,14 @@ export default function BooksInvoicesPage() {
                         <span style={chip(STATUS[inv.status].color)}>{waitingLabel(inv)}</span>
                         {inv.voided && <span style={{ ...chip(GREY), marginLeft: '6px' }}>Voided</span>}
                       </td>
+                      {data.posts && (
+                        <td style={{ ...cell, textAlign: 'left' }}>
+                          {inv.books && <span style={chip(booksChip(inv.books).color)}>{booksChip(inv.books).label}</span>}
+                        </td>
+                      )}
                     </tr>
                     {open === inv.netsuiteId && (
-                      <tr><td colSpan={5} style={{ padding: 0 }}><InvoiceDetail invoice={inv} accounts={data.accounts} /></td></tr>
+                      <tr><td colSpan={data.posts ? 6 : 5} style={{ padding: 0 }}><InvoiceDetail invoice={inv} accounts={data.accounts} /></td></tr>
                     )}
                   </Fragment>
                 ))}

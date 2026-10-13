@@ -7,12 +7,15 @@ import { BOOKS_LISTS_SYNC } from '@/lib/books/netsuite-lists';
 import { INVOICE_RULE } from '@/lib/books/invoice-rule';
 import { checkMonth, type ChartAccount, type InvoiceMonthData, type ItemAccountCount, type LineFactsRead, type TaxAccountCount } from '@/lib/books/invoice-check';
 import { readLineFacts } from '@/lib/books/invoice-line-facts';
+import { BOOKS_INVOICE_POSTING, POSTING_COMPANIES, invoiceBooks, postInvoices, unsaidFacts, type InvoicePosting } from '@/lib/books/invoice-posting';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { compactSuiteqlError } from '@/lib/sales-order-sync';
 
 export const dynamic = 'force-dynamic';
-// It asks NetSuite about the month's invoice lines.
-export const maxDuration = 60;
+// "Post now" runs the same job as the cron, with the same budget.
+export const maxDuration = 300;
+
+const POSTING_BUDGET_MS = 240_000;
 
 /**
  * GET /api/admin/books/invoices?company=BMG&month=2026-09 — one company's
@@ -27,8 +30,12 @@ export const maxDuration = 60;
  * (src/lib/books/invoice-line-facts.ts); when it can't be, the check goes
  * without and says so.
  *
+ * For a company whose invoices post (src/lib/books/invoice-posting.ts),
+ * each invoice also says what FleetSuite's books hold for it and what the
+ * next posting run does about it, and `lastRun` is how the last one went.
+ *
  * Super admin only: the books are being built hidden, for the owner, until
- * they're ready (docs/books.md). It only reads; nothing is posted.
+ * they're ready (docs/books.md). It only reads.
  */
 export async function GET(req: NextRequest) {
   const auth = await requireSuperAdmin(req);
@@ -36,7 +43,7 @@ export async function GET(req: NextRequest) {
 
   const params = new URL(req.url).searchParams;
   const service = createServiceClient();
-  const [companies, accounts, lists] = await Promise.all([
+  const [companies, accounts, lists, posting] = await Promise.all([
     service.from('gl_companies').select('id, code, name').order('code'),
     fetchAllRows<Omit<ChartAccount, 'company'> & { company_id: string | null }>((from, to) => service
       .from('gl_accounts')
@@ -44,8 +51,9 @@ export async function GET(req: NextRequest) {
       .order('id', { ascending: true })
       .range(from, to)),
     service.from('sync_state').select('last_result, updated_at').eq('sync_type', BOOKS_LISTS_SYNC).maybeSingle(),
+    service.from('sync_state').select('last_result, updated_at').eq('sync_type', BOOKS_INVOICE_POSTING).maybeSingle(),
   ]);
-  const error = companies.error || accounts.error || lists.error;
+  const error = companies.error || accounts.error || lists.error || posting.error;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const codeOf = new Map((companies.data || []).map((c) => [c.id as string, c.code as string]));
@@ -80,6 +88,21 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // What FleetSuite's books hold for the company's invoices, when they post,
+  // and what the next run does: nothing in a month NetSuite couldn't say enough about.
+  const posts = (POSTING_COMPANIES as readonly string[]).includes(company);
+  const decides = !!facts && 'lines' in facts && unsaidFacts(facts).length === 0;
+  let postings: Map<string, InvoicePosting> | null = null;
+  if (posts) {
+    const mine = invoices.filter((i) => i.companies.includes(company)).map((i) => i.netsuite_id);
+    postings = new Map();
+    if (mine.length) {
+      const held = await service.rpc('gl_invoice_postings', { p_company: company, p_source_ids: mine, p_lines: true });
+      if (held.error) return NextResponse.json({ error: held.error.message }, { status: 500 });
+      for (const p of ((held.data as any)?.invoices ?? []) as InvoicePosting[]) postings.set(p.source_id, p);
+    }
+  }
+
   const lastLists = (lists.data?.last_result ?? null) as { taxAccounts?: TaxAccountCount[]; itemAccounts?: ItemAccountCount[] } | null;
   const check = checkMonth(
     { invoices, items: data.items ?? [] },
@@ -90,6 +113,7 @@ export async function GET(req: NextRequest) {
       itemAccounts: Array.isArray(lastLists?.itemAccounts) ? lastLists.itemAccounts : null,
       facts,
     },
+    postings ? (w) => invoiceBooks(w, postings!.get(w.invoice.netsuite_id), decides) : undefined,
   );
 
   if (params.get('summary') === '1') return NextResponse.json({ company, month, summary: check.summary });
@@ -100,6 +124,24 @@ export async function GET(req: NextRequest) {
     month,
     months,
     listsCopiedAt: lists.data?.updated_at ?? null,
+    posts,
+    lastRun: posting.data ? { at: posting.data.updated_at, result: posting.data.last_result } : null,
     ...check,
+  });
+}
+
+/**
+ * POST /api/admin/books/invoices — post invoices to FleetSuite's books now
+ * rather than wait for the two-hourly run. Same job, same record of how it
+ * went; the response says only how the run went, the page reloads the rest.
+ */
+export async function POST(req: NextRequest) {
+  const auth = await requireSuperAdmin(req);
+  if (auth.error) return auth.error;
+
+  const result = await postInvoices(createServiceClient(), { deadline: Date.now() + POSTING_BUDGET_MS });
+  return NextResponse.json({
+    posting: result.error ? 'failed' : result.skipped ? 'skipped' : result.partial ? 'partial' : 'ok',
+    ...(result.skipped ? { skipped: result.skipped } : {}),
   });
 }
