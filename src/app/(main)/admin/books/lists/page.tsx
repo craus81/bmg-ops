@@ -11,8 +11,9 @@ import { apiFetch } from '@/lib/api-client';
  *
  * The lists FleetSuite's posting rules need, copied from NetSuite every two
  * hours (or on "Sync now"): locations, departments, classes, terms and tax
- * codes, plus the accounts each item and vendor posts to. Read-only and
- * super admins only while the books are built, linked from the accounts page.
+ * codes, plus the accounts each item and vendor posts to, where sales tax
+ * posts, and where items with no income account post. Read-only and super
+ * admins only while the books are built, linked from the accounts page.
  */
 
 type Kind = 'location' | 'department' | 'class' | 'term' | 'tax_code' | 'vendor' | 'item';
@@ -46,6 +47,7 @@ interface ListResult {
 interface SyncResult {
   lists?: Partial<Record<Kind, ListResult>>;
   taxAccounts?: { tax_code_id: string | null; account_id: string; lines: number }[];
+  itemAccounts?: { item_id: string; item_name: string; account_id: string; lines: number }[];
   notes?: string[];
   error?: string;
 }
@@ -476,6 +478,36 @@ export default function BooksListsPage() {
     );
   };
 
+  // ── Where items with no income account post ─────────────────────────────
+  const renderItemPostings = () => (
+    <>
+      <div style={heading}>Where items with no income account posted on invoices since January 2025</div>
+      <div style={{ ...muted, marginBottom: '6px' }}>
+        Such an item, a payment item say, posts to an account of its own. The invoice rule uses the one NetSuite used most.
+      </div>
+      {!result?.itemAccounts ? (
+        <div style={muted}>Not read yet. Sync now reads it.</div>
+      ) : result.itemAccounts.length === 0 ? (
+        <div style={muted}>No invoice since January 2025 has an item with no income account.</div>
+      ) : (
+        <div style={box}>
+          <div style={{ ...rowStyle(0, false), fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>
+            <span style={{ flex: 1 }}>Item</span>
+            <span style={{ flex: 1 }}>Account</span>
+            <span style={{ width: '110px', textAlign: 'right' }}>GL lines</span>
+          </div>
+          {result.itemAccounts.map((a) => (
+            <div key={`${a.item_id}-${a.account_id}`} style={rowStyle(1, false)}>
+              <span style={{ flex: 1, minWidth: 0 }}>{a.item_name || `NetSuite item ${a.item_id}`}</span>
+              <span style={{ flex: 1, minWidth: 0 }}>{accountLabel(a.account_id)}</span>
+              <span style={{ width: '110px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{n(a.lines)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+
   const renderLong = (kind: 'vendor' | 'item') => (
     <>
       <form
@@ -512,6 +544,7 @@ export default function BooksListsPage() {
         </>
       )}
       {renderAccounts(kind)}
+      {kind === 'item' && renderItemPostings()}
     </>
   );
 

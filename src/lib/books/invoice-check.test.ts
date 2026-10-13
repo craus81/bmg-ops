@@ -96,6 +96,14 @@ describe('checkInvoice', () => {
     expect(check(lines, [ns('0', '120', 2000), ns('1', '500', -2000)]).status).toBe('matches');
   });
 
+  it('counts a line posted where NetSuite posts an item with no income account as a sale, even its asset account', () => {
+    const ctx = { ...CTX, items: new Map([...CTX.items, ['16', { ...item('PREPAYMENT', 'Payment', null, '110'), postedAccount: '110' }]]) };
+    const lines = [line('1', '11', 50000), line('2', '16', -40000, { itemNumber: 'PREPAYMENT' })];
+    const netsuite = [ns('0', '120', 10000), ns('1', '400', -50000), ns('2', '110', 40000)];
+    expect([...costLines(lines, new Map(netsuite.map((p) => [p.lineId, p])), ctx)]).toEqual([]);
+    expect(check(lines, netsuite, ctx).status).toBe('matches');
+  });
+
   it('can\'t work out an invoice with an item it doesn\'t know, and still shows what NetSuite posted', () => {
     const c = check([...LINES, line('4', '99', 100, { itemNumber: 'NEW PART' })], [...POSTED, ns('4', '400', -100)]);
     expect(c.status).toBe('unworkable');
@@ -195,7 +203,11 @@ describe('problemReason', () => {
       problemReason({ kind: 'no_receivable' }, NAMES),
     ]).toEqual([
       { key: 'no_item', text: 'A line carries an amount but no item, so it has no income account.' },
-      { key: 'no_income|17', text: "NO ACCOUNT has no income account in the copy of NetSuite's items." },
+      {
+        key: 'no_income|17',
+        text: "NO ACCOUNT has no income account in the copy of NetSuite's items, and FleetSuite doesn't know where NetSuite posts it yet. "
+          + "It learns that from NetSuite's invoices since January 2025, as of the last copy of the NetSuite lists.",
+      },
       {
         key: 'no_tax|',
         text: "FleetSuite doesn't know where sales tax with no tax code posts yet. It learns that from NetSuite's sales tax postings "
@@ -399,6 +411,52 @@ describe('checkMonth', () => {
       "On 1 invoice NetSuite's own amounts for the lines don't add up to the invoice, so FleetSuite went by their net amounts: INV109. "
       + 'Open it to see what NetSuite says about each line.',
     ]);
+  });
+
+  it('posts a payment item with no income account where NetSuite posts it most, once the lists copy has read that', () => {
+    const items = [
+      ...ITEMS,
+      { kind: 'item' as const, netsuite_id: '15', name: 'FREIGHT', item_type: 'OthCharge', income_account: '400', asset_account: null },
+      { kind: 'item' as const, netsuite_id: '16', name: 'PREPAYMENT', item_type: 'Payment', income_account: null, asset_account: null },
+    ];
+    // A $50 prepayment under $20 of freight: NetSuite spreads it over the freight, whose net becomes a $30 credit,
+    // and posts the payment on its own line, to the account it uses for that item.
+    const paid = invoice('INV110', {
+      total: '70.00',
+      lines: [
+        invoice('X').lines[0],
+        { line_id: '2', line_no: 2, kind: 'item', item_id: '15', item_number: 'FREIGHT', amount: '-30.00', netamount: '30.00' },
+        { line_id: '3', line_no: 3, kind: 'item', item_id: '16', item_number: 'PREPAYMENT', amount: '0.00', netamount: '0' },
+      ],
+      netsuite: [
+        { line_id: '0', account: '120', debit: '70.00', credit: '0.00' },
+        { line_id: '1', account: '400', debit: '0.00', credit: '100.00' },
+        { line_id: '2', account: '400', debit: '0.00', credit: '20.00' },
+        { line_id: '3', account: '110', debit: '50.00', credit: '0.00' },
+      ],
+    });
+    const said = (lineId: string, amount: string): [string, LineFacts] => [`110:${lineId}`, { cogs: false, topDiscount: false, amount, quantity: null, rate: null }];
+    const facts = { lines: new Map([said('1', '-100.00'), said('2', '-20.00'), said('3', '50.00')]), missing: [] };
+    const month = { invoices: [paid], items };
+    const opts = { company: 'BMG', chart: CHART, taxAccounts: TAX, facts };
+
+    const learned = checkMonth(month, { ...opts, itemAccounts: [{ item_id: '16', account_id: '111', lines: 1 }, { item_id: '16', account_id: '110', lines: 3 }] });
+    expect(learned.invoices[0]).toMatchObject({ status: 'matches', amounts: 'own' });
+    expect(learned.invoices[0].rows.map((r) => [r.label, r.division, r.fleetsuite?.account, r.fleetsuite?.cents, r.cost])).toEqual([
+      ['Receivable', null, '120', 7000, false],
+      ['PART-A', 'upfit', '400', -10000, false],
+      ['FREIGHT', null, '400', -2000, false],
+      ['PREPAYMENT', null, '110', 5000, false],
+    ]);
+
+    for (const itemAccounts of [undefined, null, []]) {
+      const before = checkMonth(month, { ...opts, itemAccounts });
+      expect(before.invoices[0].status).toBe('unworkable');
+      expect(before.invoices[0].reasons).toEqual([
+        "PREPAYMENT has no income account in the copy of NetSuite's items, and FleetSuite doesn't know where NetSuite posts it yet. "
+        + "It learns that from NetSuite's invoices since January 2025, as of the last copy of the NetSuite lists.",
+      ]);
+    }
   });
 
   it('says when NetSuite couldn\'t be asked about the lines, or wouldn\'t say everything', () => {

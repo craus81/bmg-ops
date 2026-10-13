@@ -8,11 +8,13 @@ vi.mock('@/lib/netsuite', () => ({
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
 
 import {
+  ITEM_ACCOUNTS_QUERY,
   LISTS,
   TAX_ACCOUNTS_QUERY,
   fieldQuery,
   joinWords,
   listQuery,
+  mapItemAccounts,
   mapList,
   mapListRow,
   mapTaxAccounts,
@@ -74,6 +76,14 @@ describe('the list queries', () => {
     expect(TAX_ACCOUNTS_QUERY).toContain("tl.taxline = 'T'");
     expect(TAX_ACCOUNTS_QUERY).toContain("t.trandate >= TO_DATE('01/01/2025', 'MM/DD/YYYY')");
     expect(TAX_ACCOUNTS_QUERY).toContain('GROUP BY tl.item, tal.account');
+  });
+
+  it('counts the invoice lines of items with no income account from the start of the GL copy, leaving out tax', () => {
+    expect(ITEM_ACCOUNTS_QUERY).toContain("t.type = 'CustInvc'");
+    expect(ITEM_ACCOUNTS_QUERY).toContain('i.incomeaccount IS NULL');
+    expect(ITEM_ACCOUNTS_QUERY).toContain("tl.taxline = 'F'");
+    expect(ITEM_ACCOUNTS_QUERY).toContain("t.trandate >= TO_DATE('01/01/2025', 'MM/DD/YYYY')");
+    expect(ITEM_ACCOUNTS_QUERY).toContain('GROUP BY tl.item, i.itemid, tal.account');
   });
 });
 
@@ -219,6 +229,20 @@ describe('mapping NetSuite rows', () => {
       { tax_code_id: '12', account_id: '231', lines: 100 },
       { tax_code_id: '12', account_id: '230', lines: 40 },
       { tax_code_id: null, account_id: '230', lines: 3 },
+    ]);
+  });
+
+  it('counts where items with no income account posted, most lines first, skipping rows with no item or account', () => {
+    expect(mapItemAccounts([
+      { item_id: '16', item_name: 'PREPAYMENT', account_id: '110', line_count: '2' },
+      { item_id: '17', item_name: ' DEPOSIT ', account_id: '111', line_count: 5 },
+      { item_id: '16', item_name: 'PREPAYMENT', account_id: '112', line_count: 2 },
+      { item_id: null, item_name: '', account_id: '110', line_count: 9 },
+      { item_id: '18', item_name: 'ODD', account_id: null, line_count: 9 },
+    ])).toEqual([
+      { item_id: '17', item_name: 'DEPOSIT', account_id: '111', lines: 5 },
+      { item_id: '16', item_name: 'PREPAYMENT', account_id: '110', lines: 2 },
+      { item_id: '16', item_name: 'PREPAYMENT', account_id: '112', lines: 2 },
     ]);
   });
 

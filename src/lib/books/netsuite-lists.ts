@@ -352,6 +352,47 @@ export function mapTaxAccounts(rows: Row[]): TaxAccount[] {
   return out.sort((a, b) => b.lines - a.lines || a.account_id.localeCompare(b.account_id));
 }
 
+// ── Where items with no income account post ────────────────────────────────
+
+/**
+ * Invoice lines since the GL copy starts whose item has no income account,
+ * a payment item say, counted by item and the account NetSuite posted them
+ * to. Such an item posts to an account of its own that the items copy
+ * doesn't read, so the invoice rule goes by where NetSuite posted it, as it
+ * does for sales tax. Tax lines are left out, and cost of goods posts on
+ * stock, which has an income account.
+ */
+export const ITEM_ACCOUNTS_QUERY = `
+    SELECT tl.item AS item_id, i.itemid AS item_name, tal.account AS account_id, COUNT(*) AS line_count
+    FROM transactionaccountingline tal
+    JOIN transaction t ON t.id = tal.transaction
+    JOIN transactionline tl ON tl.transaction = tal.transaction AND tl.id = tal.transactionline
+    JOIN item i ON i.id = tl.item
+    WHERE tal.posting = 'T' AND t.type = 'CustInvc' AND tl.taxline = 'F' AND i.incomeaccount IS NULL
+      AND tal.account IS NOT NULL AND t.trandate >= ${suiteqlDate(COPY_FROM)}
+    GROUP BY tl.item, i.itemid, tal.account
+    ORDER BY tl.item, tal.account
+  `;
+
+export interface ItemAccount {
+  item_id: string;
+  /** NetSuite's item name (its item number), to show. */
+  item_name: string;
+  account_id: string;
+  lines: number;
+}
+
+export function mapItemAccounts(rows: Row[]): ItemAccount[] {
+  const out: ItemAccount[] = [];
+  for (const row of rows) {
+    const item = numericId(row.item_id);
+    const account = numericId(row.account_id);
+    if (!item || !account) continue;
+    out.push({ item_id: item, item_name: text(row.item_name), account_id: account, lines: Number(row.line_count) || 0 });
+  }
+  return out.sort((a, b) => b.lines - a.lines || a.item_id.localeCompare(b.item_id) || a.account_id.localeCompare(b.account_id));
+}
+
 // ── The run ────────────────────────────────────────────────────────────────
 
 export interface ListResult {
@@ -370,6 +411,8 @@ export interface BooksListsSyncResult {
   lists: Partial<Record<ListKind, ListResult>>;
   /** Where sales tax posted since the GL copy starts. */
   taxAccounts?: TaxAccount[];
+  /** Where invoice lines for items with no income account posted since the GL copy starts. */
+  itemAccounts?: ItemAccount[];
   /** What the run couldn't do, in plain words. */
   notes?: string[];
   /** Set when no list could be read at all. */
@@ -430,11 +473,18 @@ export async function syncBooksLists(
         : `NetSuite wouldn't list its ${def.label} (${reason(err)}).`);
     }
 
+    // Where things post is read with the tax codes, early in the run, so a
+    // run short of time for the items still has it.
     if (def.kind === 'tax_code') {
       try {
         result.taxAccounts = mapTaxAccounts(await query(TAX_ACCOUNTS_QUERY));
       } catch (err) {
         notes.push(`NetSuite wouldn't say which accounts sales tax posts to (${reason(err)}).`);
+      }
+      try {
+        result.itemAccounts = mapItemAccounts(await query(ITEM_ACCOUNTS_QUERY));
+      } catch (err) {
+        notes.push(`NetSuite wouldn't say where items with no income account post (${reason(err)}).`);
       }
     }
   }

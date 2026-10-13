@@ -9,6 +9,8 @@ import { LAYOUT_TYPES, revenueBucket } from '@/lib/division-revenue';
  * During 2027 FleetSuite copies NetSuite's account choices exactly, so the
  * accounts come from the copied NetSuite lists (migration 363): each item's
  * income account, and where each tax code's sales tax has posted since 2025.
+ * An item with no income account, a payment item say, goes to the account
+ * NetSuite has posted its invoice lines to since 2025.
  *
  * Pure: it works out an invoice's entry, or says why it can't, and posts
  * nothing. Amounts are whole cents, debit positive.
@@ -37,6 +39,13 @@ export interface RuleItem {
   type: string | null;
   incomeAccount: string | null;
   assetAccount: string | null;
+  /**
+   * For an item with no income account, a payment item say: the account
+   * NetSuite posted its invoice lines to most since 2025, as the lists copy
+   * counted them. Such an item posts to an account of its own, which the
+   * items copy doesn't read.
+   */
+  postedAccount?: string | null;
 }
 
 export interface RuleAccounts {
@@ -56,7 +65,7 @@ export interface RuleLine {
   /** The invoice line it posts; MAIN_LINE for the receivable. */
   lineId: string;
   itemNumber: string | null;
-  /** Upfit or Graphics by the owner's rule of 2026-10-06; null for tax, discounts, freight and the receivable. */
+  /** Upfit or Graphics by the owner's rule of 2026-10-06; null for tax, discounts, freight, items with no income account and the receivable. */
   division: 'upfit' | 'graphics' | null;
 }
 
@@ -122,13 +131,15 @@ export function invoiceEntry(lines: InvoiceLine[], accounts: RuleAccounts): Rule
       continue;
     }
     const itemNumber = line.itemNumber || item.number;
-    if (!item.incomeAccount) {
+    const account = item.incomeAccount ?? item.postedAccount ?? null;
+    if (!account) {
       problems.push({ kind: 'no_income_account', lineId: line.lineId, itemId: line.itemId, itemNumber });
       continue;
     }
-    const bucket = revenueBucket(itemNumber, item.type);
+    // An item with no income account, a payment say, isn't a sale of either division.
+    const bucket = item.incomeAccount ? revenueBucket(itemNumber, item.type) : null;
     out.push({
-      account: item.incomeAccount,
+      account,
       cents: -line.cents,
       lineId: line.lineId,
       itemNumber,

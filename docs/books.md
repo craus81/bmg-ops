@@ -169,6 +169,12 @@ How a copy works:
 - Which account a tax code posts to comes from what sales tax actually
   posted to: the copy counts sales tax's GL lines since 2025 (its tax lines)
   by tax code and account. That goes in the run's record, not the table.
+- Where an item with no income account posts, a payment item say, comes
+  from NetSuite's postings the same way. Such an item posts to an account
+  of its own that the items copy doesn't read, so with the sales tax count
+  the copy counts the invoice lines since 2025 whose item has no income
+  account, by item and account (`ITEM_ACCOUNTS_QUERY`). That goes in the
+  run's record too, and the items tab shows it.
 
 The record of each run is `sync_state` `books_netsuite_lists`. Like the other
 books jobs it is not a System Health monitor, and it carries counts, never
@@ -272,10 +278,11 @@ the plan's: accounts receivable takes the invoice's total, each line goes to
 its item's income account, and sales tax goes to the account its tax code
 posts to. During 2027 FleetSuite copies NetSuite's account choices exactly,
 so the accounts come from the copied lists: each item's income account and,
-for each tax code, the account its sales tax posted to most since 2025. The
-receivable is the one receivable account the company can use. With more
-than one, it's the one NetSuite's invoices used most that month, and the
-page says so.
+for each tax code, the account its sales tax posted to most since 2025. An
+item with no income account, a payment item say, goes to the account
+NetSuite posted its invoice lines to most since 2025. The receivable is the
+one receivable account the company can use. With more than one, it's the
+one NetSuite's invoices used most that month, and the page says so.
 
 - Lines that post nothing are skipped: a line of $0, and subtotal,
   description and item group lines, which repeat amounts. That's why the
@@ -305,12 +312,13 @@ page says so.
   NetSuite's columns was worked out from the first checks, not from
   NetSuite's documentation.
 - Each line is filed Upfit or Graphics by the owner's rule of 2026-10-06
-  (`src/lib/division-revenue.ts`). Tax, discounts, freight and the
-  receivable get no division.
+  (`src/lib/division-revenue.ts`). Tax, discounts, freight, items with no
+  income account and the receivable get no division.
 - An invoice posts whole or not at all. When a line can't be worked out (an
-  item not in the copy yet, an item with no income account, a tax code whose
-  account isn't known, a line with an amount but no item, no receivable
-  account), the rule says why and posts nothing.
+  item not in the copy yet, an item with no income account that NetSuite
+  hasn't posted on an invoice since 2025, a tax code whose account isn't
+  known, a line with an amount but no item, no receivable account), the rule
+  says why and posts nothing.
 
 Nothing posts yet (owner's choice 2026-10-11: check first). For every
 NetSuite invoice, `/admin/books/invoices` works out the rule's entry and
@@ -335,9 +343,9 @@ count for every month from January 2025.
   fulfillment rule, so the check leaves those lines out of the invoice's
   entry and doesn't compare them. They're the lines NetSuite flags itself
   (`iscogs`), and any NetSuite posts to a cost of goods sold account or to
-  the item's inventory asset account (unless the line goes to its item's
-  own income account), which covers them when the flag can't be read. The
-  page counts the invoices that have them.
+  the item's inventory asset account (unless the line goes to the account
+  the rule posts its item to), which covers them when the flag can't be
+  read. The page counts the invoices that have them.
 - Which lines are cost of goods, which line is a discount set at the top,
   and each line's own amount aren't in the copy of the invoice: the
   mirror's line read doesn't ask for them, and having it ask would mean
