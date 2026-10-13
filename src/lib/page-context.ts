@@ -101,7 +101,7 @@ const RULES: Rule[] = [
 
   { path: /^\/estimates$/, label: 'the Estimates builder',
     from: { param: 'id' }, kind: 'estimate', table: 'estimates', column: 'id', idKind: 'uuid' },
-  { path: /^\/admin\/wrap-quote$/, label: 'the Wrap Quote builder',
+  { path: /^\/admin\/wrap-quote$/, label: 'the Graphics Builder',
     from: { param: 'id' }, kind: 'wrap quote', table: 'wrap_quotes', column: 'id', idKind: 'uuid' },
   { path: /^\/tracking$/, label: 'the In-Shop board',
     from: { param: 'vehicle' }, kind: 'vehicle check-in', table: 'fleet_checkins', column: 'id', idKind: 'uuid' },

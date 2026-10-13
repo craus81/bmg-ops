@@ -37,6 +37,8 @@ export interface QuoteListItem {
   number: string;
   /** The other number when a pushed estimate has two; null for wrap quotes. */
   altNumber: string | null;
+  /** An estimate with a Graphics Builder worksheet feeding it (🎨 on the row). */
+  graphics: boolean;
   title: string;
   customer: string;
   total: number;
@@ -101,7 +103,7 @@ export async function loadQuoteListItems(
   const wrapQuery = () => {
     let q = service
       .from('wrap_quotes')
-      .select('id, quote_number, vehicle_description, customer, total, status, created_by, created_at, sent_at, last_followup_at, accepted_at, rejected_at, approval_token_expires_at')
+      .select('id, quote_number, vehicle_description, customer, total, status, created_by, created_at, sent_at, last_followup_at, accepted_at, rejected_at, approval_token_expires_at, estimate_id')
       .is('archived_at', null);
     if (status !== 'all') q = q.in('status', WRAP_STATUSES[status]);
     return q.order('created_at', { ascending: false }).order('id');
@@ -114,12 +116,25 @@ export async function loadQuoteListItems(
   if (estRes.error) throw new Error(estRes.error.message);
   if (wrapRes.error) throw new Error(wrapRes.error.message);
 
+  // The estimate is what the customer receives; a wrap quote is the
+  // Graphics Builder worksheet behind it (Craig, 2026-10-13). So the list
+  // is estimates — flagged 🎨 when a worksheet feeds them — plus only the
+  // OLDER standalone wrap quotes that were actually sent to a customer and
+  // still need chasing or a decision. Worksheets on an estimate, and
+  // drafts, never show here.
+  const withGraphics = new Set<string>(
+    (wrapRes.data || []).map((w: any) => w.estimate_id).filter(Boolean) as string[],
+  );
+  const legacyWraps = (wrapRes.data || []).filter((w: any) =>
+    !w.estimate_id && ['sent', 'accepted', 'rejected'].includes(w.status));
+
   const items: QuoteListItem[] = [
     ...(estRes.data || []).map((e: any) => ({
       type: 'estimate' as const,
       id: e.id,
       number: estimateHeadlineNumber(e),
       altNumber: estimateAltNumber(e),
+      graphics: withGraphics.has(e.id),
       title: e.title || '',
       customer: e.customer_name || '—',
       total: Number(e.grand_total) || 0,
@@ -139,11 +154,12 @@ export async function loadQuoteListItems(
       views: { humanCount: 0, firstHumanAt: null, lastHumanAt: null, machineCount: 0 } as ViewSummary,
       viewsTracked: false,
     })),
-    ...(wrapRes.data || []).map((w: any) => ({
+    ...legacyWraps.map((w: any) => ({
       type: 'wrap' as const,
       id: w.id,
       number: w.quote_number,
       altNumber: null,
+      graphics: false,
       title: w.vehicle_description || '',
       customer: (w.customer as any)?.name || '—',
       total: Number(w.total) || 0,

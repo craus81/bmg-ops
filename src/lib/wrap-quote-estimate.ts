@@ -6,6 +6,9 @@ import { FALLBACK_LABOR_RATE } from '@/lib/labor-rate';
 import { findItems } from '@/lib/netsuite';
 import { WRAP_VINYL_ITEM, WRAP_LABOR_ITEM, kitLineSplit } from '@/lib/graphics-invoice';
 import { linkQuoteJobsToEstimate } from '@/lib/graphics-links';
+import { getSalesTaxRate } from '@/lib/sales-tax';
+import { getDefaultLaborRate } from '@/lib/labor-rate';
+import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 
 export interface WrapQuoteAttach {
   diagram?: boolean;
@@ -176,4 +179,145 @@ export async function addWrapQuoteToEstimate(
     linesAdded: lineRows.length,
     matched: !!(vinylId || materials <= 0) && !!(laborId || labor <= 0),
   });
+}
+
+/**
+ * "Save & open estimate" from the Graphics Builder: the wrap quote is the
+ * worksheet, the estimate is what the customer receives (Craig, 2026-10-13).
+ *
+ * A quote that already belongs to an estimate re-folds its lines into it
+ * (same replace semantics as addWrapQuoteToEstimate, so a re-priced quote
+ * updates the estimate in place). A quote with no estimate gets a draft
+ * estimate created for its customer and vehicle, then the lines. Either
+ * way the caller lands on the estimate.
+ *
+ * `attach` is only applied when the caller sends it (a quote that was never
+ * on an estimate defaults to everything on: proof, files, vinyl details).
+ * `targetEstimateId` is the estimate the rep arrived from (?forEstimate):
+ * a quote not yet on any estimate joins that one instead of getting a new
+ * draft, which is how the first save after "Add Graphics" links up.
+ */
+export async function openEstimateForWrapQuote(
+  supabase: SupabaseClient,
+  wrapQuoteId: string,
+  userId: string | null,
+  attach?: WrapQuoteAttach,
+  targetEstimateId?: string | null,
+): Promise<{ status: number; body: any }> {
+  const { data: quote } = await supabase
+    .from('wrap_quotes')
+    .select('id, quote_number, vehicle_description, customer_id, customer, project_type, project_notes, estimate_id, estimate_attach, template_id, materials_total, labor_total')
+    .eq('id', wrapQuoteId)
+    .maybeSingle();
+  if (!quote) return result({ error: 'Wrap quote not found' }, { status: 404 });
+
+  // Already on an estimate (or the rep came from one): refresh its lines
+  // there and go.
+  const existingId = quote.estimate_id || targetEstimateId || null;
+  if (existingId) {
+    const { data: est } = await supabase
+      .from('estimates')
+      .select('id, estimate_number, netsuite_estimate_number')
+      .eq('id', existingId)
+      .maybeSingle();
+    if (est) {
+      const priced = (parseFloat(quote.materials_total) || 0) > 0 || (parseFloat(quote.labor_total) || 0) > 0;
+      // An unpriced quote still opens its estimate — the lines land once
+      // it has amounts. A locked estimate (accepted / converted) is
+      // reported, not silently skipped.
+      if (priced) {
+        const r = await addWrapQuoteToEstimate(supabase, est.id, wrapQuoteId, attach);
+        if (r.status === 409) return r;
+      } else if (!quote.estimate_id) {
+        // Unpriced but arriving from an estimate: link now, lines later.
+        await supabase.from('wrap_quotes').update({
+          estimate_id: est.id,
+          ...(attach ? { estimate_attach: attach } : {}),
+          updated_at: new Date().toISOString(),
+        }).eq('id', wrapQuoteId);
+        await linkQuoteJobsToEstimate(supabase, wrapQuoteId, est.id);
+      }
+      return result({ success: true, estimateId: est.id, estimateNumber: est.estimate_number, netsuiteEstimateNumber: est.netsuite_estimate_number, created: false });
+    }
+    // The estimate it pointed at is gone — fall through and make a new one.
+  }
+
+  // No estimate yet: create a draft for the quote's customer + vehicle.
+  let customerNsId: string | null = null;
+  let customerName: string = String(quote.customer?.name || '').trim();
+  if (quote.customer_id) {
+    const { data: cust } = await supabase
+      .from('customers')
+      .select('company_name, netsuite_id')
+      .eq('id', quote.customer_id)
+      .maybeSingle();
+    if (cust) {
+      customerNsId = cust.netsuite_id || null;
+      customerName = customerName || cust.company_name || '';
+    }
+  }
+  if (!customerName) {
+    return result({ error: 'Pick a customer on the Price & Estimate tab first — the estimate needs one.' }, { status: 400 });
+  }
+
+  // Vehicle: the template's year rides in vehicle_year; the description
+  // (year make model) goes in vehicle_other, which the estimate shows as the
+  // vehicle until someone picks a platform.
+  let vehicleYear: string | null = null;
+  if (quote.template_id) {
+    const { data: tpl } = await supabase.from('vehicle_templates').select('year').eq('id', quote.template_id).maybeSingle();
+    if (tpl?.year) vehicleYear = String(tpl.year).trim() || null;
+  }
+  const vehicle = String(quote.vehicle_description || '').trim();
+  if (!vehicleYear) {
+    const m = vehicle.match(/\b(19|20)\d{2}\b/);
+    if (m) vehicleYear = m[0];
+  }
+  const vehicleOther = vehicle ? vehicle.replace(/^\s*(19|20)\d{2}\s*/, '').trim().slice(0, 120) || null : null;
+
+  const taxRate = await getSalesTaxRate(supabase);
+  const laborRate = await getDefaultLaborRate(supabase);
+  const estimateNumber = await nextJobNumber(supabase, 'EST', legacyJobNumber.est);
+  const title = [quote.project_type || 'Vehicle graphics', vehicle || null].filter(Boolean).join(' — ');
+
+  const { data: estimate, error: estErr } = await supabase
+    .from('estimates')
+    .insert({
+      estimate_number: estimateNumber,
+      customer_id: quote.customer_id || null,
+      customer_name: customerName,
+      customer_netsuite_id: customerNsId,
+      title,
+      notes: quote.project_notes || null,
+      status: 'draft',
+      tax_rate: taxRate,
+      tax_exempt: false,
+      labor_rate: laborRate,
+      labor_hours: 0,
+      subtotal: 0,
+      labor_total: 0,
+      tax_amount: 0,
+      grand_total: 0,
+      vehicle_year: vehicleYear,
+      vehicle_other: vehicleOther,
+      created_by: userId,
+    })
+    .select('id, estimate_number')
+    .single();
+  if (estErr || !estimate) return result({ error: estErr?.message || 'Could not create the estimate' }, { status: 500 });
+
+  // Link first, so an unpriced quote still belongs to its estimate.
+  await supabase.from('wrap_quotes').update({
+    estimate_id: estimate.id,
+    estimate_attach: attach || quote.estimate_attach || { diagram: true, attachments: true, films: true },
+    updated_at: new Date().toISOString(),
+  }).eq('id', wrapQuoteId);
+  await linkQuoteJobsToEstimate(supabase, wrapQuoteId, estimate.id);
+
+  const priced = (parseFloat(quote.materials_total) || 0) > 0 || (parseFloat(quote.labor_total) || 0) > 0;
+  if (priced) {
+    const r = await addWrapQuoteToEstimate(supabase, estimate.id, wrapQuoteId, attach);
+    if (r.status >= 400) return r;
+  }
+  return result({ success: true, estimateId: estimate.id, estimateNumber: estimate.estimate_number, netsuiteEstimateNumber: null, created: true });
 }

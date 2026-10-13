@@ -1,8 +1,10 @@
 'use client';
 
 /**
- * The combined quotes list — every estimate and wrap quote in one place,
- * whichever builder made it (Strategy C: one list, never a table merge).
+ * The quotes list — every estimate, plus the older standalone wrap quotes
+ * that went to a customer before the Graphics Builder fed estimates
+ * (src/lib/quote-list.ts decides which rows qualify; one list, never a
+ * table merge).
  * Replaces the Quote Follow-Ups page: the follow-up queue is now the
  * "Waiting" filter of this list, with the same log/won/lost machinery
  * (POST /api/quotes/follow-up) and the same quiet-day ordering, so nudge
@@ -38,6 +40,8 @@ interface QuoteItem {
   number: string;
   /** The estimate's other number when it has two (see estimate-number.ts). */
   altNumber: string | null;
+  /** An estimate with Graphics Builder work on it. */
+  graphics: boolean;
   title: string;
   customer: string;
   total: number;
@@ -291,15 +295,15 @@ export default function QuotesPage() {
         <div>
           <div style={{ fontSize: '20px', fontWeight: 800 }}>Quotes</div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            Every estimate and wrap quote in one place. Waiting quotes sort quietest first — log each follow-up so the clock resets; reps get a nudge after 5 quiet days.
+            Every estimate in one place. Waiting quotes sort quietest first — log each follow-up so the clock resets; reps get a nudge after 5 quiet days.
           </div>
         </div>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           <button onClick={() => router.push(deepLinks.newEstimate())} style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--accent)', border: 'none', color: '#fff', cursor: 'pointer' }}>
             + New Estimate
           </button>
-          <button onClick={() => router.push('/admin/wrap-quote')} style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--accent)', border: 'none', color: '#fff', cursor: 'pointer' }}>
-            + New Wrap Quote
+          <button onClick={() => router.push('/admin/wrap-quote')} title="Measure, draw the proof and price graphics — it opens as an estimate when you're done" style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+            🎨 Graphics Builder
           </button>
         </div>
       </div>
@@ -310,10 +314,15 @@ export default function QuotesPage() {
             {c.label}{c.key !== 'all' ? ` (${groupCounts[c.key as Group] || 0})` : ` (${base.length})`}
           </button>
         ))}
-        <span style={{ width: '1px', height: '20px', background: 'var(--border)' }} />
-        {([['all', 'Both'], ['estimate', 'Estimates'], ['wrap', 'Wraps']] as const).map(([key, label]) => (
-          <button key={key} onClick={() => setTypeFilter(key)} style={chipStyle(typeFilter === key)}>{label}</button>
-        ))}
+        {/* Older standalone wrap quotes (sent before the Graphics Builder fed
+            estimates) are the only non-estimate rows; the chips appear only
+            while some remain. */}
+        {items.some(i => i.type === 'wrap') && (<>
+          <span style={{ width: '1px', height: '20px', background: 'var(--border)' }} />
+          {([['all', 'Both'], ['estimate', 'Estimates'], ['wrap', 'Older wrap quotes']] as const).map(([key, label]) => (
+            <button key={key} onClick={() => setTypeFilter(key)} style={chipStyle(typeFilter === key)}>{label}</button>
+          ))}
+        </>)}
       </div>
 
       <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '14px' }}>
@@ -366,8 +375,11 @@ export default function QuotesPage() {
                 <div style={{ flex: 1, minWidth: '220px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                     <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '5px', textTransform: 'uppercase', background: item.type === 'estimate' ? 'rgba(96,165,250,0.12)' : 'rgba(167,139,250,0.12)', color: item.type === 'estimate' ? '#60a5fa' : '#a78bfa' }}>
-                      {item.type === 'estimate' ? 'Estimate' : 'Wrap'}
+                      {item.type === 'estimate' ? 'Estimate' : 'Older wrap quote'}
                     </span>
+                    {item.graphics && (
+                      <span title="Has graphics from the Graphics Builder" style={{ fontSize: '11px' }}>🎨</span>
+                    )}
                     <span style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{item.number}</span>
                     {item.altNumber && (
                       <span title="FleetSuite's own estimate number — NetSuite's is the one shown first" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>{item.altNumber}</span>
