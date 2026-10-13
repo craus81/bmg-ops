@@ -238,7 +238,7 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
           ? `<a href="${escHtml(a.url)}" style="color:#1d4ed8;font-weight:600;text-decoration:underline;">${escHtml(a.name)}</a>`
           : escHtml(a.name)))
         .join(' &middot; ')
-        + (linked ? `<div style="margin-top:6px;font-size:11px;color:#64748b;">Click a name to download a copy. The links work as long as your approval link does.</div>` : ''),
+        + (linked ? `<div style="margin-top:6px;font-size:11px;color:#64748b;">Click a name to download a full-size copy. The links work as long as your approval link does.</div>` : ''),
     });
   }
 
