@@ -725,7 +725,7 @@ describe('the copy job against the real functions', () => {
       await startOver();
       const ns = new FakeNetSuite(BOOKS);
       await pg.query(`SELECT gl_netsuite_claim_copy('someone-else', 300)`);
-      expect(await run(ns)).toEqual({ skipped: 'Another copy is running.' });
+      expect(await run(ns)).toEqual({ skipped: 'Another books job is running.' });
       expect(ns.queries).toEqual([]);
       expect(record()).toBeUndefined();
       await pg.query(`SELECT gl_netsuite_release_copy('someone-else')`);

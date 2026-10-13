@@ -591,9 +591,10 @@ export async function copyNetSuiteGl(
   const prev = await service.from('sync_state').select('last_result').eq('sync_type', BOOKS_GL_SYNC).maybeSingle();
   const state = parseGlState(prev.data?.last_result);
 
+  // Invoice posting (invoice-posting.ts) takes the same lock, since it reads the copy.
   const holder = crypto.randomUUID();
   const claim = await service.rpc('gl_netsuite_claim_copy', { p_holder: holder, p_seconds: LEASE_SECONDS });
-  if (!claim.error && claim.data !== true) return { skipped: 'Another copy is running.' };
+  if (!claim.error && claim.data !== true) return { skipped: 'Another books job is running.' };
 
   const result: GlCopyResult = { swept: [], transactionsCopied: 0, transactionsUnchanged: 0, transactionsRemoved: 0, linesCopied: 0 };
   const notes: string[] = [];

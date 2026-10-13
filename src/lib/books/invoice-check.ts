@@ -245,6 +245,9 @@ export interface MonthSummary {
   waiting: number;
   /** Invoices with lines NetSuite booked cost of goods on. */
   withCost: number;
+  /** When the company's invoices post: how many have an entry in FleetSuite's books, and how many the next posting run changes. */
+  posted?: number;
+  pending?: number;
 }
 
 export interface MonthReason extends Reason {
@@ -326,6 +329,8 @@ export interface InvoiceMonthData {
     total: string;
     voided: boolean;
     customer: string | null;
+    /** The FleetSuite customer the ledger mirror matched its NetSuite customer to (migration 367); null when none. */
+    customer_id?: string | null;
     lines_copied: boolean;
     /** Companies NetSuite posted it to; empty when the GL copy has none of it. */
     companies: string[];
@@ -420,6 +425,18 @@ export interface InvoiceView {
   amounts?: Exclude<LineAmounts, 'net'>;
   reasons: string[];
   rows: InvoiceRowView[];
+  /** What FleetSuite's books hold for it, when the company's invoices post (src/lib/books/invoice-posting.ts). */
+  books?: InvoiceBooks;
+}
+
+/** What FleetSuite's journal holds for an invoice, and what the next posting run does about it. */
+export interface InvoiceBooks {
+  /** The entry that stands; null when none does. */
+  entryNo: number | null;
+  /** post: it gets its first entry; replace: its entry is reversed and a new one posted; reverse: its entry is reversed. */
+  next: 'post' | 'replace' | 'reverse' | null;
+  /** Its earlier entries, oldest first, each with the entry that reversed it. */
+  earlier: Array<{ entryNo: number; reversedBy: number | null }>;
 }
 
 export interface MonthCheck {
@@ -516,21 +533,37 @@ const WITHOUT_FACT: Record<keyof LineFacts, { what: string; so: string }> = {
   rate: { what: "the lines' rates", so: "a line's quantity and rate aren't shown" },
 };
 
+export interface MonthOptions {
+  company: string;
+  chart: ChartAccount[];
+  taxAccounts: TaxAccountCount[] | null;
+  /** Where items with no income account posted; null or left out when it hasn't been read. */
+  itemAccounts?: ItemAccountCount[] | null;
+  /** What NetSuite said about the month's invoice lines, or why it couldn't be asked; null when it wasn't. */
+  facts?: LineFactsRead | { error: string } | null;
+}
+
+/** One invoice of the month, worked out with the rule and checked against NetSuite. */
+export interface WorkedInvoice {
+  invoice: InvoiceMonthData['invoices'][number];
+  number: string;
+  checked: CheckedInvoice;
+  amounts: LineAmounts;
+  /** Its lines at their net amounts, as the copy of the invoice has them. */
+  netLines: InvoiceLine[];
+  /** What NetSuite says about each of those lines, by position. */
+  lineFacts: Array<LineFacts | undefined>;
+}
+
 /**
- * `facts` is what NetSuite said about the month's invoice lines, or why it
- * couldn't be asked; null when it wasn't.
+ * Every invoice of the month worked out with the invoice rule and checked:
+ * what checkMonth shows, and what the posting job posts
+ * (src/lib/books/invoice-posting.ts).
  */
-export function checkMonth(
+export function workOutMonth(
   data: InvoiceMonthData,
-  opts: {
-    company: string;
-    chart: ChartAccount[];
-    taxAccounts: TaxAccountCount[] | null;
-    /** Where items with no income account posted; null or left out when it hasn't been read. */
-    itemAccounts?: ItemAccountCount[] | null;
-    facts?: LineFactsRead | { error: string } | null;
-  },
-): MonthCheck {
+  opts: MonthOptions,
+): { invoices: WorkedInvoice[]; names: ReasonNames; receivableNote: string | null } {
   const facts = opts.facts && 'lines' in opts.facts ? opts.facts : null;
 
   // An item with no income account goes to the account NetSuite posted its invoice lines to most.
@@ -569,12 +602,7 @@ export function checkMonth(
     taxCode: (id) => taxNames.get(id) ?? `tax code ${id}`,
   };
 
-  const checked: Array<{ number: string; checked: CheckedInvoice }> = [];
-  const invoices: InvoiceView[] = [];
-  const notInGl: string[] = [];
-  const unfit: string[] = [];
-  const used = new Set<string>();
-  for (const inv of data.invoices) {
+  const invoices = data.invoices.map((inv): WorkedInvoice => {
     const number = inv.number || `NetSuite ${inv.netsuite_id}`;
     const lineFacts = inv.lines.map((l) => facts?.lines.get(`${inv.netsuite_id}:${l.line_id}`));
     const netLines: InvoiceLine[] = inv.lines.map((l) => {
@@ -592,7 +620,28 @@ export function checkMonth(
     const cogs = lineFacts.some((f) => f?.cogs !== undefined)
       ? new Set(inv.lines.filter((_, i) => lineFacts[i]?.cogs).map((l) => l.line_id))
       : null;
-    const c = checkInvoice({ lines, linesCopied: inv.lines_copied, netsuite: postings(inv), cogs }, ctx);
+    const checked = checkInvoice({ lines, linesCopied: inv.lines_copied, netsuite: postings(inv), cogs }, ctx);
+    return { invoice: inv, number, checked, amounts, netLines, lineFacts };
+  });
+  return { invoices, names, receivableNote: receivable.note };
+}
+
+/** `books`, when the company's invoices post, says what FleetSuite's books hold for each invoice. */
+export function checkMonth(
+  data: InvoiceMonthData,
+  opts: MonthOptions,
+  books?: (worked: WorkedInvoice) => InvoiceBooks,
+): MonthCheck {
+  const { invoices: worked, names, receivableNote } = workOutMonth(data, opts);
+  const facts = opts.facts && 'lines' in opts.facts ? opts.facts : null;
+
+  const checked: Array<{ number: string; checked: CheckedInvoice }> = [];
+  const invoices: InvoiceView[] = [];
+  const notInGl: string[] = [];
+  const unfit: string[] = [];
+  const used = new Set<string>();
+  for (const w of worked) {
+    const { invoice: inv, number, checked: c, amounts, netLines, lineFacts } = w;
     if (inv.companies.length === 0) {
       // In neither company's GL copy: only worth a word when FleetSuite would post it.
       if (c.status !== 'matches') notInGl.push(number);
@@ -645,12 +694,17 @@ export function checkMonth(
       ...(amounts !== 'net' ? { amounts } : {}),
       reasons: invoiceReasons(c, names).map((r) => r.text),
       rows,
+      ...(books ? { books: books(w) } : {}),
     });
   }
 
   const { summary, reasons } = summarize(checked, names);
+  if (books) {
+    summary.posted = invoices.filter((i) => i.books && i.books.entryNo !== null).length;
+    summary.pending = invoices.filter((i) => i.books?.next).length;
+  }
   const notes: string[] = [];
-  if (receivable.note) notes.push(receivable.note);
+  if (receivableNote) notes.push(receivableNote);
   if (!opts.taxAccounts) notes.push("Where sales tax posts hasn't been read yet. Sync now on the NetSuite lists page reads it.");
   if (opts.facts && 'error' in opts.facts) {
     notes.push(`NetSuite couldn't be asked about these invoices' lines just now (${opts.facts.error}), so cost of goods is recognized by `

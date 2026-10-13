@@ -253,6 +253,31 @@ export async function reverseEntry(
   return { id: data.id, entryNo: Number(data.entry_no) };
 }
 
+/**
+ * Replaces a document's entry in one transaction (migration 367): reverses
+ * `entryId`, dated as it was, and posts `entry`, which must be the same
+ * document's (company, source type and id) under a new idempotency key. If
+ * either half is refused, neither happens and the old entry stands.
+ */
+export async function repostEntry(
+  client: RpcClient,
+  opts: { entryId: string; memo?: string | null; entry: JournalEntryInput },
+): Promise<{ reversal: { id: string; entryNo: number }; entry: { id: string; entryNo: number } }> {
+  const problems = validateEntry(opts.entry);
+  if (!UUID.test(opts.entryId ?? '')) problems.push('Entry id is missing');
+  if (problems.length) throw new BooksError('invalid', problems);
+  const { data, error } = await client.rpc('gl_repost_entry', {
+    p_entry_id: opts.entryId,
+    p_memo: opts.memo ?? null,
+    p: postPayload(opts.entry),
+  });
+  if (error) throw booksErrorFrom(error);
+  return {
+    reversal: { id: data.reversal.id, entryNo: Number(data.reversal.entry_no) },
+    entry: { id: data.entry.id, entryNo: Number(data.entry.entry_no) },
+  };
+}
+
 /** Closes or reopens one company's month ('YYYY-MM'). Reopening needs a reason; both are logged. */
 export async function setPeriodStatus(
   client: RpcClient,

@@ -77,6 +77,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/books/lists/route.ts': superAdmin(),
   'src/app/api/admin/books/trial-balance/route.ts': superAdmin(),
   'src/app/api/cron/books-netsuite-gl/route.ts': cron('requireSuperAdmin('),
+  'src/app/api/cron/books-invoice-posting/route.ts': cron('requireSuperAdmin('),
   'src/app/api/admin/bulk-upload-proofs/route.ts': admin(),
   'src/app/api/admin/bulk-upload-templates/route.ts': admin(),
   'src/app/api/admin/calibrate-templates/route.ts': staff(),

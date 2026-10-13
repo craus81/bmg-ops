@@ -1,0 +1,210 @@
+import { describe, it, expect } from 'vitest';
+import { BooksError } from './journal';
+import { workOutMonth, type ChartAccount, type InvoiceMonthData, type LineFactsRead } from './invoice-check';
+import {
+  decide, entryLines, failureReason, invoiceBooks, invoiceJournalEntry, parsePostingState, postingQueue, signature, unsaidFacts,
+  type InvoicePosting,
+} from './invoice-posting';
+
+// Made-up books: '120' receivable, '400' income, '220' sales tax payable.
+const CHART: ChartAccount[] = [
+  { netsuite_account_id: '120', number: '1200', name: 'Receivables', account_type: 'accounts_receivable', company: null, active: true, is_summary: false },
+  { netsuite_account_id: '400', number: '4000', name: 'Sales', account_type: 'income', company: null, active: true, is_summary: false },
+  { netsuite_account_id: '220', number: '2200', name: 'Sales Tax', account_type: 'other_current_liability', company: null, active: true, is_summary: false },
+];
+const ITEMS: InvoiceMonthData['items'] = [
+  { kind: 'item', netsuite_id: '11', name: 'PART-A', item_type: 'InvtPart', income_account: '400', asset_account: '130' },
+  { kind: 'item', netsuite_id: '13', name: 'INSTALL LABOR', item_type: 'Service', income_account: '400', asset_account: null },
+  { kind: 'tax_code', netsuite_id: '900', name: 'Some County', item_type: null, income_account: null, asset_account: null },
+];
+const TAX = [{ tax_code_id: '900', account_id: '220', lines: 40 }];
+const CUSTOMER = '6f1f6a52-8a43-4b8e-9a0e-2d9c1f0b7c11';
+
+type Invoice = InvoiceMonthData['invoices'][number];
+
+// A part and labor plus tax, as NetSuite posts it.
+const invoice = (fields: Partial<Invoice> = {}): Invoice => ({
+  id: 'id-101', netsuite_id: '101', number: 'INV101', date: '2026-09-15', total: '162.00', voided: false,
+  customer: 'A Customer', customer_id: CUSTOMER, lines_copied: true, companies: ['BMG'],
+  lines: [
+    { line_id: '1', line_no: 1, kind: 'item', item_id: '11', item_number: 'PART-A', amount: '100.00', netamount: '-100' },
+    { line_id: '2', line_no: 2, kind: 'item', item_id: '13', item_number: 'INSTALL LABOR', amount: '50.00', netamount: '-50' },
+    { line_id: '3', line_no: 3, kind: 'tax', item_id: '900', item_number: null, amount: '12.00', netamount: '-12' },
+  ],
+  netsuite: [
+    { line_id: '0', account: '120', debit: '162.00', credit: '0.00' },
+    { line_id: '1', account: '400', debit: '0.00', credit: '100.00' },
+    { line_id: '2', account: '400', debit: '0.00', credit: '50.00' },
+    { line_id: '3', account: '220', debit: '0.00', credit: '12.00' },
+  ],
+  ...fields,
+});
+
+const FACTS: LineFactsRead = { lines: new Map(), missing: [] };
+const worked = (inv: Invoice = invoice(), opts: { taxAccounts?: typeof TAX | null } = {}) =>
+  workOutMonth({ invoices: [inv], items: ITEMS }, { company: 'BMG', chart: CHART, taxAccounts: opts.taxAccounts === undefined ? TAX : opts.taxAccounts, facts: FACTS }).invoices[0];
+
+/** What the journal holds when INV101 posted as it is now, as entry 7. */
+const posting = (fields: Partial<InvoicePosting> = {}, lines?: NonNullable<InvoicePosting['current']>['lines']): InvoicePosting => ({
+  source_id: '101',
+  entries: 1,
+  unreversed: ['e7'],
+  current: {
+    id: 'e7', entry_no: 7, entry_date: '2026-09-15',
+    lines: lines ?? [
+      { account: '120', debit: '162.00', credit: '0.00', division: null, source_line_ref: '0', customer_id: CUSTOMER },
+      { account: '400', debit: '0.00', credit: '100.00', division: 'upfit', source_line_ref: '1', customer_id: null },
+      { account: '400', debit: '0.00', credit: '50.00', division: 'upfit', source_line_ref: '2', customer_id: null },
+      { account: '220', debit: '0.00', credit: '12.00', division: null, source_line_ref: '3', customer_id: null },
+    ],
+  },
+  history: [{ entry_no: 7, entry_date: '2026-09-15', reversed_by: null }],
+  invoice: { number: 'INV101', deleted: false, voided: false },
+  ...fields,
+});
+
+describe('signature', () => {
+  const lines = [
+    { account: '120', cents: 16200, division: null, lineRef: '0', customerId: 'c' },
+    { account: '400', cents: -16200, division: 'upfit', lineRef: '1', customerId: null },
+  ];
+
+  it('ignores the order of the lines', () => {
+    expect(signature('2026-09-15', lines)).toBe(signature('2026-09-15', [...lines].reverse()));
+  });
+
+  it('changes with the date, an account, an amount, a division, a line or the customer', () => {
+    const base = signature('2026-09-15', lines);
+    expect(signature('2026-09-16', lines)).not.toBe(base);
+    for (const change of [{ account: '410' }, { cents: -16100 }, { division: 'graphics' }, { lineRef: '2' }, { customerId: 'd' }]) {
+      expect(signature('2026-09-15', [lines[0], { ...lines[1], ...change }])).not.toBe(base);
+    }
+  });
+});
+
+describe('decide', () => {
+  it('posts an invoice nothing stands for, and keeps one whose entry still fits', () => {
+    expect(decide(worked(), undefined)).toEqual({ kind: 'post' });
+    expect(decide(worked(), posting())).toEqual({ kind: 'keep' });
+  });
+
+  it('posts what the rule works out even where NetSuite differs: the differences are what the side-by-side run shows', () => {
+    const w = worked(invoice({ netsuite: invoice().netsuite.map((l) => (l.line_id === '3' ? { ...l, account: '221' } : l)) }));
+    expect(w.checked.status).toBe('differs');
+    expect(decide(w, undefined)).toEqual({ kind: 'post' });
+    expect(decide(w, posting())).toEqual({ kind: 'keep' });
+  });
+
+  it('replaces an entry when NetSuite changed the invoice: an amount, the date or the customer', () => {
+    const more = invoice({
+      total: '182.00',
+      lines: invoice().lines.map((l) => (l.line_id === '1' ? { ...l, amount: '120.00', netamount: '-120' } : l)),
+    });
+    expect(decide(worked(more), posting())).toEqual({ kind: 'replace' });
+    expect(decide(worked(invoice({ date: '2026-09-16' })), posting())).toEqual({ kind: 'replace' });
+    expect(decide(worked(invoice({ customer_id: null })), posting())).toEqual({ kind: 'replace' });
+  });
+
+  it('reverses the entry of a voided invoice, and posts nothing for one never posted', () => {
+    expect(decide(worked(invoice({ voided: true })), posting())).toEqual({ kind: 'reverse', why: 'voided' });
+    expect(decide(worked(invoice({ voided: true })), undefined)).toEqual({ kind: 'keep' });
+  });
+
+  it('reverses the entry of an invoice that comes to nothing now', () => {
+    const zero = invoice({ total: '0.00', lines: invoice().lines.map((l) => ({ ...l, amount: '0.00', netamount: '0' })), netsuite: [] });
+    expect(entryLines(worked(zero))).toEqual([]);
+    expect(decide(worked(zero), posting())).toEqual({ kind: 'reverse', why: 'nothing' });
+    expect(decide(worked(zero), undefined)).toEqual({ kind: 'keep' });
+  });
+
+  it('leaves whatever stands when the rule can\'t work the invoice out or its lines aren\'t copied yet', () => {
+    expect(decide(worked(invoice(), { taxAccounts: null }), posting())).toEqual({ kind: 'leave', why: 'unworkable' });
+    expect(decide(worked(invoice(), { taxAccounts: null }), undefined)).toEqual({ kind: 'leave', why: 'unworkable' });
+    expect(decide(worked(invoice({ lines_copied: false })), posting())).toEqual({ kind: 'leave', why: 'waiting' });
+  });
+
+  it('leaves whatever stands when the lines don\'t come to the invoice\'s total, as when the copy is caught mid-refresh', () => {
+    expect(decide(worked(invoice({ lines: invoice().lines.slice(0, 1) })), posting())).toEqual({ kind: 'leave', why: 'total' });
+    expect(decide(worked(invoice({ total: '170.00' })), undefined)).toEqual({ kind: 'leave', why: 'total' });
+  });
+});
+
+describe('invoiceBooks', () => {
+  it('says which entry stands, what the next run does, and the earlier entries with what reversed them', () => {
+    expect(invoiceBooks(worked(), undefined)).toEqual({ entryNo: null, next: 'post', earlier: [] });
+    const replaced = posting({
+      entries: 2,
+      current: { ...posting().current!, entry_no: 9 },
+      history: [{ entry_no: 7, entry_date: '2026-09-15', reversed_by: 8 }, { entry_no: 9, entry_date: '2026-09-15', reversed_by: null }],
+    });
+    expect(invoiceBooks(worked(), replaced)).toEqual({ entryNo: 9, next: null, earlier: [{ entryNo: 7, reversedBy: 8 }] });
+    expect(invoiceBooks(worked(invoice({ voided: true })), posting()).next).toBe('reverse');
+    expect(invoiceBooks(worked(invoice({ date: '2026-09-20' })), posting()).next).toBe('replace');
+    expect(invoiceBooks(worked(invoice(), { taxAccounts: null }), undefined)).toEqual({ entryNo: null, next: null, earlier: [] });
+  });
+
+  it('says nothing is next when NetSuite couldn\'t say enough about the month\'s lines', () => {
+    expect(invoiceBooks(worked(), undefined, false)).toEqual({ entryNo: null, next: null, earlier: [] });
+    expect(invoiceBooks(worked(invoice({ voided: true })), posting(), false)).toMatchObject({ entryNo: 7, next: null });
+    expect(unsaidFacts({ lines: new Map(), missing: ['quantity', 'rate'] })).toEqual([]);
+    expect(unsaidFacts({ lines: new Map(), missing: ['rate', 'amount', 'cogs'] }).map((f) => f.fact)).toEqual(['cogs', 'amount']);
+  });
+});
+
+describe('invoiceJournalEntry', () => {
+  const ids = new Map([['120', 'a-120'], ['400', 'a-400'], ['220', 'a-220']]);
+
+  it('posts the rule\'s lines on the chart\'s accounts, the receivable carrying the customer, under the generation\'s key', () => {
+    const { entry } = invoiceJournalEntry(worked(), 'BMG', 2, ids);
+    expect(entry).toMatchObject({
+      company: 'BMG', entryDate: '2026-09-15', sourceType: 'invoice', sourceId: '101', postingRule: 'invoice@1',
+      idempotencyKey: 'invoice:101:2', memo: 'INV101, A Customer', postedBy: null,
+    });
+    expect(entry!.lines).toEqual([
+      { accountId: 'a-120', debit: '162.00', credit: null, division: null, itemNumber: null, sourceLineRef: '0', customerId: CUSTOMER },
+      { accountId: 'a-400', debit: null, credit: '100.00', division: 'upfit', itemNumber: 'PART-A', sourceLineRef: '1', customerId: null },
+      { accountId: 'a-400', debit: null, credit: '50.00', division: 'upfit', itemNumber: 'INSTALL LABOR', sourceLineRef: '2', customerId: null },
+      { accountId: 'a-220', debit: null, credit: '12.00', division: null, itemNumber: null, sourceLineRef: '3', customerId: null },
+    ]);
+  });
+
+  it('names the NetSuite accounts the chart doesn\'t have instead', () => {
+    expect(invoiceJournalEntry(worked(), 'BMG', 1, new Map([['120', 'a-120']]))).toEqual({ entry: null, missing: ['400', '220'] });
+  });
+
+  it('builds an entry that fits what it is compared against once posted', () => {
+    const { entry } = invoiceJournalEntry(worked(), 'BMG', 1, ids);
+    const back = new Map([...ids].map(([ns, id]) => [id, ns]));
+    const lines = entry!.lines.map((l) => ({
+      account: back.get(l.accountId)!, debit: String(l.debit ?? '0.00'), credit: String(l.credit ?? '0.00'),
+      division: l.division ?? null, source_line_ref: l.sourceLineRef ?? null, customer_id: l.customerId ?? null,
+    }));
+    expect(decide(worked(), posting({}, lines))).toEqual({ kind: 'keep' });
+  });
+});
+
+describe('failureReason', () => {
+  it('keeps what the journal said, but never an amount', () => {
+    expect(failureReason(new BooksError('refused', ['account 4010 (Old Sales) is inactive']))).toBe('Account 4010 (Old Sales) is inactive');
+    expect(failureReason(new BooksError('refused', ['entry does not balance: debits 10.00 vs credits 9.00']))).toBe('The journal refused the entry.');
+    expect(failureReason(new BooksError('invalid', ["Debits $10.00 don't equal credits $9.00"]))).toBe("FleetSuite's entry didn't pass the journal's own checks.");
+    expect(failureReason(new Error('timeout after 162.00 seconds'))).toBe('Timeout after … seconds');
+  });
+});
+
+describe('where a run carries on', () => {
+  it('reads the stopping point back only when it\'s a posting company and a month', () => {
+    expect(parsePostingState({ resume: { company: 'BMG', month: '2025-06-01' } })).toEqual({ resume: { company: 'BMG', month: '2025-06-01' } });
+    for (const bad of [null, {}, { resume: { company: '1084', month: '2025-06-01' } }, { resume: { company: 'BMG', month: "2025-06-01'; --" } }]) {
+      expect(parsePostingState(bad)).toEqual({ resume: null });
+    }
+  });
+
+  it('goes through every month, starting where the last run stopped', () => {
+    const months = ['2025-01-01', '2025-02-01', '2025-03-01'];
+    expect(postingQueue(['BMG'], months, null).map((q) => q.month)).toEqual(months);
+    expect(postingQueue(['BMG'], months, { company: 'BMG', month: '2025-02-01' }).map((q) => q.month))
+      .toEqual(['2025-02-01', '2025-03-01', '2025-01-01']);
+    expect(postingQueue(['BMG'], months, { company: 'BMG', month: '2024-12-01' }).map((q) => q.month)).toEqual(months);
+  });
+});
