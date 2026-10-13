@@ -50,6 +50,27 @@ export interface EmailMeta {
    *  signature (already eight positional args) didn't grow a ninth; the
    *  send layer passes it to Resend as cc. */
   cc?: string[] | null;
+  /** Display name for the From line on this send — repFromName() for a
+   *  send a person composed, so the customer sees the rep they know in
+   *  their inbox list. The address never changes. */
+  fromName?: string | null;
+}
+
+/**
+ * "Craig George via BMG Fleet" — the From display name for a customer email
+ * a staff member composed. A From line the customer recognises is opened
+ * (and not reported) far more than a plain company name, and it is what a
+ * filter learns from. Characters that would break an unquoted display
+ * name are dropped; no usable name means the default From.
+ */
+export function repFromName(fullName: string | null | undefined): string | undefined {
+  const name = String(fullName || '').replace(/[\r\n"<>,;:\\]/g, ' ').replace(/\s+/g, ' ').trim();
+  return name ? `${name} via ${fromName}` : undefined;
+}
+
+function fromHeader(customName?: string | null): string {
+  const name = String(customName || '').replace(/[\r\n"<>,;:\\]/g, ' ').replace(/\s+/g, ' ').trim();
+  return `${name || fromName} <${fromEmail}>`;
 }
 
 /** Email kinds whose body is never stored or shown on Sent Emails — an
@@ -255,7 +276,7 @@ export async function sendEmailDetailed(
     result = await enqueueSend(async () => {
       for (let attempt = 0; ; attempt++) {
         const { data, error } = await resend!.emails.send({
-          from: `${fromName} <${fromEmail}>`,
+          from: fromHeader(meta?.fromName),
           to,
           subject,
           html: qpProofHtml(htmlBody),

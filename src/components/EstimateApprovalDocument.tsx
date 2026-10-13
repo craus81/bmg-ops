@@ -16,7 +16,13 @@ import { Fragment } from 'react';
 import ZoomableImage from '@/components/ZoomableImage';
 import { discountLabel } from '@/lib/estimate-totals';
 
-export default function EstimateApprovalDocument({ estimate: est, lines, graphics, proofs = [] }: { estimate: any; lines: any[]; graphics: any[]; proofs?: any[] }) {
+export default function EstimateApprovalDocument({ estimate: est, lines, graphics, proofs = [], downloads = [] }: {
+  estimate: any; lines: any[]; graphics: any[]; proofs?: any[];
+  /** The estimate PDF, the files the approval email carried and the proofs,
+   *  as token-gated download links (estimate-approval-downloads.ts). The
+   *  staff preview passes none — staff hold no token. */
+  downloads?: { name: string; url: string; kind?: string }[];
+}) {
   const subtotal = lines.reduce((s: number, l: any) => s + (l.line_total || l.unit_price * l.quantity || 0) - (Number(l.discount_amount) || 0), 0);
 
   return (
@@ -205,6 +211,26 @@ export default function EstimateApprovalDocument({ estimate: est, lines, graphic
           ))}
         </div>
       ))}
+
+      {/* Everything the approval email carried, as downloads from our own
+          domain — for a customer whose mail system stripped the
+          attachments, and for whoever the email was forwarded to. */}
+      {downloads.length > 0 && (
+        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px', marginTop: '14px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Downloads</div>
+          {downloads.map(d => (
+            <a key={d.url} href={d.url} download style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px',
+              padding: '10px 12px', marginTop: '8px', background: '#fff', border: '1px solid #e2e8f0',
+              borderRadius: '10px', textDecoration: 'none', color: '#0f172a', fontSize: '13px', fontWeight: 600,
+            }}>
+              <span style={{ overflowWrap: 'anywhere' }}>{d.name}</span>
+              <span style={{ color: '#1d4ed8', fontSize: '12px', fontWeight: 700, whiteSpace: 'nowrap' }}>Download ↓</span>
+            </a>
+          ))}
+          <div style={{ marginTop: '8px', fontSize: '11px', color: '#64748b' }}>The same files that came with your email, to save or forward.</div>
+        </div>
+      )}
     </>
   );
 }

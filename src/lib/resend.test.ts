@@ -297,3 +297,27 @@ describe('buildInvoiceEmail heading', () => {
     expect(html).not.toContain('for Ben & Jerry <script>');
   });
 });
+
+describe('repFromName / From header', () => {
+  it('names the rep in the From line of a composed send, at the same address', async () => {
+    vi.resetModules();
+    const mod = await import('./resend');
+    expect(mod.repFromName('Craig George')).toBe('Craig George via BMG Fleet');
+    expect(mod.repFromName('  ')).toBeUndefined();
+    expect(mod.repFromName(null)).toBeUndefined();
+    // Characters that would break an unquoted display name are dropped.
+    expect(mod.repFromName('George, Craig <x>')).toBe('George Craig x via BMG Fleet');
+
+    vi.useFakeTimers();
+    try {
+      sendMock.mockReset();
+      sendMock.mockResolvedValue({ error: null });
+      const result = mod.sendEmailDetailed('a@example.com', 'S', '<p>x</p>', undefined, undefined, undefined, undefined, { fromName: 'Craig George via BMG Fleet' });
+      await vi.runAllTimersAsync();
+      expect((await result).ok).toBe(true);
+      expect(sendMock.mock.calls[0]![0].from).toBe('Craig George via BMG Fleet <notifications@bmgfleet.com>');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

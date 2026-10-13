@@ -281,3 +281,25 @@ describe('renderEstimateDocument fleet quoting', () => {
     expect(html).not.toContain('&asymp;');
   });
 });
+
+describe('Attached section', () => {
+  const baseEst = { estimate_number: 'EST-1', customer_name: 'Acme', subtotal: 0, grand_total: 0 };
+  it('lists bare names unlinked (the compose preview)', () => {
+    const html = renderEstimateDocument(baseEst, [], { attachmentNames: ['Estimate EST-1.pdf', 'Spec sheet.pdf'] });
+    expect(html).toContain('Estimate EST-1.pdf &middot; Spec sheet.pdf');
+    expect(html).not.toContain('Click a name to download');
+  });
+
+  it('links each attachment to its download URL on the real send', () => {
+    const html = renderEstimateDocument(baseEst, [], {
+      attachmentNames: [
+        { name: 'Estimate EST-1.pdf', url: 'https://go.bmgfleet.com/api/approve/estimate/t/download/pdf' },
+        { name: 'Rack & bin.pdf', url: 'https://go.bmgfleet.com/api/approve/estimate/t/download/file/f1' },
+      ],
+    });
+    expect(html).toContain('<a href="https://go.bmgfleet.com/api/approve/estimate/t/download/pdf"');
+    expect(html).toContain('>Estimate EST-1.pdf</a>');
+    expect(html).toContain('>Rack &amp; bin.pdf</a>');
+    expect(html).toContain('Click a name to download a copy');
+  });
+});

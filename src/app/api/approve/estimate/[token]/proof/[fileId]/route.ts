@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { validateExpiry } from '@/lib/magic-link-approval';
 import { r2GetBytes } from '@/lib/r2';
 import { isShrinkableImage, shrinkImageForEmail } from '@/lib/email-image';
+import { attachmentDisposition } from '@/lib/estimate-approval-downloads';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,14 +17,22 @@ const MAX_PROOF_BYTES = 10 * 1024 * 1024;
 /**
  * GET /api/approve/estimate/[token]/proof/[fileId]
  *
- * One proof picture for the approval EMAIL, served from our own domain.
+ * One graphic proof for the approval EMAIL, served from our own domain.
  * The email used to point its <img> tags at 7-day presigned links on
  * <account>.r2.cloudflarestorage.com — long signed URLs to a domain that
  * isn't ours, which spam filters score like phishing. Gated exactly like
  * the approval page: the live approval token, and only a file the estimate
- * actually attaches (graphics_jobs.estimate_attach). Served at email size.
+ * actually attaches (graphics_jobs.estimate_attach).
+ *
+ * Inline (the email's picture): image types only, shrunk to email size.
+ * `?download=1` (the approval page's Downloads list): the original file,
+ * PDF proofs included, as a download.
  */
-export async function GET(_req: NextRequest, { params }: { params: { token: string; fileId: string } }) {
+export async function GET(req: NextRequest, { params }: { params: { token: string; fileId: string } }) {
+  const download = req.nextUrl.searchParams.get('download') === '1';
+
+  // The approval token is the credential, as on the approval page, and an
+  // expired link gets nothing.
   const { data: estimate } = await supabase
     .from('estimates')
     .select('id, approval_token_expires_at')
@@ -34,7 +43,7 @@ export async function GET(_req: NextRequest, { params }: { params: { token: stri
 
   const { data: file } = await supabase
     .from('graphics_job_files')
-    .select('id, job_id, file_type, storage_path')
+    .select('id, job_id, file_name, file_type, storage_path')
     .eq('id', params.fileId)
     .maybeSingle();
   if (!file?.storage_path) return new NextResponse(null, { status: 404 });
@@ -49,10 +58,22 @@ export async function GET(_req: NextRequest, { params }: { params: { token: stri
 
   const asset = await r2GetBytes('graphics-proofs', file.storage_path, MAX_PROOF_BYTES);
   if (!asset) return new NextResponse(null, { status: 404 });
-  const contentType = isShrinkableImage(asset.contentType) ? asset.contentType : (file.file_type || '');
-  if (!isShrinkableImage(contentType)) return new NextResponse(null, { status: 415 });
+  const contentType = asset.contentType || file.file_type || 'application/octet-stream';
 
-  const small = await shrinkImageForEmail(asset.bytes, contentType);
+  if (download) {
+    return new NextResponse(new Uint8Array(asset.bytes), {
+      headers: {
+        'Content-Type': contentType,
+        'Content-Length': String(asset.bytes.byteLength),
+        'Content-Disposition': attachmentDisposition(file.file_name),
+        'Cache-Control': 'private, no-store',
+      },
+    });
+  }
+
+  const imageType = isShrinkableImage(asset.contentType) ? asset.contentType : (file.file_type || '');
+  if (!isShrinkableImage(imageType)) return new NextResponse(null, { status: 415 });
+  const small = await shrinkImageForEmail(asset.bytes, imageType);
   return new NextResponse(new Uint8Array(small.bytes), {
     headers: {
       'Content-Type': small.contentType,

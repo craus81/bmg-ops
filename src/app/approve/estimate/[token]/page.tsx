@@ -21,10 +21,12 @@ export default function EstimateApprovalPage() {
       // jobs, one checkbox approves design + price together — and the
       // server propagates the acceptance onto those jobs.
       agreementText={d => (d?.proofs?.length ? COMBINED_AGREEMENT_TEXT : AGREEMENT_TEXT)}
-      parsePayload={json => ({ estimate: json.estimate, lines: json.lines || [], graphics: json.graphics || [], proofs: json.proofs || [] })}
+      parsePayload={json => ({ estimate: json.estimate, lines: json.lines || [], graphics: json.graphics || [], proofs: json.proofs || [], downloads: json.downloads || [] })}
       docLabel={d => d?.estimate?.estimate_number ? `Estimate #${d.estimate.estimate_number}` : null}
       acceptedAt={d => d?.estimate?.customer_approved_at || null}
-      renderDocument={d => <EstimateApprovalDocument estimate={d.estimate} lines={d.lines} graphics={d.graphics} proofs={d.proofs} />}
+      renderDocument={d => <EstimateApprovalDocument estimate={d.estimate} lines={d.lines} graphics={d.graphics} proofs={d.proofs} downloads={d.downloads} />}
+      // The PDF and attached files stay downloadable after the decision.
+      downloads={d => d?.downloads || null}
       // R5-17: an approval's natural next step is telling us when the
       // vehicles arrive — the booking page shares this magic-link token.
       acceptedCta={token => ({

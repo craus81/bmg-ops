@@ -4,7 +4,7 @@ import { requireFeature, getProfileRoles } from '@/lib/api-auth';
 import { checkDiscountApproval } from '@/lib/discount-approval';
 import { generateToken, approvalContentHash } from '@/lib/magic-link-approval';
 import { reconcileLinkedWrapQuotes } from '@/lib/wrap-quote-reconcile';
-import { sendEmailDetailed } from '@/lib/resend';
+import { sendEmailDetailed, repFromName } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { sendSMS } from '@/lib/sms-provider';
 import { renderEstimateDocument } from '@/lib/estimate-document';
@@ -13,6 +13,7 @@ import { enrichLinesWithPartAssets } from '@/lib/estimate-line-parts';
 import { loadEstimateGraphics, loadEstimateProofs, proofBlocksForEmail, type EstimateProofBlock } from '@/lib/estimate-graphics';
 import { r2PublicUrl } from '@/lib/r2';
 import { loadEstimateAttachmentRows, fetchEstimateAttachments } from '@/lib/estimate-attachments';
+import { approvalDownloadUrls } from '@/lib/estimate-approval-downloads';
 import { resolveEstimateEmail, resolveEstimatePhone } from '@/lib/estimate-recipients';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/email-attachments';
 import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
@@ -403,6 +404,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       quoted_margin_at: new Date().toISOString(),
       below_floor_reason: belowFloor ? floorReason : null,
       quoted_margin_detail: quotedMargin.lines,
+      // The files this send carries (migration 368): the download links in
+      // the email and on the approval page serve exactly these, whatever is
+      // added to the estimate later.
+      approval_file_ids: picked.rows.map(r => r.id),
       updated_at: new Date().toISOString(),
     })
     .eq('id', estimate.id);
@@ -451,6 +456,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   if (emailList.length > 0) {
     const link = `${appUrl}/approve/estimate/${token}?via=email&to=${encodeURIComponent(emailList[0])}`;
+    const downloadUrls = approvalDownloadUrls(appUrl, token);
     // The real estimate document, not a notification card: the old email
     // carried a one-line summary and no quantities, rates, or line totals
     // at all — the fields customers kept asking about.
@@ -464,7 +470,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       signature,
       graphics: approvalGraphics,
       proofs: proofBlocksForEmail(proofBlocks, appUrl, token),
-      attachmentNames,
+      // Each attachment doubles as a download link behind this token, for
+      // the customer whose mail system stripped it and for whoever they
+      // forward the email to.
+      attachmentNames: [
+        { name: pdfFilename, url: downloadUrls.pdf },
+        ...picked.rows.map(r => ({ name: r.file_name, url: downloadUrls.file(r.id) })),
+      ],
     });
     const bcc = body.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
 
@@ -473,7 +485,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         emailList, subject, html, undefined,
         approvalAttachments.length > 0 ? approvalAttachments : undefined,
         auth.user?.email || undefined, bcc,
-        { kind: 'estimate_approval', cc: body.cc, sentBy: auth.user?.id, contextUrl: deepLinks.estimate(estimate.id), customerId: estimate.customer_id, netsuiteCustomerId: estimate.customer_netsuite_id },
+        { kind: 'estimate_approval', cc: body.cc, sentBy: auth.user?.id, fromName: repFromName((auth.profile as any)?.full_name), contextUrl: deepLinks.estimate(estimate.id), customerId: estimate.customer_id, netsuiteCustomerId: estimate.customer_netsuite_id },
       );
       dispatch.email = { target: emailList.join(', '), ok, bcc: bcc ? bcc.join(', ') : undefined };
       // Delivery tracking (same scheme as invoice emails): store the Resend
