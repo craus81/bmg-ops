@@ -48,6 +48,9 @@ export default function PhotoProofBoard({
   // Boxes checked for a bulk film change — across every photo, so "Select
   // all" really is the whole quote.
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  // Full screen lives here, not in the editor: the editor remounts for each
+  // photo, and stepping to the next photo shouldn't drop out of full screen.
+  const [fullscreen, setFullscreen] = useState(false);
   const lastCount = useRef(proofs.length);
   // Numbered across every page, so a piece keeps its number on any photo.
   const parts = useMemo(() => proofParts(proofs), [proofs]);
@@ -247,6 +250,14 @@ export default function PhotoProofBoard({
             checkedIds={checkedIds}
             onToggleChecked={toggleChecked}
             parts={parts}
+            fullscreen={fullscreen}
+            onFullscreenChange={setFullscreen}
+            photoNav={{
+              index: activeIndex,
+              total: proofs.length,
+              onPrev: () => { if (activeIndex > 0) setActiveId(proofs[activeIndex - 1].id); },
+              onNext: () => { if (activeIndex < proofs.length - 1) setActiveId(proofs[activeIndex + 1].id); },
+            }}
           />
         </>
       )}
