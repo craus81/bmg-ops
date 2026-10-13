@@ -414,6 +414,10 @@ const searchTemplates = async (
 // Escape LIKE wildcards so a typed "%" or "_" matches itself in .ilike().
 const likeExact = (v: string) => v.trim().replace(/[\\%_]/g, c => `\\${c}`);
 
+// Longest side of a saved coverage diagram, in pixels — big enough to read
+// on a printed estimate, small enough for every browser's canvas limit.
+const MAX_DIAGRAM_EDGE = 4000;
+
 const imageUrl = (path: string | null) => {
   if (!path) return '';
   if (path.startsWith('http')) return path;
@@ -629,6 +633,24 @@ export default function WrapQuotePage() {
         est.vin ? `VIN ${est.vin}` : null,
       ].filter(Boolean).join(' · ') || null;
       setForEstimate({ id: est.id, number: estimateHeadlineNumber(est), customerName: est.customer_name, vehicle });
+      // "Edit in wrap builder" on the estimate (&quote=<id>): reopen the
+      // quote already on this estimate, so a redraw updates it and its lines
+      // instead of starting a second quote.
+      const editId = searchParams.get('quote');
+      if (editId) {
+        const { data: linked } = await supabase.from('wrap_quotes').select('*').eq('id', editId).maybeSingle();
+        if (linked && linked.estimate_id === est.id) {
+          if (linked.estimate_attach) {
+            setEstAttach({
+              diagram: !!linked.estimate_attach.diagram,
+              attachments: !!linked.estimate_attach.attachments,
+              films: !!linked.estimate_attach.films,
+            });
+          }
+          setPendingEdit(linked as WrapQuote);
+          return;
+        }
+      }
       // Prefill on a fresh quote only — never clobber a loaded one.
       if (!savedQuoteId) {
         // Customer: same fields the customer picker fills, so the quote tab
@@ -657,35 +679,61 @@ export default function WrapQuotePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on arrival
   }, [searchParams]);
 
+  // The linked quote waiting to open once the page has loaded (see above).
+  const [pendingEdit, setPendingEdit] = useState<WrapQuote | null>(null);
+  useEffect(() => {
+    if (!pendingEdit || loading) return;
+    const q = pendingEdit;
+    setPendingEdit(null);
+    loadQuoteForEdit(q, 'estimator');
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot once loaded
+  }, [pendingEdit, loading]);
+
   // What this quote contributes to the estimate's customer PDF — the
   // Add-to-Estimate checkboxes (coverage diagram / uploaded proofs /
   // vinyl details). Stored on the quote (estimate_attach) so the estimate
   // PDF generator knows what to merge in.
   const [estAttach, setEstAttach] = useState({ diagram: true, attachments: true, films: true });
 
+  // Which step Save & open estimate is on, so the button says what's
+  // happening (the save, the picture and the estimate update used to hide
+  // behind one "Adding…").
+  const [addStep, setAddStep] = useState<'saving' | 'adding' | null>(null);
+
   // "Save & open estimate": save the worksheet (which refreshes the lines
   // on its estimate), then go there. A worksheet with no estimate yet gets
   // a draft created for its customer and vehicle (open-estimate), so the
-  // only thing the customer ever receives is an estimate.
+  // only thing the customer ever receives is an estimate. The estimate
+  // shows a "saved and added" note for this quote (&wrapAdded=).
   const saveAndOpenEstimate = async () => {
     setAddingToEstimate(true);
     try {
+      setAddStep('saving');
       const quoteId = await saveQuote();
       if (!quoteId) return;
+      // The save already refreshed the estimate's lines — unless the
+      // coverage picture failed, in which case it said so and stopped.
+      if (pictureBlocksEstimate()) return;
       if (forEstimate) {
-        router.push(`/estimates?id=${forEstimate.id}`);
+        router.push(`/estimates?id=${forEstimate.id}&wrapAdded=${quoteId}`);
         return;
       }
+      setAddStep('adding');
       const estId = await openEstimateFor(quoteId);
-      if (estId) router.push(`/estimates?id=${estId}`);
+      if (estId) router.push(`/estimates?id=${estId}&wrapAdded=${quoteId}`);
     } finally {
       setAddingToEstimate(false);
+      setAddStep(null);
     }
   };
 
   // Create (or refresh) the estimate for a saved worksheet; answers with the
   // estimate id to open, or null after telling the rep what stopped it.
-  const openEstimateFor = async (quoteId: string): Promise<string | null> => {
+  const openEstimateFor = async (quoteId: string, checkPicture = true): Promise<string | null> => {
+    if (checkPicture && pictureBlocksEstimate()) {
+      await dialog.alert(`Saved, but no estimate was made: ${pictureProblem.current}.\n\nSave again, or untick "Coverage diagram" to go ahead without the picture.`);
+      return null;
+    }
     const res = await apiFetch('/api/wrap-quote/open-estimate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -699,6 +747,10 @@ export default function WrapQuotePage() {
     return d.estimateId as string;
   };
 
+  // The coverage proof is what the customer approves against — never carry
+  // the prices onto an estimate without it while the box is ticked.
+  const pictureBlocksEstimate = () => !!(estAttach.diagram && hasCoverage && pictureProblem.current);
+
   // History: open a worksheet's estimate, creating one when it has none.
   const [openingEstimateFor, setOpeningEstimateFor] = useState<string | null>(null);
   const openEstimateFromHistory = async (q: WrapQuote) => {
@@ -706,7 +758,8 @@ export default function WrapQuotePage() {
     if (!(await dialog.confirm(`Create an estimate for ${q.customer?.name || 'this customer'} from ${q.quote_number}? The graphics land on it as lines, and the estimate is what gets sent.`))) return;
     setOpeningEstimateFor(q.id);
     try {
-      const estId = await openEstimateFor(q.id);
+      // A saved worksheet from the list: its picture was judged at its own save.
+      const estId = await openEstimateFor(q.id, false);
       if (estId) router.push(`/estimates?id=${estId}`);
     } finally {
       setOpeningEstimateFor(null);
@@ -1884,19 +1937,60 @@ export default function WrapQuotePage() {
   // by film) to a PNG so the saved/emailed quote can show the customer which
   // panels are covered. Draws onto an offscreen canvas at the template
   // image's native resolution; returns null if anything prevents rendering.
-  const renderDiagramBlob = async (): Promise<Blob | null> => {
-    if (!template?.template_image_path || measurements.length === 0) return null;
-    const img = new Image();
-    img.crossOrigin = 'anonymous'; // keep the canvas untainted so toBlob works
-    img.src = imageUrl(template.template_image_path);
-    try { await img.decode(); } catch { return null; }
-    const w = img.naturalWidth, h = img.naturalHeight;
-    if (!w || !h) return null;
+  //
+  // The template is read through our same-origin storage route first: an
+  // <img> the editor already showed (no crossOrigin) can sit in the browser
+  // cache without CORS headers, and drawing that copy taints the canvas so
+  // toBlob() throws — which used to drop the picture without a word.
+  const renderDiagramBlob = async (): Promise<{ blob: Blob | null; reason: string | null }> => {
+    if (!template?.template_image_path || measurements.length === 0) return { blob: null, reason: null };
+    const tplPath = template.template_image_path;
+    let img: HTMLImageElement | null = null;
+    let objectUrl: string | null = null;
+    try {
+      if (!tplPath.startsWith('http')) {
+        try {
+          const res = await fetch(`/api/storage?bucket=vehicle-templates&path=${encodeURIComponent(tplPath)}`, { cache: 'no-store' });
+          if (res.ok) {
+            objectUrl = URL.createObjectURL(await res.blob());
+            const local = new Image();
+            local.src = objectUrl;
+            await local.decode();
+            img = local;
+          }
+        } catch { img = null; }
+      }
+      if (!img) {
+        const remote = new Image();
+        remote.crossOrigin = 'anonymous'; // keep the canvas untainted so toBlob works
+        // Cache-buster so a non-CORS cached copy can't be reused.
+        const url = imageUrl(tplPath);
+        remote.src = url + (url.includes('?') ? '&' : '?') + 'cors=1';
+        try { await remote.decode(); } catch { return { blob: null, reason: 'the vehicle template image would not load' }; }
+        img = remote;
+      }
+      const iw = img.naturalWidth, ih = img.naturalHeight;
+      if (!iw || !ih) return { blob: null, reason: 'the vehicle template image is empty' };
+      // Browsers refuse very large canvases (Safari caps around 16.7M
+      // pixels) and hand back no image; draw big templates scaled down.
+      const k = Math.min(1, MAX_DIAGRAM_EDGE / Math.max(iw, ih));
+      const blob = await drawDiagram(img, iw, ih, k);
+      return blob ? { blob, reason: null } : { blob: null, reason: 'the browser could not turn the drawing into a picture' };
+    } catch (e: any) {
+      return { blob: null, reason: e?.message ? `the picture failed (${e.message})` : 'the picture failed' };
+    } finally {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    }
+  };
+
+  const drawDiagram = async (img: HTMLImageElement, w: number, h: number, k: number): Promise<Blob | null> => {
     const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
+    canvas.width = Math.max(1, Math.round(w * k));
+    canvas.height = Math.max(1, Math.round(h * k));
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
+    // Shapes are in template-image pixels; scale the whole drawing once.
+    ctx.setTransform(k, 0, 0, k, 0, 0);
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, w, h);
     ctx.drawImage(img, 0, 0);
@@ -1948,15 +2042,17 @@ export default function WrapQuotePage() {
 
   // Timestamped path so re-saves aren't served stale from CDN/email caches;
   // failure is non-fatal (the quote just saves without a diagram).
-  const uploadDiagram = async (qn: string): Promise<string | null> => {
+  // The quote still saves when this fails, but the reason comes back so
+  // Add to Estimate can stop and say why instead of carrying no picture.
+  const uploadDiagram = async (qn: string): Promise<{ path: string | null; reason: string | null }> => {
     try {
-      const blob = await renderDiagramBlob();
-      if (!blob) return null;
+      const { blob, reason } = await renderDiagramBlob();
+      if (!blob) return { path: null, reason };
       const path = `quote-diagrams/${qn}-${Date.now()}.png`;
       const { error } = await storage.from('vehicle-templates').upload(path, blob, { contentType: 'image/png', upsert: true });
-      return error ? null : path;
-    } catch {
-      return null;
+      return error ? { path: null, reason: `the upload failed (${error.message})` } : { path, reason: null };
+    } catch (e: any) {
+      return { path: null, reason: e?.message || 'the picture failed' };
     }
   };
 
@@ -1973,13 +2069,19 @@ export default function WrapQuotePage() {
   // its own diagram_path so the emailed quote can show all the views; the
   // first one also becomes the quote's diagram_path, which is what the
   // single-picture surfaces (the estimate attach) still read.
-  const uploadProofDiagrams = async (qn: string): Promise<PhotoProof[]> => {
+  const uploadProofDiagrams = async (qn: string): Promise<{ proofs: PhotoProof[]; reason: string | null }> => {
     const out: PhotoProof[] = [];
+    const failed: string[] = [];
     for (const [i, proof] of photoProofs.entries()) {
       let path = proof.diagram_path || null;
       try {
+        // Same-origin read, for the same cached-without-CORS reason as the
+        // template diagram above.
+        const src = proof.path.startsWith('http')
+          ? imageUrl(proof.path)
+          : `/api/storage?bucket=vehicle-templates&path=${encodeURIComponent(proof.path)}`;
         const blob = proof.boxes.length > 0
-          ? await renderCoverageProofBlob(imageUrl(proof.path), proof.boxes, proofPageParts(proof))
+          ? await renderCoverageProofBlob(src, proof.boxes, proofPageParts(proof))
           : null;
         if (blob) {
           const target = `quote-diagrams/${qn}-${i + 1}-${Date.now()}.jpg`;
@@ -1987,15 +2089,28 @@ export default function WrapQuotePage() {
           // A failed upload keeps the picture this proof already had rather
           // than blanking a view that was fine a moment ago.
           if (!error) path = target;
+          else failed.push(proofLabel(proof, i));
         } else if (proof.boxes.length === 0) {
           // Every box deleted — this view has nothing left to show.
           path = null;
+        } else {
+          failed.push(proofLabel(proof, i));
         }
-      } catch { /* keep whatever it had */ }
+      } catch {
+        // keep whatever it had
+        failed.push(proofLabel(proof, i));
+      }
       out.push({ ...proof, diagram_path: path });
     }
-    return out;
+    return {
+      proofs: out,
+      reason: failed.length ? `the picture for ${failed.join(', ')} could not be made` : null,
+    };
   };
+
+  // Why the last save couldn't make the coverage picture (null = it did, or
+  // there was nothing to draw). Add to Estimate reads it after saving.
+  const pictureProblem = useRef<string | null>(null);
 
   const saveQuote = async (): Promise<string | null> => {
     // A crossed freeform outline shoelaces to less area than what's visually
@@ -2014,13 +2129,18 @@ export default function WrapQuotePage() {
     // switched from a template to photos can't keep emailing the old
     // template diagram.
     let row: any;
+    pictureProblem.current = null;
     if (photoMode) {
-      const proofs = await uploadProofDiagrams(snap.quote_number);
+      const { proofs, reason } = await uploadProofDiagrams(snap.quote_number);
+      pictureProblem.current = reason;
       setPhotoProofs(proofs);
       const lead = proofs.find(p => p.diagram_path)?.diagram_path || null;
       row = { ...snap, photo_proofs: proofs, diagram_path: lead };
     } else {
-      const diagramPath = await uploadDiagram(snap.quote_number);
+      const { path: diagramPath, reason } = await uploadDiagram(snap.quote_number);
+      pictureProblem.current = measurements.length > 0 && !diagramPath
+        ? (reason || (!template?.template_image_path ? 'this template has no outline picture' : 'the picture could not be made'))
+        : null;
       row = diagramPath
         ? { ...snap, diagram_path: diagramPath }
         : measurements.length === 0 ? { ...snap, diagram_path: null } : snap;
@@ -2055,6 +2175,14 @@ export default function WrapQuotePage() {
   // is said out loud once, since the customer's copy can't follow.
   const syncEstimateLines = async (quoteId: string) => {
     if (!forEstimate) return;
+    if (pictureBlocksEstimate()) {
+      const number = quoteNumber || history.find(h => h.id === quoteId)?.quote_number || 'The worksheet';
+      await dialog.alert(
+        `${number} was saved, but Estimate ${forEstimate.number} was NOT updated: ${pictureProblem.current}.\n\n`
+        + 'Save again. If it keeps happening, untick "Coverage diagram" to put the prices on the estimate without the picture.',
+      );
+      return;
+    }
     try {
       const res = await apiFetch('/api/wrap-quote/open-estimate', {
         method: 'POST',
@@ -3417,7 +3545,9 @@ export default function WrapQuotePage() {
         }}>
           <div style={{ flex: 1, minWidth: '220px' }}>
             <div style={{ fontSize: '12px', fontWeight: 800, color: '#8b5cf6' }}>
-              🎨 Graphics for Estimate {forEstimate.number}
+              {savedQuoteId && quoteNumber
+                ? `🎨 Editing ${quoteNumber} for Estimate ${forEstimate.number}`
+                : `🎨 Graphics for Estimate ${forEstimate.number}`}
             </div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
               {[forEstimate.customerName, forEstimate.vehicle].filter(Boolean).join(' · ') || 'Price the graphics here'}
@@ -3446,10 +3576,14 @@ export default function WrapQuotePage() {
           <button
             onClick={saveAndOpenEstimate}
             disabled={addingToEstimate}
-            title="Save this worksheet (its materials + install lines update on the estimate) and open the estimate"
-            style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#8b5cf6', color: '#fff', fontSize: '12px', fontWeight: 800, cursor: addingToEstimate ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}
+            title="Save this worksheet (its materials + install lines and coverage picture update on the estimate) and open the estimate"
+            style={{ padding: '10px 18px', borderRadius: '8px', border: 'none', background: '#8b5cf6', color: '#fff', fontSize: '13px', fontWeight: 800, cursor: addingToEstimate ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}
           >
-            {addingToEstimate ? 'Saving…' : `Save & open Estimate ${forEstimate.number} ▸`}
+            {addStep === 'saving'
+              ? 'Saving worksheet and coverage picture…'
+              : addStep === 'adding'
+                ? `Opening Estimate ${forEstimate.number}…`
+                : `Save & open Estimate ${forEstimate.number} ▸`}
           </button>
           <button
             onClick={() => router.push(`/estimates?id=${forEstimate.id}`)}
@@ -4365,7 +4499,7 @@ export default function WrapQuotePage() {
                 title={forEstimate ? `Save, then open Estimate ${forEstimate.number}` : 'Save, create a draft estimate for this customer with the graphics on it, and open it'}
                 style={{ ...btnStyle('#fff', '#22c55e'), border: 'none' }}
               >
-                {addingToEstimate ? 'Saving…' : forEstimate ? `Save & open Estimate ${forEstimate.number} ▸` : 'Save & open estimate ▸'}
+                {addStep === 'saving' ? 'Saving worksheet and coverage picture…' : addStep === 'adding' ? 'Creating the estimate…' : forEstimate ? `Save & open Estimate ${forEstimate.number} ▸` : 'Save & open estimate ▸'}
               </button>
             </div>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginTop: '6px' }}>

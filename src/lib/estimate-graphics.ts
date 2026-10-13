@@ -79,7 +79,11 @@ export async function loadEstimateGraphics(
     let films: { name: string; areas: string[] }[] = [];
     if (wantFilms) {
       const measurements: any[] = Array.isArray(q.measurements) ? q.measurements : [];
-      const filmIds = [...new Set(measurements.map(m => m?.substrate_id).filter(Boolean))] as string[];
+      // The builder snapshots each area's film as `substrate: { id, name, … }`
+      // (older rows carried a bare `substrate_id`); read both, and prefer the
+      // snapshotted name so a renamed film still reads as it was quoted.
+      const filmIdOf = (m: any): string | null => m?.substrate?.id || m?.substrate_id || null;
+      const filmIds = [...new Set(measurements.map(filmIdOf).filter(Boolean))] as string[];
       const names = new Map<string, string>();
       if (filmIds.length > 0) {
         const { data: filmRows } = await supabase
@@ -88,7 +92,8 @@ export async function loadEstimateGraphics(
       }
       const byFilm = new Map<string, string[]>();
       for (const m of measurements) {
-        const name = m?.substrate_id ? (names.get(m.substrate_id) || 'Vinyl') : 'Vinyl';
+        const id = filmIdOf(m);
+        const name = m?.substrate?.name || (id ? (names.get(id) || 'Vinyl') : 'Vinyl');
         const areas = byFilm.get(name) || [];
         if (m?.name) areas.push(String(m.name));
         byFilm.set(name, areas);

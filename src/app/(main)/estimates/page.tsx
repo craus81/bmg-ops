@@ -925,6 +925,13 @@ export default function EstimatesPage() {
   // own. See /api/estimates/[id]/graphics-attach.
   const [wrapAttachQuotes, setWrapAttachQuotes] = useState<WrapAttachQuote[]>([]);
   const [wrapAttachSaving, setWrapAttachSaving] = useState<string | null>(null);
+  // Just back from the wrap builder's Save & add (&wrapAdded=<quote id>):
+  // that quote's card says it was saved and added.
+  const [wrapJustAdded, setWrapJustAdded] = useState<string | null>(null);
+  useEffect(() => {
+    const added = searchParams.get('wrapAdded');
+    if (added && /^[0-9a-f-]{36}$/i.test(added)) setWrapJustAdded(added);
+  }, [searchParams]);
 
   useEffect(() => {
     if (!user) return;
@@ -2208,13 +2215,16 @@ export default function EstimatesPage() {
     }
   };
 
-  const addGraphics = async () => {
+  // quoteId: reopen that linked wrap quote (the coverage proof card's Edit)
+  // rather than a blank one, so a redraw updates it instead of adding a
+  // second quote.
+  const addGraphics = async (quoteId?: string) => {
     // Preserve the record's current status — the bare saveEstimate() default
     // is 'draft', which silently demoted a pushed estimate (dropping it from
     // the sales-performance report) every time someone added graphics.
     const currentStatus = estimates.find(e => e.id === editingId)?.status || 'draft';
     const id = await saveEstimate(currentStatus);
-    if (id) router.push(`/admin/wrap-quote?forEstimate=${id}`);
+    if (id) router.push(`/admin/wrap-quote?forEstimate=${id}${quoteId ? `&quote=${quoteId}` : ''}`);
   };
 
   // ── Push to NetSuite (initial push or sync update) ──
@@ -4594,7 +4604,7 @@ export default function EstimatesPage() {
             </button>
             <button
               type="button"
-              onClick={addGraphics}
+              onClick={() => addGraphics()}
               disabled={saving}
               title="Save this estimate and price vehicle graphics in the wrap-quote builder — the result comes back as lines on this estimate"
               className="est-part-action" style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: saving ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}
@@ -5127,15 +5137,15 @@ export default function EstimatesPage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
             <div style={labelStyle}>Coverage proof on the customer copy</div>
             <button
-              onClick={addGraphics}
+              onClick={() => addGraphics()}
               disabled={saving}
-              title="Open the wrap-quote builder to draw or re-draw the coverage proof"
+              title="Start another graphics worksheet for this estimate (to change one above, use its Edit in Graphics Builder)"
               style={{
                 padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
                 background: 'var(--card)', border: '1px solid var(--border)',
                 color: 'var(--text-body)', cursor: saving ? 'wait' : 'pointer',
               }}
-            >Edit in wrap builder</button>
+            >+ Another graphics worksheet</button>
           </div>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
             Tick what the estimate PDF and approval email carry. The estimate reads the quote's
@@ -5174,8 +5184,37 @@ export default function EstimatesPage() {
                   padding: '8px', borderRadius: '8px', background: 'var(--card)',
                   border: '1px solid var(--border)', opacity: busy ? 0.6 : 1,
                 }}>
-                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '6px' }}>
-                    {q.quoteNumber}{q.vehicle ? ` — ${q.vehicle}` : ''}
+                  {wrapJustAdded === q.id && (
+                    <div style={{
+                      fontSize: '11px', fontWeight: 700, color: '#16a34a', marginBottom: '6px',
+                      padding: '5px 8px', borderRadius: '6px',
+                      background: 'rgba(22,163,74,0.08)', border: '1px solid rgba(22,163,74,0.3)',
+                    }}>
+                      ✓ {q.quoteNumber} was saved and added to this estimate. Its prices are in the lines
+                      {q.hasDiagram && q.attach?.diagram ? ', and its coverage proof is on the customer copy.' : '.'}
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                      {/* Opens the wrap quote on its own, in a new tab. */}
+                      <a
+                        href={`/admin/wrap-quote?id=${q.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Open this wrap quote on its own (new tab)"
+                        style={{ color: '#3b82f6', textDecoration: 'underline' }}
+                      >{q.quoteNumber}</a>{q.vehicle ? ` — ${q.vehicle}` : ''}
+                    </div>
+                    <button
+                      onClick={() => addGraphics(q.id)}
+                      disabled={saving}
+                      title="Reopen this wrap quote in the builder to change or redraw it; saving it updates this estimate"
+                      style={{
+                        padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                        background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+                        color: 'var(--text-body)', cursor: saving ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+                      }}
+                    >Edit in Graphics Builder</button>
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                     {rows.map(r => (
