@@ -150,6 +150,7 @@ export const ENV_SPECS: EnvSpec[] = [
   { name: 'DIALPAD_FROM_NUMBER', group: 'telephony', powers: 'Dialpad send-from number (or use DIALPAD_USER_ID)', whenMissing: 'off' },
   { name: 'DIALPAD_USER_ID', group: 'telephony', powers: 'Sending Dialpad texts as a specific user', whenMissing: 'off' },
   { name: 'DIALPAD_WEBHOOK_SECRET', group: 'telephony', powers: 'The caller-ID screen-pop and CRM call logging — without it inbound call events are rejected', whenMissing: 'off' },
+  { name: 'RETELL_API_KEY', group: 'telephony', powers: 'After-hours phone agent call summaries (Retell webhook) — without it Retell call events are rejected', whenMissing: 'off' },
 
   // --- Push ---
   { name: 'NEXT_PUBLIC_VAPID_PUBLIC_KEY', group: 'push', powers: 'Browser push', whenMissing: 'warn' },

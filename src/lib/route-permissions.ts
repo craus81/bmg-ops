@@ -580,6 +580,9 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // with the shared secret set on the subscription, verified fail-closed —
   // no secret configured means reject, since this route writes CRM rows.
   'src/app/api/webhooks/dialpad/route.ts': webhook('Dialpad signs every delivery as an HS256 JWT with the subscription secret; an unverifiable payload is rejected before any write', 'verifyDialpadJwt('),
+  // Retell AI after-hours phone agent: x-retell-signature is an HMAC of the
+  // raw body + timestamp keyed with RETELL_API_KEY, verified fail-closed.
+  'src/app/api/webhooks/retell/route.ts': webhook('Retell signs every delivery (HMAC-SHA256 of body + timestamp with the API key); an unverifiable payload is rejected before any write', 'verifyRetellSignature('),
   'src/app/api/wrap-quote/[id]/pdf/route.ts': staff(),
   'src/app/api/wrap-quote/create-customer/route.ts': staff(),
   'src/app/api/wrap-quote/netsuite/route.ts': staff(),
