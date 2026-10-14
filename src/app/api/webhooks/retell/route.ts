@@ -27,6 +27,10 @@ const service = createClient(
  * Zach, Craig and Jessie, whatever their role) gets the summary as its own
  * email, plus an in-app/push alert per their notification settings.
  *
+ * A caller ID on the spam list (phone_spam_numbers, marked from the
+ * After-hours Calls page) is still logged, flagged spam, but nobody is
+ * emailed or alerted.
+ *
  * verifyRetellSignature is the credential check and fails closed (no
  * RETELL_API_KEY = reject). summary_emailed_at makes Retell's retries
  * harmless: the emails go out once per call.
@@ -55,6 +59,14 @@ export async function POST(req: NextRequest) {
 
   const call = parseRetellCall(body);
   if (!call) return NextResponse.json({ ok: true, ignored: 'no call id' });
+
+  // Caller ID on the spam list: log it under Spam, tell nobody.
+  let spam = false;
+  if (call.externalDigits.length >= 7) {
+    const { data: blocked } = await service
+      .from('phone_spam_numbers').select('digits').eq('digits', call.externalDigits).maybeSingle();
+    spam = !!blocked;
+  }
 
   // Match the caller against the CRM the same way the Dialpad caller-ID
   // webhook does, so the email can open their record.
@@ -103,6 +115,7 @@ export async function POST(req: NextRequest) {
       summary: call.summary,
       transcript: call.transcript,
       recording_url: call.recordingUrl,
+      spam,
       raw: body,
       updated_at: new Date().toISOString(),
     }, { onConflict: 'provider,provider_call_id' })
@@ -113,6 +126,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'store failed' }, { status: 500 });
   }
   if (existing?.summary_emailed_at) return NextResponse.json({ ok: true, duplicate: true });
+  if (spam) return NextResponse.json({ ok: true, spam: true });
 
   // Deep-link rule: the email and alert open this call on the After-hours
   // Calls page, which links on to the customer or adds them as a lead.

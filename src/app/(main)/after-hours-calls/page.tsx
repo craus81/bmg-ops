@@ -10,6 +10,8 @@
  * the summary, what the caller left, the recording and the transcript,
  * with Call back, Open customer / Add as lead, and a "Called back" tick
  * for whoever returns the call (Jessie, the next business morning).
+ * "Spam" files the call, and every later call from that caller ID, under
+ * the Spam tab with no email or alert; "Not spam" undoes it.
  */
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -40,6 +42,7 @@ interface Call {
   matched_company: string | null;
   called_back_at: string | null;
   called_back_by_name: string | null;
+  spam: boolean;
 }
 
 interface DupeMatch { source: 'prospects' | 'customers'; id: string; company_name: string | null; netsuite_id: string | null; matchedOn: string[] }
@@ -74,9 +77,12 @@ function AfterHoursCalls() {
   const { hasRole, loading: authLoading } = useAuth();
   const isStaff = INTERNAL_STAFF_ROLES.some(r => hasRole(r));
 
-  const [show, setShow] = useState<'open' | 'all'>('open');
+  const [show, setShow] = useState<'open' | 'all' | 'spam'>('open');
   const [calls, setCalls] = useState<Call[]>([]);
   const [openCount, setOpenCount] = useState(0);
+  const [spamCount, setSpamCount] = useState(0);
+  // The call just marked spam, for the Undo line once it leaves the list.
+  const [justSpammed, setJustSpammed] = useState<{ id: string; label: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -92,6 +98,7 @@ function AfterHoursCalls() {
       if (!res.ok) throw new Error(json.error || 'Could not load calls');
       setCalls(json.calls || []);
       setOpenCount(json.openCount || 0);
+      setSpamCount(json.spamCount || 0);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -114,11 +121,11 @@ function AfterHoursCalls() {
   }, [currentId]);
   const open = (id: string | null) => router.replace(id ? deepLinks.afterHoursCall(id) : deepLinks.afterHoursCalls(), { scroll: false });
 
-  const patch = async (body: Record<string, unknown>) => {
-    if (!current) return false;
+  const patch = async (body: Record<string, unknown>, id = current?.id) => {
+    if (!id) return false;
     setBusy(true);
     try {
-      const res = await apiFetch('/api/phone-calls', { method: 'PATCH', body: JSON.stringify({ id: current.id, ...body }) });
+      const res = await apiFetch('/api/phone-calls', { method: 'PATCH', body: JSON.stringify({ id, ...body }) });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || 'Could not save');
       await load();
@@ -129,6 +136,19 @@ function AfterHoursCalls() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const markSpam = async () => {
+    if (!current) return;
+    const label = prettyPhone(current.from_number) || who(current);
+    if (await patch({ spam: true })) {
+      setJustSpammed({ id: current.id, label });
+      open(null);
+    }
+  };
+
+  const notSpam = async (id: string) => {
+    if (await patch({ spam: false }, id)) setJustSpammed(null);
   };
 
   const addAsLead = async (force = false) => {
@@ -175,20 +195,26 @@ function AfterHoursCalls() {
       <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14 }}>
         Calls BMG&apos;s virtual assistant answered while the office was closed. {openCount} waiting on a call back.
       </div>
+      {justSpammed && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border-strong)', marginBottom: 12, fontSize: 14, color: 'var(--text-primary)' }}>
+          <span style={{ flex: '1 1 240px' }}>Marked {justSpammed.label} as spam. Its calls are under Spam, and future calls from it won&apos;t email or alert anyone.</span>
+          <button disabled={busy} onClick={() => notSpam(justSpammed.id)} style={{ ...btn(), padding: '5px 12px', fontSize: 13 }}>Undo</button>
+        </div>
+      )}
       {error && <div style={{ padding: '10px 12px', borderRadius: 8, background: 'rgba(239,68,68,0.12)', color: '#ef4444', marginBottom: 12, fontSize: 14 }}>{error}</div>}
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' }}>
         {/* List */}
         <div style={{ flex: '1 1 300px', minWidth: 0, maxWidth: current ? 380 : undefined }}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-            {(['open', 'all'] as const).map(s => (
+            {(['open', 'all', 'spam'] as const).map(s => (
               <button key={s} onClick={() => setShow(s)} style={{ ...btn(show === s), padding: '7px 12px', fontSize: 13 }}>
-                {s === 'open' ? 'Needs call back' : 'All calls'}
+                {s === 'open' ? 'Needs call back' : s === 'all' ? 'All calls' : `Spam${spamCount ? ` (${spamCount})` : ''}`}
               </button>
             ))}
           </div>
           {loading ? <div style={{ color: 'var(--text-secondary)', fontSize: 14 }}>Loading…</div>
-            : calls.length === 0 ? <div style={{ color: 'var(--text-secondary)', fontSize: 14, padding: '20px 0' }}>{show === 'open' ? 'Every after-hours call has been called back.' : 'No after-hours calls yet.'}</div>
+            : calls.length === 0 ? <div style={{ color: 'var(--text-secondary)', fontSize: 14, padding: '20px 0' }}>{show === 'open' ? 'Every after-hours call has been called back.' : show === 'spam' ? 'No spam calls.' : 'No after-hours calls yet.'}</div>
               : calls.map(c => (
                 <button key={c.id} onClick={() => open(c.id)} style={{
                   display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer', marginBottom: 8, padding: '12px 14px', borderRadius: 10,
@@ -197,7 +223,8 @@ function AfterHoursCalls() {
                 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                     <span style={{ fontWeight: 800, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.urgent ? '🔴 ' : ''}{who(c)}</span>
-                    {c.called_back_at && <span style={{ fontSize: 12, color: '#16a34a', fontWeight: 700, whiteSpace: 'nowrap' }}>✓ Called back</span>}
+                    {c.spam && <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 700, whiteSpace: 'nowrap' }}>Spam</span>}
+                    {!c.spam && c.called_back_at && <span style={{ fontSize: 12, color: '#16a34a', fontWeight: 700, whiteSpace: 'nowrap' }}>✓ Called back</span>}
                   </div>
                   <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>{reasonLabel(c.call_reason)} · {fmtWhen(c.started_at || c.created_at)}</div>
                 </button>
@@ -211,6 +238,12 @@ function AfterHoursCalls() {
               <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{fmtWhen(current.started_at || current.created_at)}{fmtLength(current.duration_seconds) ? ` · ${fmtLength(current.duration_seconds)}` : ''}</div>
               <button onClick={() => open(null)} style={{ ...btn(), padding: '5px 10px', fontSize: 12 }}>Close</button>
             </div>
+            {current.spam && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginTop: 10, padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border-strong)', fontSize: 14, color: 'var(--text-primary)' }}>
+                <span style={{ flex: '1 1 220px' }}><strong>Spam.</strong> Calls from {prettyPhone(current.from_number) || 'this number'} are filed here and don&apos;t email or alert anyone.</span>
+                <button disabled={busy} onClick={() => notSpam(current.id)} style={{ ...btn(), padding: '5px 12px', fontSize: 13 }}>Not spam</button>
+              </div>
+            )}
             {current.urgent && <div style={{ marginTop: 10, padding: '9px 12px', borderRadius: 8, background: 'rgba(239,68,68,0.12)', color: '#ef4444', fontWeight: 800, fontSize: 14 }}>Caller says this is urgent.</div>}
             <h2 style={{ fontSize: 19, fontWeight: 800, color: 'var(--text-primary)', margin: '10px 0 6px' }}>
               {reasonLabel(current.call_reason)}{current.caller_name ? ` from ${current.caller_name}` : ''}
@@ -240,6 +273,9 @@ function AfterHoursCalls() {
               {current.matched_prospect_id
                 ? <a href={deepLinks.prospect(current.matched_prospect_id)} style={btn()}>Open customer</a>
                 : <button disabled={busy} onClick={() => addAsLead(false)} style={btn()}>Add as lead</button>}
+              {!current.spam && (
+                <button disabled={busy} onClick={markSpam} title="Hide this call and send future calls from this number to Spam" style={{ ...btn(), color: '#dc2626', borderColor: 'rgba(220,38,38,0.45)', marginLeft: 'auto' }}>🚫 Spam</button>
+              )}
             </div>
 
             {dupes && (
@@ -257,11 +293,11 @@ function AfterHoursCalls() {
               </div>
             )}
 
-            <label style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 10, border: '1px solid var(--border-strong)', cursor: 'pointer', marginBottom: 16, fontSize: 15, color: 'var(--text-primary)' }}>
+            {!current.spam && <label style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 10, border: '1px solid var(--border-strong)', cursor: 'pointer', marginBottom: 16, fontSize: 15, color: 'var(--text-primary)' }}>
               <input type="checkbox" checked={!!current.called_back_at} disabled={busy} onChange={e => patch({ calledBack: e.target.checked })} style={{ width: 20, height: 20 }} />
               <span style={{ fontWeight: 800 }}>Called back</span>
               {current.called_back_at && <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{current.called_back_by_name ? `by ${current.called_back_by_name} · ` : ''}{fmtWhen(current.called_back_at)}</span>}
-            </label>
+            </label>}
 
             {current.recording_url && (
               <div style={{ marginBottom: 16 }}>
