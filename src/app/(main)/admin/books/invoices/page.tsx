@@ -7,30 +7,32 @@ import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 
 /**
- * Books → Invoices vs NetSuite (migrations 364 and 370, docs/books.md
- * "Invoices").
+ * Books → Invoices vs NetSuite (migrations 364, 370 and 374, docs/books.md
+ * "Invoices" and "Payments").
  *
  * FleetSuite works out its own entry for every NetSuite invoice with the
  * invoice rule, and for every credit memo with the same rule the other way
  * round, and checks it line by line against what NetSuite posted for the
  * same document, and shows what its own books hold for each: the posting
  * job (src/lib/books/invoice-posting.ts) posts BMG's every two hours, or on
- * "Post now". Super admins only while the books are built, linked from the
- * other books pages.
+ * "Post now". Customer payments are checked the same way with the payment
+ * rule, and don't post yet. Super admins only while the books are built,
+ * linked from the other books pages.
  */
 
 type Status = 'matches' | 'differs' | 'unworkable' | 'waiting';
 
-type Kind = 'invoice' | 'credit_memo';
+type Kind = 'invoice' | 'credit_memo' | 'payment';
 
 /** What each kind of document is called. */
 const WORDS: Record<Kind, { one: string; many: string; title: string; head: string }> = {
   invoice: { one: 'invoice', many: 'invoices', title: 'Invoices', head: 'Invoice' },
   credit_memo: { one: 'credit memo', many: 'credit memos', title: 'Credit memos', head: 'Credit memo' },
+  payment: { one: 'payment', many: 'payments', title: 'Payments', head: 'Payment' },
 };
 
 interface Summary {
-  /** Invoices or credit memos, whichever kind the month was checked for. */
+  /** Invoices, credit memos or payments, whichever kind the month was checked for. */
   invoices: number;
   matches: number;
   differs: number;
@@ -103,6 +105,8 @@ interface Invoice {
   reasons: string[];
   rows: Row[];
   books?: Books;
+  /** A payment's: what it was applied to, as the copy of the payment has it. */
+  applied?: Array<{ number: string; cents: number }>;
 }
 
 interface Reason {
@@ -120,7 +124,7 @@ interface Payload {
   month: string;
   months: string[];
   listsCopiedAt: string | null;
-  /** Whether this company's invoices and credit memos post to FleetSuite's books yet. */
+  /** Whether this company's documents of the kind shown post to FleetSuite's books yet; payments don't. */
   posts: boolean;
   lastRun: { at: string; result: PostingRun } | null;
   summary: Summary;
@@ -260,9 +264,15 @@ function InvoiceDetail({ invoice, accounts, one }: { invoice: Invoice; accounts:
       {invoice.amounts && (
         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>{amountsText(invoice.amounts, one)}</div>
       )}
+      {!!invoice.applied?.length && (
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>
+          Applied to {invoice.applied.map((a) => `${a.number} (${fmt(a.cents)})`).join(', ')}.
+        </div>
+      )}
       {invoice.rows.length === 0 ? (
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-          {invoice.waiting === 'lines' ? `This ${one}'s lines haven't been copied from NetSuite yet.` : 'Nothing posts on either side.'}
+          {invoice.waiting === 'lines' ? `This ${one}'s lines haven't been copied from NetSuite yet.`
+            : invoice.waiting === 'gl' ? `NetSuite's GL copy has nothing for this ${one} yet.` : 'Nothing posts on either side.'}
         </div>
       ) : (
         <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: '8px', marginTop: '6px' }}>
@@ -407,13 +417,26 @@ export default function BooksInvoicesPage() {
         <div style={{ flex: '1 1 280px' }}>
           <div style={{ fontSize: '20px', fontWeight: 800 }}>{words.title} vs NetSuite</div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            For every NetSuite invoice FleetSuite works out its own entry: receivables take the total, each line goes to its
-            item&apos;s income account, and sales tax to the account its tax code posts to. A credit memo works the other way
-            round: its lines and sales tax are debited and receivables credited. Each entry is checked line by line against what
-            NetSuite posted for the same invoice or credit memo. Every two hours each BMG invoice and credit memo FleetSuite can
-            work out is posted to its own books, once. When NetSuite changes one its entry is reversed and the new one posted,
-            and a voided or deleted one is reversed. Until the books go live they can be emptied and posted again. Visible only
-            to super admins. <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
+            {kind === 'payment' ? (
+              <>
+                For every NetSuite customer payment FleetSuite works out its own entry: the money goes to the account the payment
+                was deposited to, Undeposited Funds or a bank account, and receivables are credited with its total. Where the money
+                went comes from NetSuite&apos;s posting of the payment, since the copy of the payment doesn&apos;t keep it. Each
+                entry is checked account by account against what NetSuite posted for the same payment. Payments aren&apos;t posted
+                to FleetSuite&apos;s books yet; they will be once they&apos;ve been checked.
+              </>
+            ) : (
+              <>
+                For every NetSuite invoice FleetSuite works out its own entry: receivables take the total, each line goes to its
+                item&apos;s income account, and sales tax to the account its tax code posts to. A credit memo works the other way
+                round: its lines and sales tax are debited and receivables credited. Each entry is checked line by line against
+                what NetSuite posted for the same invoice or credit memo. Every two hours each BMG invoice and credit memo
+                FleetSuite can work out is posted to its own books, once. When NetSuite changes one its entry is reversed and the
+                new one posted, and a voided or deleted one is reversed. Until the books go live they can be emptied and posted
+                again.
+              </>
+            )}
+            {' '}Visible only to super admins. <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
             {' · '}
             <Link href="/admin/books/trial-balance" style={{ color: 'var(--text-secondary)' }}>Trial balance vs NetSuite</Link>
             {' · '}
@@ -492,7 +515,7 @@ export default function BooksInvoicesPage() {
               </button>
             ))}
             <span style={{ borderLeft: '1px solid var(--border)', margin: '0 4px' }} />
-            {(['invoice', 'credit_memo'] as const).map((k) => (
+            {(['invoice', 'credit_memo', 'payment'] as const).map((k) => (
               <button key={k} onClick={() => pick(company, month, k)} disabled={loading || !!checking || posting} style={button(k === kind)}>
                 {WORDS[k].title}
               </button>

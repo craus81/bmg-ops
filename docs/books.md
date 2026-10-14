@@ -10,9 +10,10 @@ This file covers part 1, the ledger core, part 2, the chart of accounts
 copied from NetSuite, part 3, NetSuite's general ledger from 2025 copied
 and checked month by month, part 4, the NetSuite lists the posting rules
 need, part 5, the invoice rule, checked against NetSuite, part 6, every
-BMG invoice since 2025 posted to FleetSuite's own journal with it, and part
-7, credit memos, checked and posted the same way, the other way round. The
-screens are the accounts page at `/admin/books`, the trial
+BMG invoice since 2025 posted to FleetSuite's own journal with it, part 7,
+credit memos, checked and posted the same way, the other way round, and
+part 8, customer payments, checked against NetSuite with the payment rule.
+The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`
 and the invoices at `/admin/books/invoices`, which only super admins can
 open. Only they see the Books entry on the More page (Admin), which opens
@@ -38,6 +39,8 @@ the accounts page; the others are linked from there.
 | Invoices posted to the journal | `migrations/367-books-invoice-posting.sql`, `src/lib/books/invoice-posting.ts`, `src/app/api/cron/books-invoice-posting/route.ts` |
 | Invoice posting tests | `src/lib/books/invoice-posting.test.ts`, `src/lib/books/invoice-posting-sql.test.ts` |
 | Credit memos, checked and posted like invoices | `migrations/370-books-credit-memos.sql`, with the invoice files above; their tests are in the invoice test files |
+| Payment rule and its check, on the invoices page | `src/lib/books/payment-rule.ts`, `src/lib/books/payment-check.ts`, `migrations/374-books-payment-check.sql` |
+| Payment tests | `src/lib/books/payment-rule.test.ts`, `src/lib/books/payment-check.test.ts`, `src/lib/books/payment-check-sql.test.ts` |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
 QuickBooks and NetSuite history that importers replace wholesale. They stay
@@ -456,6 +459,43 @@ next run will do to it: post, replace or reverse. Opening it lists its
 earlier entries and what reversed them. Until a company's books go live the
 journal can be emptied (`resetJournal`), and the next run posts every
 invoice again.
+
+## Payments
+
+The payment rule, `payment@1` (`src/lib/books/payment-rule.ts`), is the
+plan's: the money goes to the account the payment was deposited to,
+Undeposited Funds or a bank account, and receivables are credited with the
+payment's total, for its customer. Where the money went is the payment's own
+choice, as an invoice line's item is. The ledger mirror's copy of the
+payment (migration 314's `ledger_payments`) doesn't keep it, so it comes
+from NetSuite's posting of the payment: the account its main line debits,
+or, should that line be missing or a receivable, the one account outside
+receivables NetSuite debits for it. The receivable is the company's, picked
+as for invoices; with more than one, it's the one NetSuite's payments used
+most that month. A payment of $0, one that only applies a credit to an
+invoice, posts nothing.
+
+The check comes first (owner decision 2026-10-14), as it did for invoices,
+and payments post once it shows them matching. The **Payments** switch on
+the invoices page checks every NetSuite customer payment against the GL
+lines NetSuite posted for it, account by account, to the cent. NetSuite's
+lines on one account are added together, since it may take a payment off
+receivables on a line for each invoice it pays. Migration 374's
+`gl_payment_month(company, month)` reads one month: the payments dated in it
+from the ledger mirror, with what each was applied to and NetSuite's GL
+lines for each from the copy (migration 361). Opening a payment shows what
+it was applied to. Payments aren't posted yet.
+
+- A payment is a company's when NetSuite posted a GL line of it to that
+  company. Payments with no GL line in the copy are named in a note, not
+  counted. The mirror keeps a payment NetSuite deleted (its delete sweep
+  covers only invoices and credit memos), so a deleted one shows in that
+  note. Before payments post, the sweep needs to cover them too.
+- Anything else NetSuite posts for a payment, a discount the customer took
+  say, shows as a line FleetSuite's entry doesn't have.
+- Customer deposits, and applying them to invoices, are NetSuite documents
+  of their own and aren't copied yet. Nor are bank deposits, which move the
+  money from Undeposited Funds to the bank.
 
 ## Posting
 
