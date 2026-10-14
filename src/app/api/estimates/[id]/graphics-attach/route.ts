@@ -58,7 +58,9 @@ function describeQuote(q: any) {
     proofLabels: withPictures.map((p, i) => String(p.label || '').trim() || `Photo ${i + 1}`),
     hasDiagram: withPictures.length > 0 || !!q.diagram_path,
     fileCount: files.length,
-    filmCount: new Set(measurements.map((m: any) => m?.substrate_id).filter(Boolean)).size,
+    // The builder snapshots the film as `substrate: { id }`; older rows
+    // carried a bare `substrate_id`.
+    filmCount: new Set(measurements.map((m: any) => m?.substrate?.id || m?.substrate_id).filter(Boolean)).size,
     totalSqft: parseFloat(q.total_area_sqft) || 0,
     // null = a legacy lines-only add (pre-migration-223 semantics), which
     // the edit view shows as everything switched off rather than hiding.

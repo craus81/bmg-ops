@@ -209,6 +209,10 @@ interface Measurement {
   price_override?: number | null;
 }
 
+// The one email the builder still sends: the coverage picture for feedback.
+// Pricing, line items and NetSuite PDFs reach the customer on the estimate.
+const PROOF_SEND = { pricing: false, lineItems: false, diagram: true, netsuitePdf: false } as const;
+
 interface WrapQuote {
   id: string;
   /** Manual pricing as typed (migration 356); null on older quotes. */
@@ -252,6 +256,8 @@ interface WrapQuote {
   archived_at: string | null;
   netsuite_estimate_id: string | null;
   netsuite_estimate_number: string | null;
+  /** The estimate this worksheet feeds (migration 208); null = not on one yet. */
+  estimate_id: string | null;
   package_qty: number | null;
   adjustments: QuoteAdjustments | null;
   nesting: NestingSnapshot | null;
@@ -408,6 +414,10 @@ const searchTemplates = async (
 
 // Escape LIKE wildcards so a typed "%" or "_" matches itself in .ilike().
 const likeExact = (v: string) => v.trim().replace(/[\\%_]/g, c => `\\${c}`);
+
+// Longest side of a saved coverage diagram, in pixels — big enough to read
+// on a printed estimate, small enough for every browser's canvas limit.
+const MAX_DIAGRAM_EDGE = 4000;
 
 const imageUrl = (path: string | null) => {
   if (!path) return '';
@@ -582,11 +592,6 @@ export default function WrapQuotePage() {
   const [attachments, setAttachments] = useState<QuoteAttachment[]>([]);
   const [attaching, setAttaching] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
-  // Email content checkboxes (replaced the single-select mode — you can now
-  // mix them, e.g. picture + total with no line items, or pricing + PDF).
-  const [sendInclude, setSendInclude] = useState<{ pricing: boolean; lineItems: boolean; diagram: boolean; netsuitePdf: boolean }>({
-    pricing: true, lineItems: true, diagram: true, netsuitePdf: false,
-  });
   // The follow-up send auto-attaches the quote PDF; the preview names it.
   const [followupPdfName, setFollowupPdfName] = useState<string | null>(null);
   // Email-the-quote compose (the standard EmailComposeModal): opens on a
@@ -607,10 +612,15 @@ export default function WrapQuotePage() {
   // template library once it loads (loadAll races this effect on arrival).
   const [vehiclePrefill, setVehiclePrefill] = useState<{ year: string; label: string } | null>(null);
   const forEstimateHandled = useRef(false);
+  // True while the banner is pinned by a reopened worksheet rather than by
+  // the ?forEstimate the rep arrived with — starting a fresh quote then
+  // unpins it, so the new quote can't quietly attach to the old estimate.
+  const pinnedByQuote = useRef(false);
   useEffect(() => {
     const estId = searchParams.get('forEstimate');
     if (!estId || forEstimateHandled.current) return;
     forEstimateHandled.current = true;
+    pinnedByQuote.current = false;
     (async () => {
       const { data: est } = await supabase
         .from('estimates')
@@ -628,6 +638,24 @@ export default function WrapQuotePage() {
         est.vin ? `VIN ${est.vin}` : null,
       ].filter(Boolean).join(' · ') || null;
       setForEstimate({ id: est.id, number: estimateHeadlineNumber(est), customerName: est.customer_name, vehicle });
+      // "Edit in wrap builder" on the estimate (&quote=<id>): reopen the
+      // quote already on this estimate, so a redraw updates it and its lines
+      // instead of starting a second quote.
+      const editId = searchParams.get('quote');
+      if (editId) {
+        const { data: linked } = await supabase.from('wrap_quotes').select('*').eq('id', editId).maybeSingle();
+        if (linked && linked.estimate_id === est.id) {
+          if (linked.estimate_attach) {
+            setEstAttach({
+              diagram: !!linked.estimate_attach.diagram,
+              attachments: !!linked.estimate_attach.attachments,
+              films: !!linked.estimate_attach.films,
+            });
+          }
+          setPendingEdit(linked as WrapQuote);
+          return;
+        }
+      }
       // Prefill on a fresh quote only — never clobber a loaded one.
       if (!savedQuoteId) {
         // Customer: same fields the customer picker fills, so the quote tab
@@ -656,31 +684,90 @@ export default function WrapQuotePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on arrival
   }, [searchParams]);
 
+  // The linked quote waiting to open once the page has loaded (see above).
+  const [pendingEdit, setPendingEdit] = useState<WrapQuote | null>(null);
+  useEffect(() => {
+    if (!pendingEdit || loading) return;
+    const q = pendingEdit;
+    setPendingEdit(null);
+    loadQuoteForEdit(q, 'estimator');
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot once loaded
+  }, [pendingEdit, loading]);
+
   // What this quote contributes to the estimate's customer PDF — the
   // Add-to-Estimate checkboxes (coverage diagram / uploaded proofs /
   // vinyl details). Stored on the quote (estimate_attach) so the estimate
   // PDF generator knows what to merge in.
   const [estAttach, setEstAttach] = useState({ diagram: true, attachments: true, films: true });
 
-  const addToEstimate = async () => {
-    if (!forEstimate) return;
+  // Which step Save & open estimate is on, so the button says what's
+  // happening (the save, the picture and the estimate update used to hide
+  // behind one "Adding…").
+  const [addStep, setAddStep] = useState<'saving' | 'adding' | null>(null);
+
+  // "Save & open estimate": save the worksheet (which refreshes the lines
+  // on its estimate), then go there. A worksheet with no estimate yet gets
+  // a draft created for its customer and vehicle (open-estimate), so the
+  // only thing the customer ever receives is an estimate. The estimate
+  // shows a "saved and added" note for this quote (&wrapAdded=).
+  const saveAndOpenEstimate = async () => {
     setAddingToEstimate(true);
     try {
+      setAddStep('saving');
       const quoteId = await saveQuote();
       if (!quoteId) return;
-      const res = await apiFetch(`/api/estimates/${forEstimate.id}/add-wrap-quote`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wrapQuoteId: quoteId, attach: estAttach }),
-      });
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        await dialog.alert(`Could not add to the estimate: ${d.error || 'unknown error'}`);
+      // The save already refreshed the estimate's lines — unless the
+      // coverage picture failed, in which case it said so and stopped.
+      if (pictureBlocksEstimate()) return;
+      if (forEstimate) {
+        router.push(`/estimates?id=${forEstimate.id}&wrapAdded=${quoteId}`);
         return;
       }
-      router.push(`/estimates?id=${forEstimate.id}`);
+      setAddStep('adding');
+      const estId = await openEstimateFor(quoteId);
+      if (estId) router.push(`/estimates?id=${estId}&wrapAdded=${quoteId}`);
     } finally {
       setAddingToEstimate(false);
+      setAddStep(null);
+    }
+  };
+
+  // Create (or refresh) the estimate for a saved worksheet; answers with the
+  // estimate id to open, or null after telling the rep what stopped it.
+  const openEstimateFor = async (quoteId: string, checkPicture = true): Promise<string | null> => {
+    if (checkPicture && pictureBlocksEstimate()) {
+      await dialog.alert(`Saved, but no estimate was made: ${pictureProblem.current}.\n\nSave again, or untick "Coverage diagram" to go ahead without the picture.`);
+      return null;
+    }
+    const res = await apiFetch('/api/wrap-quote/open-estimate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quoteId, attach: estAttach }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok || !d.estimateId) {
+      await dialog.alert(`Could not open an estimate: ${d.error || 'unknown error'}`);
+      return null;
+    }
+    return d.estimateId as string;
+  };
+
+  // The coverage proof is what the customer approves against — never carry
+  // the prices onto an estimate without it while the box is ticked.
+  const pictureBlocksEstimate = () => !!(estAttach.diagram && hasCoverage && pictureProblem.current);
+
+  // History: open a worksheet's estimate, creating one when it has none.
+  const [openingEstimateFor, setOpeningEstimateFor] = useState<string | null>(null);
+  const openEstimateFromHistory = async (q: WrapQuote) => {
+    if (q.estimate_id) { router.push(`/estimates?id=${q.estimate_id}`); return; }
+    if (!(await dialog.confirm(`Create an estimate for ${q.customer?.name || 'this customer'} from ${q.quote_number}? The graphics land on it as lines, and the estimate is what gets sent.`))) return;
+    setOpeningEstimateFor(q.id);
+    try {
+      // A saved worksheet from the list: its picture was judged at its own save.
+      const estId = await openEstimateFor(q.id, false);
+      if (estId) router.push(`/estimates?id=${estId}`);
+    } finally {
+      setOpeningEstimateFor(null);
     }
   };
 
@@ -737,7 +824,6 @@ export default function WrapQuotePage() {
     const { ok, error } = await openNetSuitePdf('estimate', estimateId);
     if (!ok) await dialog.alert(`Could not open the NetSuite PDF: ${error}`);
   };
-  const [pushingNetsuite, setPushingNetsuite] = useState(false);
   const [creatingCustomer, setCreatingCustomer] = useState(false);
   // Graphics jobs spawned from wrap quotes, keyed by wrap_quote_id — powers
   // the job badge in history and stops duplicate creates.
@@ -1683,6 +1769,7 @@ export default function WrapQuotePage() {
   const hasCoverage = measurements.length > 0 || (photoMode && allProofBoxes(photoProofs).length > 0);
 
   const resetEstimate = () => {
+    if (pinnedByQuote.current) { setForEstimate(null); pinnedByQuote.current = false; }
     setDrawnMeasurements([]);
     // The photo is one customer's vehicle (unlike a reusable template), so it
     // goes with the estimate it was drawn for.
@@ -1855,19 +1942,60 @@ export default function WrapQuotePage() {
   // by film) to a PNG so the saved/emailed quote can show the customer which
   // panels are covered. Draws onto an offscreen canvas at the template
   // image's native resolution; returns null if anything prevents rendering.
-  const renderDiagramBlob = async (): Promise<Blob | null> => {
-    if (!template?.template_image_path || measurements.length === 0) return null;
-    const img = new Image();
-    img.crossOrigin = 'anonymous'; // keep the canvas untainted so toBlob works
-    img.src = imageUrl(template.template_image_path);
-    try { await img.decode(); } catch { return null; }
-    const w = img.naturalWidth, h = img.naturalHeight;
-    if (!w || !h) return null;
+  //
+  // The template is read through our same-origin storage route first: an
+  // <img> the editor already showed (no crossOrigin) can sit in the browser
+  // cache without CORS headers, and drawing that copy taints the canvas so
+  // toBlob() throws — which used to drop the picture without a word.
+  const renderDiagramBlob = async (): Promise<{ blob: Blob | null; reason: string | null }> => {
+    if (!template?.template_image_path || measurements.length === 0) return { blob: null, reason: null };
+    const tplPath = template.template_image_path;
+    let img: HTMLImageElement | null = null;
+    let objectUrl: string | null = null;
+    try {
+      if (!tplPath.startsWith('http')) {
+        try {
+          const res = await fetch(`/api/storage?bucket=vehicle-templates&path=${encodeURIComponent(tplPath)}`, { cache: 'no-store' });
+          if (res.ok) {
+            objectUrl = URL.createObjectURL(await res.blob());
+            const local = new Image();
+            local.src = objectUrl;
+            await local.decode();
+            img = local;
+          }
+        } catch { img = null; }
+      }
+      if (!img) {
+        const remote = new Image();
+        remote.crossOrigin = 'anonymous'; // keep the canvas untainted so toBlob works
+        // Cache-buster so a non-CORS cached copy can't be reused.
+        const url = imageUrl(tplPath);
+        remote.src = url + (url.includes('?') ? '&' : '?') + 'cors=1';
+        try { await remote.decode(); } catch { return { blob: null, reason: 'the vehicle template image would not load' }; }
+        img = remote;
+      }
+      const iw = img.naturalWidth, ih = img.naturalHeight;
+      if (!iw || !ih) return { blob: null, reason: 'the vehicle template image is empty' };
+      // Browsers refuse very large canvases (Safari caps around 16.7M
+      // pixels) and hand back no image; draw big templates scaled down.
+      const k = Math.min(1, MAX_DIAGRAM_EDGE / Math.max(iw, ih));
+      const blob = await drawDiagram(img, iw, ih, k);
+      return blob ? { blob, reason: null } : { blob: null, reason: 'the browser could not turn the drawing into a picture' };
+    } catch (e: any) {
+      return { blob: null, reason: e?.message ? `the picture failed (${e.message})` : 'the picture failed' };
+    } finally {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    }
+  };
+
+  const drawDiagram = async (img: HTMLImageElement, w: number, h: number, k: number): Promise<Blob | null> => {
     const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
+    canvas.width = Math.max(1, Math.round(w * k));
+    canvas.height = Math.max(1, Math.round(h * k));
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
+    // Shapes are in template-image pixels; scale the whole drawing once.
+    ctx.setTransform(k, 0, 0, k, 0, 0);
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, w, h);
     ctx.drawImage(img, 0, 0);
@@ -1919,15 +2047,17 @@ export default function WrapQuotePage() {
 
   // Timestamped path so re-saves aren't served stale from CDN/email caches;
   // failure is non-fatal (the quote just saves without a diagram).
-  const uploadDiagram = async (qn: string): Promise<string | null> => {
+  // The quote still saves when this fails, but the reason comes back so
+  // Add to Estimate can stop and say why instead of carrying no picture.
+  const uploadDiagram = async (qn: string): Promise<{ path: string | null; reason: string | null }> => {
     try {
-      const blob = await renderDiagramBlob();
-      if (!blob) return null;
+      const { blob, reason } = await renderDiagramBlob();
+      if (!blob) return { path: null, reason };
       const path = `quote-diagrams/${qn}-${Date.now()}.png`;
       const { error } = await storage.from('vehicle-templates').upload(path, blob, { contentType: 'image/png', upsert: true });
-      return error ? null : path;
-    } catch {
-      return null;
+      return error ? { path: null, reason: `the upload failed (${error.message})` } : { path, reason: null };
+    } catch (e: any) {
+      return { path: null, reason: e?.message || 'the picture failed' };
     }
   };
 
@@ -1944,13 +2074,19 @@ export default function WrapQuotePage() {
   // its own diagram_path so the emailed quote can show all the views; the
   // first one also becomes the quote's diagram_path, which is what the
   // single-picture surfaces (the estimate attach) still read.
-  const uploadProofDiagrams = async (qn: string): Promise<PhotoProof[]> => {
+  const uploadProofDiagrams = async (qn: string): Promise<{ proofs: PhotoProof[]; reason: string | null }> => {
     const out: PhotoProof[] = [];
+    const failed: string[] = [];
     for (const [i, proof] of photoProofs.entries()) {
       let path = proof.diagram_path || null;
       try {
+        // Same-origin read, for the same cached-without-CORS reason as the
+        // template diagram above.
+        const src = proof.path.startsWith('http')
+          ? imageUrl(proof.path)
+          : `/api/storage?bucket=vehicle-templates&path=${encodeURIComponent(proof.path)}`;
         const blob = proof.boxes.length > 0
-          ? await renderCoverageProofBlob(imageUrl(proof.path), proof.boxes, proofPageParts(proof))
+          ? await renderCoverageProofBlob(src, proof.boxes, proofPageParts(proof))
           : null;
         if (blob) {
           const target = `quote-diagrams/${qn}-${i + 1}-${Date.now()}.jpg`;
@@ -1958,15 +2094,28 @@ export default function WrapQuotePage() {
           // A failed upload keeps the picture this proof already had rather
           // than blanking a view that was fine a moment ago.
           if (!error) path = target;
+          else failed.push(proofLabel(proof, i));
         } else if (proof.boxes.length === 0) {
           // Every box deleted — this view has nothing left to show.
           path = null;
+        } else {
+          failed.push(proofLabel(proof, i));
         }
-      } catch { /* keep whatever it had */ }
+      } catch {
+        // keep whatever it had
+        failed.push(proofLabel(proof, i));
+      }
       out.push({ ...proof, diagram_path: path });
     }
-    return out;
+    return {
+      proofs: out,
+      reason: failed.length ? `the picture for ${failed.join(', ')} could not be made` : null,
+    };
   };
+
+  // Why the last save couldn't make the coverage picture (null = it did, or
+  // there was nothing to draw). Add to Estimate reads it after saving.
+  const pictureProblem = useRef<string | null>(null);
 
   const saveQuote = async (): Promise<string | null> => {
     // A crossed freeform outline shoelaces to less area than what's visually
@@ -1985,13 +2134,18 @@ export default function WrapQuotePage() {
     // switched from a template to photos can't keep emailing the old
     // template diagram.
     let row: any;
+    pictureProblem.current = null;
     if (photoMode) {
-      const proofs = await uploadProofDiagrams(snap.quote_number);
+      const { proofs, reason } = await uploadProofDiagrams(snap.quote_number);
+      pictureProblem.current = reason;
       setPhotoProofs(proofs);
       const lead = proofs.find(p => p.diagram_path)?.diagram_path || null;
       row = { ...snap, photo_proofs: proofs, diagram_path: lead };
     } else {
-      const diagramPath = await uploadDiagram(snap.quote_number);
+      const { path: diagramPath, reason } = await uploadDiagram(snap.quote_number);
+      pictureProblem.current = measurements.length > 0 && !diagramPath
+        ? (reason || (!template?.template_image_path ? 'this template has no outline picture' : 'the picture could not be made'))
+        : null;
       row = diagramPath
         ? { ...snap, diagram_path: diagramPath }
         : measurements.length === 0 ? { ...snap, diagram_path: null } : snap;
@@ -1999,6 +2153,7 @@ export default function WrapQuotePage() {
     if (savedQuoteId) {
       const { error } = await supabase.from('wrap_quotes').update({ ...row, updated_at: new Date().toISOString() }).eq('id', savedQuoteId);
       if (error) { await dialog.alert(`Save failed: ${saveErrorMessage(error)}`); return null; }
+      await syncEstimateLines(savedQuoteId);
       await loadAll();
       return savedQuoteId;
     }
@@ -2013,8 +2168,37 @@ export default function WrapQuotePage() {
     const { data, error } = insert;
     if (error || !data) { await dialog.alert(`Save failed: ${saveErrorMessage(error)}`); return null; }
     setSavedQuoteId(data.id);
+    await syncEstimateLines(data.id);
     await loadAll();
     return data.id;
+  };
+
+  // The worksheet feeds its estimate on every save: the estimate's graphics
+  // lines (materials + install) are rewritten from the quote's current
+  // totals, so a re-priced quote never needs "re-adding". An unpriced quote
+  // (400) just waits for amounts; a locked estimate (accepted / converted)
+  // is said out loud once, since the customer's copy can't follow.
+  const syncEstimateLines = async (quoteId: string) => {
+    if (!forEstimate) return;
+    if (pictureBlocksEstimate()) {
+      const number = quoteNumber || history.find(h => h.id === quoteId)?.quote_number || 'The worksheet';
+      await dialog.alert(
+        `${number} was saved, but Estimate ${forEstimate.number} was NOT updated: ${pictureProblem.current}.\n\n`
+        + 'Save again. If it keeps happening, untick "Coverage diagram" to put the prices on the estimate without the picture.',
+      );
+      return;
+    }
+    try {
+      const res = await apiFetch('/api/wrap-quote/open-estimate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quoteId, estimateId: forEstimate.id, attach: estAttach }),
+      });
+      if (res.status === 409) {
+        const d = await res.json().catch(() => ({}));
+        await dialog.alert(`Saved here, but Estimate ${forEstimate.number} didn't change: ${d.error || 'it is locked.'}`);
+      }
+    } catch { /* offline — the next save syncs */ }
   };
 
   // Dry-run render for the compose modal — the send route returns the exact
@@ -2027,7 +2211,7 @@ export default function WrapQuotePage() {
         method: 'POST',
         body: JSON.stringify({
           quoteId: emailQuoteId,
-          include: sendInclude,
+          include: PROOF_SEND,
           preview: true,
           message: fields.message || undefined,
           emails: fields.emails.length > 0 ? fields.emails : undefined,
@@ -2042,19 +2226,13 @@ export default function WrapQuotePage() {
     }
   };
 
-  // Opens the compose modal (saves the draft first so the server can render
-  // the real thing). The actual send happens in sendQuoteEmail.
-  const createAndEmail = async () => {
+  // "Send proof for feedback": the coverage picture, no price, no approval
+  // link — the one thing the builder still emails. Pricing goes out on the
+  // estimate. Saves the draft first so the server can render the real thing;
+  // the actual send happens in sendQuoteEmail.
+  const sendProofForFeedback = async () => {
     if (!customer.email?.trim()) { await dialog.alert('Enter a customer email first.'); return; }
     if (!hasCoverage) { await dialog.alert('Nothing drawn yet — mark the wrap areas on the Estimator tab first.'); return; }
-    if (!sendInclude.pricing && !sendInclude.diagram && !sendInclude.netsuitePdf) {
-      await dialog.alert('Nothing selected to send — pick pricing, the coverage picture, or the NetSuite PDF.');
-      return;
-    }
-    if (sendInclude.netsuitePdf && !history.find(q => q.id === savedQuoteId)?.netsuite_estimate_id) {
-      await dialog.alert('This quote isn\'t in NetSuite yet — use "Create Quote in NetSuite" first.');
-      return;
-    }
     setSending(true);
     try {
       const id = await saveQuote();
@@ -2068,7 +2246,6 @@ export default function WrapQuotePage() {
 
   const sendQuoteEmail = async (fields: EmailComposeFields): Promise<{ ok: boolean }> => {
     if (!emailQuoteId) return { ok: false };
-    const coverageOnly = !sendInclude.pricing && !sendInclude.netsuitePdf;
     setSending(true);
     try {
       // Customer on hold (migration 366): admin / A/R give a reason, others are told who can.
@@ -2076,7 +2253,7 @@ export default function WrapQuotePage() {
         method: 'POST',
         body: JSON.stringify({
           quoteId: emailQuoteId,
-          include: sendInclude,
+          include: PROOF_SEND,
           message: fields.message || undefined,
           emails: fields.emails,
           bccSelf: fields.bccSelf, cc: fields.cc,
@@ -2093,17 +2270,10 @@ export default function WrapQuotePage() {
       // Close before the success dialog so the alert isn't stacked on the
       // compose screen.
       setEmailModal(false);
-      if (coverageOnly) {
-        // The quote itself hasn't gone out — keep everything in place so
-        // the real quote can still be sent after the customer sees coverage.
-        await dialog.alert(`Coverage picture emailed to ${sentTo}`);
-        await loadAll();
-      } else {
-        await dialog.alert(`Quote emailed to ${sentTo}`);
-        resetAfterSend();
-        await loadAll();
-        setTab('history');
-      }
+      // Nothing priced went out — keep everything in place so the estimate
+      // can follow once the customer has reacted to the proof.
+      await dialog.alert(`Proof emailed to ${sentTo}`);
+      await loadAll();
       return { ok: true };
     } catch (e: any) {
       await dialog.alert(`Email failed: ${e.message}`);
@@ -2157,32 +2327,6 @@ export default function WrapQuotePage() {
   // Push the quote to NetSuite as an Estimate: vinyl total -> "3M Vinyl"
   // (described as the quoted vehicle), labor total -> "Graphics Install
   // Labor". Taxes are NetSuite's job. No email is sent.
-  const createNetsuiteQuote = async () => {
-    if (!hasCoverage) { await dialog.alert('Nothing drawn yet — mark the wrap areas on the Estimator tab first.'); return; }
-    if (!customerId) { await dialog.alert('Pick the customer from the NetSuite search first — a typed-in name has no NetSuite record to attach the quote to.'); return; }
-    if (!(await dialog.confirm(`Create a NetSuite quote for ${customer.name}? Vinyl ($${fmt(totals.adjMaterials)}${totals.kitQty > 1 ? `, ${totals.kitQty} kits` : ''}) maps to "3M Vinyl", labor ($${fmt(totals.adjLabor)}) to "Graphics Install Labor" — NetSuite adds tax.`))) return;
-    setPushingNetsuite(true);
-    try {
-      const id = await saveQuote();
-      if (!id) return;
-      const res = await apiFetch('/api/wrap-quote/netsuite', {
-        method: 'POST',
-        body: JSON.stringify({ quoteId: id }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        await dialog.alert(`NetSuite quote failed: ${data.error || 'Unknown error'}`);
-      } else {
-        await dialog.alert(`NetSuite quote created${data.estimateNumber ? `: ${data.estimateNumber}` : ''}.`);
-        await loadAll();
-      }
-    } catch (e: any) {
-      await dialog.alert(`NetSuite quote failed: ${e.message}`);
-    } finally {
-      setPushingNetsuite(false);
-    }
-  };
-
   // Spawn a graphics production job from a saved quote. The job lands on the
   // Graphics board as "Received" with the vehicle, customer, films, and
   // coverage areas pre-filled — no retyping. One job per quote; if one
@@ -2341,26 +2485,41 @@ export default function WrapQuotePage() {
       setPlacements({});
       setUseRollPricing(false);
     }
-    setSendInclude({ pricing: true, lineItems: true, diagram: true, netsuitePdf: false });
+    // A worksheet that already feeds an estimate reopens pinned to it, so
+    // every save keeps that estimate's lines current and "Save & open
+    // estimate" lands there. One with no estimate keeps whatever estimate
+    // the rep arrived for (?forEstimate), so it attaches on save.
+    if (q.estimate_id) { await pinEstimate(q.estimate_id); pinnedByQuote.current = true; }
+    setEstAttach({
+      diagram: (q as any).estimate_attach?.diagram ?? true,
+      attachments: (q as any).estimate_attach?.attachments ?? true,
+      films: (q as any).estimate_attach?.films ?? true,
+    });
     setViewQuote(null);
     setReturnToQuotesFor(null);
     setTab(landOn);
   };
 
-  // A sent quote is finished — clear the whole estimator (drawing, customer,
-  // project, attachments) so the next quote starts clean. Keeps the selected
-  // vehicle template.
-  const resetAfterSend = () => {
-    resetEstimate();
-    setCustomer({ name: '', address: '', city: '', state: '', zip: '', phone: '', email: '', email_cc: '' });
-    setCustomerId(null);
-    setCustSearch('');
-    setProjectType('');
-    setProjectNotes('');
-    setAttachments([]);
-    setLaborRates({});
-    setVinylRates({});
-    setFinalPriceText('');
+  // Pin the banner to an estimate by id (the quote's own, or the one the rep
+  // came from). Only the identity — never the customer/vehicle prefill, which
+  // belongs to a fresh quote.
+  const pinEstimate = async (estId: string) => {
+    const { data: est } = await supabase
+      .from('estimates')
+      .select('id, estimate_number, netsuite_estimate_number, customer_name, vehicle_year, vehicle_roof, vehicle_wheelbase, vehicle_other, vin, unit_number, vehicle_platforms(label)')
+      .eq('id', estId)
+      .maybeSingle();
+    if (!est) { setForEstimate(null); return; }
+    const platformLabel = (est as any).vehicle_platforms?.label || (est as any).vehicle_other || '';
+    const vehicle = [
+      est.vehicle_year,
+      platformLabel,
+      est.vehicle_roof ? `${est.vehicle_roof} roof` : null,
+      est.vehicle_wheelbase ? `${est.vehicle_wheelbase}" WB` : null,
+      est.unit_number ? `Unit ${est.unit_number}` : null,
+      est.vin ? `VIN ${est.vin}` : null,
+    ].filter(Boolean).join(' · ') || null;
+    setForEstimate({ id: est.id, number: estimateHeadlineNumber(est), customerName: est.customer_name, vehicle });
   };
 
   // ----- Email attachments (proofs, vinyl specs, …) -----
@@ -3108,7 +3267,7 @@ export default function WrapQuotePage() {
   useEffect(() => { if (tplFullscreen && calibLine) setTplPanelOpen(true); }, [tplFullscreen, calibLine]);
 
   if (authLoading || loading) return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading...</div>;
-  if (!hasAccess) return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>You don&apos;t have access to Wrap Quotes.</div>;
+  if (!hasAccess) return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>You don&apos;t have access to the Graphics Builder.</div>;
 
   const laborEditor = (key: 'design' | 'preparation' | 'installation', title: string) => {
     const s = settings[key];
@@ -3455,8 +3614,13 @@ export default function WrapQuotePage() {
 
   return (
     <div>
-      <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '12px' }}>
-        Wrap Quotes
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' }}>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.8px' }}>
+          Graphics Builder
+        </div>
+        <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+          Measure, draw the proof and price the graphics here — the customer gets it as an estimate.
+        </div>
       </div>
 
       {/* Add Graphics round trip — pinned while pricing for an estimate */}
@@ -3468,10 +3632,13 @@ export default function WrapQuotePage() {
         }}>
           <div style={{ flex: 1, minWidth: '220px' }}>
             <div style={{ fontSize: '12px', fontWeight: 800, color: '#8b5cf6' }}>
-              🎨 Building graphics for Estimate {forEstimate.number}
+              {savedQuoteId && quoteNumber
+                ? `🎨 Editing ${quoteNumber} for Estimate ${forEstimate.number}`
+                : `🎨 Graphics for Estimate ${forEstimate.number}`}
             </div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-              {[forEstimate.customerName, forEstimate.vehicle].filter(Boolean).join(' · ') || 'Price the wrap, then add it to the estimate'}
+              {[forEstimate.customerName, forEstimate.vehicle].filter(Boolean).join(' · ') || 'Price the graphics here'}
+              {' — every save updates the estimate\u2019s graphics lines.'}
             </div>
             {/* What rides along onto the estimate's customer PDF (one merged
                 file: quote + these). Unchecked = price lines only. */}
@@ -3494,12 +3661,16 @@ export default function WrapQuotePage() {
             </div>
           </div>
           <button
-            onClick={addToEstimate}
+            onClick={saveAndOpenEstimate}
             disabled={addingToEstimate}
-            title="Save this wrap quote and add it to the estimate as materials + install lines (re-adding after edits updates the same lines)"
-            style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#8b5cf6', color: '#fff', fontSize: '12px', fontWeight: 800, cursor: addingToEstimate ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}
+            title="Save this worksheet (its materials + install lines and coverage picture update on the estimate) and open the estimate"
+            style={{ padding: '10px 18px', borderRadius: '8px', border: 'none', background: '#8b5cf6', color: '#fff', fontSize: '13px', fontWeight: 800, cursor: addingToEstimate ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}
           >
-            {addingToEstimate ? 'Adding…' : `✓ Add to Estimate ${forEstimate.number}`}
+            {addStep === 'saving'
+              ? 'Saving worksheet and coverage picture…'
+              : addStep === 'adding'
+                ? `Opening Estimate ${forEstimate.number}…`
+                : `Save & open Estimate ${forEstimate.number} ▸`}
           </button>
           <button
             onClick={() => router.push(`/estimates?id=${forEstimate.id}`)}
@@ -3516,9 +3687,9 @@ export default function WrapQuotePage() {
         {([
           { id: 'estimator' as Tab, label: 'Estimator' },
           { id: 'nesting' as Tab, label: `Roll Nesting${nestPieces.length > 0 ? ` (${nestPieces.length})` : ''}` },
-          { id: 'quote' as Tab, label: 'Quote' },
-          { id: 'history' as Tab, label: `Quote History (${history.filter(q => !q.archived_at).length})` },
-          { id: 'pricing' as Tab, label: 'Pricing' },
+          { id: 'quote' as Tab, label: 'Price & Estimate' },
+          { id: 'history' as Tab, label: `Worksheets (${history.filter(q => !q.archived_at).length})` },
+          { id: 'pricing' as Tab, label: 'Film Pricing' },
           { id: 'company' as Tab, label: 'Company Info' },
           { id: 'templates' as Tab, label: `Templates${tplStats ? ` (${tplStats.total.toLocaleString()})` : ''}` },
         ]).map(t => (
@@ -4413,7 +4584,7 @@ export default function WrapQuotePage() {
               <div style={labelStyle}>Note</div>
               <textarea value={projectNotes} onChange={e => setProjectNotes(e.target.value)} rows={3} style={{ ...inputStyle, resize: 'vertical' }} />
             </div>
-            {sectionHead('Email Attachments')}
+            {sectionHead('Files')}
             <DropZone disabled={attaching} onFiles={files => addAttachments(files)}>
             {attachments.map(a => (
               <div key={a.path} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
@@ -4426,56 +4597,38 @@ export default function WrapQuotePage() {
               {attaching ? 'Uploading…' : '+ Attach File'}
               <input type="file" multiple disabled={attaching} onChange={e => { addAttachments(e.target.files); e.target.value = ''; }} style={{ display: 'none' }} />
             </label>
-            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '12px' }}>Sent with the emailed quote — proof files, vinyl specs, or other documentation.</div>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '12px' }}>Proof files, vinyl specs, or other documentation — they ride on the estimate&apos;s customer copy (when ticked on the estimate banner) and on proof emails.</div>
             </DropZone>
-            <div style={{ marginBottom: '8px' }}>
-              <div style={labelStyle}>Email Content</div>
-              {([
-                ['diagram', 'Coverage picture', 'The vehicle drawing with the wrap areas'],
-                ['pricing', 'Pricing', 'Subtotal, tax, and total in the email body'],
-                ['lineItems', 'Itemized line items', 'The per-area rows — uncheck for just the total'],
-                ['netsuitePdf', 'NetSuite quote PDF', 'Attached; NetSuite\u2019s totals are the document of record'],
-              ] as const).map(([key, label, hint]) => {
-                const disabled = key === 'lineItems' && !sendInclude.pricing;
-                return (
-                  <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 2px', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.45 : 1 }}>
-                    <input
-                      type="checkbox"
-                      checked={key === 'lineItems' ? sendInclude.lineItems && sendInclude.pricing : sendInclude[key]}
-                      disabled={disabled}
-                      onChange={e => setSendInclude(prev => ({ ...prev, [key]: e.target.checked }))}
-                    />
-                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>{label}</span>
-                    <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{hint}</span>
-                  </label>
-                );
-              })}
-            </div>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               <button onClick={() => saveQuote()} style={btnStyle('#60a5fa', 'rgba(59,130,246,0.1)')}>{savedQuoteId ? 'Update Draft' : 'Save Draft'}</button>
-              <button onClick={createAndEmail} disabled={sending} style={{ ...btnStyle('#fff', '#22c55e'), border: 'none' }}>
-                {sending ? 'Working…' : (!sendInclude.pricing && !sendInclude.netsuitePdf) ? 'Preview & Email Coverage' : 'Preview & Email Quote'}
+              <button
+                onClick={saveAndOpenEstimate}
+                disabled={addingToEstimate || sending}
+                title={forEstimate ? `Save, then open Estimate ${forEstimate.number}` : 'Save, create a draft estimate for this customer with the graphics on it, and open it'}
+                style={{ ...btnStyle('#fff', '#22c55e'), border: 'none' }}
+              >
+                {addStep === 'saving' ? 'Saving worksheet and coverage picture…' : addStep === 'adding' ? 'Creating the estimate…' : forEstimate ? `Save & open Estimate ${forEstimate.number} ▸` : 'Save & open estimate ▸'}
               </button>
             </div>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginTop: '6px' }}>
-              {(() => {
-                const nsQuote = history.find(q => q.id === savedQuoteId);
-                return nsQuote?.netsuite_estimate_id ? (
-                  <>
-                    <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
-                      NetSuite quote {nsQuote.netsuite_estimate_number || nsQuote.netsuite_estimate_id}
-                    </span>
-                    <button onClick={() => viewEstimatePdf(nsQuote.netsuite_estimate_id)} style={btnStyle('#a78bfa', 'rgba(167,139,250,0.08)')}>
-                      View PDF
-                    </button>
-                  </>
-                ) : (
-                  <button onClick={createNetsuiteQuote} disabled={pushingNetsuite} style={btnStyle('#a78bfa', 'rgba(167,139,250,0.08)')}>
-                    {pushingNetsuite ? 'Creating…' : 'Create Quote in NetSuite'}
-                  </button>
-                );
-              })()}
+              <button onClick={sendProofForFeedback} disabled={sending} title="Email the coverage picture only — no price, no approval link — so the customer can react before the estimate goes out" style={btnStyle('#60a5fa', 'rgba(59,130,246,0.1)')}>
+                {sending ? 'Working…' : '✉ Send proof for feedback'}
+              </button>
+              <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Pricing, approval and NetSuite happen on the estimate.</span>
             </div>
+            {(() => {
+              const nsQuote = history.find(q => q.id === savedQuoteId);
+              return nsQuote?.netsuite_estimate_id ? (
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginTop: '6px' }}>
+                  <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
+                    Older NetSuite quote {nsQuote.netsuite_estimate_number || nsQuote.netsuite_estimate_id}
+                  </span>
+                  <button onClick={() => viewEstimatePdf(nsQuote.netsuite_estimate_id)} style={btnStyle('#a78bfa', 'rgba(167,139,250,0.08)')}>
+                    View PDF
+                  </button>
+                </div>
+              ) : null;
+            })()}
             {!hasCoverage && (
               <div style={{ marginTop: '8px', fontSize: '10px', color: '#fbbf24', fontWeight: 700 }}>Nothing drawn yet — use the Estimator tab first.</div>
             )}
@@ -4537,7 +4690,7 @@ export default function WrapQuotePage() {
                   }}>{q.status === 'accepted' ? 'Accepted ✓' : q.status === 'rejected' ? 'Lost / Changes' : q.status === 'sent' ? `Sent${q.sent_to ? ` · ${q.sent_to}` : ''}` : 'Draft'}</span>
                 <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>${fmt(q.total)}</span>
                 <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{new Date(q.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-                {q.status === 'sent' && !q.archived_at && (() => {
+                {q.status === 'sent' && !q.estimate_id && !q.archived_at && (() => {
                   const quiet = quietDays(q);
                   return (
                     <>
@@ -4568,7 +4721,7 @@ export default function WrapQuotePage() {
                     style={btnStyle('#60a5fa', 'transparent')}
                   >⎙ Signed Doc</button>
                 )}
-                {q.status === 'sent' && q.approval_token && (
+                {q.status === 'sent' && !q.estimate_id && q.approval_token && (
                   <button
                     onClick={async e => {
                       e.stopPropagation();
@@ -4585,8 +4738,13 @@ export default function WrapQuotePage() {
                 <button onClick={e => { e.stopPropagation(); loadQuoteForEdit(q, 'estimator'); }} title="Reopen this quote on the drawing to change its boxes" style={btnStyle('#60a5fa', 'transparent')}>
                   Edit
                 </button>
-                <button onClick={e => { e.stopPropagation(); loadQuoteForEdit(q, 'quote'); }} title="Reopen this quote on the Quote tab to send it again" style={btnStyle('#60a5fa', 'transparent')}>
-                  Resend
+                <button
+                  onClick={e => { e.stopPropagation(); openEstimateFromHistory(q); }}
+                  disabled={openingEstimateFor === q.id}
+                  title={q.estimate_id ? 'Open the estimate this worksheet feeds' : 'Create a draft estimate for this customer with these graphics on it'}
+                  style={btnStyle('#22c55e', 'transparent')}
+                >
+                  {openingEstimateFor === q.id ? 'Creating…' : q.estimate_id ? 'Estimate ▸' : '+ Estimate'}
                 </button>
                 <button onClick={e => { e.stopPropagation(); toggleArchiveQuote(q); }} title={q.archived_at ? 'Unarchive' : 'Archive'} style={btnStyle('#f59e0b', 'transparent')}>
                   {q.archived_at ? 'Unarchive' : 'Archive'}
@@ -4607,7 +4765,14 @@ export default function WrapQuotePage() {
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px', marginTop: '8px', alignItems: 'center' }}>
               <CreatedBy userId={viewQuote.created_by} at={viewQuote.created_at} style={{ marginRight: 'auto', color: 'var(--text-secondary)' }} />
               <button onClick={() => loadQuoteForEdit(viewQuote, 'estimator')} title="Reopen this quote on the drawing to change its boxes" style={btnStyle('#60a5fa', 'var(--card)')}>Edit</button>
-              <button onClick={() => loadQuoteForEdit(viewQuote, 'quote')} title="Reopen this quote on the Quote tab to send it again" style={btnStyle('#60a5fa', 'var(--card)')}>Resend</button>
+              <button
+                onClick={() => openEstimateFromHistory(viewQuote)}
+                disabled={openingEstimateFor === viewQuote.id}
+                title={viewQuote.estimate_id ? 'Open the estimate this worksheet feeds' : 'Create a draft estimate for this customer with these graphics on it'}
+                style={btnStyle('#22c55e', 'var(--card)')}
+              >
+                {openingEstimateFor === viewQuote.id ? 'Creating…' : viewQuote.estimate_id ? 'Estimate ▸' : '+ Estimate'}
+              </button>
               <button
                 onClick={() => createGraphicsJob(viewQuote)}
                 disabled={creatingJobFor === viewQuote.id}
@@ -5061,26 +5226,21 @@ export default function WrapQuotePage() {
         </div>
       )}
 
-      {/* Email-the-quote compose — the standard customer email screen
-          (docs/customer-email-standard.md). The Email Content checkboxes
-          (sendInclude) live on the Quote tab, so they're fixed for the
-          modal's lifetime; the live preview is the send route's dry run of
-          the shared quote document. */}
+      {/* Proof-for-feedback compose — the standard customer email screen
+          (docs/customer-email-standard.md). Always the coverage picture
+          only (PROOF_SEND): pricing goes out on the estimate. The live
+          preview is the send route's dry run of the shared quote document. */}
       {emailModal && emailQuoteId && (
         <EmailComposeModal
           title="Review Email Before Sending"
           customerId={customerId}
-          sendLabel={!sendInclude.pricing && !sendInclude.netsuitePdf ? 'Send Coverage' : 'Send Quote'}
-          messagePlaceholder="Optional note to the customer — added above the quote…"
-          intro={sendInclude.netsuitePdf ? (
+          sendLabel="Send proof"
+          messagePlaceholder="Optional note to the customer — added above the proof…"
+          intro={(
             <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              📎 The NetSuite quote PDF is attached automatically in this mode.
+              The coverage picture only — no price and no approval link. Pricing goes out on the estimate.
             </div>
-          ) : sendInclude.pricing ? (
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              📎 A PDF copy of this quote is attached automatically, so the customer can save or forward it.
-            </div>
-          ) : undefined}
+          )}
           attachments={attachments.map(a => ({ id: a.path, name: a.name, sizeBytes: a.size }))}
           initialAttachmentIds={attachments.map(a => a.path)}
           fetchPreview={fetchQuoteEmailPreview}
