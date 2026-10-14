@@ -186,6 +186,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'system_health', label: 'System health alert', description: 'A background job, integration or probe reported a problem.', area: 'system', defaultChannels: ['in_app', 'push', 'email'], emailNow: true },
   { type: 'ledger_import', label: 'Ledger import update', description: 'A QuickBooks/NetSuite history import finished, needs review, or failed.', area: 'system', defaultChannels: ['in_app', 'push'], audience: 'Super admins and anyone granted System Health.' },
   { type: 'access_request', label: 'Access request', description: 'Someone asked for an account or extra permissions.', area: 'system', defaultChannels: ['in_app', 'push'], emailNow: true },
+  { type: 'account_closed', label: 'Account closed', description: 'Someone deleted their own FleetSuite account from Settings.', area: 'system', defaultChannels: ['in_app', 'push', 'email'], emailNow: true, audience: 'Super admins.' },
 
   // ── Messages & mentions ───────────────────────────────────────────────
   // Push is the user's choice on both rows (Craig, 2026-09-24: it was

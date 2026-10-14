@@ -1771,6 +1771,85 @@ export default function SettingsPage() {
       >
         ← Back
       </button>
+
+      <DeleteAccountCard sectionStyle={sectionStyle} isOwner={hasRole('super_admin')} />
+    </div>
+  );
+}
+
+/**
+ * Settings → Delete my account. Apple requires it because the phone app's
+ * sign-in links to Request Access (guideline 5.1.1(v)). Two taps: the first
+ * explains what happens, the second closes the account and signs out.
+ * See src/app/api/account/delete/route.ts.
+ */
+function DeleteAccountCard({ sectionStyle, isOwner }: { sectionStyle: React.CSSProperties; isOwner: boolean }) {
+  const { signOut } = useAuth();
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState('');
+
+  const deleteAccount = async () => {
+    setDeleting(true); setError('');
+    try {
+      const res = await apiFetch('/api/account/delete', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'Could not delete your account.');
+      await signOut();
+      window.location.href = '/login';
+    } catch (e: any) {
+      setError(e.message);
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <div style={{ ...sectionStyle, marginTop: '24px' }}>
+      <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>Delete My Account</div>
+      {isOwner ? (
+        <div style={{ fontSize: '11px', color: 'var(--text-label)' }}>
+          Owner accounts can&apos;t be deleted here. Email inquiry@bmgfleet.com.
+        </div>
+      ) : (<>
+        <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px', lineHeight: 1.5 }}>
+          Closes your FleetSuite account and signs you out on every device. Your email signature and notification devices are removed.
+          Jobs, estimates and other work records you were part of stay with BMG.
+        </div>
+        {error && <div style={{ fontSize: '11px', color: '#ef4444', marginBottom: '8px' }}>{error}</div>}
+        {!confirming ? (
+          <button
+            onClick={() => setConfirming(true)}
+            style={{
+              width: '100%', padding: '12px', borderRadius: '10px', background: 'transparent',
+              border: '1px solid rgba(239,68,68,0.4)', color: '#ef4444', fontSize: '13px', fontWeight: 700, cursor: 'pointer',
+            }}
+          >
+            Delete My Account
+          </button>
+        ) : (
+          <div style={{ padding: '10px', borderRadius: '10px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)' }}>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)', marginBottom: '8px' }}>
+              Delete your account? You won&apos;t be able to sign in again unless an admin restores it.
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={() => setConfirming(false)}
+                disabled={deleting}
+                style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={deleteAccount}
+                disabled={deleting}
+                style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: '#ef4444', color: '#fff', fontSize: '12px', fontWeight: 800, opacity: deleting ? 0.6 : 1 }}
+              >
+                {deleting ? 'Deleting...' : 'Yes, delete it'}
+              </button>
+            </div>
+          </div>
+        )}
+      </>)}
     </div>
   );
 }

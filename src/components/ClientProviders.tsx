@@ -41,15 +41,17 @@ function PendingScreen() {
   );
 }
 
-function DeniedScreen() {
+function DeniedScreen({ closed = false }: { closed?: boolean }) {
   const { signOut } = useAuth();
   return (
     <div style={{ minHeight: 'calc(100vh / var(--ts))', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', padding: '20px' }}>
       <div style={{ textAlign: 'center', maxWidth: '340px' }}>
-        <div style={{ fontSize: '20px', marginBottom: '12px', color: 'var(--text-muted)' }}>Denied</div>
-        <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px' }}>Access Denied</div>
+        <div style={{ fontSize: '20px', marginBottom: '12px', color: 'var(--text-muted)' }}>{closed ? 'Closed' : 'Denied'}</div>
+        <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px' }}>{closed ? 'Account Closed' : 'Access Denied'}</div>
         <div style={{ fontSize: '14px', color: 'var(--text-secondary)', lineHeight: '1.5', marginBottom: '24px' }}>
-          Your account request was not approved. Contact an admin if you believe this is a mistake.
+          {closed
+            ? 'This account has been deleted or deactivated. Contact a BMG admin if you need it back.'
+            : 'Your account request was not approved. Contact an admin if you believe this is a mistake.'}
         </div>
         <button onClick={signOut} style={{
           padding: '12px 24px', borderRadius: '12px', background: 'transparent',
@@ -97,6 +99,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   // Check approval status
   if (profile?.status === 'pending') return <PendingScreen />;
   if (profile?.status === 'denied') return <DeniedScreen />;
+  if (profile?.deactivated) return <DeniedScreen closed />;
 
   return (
     <div style={{ minHeight: 'calc(100vh / var(--ts))', paddingBottom: '85px', background: 'var(--bg)' }}>
