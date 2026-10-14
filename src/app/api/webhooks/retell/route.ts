@@ -114,11 +114,9 @@ export async function POST(req: NextRequest) {
   }
   if (existing?.summary_emailed_at) return NextResponse.json({ ok: true, duplicate: true });
 
-  // Deep-link rule: a known caller opens their record; an unknown one opens
-  // the customer search prefilled with the number, one tap to find or add.
-  const url = matchedProspectId
-    ? deepLinks.prospect(matchedProspectId)
-    : `/admin/prospects?q=${encodeURIComponent(call.externalDigits || call.callbackNumber || '')}`;
+  // Deep-link rule: the email and alert open this call on the After-hours
+  // Calls page, which links on to the customer or adds them as a lead.
+  const url = deepLinks.afterHoursCall(saved.id);
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
 
   const recipients = await summaryRecipients();
