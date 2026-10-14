@@ -1,11 +1,22 @@
-import { invoiceEntry, isLayoutLine, MAIN_LINE, type InvoiceLine, type RuleAccounts, type RuleItem, type RuleLine, type RuleProblem } from './invoice-rule';
+import {
+  invoiceEntry, isLayoutLine, MAIN_LINE,
+  type InvoiceLine, type RuleAccounts, type RuleItem, type RuleLine, type RuleProblem, type SalesDocKind,
+} from './invoice-rule';
 
 /**
- * Each NetSuite invoice checked against NetSuite (docs/books.md "Invoices"):
- * FleetSuite's own entry from the invoice rule next to the GL lines NetSuite
- * posted for the same invoice (the copy, migration 361), line by line, to
- * the cent. Pure; amounts are whole cents, debit positive.
+ * Each NetSuite invoice, or credit memo, checked against NetSuite
+ * (docs/books.md "Invoices"): FleetSuite's own entry from the invoice rule
+ * next to the GL lines NetSuite posted for the same document (the copy,
+ * migration 361), line by line, to the cent. A credit memo goes through the
+ * same code, its signed amounts the other way round. Pure; amounts are whole
+ * cents, debit positive.
  */
+
+/** What each kind of document is called, in the check's notes. */
+const DOC_WORDS: Record<SalesDocKind, { one: string; many: string; a: string }> = {
+  invoice: { one: 'invoice', many: 'invoices', a: 'an invoice' },
+  credit_memo: { one: 'credit memo', many: 'credit memos', a: 'a credit memo' },
+};
 
 export interface NetSuitePosting {
   /** NetSuite's transaction line id; MAIN_LINE is the invoice's own. */
@@ -143,6 +154,8 @@ export interface ReasonNames {
   account: (id: string) => string;
   /** NetSuite tax code id → its name ('' = none). */
   taxCode: (id: string) => string;
+  /** What the documents are: 'invoice' or 'credit memo'. */
+  doc: string;
 }
 
 export interface Reason {
@@ -156,7 +169,7 @@ const itemLabel = (line: InvoiceLine | null, fallback: string) => line?.itemNumb
 export function problemReason(p: RuleProblem, names: ReasonNames): Reason {
   switch (p.kind) {
     case 'unreadable':
-      return { key: 'unreadable', text: "A line's amount couldn't be read from the copy of the invoice." };
+      return { key: 'unreadable', text: `A line's amount couldn't be read from the copy of the ${names.doc}.` };
     case 'no_item':
       return { key: 'no_item', text: 'A line carries an amount but no item, so it has no income account.' };
     case 'not_copied':
@@ -188,7 +201,7 @@ export function rowReason(row: CheckRow, names: ReasonNames): Reason | null {
   const what = row.lineId === MAIN_LINE ? 'receivable' : line?.tax ? 'tax' : line ? 'item' : 'unknown';
 
   if (what === 'unknown') {
-    return { key: `unknown|${n!.account}`, text: `NetSuite posts to ${acct(n!.account)} on a line the copy of the invoice doesn't have.` };
+    return { key: `unknown|${n!.account}`, text: `NetSuite posts to ${acct(n!.account)} on a line the copy of the ${names.doc} doesn't have.` };
   }
   if (what === 'receivable') {
     if (f && n && f.account !== n.account) {
@@ -238,6 +251,7 @@ export function invoiceReasons(checked: CheckedInvoice, names: ReasonNames): Rea
 // ── A month ────────────────────────────────────────────────────────────────
 
 export interface MonthSummary {
+  /** Invoices or credit memos, whichever kind the month was checked for. */
   invoices: number;
   matches: number;
   differs: number;
@@ -287,14 +301,16 @@ export interface ChartAccount {
 }
 
 /**
- * The receivable account a company's invoices debit: its only one, as the
- * chart of accounts has it. With more than one, the one NetSuite's invoices
- * used most this month, and a note saying so.
+ * The receivable account a company's invoices debit, and its credit memos
+ * credit: its only one, as the chart of accounts has it. With more than one,
+ * the one NetSuite's documents (`many`: 'invoices' or 'credit memos') used
+ * most this month, and a note saying so.
  */
 export function pickReceivable(
   accounts: ChartAccount[],
   company: string,
   mainLines: NetSuitePosting[],
+  many = 'invoices',
 ): { account: string | null; note: string | null } {
   const candidates = accounts.filter((a) => a.account_type === 'accounts_receivable' && a.active && !a.is_summary
     && a.netsuite_account_id && (a.company === null || a.company === company));
@@ -313,16 +329,18 @@ export function pickReceivable(
   return {
     account: pick,
     note: `${company} can use ${candidates.length} receivable accounts, so FleetSuite used ${name(pick)}, `
-      + (most ? "the one NetSuite's invoices used most this month." : 'the first in the chart.'),
+      + (most ? `the one NetSuite's ${many} used most this month.` : 'the first in the chart.'),
   };
 }
 
 // ── A month, from the database ─────────────────────────────────────────────
 
-/** What gl_invoice_month (migration 364) returns. */
+/** What gl_invoice_month (migrations 364, 367 and 370) returns: the month's invoices and credit memos. */
 export interface InvoiceMonthData {
   invoices: Array<{
     id: string;
+    /** Which kind of document it is (migration 370). */
+    doc_type: SalesDocKind;
     netsuite_id: string;
     number: string | null;
     date: string;
@@ -524,17 +542,19 @@ export function withOwnAmounts(
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 const andList = (words: string[]) => (words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`);
 
-/** What a fact NetSuite wouldn't give leaves the check to do instead. */
-const WITHOUT_FACT: Record<keyof LineFacts, { what: string; so: string }> = {
+/** What a fact NetSuite wouldn't give leaves the check to do instead; `a` is 'an invoice' or 'a credit memo'. */
+const withoutFact = (a: string): Record<keyof LineFacts, { what: string; so: string }> => ({
   cogs: { what: 'which lines are cost of goods', so: 'cost of goods is recognized by the accounts it went to' },
   topDiscount: { what: 'which line is a discount or markup set at the top', so: "a discount or markup set at the top with no amount of its own isn't separated from the lines it's spread over" },
-  amount: { what: "the lines' own amounts", so: "a discount or markup spread over an invoice's lines isn't separated from them" },
+  amount: { what: "the lines' own amounts", so: `a discount or markup spread over ${a}'s lines isn't separated from them` },
   quantity: { what: "the lines' quantities", so: "a line's quantity and rate aren't shown" },
   rate: { what: "the lines' rates", so: "a line's quantity and rate aren't shown" },
-};
+});
 
 export interface MonthOptions {
   company: string;
+  /** Which kind of document the month's are, for the words: invoices when left out. */
+  kind?: SalesDocKind;
   chart: ChartAccount[];
   taxAccounts: TaxAccountCount[] | null;
   /** Where items with no income account posted; null or left out when it hasn't been read. */
@@ -594,12 +614,14 @@ export function workOutMonth(
   const postings = (inv: InvoiceMonthData['invoices'][number]): NetSuitePosting[] =>
     inv.netsuite.map((l) => ({ lineId: l.line_id, account: l.account, cents: (centsOf(l.debit) ?? 0) - (centsOf(l.credit) ?? 0) }));
   const mainLines = data.invoices.flatMap((inv) => postings(inv).filter((p) => p.lineId === MAIN_LINE));
-  const receivable = pickReceivable(opts.chart, opts.company, mainLines);
+  const words = DOC_WORDS[opts.kind ?? 'invoice'];
+  const receivable = pickReceivable(opts.chart, opts.company, mainLines, words.many);
 
   const ctx: CheckContext = { items, taxAccounts, receivable: receivable.account, accountTypes };
   const names: ReasonNames = {
     account: (id) => accountNames.get(id) ?? `NetSuite account ${id}`,
     taxCode: (id) => taxNames.get(id) ?? `tax code ${id}`,
+    doc: words.one,
   };
 
   const invoices = data.invoices.map((inv): WorkedInvoice => {
@@ -626,7 +648,11 @@ export function workOutMonth(
   return { invoices, names, receivableNote: receivable.note };
 }
 
-/** `books`, when the company's invoices post, says what FleetSuite's books hold for each invoice. */
+/**
+ * One month's documents of one kind (`opts.kind`, invoices when left out),
+ * each checked against NetSuite. `books`, when the company's documents post,
+ * says what FleetSuite's books hold for each.
+ */
 export function checkMonth(
   data: InvoiceMonthData,
   opts: MonthOptions,
@@ -634,6 +660,8 @@ export function checkMonth(
 ): MonthCheck {
   const { invoices: worked, names, receivableNote } = workOutMonth(data, opts);
   const facts = opts.facts && 'lines' in opts.facts ? opts.facts : null;
+  const kind = opts.kind ?? 'invoice';
+  const words = DOC_WORDS[kind];
 
   const checked: Array<{ number: string; checked: CheckedInvoice }> = [];
   const invoices: InvoiceView[] = [];
@@ -707,28 +735,33 @@ export function checkMonth(
   if (receivableNote) notes.push(receivableNote);
   if (!opts.taxAccounts) notes.push("Where sales tax posts hasn't been read yet. Sync now on the NetSuite lists page reads it.");
   if (opts.facts && 'error' in opts.facts) {
-    notes.push(`NetSuite couldn't be asked about these invoices' lines just now (${opts.facts.error}), so cost of goods is recognized by `
-      + "the accounts it went to, and a discount or markup spread over an invoice's lines isn't separated from them.");
+    notes.push(`NetSuite couldn't be asked about these ${words.many}' lines just now (${opts.facts.error}), so cost of goods is recognized by `
+      + `the accounts it went to, and a discount or markup spread over ${words.a}'s lines isn't separated from them.`);
   } else if (facts?.missing.length) {
-    const sos = [...new Set(facts.missing.map((m) => WITHOUT_FACT[m].so))];
-    notes.push(`NetSuite wouldn't say ${andList(facts.missing.map((m) => WITHOUT_FACT[m].what))} on these invoices, so ${andList(sos)}.`);
+    const without = withoutFact(words.a);
+    const sos = [...new Set(facts.missing.map((m) => without[m].so))];
+    notes.push(`NetSuite wouldn't say ${andList(facts.missing.map((m) => without[m].what))} on these ${words.many}, so ${andList(sos)}.`);
   }
   if (unfit.length) {
     const shown = unfit.slice(0, 10).join(', ');
-    notes.push(`On ${plural(unfit.length, 'invoice', 'invoices')} NetSuite's own amounts for the lines don't add up to the invoice, `
+    notes.push(`On ${plural(unfit.length, words.one, words.many)} NetSuite's own amounts for the lines don't add up to the ${words.one}, `
       + `so FleetSuite went by their net amounts: ${shown}${unfit.length > 10 ? ', …' : ''}. `
       + `Open ${unfit.length === 1 ? 'it' : 'one'} to see what NetSuite says about each line.`);
   }
   if (summary.withCost) {
-    notes.push(`${plural(summary.withCost, 'invoice also books', 'invoices also book')} the cost of the stock sold, as NetSuite does when an `
-      + "invoice isn't fulfilled first. FleetSuite will post that cost with the fulfillment rule, so those lines aren't compared here.");
+    notes.push(kind === 'credit_memo'
+      ? `${plural(summary.withCost, 'credit memo also books', 'credit memos also book')} the cost of stock coming back, as NetSuite does when `
+        + "items are returned on a credit memo. FleetSuite will post the cost of stock with its own rules, so those lines aren't compared here."
+      : `${plural(summary.withCost, 'invoice also books', 'invoices also book')} the cost of the stock sold, as NetSuite does when an `
+        + "invoice isn't fulfilled first. FleetSuite will post that cost with the fulfillment rule, so those lines aren't compared here.");
   }
   if (notInGl.length) {
     const shown = notInGl.slice(0, 10).join(', ');
-    notes.push(`${plural(notInGl.length, 'more invoice', 'more invoices')} dated this month ${notInGl.length === 1 ? "isn't" : "aren't"} in the copy `
+    const them = notInGl.length === 1 ? 'it' : 'them';
+    notes.push(`${plural(notInGl.length, `more ${words.one}`, `more ${words.many}`)} dated this month ${notInGl.length === 1 ? "isn't" : "aren't"} in the copy `
       + `of NetSuite's GL for either company: ${shown}${notInGl.length > 10 ? ', …' : ''}. NetSuite may not have posted `
-      + `${notInGl.length === 1 ? 'it' : 'them'} (an invoice waiting for approval doesn't post), or the copy, which runs every two hours, hasn't reached `
-      + `${notInGl.length === 1 ? 'it' : 'them'} yet.`);
+      + `${them}${kind === 'invoice' ? " (an invoice waiting for approval doesn't post)" : ''}, or the copy, which runs every two hours, hasn't reached `
+      + `${them} yet.`);
   }
 
   return {

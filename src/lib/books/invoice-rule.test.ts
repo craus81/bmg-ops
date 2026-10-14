@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { INVOICE_RULE, MAIN_LINE, invoiceEntry, type InvoiceLine, type RuleAccounts, type RuleItem } from './invoice-rule';
+import { CREDIT_MEMO_RULE, INVOICE_RULE, MAIN_LINE, RULES, invoiceEntry, type InvoiceLine, type RuleAccounts, type RuleItem } from './invoice-rule';
 
 // Made-up items and accounts: '120' receivable, '400' and '410' income,
 // '220' sales tax payable, '480' discounts.
@@ -40,6 +40,22 @@ describe('invoiceEntry (invoice@1)', () => {
       ['1', '400', -10000],
       ['2', '400', -5000],
       ['3', '220', -1200],
+    ]);
+    expect(r.lines.reduce((sum, l) => sum + l.cents, 0)).toBe(0);
+  });
+
+  it('posts a credit memo the other way round: its lines come signed the other way, so revenue and tax are debited and receivables credited', () => {
+    expect(CREDIT_MEMO_RULE).toBe('credit_memo@1');
+    expect(RULES).toEqual({ invoice: 'invoice@1', credit_memo: 'credit_memo@1' });
+    // A part and labor given back with their tax, and a restocking fee kept.
+    const r = invoiceEntry([line('1', '11', -10000), line('2', '13', -5000), line('3', '16', 1500), tax('4', '900', -1200)], ACCOUNTS);
+    expect(r.problems).toEqual([]);
+    expect(r.lines.map((l) => [l.lineId, l.account, l.cents, l.division])).toEqual([
+      [MAIN_LINE, '120', -14700, null],
+      ['1', '400', 10000, 'upfit'],
+      ['2', '400', 5000, 'upfit'],
+      ['3', '400', -1500, null],
+      ['4', '220', 1200, null],
     ]);
     expect(r.lines.reduce((sum, l) => sum + l.cents, 0)).toBe(0);
   });
