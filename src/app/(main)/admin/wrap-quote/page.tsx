@@ -21,6 +21,7 @@ import { CoverageProofPreview, type ProofFilmOption } from '@/components/PhotoCo
 import BulkFilmBar from '@/components/BulkFilmBar';
 import { parseFinalPrice, parseRateMap, readPricingOverrides, scaleQuoteSnapshot } from '@/lib/wrap-quote-price-override';
 import PhotoProofBoard from '@/components/PhotoProofBoard';
+import DrawingWorkspace, { QuickBar, ToolButton, barButtonStyle } from '@/components/DrawingWorkspace';
 import { partRowsForPage, proofParts, withPartSize } from '@/lib/proof-parts';
 import {
   allProofBoxes,
@@ -545,6 +546,10 @@ export default function WrapQuotePage() {
   // business.
   const measurements = photoMode ? photoMeasurements : drawnMeasurements;
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Template drawn with the picture filling the screen (small tool buttons,
+  // the side panel as a sheet). Same state either way, so nothing is lost.
+  const [tplFullscreen, setTplFullscreen] = useState(false);
+  const [tplPanelOpen, setTplPanelOpen] = useState(false);
   // Shapes checked in the Measurements list for a bulk film change.
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   // Film applied to newly drawn shapes: sticks to the last film the user
@@ -3255,6 +3260,12 @@ export default function WrapQuotePage() {
     <div style={{ fontSize: '10px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', padding: '6px 0', borderBottom: `1px solid ${theme.border}`, marginBottom: '10px' }}>{t}</div>
   );
 
+  // ----- Full screen template drawing (hooks stay above the early returns) -----
+  // Leaving the template (another vehicle, or photos) leaves full screen too.
+  useEffect(() => { setTplFullscreen(false); setTplPanelOpen(false); }, [templateId, photoMode]);
+  // A traced scale line needs its real length typed — open the sheet with the field.
+  useEffect(() => { if (tplFullscreen && calibLine) setTplPanelOpen(true); }, [tplFullscreen, calibLine]);
+
   if (authLoading || loading) return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading...</div>;
   if (!hasAccess) return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>You don&apos;t have access to the Graphics Builder.</div>;
 
@@ -3525,6 +3536,82 @@ export default function WrapQuotePage() {
     </div>
   );
 
+
+  // ----- Full screen template drawing -----
+
+  const tplCalibrated = !!template?.px_per_in;
+  const pickTool = (t: Tool) => {
+    if (t !== 'poly') { setPolyDraft(null); setPolyHover(null); }
+    setTool(t); setPendingPair(null);
+  };
+  const templateFullscreenTools = (
+    <>
+      <ToolButton icon="➚" label="Select" active={tool === 'select'} onClick={() => pickTool('select')} title="Select — tap a shape to edit it, drag to move it" />
+      <ToolButton icon="▭" label="Box" active={tool === 'box'} disabled={!tplCalibrated} onClick={() => pickTool('box')} title="Draw Box" />
+      <ToolButton icon="⬠" label="Shape" active={tool === 'poly'} disabled={!tplCalibrated} onClick={() => pickTool('poly')} title="Draw Shape — tap each corner, tap the first point to close" />
+      <ToolButton icon="⌂" label="Roof" active={tool === 'roof'} disabled={!tplCalibrated} onClick={() => pickTool('roof')} title="Draw Roof — line 1 along the side view, line 2 across the front/back view" />
+      <ToolButton icon="▱" label="Hood" active={tool === 'hood'} disabled={!tplCalibrated} onClick={() => pickTool('hood')} title="Draw Hood — line 1 along the side view, line 2 across the front view" />
+      <ToolButton icon="📏" label="Scale" color="#fbbf24" active={tool === 'calibrate'} onClick={() => pickTool('calibrate')} title={tplCalibrated ? 'Recalibrate Scale' : 'Calibrate Scale'} />
+    </>
+  );
+  const templateFullscreenHint: React.ReactNode = !tplFullscreen || tplPanelOpen ? null
+    : !tplCalibrated && !calibLine && tool !== 'calibrate' ? 'This template needs a scale first — tap Scale and drag along a dimension you know'
+    : tool === 'calibrate' && !calibLine ? 'Drag a line along a dimension you know — the longer the better'
+    : tool === 'box' ? 'Drag a box over the area'
+    : tool === 'poly' && (!polyDraft || polyDraft.length === 0) ? 'Tap each corner · tap the first point again to close the shape'
+    : (tool === 'roof' || tool === 'hood') && !pendingPair ? `Drag line 1 along the ${tool} in the side view (its length)`
+    : pendingPair ? `Now drag line 2 across the ${pendingPair.type === 'roof' ? 'roof in the front/back view' : 'hood in the front view'} (its width)`
+    : null;
+  const templateFullscreenBottomBar: React.ReactNode = polyDraft && polyDraft.length > 0 ? (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+      <span style={{ flex: 1, minWidth: 0, fontSize: '12px', fontWeight: 700, color: '#e5e7eb' }}>
+        {polyDraft.length} point{polyDraft.length !== 1 ? 's' : ''}
+      </span>
+      <button onClick={() => { void closePoly(); }} disabled={polyDraft.length < 3} style={{ ...barButtonStyle, color: '#22c55e', borderColor: 'rgba(34,197,94,0.5)', opacity: polyDraft.length < 3 ? 0.4 : 1 }}>Close Shape</button>
+      <button onClick={undoPolyPoint} style={{ ...barButtonStyle, color: '#f59e0b' }}>Undo Point</button>
+      <button onClick={cancelPoly} style={{ ...barButtonStyle, color: '#ef4444' }}>Cancel</button>
+    </div>
+  ) : pendingPair ? (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+      <span style={{ flex: 1, minWidth: 0, fontSize: '12px', fontWeight: 700, color: '#e5e7eb' }}>Line 1: {fmt(pendingPair.dim1_in)} in</span>
+      <button onClick={() => { setPendingPair(null); setTool('select'); }} style={{ ...barButtonStyle, color: '#ef4444' }}>Cancel</button>
+    </div>
+  ) : selected && !tplPanelOpen ? (
+    <QuickBar
+      onClose={() => setSelectedId(null)}
+      color={filmColor(selected.substrate_id)}
+      title={selected.name}
+      detail={`${fmt(num(selected.dim1_in))}" × ${fmt(num(selected.dim2_in))}" · $${fmt(measurementPricing(selected).lineTotal)}`}
+    >
+      <select
+        aria-label="Film"
+        value={selected.substrate_id || ''}
+        onChange={e => updateMeasurement(selected.id, { substrate_id: e.target.value || null })}
+        style={{ ...inputStyle, flex: 1, minWidth: 0, height: '34px', padding: '4px 6px' }}
+      >
+        <option value="">— film —</option>
+        {activeSubstrates.map(f => <option key={f.id} value={f.id}>{filmLabel(f)}</option>)}
+      </select>
+      <input
+        type="number" min={1} aria-label="Quantity"
+        value={selected.qty}
+        onChange={e => updateMeasurement(selected.id, { qty: Math.max(1, Math.round(num(e.target.value))) })}
+        style={{ ...inputStyle, width: '56px', height: '34px', padding: '4px 6px' }}
+      />
+      <button onClick={() => setTplPanelOpen(true)} style={{ ...barButtonStyle, background: 'rgba(6,182,212,0.12)', border: '1px solid rgba(6,182,212,0.4)', color: '#06b6d4' }}>Details</button>
+      <button onClick={() => removeMeasurement(selected.id)} aria-label="Delete shape" style={{ ...barButtonStyle, color: '#ef4444' }}>🗑</button>
+    </QuickBar>
+  ) : (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+      <span style={{ flex: 1, minWidth: 0, fontSize: '11px', fontWeight: 600, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {measurements.length} shape{measurements.length === 1 ? '' : 's'} · {fmt(totals.area)} ft²
+      </span>
+      {!tplPanelOpen && (
+        <button onClick={() => setTplPanelOpen(true)} style={{ ...barButtonStyle, background: 'rgba(6,182,212,0.12)', border: '1px solid rgba(6,182,212,0.4)', color: '#06b6d4' }}>☰ Measurements</button>
+      )}
+    </div>
+  );
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' }}>
@@ -3714,230 +3801,243 @@ export default function WrapQuotePage() {
           )}
 
           {!photoMode && template && (
-            <div style={{ display: 'grid', gridTemplateColumns: '230px 1fr', gap: '12px', alignItems: 'start' }}>
-              {/* Sidebar: tools + measurements */}
-              <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '12px' }}>
-                <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px' }}>Film Estimator</div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '10px' }}>
-                  {([
-                    { id: 'box' as Tool, label: 'Draw Box' },
-                    { id: 'poly' as Tool, label: 'Draw Shape' },
-                    { id: 'roof' as Tool, label: 'Draw Roof' },
-                    { id: 'hood' as Tool, label: 'Draw Hood' },
-                  ]).map(t => (
-                    <button key={t.id} onClick={() => { setTool(t.id); setPendingPair(null); if (t.id !== 'poly') { setPolyDraft(null); setPolyHover(null); } }} disabled={!template.px_per_in} title={!template.px_per_in ? 'Calibrate the template first' : (t.id === 'roof' || t.id === 'hood') ? 'Drag line 1 along the side view, then line 2 across the front/back view — area = L1 × L2' : t.id === 'poly' ? 'Click to place connected corners; click the first point again to close the shape' : undefined} style={{
-                      padding: '8px 6px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: template.px_per_in ? 'pointer' : 'default',
-                      background: tool === t.id ? 'rgba(6,182,212,0.15)' : 'var(--subtle-bg)',
-                      border: tool === t.id ? '1px solid rgba(6,182,212,0.4)' : '1px solid var(--border)',
-                      color: tool === t.id ? '#06b6d4' : 'var(--text-secondary)',
-                      opacity: template.px_per_in ? 1 : 0.5,
-                    }}>{t.label}</button>
-                  ))}
-                </div>
-                <button onClick={() => { setTool('calibrate'); setPendingPair(null); setPolyDraft(null); setPolyHover(null); }} style={{
-                  width: '100%', padding: '6px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer', marginBottom: '10px',
-                  background: tool === 'calibrate' ? 'rgba(251,191,36,0.15)' : 'transparent',
-                  border: '1px solid rgba(251,191,36,0.35)', color: '#fbbf24',
-                }}>{template.px_per_in ? 'Recalibrate Scale' : 'Calibrate Scale'}</button>
-
-                {(tool === 'roof' || tool === 'hood') && !pendingPair && !drag && (
-                  <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
-                    <b style={{ color: '#06b6d4' }}>How Draw {tool === 'roof' ? 'Roof' : 'Hood'} works</b> (for templates without a top view):<br />
-                    <b style={{ color: '#ef4444' }}>1.</b> Drag the <b style={{ color: '#ef4444' }}>red line</b> along the {tool} in the <b>side view</b> — front edge to back edge (its length).<br />
-                    <b style={{ color: '#3b82f6' }}>2.</b> Drag the <b style={{ color: '#3b82f6' }}>blue line</b> across the {tool} in the <b>front or back view</b> (its width).<br />
-                    Area = length × width. Both numbers stay editable afterward.
+            <DrawingWorkspace
+              fullscreen={tplFullscreen}
+              onFullscreenChange={on => { setTplPanelOpen(false); setTplFullscreen(on); }}
+              panelOpen={tplPanelOpen}
+              onPanelOpenChange={setTplPanelOpen}
+              panelTitle={selected ? selected.name : 'Measurements'}
+              inlineColumns="230px minmax(0, 1fr)"
+              pictureAspect={imgDim ? imgDim.w / imgDim.h : null}
+              tools={templateFullscreenTools}
+              hint={templateFullscreenHint}
+              bottomBar={templateFullscreenBottomBar}
+              panel={(
+                <>
+                {/* Sidebar: tools + measurements */}
+                <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '12px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px' }}>Film Estimator</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '10px' }}>
+                    {([
+                      { id: 'box' as Tool, label: 'Draw Box' },
+                      { id: 'poly' as Tool, label: 'Draw Shape' },
+                      { id: 'roof' as Tool, label: 'Draw Roof' },
+                      { id: 'hood' as Tool, label: 'Draw Hood' },
+                    ]).map(t => (
+                      <button key={t.id} onClick={() => { setTool(t.id); setPendingPair(null); if (t.id !== 'poly') { setPolyDraft(null); setPolyHover(null); } }} disabled={!template.px_per_in} title={!template.px_per_in ? 'Calibrate the template first' : (t.id === 'roof' || t.id === 'hood') ? 'Drag line 1 along the side view, then line 2 across the front/back view — area = L1 × L2' : t.id === 'poly' ? 'Click to place connected corners; click the first point again to close the shape' : undefined} style={{
+                        padding: '8px 6px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: template.px_per_in ? 'pointer' : 'default',
+                        background: tool === t.id ? 'rgba(6,182,212,0.15)' : 'var(--subtle-bg)',
+                        border: tool === t.id ? '1px solid rgba(6,182,212,0.4)' : '1px solid var(--border)',
+                        color: tool === t.id ? '#06b6d4' : 'var(--text-secondary)',
+                        opacity: template.px_per_in ? 1 : 0.5,
+                      }}>{t.label}</button>
+                    ))}
                   </div>
-                )}
+                  <button onClick={() => { setTool('calibrate'); setPendingPair(null); setPolyDraft(null); setPolyHover(null); }} style={{
+                    width: '100%', padding: '6px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer', marginBottom: '10px',
+                    background: tool === 'calibrate' ? 'rgba(251,191,36,0.15)' : 'transparent',
+                    border: '1px solid rgba(251,191,36,0.35)', color: '#fbbf24',
+                  }}>{template.px_per_in ? 'Recalibrate Scale' : 'Calibrate Scale'}</button>
 
-                {pendingPair && (
-                  <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', fontSize: '10px', fontWeight: 700, color: '#06b6d4', marginBottom: '10px' }}>
-                    Line 1 done ({fmt(pendingPair.dim1_in)} in) — now drag line 2 across the {pendingPair.type === 'roof' ? 'front/back view of the roof' : 'front view of the hood'}.
-                    <button onClick={() => { setPendingPair(null); setTool('select'); }} style={{ display: 'block', marginTop: '4px', background: 'none', border: 'none', color: '#ef4444', fontSize: '10px', fontWeight: 700, cursor: 'pointer', padding: 0 }}>Cancel</button>
-                  </div>
-                )}
-
-                {tool === 'poly' && (!polyDraft || polyDraft.length === 0) && (
-                  <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
-                    <b style={{ color: '#06b6d4' }}>Freeform shape:</b> click to place each corner — the lines connect
-                    as you go and snap square to the previous point. Click the <b>first point</b> again to close the
-                    shape (it highlights when you&apos;re close). Pricing uses the shape&apos;s true area, not its bounding box.
-                  </div>
-                )}
-
-                {polyDraft && polyDraft.length > 0 && (
-                  <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', fontSize: '10px', fontWeight: 700, color: '#06b6d4', marginBottom: '10px' }}>
-                    {polyDraft.length} point{polyDraft.length !== 1 ? 's' : ''} placed{polyDraft.length >= 3 ? ' — click the first point (or Close Shape) to finish.' : ' — keep clicking corners.'}
-                    <div style={{ display: 'flex', gap: '4px', marginTop: '6px', flexWrap: 'wrap' }}>
-                      <button onClick={closePoly} disabled={polyDraft.length < 3} style={{ ...btnStyle('#22c55e', 'rgba(34,197,94,0.1)'), opacity: polyDraft.length < 3 ? 0.5 : 1 }}>Close Shape</button>
-                      <button onClick={undoPolyPoint} style={btnStyle('#f59e0b', 'transparent')}>Undo Point</button>
-                      <button onClick={cancelPoly} style={btnStyle('#ef4444', 'transparent')}>Cancel</button>
+                  {(tool === 'roof' || tool === 'hood') && !pendingPair && !drag && (
+                    <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
+                      <b style={{ color: '#06b6d4' }}>How Draw {tool === 'roof' ? 'Roof' : 'Hood'} works</b> (for templates without a top view):<br />
+                      <b style={{ color: '#ef4444' }}>1.</b> Drag the <b style={{ color: '#ef4444' }}>red line</b> along the {tool} in the <b>side view</b> — front edge to back edge (its length).<br />
+                      <b style={{ color: '#3b82f6' }}>2.</b> Drag the <b style={{ color: '#3b82f6' }}>blue line</b> across the {tool} in the <b>front or back view</b> (its width).<br />
+                      Area = length × width. Both numbers stay editable afterward.
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {calibLine && (
-                  <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', marginBottom: '10px' }}>
-                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '6px' }}>
-                      {calibRefs.length > 0 ? 'What did you just trace?' : 'How long is that line in real life?'}
+                  {pendingPair && (
+                    <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', fontSize: '10px', fontWeight: 700, color: '#06b6d4', marginBottom: '10px' }}>
+                      Line 1 done ({fmt(pendingPair.dim1_in)} in) — now drag line 2 across the {pendingPair.type === 'roof' ? 'front/back view of the roof' : 'front view of the hood'}.
+                      <button onClick={() => { setPendingPair(null); setTool('select'); }} style={{ display: 'block', marginTop: '4px', background: 'none', border: 'none', color: '#ef4444', fontSize: '10px', fontWeight: 700, cursor: 'pointer', padding: 0 }}>Cancel</button>
                     </div>
+                  )}
 
-                    {calibRefs.length > 0 ? (
-                      <>
+                  {tool === 'poly' && (!polyDraft || polyDraft.length === 0) && (
+                    <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
+                      <b style={{ color: '#06b6d4' }}>Freeform shape:</b> click to place each corner — the lines connect
+                      as you go and snap square to the previous point. Click the <b>first point</b> again to close the
+                      shape (it highlights when you&apos;re close). Pricing uses the shape&apos;s true area, not its bounding box.
+                    </div>
+                  )}
+
+                  {polyDraft && polyDraft.length > 0 && (
+                    <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', fontSize: '10px', fontWeight: 700, color: '#06b6d4', marginBottom: '10px' }}>
+                      {polyDraft.length} point{polyDraft.length !== 1 ? 's' : ''} placed{polyDraft.length >= 3 ? ' — click the first point (or Close Shape) to finish.' : ' — keep clicking corners.'}
+                      <div style={{ display: 'flex', gap: '4px', marginTop: '6px', flexWrap: 'wrap' }}>
+                        <button onClick={closePoly} disabled={polyDraft.length < 3} style={{ ...btnStyle('#22c55e', 'rgba(34,197,94,0.1)'), opacity: polyDraft.length < 3 ? 0.5 : 1 }}>Close Shape</button>
+                        <button onClick={undoPolyPoint} style={btnStyle('#f59e0b', 'transparent')}>Undo Point</button>
+                        <button onClick={cancelPoly} style={btnStyle('#ef4444', 'transparent')}>Cancel</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {calibLine && (
+                    <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', marginBottom: '10px' }}>
+                      <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '6px' }}>
+                        {calibRefs.length > 0 ? 'What did you just trace?' : 'How long is that line in real life?'}
+                      </div>
+
+                      {calibRefs.length > 0 ? (
+                        <>
+                          <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '6px', lineHeight: 1.5 }}>
+                            From this vehicle&apos;s wrap dimension sheet. Pick the one you traced — longest first, because a
+                            few pixels of sloppy tracing matter far less over a long line.
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+                            {calibRefs.map(r => (
+                              <button
+                                key={r.key}
+                                onClick={() => { setCalibRefKey(r.key); setCalibInches(String(r.inches)); }}
+                                style={{
+                                  padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                                  background: calibRefKey === r.key ? 'rgba(34,197,94,0.15)' : 'transparent',
+                                  border: `1px solid ${calibRefKey === r.key ? '#22c55e' : theme.border}`,
+                                  color: calibRefKey === r.key ? '#22c55e' : 'var(--text-secondary)',
+                                }}
+                              >
+                                {r.label} <span style={{ color: 'var(--text-muted)' }}>{r.inches}&quot;</span>
+                              </button>
+                            ))}
+                          </div>
+                          <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '3px' }}>Or type it</div>
+                        </>
+                      ) : (
                         <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '6px', lineHeight: 1.5 }}>
-                          From this vehicle&apos;s wrap dimension sheet. Pick the one you traced — longest first, because a
-                          few pixels of sloppy tracing matter far less over a long line.
-                        </div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
-                          {calibRefs.map(r => (
-                            <button
-                              key={r.key}
-                              onClick={() => { setCalibRefKey(r.key); setCalibInches(String(r.inches)); }}
-                              style={{
-                                padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
-                                background: calibRefKey === r.key ? 'rgba(34,197,94,0.15)' : 'transparent',
-                                border: `1px solid ${calibRefKey === r.key ? '#22c55e' : theme.border}`,
-                                color: calibRefKey === r.key ? '#22c55e' : 'var(--text-secondary)',
-                              }}
-                            >
-                              {r.label} <span style={{ color: 'var(--text-muted)' }}>{r.inches}&quot;</span>
-                            </button>
-                          ))}
-                        </div>
-                        <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '3px' }}>Or type it</div>
-                      </>
-                    ) : (
-                      <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '6px', lineHeight: 1.5 }}>
-                        No wrap dimension sheet data for this vehicle, so this one has to be measured. Trace a dimension you
-                        can verify and enter it.
-                      </div>
-                    )}
-
-                    <input
-                      type="number"
-                      value={calibInches}
-                      onChange={e => { setCalibInches(e.target.value); setCalibRefKey(''); }}
-                      placeholder="inches"
-                      style={{ ...inputStyle, marginBottom: '6px' }}
-                    />
-
-                    {calibPreview && calibPreview.areaRatio != null && Math.abs(calibPreview.areaRatio - 1) > 0.005 && (
-                      <div style={{
-                        fontSize: '10px', lineHeight: 1.5, marginBottom: '6px', padding: '6px', borderRadius: '6px',
-                        background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', color: 'var(--text-secondary)',
-                      }}>
-                        Saving this changes the scale from <b>{fmt(num(template.px_per_in))}</b> to <b>{fmt(calibPreview.pxPerIn)}</b> px/in.
-                        Panels on this template will measure{' '}
-                        <b>{fmt(Math.abs(calibPreview.linearRatio! - 1) * 100)}% {calibPreview.linearRatio! < 1 ? 'shorter' : 'longer'}</b>, so
-                        quoted area drops{calibPreview.areaRatio! > 1 ? ' — rises' : ''}{' '}
-                        <b>{fmt(Math.abs(calibPreview.areaRatio! - 1) * 100)}%</b>. Existing saved quotes keep their own numbers.
-                      </div>
-                    )}
-
-                    <div style={{ display: 'flex', gap: '4px' }}>
-                      <button onClick={saveCalibration} disabled={num(calibInches) <= 0} style={btnStyle('#22c55e', 'rgba(34,197,94,0.1)')}>Save</button>
-                      <button onClick={() => { setCalibLine(null); setCalibInches(''); setCalibRefKey(''); setTool('select'); }} style={btnStyle('#94a3b8', 'transparent')}>Cancel</button>
-                    </div>
-                  </div>
-                )}
-
-                <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '6px' }}>Measurements</div>
-                {measurements.length === 0 && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '8px' }}>Nothing measured yet.</div>}
-                <BulkFilmBar
-                  total={measurements.length}
-                  checked={measurements.filter(m => checkedIds.has(m.id)).length}
-                  onToggleAll={all => setCheckedIds(all ? new Set(measurements.map(m => m.id)) : new Set())}
-                  films={activeSubstrates.map(f => ({ id: f.id, label: `${filmLabel(f)} ($${fmt(quoteFilmRate(f))}/ft²)` }))}
-                  onApply={setFilmOnChecked}
-                />
-                {measurements.map(m => (
-                  <div key={m.id} onClick={() => setSelectedId(m.id)} style={{
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 8px', borderRadius: '6px', marginBottom: '3px', cursor: 'pointer',
-                    background: selectedId === m.id ? 'rgba(6,182,212,0.1)' : 'var(--subtle-bg)',
-                    border: selectedId === m.id ? '1px solid rgba(6,182,212,0.35)' : '1px solid var(--border)',
-                  }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
-                      <input
-                        type="checkbox"
-                        checked={checkedIds.has(m.id)}
-                        onClick={e => e.stopPropagation()}
-                        onChange={e => setCheckedIds(prev => {
-                          const next = new Set(prev);
-                          if (e.target.checked) next.add(m.id); else next.delete(m.id);
-                          return next;
-                        })}
-                        aria-label={`Select ${m.name}`}
-                        style={{ margin: 0, flexShrink: 0 }}
-                      />
-                      <span style={{ width: '9px', height: '9px', borderRadius: '3px', background: filmColor(m.substrate_id), flexShrink: 0 }} />
-                      <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</span>
-                      {m.price_override != null && !totals.nested && (
-                        <span title="Price typed by hand" style={{ flexShrink: 0, fontSize: '8px', fontWeight: 800, color: '#f59e0b' }}>$ SET</span>
-                      )}
-                    </span>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
-                      <button onClick={e => { e.stopPropagation(); duplicateMeasurement(m.id); }} title="Duplicate" style={{ background: 'none', border: 'none', color: '#06b6d4', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>⧉</button>
-                      <button onClick={e => { e.stopPropagation(); removeMeasurement(m.id); }} title="Delete" style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
-                    </span>
-                  </div>
-                ))}
-
-                {selected && (() => {
-                  const p = measurementPricing(selected);
-                  const twoLines = selected.type === 'roof' || selected.type === 'hood';
-                  return (
-                    <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: `1px solid ${theme.border}` }}>
-                      <div style={labelStyle}>Name</div>
-                      <input value={selected.name} onChange={e => updateMeasurement(selected.id, { name: e.target.value })} style={{ ...inputStyle, marginBottom: '6px' }} />
-                      <div style={labelStyle}>{twoLines ? 'Line 1 (in)' : 'Width (in)'}</div>
-                      <input type="number" value={selected.dim1_in ? Number(selected.dim1_in.toFixed(2)) : ''} onChange={e => updateMeasurement(selected.id, { dim1_in: num(e.target.value) })} style={{ ...inputStyle, marginBottom: '6px' }} />
-                      <div style={labelStyle}>{twoLines ? 'Line 2 (in)' : 'Height (in)'}</div>
-                      <input type="number" value={selected.dim2_in ? Number(selected.dim2_in.toFixed(2)) : ''} onChange={e => updateMeasurement(selected.id, { dim2_in: num(e.target.value) })} style={{ ...inputStyle, marginBottom: '6px' }} />
-                      <div style={labelStyle}>Quantity</div>
-                      <NumberInput min={1} value={selected.qty} onChange={e => updateMeasurement(selected.id, { qty: Math.max(1, Math.round(num(e.target.value))) })} style={{ ...inputStyle, marginBottom: '6px' }} />
-                      <div style={labelStyle}>Film</div>
-                      <select value={selected.substrate_id || ''} onChange={e => updateMeasurement(selected.id, { substrate_id: e.target.value || null })} style={{ ...inputStyle, marginBottom: '6px' }}>
-                        <option value="">— none —</option>
-                        {activeSubstrates.map(s => <option key={s.id} value={s.id}>{filmLabel(s)} (${fmt(quoteFilmRate(s))}/ft²)</option>)}
-                      </select>
-                      <div style={labelStyle}>Price each ($)</div>
-                      <input
-                        type="number" min={0} step="0.01"
-                        value={selected.price_override ?? ''}
-                        disabled={totals.nested}
-                        onChange={e => updateMeasurement(selected.id, { price_override: e.target.value.trim() === '' ? null : Math.max(0, num(e.target.value)) })}
-                        placeholder={totals.nested ? 'roll priced' : `auto ${fmt(p.calcUnitPrice)}`}
-                        title={totals.nested ? 'Roll pricing is on — vinyl prices from the roll layout. Turn it off to price shapes one by one.' : 'Type a vinyl price for one of this shape; clear it to price by area again'}
-                        style={{ ...inputStyle, marginBottom: '6px', opacity: totals.nested ? 0.5 : 1 }}
-                      />
-                      <div style={{ display: 'flex', gap: '6px', margin: '2px 0 8px', flexWrap: 'wrap' }}>
-                        <button onClick={() => duplicateMeasurement(selected.id)} style={btnStyle('#06b6d4', 'rgba(6,182,212,0.08)')}>⧉ Duplicate</button>
-                        {selected.type === 'poly' && (
-                          <button onClick={() => duplicateMeasurement(selected.id, true)} title="Duplicate this shape flipped horizontally — driver side → passenger side" style={btnStyle('#a78bfa', 'rgba(167,139,250,0.08)')}>⧉ Mirror Copy</button>
-                        )}
-                        {selected.type === 'poly' && (
-                          <button onClick={() => flipMeasurement(selected.id, 'h')} title="Flip this shape left↔right in place" style={btnStyle('#f59e0b', 'transparent')}>⇋ Flip</button>
-                        )}
-                        {selected.type === 'poly' && (
-                          <button onClick={() => flipMeasurement(selected.id, 'v')} title="Flip this shape top↕bottom in place" style={btnStyle('#f59e0b', 'transparent')}>⇵ Flip</button>
-                        )}
-                        <button onClick={() => removeMeasurement(selected.id)} style={btnStyle('#ef4444', 'transparent')}>Delete</button>
-                      </div>
-                      {selected.type === 'poly' && selected.points && polygonSelfIntersects(selected.points) && (
-                        <div style={{ fontSize: '10px', color: '#fbbf24', fontWeight: 700, marginBottom: '4px' }}>
-                          ⚠ Outline crosses itself — the area can&apos;t be trusted. Drag the corners apart.
+                          No wrap dimension sheet data for this vehicle, so this one has to be measured. Trace a dimension you
+                          can verify and enter it.
                         </div>
                       )}
-                      <div style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: 700 }}>
-                        Area: {fmt(p.trimArea)} ft²{p.sub && num(p.sub.bleed_in) > 0 ? ` · billed ${fmt(p.billedArea)} ft² with ${p.sub.bleed_in}" bleed` : ''}
-                      </div>
-                      <div style={{ fontSize: '10px', color: '#22c55e', fontWeight: 700 }}>Line total: ${fmt(p.lineTotal)}</div>
-                    </div>
-                  );
-                })()}
-              </div>
 
-              {/* Canvas */}
-              <div>
+                      <input
+                        type="number"
+                        value={calibInches}
+                        onChange={e => { setCalibInches(e.target.value); setCalibRefKey(''); }}
+                        placeholder="inches"
+                        style={{ ...inputStyle, marginBottom: '6px' }}
+                      />
+
+                      {calibPreview && calibPreview.areaRatio != null && Math.abs(calibPreview.areaRatio - 1) > 0.005 && (
+                        <div style={{
+                          fontSize: '10px', lineHeight: 1.5, marginBottom: '6px', padding: '6px', borderRadius: '6px',
+                          background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', color: 'var(--text-secondary)',
+                        }}>
+                          Saving this changes the scale from <b>{fmt(num(template.px_per_in))}</b> to <b>{fmt(calibPreview.pxPerIn)}</b> px/in.
+                          Panels on this template will measure{' '}
+                          <b>{fmt(Math.abs(calibPreview.linearRatio! - 1) * 100)}% {calibPreview.linearRatio! < 1 ? 'shorter' : 'longer'}</b>, so
+                          quoted area drops{calibPreview.areaRatio! > 1 ? ' — rises' : ''}{' '}
+                          <b>{fmt(Math.abs(calibPreview.areaRatio! - 1) * 100)}%</b>. Existing saved quotes keep their own numbers.
+                        </div>
+                      )}
+
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <button onClick={saveCalibration} disabled={num(calibInches) <= 0} style={btnStyle('#22c55e', 'rgba(34,197,94,0.1)')}>Save</button>
+                        <button onClick={() => { setCalibLine(null); setCalibInches(''); setCalibRefKey(''); setTool('select'); }} style={btnStyle('#94a3b8', 'transparent')}>Cancel</button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '6px' }}>Measurements</div>
+                  {measurements.length === 0 && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '8px' }}>Nothing measured yet.</div>}
+                  <BulkFilmBar
+                    total={measurements.length}
+                    checked={measurements.filter(m => checkedIds.has(m.id)).length}
+                    onToggleAll={all => setCheckedIds(all ? new Set(measurements.map(m => m.id)) : new Set())}
+                    films={activeSubstrates.map(f => ({ id: f.id, label: `${filmLabel(f)} ($${fmt(quoteFilmRate(f))}/ft²)` }))}
+                    onApply={setFilmOnChecked}
+                  />
+                  {measurements.map(m => (
+                    <div key={m.id} onClick={() => setSelectedId(m.id)} style={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 8px', borderRadius: '6px', marginBottom: '3px', cursor: 'pointer',
+                      background: selectedId === m.id ? 'rgba(6,182,212,0.1)' : 'var(--subtle-bg)',
+                      border: selectedId === m.id ? '1px solid rgba(6,182,212,0.35)' : '1px solid var(--border)',
+                    }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                        <input
+                          type="checkbox"
+                          checked={checkedIds.has(m.id)}
+                          onClick={e => e.stopPropagation()}
+                          onChange={e => setCheckedIds(prev => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add(m.id); else next.delete(m.id);
+                            return next;
+                          })}
+                          aria-label={`Select ${m.name}`}
+                          style={{ margin: 0, flexShrink: 0 }}
+                        />
+                        <span style={{ width: '9px', height: '9px', borderRadius: '3px', background: filmColor(m.substrate_id), flexShrink: 0 }} />
+                        <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</span>
+                        {m.price_override != null && !totals.nested && (
+                          <span title="Price typed by hand" style={{ flexShrink: 0, fontSize: '8px', fontWeight: 800, color: '#f59e0b' }}>$ SET</span>
+                        )}
+                      </span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
+                        <button onClick={e => { e.stopPropagation(); duplicateMeasurement(m.id); }} title="Duplicate" style={{ background: 'none', border: 'none', color: '#06b6d4', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>⧉</button>
+                        <button onClick={e => { e.stopPropagation(); removeMeasurement(m.id); }} title="Delete" style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
+                      </span>
+                    </div>
+                  ))}
+
+                  {selected && (() => {
+                    const p = measurementPricing(selected);
+                    const twoLines = selected.type === 'roof' || selected.type === 'hood';
+                    return (
+                      <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: `1px solid ${theme.border}` }}>
+                        <div style={labelStyle}>Name</div>
+                        <input value={selected.name} onChange={e => updateMeasurement(selected.id, { name: e.target.value })} style={{ ...inputStyle, marginBottom: '6px' }} />
+                        <div style={labelStyle}>{twoLines ? 'Line 1 (in)' : 'Width (in)'}</div>
+                        <input type="number" value={selected.dim1_in ? Number(selected.dim1_in.toFixed(2)) : ''} onChange={e => updateMeasurement(selected.id, { dim1_in: num(e.target.value) })} style={{ ...inputStyle, marginBottom: '6px' }} />
+                        <div style={labelStyle}>{twoLines ? 'Line 2 (in)' : 'Height (in)'}</div>
+                        <input type="number" value={selected.dim2_in ? Number(selected.dim2_in.toFixed(2)) : ''} onChange={e => updateMeasurement(selected.id, { dim2_in: num(e.target.value) })} style={{ ...inputStyle, marginBottom: '6px' }} />
+                        <div style={labelStyle}>Quantity</div>
+                        <NumberInput min={1} value={selected.qty} onChange={e => updateMeasurement(selected.id, { qty: Math.max(1, Math.round(num(e.target.value))) })} style={{ ...inputStyle, marginBottom: '6px' }} />
+                        <div style={labelStyle}>Film</div>
+                        <select value={selected.substrate_id || ''} onChange={e => updateMeasurement(selected.id, { substrate_id: e.target.value || null })} style={{ ...inputStyle, marginBottom: '6px' }}>
+                          <option value="">— none —</option>
+                          {activeSubstrates.map(s => <option key={s.id} value={s.id}>{filmLabel(s)} (${fmt(quoteFilmRate(s))}/ft²)</option>)}
+                        </select>
+                        <div style={labelStyle}>Price each ($)</div>
+                        <input
+                          type="number" min={0} step="0.01"
+                          value={selected.price_override ?? ''}
+                          disabled={totals.nested}
+                          onChange={e => updateMeasurement(selected.id, { price_override: e.target.value.trim() === '' ? null : Math.max(0, num(e.target.value)) })}
+                          placeholder={totals.nested ? 'roll priced' : `auto ${fmt(p.calcUnitPrice)}`}
+                          title={totals.nested ? 'Roll pricing is on — vinyl prices from the roll layout. Turn it off to price shapes one by one.' : 'Type a vinyl price for one of this shape; clear it to price by area again'}
+                          style={{ ...inputStyle, marginBottom: '6px', opacity: totals.nested ? 0.5 : 1 }}
+                        />
+                        <div style={{ display: 'flex', gap: '6px', margin: '2px 0 8px', flexWrap: 'wrap' }}>
+                          <button onClick={() => duplicateMeasurement(selected.id)} style={btnStyle('#06b6d4', 'rgba(6,182,212,0.08)')}>⧉ Duplicate</button>
+                          {selected.type === 'poly' && (
+                            <button onClick={() => duplicateMeasurement(selected.id, true)} title="Duplicate this shape flipped horizontally — driver side → passenger side" style={btnStyle('#a78bfa', 'rgba(167,139,250,0.08)')}>⧉ Mirror Copy</button>
+                          )}
+                          {selected.type === 'poly' && (
+                            <button onClick={() => flipMeasurement(selected.id, 'h')} title="Flip this shape left↔right in place" style={btnStyle('#f59e0b', 'transparent')}>⇋ Flip</button>
+                          )}
+                          {selected.type === 'poly' && (
+                            <button onClick={() => flipMeasurement(selected.id, 'v')} title="Flip this shape top↕bottom in place" style={btnStyle('#f59e0b', 'transparent')}>⇵ Flip</button>
+                          )}
+                          <button onClick={() => removeMeasurement(selected.id)} style={btnStyle('#ef4444', 'transparent')}>Delete</button>
+                        </div>
+                        {selected.type === 'poly' && selected.points && polygonSelfIntersects(selected.points) && (
+                          <div style={{ fontSize: '10px', color: '#fbbf24', fontWeight: 700, marginBottom: '4px' }}>
+                            ⚠ Outline crosses itself — the area can&apos;t be trusted. Drag the corners apart.
+                          </div>
+                        )}
+                        <div style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: 700 }}>
+                          Area: {fmt(p.trimArea)} ft²{p.sub && num(p.sub.bleed_in) > 0 ? ` · billed ${fmt(p.billedArea)} ft² with ${p.sub.bleed_in}" bleed` : ''}
+                        </div>
+                        <div style={{ fontSize: '10px', color: '#22c55e', fontWeight: 700 }}>Line total: ${fmt(p.lineTotal)}</div>
+                      </div>
+                    );
+                  })()}
+                </div>
+                </>
+              )}
+              inlineHeader={(
+                <>
                 {!template.px_per_in && !calibLine && (
                   <div style={{ padding: '10px 14px', borderRadius: '10px', marginBottom: '10px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)', fontSize: '11px', fontWeight: 700, color: '#fbbf24' }}>
                     This template isn&apos;t calibrated yet. Click <b>Calibrate Scale</b> and drag a line along{' '}
@@ -3947,7 +4047,12 @@ export default function WrapQuotePage() {
                     {' '}You only do this once per template.
                   </div>
                 )}
-                <div style={{ position: 'relative', background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '12px', overflow: 'hidden' }}>
+                </>
+              )}
+              canvas={(
+                <div style={tplFullscreen
+                  ? { position: 'relative', background: '#fff', margin: 'auto', flexShrink: 0, width: imgDim ? `min(100cqw, calc(100cqh * ${imgDim.w / imgDim.h}))` : '100%' }
+                  : { position: 'relative', background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '12px', overflow: 'hidden' }}>
                   {/* eslint-disable-next-line @next/next/no-img-element -- template dimensions are unknown; next/image needs fixed sizes */}
                   <img
                     src={imageUrl(template.template_image_path)}
@@ -4121,7 +4226,9 @@ export default function WrapQuotePage() {
                     </svg>
                   )}
                 </div>
-
+              )}
+              inlineFooter={(
+                <>
                 {/* Footer bar */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', padding: '10px 14px', marginTop: '10px', background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '10px' }}>
                   <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)' }}>
@@ -4183,8 +4290,9 @@ export default function WrapQuotePage() {
                     cursor: measurements.length === 0 ? 'default' : 'pointer',
                   }}>Quote →</button>
                 </div>
-              </div>
-            </div>
+                </>
+              )}
+            />
           )}
 
           {photoMode && (

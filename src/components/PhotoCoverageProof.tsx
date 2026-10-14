@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { theme } from '@/lib/theme';
+import DrawingWorkspace, { QuickBar, ToolButton, barButtonStyle } from '@/components/DrawingWorkspace';
 import {
   COVERAGE_COLORS,
   nextCoverageColor,
@@ -72,6 +73,12 @@ interface Props {
   /** Part numbers and evened-out sizes across every page of the quote
    *  (src/lib/proof-parts.ts) — the board owns it since it spans pages. */
   parts?: ProofPartsIndex;
+  /** The picture fills the screen. The board owns it, so flipping to another
+   *  photo (which remounts this editor) stays in full screen. */
+  fullscreen?: boolean;
+  onFullscreenChange?: (on: boolean) => void;
+  /** Full screen: step through the quote's other photos. */
+  photoNav?: { index: number; total: number; onPrev: () => void; onNext: () => void };
 }
 
 type Tool = 'box' | 'select' | 'calibrate-line' | 'calibrate-plane';
@@ -219,7 +226,10 @@ export function CoverageProofPreview({ src, boxes, caption, numberOf, rows }: {
   );
 }
 
-export default function PhotoCoverageProof({ src, proof, onChange, films, rollPriced, defaultFilmId, onPickFilm, suggestedLineInches, lineHint, checkedIds, onToggleChecked, parts }: Props) {
+export default function PhotoCoverageProof({
+  src, proof, onChange, films, rollPriced, defaultFilmId, onPickFilm, suggestedLineInches, lineHint, checkedIds, onToggleChecked, parts,
+  fullscreen = false, onFullscreenChange, photoNav,
+}: Props) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [dim, setDim] = useState<{ w: number; h: number } | null>(null);
   const [tool, setTool] = useState<Tool>('box');
@@ -232,6 +242,8 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, rollPr
   const [lineInches, setLineInches] = useState('');
   const [planeW, setPlaneW] = useState('');
   const [planeH, setPlaneH] = useState('');
+  // Full screen: the side panel as a sheet over the photo.
+  const [panelOpen, setPanelOpen] = useState(false);
 
   // ----- Zoom -----
   // The photo sits in a scrolling viewport; zoom widens the content inside it.
@@ -239,6 +251,7 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, rollPr
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [zoom, setZoom] = useState(1);
   const [viewportW, setViewportW] = useState(0);
+  const [viewportH, setViewportH] = useState(0);
   const [spaceHeld, setSpaceHeld] = useState(false);
   const pendingScroll = useRef<{ left: number; top: number } | null>(null);
   // Fingers/buttons currently down, and the pinch or pan they're making.
@@ -265,14 +278,19 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, rollPr
     const vp = viewportRef.current;
     if (!vp || typeof ResizeObserver === 'undefined') return;
     // contentRect is CSS px, so the app's text-size zoom cancels out.
-    const ro = new ResizeObserver(([en]) => setViewportW(en.contentRect.width));
+    const ro = new ResizeObserver(([en]) => { setViewportW(en.contentRect.width); setViewportH(en.contentRect.height); });
     ro.observe(vp);
     return () => ro.disconnect();
   }, []);
 
+  /** The photo's on-screen width at 100% (CSS px): the viewport's width on
+   *  the page; in full screen, whatever fits both ways. */
+  const baseW = fullscreen && dim && viewportH > 0
+    ? Math.min(viewportW, viewportH * (dim.w / dim.h))
+    : viewportW;
   /** Photo pixels per on-screen CSS pixel — scales the fixed-size overlays.
-   *  The photo is `zoom` viewports wide, which is known before layout. */
-  const k = dim && viewportW > 0 ? dim.w / (viewportW * zoom) : 1;
+   *  The photo is `zoom` times its fitted width, which is known before layout. */
+  const k = dim && baseW > 0 ? dim.w / (baseW * zoom) : 1;
   const minBoxPx = Math.max(1, MIN_BOX_SCREEN_PX * k);
 
   /** CSS px of the viewport per real (client) px — they differ under text-size zoom. */
@@ -298,7 +316,7 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, rollPr
     const cy = focus ? focus.clientY : vr.top + vr.height / 2;
     const fx = (cx - cr.left) / cr.width, fy = (cy - cr.top) / cr.height;
     const ox = (cx - vr.left) * s - vp.clientLeft, oy = (cy - vr.top) * s - vp.clientTop;
-    const newW = vp.clientWidth * z, newH = newW * (dim.h / dim.w);
+    const newW = (fullscreen && baseW ? baseW : vp.clientWidth) * z, newH = newW * (dim.h / dim.w);
     const target = { left: fx * newW - ox - pan.x * s, top: fy * newH - oy - pan.y * s };
     if (z === zoom) {
       vp.scrollLeft = target.left; vp.scrollTop = target.top;
@@ -337,6 +355,12 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, rollPr
   }, []);
 
   const selected = boxes.find(b => b.id === selectedId) || null;
+
+  // Full screen: a scale that needs its real size typed opens the sheet with
+  // the field in it.
+  useEffect(() => {
+    if (fullscreen && (lineDraft || cornerDraft.length === 4)) setPanelOpen(true);
+  }, [fullscreen, lineDraft, cornerDraft.length]);
 
   // clientX/clientY and the rect are both real viewport px, so the ratio is
   // unaffected by the app's text-size zoom.
@@ -410,6 +434,8 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, rollPr
     if (!dim) return;
     const p = photoPoint(e);
     if (!p) return;
+    // Tapping empty photo with Select lets go of the selected box.
+    if (tool === 'select') { if (e.target === svgRef.current) setSelectedId(null); return; }
     if (tool === 'calibrate-plane') {
       // Four clicks around a rectangle you know the real size of.
       const next = [...cornerDraft, p].slice(0, 4);
@@ -675,384 +701,472 @@ export default function PhotoCoverageProof({ src, proof, onChange, films, rollPr
     return gaps.length ? Math.max(...gaps) : null;
   };
 
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: '250px minmax(0, 1fr)', gap: '12px', alignItems: 'start' }}>
-      {/* Tools + scale + box list */}
-      <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '12px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px' }}>Coverage Proof</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '10px' }}>
-          <button onClick={() => { setTool('box'); setLineDraft(null); setCornerDraft([]); }} style={btn(tool === 'box', '#06b6d4')}>Draw Box</button>
-          <button onClick={() => { setTool('select'); setDrag(null); setLineDraft(null); setCornerDraft([]); }} style={btn(tool === 'select', '#06b6d4')}>Select / Move</button>
-        </div>
+  // Full screen: what to do next, over the top of the photo.
+  const fullscreenHint: React.ReactNode = !fullscreen || panelOpen ? null
+    : tool === 'box' ? (calibrated ? 'Drag a box over each area being covered' : 'Drag a box over each area · set a scale (Length) to get sizes')
+    : tool === 'calibrate-line' && !lineDraft ? (lineHint || 'Drag along something you know the length of — a door, a window, a panel')
+    : tool === 'calibrate-plane' && cornerDraft.length < 4 ? `Tap corner ${cornerDraft.length + 1} of 4 — top-left, top-right, bottom-right, bottom-left`
+    : null;
 
-        {/* ── Scale ── */}
-        <div style={{
-          padding: '8px', borderRadius: '8px', marginBottom: '10px',
-          background: calibrated ? 'rgba(34,197,94,0.08)' : 'rgba(251,191,36,0.08)',
-          border: `1px solid ${calibrated ? 'rgba(34,197,94,0.3)' : 'rgba(251,191,36,0.3)'}`,
-        }}>
-          <div style={{ fontSize: '10px', fontWeight: 800, color: calibrated ? '#22c55e' : '#fbbf24', marginBottom: '4px' }}>
-            {calibrated ? 'Scale set — boxes are measured' : 'No scale yet — boxes are a picture only'}
-          </div>
-          {cal?.plane && (
-            <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '2px' }}>
-              ▸ Known rectangle {cal.plane.widthIn}&quot; × {cal.plane.heightIn}&quot; — perspective corrected
-              <button onClick={() => clearCalibration('plane')} title="Remove this reference" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '10px', fontWeight: 700 }}>✕</button>
-            </div>
-          )}
-          {cal?.line && (
-            <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '2px' }}>
-              ▸ Known length {cal.line.inches}&quot;{ppi ? ` — ${ppi.toFixed(1)} px/in` : ''}{cal.plane ? ' (backup)' : ''}
-              <button onClick={() => clearCalibration('line')} title="Remove this reference" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '10px', fontWeight: 700 }}>✕</button>
-            </div>
-          )}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginTop: '6px' }}>
-            <button
-              onClick={() => { setTool('calibrate-line'); setCornerDraft([]); }}
-              title="Drag along something on that same face whose real length you know — a door width, a window, a panel"
-              style={btn(tool === 'calibrate-line', '#fbbf24')}
-            >Known length</button>
-            <button
-              onClick={() => { setTool('calibrate-plane'); setLineDraft(null); setCornerDraft([]); }}
-              title="Click the four corners of something rectangular whose real size you know — a door, a window. Corrects for camera angle, so it's the one to use when the shot isn't square-on"
-              style={btn(tool === 'calibrate-plane', '#fbbf24')}
-            >Known rectangle</button>
-          </div>
-          <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.5 }}>
-            Measure something <b>on the same face you&apos;re covering</b> — a door or window frame on that wall,
-            a panel or the wheelbase on that side of the vehicle. Anything at a different depth (a wall at an
-            angle, the building behind a van, a car parked in front) is a different distance from the camera and
-            throws every box off.
-          </div>
-        </div>
+  const panel = (
+    <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '12px' }}>
+      <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px' }}>Coverage Proof</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '10px' }}>
+        <button onClick={() => { setTool('box'); setLineDraft(null); setCornerDraft([]); }} style={btn(tool === 'box', '#06b6d4')}>Draw Box</button>
+        <button onClick={() => { setTool('select'); setDrag(null); setLineDraft(null); setCornerDraft([]); }} style={btn(tool === 'select', '#06b6d4')}>Select / Move</button>
+      </div>
 
-        {/* Calibration in progress */}
-        {tool === 'calibrate-line' && !lineDraft && (
-          <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
-            {lineHint || 'Drag a line along something you know the length of — the front door, a window, a panel — then type that length.'}
+      {/* ── Scale ── */}
+      <div style={{
+        padding: '8px', borderRadius: '8px', marginBottom: '10px',
+        background: calibrated ? 'rgba(34,197,94,0.08)' : 'rgba(251,191,36,0.08)',
+        border: `1px solid ${calibrated ? 'rgba(34,197,94,0.3)' : 'rgba(251,191,36,0.3)'}`,
+      }}>
+        <div style={{ fontSize: '10px', fontWeight: 800, color: calibrated ? '#22c55e' : '#fbbf24', marginBottom: '4px' }}>
+          {calibrated ? 'Scale set — boxes are measured' : 'No scale yet — boxes are a picture only'}
+        </div>
+        {cal?.plane && (
+          <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '2px' }}>
+            ▸ Known rectangle {cal.plane.widthIn}&quot; × {cal.plane.heightIn}&quot; — perspective corrected
+            <button onClick={() => clearCalibration('plane')} title="Remove this reference" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '10px', fontWeight: 700 }}>✕</button>
           </div>
         )}
-        {lineDraft && (
-          <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.35)', marginBottom: '10px' }}>
-            <div style={labelStyle}>How long is that line? (inches)</div>
-            <input
-              type="number" autoFocus value={lineInches}
-              onChange={e => setLineInches(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') commitLine(); }}
-              placeholder="e.g. 36"
-              style={{ ...inputStyle, marginBottom: '6px' }}
-            />
-            <div style={{ display: 'flex', gap: '6px' }}>
-              <button onClick={commitLine} disabled={!(parseFloat(lineInches) > 0)} style={{ ...smallBtn('#22c55e', 'rgba(34,197,94,0.1)'), opacity: parseFloat(lineInches) > 0 ? 1 : 0.5 }}>Set scale</button>
-              <button onClick={() => { setLineDraft(null); setLineInches(''); }} style={smallBtn('#ef4444', 'transparent')}>Cancel</button>
-            </div>
+        {cal?.line && (
+          <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '2px' }}>
+            ▸ Known length {cal.line.inches}&quot;{ppi ? ` — ${ppi.toFixed(1)} px/in` : ''}{cal.plane ? ' (backup)' : ''}
+            <button onClick={() => clearCalibration('line')} title="Remove this reference" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '10px', fontWeight: 700 }}>✕</button>
           </div>
         )}
-        {tool === 'calibrate-plane' && (
-          <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.35)', marginBottom: '10px' }}>
-            <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '4px' }}>
-              {cornerDraft.length < 4
-                ? `Click corner ${cornerDraft.length + 1} of 4`
-                : 'Four corners placed — now its real size'}
-            </div>
-            <div style={{ fontSize: '9px', color: 'var(--text-secondary)', marginBottom: '6px', lineHeight: 1.5 }}>
-              A door or window frame does nicely. Go around it in order: top-left, top-right, bottom-right,
-              bottom-left <b>as the rectangle itself sits</b>, not as the photo does. On a square-on shot the
-              known-length tool is quicker and just as accurate.
-            </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginTop: '6px' }}>
+          <button
+            onClick={() => { setTool('calibrate-line'); setCornerDraft([]); }}
+            title="Drag along something on that same face whose real length you know — a door width, a window, a panel"
+            style={btn(tool === 'calibrate-line', '#fbbf24')}
+          >Known length</button>
+          <button
+            onClick={() => { setTool('calibrate-plane'); setLineDraft(null); setCornerDraft([]); }}
+            title="Click the four corners of something rectangular whose real size you know — a door, a window. Corrects for camera angle, so it's the one to use when the shot isn't square-on"
+            style={btn(tool === 'calibrate-plane', '#fbbf24')}
+          >Known rectangle</button>
+        </div>
+        <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.5 }}>
+          Measure something <b>on the same face you&apos;re covering</b> — a door or window frame on that wall,
+          a panel or the wheelbase on that side of the vehicle. Anything at a different depth (a wall at an
+          angle, the building behind a van, a car parked in front) is a different distance from the camera and
+          throws every box off.
+        </div>
+      </div>
+
+      {/* Calibration in progress */}
+      {tool === 'calibrate-line' && !lineDraft && (
+        <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
+          {lineHint || 'Drag a line along something you know the length of — the front door, a window, a panel — then type that length.'}
+        </div>
+      )}
+      {lineDraft && (
+        <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.35)', marginBottom: '10px' }}>
+          <div style={labelStyle}>How long is that line? (inches)</div>
+          <input
+            type="number" autoFocus value={lineInches}
+            onChange={e => setLineInches(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') commitLine(); }}
+            placeholder="e.g. 36"
+            style={{ ...inputStyle, marginBottom: '6px' }}
+          />
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button onClick={commitLine} disabled={!(parseFloat(lineInches) > 0)} style={{ ...smallBtn('#22c55e', 'rgba(34,197,94,0.1)'), opacity: parseFloat(lineInches) > 0 ? 1 : 0.5 }}>Set scale</button>
+            <button onClick={() => { setLineDraft(null); setLineInches(''); }} style={smallBtn('#ef4444', 'transparent')}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {tool === 'calibrate-plane' && (
+        <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.35)', marginBottom: '10px' }}>
+          <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '4px' }}>
+            {cornerDraft.length < 4
+              ? `Click corner ${cornerDraft.length + 1} of 4`
+              : 'Four corners placed — now its real size'}
+          </div>
+          <div style={{ fontSize: '9px', color: 'var(--text-secondary)', marginBottom: '6px', lineHeight: 1.5 }}>
+            A door or window frame does nicely. Go around it in order: top-left, top-right, bottom-right,
+            bottom-left <b>as the rectangle itself sits</b>, not as the photo does. On a square-on shot the
+            known-length tool is quicker and just as accurate.
+          </div>
+          {cornerDraft.length === 4 && (
+            <>
+              <div style={labelStyle}>Its real width (in)</div>
+              <input type="number" value={planeW} onChange={e => setPlaneW(e.target.value)} style={{ ...inputStyle, marginBottom: '4px' }} />
+              <div style={labelStyle}>Its real height (in)</div>
+              <input type="number" value={planeH} onChange={e => setPlaneH(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') commitPlane(); }} style={{ ...inputStyle, marginBottom: '6px' }} />
+            </>
+          )}
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
             {cornerDraft.length === 4 && (
-              <>
-                <div style={labelStyle}>Its real width (in)</div>
-                <input type="number" value={planeW} onChange={e => setPlaneW(e.target.value)} style={{ ...inputStyle, marginBottom: '4px' }} />
-                <div style={labelStyle}>Its real height (in)</div>
-                <input type="number" value={planeH} onChange={e => setPlaneH(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') commitPlane(); }} style={{ ...inputStyle, marginBottom: '6px' }} />
-              </>
+              <button onClick={commitPlane} disabled={!(parseFloat(planeW) > 0 && parseFloat(planeH) > 0)} style={{ ...smallBtn('#22c55e', 'rgba(34,197,94,0.1)'), opacity: parseFloat(planeW) > 0 && parseFloat(planeH) > 0 ? 1 : 0.5 }}>Set scale</button>
             )}
-            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-              {cornerDraft.length === 4 && (
-                <button onClick={commitPlane} disabled={!(parseFloat(planeW) > 0 && parseFloat(planeH) > 0)} style={{ ...smallBtn('#22c55e', 'rgba(34,197,94,0.1)'), opacity: parseFloat(planeW) > 0 && parseFloat(planeH) > 0 ? 1 : 0.5 }}>Set scale</button>
-              )}
-              {cornerDraft.length > 0 && (
-                <button onClick={() => setCornerDraft(cornerDraft.slice(0, -1))} style={smallBtn('#f59e0b', 'transparent')}>Undo point</button>
-              )}
-              <button onClick={() => { setCornerDraft([]); setTool('select'); }} style={smallBtn('#ef4444', 'transparent')}>Cancel</button>
-            </div>
+            {cornerDraft.length > 0 && (
+              <button onClick={() => setCornerDraft(cornerDraft.slice(0, -1))} style={smallBtn('#f59e0b', 'transparent')}>Undo point</button>
+            )}
+            <button onClick={() => { setCornerDraft([]); setTool('select'); }} style={smallBtn('#ef4444', 'transparent')}>Cancel</button>
           </div>
-        )}
-
-        {tool === 'box' && !lineDraft && (
-          <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
-            Drag a box over each area being covered.{calibrated ? ' Its size is measured off the photo as you draw.' : ' Set a scale above to get sizes and pricing.'}
-          </div>
-        )}
-
-        <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
-          Boxes ({boxes.length}){totalSqft > 0 ? ` · ${totalSqft.toFixed(1)} ft²` : ''}
         </div>
-        {boxes.length === 0 && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '8px' }}>Nothing drawn yet.</div>}
-        {boxes.map(b => (
-          <div key={b.id} onClick={() => { setSelectedId(b.id); setTool('select'); }} style={{
-            display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 6px', marginBottom: '3px', borderRadius: '6px', cursor: 'pointer',
-            background: b.id === selectedId ? 'rgba(245,158,11,0.12)' : 'var(--subtle-bg)',
-            border: `1px solid ${b.id === selectedId ? 'rgba(245,158,11,0.4)' : 'transparent'}`,
-          }}>
-            {onToggleChecked && (
-              <input
-                type="checkbox"
-                checked={!!checkedIds?.has(b.id)}
-                onClick={e => e.stopPropagation()}
-                onChange={e => onToggleChecked(b.id, e.target.checked)}
-                aria-label={`Select ${b.label || 'box'}`}
-                style={{ margin: 0, flexShrink: 0 }}
-              />
-            )}
-            <span style={{ width: '10px', height: '10px', borderRadius: '3px', background: b.color, flexShrink: 0 }} />
-            <span style={{ flex: 1, fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {parts?.partOf.get(b.id) ? <span style={{ color: 'var(--text-muted)' }}>{parts.partOf.get(b.id)!.number} · </span> : null}
-              {b.label || 'Untitled'}
-              {b.area_in2 ? <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}> · {sqft(b.area_in2).toFixed(1)} ft²</span> : null}
-            </span>
-            {sizeTag(b) && (
-              <span title={sizeTag(b) === 'size table' ? 'Sized by the number printed on the proof' : sizeTag(b) === 'typed' ? 'Size typed by hand' : 'Measured off the picture'} style={{
-                flexShrink: 0, fontSize: '8px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.04em', padding: '1px 4px', borderRadius: '4px',
-                background: sizeTag(b) === 'size table' ? 'rgba(34,197,94,0.12)' : 'var(--subtle-bg)',
-                border: `1px solid ${sizeTag(b) === 'size table' ? 'rgba(34,197,94,0.35)' : 'var(--border)'}`,
-                color: sizeTag(b) === 'size table' ? '#22c55e' : 'var(--text-muted)',
-              }}>{sizeTag(b)}</span>
-            )}
-            <button onClick={e => { e.stopPropagation(); remove(b.id); }} title="Delete" style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
-          </div>
-        ))}
+      )}
 
-        {selected && (
-          <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: `1px solid ${theme.border}` }}>
-            <div style={labelStyle}>Label</div>
-            <input
-              value={selected.label}
-              onChange={e => update(selected.id, { label: e.target.value })}
-              placeholder="Front window, Driver side, …"
-              style={{ ...inputStyle, marginBottom: '8px' }}
-            />
-            <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
-              <div style={{ flex: 1 }}>
-                <div style={labelStyle}>Width (in)</div>
-                <input
-                  type="number"
-                  value={selected.width_in != null ? Number(selected.width_in.toFixed(2)) : ''}
-                  onChange={e => typeDimension(selected.id, 'width_in', e.target.value)}
-                  placeholder={calibrated ? '' : 'set a scale'}
-                  style={inputStyle}
-                />
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={labelStyle}>Height (in)</div>
-                <input
-                  type="number"
-                  value={selected.height_in != null ? Number(selected.height_in.toFixed(2)) : ''}
-                  onChange={e => typeDimension(selected.id, 'height_in', e.target.value)}
-                  placeholder={calibrated ? '' : 'set a scale'}
-                  style={inputStyle}
-                />
-              </div>
-            </div>
-            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '8px', lineHeight: 1.5 }}>
-              {sizeStatus(selected)}
-              {selected.area_in2 ? ` · ${sqft(selected.area_in2).toFixed(2)} ft² each` : ''}
-            </div>
-            {(() => {
-              // Matching pieces share one size — say so when this box's own
-              // numbers aren't the ones being priced.
-              const part = parts?.partOf.get(selected.id);
-              const shared = parts?.sizeOf.get(selected.id);
-              if (!part || !shared || part.boxIds.length < 2) return null;
-              if (shared.width_in === selected.width_in && shared.height_in === selected.height_in) return null;
-              const others = part.boxIds.length - 1;
-              return (
-                <div style={{ fontSize: '10px', color: '#22c55e', marginBottom: '8px', lineHeight: 1.5 }}>
-                  Priced at {partSizeText(part.size)} to match {others === 1 ? 'the other' : `the ${others} other`} #{part.number} piece{others === 1 ? '' : 's'}. Type a size here to set it for all of them.
-                </div>
-              );
-            })()}
-            {(() => {
-              const gap = usesLegendSize(selected) ? legendGapPct(selected) : null;
-              return gap != null && gap > DISAGREEMENT_WARN_PCT ? (
-                <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '8px', lineHeight: 1.5 }}>
-                  ⚠ The drawing is {gap.toFixed(0)}% off the printed size — the proof isn&apos;t drawn to scale here. The printed size is what&apos;s priced unless you switch it above.
-                </div>
-              ) : null;
-            })()}
-            {disagreement != null && disagreement > DISAGREEMENT_WARN_PCT && (
-              <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '8px', lineHeight: 1.5 }}>
-                ⚠ Your two references disagree by {disagreement.toFixed(0)}% on this box. They&apos;re probably not
-                the same distance from the camera — drop whichever one isn&apos;t on the face you&apos;re covering.
-              </div>
-            )}
-            <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
-              <div style={{ width: '70px' }}>
-                <div style={labelStyle}>Qty</div>
-                <input
-                  type="number" min={1}
-                  value={selected.qty ?? 1}
-                  onChange={e => update(selected.id, { qty: Math.max(1, Math.round(parseFloat(e.target.value) || 1)) })}
-                  style={inputStyle}
-                />
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={labelStyle}>Film</div>
-                <select
-                  value={selected.substrate_id || ''}
-                  onChange={e => { const v = e.target.value || null; update(selected.id, { substrate_id: v }); onPickFilm?.(v); }}
-                  style={inputStyle}
-                >
-                  <option value="">— none —</option>
-                  {films.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
-                </select>
-              </div>
-            </div>
-            <div style={labelStyle}>Price each ($)</div>
-            <input
-              type="number" min={0} step="0.01"
-              value={selected.price_override ?? ''}
-              disabled={rollPriced}
-              onChange={e => update(selected.id, { price_override: e.target.value.trim() === '' ? null : Math.max(0, parseFloat(e.target.value) || 0) })}
-              placeholder={rollPriced ? 'roll priced' : 'auto (by area)'}
-              title={rollPriced ? 'Roll pricing is on — vinyl prices from the roll layout. Turn it off to price boxes one by one.' : 'Type a vinyl price for one of this box; clear it to price by area again'}
-              style={{ ...inputStyle, marginBottom: '8px', opacity: rollPriced ? 0.5 : 1 }}
-            />
-            <div style={labelStyle}>Color</div>
-            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginBottom: '8px' }}>
-              {COVERAGE_COLORS.map(c => (
-                <button
-                  key={c}
-                  onClick={() => update(selected.id, { color: c })}
-                  title={c}
-                  style={{
-                    width: '20px', height: '20px', borderRadius: '5px', background: c, cursor: 'pointer',
-                    border: c === selected.color ? '2px solid var(--text-primary)' : '1px solid var(--border)',
-                  }}
-                />
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-              <button onClick={() => duplicate(selected)} style={smallBtn('#06b6d4', 'rgba(6,182,212,0.08)')}>⧉ Duplicate</button>
-              <button onClick={() => remove(selected.id)} style={smallBtn('#ef4444', 'transparent')}>Delete</button>
-            </div>
-          </div>
-        )}
+      {tool === 'box' && !lineDraft && (
+        <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
+          Drag a box over each area being covered.{calibrated ? ' Its size is measured off the photo as you draw.' : ' Set a scale above to get sizes and pricing.'}
+        </div>
+      )}
+
+      <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+        Boxes ({boxes.length}){totalSqft > 0 ? ` · ${totalSqft.toFixed(1)} ft²` : ''}
       </div>
-
-      {/* Photo canvas */}
-      <div style={{ minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '6px', flexWrap: 'wrap' }}>
-          <button onClick={() => zoomTo(zoom / ZOOM_STEP)} disabled={zoom <= ZOOM_MIN} title="Zoom out" style={{ ...zoomBtn, opacity: zoom <= ZOOM_MIN ? 0.4 : 1 }}>−</button>
-          <span style={{ minWidth: '42px', textAlign: 'center', fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)' }}>{Math.round(zoom * 100)}%</span>
-          <button onClick={() => zoomTo(zoom * ZOOM_STEP)} disabled={zoom >= ZOOM_MAX} title="Zoom in" style={{ ...zoomBtn, opacity: zoom >= ZOOM_MAX ? 0.4 : 1 }}>+</button>
-          <button onClick={() => zoomTo(1)} disabled={zoom === 1} title="Fit the whole photo" style={{ ...zoomBtn, width: 'auto', padding: '0 8px', opacity: zoom === 1 ? 0.4 : 1 }}>Fit</button>
-          <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '4px' }}>
-            {zoom > 1 ? 'Move around: two fingers, space + drag, or drag empty photo with Select' : 'Pinch or Ctrl + scroll to zoom'}
+      {boxes.length === 0 && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '8px' }}>Nothing drawn yet.</div>}
+      {boxes.map(b => (
+        <div key={b.id} onClick={() => { setSelectedId(b.id); setTool('select'); }} style={{
+          display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 6px', marginBottom: '3px', borderRadius: '6px', cursor: 'pointer',
+          background: b.id === selectedId ? 'rgba(245,158,11,0.12)' : 'var(--subtle-bg)',
+          border: `1px solid ${b.id === selectedId ? 'rgba(245,158,11,0.4)' : 'transparent'}`,
+        }}>
+          {onToggleChecked && (
+            <input
+              type="checkbox"
+              checked={!!checkedIds?.has(b.id)}
+              onClick={e => e.stopPropagation()}
+              onChange={e => onToggleChecked(b.id, e.target.checked)}
+              aria-label={`Select ${b.label || 'box'}`}
+              style={{ margin: 0, flexShrink: 0 }}
+            />
+          )}
+          <span style={{ width: '10px', height: '10px', borderRadius: '3px', background: b.color, flexShrink: 0 }} />
+          <span style={{ flex: 1, fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {parts?.partOf.get(b.id) ? <span style={{ color: 'var(--text-muted)' }}>{parts.partOf.get(b.id)!.number} · </span> : null}
+            {b.label || 'Untitled'}
+            {b.area_in2 ? <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}> · {sqft(b.area_in2).toFixed(1)} ft²</span> : null}
           </span>
+          {sizeTag(b) && (
+            <span title={sizeTag(b) === 'size table' ? 'Sized by the number printed on the proof' : sizeTag(b) === 'typed' ? 'Size typed by hand' : 'Measured off the picture'} style={{
+              flexShrink: 0, fontSize: '8px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.04em', padding: '1px 4px', borderRadius: '4px',
+              background: sizeTag(b) === 'size table' ? 'rgba(34,197,94,0.12)' : 'var(--subtle-bg)',
+              border: `1px solid ${sizeTag(b) === 'size table' ? 'rgba(34,197,94,0.35)' : 'var(--border)'}`,
+              color: sizeTag(b) === 'size table' ? '#22c55e' : 'var(--text-muted)',
+            }}>{sizeTag(b)}</span>
+          )}
+          <button onClick={e => { e.stopPropagation(); remove(b.id); }} title="Delete" style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
         </div>
-        <div
-          ref={viewportRef}
-          style={{
-            position: 'relative', background: '#000', border: `1px solid ${theme.border}`, borderRadius: '12px',
-            overflow: zoom > 1 ? 'auto' : 'hidden',
-            // Zoomed in, the viewport keeps the fitted photo's height and scrolls.
-            height: zoom > 1 && dim && viewportW ? viewportW * (dim.h / dim.w) : undefined,
-          }}
-        >
-        <div ref={contentRef} style={{ position: 'relative', width: `${zoom * 100}%` }}>
-        {/* eslint-disable-next-line @next/next/no-img-element -- photo dimensions are unknown; next/image needs fixed sizes */}
-        <img
-          src={src}
-          alt="Job photo"
-          onLoad={e => setDim({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
-          style={{ width: '100%', display: 'block' }}
-          draggable={false}
-        />
-        {dim && (
-          <svg
-            ref={svgRef}
-            viewBox={`0 0 ${dim.w} ${dim.h}`}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onPointerCancel={onPointerUp}
-            onPointerDownCapture={onPointerDownCapture}
-            onPointerMoveCapture={onPointerMoveCapture}
-            onPointerUpCapture={onPointerUpCapture}
-            onPointerCancelCapture={onPointerUpCapture}
-            style={{
-              position: 'absolute', inset: 0, width: '100%', height: '100%', touchAction: 'none',
-              cursor: spaceHeld ? 'grab' : tool === 'select' ? (zoom > 1 ? 'grab' : 'default') : 'crosshair',
-            }}
-          >
-            {boxes.map(b => {
-              const sel = b.id === selectedId;
-              return (
-                <g key={b.id} onPointerDown={e => beginEdit(e, b, 'move')} style={{ cursor: tool === 'select' ? 'move' : 'crosshair' }}>
-                  <CoverageBoxShape box={parts ? withPartSize(b, parts) : b} number={parts?.partOf.get(b.id)?.number} photoW={dim.w} fontSize={TAG_FONT_PX * k} stroke={sel ? '#f59e0b' : undefined} />
-                  {sel && tool === 'select' && (
-                    <g onPointerDown={e => beginEdit(e, b, 'resize')} style={{ cursor: 'nwse-resize' }}>
-                      <rect
-                        x={b.rect.x + b.rect.w - (HANDLE_HIT_PX * k) / 2} y={b.rect.y + b.rect.h - (HANDLE_HIT_PX * k) / 2}
-                        width={HANDLE_HIT_PX * k} height={HANDLE_HIT_PX * k} fill="transparent"
-                      />
-                      <rect
-                        x={b.rect.x + b.rect.w - (HANDLE_PX * k) / 2} y={b.rect.y + b.rect.h - (HANDLE_PX * k) / 2}
-                        width={HANDLE_PX * k} height={HANDLE_PX * k} rx={2 * k}
-                        fill="#f59e0b" stroke="#fff" strokeWidth={1} vectorEffect="non-scaling-stroke"
-                      />
-                    </g>
-                  )}
-                </g>
-              );
-            })}
-            {previewRect && previewRect.w > 0 && (
-              <rect
-                x={previewRect.x} y={previewRect.y} width={previewRect.w} height={previewRect.h}
-                fill="rgba(6,182,212,0.18)" stroke="#06b6d4" strokeWidth={2} strokeDasharray="6 4" vectorEffect="non-scaling-stroke"
+      ))}
+
+      {selected && (
+        <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: `1px solid ${theme.border}` }}>
+          <div style={labelStyle}>Label</div>
+          <input
+            value={selected.label}
+            onChange={e => update(selected.id, { label: e.target.value })}
+            placeholder="Front window, Driver side, …"
+            style={{ ...inputStyle, marginBottom: '8px' }}
+          />
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+            <div style={{ flex: 1 }}>
+              <div style={labelStyle}>Width (in)</div>
+              <input
+                type="number"
+                value={selected.width_in != null ? Number(selected.width_in.toFixed(2)) : ''}
+                onChange={e => typeDimension(selected.id, 'width_in', e.target.value)}
+                placeholder={calibrated ? '' : 'set a scale'}
+                style={inputStyle}
               />
-            )}
-            {/* The calibration line: the one being dragged, or the stored one
-                while its tool is open, so the reference stays visible. */}
-            {(liveLine || (tool === 'calibrate-line' && cal?.line)) && (() => {
-              const l = liveLine || cal!.line!;
-              const r = MARKER_PX * k;
-              return (
-                <g>
-                  <line x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke="#fbbf24" strokeWidth={3} vectorEffect="non-scaling-stroke" />
-                  <circle cx={l.x1} cy={l.y1} r={r} fill="#fbbf24" />
-                  <circle cx={l.x2} cy={l.y2} r={r} fill="#fbbf24" />
-                </g>
-              );
-            })()}
-            {/* Corners being placed, and the stored rectangle while its tool
-                is open. */}
-            {(cornerDraft.length > 0 || (tool === 'calibrate-plane' && cal?.plane)) && (() => {
-              const pts = cornerDraft.length > 0 ? cornerDraft : cal!.plane!.corners;
-              const r = MARKER_PX * k;
-              return (
-                <g>
-                  <polygon
-                    points={pts.map(p => `${p.x},${p.y}`).join(' ')}
-                    fill="rgba(251,191,36,0.18)" stroke="#fbbf24" strokeWidth={2}
-                    strokeDasharray={pts.length < 4 ? '6 4' : undefined} vectorEffect="non-scaling-stroke"
-                  />
-                  {pts.map((p, i) => (
-                    <g key={i}>
-                      <circle cx={p.x} cy={p.y} r={r} fill="#fbbf24" />
-                      <text x={p.x + r * 1.4} y={p.y} fill="#fbbf24" fontSize={TAG_FONT_PX * k} fontWeight={700} dominantBaseline="middle">{i + 1}</text>
-                    </g>
-                  ))}
-                </g>
-              );
-            })()}
-          </svg>
-        )}
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={labelStyle}>Height (in)</div>
+              <input
+                type="number"
+                value={selected.height_in != null ? Number(selected.height_in.toFixed(2)) : ''}
+                onChange={e => typeDimension(selected.id, 'height_in', e.target.value)}
+                placeholder={calibrated ? '' : 'set a scale'}
+                style={inputStyle}
+              />
+            </div>
+          </div>
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '8px', lineHeight: 1.5 }}>
+            {sizeStatus(selected)}
+            {selected.area_in2 ? ` · ${sqft(selected.area_in2).toFixed(2)} ft² each` : ''}
+          </div>
+          {(() => {
+            // Matching pieces share one size — say so when this box's own
+            // numbers aren't the ones being priced.
+            const part = parts?.partOf.get(selected.id);
+            const shared = parts?.sizeOf.get(selected.id);
+            if (!part || !shared || part.boxIds.length < 2) return null;
+            if (shared.width_in === selected.width_in && shared.height_in === selected.height_in) return null;
+            const others = part.boxIds.length - 1;
+            return (
+              <div style={{ fontSize: '10px', color: '#22c55e', marginBottom: '8px', lineHeight: 1.5 }}>
+                Priced at {partSizeText(part.size)} to match {others === 1 ? 'the other' : `the ${others} other`} #{part.number} piece{others === 1 ? '' : 's'}. Type a size here to set it for all of them.
+              </div>
+            );
+          })()}
+          {(() => {
+            const gap = usesLegendSize(selected) ? legendGapPct(selected) : null;
+            return gap != null && gap > DISAGREEMENT_WARN_PCT ? (
+              <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '8px', lineHeight: 1.5 }}>
+                ⚠ The drawing is {gap.toFixed(0)}% off the printed size — the proof isn&apos;t drawn to scale here. The printed size is what&apos;s priced unless you switch it above.
+              </div>
+            ) : null;
+          })()}
+          {disagreement != null && disagreement > DISAGREEMENT_WARN_PCT && (
+            <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '8px', lineHeight: 1.5 }}>
+              ⚠ Your two references disagree by {disagreement.toFixed(0)}% on this box. They&apos;re probably not
+              the same distance from the camera — drop whichever one isn&apos;t on the face you&apos;re covering.
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+            <div style={{ width: '70px' }}>
+              <div style={labelStyle}>Qty</div>
+              <input
+                type="number" min={1}
+                value={selected.qty ?? 1}
+                onChange={e => update(selected.id, { qty: Math.max(1, Math.round(parseFloat(e.target.value) || 1)) })}
+                style={inputStyle}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={labelStyle}>Film</div>
+              <select
+                value={selected.substrate_id || ''}
+                onChange={e => { const v = e.target.value || null; update(selected.id, { substrate_id: v }); onPickFilm?.(v); }}
+                style={inputStyle}
+              >
+                <option value="">— none —</option>
+                {films.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={labelStyle}>Price each ($)</div>
+          <input
+            type="number" min={0} step="0.01"
+            value={selected.price_override ?? ''}
+            disabled={rollPriced}
+            onChange={e => update(selected.id, { price_override: e.target.value.trim() === '' ? null : Math.max(0, parseFloat(e.target.value) || 0) })}
+            placeholder={rollPriced ? 'roll priced' : 'auto (by area)'}
+            title={rollPriced ? 'Roll pricing is on — vinyl prices from the roll layout. Turn it off to price boxes one by one.' : 'Type a vinyl price for one of this box; clear it to price by area again'}
+            style={{ ...inputStyle, marginBottom: '8px', opacity: rollPriced ? 0.5 : 1 }}
+          />
+          <div style={labelStyle}>Color</div>
+          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginBottom: '8px' }}>
+            {COVERAGE_COLORS.map(c => (
+              <button
+                key={c}
+                onClick={() => update(selected.id, { color: c })}
+                title={c}
+                style={{
+                  width: '20px', height: '20px', borderRadius: '5px', background: c, cursor: 'pointer',
+                  border: c === selected.color ? '2px solid var(--text-primary)' : '1px solid var(--border)',
+                }}
+              />
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            <button onClick={() => duplicate(selected)} style={smallBtn('#06b6d4', 'rgba(6,182,212,0.08)')}>⧉ Duplicate</button>
+            <button onClick={() => remove(selected.id)} style={smallBtn('#ef4444', 'transparent')}>Delete</button>
+          </div>
         </div>
-        </div>
-      </div>
+      )}
     </div>
+  );
+
+  const zoomRow = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '6px', flexWrap: 'wrap' }}>
+      <button onClick={() => zoomTo(zoom / ZOOM_STEP)} disabled={zoom <= ZOOM_MIN} title="Zoom out" style={{ ...zoomBtn, opacity: zoom <= ZOOM_MIN ? 0.4 : 1 }}>−</button>
+      <span style={{ minWidth: '42px', textAlign: 'center', fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)' }}>{Math.round(zoom * 100)}%</span>
+      <button onClick={() => zoomTo(zoom * ZOOM_STEP)} disabled={zoom >= ZOOM_MAX} title="Zoom in" style={{ ...zoomBtn, opacity: zoom >= ZOOM_MAX ? 0.4 : 1 }}>+</button>
+      <button onClick={() => zoomTo(1)} disabled={zoom === 1} title="Fit the whole photo" style={{ ...zoomBtn, width: 'auto', padding: '0 8px', opacity: zoom === 1 ? 0.4 : 1 }}>Fit</button>
+      <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '4px' }}>
+        {zoom > 1 ? 'Move around: two fingers, space + drag, or drag empty photo with Select' : 'Pinch or Ctrl + scroll to zoom'}
+      </span>
+    </div>
+  );
+
+  const canvas = (
+    <div
+      ref={viewportRef}
+      style={fullscreen ? {
+        // Full screen: the viewport fills the space left, the photo fits
+        // inside it and stays centered until zooming makes it bigger.
+        position: 'relative', background: '#000', width: '100%', height: '100%',
+        overflow: 'auto', display: 'flex', WebkitOverflowScrolling: 'touch',
+      } : {
+        position: 'relative', background: '#000', border: `1px solid ${theme.border}`, borderRadius: '12px',
+        overflow: zoom > 1 ? 'auto' : 'hidden',
+        // Zoomed in, the viewport keeps the fitted photo's height and scrolls.
+        height: zoom > 1 && dim && viewportW ? viewportW * (dim.h / dim.w) : undefined,
+      }}
+    >
+    <div ref={contentRef} style={fullscreen
+      ? { position: 'relative', margin: 'auto', flexShrink: 0, width: baseW ? baseW * zoom : '100%' }
+      : { position: 'relative', width: `${zoom * 100}%` }}>
+    {/* eslint-disable-next-line @next/next/no-img-element -- photo dimensions are unknown; next/image needs fixed sizes */}
+    <img
+      src={src}
+      alt="Job photo"
+      onLoad={e => setDim({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+      style={{ width: '100%', display: 'block' }}
+      draggable={false}
+    />
+    {dim && (
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${dim.w} ${dim.h}`}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onPointerDownCapture={onPointerDownCapture}
+        onPointerMoveCapture={onPointerMoveCapture}
+        onPointerUpCapture={onPointerUpCapture}
+        onPointerCancelCapture={onPointerUpCapture}
+        style={{
+          position: 'absolute', inset: 0, width: '100%', height: '100%', touchAction: 'none',
+          cursor: spaceHeld ? 'grab' : tool === 'select' ? (zoom > 1 ? 'grab' : 'default') : 'crosshair',
+        }}
+      >
+        {boxes.map(b => {
+          const sel = b.id === selectedId;
+          return (
+            <g key={b.id} onPointerDown={e => beginEdit(e, b, 'move')} style={{ cursor: tool === 'select' ? 'move' : 'crosshair' }}>
+              <CoverageBoxShape box={parts ? withPartSize(b, parts) : b} number={parts?.partOf.get(b.id)?.number} photoW={dim.w} fontSize={TAG_FONT_PX * k} stroke={sel ? '#f59e0b' : undefined} />
+              {sel && tool === 'select' && (
+                <g onPointerDown={e => beginEdit(e, b, 'resize')} style={{ cursor: 'nwse-resize' }}>
+                  <rect
+                    x={b.rect.x + b.rect.w - (HANDLE_HIT_PX * k) / 2} y={b.rect.y + b.rect.h - (HANDLE_HIT_PX * k) / 2}
+                    width={HANDLE_HIT_PX * k} height={HANDLE_HIT_PX * k} fill="transparent"
+                  />
+                  <rect
+                    x={b.rect.x + b.rect.w - (HANDLE_PX * k) / 2} y={b.rect.y + b.rect.h - (HANDLE_PX * k) / 2}
+                    width={HANDLE_PX * k} height={HANDLE_PX * k} rx={2 * k}
+                    fill="#f59e0b" stroke="#fff" strokeWidth={1} vectorEffect="non-scaling-stroke"
+                  />
+                </g>
+              )}
+            </g>
+          );
+        })}
+        {previewRect && previewRect.w > 0 && (
+          <rect
+            x={previewRect.x} y={previewRect.y} width={previewRect.w} height={previewRect.h}
+            fill="rgba(6,182,212,0.18)" stroke="#06b6d4" strokeWidth={2} strokeDasharray="6 4" vectorEffect="non-scaling-stroke"
+          />
+        )}
+        {/* The calibration line: the one being dragged, or the stored one
+            while its tool is open, so the reference stays visible. */}
+        {(liveLine || (tool === 'calibrate-line' && cal?.line)) && (() => {
+          const l = liveLine || cal!.line!;
+          const r = MARKER_PX * k;
+          return (
+            <g>
+              <line x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke="#fbbf24" strokeWidth={3} vectorEffect="non-scaling-stroke" />
+              <circle cx={l.x1} cy={l.y1} r={r} fill="#fbbf24" />
+              <circle cx={l.x2} cy={l.y2} r={r} fill="#fbbf24" />
+            </g>
+          );
+        })()}
+        {/* Corners being placed, and the stored rectangle while its tool
+            is open. */}
+        {(cornerDraft.length > 0 || (tool === 'calibrate-plane' && cal?.plane)) && (() => {
+          const pts = cornerDraft.length > 0 ? cornerDraft : cal!.plane!.corners;
+          const r = MARKER_PX * k;
+          return (
+            <g>
+              <polygon
+                points={pts.map(p => `${p.x},${p.y}`).join(' ')}
+                fill="rgba(251,191,36,0.18)" stroke="#fbbf24" strokeWidth={2}
+                strokeDasharray={pts.length < 4 ? '6 4' : undefined} vectorEffect="non-scaling-stroke"
+              />
+              {pts.map((p, i) => (
+                <g key={i}>
+                  <circle cx={p.x} cy={p.y} r={r} fill="#fbbf24" />
+                  <text x={p.x + r * 1.4} y={p.y} fill="#fbbf24" fontSize={TAG_FONT_PX * k} fontWeight={700} dominantBaseline="middle">{i + 1}</text>
+                </g>
+              ))}
+            </g>
+          );
+        })()}
+      </svg>
+    )}
+    </div>
+    </div>
+  );
+
+  return (
+    <DrawingWorkspace
+      fullscreen={fullscreen}
+      onFullscreenChange={on => { setPanelOpen(false); onFullscreenChange?.(on); }}
+      panel={panel}
+      panelOpen={panelOpen}
+      onPanelOpenChange={setPanelOpen}
+      panelTitle={selected ? (selected.label || 'Untitled') : 'Boxes & scale'}
+      inlineColumns="250px minmax(0, 1fr)"
+      inlineHeader={zoomRow}
+      canvas={canvas}
+      pictureAspect={dim ? dim.w / dim.h : null}
+      tools={(
+        <>
+          <ToolButton icon="▭" label="Box" active={tool === 'box'} onClick={() => { setTool('box'); setLineDraft(null); setCornerDraft([]); }} title="Draw Box — drag over each area being covered" />
+          <ToolButton icon="➚" label="Select" active={tool === 'select'} onClick={() => { setTool('select'); setDrag(null); setLineDraft(null); setCornerDraft([]); }} title="Select / Move — tap a box to edit it, drag to move it" />
+          <ToolButton icon="📏" label="Length" color="#fbbf24" active={tool === 'calibrate-line'} onClick={() => { setTool('calibrate-line'); setCornerDraft([]); }} title="Set the scale with a known length — drag along a door, window or panel" />
+          <ToolButton icon="⬚" label="Rect" color="#fbbf24" active={tool === 'calibrate-plane'} onClick={() => { setTool('calibrate-plane'); setLineDraft(null); setCornerDraft([]); }} title="Set the scale with a known rectangle — tap its four corners" />
+        </>
+      )}
+      zoomControls={(
+        <>
+          <button onClick={() => zoomTo(zoom / ZOOM_STEP)} disabled={zoom <= ZOOM_MIN} aria-label="Zoom out" style={{ ...barButtonStyle, opacity: zoom <= ZOOM_MIN ? 0.4 : 1 }}>−</button>
+          <button onClick={() => zoomTo(zoom * ZOOM_STEP)} disabled={zoom >= ZOOM_MAX} aria-label="Zoom in" style={{ ...barButtonStyle, opacity: zoom >= ZOOM_MAX ? 0.4 : 1 }}>+</button>
+          <button onClick={() => zoomTo(1)} disabled={zoom === 1} title="Fit the whole photo" style={{ ...barButtonStyle, opacity: zoom === 1 ? 0.4 : 1 }}>Fit</button>
+        </>
+      )}
+      hint={fullscreenHint}
+      bottomBar={selected && !panelOpen ? (
+        <QuickBar
+          onClose={() => setSelectedId(null)}
+          color={selected.color}
+          title={<>{parts?.partOf.get(selected.id) ? `${parts.partOf.get(selected.id)!.number} · ` : ''}{selected.label || 'Untitled'}</>}
+          detail={selected.width_in && selected.height_in
+            ? `${fmtIn(selected.width_in)}" × ${fmtIn(selected.height_in)}"${selected.area_in2 ? ` · ${sqft(selected.area_in2).toFixed(1)} ft²` : ''}`
+            : calibrated ? null : 'no scale yet'}
+        >
+          <select
+            aria-label="Film"
+            value={selected.substrate_id || ''}
+            onChange={e => { const v = e.target.value || null; update(selected.id, { substrate_id: v }); onPickFilm?.(v); }}
+            style={{ ...inputStyle, flex: 1, minWidth: 0, height: '34px' }}
+          >
+            <option value="">— film —</option>
+            {films.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+          </select>
+          <input
+            type="number" min={1} aria-label="Qty"
+            value={selected.qty ?? 1}
+            onChange={e => update(selected.id, { qty: Math.max(1, Math.round(parseFloat(e.target.value) || 1)) })}
+            style={{ ...inputStyle, width: '56px', height: '34px' }}
+          />
+          <button onClick={() => setPanelOpen(true)} style={{ ...barButtonStyle, background: 'rgba(6,182,212,0.12)', border: '1px solid rgba(6,182,212,0.4)', color: '#06b6d4' }}>Details</button>
+          <button onClick={() => remove(selected.id)} aria-label="Delete box" style={{ ...barButtonStyle, color: '#ef4444' }}>🗑</button>
+        </QuickBar>
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {photoNav && photoNav.total > 1 && (
+            <>
+              <button onClick={photoNav.onPrev} disabled={photoNav.index === 0} aria-label="Previous photo" style={{ ...barButtonStyle, opacity: photoNav.index === 0 ? 0.4 : 1 }}>‹</button>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#e5e7eb', whiteSpace: 'nowrap' }}>Photo {photoNav.index + 1}/{photoNav.total}</span>
+              <button onClick={photoNav.onNext} disabled={photoNav.index >= photoNav.total - 1} aria-label="Next photo" style={{ ...barButtonStyle, opacity: photoNav.index >= photoNav.total - 1 ? 0.4 : 1 }}>›</button>
+            </>
+          )}
+          <span style={{ flex: 1, minWidth: 0, fontSize: '11px', fontWeight: 600, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {boxes.length} box{boxes.length === 1 ? '' : 'es'}{totalSqft > 0 ? ` · ${totalSqft.toFixed(1)} ft²` : ''}{calibrated ? '' : ' · no scale yet'}
+          </span>
+          {!panelOpen && (
+            <button onClick={() => setPanelOpen(true)} style={{ ...barButtonStyle, background: 'rgba(6,182,212,0.12)', border: '1px solid rgba(6,182,212,0.4)', color: '#06b6d4' }}>☰ Boxes &amp; scale</button>
+          )}
+        </div>
+      )}
+    />
   );
 }

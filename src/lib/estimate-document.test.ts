@@ -300,6 +300,6 @@ describe('Attached section', () => {
     expect(html).toContain('<a href="https://go.bmgfleet.com/api/approve/estimate/t/download/pdf"');
     expect(html).toContain('>Estimate EST-1.pdf</a>');
     expect(html).toContain('>Rack &amp; bin.pdf</a>');
-    expect(html).toContain('Click a name to download a copy');
+    expect(html).toContain('Click a name to download a full-size copy');
   });
 });
