@@ -9,8 +9,9 @@ Installations LLC and 1084 Cool Springs LLC, which owns the building.
 This file covers part 1, the ledger core, part 2, the chart of accounts
 copied from NetSuite, part 3, NetSuite's general ledger from 2025 copied
 and checked month by month, part 4, the NetSuite lists the posting rules
-need, part 5, the invoice rule, checked against NetSuite, and part 6, every
-BMG invoice since 2025 posted to FleetSuite's own journal with it. The
+need, part 5, the invoice rule, checked against NetSuite, part 6, every
+BMG invoice since 2025 posted to FleetSuite's own journal with it, and part
+7, credit memos, checked and posted the same way, the other way round. The
 screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`
 and the invoices at `/admin/books/invoices`, which only super admins can
@@ -36,6 +37,7 @@ the accounts page; the others are linked from there.
 | Invoice tests | `src/lib/books/invoice-rule.test.ts`, `src/lib/books/invoice-check.test.ts`, `src/lib/books/invoice-line-facts.test.ts`, `src/lib/books/invoice-check-sql.test.ts` |
 | Invoices posted to the journal | `migrations/367-books-invoice-posting.sql`, `src/lib/books/invoice-posting.ts`, `src/app/api/cron/books-invoice-posting/route.ts` |
 | Invoice posting tests | `src/lib/books/invoice-posting.test.ts`, `src/lib/books/invoice-posting-sql.test.ts` |
+| Credit memos, checked and posted like invoices | `migrations/370-books-credit-memos.sql`, with the invoice files above; their tests are in the invoice test files |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
 QuickBooks and NetSuite history that importers replace wholesale. They stay
@@ -364,8 +366,25 @@ count for every month from January 2025.
 - The mirror keeps NetSuite's signed `netamount` in each line's `raw`, where
   a sale is negative. A line whose amount it didn't keep can't be worked
   out.
-- Credit memos aren't checked yet. They're the plan's mirror image of this
-  rule: revenue and sales tax debited, receivables credited.
+
+### Credit memos
+
+A credit memo is the invoice rule the other way round, `credit_memo@1`
+(owner decision 2026-10-14): revenue and sales tax debited, receivables
+credited. The working out is the same: the mirror keeps a credit memo's
+lines' `netamount` positive where an invoice's is negative, so each line
+debits its item's income account or its tax code's account and the
+receivable takes the credit.
+
+The page's **Invoices / Credit memos** switch checks credit memos month by
+month just as it checks invoices, against the GL lines NetSuite posted for
+each, and **Check every month** counts whichever is showing. Migration 370's
+`gl_invoice_month` returns both kinds, each with its `doc_type`, and the API
+keeps the kind asked for (`kind=credit_memo`). A credit memo that takes
+stock back books the stock's cost coming back on lines of its own, a debit
+to an inventory asset account and a credit to cost of goods; like an
+invoice's cost lines, they're left out of the entry, not compared, and
+counted.
 
 ## Posting invoices
 
@@ -375,6 +394,13 @@ it matches NetSuite or not (owner decision 2026-10-13): during 2027 the
 differences are what the side-by-side run is for. 1084's invoices join once
 they've been checked against NetSuite (`POSTING_COMPANIES` in
 `src/lib/books/invoice-posting.ts`). Nothing is written to NetSuite.
+
+Credit memos post in the same run, the same way (owner decision
+2026-10-14), with the rule `credit_memo@1` and keys of their own
+(`credit_memo:<NetSuite id>:<n>`); what follows about invoices goes for
+them too. A credit memo's receivable must come to its total as a credit, so
+one whose copied lines come out any other way keeps whatever it has, like an
+invoice caught mid-refresh.
 
 It runs every two hours (`/api/cron/books-invoice-posting`, :48 on odd
 hours, after the GL copy at :26 and the ledger mirror's invoices at :35 on
@@ -409,8 +435,11 @@ ledger mirror matched it (`customer_id`, which `gl_invoice_month` now
 returns). Migration 367's `gl_invoice_postings` reads what the journal holds
 for each invoice: the entry that stands and its lines, every earlier entry
 and what reversed it, and whether the copy of NetSuite's invoices says it's
-deleted or voided. Should a second entry ever stand for one invoice, the
-older is reversed.
+deleted or voided. Migration 370 has it read credit memos' entries too,
+each with its kind (`source_type`), looked up in the copy of NetSuite's
+documents of that kind; `gl_repost_entry` won't replace an entry with one of
+the other kind. Should a second entry ever stand for one invoice, the older
+is reversed.
 
 The run takes the GL copy's lock (`gl_netsuite_claim_copy`): it reads that
 copy, so it never runs while the copy changes it, and two runs never

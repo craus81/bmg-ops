@@ -24,7 +24,7 @@ type Invoice = InvoiceMonthData['invoices'][number];
 
 // A part and labor plus tax, as NetSuite posts it.
 const invoice = (fields: Partial<Invoice> = {}): Invoice => ({
-  id: 'id-101', netsuite_id: '101', number: 'INV101', date: '2026-09-15', total: '162.00', voided: false,
+  id: 'id-101', doc_type: 'invoice', netsuite_id: '101', number: 'INV101', date: '2026-09-15', total: '162.00', voided: false,
   customer: 'A Customer', customer_id: CUSTOMER, lines_copied: true, companies: ['BMG'],
   lines: [
     { line_id: '1', line_no: 1, kind: 'item', item_id: '11', item_number: 'PART-A', amount: '100.00', netamount: '-100' },
@@ -46,6 +46,7 @@ const worked = (inv: Invoice = invoice(), opts: { taxAccounts?: typeof TAX | nul
 
 /** What the journal holds when INV101 posted as it is now, as entry 7. */
 const posting = (fields: Partial<InvoicePosting> = {}, lines?: NonNullable<InvoicePosting['current']>['lines']): InvoicePosting => ({
+  source_type: 'invoice',
   source_id: '101',
   entries: 1,
   unreversed: ['e7'],
@@ -180,6 +181,52 @@ describe('invoiceJournalEntry', () => {
       division: l.division ?? null, source_line_ref: l.sourceLineRef ?? null, customer_id: l.customerId ?? null,
     }));
     expect(decide(worked(), posting({}, lines))).toEqual({ kind: 'keep' });
+  });
+});
+
+describe('credit memos', () => {
+  const ids = new Map([['120', 'a-120'], ['400', 'a-400'], ['220', 'a-220']]);
+  // CM105 gives the part and labor back with their tax: NetSuite's signed amounts the other way round from INV101's.
+  const memo = (fields: Partial<Invoice> = {}): Invoice => invoice({
+    id: 'id-105', doc_type: 'credit_memo', netsuite_id: '105', number: 'CM105',
+    lines: invoice().lines.map((l) => ({ ...l, netamount: String(-Number(l.netamount)) })),
+    netsuite: invoice().netsuite.map((l) => ({ ...l, debit: l.credit, credit: l.debit })),
+    ...fields,
+  });
+  const held = (fields: Partial<InvoicePosting> = {}) => posting({ source_type: 'credit_memo', source_id: '105', ...fields }, [
+    { account: '120', debit: '0.00', credit: '162.00', division: null, source_line_ref: '0', customer_id: CUSTOMER },
+    { account: '400', debit: '100.00', credit: '0.00', division: 'upfit', source_line_ref: '1', customer_id: null },
+    { account: '400', debit: '50.00', credit: '0.00', division: 'upfit', source_line_ref: '2', customer_id: null },
+    { account: '220', debit: '12.00', credit: '0.00', division: null, source_line_ref: '3', customer_id: null },
+  ]);
+
+  it('posts a credit memo under its own kind and rule, receivables credited and revenue and tax debited', () => {
+    const w = worked(memo());
+    expect(w.checked.status).toBe('matches');
+    expect(decide(w, undefined)).toEqual({ kind: 'post' });
+    const { entry } = invoiceJournalEntry(w, 'BMG', 1, ids);
+    expect(entry).toMatchObject({
+      company: 'BMG', entryDate: '2026-09-15', sourceType: 'credit_memo', sourceId: '105', postingRule: 'credit_memo@1',
+      idempotencyKey: 'credit_memo:105:1', memo: 'CM105, A Customer',
+    });
+    expect(entry!.lines).toEqual([
+      { accountId: 'a-120', debit: null, credit: '162.00', division: null, itemNumber: null, sourceLineRef: '0', customerId: CUSTOMER },
+      { accountId: 'a-400', debit: '100.00', credit: null, division: 'upfit', itemNumber: 'PART-A', sourceLineRef: '1', customerId: null },
+      { accountId: 'a-400', debit: '50.00', credit: null, division: 'upfit', itemNumber: 'INSTALL LABOR', sourceLineRef: '2', customerId: null },
+      { accountId: 'a-220', debit: '12.00', credit: null, division: null, itemNumber: null, sourceLineRef: '3', customerId: null },
+    ]);
+  });
+
+  it('keeps, replaces and reverses a credit memo\'s entry as it does an invoice\'s', () => {
+    expect(decide(worked(memo()), held())).toEqual({ kind: 'keep' });
+    expect(decide(worked(memo({ date: '2026-09-16' })), held())).toEqual({ kind: 'replace' });
+    expect(decide(worked(memo({ voided: true })), held())).toEqual({ kind: 'reverse', why: 'voided' });
+  });
+
+  it('leaves a credit memo whose lines don\'t come to its total credited, as when they\'re read the wrong way round', () => {
+    // With an invoice's signs the receivable would be debited, which no credit memo does.
+    expect(decide(worked(memo({ lines: invoice().lines })), undefined)).toEqual({ kind: 'leave', why: 'total' });
+    expect(decide(worked(memo({ total: '170.00' })), held())).toEqual({ kind: 'leave', why: 'total' });
   });
 });
 

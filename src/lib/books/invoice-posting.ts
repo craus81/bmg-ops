@@ -10,7 +10,7 @@ import {
 } from './journal';
 import { COPY_FROM, monthOfDate, monthsBetween } from './netsuite-gl';
 import { BOOKS_LISTS_SYNC } from './netsuite-lists';
-import { INVOICE_RULE, MAIN_LINE, type RuleLine } from './invoice-rule';
+import { MAIN_LINE, RULES, type RuleLine, type SalesDocKind } from './invoice-rule';
 import {
   centsOf, workOutMonth,
   type ChartAccount, type InvoiceBooks, type InvoiceMonthData, type ItemAccountCount, type LineFacts,
@@ -21,7 +21,10 @@ import { readLineFacts } from './invoice-line-facts';
 /**
  * NetSuite's invoices posted to FleetSuite's own journal with the invoice
  * rule (migration 367, docs/books.md "Posting invoices"; owner decision
- * 2026-10-13, thread "Replacing NetSuite with FleetSuite").
+ * 2026-10-13, thread "Replacing NetSuite with FleetSuite"), and its credit
+ * memos with the credit memo rule, the same the other way round (migration
+ * 370; owner decision 2026-10-14). Everything below that says invoice holds
+ * for a credit memo too.
  *
  * Every BMG invoice dated from January 2025 that the rule can work out posts
  * once, as the check on Invoices vs NetSuite shows it, whether it matches
@@ -53,7 +56,7 @@ import { readLineFacts } from './invoice-line-facts';
 
 export const BOOKS_INVOICE_POSTING = 'books_invoice_posting';
 
-/** The companies whose invoices post. 1084's join once its invoices have been checked against NetSuite. */
+/** The companies whose invoices and credit memos post. 1084's join once they've been checked against NetSuite. */
 export const POSTING_COMPANIES: readonly BooksCompany[] = ['BMG'];
 
 /** Seconds a run holds the lock: past the routes' 300 s limit, so a run that dies lets go soon after. */
@@ -90,8 +93,9 @@ export interface PostedLine {
   customer_id: string | null;
 }
 
-/** What the journal holds for one invoice (gl_invoice_postings, migration 367). */
+/** What the journal holds for one invoice or credit memo (gl_invoice_postings, migrations 367 and 370). */
 export interface InvoicePosting {
+  source_type: SalesDocKind;
   source_id: string;
   /** How many entries it has had. */
   entries: number;
@@ -104,6 +108,16 @@ export interface InvoicePosting {
 }
 
 // ── Deciding ───────────────────────────────────────────────────────────────
+
+/** Which kind of document it is: anything but a credit memo is an invoice. */
+const kindOf = (worked: WorkedInvoice): SalesDocKind => (worked.invoice.doc_type === 'credit_memo' ? 'credit_memo' : 'invoice');
+
+/** What the journal holds for a document is looked up by its kind and NetSuite id, as its entries name it. */
+export const postingKey = (kind: SalesDocKind, netsuiteId: string) => `${kind}:${netsuiteId}`;
+
+/** What the journal holds for a worked out document, from gl_invoice_postings' answer keyed by postingKey. */
+export const postingFor = (postings: Map<string, InvoicePosting>, worked: WorkedInvoice) =>
+  postings.get(postingKey(kindOf(worked), worked.invoice.netsuite_id));
 
 /** The lines the rule works out for an invoice, the receivable first; none when it posts nothing. */
 export function entryLines(worked: WorkedInvoice): RuleLine[] {
@@ -175,11 +189,13 @@ export function decide(worked: WorkedInvoice, posting: InvoicePosting | undefine
   if (status === 'waiting') return { kind: 'leave', why: 'waiting' };
   if (status === 'unworkable') return { kind: 'leave', why: 'unworkable' };
 
-  // The receivable is the invoice's total, so lines that don't come to it
-  // are the copy's lines caught mid-refresh, not the invoice.
+  // The receivable is the invoice's total, or a credit memo's credited (the
+  // copy keeps both totals unsigned), so lines that don't come to it are the
+  // copy's lines caught mid-refresh, not the document.
   const lines = entryLines(worked);
   const receivable = lines.find((l) => l.lineId === MAIN_LINE)?.cents ?? 0;
-  if (receivable !== centsOf(worked.invoice.total)) return { kind: 'leave', why: 'total' };
+  const total = centsOf(worked.invoice.total);
+  if (receivable !== (total !== null && kindOf(worked) === 'credit_memo' ? -total : total)) return { kind: 'leave', why: 'total' };
 
   if (lines.length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep' };
   if (!current) return { kind: 'post' };
@@ -210,9 +226,10 @@ export function invoiceBooks(worked: WorkedInvoice, posting: InvoicePosting | un
 }
 
 /**
- * The journal entry for an invoice, its `generation`th: the rule's lines on
- * the chart's accounts, the receivable carrying the customer. Null with the
- * NetSuite accounts the chart doesn't have when it can't be built.
+ * The journal entry for an invoice or credit memo, its `generation`th: the
+ * rule's lines on the chart's accounts, the receivable carrying the customer,
+ * keyed by its kind (`invoice:…`, `credit_memo:…`). Null with the NetSuite
+ * accounts the chart doesn't have when it can't be built.
  */
 export function invoiceJournalEntry(
   worked: WorkedInvoice,
@@ -224,14 +241,15 @@ export function invoiceJournalEntry(
   const missing = [...new Set(lines.map((l) => l.account).filter((a) => !accountIds.has(a)))];
   if (missing.length) return { entry: null, missing };
   const inv = worked.invoice;
+  const kind = kindOf(worked);
   return {
     entry: {
       company,
       entryDate: inv.date,
-      sourceType: 'invoice',
+      sourceType: kind,
       sourceId: inv.netsuite_id,
-      postingRule: INVOICE_RULE,
-      idempotencyKey: `invoice:${inv.netsuite_id}:${generation}`,
+      postingRule: RULES[kind],
+      idempotencyKey: `${kind}:${inv.netsuite_id}:${generation}`,
       memo: inv.customer ? `${worked.number}, ${inv.customer}` : worked.number,
       postedBy: null,
       lines: lines.map((l) => ({
@@ -318,6 +336,15 @@ const plural = (n: number, one: string, many: string) => `${n.toLocaleString('en
 const listed = (items: string[], max = 10) => `${items.slice(0, max).join(', ')}${items.length > max ? ', …' : ''}`;
 const joined = (words: string[], last: 'and' | 'or') =>
   (words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} ${last} ${words[words.length - 1]}`);
+/** '2 invoices and 1 credit memo', for documents of these kinds. */
+const documents = (kinds: SalesDocKind[]) => {
+  const invoices = kinds.filter((k) => k === 'invoice').length;
+  const memos = kinds.length - invoices;
+  return joined([
+    invoices ? plural(invoices, 'invoice', 'invoices') : '',
+    memos ? plural(memos, 'credit memo', 'credit memos') : '',
+  ].filter(Boolean), 'and');
+};
 
 async function runLimited(tasks: Array<() => Promise<void>>, limit: number): Promise<void> {
   let next = 0;
@@ -378,7 +405,7 @@ export async function postInvoices(
     const lastLists = (lists.data?.last_result ?? null) as { taxAccounts?: TaxAccountCount[]; itemAccounts?: ItemAccountCount[] } | null;
     const taxAccounts = Array.isArray(lastLists?.taxAccounts) ? lastLists.taxAccounts : null;
     const itemAccounts = Array.isArray(lastLists?.itemAccounts) ? lastLists.itemAccounts : null;
-    if (!taxAccounts) notes.push("Where sales tax posts hasn't been read yet, so invoices with sales tax weren't posted. Sync now on the NetSuite lists page reads it.");
+    if (!taxAccounts) notes.push("Where sales tax posts hasn't been read yet, so invoices and credit memos with sales tax weren't posted. Sync now on the NetSuite lists page reads it.");
 
     const reverse = async (number: string, entryId: string, memo: string) => {
       try {
@@ -412,7 +439,7 @@ export async function postInvoices(
     const months = monthsBetween(COPY_FROM, monthOfDate(new Date(now()).toISOString().slice(0, 10))!);
     const skippedMonths: string[] = [];
     let skippedWhy = '';
-    const leftTotal: string[] = [];
+    const leftTotal: Array<{ number: string; kind: SalesDocKind }> = [];
     const missingAccounts = new Set<string>();
     const queue = postingQueue(POSTING_COMPANIES, months, state.resume);
 
@@ -435,12 +462,12 @@ export async function postInvoices(
           facts = await readLineFacts(query, mine.map((inv) => inv.netsuite_id));
         } catch (err) {
           skippedMonths.push(month);
-          skippedWhy ||= `NetSuite couldn't be asked about the invoices' lines (${compactSuiteqlError(err)})`;
+          skippedWhy ||= `NetSuite couldn't be asked about the invoices' and credit memos' lines (${compactSuiteqlError(err)})`;
         }
         const unsaid = facts ? unsaidFacts(facts) : [];
         if (facts && unsaid.length) {
           skippedMonths.push(month);
-          skippedWhy ||= `NetSuite wouldn't say ${joined(unsaid.map((f) => f.words), 'and')} on the invoices`;
+          skippedWhy ||= `NetSuite wouldn't say ${joined(unsaid.map((f) => f.words), 'and')} on the invoices and credit memos`;
           facts = null;
         }
 
@@ -454,11 +481,11 @@ export async function postInvoices(
             p_company: company, p_source_ids: mine.map((inv) => inv.netsuite_id), p_lines: true,
           });
           if (held.error) throw new Error(held.error.message);
-          const postings = new Map((((held.data as any)?.invoices ?? []) as InvoicePosting[]).map((p) => [p.source_id, p]));
+          const postings = new Map((((held.data as any)?.invoices ?? []) as InvoicePosting[]).map((p) => [postingKey(p.source_type, p.source_id), p]));
 
           const tasks: Array<() => Promise<void>> = [];
           for (const w of worked) {
-            const posting = postings.get(w.invoice.netsuite_id);
+            const posting = postingFor(postings, w);
             const d = decide(w, posting);
             if (d.kind === 'keep') {
               if (posting?.current) result.unchanged! += 1;
@@ -466,7 +493,7 @@ export async function postInvoices(
             }
             if (d.kind === 'leave') {
               result.left! += 1;
-              if (d.why === 'total') leftTotal.push(w.number);
+              if (d.why === 'total') leftTotal.push({ number: w.number, kind: kindOf(w) });
               continue;
             }
             if (d.kind === 'reverse') {
@@ -514,13 +541,15 @@ export async function postInvoices(
       notes.push(`${skippedWhy}, so nothing dated ${joined(skippedMonths.map(monthLabel), 'or')} was posted or changed this time.`);
     }
     if (leftTotal.length) {
-      notes.push(`FleetSuite's entry for ${plural(leftTotal.length, 'invoice', 'invoices')} doesn't come to the invoice's total, so whatever `
-        + `FleetSuite holds for ${leftTotal.length === 1 ? 'it' : 'them'} stayed as it is: ${listed(leftTotal)}. Either the copy of the invoice `
-        + 'was caught mid-refresh, and the next run looks again, or the rule leaves out a line NetSuite posts, which Invoices vs NetSuite shows.');
+      const one = leftTotal.length === 1;
+      notes.push(`FleetSuite's ${one ? 'entry' : 'entries'} for ${documents(leftTotal.map((l) => l.kind))} ${one ? "doesn't come to its total" : "don't come to their totals"}, `
+        + `so whatever FleetSuite holds for ${one ? 'it' : 'them'} stayed as it is: ${listed(leftTotal.map((l) => l.number))}. `
+        + `Either the ${one ? 'copy was' : 'copies were'} caught mid-refresh, and the next run looks again, or the rule leaves out a line `
+        + 'NetSuite posts, which Invoices vs NetSuite shows.');
     }
     if (missingAccounts.size) {
       notes.push(`NetSuite account${missingAccounts.size === 1 ? '' : 's'} ${listed([...missingAccounts])} ${missingAccounts.size === 1 ? "isn't" : "aren't"} `
-        + 'in the chart of accounts yet, so invoices posting there weren\'t posted. Sync now on the chart of accounts page copies them.');
+        + 'in the chart of accounts yet, so invoices and credit memos posting there weren\'t posted. Sync now on the chart of accounts page copies them.');
     }
   } catch (err) {
     result.error = String((err as any)?.message || err).slice(0, 300);

@@ -24,6 +24,7 @@ const CTX: CheckContext = {
 const NAMES: ReasonNames = {
   account: (id) => ({ '120': '1200 Receivables', '400': '4000 Sales', '410': '4100 Other Sales', '220': '2200 Sales Tax', '500': '5000 Cost of Goods' } as Record<string, string>)[id] ?? `NetSuite account ${id}`,
   taxCode: (id) => (id === '900' ? 'Some County' : `tax code ${id}`),
+  doc: 'invoice',
 };
 
 const line = (lineId: string, itemId: string | null, cents: number | null, fields: Partial<InvoiceLine> = {}): InvoiceLine =>
@@ -118,6 +119,19 @@ describe('checkInvoice', () => {
     expect(checkInvoice({ lines: LINES, netsuite: POSTED, linesCopied: false }, CTX)).toEqual({ status: 'waiting', waiting: 'lines', problems: [], rows: [] });
     expect(check(LINES, [])).toMatchObject({ status: 'waiting', waiting: 'gl' });
     expect(check([line('1', '11', 0)], []).status).toBe('matches');
+  });
+
+  it('checks a credit memo the other way round, leaving out the cost of the stock that comes back', () => {
+    // The part and labor given back with their tax. Lines 4 and 5 put the part's stock back: they're not sales.
+    const lines = [line('1', '11', -10000), line('2', '13', -5000), line('3', '900', -1200, { tax: true, itemNumber: null }), line('4', '11', 0), line('5', '11', 0)];
+    const netsuite = [ns('0', '120', -16200), ns('1', '400', 10000), ns('2', '400', 5000), ns('3', '220', 1200), ns('4', '130', 3000), ns('5', '500', -3000)];
+    const c = check(lines, netsuite);
+    expect(c.status).toBe('matches');
+    expect(c.rows.map((r) => [r.lineId, r.fleetsuite?.account ?? null, r.fleetsuite?.cents ?? null, r.cost])).toEqual([
+      ['0', '120', -16200, false], ['1', '400', 10000, false], ['2', '400', 5000, false], ['3', '220', 1200, false], ['4', null, null, true], ['5', null, null, true],
+    ]);
+    // Read the wrong way round, every line would differ.
+    expect(check(lines.map((l) => ({ ...l, cents: -(l.cents ?? 0) })), netsuite).status).toBe('differs');
   });
 });
 
@@ -261,7 +275,7 @@ describe('checkMonth', () => {
     { netsuite_account_id: '500', number: '5000', name: 'Cost of Goods', account_type: 'cost_of_goods_sold', company: null, active: true, is_summary: false },
   ];
   const invoice = (number: string, fields: Partial<InvoiceMonthData['invoices'][number]> = {}): InvoiceMonthData['invoices'][number] => ({
-    id: `id-${number}`, netsuite_id: number.replace(/\D/g, ''), number, date: '2026-09-15', total: '162.00', voided: false, customer: 'A Customer',
+    id: `id-${number}`, doc_type: 'invoice', netsuite_id: number.replace(/\D/g, ''), number, date: '2026-09-15', total: '162.00', voided: false, customer: 'A Customer',
     lines_copied: true, companies: ['BMG'],
     lines: [
       { line_id: '1', line_no: 1, kind: 'item', item_id: '11', item_number: 'PART-A', amount: '100.00', netamount: '-100' },
@@ -480,6 +494,44 @@ describe('checkMonth', () => {
     const lost = invoice('INV105', { lines: [{ line_id: '1', line_no: 1, kind: 'item', item_id: '11', item_number: 'PART-A', amount: '100.00', netamount: null }] });
     expect(checkMonth({ invoices: [lost], items: ITEMS }, { company: 'BMG', chart: CHART, taxAccounts: TAX }).invoices[0].reasons)
       .toEqual(["A line's amount couldn't be read from the copy of the invoice."]);
+  });
+
+  it('checks a month of credit memos, in their own words', () => {
+    // NetSuite's signed amounts come back the other way round on a credit memo, and it credits receivables.
+    const memo = (number: string, fields: Partial<InvoiceMonthData['invoices'][number]> = {}) => invoice(number, {
+      doc_type: 'credit_memo',
+      lines: invoice('X').lines.map((l) => ({ ...l, netamount: String(-Number(l.netamount)) })),
+      netsuite: invoice('X').netsuite.map((l) => ({ ...l, debit: l.credit, credit: l.debit })),
+      ...fields,
+    });
+    // The part's stock comes back on lines 4 and 5.
+    const withCost = memo('CM102', {
+      lines: [...memo('X').lines, ...['4', '5'].map((id) => ({ line_id: id, line_no: Number(id), kind: 'item', item_id: '11', item_number: 'PART-A', amount: '0.00', netamount: null }))],
+      netsuite: [...memo('X').netsuite, { line_id: '4', account: '500', debit: '0.00', credit: '30.00' }, { line_id: '5', account: '130', debit: '30.00', credit: '0.00' }],
+    });
+    const lost = memo('CM103', { lines: [{ line_id: '1', line_no: 1, kind: 'item', item_id: '11', item_number: 'PART-A', amount: '100.00', netamount: null }] });
+    const extra = memo('CM105', { netsuite: [...memo('X').netsuite, { line_id: '7', account: '400', debit: '1.00', credit: '0.00' }] });
+    const m = checkMonth(
+      { invoices: [memo('CM101'), withCost, lost, memo('CM104', { companies: [], netsuite: [] }), extra], items: ITEMS },
+      { company: 'BMG', kind: 'credit_memo', chart: CHART, taxAccounts: TAX },
+    );
+    expect(m.summary).toEqual({ invoices: 4, matches: 2, differs: 1, unworkable: 1, waiting: 0, withCost: 1 });
+    expect(m.invoices[0].rows.map((r) => [r.label, r.fleetsuite?.cents, r.netsuite?.cents])).toEqual([
+      ['Receivable', -16200, -16200],
+      ['PART-A', 10000, 10000],
+      ['INSTALL LABOR', 5000, 5000],
+      ['Sales tax, Some County', 1200, 1200],
+    ]);
+    expect(m.reasons.map((r) => r.text)).toEqual([
+      "A line's amount couldn't be read from the copy of the credit memo.",
+      "NetSuite posts to 4000 Sales on a line the copy of the credit memo doesn't have.",
+    ]);
+    expect(m.notes).toEqual([
+      '1 credit memo also books the cost of stock coming back, as NetSuite does when items are returned on a credit memo. '
+      + "FleetSuite will post the cost of stock with its own rules, so those lines aren't compared here.",
+      "1 more credit memo dated this month isn't in the copy of NetSuite's GL for either company: CM104. NetSuite may not have posted it, "
+      + "or the copy, which runs every two hours, hasn't reached it yet.",
+    ]);
   });
 });
 

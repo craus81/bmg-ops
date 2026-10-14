@@ -12,11 +12,23 @@ import { LAYOUT_TYPES, revenueBucket } from '@/lib/division-revenue';
  * An item with no income account, a payment item say, goes to the account
  * NetSuite has posted its invoice lines to since 2025.
  *
- * Pure: it works out an invoice's entry, or says why it can't, and posts
- * nothing. Amounts are whole cents, debit positive.
+ * A credit memo posts with the same working out, the other way round
+ * (credit_memo@1): NetSuite's signed amounts carry the direction, so a
+ * credit memo's lines debit revenue and sales tax, and receivables are
+ * credited.
+ *
+ * Pure: it works out an invoice's or credit memo's entry, or says why it
+ * can't, and posts nothing. Amounts are whole cents, debit positive.
  */
 
 export const INVOICE_RULE = 'invoice@1';
+export const CREDIT_MEMO_RULE = 'credit_memo@1';
+
+/** The NetSuite documents these rules post. */
+export type SalesDocKind = 'invoice' | 'credit_memo';
+
+/** Each kind's rule, as its entries record it. */
+export const RULES: Record<SalesDocKind, string> = { invoice: INVOICE_RULE, credit_memo: CREDIT_MEMO_RULE };
 
 /** NetSuite's id for an invoice's own line, where its receivable posts. */
 export const MAIN_LINE = '0';
@@ -28,7 +40,7 @@ export interface InvoiceLine {
   itemId: string | null;
   itemNumber: string | null;
   tax: boolean;
-  /** What the line charges the customer, in cents; a discount is negative. Null when it couldn't be read. */
+  /** What the line charges the customer, in cents: a discount, or a credit memo's line, is negative. Null when it couldn't be read. */
   cents: number | null;
 }
 

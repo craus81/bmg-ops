@@ -4,10 +4,12 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { COPY_FROM, monthOfDate, monthsBetween } from '@/lib/books/netsuite-gl';
 import { BOOKS_LISTS_SYNC } from '@/lib/books/netsuite-lists';
-import { INVOICE_RULE } from '@/lib/books/invoice-rule';
+import { RULES, type SalesDocKind } from '@/lib/books/invoice-rule';
 import { checkMonth, type ChartAccount, type InvoiceMonthData, type ItemAccountCount, type LineFactsRead, type TaxAccountCount } from '@/lib/books/invoice-check';
 import { readLineFacts } from '@/lib/books/invoice-line-facts';
-import { BOOKS_INVOICE_POSTING, POSTING_COMPANIES, invoiceBooks, postInvoices, unsaidFacts, type InvoicePosting } from '@/lib/books/invoice-posting';
+import {
+  BOOKS_INVOICE_POSTING, POSTING_COMPANIES, invoiceBooks, postInvoices, postingFor, postingKey, unsaidFacts, type InvoicePosting,
+} from '@/lib/books/invoice-posting';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { compactSuiteqlError } from '@/lib/sales-order-sync';
 
@@ -18,11 +20,12 @@ export const maxDuration = 300;
 const POSTING_BUDGET_MS = 240_000;
 
 /**
- * GET /api/admin/books/invoices?company=BMG&month=2026-09 — one company's
- * NetSuite invoices dated in a month, each with the entry FleetSuite's
- * invoice rule works out for it next to the GL lines NetSuite posted
- * (migration 364), and why any differ. With `summary=1` only the counts come
- * back, for checking every month in turn.
+ * GET /api/admin/books/invoices?company=BMG&month=2026-09&kind=invoice — one
+ * company's NetSuite invoices dated in a month, or with
+ * `kind=credit_memo` its credit memos, each with the entry FleetSuite's rule
+ * works out for it next to the GL lines NetSuite posted (migrations 364 and
+ * 370), and why any differ. With `summary=1` only the counts come back, for
+ * checking every month in turn.
  *
  * What the copy of the invoices' lines doesn't keep (which lines are cost of
  * goods, a discount or markup set at the top, each line's own amount,
@@ -74,11 +77,13 @@ export async function GET(req: NextRequest) {
     ? `${askedMonth}-01`
     : months.includes(previous) ? previous : months[0];
 
+  const kind: SalesDocKind = params.get('kind') === 'credit_memo' ? 'credit_memo' : 'invoice';
+
   const res = await service.rpc('gl_invoice_month', { p_company: company, p_month: month });
   if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
   const data = (res.data ?? {}) as Partial<InvoiceMonthData>;
 
-  const invoices = data.invoices ?? [];
+  const invoices = (data.invoices ?? []).filter((i) => i.doc_type === kind);
   let facts: LineFactsRead | { error: string } | null = null;
   if (invoices.length) {
     try {
@@ -99,7 +104,7 @@ export async function GET(req: NextRequest) {
     if (mine.length) {
       const held = await service.rpc('gl_invoice_postings', { p_company: company, p_source_ids: mine, p_lines: true });
       if (held.error) return NextResponse.json({ error: held.error.message }, { status: 500 });
-      for (const p of ((held.data as any)?.invoices ?? []) as InvoicePosting[]) postings.set(p.source_id, p);
+      for (const p of ((held.data as any)?.invoices ?? []) as InvoicePosting[]) postings.set(postingKey(p.source_type, p.source_id), p);
     }
   }
 
@@ -108,17 +113,19 @@ export async function GET(req: NextRequest) {
     { invoices, items: data.items ?? [] },
     {
       company,
+      kind,
       chart: accounts.data.map(({ company_id, ...a }) => ({ ...a, company: company_id ? codeOf.get(company_id) ?? null : null })),
       taxAccounts: Array.isArray(lastLists?.taxAccounts) ? lastLists.taxAccounts : null,
       itemAccounts: Array.isArray(lastLists?.itemAccounts) ? lastLists.itemAccounts : null,
       facts,
     },
-    postings ? (w) => invoiceBooks(w, postings!.get(w.invoice.netsuite_id), decides) : undefined,
+    postings ? (w) => invoiceBooks(w, postingFor(postings!, w), decides) : undefined,
   );
 
-  if (params.get('summary') === '1') return NextResponse.json({ company, month, summary: check.summary });
+  if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });
   return NextResponse.json({
-    rule: INVOICE_RULE,
+    rule: RULES[kind],
+    kind,
     companies: (companies.data || []).map((c) => ({ code: c.code, name: c.name })),
     company,
     month,
@@ -131,9 +138,10 @@ export async function GET(req: NextRequest) {
 }
 
 /**
- * POST /api/admin/books/invoices — post invoices to FleetSuite's books now
- * rather than wait for the two-hourly run. Same job, same record of how it
- * went; the response says only how the run went, the page reloads the rest.
+ * POST /api/admin/books/invoices — post invoices and credit memos to
+ * FleetSuite's books now rather than wait for the two-hourly run. Same job,
+ * same record of how it went; the response says only how the run went, the
+ * page reloads the rest.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireSuperAdmin(req);

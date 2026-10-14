@@ -1,8 +1,9 @@
-// Migration 367 posts NetSuite's invoices to FleetSuite's own journal. This
-// runs migration 314 (with stand-ins for the app tables it points at) and
-// migrations 359–364 and 367 in an in-memory Postgres (PGlite) as the app's
-// server login and holds the new functions' rules, then runs the posting job
-// against them with a fake NetSuite that answers the job's own SuiteQL.
+// Migration 367 posts NetSuite's invoices to FleetSuite's own journal, and
+// migration 370 its credit memos. This runs migration 314 (with stand-ins
+// for the app tables it points at) and migrations 359–364, 367 and 370 in an
+// in-memory Postgres (PGlite) as the app's server login and holds the
+// functions' rules, then runs the posting job against them with a fake
+// NetSuite that answers the job's own SuiteQL.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -38,8 +39,8 @@ const FEB = '2025-02-01';
 const MAR = '2025-03-01';
 
 // A fresh database with Supabase's API roles and default grants, migrations
-// 314, 359–364 and 367 run twice as the owner, a made-up chart of accounts
-// and copy of NetSuite's items, then the app's server login.
+// 314, 359–364, 367 and 370 run twice as the owner, a made-up chart of
+// accounts and copy of NetSuite's items, then the app's server login.
 async function freshDb(): Promise<PGlite> {
   const pg = new PGlite();
   await pg.exec(`
@@ -58,7 +59,7 @@ async function freshDb(): Promise<PGlite> {
   for (const file of [
     '314-ledger.sql', '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '364-books-invoice-check.sql',
-    '367-books-invoice-posting.sql',
+    '367-books-invoice-posting.sql', '370-books-credit-memos.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -88,7 +89,7 @@ async function freshDb(): Promise<PGlite> {
 /** A Postgres text[] literal, as PostgREST sends a list. */
 const textArray = (items: string[]) => `{${items.map((s) => `"${s.replace(/["\\]/g, '\\$&')}"`).join(',')}}`;
 
-// ── NetSuite's invoices, and the copies of them ────────────────────────────
+// ── NetSuite's invoices and credit memos, and the copies of them ───────────
 
 interface NsLine {
   id: string;
@@ -103,6 +104,8 @@ interface NsLine {
 }
 
 interface NsInvoice {
+  /** A credit memo, which NetSuite posts the other way round; an invoice when left out. */
+  kind?: 'credit_memo';
   ref: string;
   number: string;
   date: string;
@@ -120,38 +123,42 @@ const labor = (amount: string, id = '1'): NsLine => ({ id, kind: 'item', item: '
 const tax = (amount: string, id: string): NsLine => ({ id, kind: 'tax', item: '900', number: null, amount, account: '220' });
 
 /**
- * Copies an invoice as the ledger mirror and the GL copy would. `lines` are
- * the mirror's when it hasn't caught up with NetSuite's (null: it has copied
- * none yet).
+ * Copies an invoice or credit memo as the ledger mirror and the GL copy
+ * would. `lines` are the mirror's when it hasn't caught up with NetSuite's
+ * (null: it has copied none yet). The mirror keeps NetSuite's signed net
+ * amounts, a sale negative on an invoice and positive on a credit memo, and
+ * NetSuite posts a credit memo the other way round.
  */
 async function copy(pg: PGlite, inv: NsInvoice, lines: NsLine[] | null = inv.lines) {
+  const memo = inv.kind === 'credit_memo';
   await pg.query('DELETE FROM ledger_invoices WHERE external_ref = $1', [inv.ref]);
   await pg.query('DELETE FROM gl_netsuite_transactions WHERE netsuite_id = $1', [inv.ref]);
   const total = (inv.lines.reduce((sum, l) => sum + Math.round(Number(l.amount) * 100), 0) / 100).toFixed(2);
   const doc = await pg.query<{ id: string }>(
     `INSERT INTO ledger_invoices (source, external_id, external_ref, doc_type, doc_number, doc_date, total, voided, deleted_at,
                                   lines_synced_at, party_name, customer_id)
-     VALUES ('netsuite', $1, $2, 'invoice', $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-    [`CustInvc/${inv.ref}`, inv.ref, inv.number, inv.date, total, !!inv.voided, inv.deleted ? '2025-03-14T00:00:00Z' : null,
-      lines ? '2025-03-14T00:00:00Z' : null, inv.customer ?? 'A Customer', inv.customerId ?? null],
+     VALUES ('netsuite', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+    [`${memo ? 'CustCred' : 'CustInvc'}/${inv.ref}`, inv.ref, memo ? 'credit_memo' : 'invoice', inv.number, inv.date, total, !!inv.voided,
+      inv.deleted ? '2025-03-14T00:00:00Z' : null, lines ? '2025-03-14T00:00:00Z' : null, inv.customer ?? 'A Customer', inv.customerId ?? null],
   );
   for (const [i, l] of (lines ?? inv.lines).entries()) {
     await pg.query(
       `INSERT INTO ledger_invoice_lines (document_id, line_external_id, line_no, line_kind, item_external_id, item_number, amount, raw)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
-      [doc.rows[0].id, l.id, i + 1, l.kind, l.item, l.number, l.amount, JSON.stringify(lines ? { netamount: `-${l.amount}` } : {})],
+      [doc.rows[0].id, l.id, i + 1, l.kind, l.item, l.number, l.amount, JSON.stringify(lines ? { netamount: `${memo ? '' : '-'}${l.amount}` } : {})],
     );
   }
   if (!inv.company || inv.deleted) return;
   const month = `${inv.date.slice(0, 7)}-01`;
   await pg.query(
     `INSERT INTO gl_netsuite_transactions (netsuite_id, tran_type, tranid, trandate, posting_month, content_hash, sweep)
-     VALUES ($1, 'CustInvc', $2, $3, $4, 'x', 's')`,
-    [inv.ref, inv.number, inv.date, month],
+     VALUES ($1, $2, $3, $4, $5, 'x', 's')`,
+    [inv.ref, memo ? 'CustCred' : 'CustInvc', inv.number, inv.date, month],
   );
+  const side = (amount: string) => (memo ? { debit: amount, credit: '0.00' } : { debit: '0.00', credit: amount });
   const posted = [
-    { id: '0', account: inv.company === 'BMG' ? '120' : '121', debit: total, credit: '0.00' },
-    ...inv.lines.map((l) => ({ id: l.id, account: l.account, debit: '0.00', credit: l.amount })),
+    { id: '0', account: inv.company === 'BMG' ? '120' : '121', ...(memo ? { debit: '0.00', credit: total } : { debit: total, credit: '0.00' }) },
+    ...inv.lines.map((l) => ({ id: l.id, account: l.account, ...side(l.amount) })),
   ];
   for (const p of posted) {
     await pg.query(
@@ -188,7 +195,8 @@ class FakeNetSuite {
     }
     const ids = (q.match(/tl\.transaction IN \(([\d, ]+)\)/)?.[1] ?? '').split(',').map((s) => s.trim());
     return ids.flatMap((id) => (this.invoices.get(id)?.lines ?? []).map((l) => {
-      const says: Record<string, unknown> = { iscogs: 'F', transactiondiscount: 'F', foreignamount: `-${l.amount}`, quantity: '1', rate: l.amount };
+      const sign = this.invoices.get(id)?.kind === 'credit_memo' ? '' : '-';
+      const says: Record<string, unknown> = { iscogs: 'F', transactiondiscount: 'F', foreignamount: `${sign}${l.amount}`, quantity: '1', rate: l.amount };
       return { txn_id: Number(id), line_id: Number(l.id), ...Object.fromEntries(columns.map((c) => [c, says[c]])) };
     }));
   };
@@ -196,12 +204,13 @@ class FakeNetSuite {
 
 // ── The functions ──────────────────────────────────────────────────────────
 
-describe('migration 367\'s functions', () => {
+describe('migrations 367 and 370\'s functions', () => {
   let db: PGlite;
   beforeAll(async () => {
     db = await freshDb();
     await copy(db, { ref: '301', number: 'INV301', date: '2025-02-05', company: 'BMG', customerId: CUSTOMER, lines: [part('10.00')] });
     await copy(db, { ref: '304', number: 'INV304', date: '2025-02-06', company: 'BMG', lines: [part('10.00')] });
+    await copy(db, { kind: 'credit_memo', ref: '305', number: 'CM305', date: '2025-02-07', company: 'BMG', customerId: CUSTOMER, lines: [part('4.00')] });
   }, 60_000);
   afterAll(async () => { await db?.close(); });
 
@@ -235,9 +244,18 @@ describe('migration 367\'s functions', () => {
   let first: { id: string; entry_no: number };
   let second: { id: string; entry_no: number };
 
-  it('gl_invoice_month gives each invoice the FleetSuite customer the ledger mirror matched it to', async () => {
+  it('gl_invoice_month gives each invoice and credit memo its kind and the FleetSuite customer the ledger mirror matched it to', async () => {
     const month = await one<InvoiceMonthData>(`SELECT gl_invoice_month('BMG', '2025-02-01') AS r`);
-    expect(month.invoices.map((i) => [i.number, i.customer_id])).toEqual([['INV301', CUSTOMER], ['INV304', null]]);
+    expect(month.invoices.map((i) => [i.number, i.doc_type, i.customer_id])).toEqual([
+      ['INV301', 'invoice', CUSTOMER], ['INV304', 'invoice', null], ['CM305', 'credit_memo', CUSTOMER],
+    ]);
+    // A credit memo's lines come signed the other way round, and NetSuite credits receivables.
+    const memo = month.invoices[2];
+    expect(memo.lines.map((l) => [l.line_id, l.amount, l.netamount])).toEqual([['1', '4.00', '4.00']]);
+    expect(memo.netsuite).toEqual([
+      { line_id: '0', account: '120', debit: '0.00', credit: '4.00' },
+      { line_id: '1', account: '400', debit: '4.00', credit: '0.00' },
+    ]);
   });
 
   it('gl_repost_entry reverses a document\'s entry and posts its new one together', async () => {
@@ -298,6 +316,7 @@ describe('migration 367\'s functions', () => {
 
     expect(await postings('BMG', null, false)).toEqual([
       {
+        source_type: 'invoice',
         source_id: '301',
         entries: 2,
         unreversed: [second.id],
@@ -310,6 +329,7 @@ describe('migration 367\'s functions', () => {
       },
       {
         // Not in the copy of NetSuite's invoices.
+        source_type: 'invoice',
         source_id: '302',
         entries: 1,
         unreversed: [other.id],
@@ -340,6 +360,39 @@ describe('migration 367\'s functions', () => {
       ['302', 0, null, null],
       ['304', 1, expect.any(Number), { number: 'INV304', deleted: false, voided: true }],
     ]);
+  });
+
+  it('gl_invoice_postings reads credit memos too, each looked up among the copies of its own kind', async () => {
+    const memoEntry = (key: string, amount: string) => entry('BMG', key, '305', amount, {
+      source_type: 'credit_memo',
+      posting_rule: 'credit_memo@1',
+      memo: 'CM305, A Customer',
+      lines: [
+        { account_id: ACCOUNT[120], credit: amount, source_line_ref: '0', customer_id: CUSTOMER },
+        { account_id: ACCOUNT[400], debit: amount, division: 'upfit', item_number: 'PART-A', source_line_ref: '1' },
+      ],
+    });
+    const memo = await post(memoEntry('credit_memo:305:1', '4.00'));
+    const replaced = (await repost(memo.id, 'CM305 changed in NetSuite', memoEntry('credit_memo:305:2', '5.00'))).entry;
+    // An invoice's entry under the credit memo's NetSuite id is another document's, and finds no invoice of that id in the copy.
+    await post(entry('BMG', 'invoice:305:1', '305', '1.00'));
+
+    const held = await postings('BMG', ['305'], true);
+    expect(held.map((p) => [p.source_type, p.source_id, p.entries, p.unreversed.length, p.invoice])).toEqual([
+      ['credit_memo', '305', 2, 1, { number: 'CM305', deleted: false, voided: false }],
+      ['invoice', '305', 1, 1, null],
+    ]);
+    expect(held[0].current).toEqual({
+      id: replaced.id,
+      entry_no: replaced.entry_no,
+      entry_date: '2025-02-05',
+      lines: [
+        { account: '120', debit: '0.00', credit: '5.00', division: null, source_line_ref: '0', customer_id: CUSTOMER },
+        { account: '400', debit: '5.00', credit: '0.00', division: 'upfit', source_line_ref: '1', customer_id: null },
+      ],
+    });
+    // A credit memo's entry can't be replaced with an invoice's, or the other way round.
+    await expect(repost(replaced.id, 'CM305 changed in NetSuite', entry('BMG', 'invoice:305:2', '305', '5.00'))).rejects.toThrow(/another document's/);
   });
 
   it('is the service role\'s alone', async () => {
@@ -498,8 +551,8 @@ describe('the posting job against the real functions', () => {
       expect(r.partial).toBeUndefined();
       expect(r.failed).toBeUndefined();
       expect(r.notes).toEqual([
-        "FleetSuite's entry for 1 invoice doesn't come to the invoice's total, so whatever FleetSuite holds for it stayed as it is: INV208. "
-        + 'Either the copy of the invoice was caught mid-refresh, and the next run looks again, or the rule leaves out a line NetSuite posts, '
+        "FleetSuite's entry for 1 invoice doesn't come to its total, so whatever FleetSuite holds for it stayed as it is: INV208. "
+        + 'Either the copy was caught mid-refresh, and the next run looks again, or the rule leaves out a line NetSuite posts, '
         + 'which Invoices vs NetSuite shows.',
       ]);
 
@@ -614,7 +667,7 @@ describe('the posting job against the real functions', () => {
       let r = await run();
       expect(r).toMatchObject({ months: [JAN, FEB, MAR], posted: 0, replaced: 0, reversed: 0 });
       expect(r.notes).toEqual([
-        "NetSuite couldn't be asked about the invoices' lines (socket hang up), so nothing dated Feb 2025 or Mar 2025 was posted or changed this time.",
+        "NetSuite couldn't be asked about the invoices' and credit memos' lines (socket hang up), so nothing dated Feb 2025 or Mar 2025 was posted or changed this time.",
       ]);
 
       ns.fail = null;
@@ -622,7 +675,7 @@ describe('the posting job against the real functions', () => {
       r = await run();
       expect(r).toMatchObject({ posted: 0, replaced: 0, reversed: 0 });
       expect(r.notes).toEqual([
-        "NetSuite wouldn't say the lines' own amounts on the invoices, so nothing dated Feb 2025 or Mar 2025 was posted or changed this time.",
+        "NetSuite wouldn't say the lines' own amounts on the invoices and credit memos, so nothing dated Feb 2025 or Mar 2025 was posted or changed this time.",
       ]);
       expect(await journal()).toEqual(before);
 
@@ -653,7 +706,7 @@ describe('the posting job against the real functions', () => {
         ],
       });
       expect(r.notes).toEqual([
-        "NetSuite account 420 isn't in the chart of accounts yet, so invoices posting there weren't posted. Sync now on the chart of accounts page copies them.",
+        "NetSuite account 420 isn't in the chart of accounts yet, so invoices and credit memos posting there weren't posted. Sync now on the chart of accounts page copies them.",
       ]);
       expect(await journal()).toEqual(before);
       expect(JSON.stringify(record().last_result)).not.toMatch(/\d\.\d|\$/);
@@ -685,6 +738,73 @@ describe('the posting job against the real functions', () => {
 
       ns.takes = 0;
       expect(await run()).toMatchObject({ months: [JAN, FEB, MAR], posted: 3 });
+    });
+  });
+
+  describe('credit memos', () => {
+    // Made-up credit memos: CM401 gives back a part with its tax, CM402 some labor.
+    const MEMOS = (): NsInvoice[] => [
+      { kind: 'credit_memo', ref: '401', number: 'CM401', date: '2025-02-10', company: 'BMG', customerId: CUSTOMER, lines: [part('40.00'), tax('3.00', '2')] },
+      { kind: 'credit_memo', ref: '402', number: 'CM402', date: '2025-03-10', company: 'BMG', lines: [labor('10.00')] },
+    ];
+
+    beforeAll(async () => {
+      await startOver();
+      for (const memo of MEMOS()) {
+        ns.invoices.set(memo.ref, memo);
+        await copy(pg, memo);
+      }
+    });
+
+    it('posts each credit memo the other way round, under its own kind and rule, along with the invoices', async () => {
+      const r = await run();
+      expect(r).toMatchObject({ months: [JAN, FEB, MAR], posted: 5, replaced: 0, reversed: 0, unchanged: 0, left: 3, failedCount: 0 });
+      const memos = (await journal()).filter((e) => e.key?.startsWith('credit_memo:'));
+      expect(memos).toEqual([
+        { no: expect.any(Number), date: '2025-02-10', key: 'credit_memo:401:1', reverses: null, memo: 'CM401, A Customer' },
+        { no: expect.any(Number), date: '2025-03-10', key: 'credit_memo:402:1', reverses: null, memo: 'CM402, A Customer' },
+      ]);
+      expect(await linesOf(memos[0].no)).toEqual([
+        { account: '120', debit: '0.00', credit: '43.00', division: null, customer_id: CUSTOMER, item_number: null, source_line_ref: '0' },
+        { account: '400', debit: '40.00', credit: '0.00', division: 'upfit', customer_id: null, item_number: 'PART-A', source_line_ref: '1' },
+        { account: '220', debit: '3.00', credit: '0.00', division: null, customer_id: null, item_number: null, source_line_ref: '2' },
+      ]);
+      expect((await pg.query(`SELECT source_type, posting_rule, count(*)::int AS n FROM gl_entries GROUP BY 1, 2 ORDER BY 1`)).rows).toEqual([
+        { source_type: 'credit_memo', posting_rule: 'credit_memo@1', n: 2 },
+        { source_type: 'invoice', posting_rule: 'invoice@1', n: 3 },
+      ]);
+      // INV201, INV202 and INV204, less the two credit memos.
+      expect(await balances()).toEqual({ 120: '229.00', 220: '-9.00', 400: '-220.00' });
+      expect(await run()).toMatchObject({ posted: 0, replaced: 0, reversed: 0, unchanged: 5 });
+    });
+
+    it('replaces a credit memo\'s entry when NetSuite changes it, and reverses it when NetSuite deletes it', async () => {
+      await edit('402', (m) => { m.lines = [labor('12.00')]; });
+      expect(await run()).toMatchObject({ posted: 0, replaced: 1, reversed: 0, unchanged: 4 });
+      expect((await journal()).slice(-2)).toEqual([
+        { no: expect.any(Number), date: '2025-03-10', key: null, reverses: expect.any(Number), memo: 'CM402 changed in NetSuite' },
+        { no: expect.any(Number), date: '2025-03-10', key: 'credit_memo:402:2', reverses: null, memo: 'CM402, A Customer' },
+      ]);
+
+      await edit('401', (m) => { m.deleted = true; });
+      expect(await run()).toMatchObject({ posted: 0, replaced: 0, reversed: 1, unchanged: 4 });
+      expect((await journal()).slice(-1)).toEqual([
+        { no: expect.any(Number), date: '2025-02-10', key: null, reverses: expect.any(Number), memo: 'CM401 deleted in NetSuite' },
+      ]);
+      expect(await balances()).toEqual({ 120: '270.00', 220: '-12.00', 400: '-258.00' });
+    });
+
+    it('names invoices and credit memos that don\'t come to their totals in one note', async () => {
+      const memo: NsInvoice = { kind: 'credit_memo', ref: '403', number: 'CM403', date: '2025-03-12', company: 'BMG', lines: [labor('5.00'), part('6.00', '2')] };
+      ns.invoices.set(memo.ref, memo);
+      await copy(pg, memo, [labor('5.00')]);
+      const r = await run();
+      expect(r).toMatchObject({ posted: 0, replaced: 0, reversed: 0, left: 4 });
+      expect(r.notes).toEqual([
+        "FleetSuite's entries for 1 invoice and 1 credit memo don't come to their totals, so whatever FleetSuite holds for them stayed as it is: "
+        + 'INV208, CM403. Either the copies were caught mid-refresh, and the next run looks again, or the rule leaves out a line NetSuite posts, '
+        + 'which Invoices vs NetSuite shows.',
+      ]);
     });
   });
 });
