@@ -208,7 +208,14 @@ interface WrapAttachQuote {
   hasDiagram: boolean;
   fileCount: number;
   filmCount: number;
+  filmNames: string[];
   totalSqft: number;
+  pictureUrl: string | null;
+  pictureCount: number;
+  kits: number;
+  materialsTotal: number;
+  laborTotal: number;
+  total: number;
   attach: { diagram?: boolean; attachments?: boolean; films?: boolean } | null;
 }
 
@@ -5135,7 +5142,7 @@ export default function EstimatesPage() {
           padding: '12px', marginBottom: '12px',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-            <div style={labelStyle}>Coverage proof on the customer copy</div>
+            <div style={labelStyle}>Graphics</div>
             <button
               onClick={() => addGraphics()}
               disabled={saving}
@@ -5148,9 +5155,9 @@ export default function EstimatesPage() {
             >+ Another graphics worksheet</button>
           </div>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
-            Tick what the estimate PDF and approval email carry. The estimate reads the quote's
-            current proof every time it's sent — redraw it in the wrap builder and the customer's
-            copy follows, with nothing to re-add here.
+            Built in the Graphics Builder; its prices are the 3M Vinyl and Graphics Install Labor lines
+            below and follow every save of the worksheet. Tick what the estimate PDF and approval
+            email carry — the customer's copy always shows the worksheet's current proof.
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {wrapAttachQuotes.map(q => {
@@ -5194,27 +5201,88 @@ export default function EstimatesPage() {
                       {q.hasDiagram && q.attach?.diagram ? ', and its coverage proof is on the customer copy.' : '.'}
                     </div>
                   )}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                    <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)' }}>
-                      {/* Opens the wrap quote on its own, in a new tab. */}
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', marginBottom: '8px' }}>
+                    {/* The worksheet's coverage proof, read live — redraw it in the
+                        builder and this picture changes with no re-add. */}
+                    {q.pictureUrl ? (
                       <a
-                        href={`/admin/wrap-quote?id=${q.id}`}
+                        href={q.pictureUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        title="Open this wrap quote on its own (new tab)"
-                        style={{ color: '#3b82f6', textDecoration: 'underline' }}
-                      >{q.quoteNumber}</a>{q.vehicle ? ` — ${q.vehicle}` : ''}
+                        title={q.pictureCount > 1 ? `Open the first of ${q.pictureCount} coverage views (new tab)` : 'Open the coverage proof (new tab)'}
+                        style={{ flexShrink: 0, position: 'relative', display: 'block' }}
+                      >
+                        <img
+                          src={q.pictureUrl}
+                          alt={`Coverage proof for ${q.quoteNumber}`}
+                          style={{
+                            width: '112px', height: '80px', objectFit: 'contain', display: 'block',
+                            borderRadius: '6px', border: '1px solid var(--border)', background: '#fff',
+                          }}
+                        />
+                        {q.pictureCount > 1 && (
+                          <span style={{
+                            position: 'absolute', right: '4px', bottom: '4px', fontSize: '10px', fontWeight: 700,
+                            padding: '1px 5px', borderRadius: '8px', background: 'rgba(0,0,0,0.65)', color: '#fff',
+                          }}>+{q.pictureCount - 1}</span>
+                        )}
+                      </a>
+                    ) : (
+                      <div
+                        title="No coverage proof drawn yet — Edit in Graphics Builder to draw one"
+                        style={{
+                          flexShrink: 0, width: '112px', height: '80px', borderRadius: '6px',
+                          border: '1px dashed var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: '10px', color: 'var(--text-muted)', textAlign: 'center', padding: '4px',
+                        }}
+                      >No proof drawn yet</div>
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {q.vehicle || 'Vehicle graphics'}
+                          {' '}
+                          {/* Opens the worksheet on its own, in a new tab. */}
+                          <a
+                            href={`/admin/wrap-quote?id=${q.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Open this worksheet on its own (new tab)"
+                            style={{ color: '#3b82f6', textDecoration: 'underline', fontSize: '11px', fontWeight: 600 }}
+                          >{q.quoteNumber}</a>
+                        </div>
+                        <button
+                          onClick={() => addGraphics(q.id)}
+                          disabled={saving}
+                          title="Reopen this worksheet in the Graphics Builder to change or redraw it; saving it updates this estimate"
+                          style={{
+                            padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                            background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+                            color: 'var(--text-body)', cursor: saving ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+                          }}
+                        >Edit in Graphics Builder</button>
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                        {q.filmNames.length > 0
+                          ? q.filmNames.join(', ')
+                          : q.filmCount > 0 ? `${q.filmCount} film${q.filmCount === 1 ? '' : 's'}` : 'No film chosen yet'}
+                        {q.totalSqft > 0 ? ` · ${q.totalSqft.toFixed(1)} ft²` : ''}
+                        {q.kits > 1 ? ` · ${q.kits} kits` : ''}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                        {q.total > 0 ? (
+                          <>
+                            Materials {fmt(q.materialsTotal)} · Labor {fmt(q.laborTotal)} ·{' '}
+                            <strong style={{ color: 'var(--text-body)' }}>{fmt(q.total)}</strong>
+                          </>
+                        ) : (
+                          <span style={{ color: '#f59e0b' }}>Not priced yet — nothing on the estimate's lines from this worksheet</span>
+                        )}
+                      </div>
                     </div>
-                    <button
-                      onClick={() => addGraphics(q.id)}
-                      disabled={saving}
-                      title="Reopen this wrap quote in the builder to change or redraw it; saving it updates this estimate"
-                      style={{
-                        padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-                        background: 'var(--subtle-bg)', border: '1px solid var(--border)',
-                        color: 'var(--text-body)', cursor: saving ? 'wait' : 'pointer', whiteSpace: 'nowrap',
-                      }}
-                    >Edit in Graphics Builder</button>
+                  </div>
+                  <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    On the customer copy
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                     {rows.map(r => (
@@ -5243,7 +5311,7 @@ export default function EstimatesPage() {
                   </div>
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '5px' }}>
                     {rows.filter(r => !r.available).length === rows.length
-                      ? 'Nothing on this quote to attach yet — draw the coverage proof in the wrap builder first.'
+                      ? 'Nothing on this worksheet to attach yet — draw the coverage proof in the Graphics Builder first.'
                       : rows.find(r => r.field === 'diagram')!.note}
                   </div>
                 </div>

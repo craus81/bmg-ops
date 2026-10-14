@@ -3,6 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { sanitizePhotoProofs } from '@/lib/coverage-proof';
+import { coveragePictures } from '@/lib/estimate-graphics';
+import { sameOriginStorageUrl } from '@/lib/r2';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,7 +42,7 @@ const PatchSchema = z.object({
 });
 
 const QUOTE_COLUMNS =
-  'id, quote_number, vehicle_description, diagram_path, photo_path, photo_boxes, photo_proofs, attachments, measurements, estimate_attach, total_area_sqft';
+  'id, quote_number, vehicle_description, diagram_path, photo_path, photo_boxes, photo_proofs, attachments, measurements, estimate_attach, total_area_sqft, package_qty, materials_total, labor_total, total';
 
 /** What the edit view needs to describe one linked quote's proof. */
 function describeQuote(q: any) {
@@ -48,6 +50,13 @@ function describeQuote(q: any) {
   const withPictures = proofs.filter(p => p.diagram_path);
   const files = Array.isArray(q.attachments) ? q.attachments : [];
   const measurements = Array.isArray(q.measurements) ? q.measurements : [];
+  // The builder snapshots each area's film as `substrate: { id, name }`;
+  // older rows carried a bare `substrate_id` and no name.
+  const filmIds = new Set(measurements.map((m: any) => m?.substrate?.id || m?.substrate_id).filter(Boolean));
+  const filmNames = [...new Set(measurements.map((m: any) => String(m?.substrate?.name || '').trim()).filter(Boolean))] as string[];
+  // The first coverage picture, served same-origin so the estimate page can
+  // show it as a thumbnail with the session cookie (no public URL needed).
+  const pictures = coveragePictures(q);
   return {
     id: q.id,
     quoteNumber: q.quote_number,
@@ -60,8 +69,15 @@ function describeQuote(q: any) {
     fileCount: files.length,
     // The builder snapshots the film as `substrate: { id }`; older rows
     // carried a bare `substrate_id`.
-    filmCount: new Set(measurements.map((m: any) => m?.substrate?.id || m?.substrate_id).filter(Boolean)).size,
+    filmCount: filmIds.size,
+    filmNames,
     totalSqft: parseFloat(q.total_area_sqft) || 0,
+    pictureUrl: pictures.length > 0 ? sameOriginStorageUrl('vehicle-templates', pictures[0].path) : null,
+    pictureCount: pictures.length,
+    kits: Math.max(1, parseInt(String(q.package_qty ?? 1), 10) || 1),
+    materialsTotal: parseFloat(q.materials_total) || 0,
+    laborTotal: parseFloat(q.labor_total) || 0,
+    total: parseFloat(q.total) || 0,
     // null = a legacy lines-only add (pre-migration-223 semantics), which
     // the edit view shows as everything switched off rather than hiding.
     attach: q.estimate_attach || null,
