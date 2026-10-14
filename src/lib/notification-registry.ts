@@ -108,6 +108,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'estimate_review_update', label: 'Your estimate\'s review came back', description: 'The teammate reviewing your estimate approved it, sent it back with changes, or passed it to someone else.', area: 'sales', defaultChannels: ['in_app', 'push', 'email'] },
   { type: 'approval_relink_requested', label: 'Customer asked for a fresh link', description: 'A customer found their approval link expired and requested a new one.', area: 'sales', defaultChannels: ['in_app', 'push'] },
   { type: 'credit_app_submitted', label: 'Credit application submitted', description: 'A customer completed the credit application.', area: 'sales', defaultChannels: ['in_app', 'push', 'email'] },
+  { type: 'after_hours_call', label: 'After-hours call answered', description: 'BMG\'s virtual assistant answered the main line while the office was closed and took a message. The email copy (summary, call-back button, transcript) always goes to the people picked for it.', area: 'sales', defaultChannels: ['in_app', 'push'], audience: 'Valarie, Harold, Zach, Craig and Jessie (profiles flagged for after-hours call emails).' },
   { type: 'incoming_call', label: 'Incoming call matched', description: 'Caller ID matched a customer or lead on an inbound call.', area: 'sales', defaultChannels: ['in_app', 'push'] },
 
   // ── Graphics & proofs ─────────────────────────────────────────────────
