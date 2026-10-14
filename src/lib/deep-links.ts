@@ -318,6 +318,11 @@ export const deepLinks = {
    *  `?download=1` for a save-as (a 5-minute presigned URL). Never a public
    *  R2 URL: the `ledger` prefix is denied on the generic storage routes. */
   ledgerDocument: (documentId: string) => `/api/ledger/documents/${documentId}`,
+  /** NetSuite's own PDF of one transaction, as bytes (same-origin, staff
+   *  only). Feed it to `pdfViewer`. The top bar opens a NetSuite estimate
+   *  this way (netsuite_estimates, migration 372). */
+  netsuitePdf: (type: 'salesOrder' | 'invoice' | 'estimate', netsuiteId: string | number) =>
+    `/api/netsuite/pdf?type=${type}&id=${encodeURIComponent(String(netsuiteId))}&format=pdf`,
   /** In-app PDF viewer tab. Use this instead of linking a new tab straight at
    *  PDF bytes: a raw-PDF tab has no app chrome and no working Back button,
    *  so it strands whoever opened it (field bug: opening a PO PDF mid-import).

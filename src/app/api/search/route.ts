@@ -54,6 +54,21 @@ export async function GET(req: NextRequest) {
       return { results: {}, totals: {}, more: {} };
     });
 
+  // Estimates made in NetSuite (copied every two hours, migration 372), so
+  // "EST526" finds one FleetSuite never pushed. Rows that came from a
+  // FleetSuite estimate are left out: that estimate is already in the
+  // Estimates group under both numbers. Started now, awaited below.
+  const nsEstimatesPromise = features.has('estimates')
+    ? supabase
+        .from('netsuite_estimates')
+        .select('id, netsuite_id, tranid, trandate, customer_name, customer_netsuite_id, status_label, memo, otherrefnum, total', { count: 'exact' })
+        .is('estimate_id', null)
+        .or(anyOf(['tranid', 'otherrefnum', 'memo', 'customer_name']))
+        .order('trandate', { ascending: false, nullsFirst: false })
+        .limit(full ? FULL_PER_GROUP : MAX_PER_GROUP)
+        .then(r => r, err => ({ data: null, count: null, error: err }))
+    : null;
+
   // Caller-ID search (audit Stage 1: no phone search existed anywhere).
   // A phone-shaped query — digits with phone punctuation only — searches
   // the digit-stripped phone_digits columns (migrations 238/239) so
@@ -374,6 +389,12 @@ export async function GET(req: NextRequest) {
   if (allEstimates.length > 0) {
     results.estimates = allEstimates;
     totals.estimates = Math.max(allEstimates.length, (estimates.count ?? 0) + estimatesByCustomer.length);
+  }
+  const nsEstimates = nsEstimatesPromise ? await nsEstimatesPromise : null;
+  if (nsEstimates?.error) console.error('search: NetSuite estimates failed:', nsEstimates.error);
+  if (nsEstimates?.data?.length) {
+    results.ns_estimates = nsEstimates.data;
+    totals.ns_estimates = nsEstimates.count ?? nsEstimates.data.length;
   }
   if (parts.data?.length) {
     // Count is raw matching rows (pre-dedupe) — close enough for "of N".

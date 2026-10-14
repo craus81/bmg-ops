@@ -252,6 +252,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cron/ledger-netsuite-mirror/route.ts': cron('requireAdmin('),
   'src/app/api/cron/health-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/netsuite-sync/route.ts': cron('requireAdmin('),
+  'src/app/api/cron/netsuite-estimates/route.ts': cron('requireAdmin('),
   'src/app/api/cron/owner-brief/route.ts': cron('requireAdmin('),
   'src/app/api/cron/parts-email-scan/route.ts': cron('requireAdmin('),
   'src/app/api/cron/graphics-reminders/route.ts': cron('requireAdmin('),

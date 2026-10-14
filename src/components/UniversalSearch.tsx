@@ -36,6 +36,8 @@ export const GROUP_CONFIG: Record<string, { label: string; icon: string; color: 
   vehicles: { label: 'Vehicles', icon: '', color: '#34d399' },
   graphics_jobs: { label: 'Graphics Production Jobs', icon: '', color: '#a78bfa' },
   estimates: { label: 'Estimates', icon: '', color: '#fbbf24' },
+  // Made in NetSuite, never in FleetSuite (migration 372).
+  ns_estimates: { label: 'NetSuite Estimates', icon: '', color: '#fbbf24' },
   parts: { label: 'Parts Catalog', icon: '', color: '#f97316' },
   customers: { label: 'Customers', icon: '', color: '#06b6d4' },
   cni_companies: { label: 'CNI Companies', icon: '', color: '#f472b6' },
@@ -51,6 +53,10 @@ export const GROUP_CONFIG: Record<string, { label: string; icon: string; color: 
 
 /** Groups from src/lib/deep-search.ts, whose "more" is the full results page. */
 export const DEEP_GROUPS = new Set(['qb_history', 'ns_transactions', 'notes', 'bills']);
+
+/** Groups whose rows open their own URL (deepResultUrl) instead of a popout
+ *  page, and whose "more" is the full results page. */
+export const URL_GROUPS = new Set([...DEEP_GROUPS, 'ns_estimates']);
 
 /** The full results page (memos and notes get more rows there, plus bills). */
 export const searchAllUrl = (q: string) => `/search?q=${encodeURIComponent(q)}`;
@@ -174,6 +180,24 @@ export function renderResult(group: string, item: any, onSelect: (group: string,
           <div style={subtitleStyle}>
             {[item.title || '', estimateAltNumber(item), item.created_at ? formatDate(item.created_at) : ''].filter(Boolean).join(' · ')}
           </div>
+        </button>
+      );
+
+    // A NetSuite estimate FleetSuite never had: opens NetSuite's PDF.
+    case 'ns_estimates':
+      return (
+        <button key={item.id} onClick={select} style={resultBtnStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+            <span style={titleStyle}>{item.tranid || 'NetSuite estimate'}</span>
+            <div>
+              {item.status_label && <span style={{ ...statusBadge, color: statusColor(item.status_label) }}>{item.status_label}</span>}
+              {showMoney && item.total > 0 && <span style={valueStyle}>{formatCurrency(item.total)}</span>}
+            </div>
+          </div>
+          <div style={subtitleStyle}>
+            {[item.customer_name, item.otherrefnum ? `PO ${item.otherrefnum}` : '', item.trandate ? formatDate(item.trandate) : ''].filter(Boolean).join(' · ')}
+          </div>
+          {item.memo && <div style={snippetStyle}>{item.memo.length > 120 ? `${item.memo.slice(0, 120)}…` : item.memo}</div>}
         </button>
       );
 
@@ -324,6 +348,17 @@ export function deepResultUrl(group: string, item: any, backTo?: string | null):
     case 'ns_transactions':
     case 'notes':
       return item.url || null;
+    // NetSuite's PDF in the app's viewer; ← goes to the customer when we
+    // know them, else back to the search.
+    case 'ns_estimates': {
+      const back = item.customer_netsuite_id ? deepLinks.customerByNetsuiteId(item.customer_netsuite_id) : (backTo || null);
+      return item.netsuite_id
+        ? deepLinks.pdfViewer(deepLinks.netsuitePdf('estimate', item.netsuite_id), {
+            name: `NetSuite estimate ${item.tranid || item.netsuite_id}`,
+            back, backLabel: item.customer_netsuite_id ? (item.customer_name || 'Customer') : (back ? 'Search' : null),
+          })
+        : null;
+    }
     case 'bills':
       return item.pdf_document_id
         ? deepLinks.pdfViewer(deepLinks.ledgerDocument(item.pdf_document_id), {
@@ -483,7 +518,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
     }
     // Memos and notes carry their own destination (and no popout type).
     if (group === 'qb_history') { setQbRecordId(item.id); return; }
-    if (group === 'ns_transactions' || group === 'notes' || group === 'bills') {
+    if (group === 'ns_transactions' || group === 'notes' || group === 'bills' || group === 'ns_estimates') {
       const url = deepResultUrl(group, item);
       if (!url) return;
       onClose();
@@ -711,7 +746,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
             // is the full results page.
             const viewAllUrl = !hasMore ? null
               : VIEW_ALL[group] ? (canViewAll(group) ? VIEW_ALL[group](query) : null)
-              : DEEP_GROUPS.has(group) ? searchAllUrl(query) : null;
+              : URL_GROUPS.has(group) ? searchAllUrl(query) : null;
 
             return (
               <div key={group}>

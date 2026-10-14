@@ -16,7 +16,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { pathFor, type PopoutType } from '@/components/Popout';
 import QuickBooksRecordModal from '@/components/QuickBooksRecordModal';
 import {
-  GROUP_CONFIG, VIEW_ALL, DEEP_GROUPS, renderResult, deepResultUrl, searchAllUrl,
+  GROUP_CONFIG, VIEW_ALL, DEEP_GROUPS, URL_GROUPS, renderResult, deepResultUrl, searchAllUrl,
 } from '@/components/UniversalSearch';
 import { buildRecent, pushRecent } from '@/lib/command-palette';
 import { deepLinks } from '@/lib/deep-links';
@@ -81,7 +81,7 @@ export default function SearchPage() {
 
   const open = useCallback((group: string, item: any) => {
     if (group === 'qb_history') { setQbRecordId(item.id); return; }
-    if (DEEP_GROUPS.has(group)) {
+    if (URL_GROUPS.has(group)) {
       const url = deepResultUrl(group, item, searchAllUrl(urlQ));
       if (url) router.push(url);
       return;
@@ -166,7 +166,7 @@ export default function SearchPage() {
                 {renderResult(group, item, open, canSeeMoney)}
               </div>
             ))}
-            {DEEP_GROUPS.has(group) && (moreFlag || total > items.length) && (
+            {URL_GROUPS.has(group) && (moreFlag || total > items.length) && (
               <div style={{ padding: '8px 14px', fontSize: '11px', color: 'var(--text-muted)' }}>
                 Showing the newest {items.length}. Add another word to narrow it down.
               </div>

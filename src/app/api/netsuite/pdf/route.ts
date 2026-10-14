@@ -7,6 +7,11 @@ export const maxDuration = 60;
 /**
  * GET /api/netsuite/pdf?type=salesOrder|invoice|estimate&id=123
  * Generic PDF endpoint for any supported NetSuite transaction type.
+ *
+ * Answers JSON ({ success, pdfBase64 }) by default. `&format=pdf` answers
+ * the PDF itself, inline, so the in-app viewer (deepLinks.netsuitePdf →
+ * deepLinks.pdfViewer) can show it — the top bar opens a NetSuite estimate
+ * that way.
  */
 export async function GET(request: NextRequest) {
   const auth = await requireStaff(request);
@@ -35,6 +40,18 @@ export async function GET(request: NextRequest) {
 
     if (!result.success) {
       return NextResponse.json(result, { status: 400 });
+    }
+
+    if (searchParams.get('format') === 'pdf' && result.pdfBase64) {
+      const bytes = Buffer.from(result.pdfBase64, 'base64');
+      const filename = (result.filename || `${type}-${id}.pdf`).replace(/[^A-Za-z0-9._-]+/g, '_');
+      return new NextResponse(bytes, {
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `inline; filename="${filename}"`,
+          'Cache-Control': 'private, no-store',
+        },
+      });
     }
 
     return NextResponse.json(result);
