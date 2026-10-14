@@ -35,6 +35,13 @@ const REPORTS: ReportLink[] = [
     source: 'NetSuite',
   },
   {
+    title: 'Open Estimates',
+    blurb: 'Every estimate still waiting on someone: in review, handed back with changes, not sent yet, waiting on the customer, or approved with no sales order. Oldest first, with who it is waiting on and overdue ones in red, so nothing gets dropped.',
+    href: '/admin/reports/open-estimates',
+    source: 'FleetSuite',
+    visibility: 'admin',
+  },
+  {
     title: 'Quoted Tax Shortfall',
     blurb: 'Estimates whose saved tax is below what the tax math gives today — the fallout from the item-level Taxable checkbox that used to drop ordinary parts out of the tax base. Bucketed by what each one needs: a conversation if the customer already signed, a re-save if it hasn’t gone out yet.',
     href: '/admin/reports/quoted-tax-gap',
