@@ -87,6 +87,7 @@ describe('after-hours call email', () => {
     expect(html).not.toContain('<b>asap</b>');
     expect(html).toContain('href="tel:6365550199"');
     expect(html).toContain('https://go.bmgfleet.com/admin/prospects/p1');
+    expect(html).toContain('Open the call');
     expect(html).toContain('https://example.com/rec.wav');
     expect(html).toContain('Caller:</span>');
     expect(html).toContain('Wed, Oct 14, 6:12 PM');

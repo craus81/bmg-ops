@@ -146,6 +146,10 @@ export const deepLinks = {
   cniJobPhotos: (jobId: string) => `/admin/cni/jobs/${jobId}/photos`,
   /** Completion Photos: finished-work photos from every job, filterable. */
   completionPhotos: () => '/completion-photos',
+  /** After-hours Calls: calls BMG's virtual assistant answered while the office was closed. */
+  afterHoursCalls: () => '/after-hours-calls',
+  /** One after-hours call: summary, transcript, recording, called-back tick. */
+  afterHoursCall: (callId: string) => `/after-hours-calls?id=${callId}`,
   /** Public page for photos shared with a customer (the token is the credential). */
   sharedPhotos: (token: string) => `/shared-photos/${encodeURIComponent(token)}`,
   /** The vehicle record for one VIN — what was installed outside the shop,

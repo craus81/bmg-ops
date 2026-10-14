@@ -1,5 +1,8 @@
 import crypto from 'crypto';
 import { phoneDigits } from './dialpad';
+import { prettyPhone, reasonLabel, telHref, transcriptTurns } from './after-hours-calls';
+
+export { prettyPhone, reasonLabel } from './after-hours-calls';
 
 /**
  * Retell AI phone agent primitives — the after-hours answering service.
@@ -114,12 +117,6 @@ const esc = (s: string) => s
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-/** (636) 555-0142 for a 10-digit US number, else as given. */
-export function prettyPhone(phone: string | null | undefined): string {
-  const d = phoneDigits(phone);
-  return d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : String(phone || '');
-}
-
 function centralTime(isoTs: string | null): string | null {
   if (!isoTs) return null;
   return new Date(isoTs).toLocaleString('en-US', {
@@ -133,15 +130,6 @@ function duration(seconds: number | null): string | null {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return m ? `${m} min ${s} sec` : `${s} sec`;
-}
-
-const REASON_LABELS: Record<string, string> = {
-  quote: 'Quote request', status: 'Job or estimate status', billing: 'Billing', other: 'Other',
-};
-
-export function reasonLabel(reason: string | null): string {
-  if (!reason) return 'Message';
-  return REASON_LABELS[reason.toLowerCase()] || reason.charAt(0).toUpperCase() + reason.slice(1);
 }
 
 export function afterHoursCallSubject(call: RetellCall): string {
@@ -163,7 +151,7 @@ export function buildAfterHoursCallEmail(call: RetellCall, recordUrl: string, re
   add('Caller', call.callerName ? esc(call.callerName) : null);
   add('Company', call.callerCompany ? esc(call.callerCompany) : null);
   add('Call back', callback
-    ? `<a href="tel:${esc(callback.replace(/[^\d+]/g, ''))}" style="color:#1d4ed8;text-decoration:none;font-weight:700;">${esc(prettyPhone(callback))}</a>`
+    ? `<a href="${esc(telHref(callback))}" style="color:#1d4ed8;text-decoration:none;font-weight:700;">${esc(prettyPhone(callback))}</a>`
     : null);
   add('Email', call.callerEmail
     ? `<a href="mailto:${esc(call.callerEmail)}" style="color:#1d4ed8;text-decoration:none;">${esc(call.callerEmail)}</a>`
@@ -182,20 +170,15 @@ export function buildAfterHoursCallEmail(call: RetellCall, recordUrl: string, re
             <td style="padding:7px 0;font-size:14px;color:#0f172a;">${value}</td>
           </tr>`).join('');
 
-  const transcriptHtml = call.transcript
-    ? call.transcript.split(/\r?\n/).filter(l => l.trim()).map(line => {
-      const m = /^(Agent|User)\s*:\s*(.*)$/i.exec(line.trim());
-      if (!m) return `<div style="margin:0 0 8px;">${esc(line.trim())}</div>`;
-      const isAgent = m[1].toLowerCase() === 'agent';
-      return `<div style="margin:0 0 8px;"><span style="font-weight:700;color:${isAgent ? '#64748b' : '#0f172a'};">${isAgent ? 'Assistant' : 'Caller'}:</span> ${esc(m[2])}</div>`;
-    }).join('')
-    : '';
+  const transcriptHtml = transcriptTurns(call.transcript).map(t => t.speaker
+    ? `<div style="margin:0 0 8px;"><span style="font-weight:700;color:${t.speaker === 'Assistant' ? '#64748b' : '#0f172a'};">${t.speaker}:</span> ${esc(t.text)}</div>`
+    : `<div style="margin:0 0 8px;">${esc(t.text)}</div>`).join('');
 
   const button = (href: string, label: string, primary: boolean) =>
     `<a href="${esc(href)}" style="display:inline-block;margin:0 8px 8px 0;padding:11px 18px;border-radius:8px;font-size:14px;font-weight:700;text-decoration:none;${primary ? 'background:#1d4ed8;color:#ffffff;' : 'background:#ffffff;color:#1d4ed8;border:1px solid #cbd5e1;'}">${label}</a>`;
   const buttons = [
-    callback ? button(`tel:${callback.replace(/[^\d+]/g, '')}`, 'Call back', true) : '',
-    button(recordUrl, 'Open in FleetSuite', !callback),
+    callback ? button(telHref(callback), 'Call back', true) : '',
+    button(recordUrl, 'Open the call', !callback),
     call.recordingUrl ? button(call.recordingUrl, 'Listen to the call', false) : '',
   ].join('');
 
