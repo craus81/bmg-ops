@@ -7,6 +7,8 @@ import { BOOKS_LISTS_SYNC } from '@/lib/books/netsuite-lists';
 import { RULES, type SalesDocKind } from '@/lib/books/invoice-rule';
 import { checkMonth, type ChartAccount, type InvoiceMonthData, type ItemAccountCount, type LineFactsRead, type TaxAccountCount } from '@/lib/books/invoice-check';
 import { readLineFacts } from '@/lib/books/invoice-line-facts';
+import { PAYMENT_RULE } from '@/lib/books/payment-rule';
+import { checkPaymentMonth, type PaymentMonthData } from '@/lib/books/payment-check';
 import {
   BOOKS_INVOICE_POSTING, POSTING_COMPANIES, invoiceBooks, postInvoices, postingFor, postingKey, unsaidFacts, type InvoicePosting,
 } from '@/lib/books/invoice-posting';
@@ -24,8 +26,9 @@ const POSTING_BUDGET_MS = 240_000;
  * company's NetSuite invoices dated in a month, or with
  * `kind=credit_memo` its credit memos, each with the entry FleetSuite's rule
  * works out for it next to the GL lines NetSuite posted (migrations 364 and
- * 370), and why any differ. With `summary=1` only the counts come back, for
- * checking every month in turn.
+ * 370), and why any differ. With `kind=payment` its customer payments, each
+ * checked with the payment rule (migration 374); they don't post yet. With
+ * `summary=1` only the counts come back, for checking every month in turn.
  *
  * What the copy of the invoices' lines doesn't keep (which lines are cost of
  * goods, a discount or markup set at the top, each line's own amount,
@@ -77,7 +80,24 @@ export async function GET(req: NextRequest) {
     ? `${askedMonth}-01`
     : months.includes(previous) ? previous : months[0];
 
-  const kind: SalesDocKind = params.get('kind') === 'credit_memo' ? 'credit_memo' : 'invoice';
+  const askedKind = params.get('kind');
+  const kind: SalesDocKind | 'payment' = askedKind === 'credit_memo' || askedKind === 'payment' ? askedKind : 'invoice';
+  const chart = accounts.data.map(({ company_id, ...a }) => ({ ...a, company: company_id ? codeOf.get(company_id) ?? null : null }));
+  const page = {
+    companies: (companies.data || []).map((c) => ({ code: c.code, name: c.name })),
+    company,
+    month,
+    months,
+    lastRun: posting.data ? { at: posting.data.updated_at, result: posting.data.last_result } : null,
+  };
+
+  if (kind === 'payment') {
+    const paid = await service.rpc('gl_payment_month', { p_company: company, p_month: month });
+    if (paid.error) return NextResponse.json({ error: paid.error.message }, { status: 500 });
+    const check = checkPaymentMonth({ payments: ((paid.data ?? {}) as Partial<PaymentMonthData>).payments ?? [] }, { company, chart });
+    if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });
+    return NextResponse.json({ rule: PAYMENT_RULE, kind, ...page, listsCopiedAt: null, posts: false, ...check });
+  }
 
   const res = await service.rpc('gl_invoice_month', { p_company: company, p_month: month });
   if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
@@ -114,7 +134,7 @@ export async function GET(req: NextRequest) {
     {
       company,
       kind,
-      chart: accounts.data.map(({ company_id, ...a }) => ({ ...a, company: company_id ? codeOf.get(company_id) ?? null : null })),
+      chart,
       taxAccounts: Array.isArray(lastLists?.taxAccounts) ? lastLists.taxAccounts : null,
       itemAccounts: Array.isArray(lastLists?.itemAccounts) ? lastLists.itemAccounts : null,
       facts,
@@ -123,18 +143,7 @@ export async function GET(req: NextRequest) {
   );
 
   if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });
-  return NextResponse.json({
-    rule: RULES[kind],
-    kind,
-    companies: (companies.data || []).map((c) => ({ code: c.code, name: c.name })),
-    company,
-    month,
-    months,
-    listsCopiedAt: lists.data?.updated_at ?? null,
-    posts,
-    lastRun: posting.data ? { at: posting.data.updated_at, result: posting.data.last_result } : null,
-    ...check,
-  });
+  return NextResponse.json({ rule: RULES[kind], kind, ...page, listsCopiedAt: lists.data?.updated_at ?? null, posts, ...check });
 }
 
 /**
