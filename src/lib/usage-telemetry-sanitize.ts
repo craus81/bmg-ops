@@ -42,7 +42,7 @@ const DIGITS_RE = /^\d+$/;
 /** Segments whose NEXT segment is an e-sign / magic-link credential. The
  *  /book/[token] segment IS the estimate-approval token, so it can never
  *  reach the table as typed. Matched with or without a leading /api. */
-const TOKEN_AFTER_ONE: string[] = ['book', 'portal'];
+const TOKEN_AFTER_ONE: string[] = ['book', 'portal', 'qc'];
 const TOKEN_AFTER_TWO: string[] = ['approve', 'signed'];
 const TOKEN_AFTER_PAIR: [string, string][] = [['cni', 'schedule']];
 

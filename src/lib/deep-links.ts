@@ -158,6 +158,12 @@ export const deepLinks = {
     return `/client-files${s ? `?${s}` : ''}`;
   },
   /** After-hours Calls: calls BMG's virtual assistant answered while the office was closed. */
+  /** QC Fixes (migration 380): the staff list, or one report. */
+  qcFixes: () => '/qc-fixes',
+  qcFix: (reportId: string) => `/qc-fixes?id=${encodeURIComponent(reportId)}`,
+  /** A customer's shared QC link (no login), optionally opening one report. */
+  qcLink: (token: string, reportId?: string | null) =>
+    `/qc/${encodeURIComponent(token)}${reportId ? `?report=${encodeURIComponent(reportId)}` : ''}`,
   afterHoursCalls: () => '/after-hours-calls',
   /** One after-hours call: summary, transcript, recording, called-back tick. */
   afterHoursCall: (callId: string) => `/after-hours-calls?id=${callId}`,

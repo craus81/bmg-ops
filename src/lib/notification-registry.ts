@@ -109,6 +109,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'approval_relink_requested', label: 'Customer asked for a fresh link', description: 'A customer found their approval link expired and requested a new one.', area: 'sales', defaultChannels: ['in_app', 'push'] },
   { type: 'credit_app_submitted', label: 'Credit application submitted', description: 'A customer completed the credit application.', area: 'sales', defaultChannels: ['in_app', 'push', 'email'] },
   { type: 'after_hours_call', label: 'After-hours call answered', description: 'BMG\'s virtual assistant answered the main line while the office was closed and took a message. The email copy (summary, call-back button, transcript) always goes to the people picked for it.', area: 'sales', defaultChannels: ['in_app', 'push'], audience: 'Valarie, Harold, Zach, Craig and Jessie (profiles flagged for after-hours call emails).' },
+  { type: 'qc_fix_reported', label: 'QC fix reported', description: 'A customer\'s QC team (Masterack) reported an issue on a vehicle through their QC link. Opens the report on the QC Fixes page to set a fix-by date.', area: 'floor', defaultChannels: ['in_app', 'push'], audience: 'Super admins.' },
   { type: 'incoming_call', label: 'Incoming call matched', description: 'Caller ID matched a customer or lead on an inbound call.', area: 'sales', defaultChannels: ['in_app', 'push'] },
 
   // ── Graphics & proofs ─────────────────────────────────────────────────
