@@ -14,7 +14,9 @@
  *    pages (packing lists, printouts) in a frame, and anything else offered
  *    to the share sheet (Save to Files, AirDrop, Print).
  *  - Other same-site pages open in place with the router.
- *  - Links to other sites (NetSuite, UPS, Dropbox) still go to Safari.
+ *  - Links to other sites (NetSuite, UPS, Dropbox) still go to Safari, and
+ *    so does any link marked data-browser (sign-in's "Request access", which
+ *    the app itself doesn't offer).
  *
  * Screens that already handle the app themselves (graphics job files) call
  * preventDefault first, and this leaves those clicks alone. Computers never
@@ -121,6 +123,7 @@ export default function NativeLinkHandler() {
       if (e.defaultPrevented || e.button !== 0) return;
       const a = (e.target as Element | null)?.closest?.('a');
       if (!a || !a.href) return;
+      if (a.hasAttribute('data-browser')) return;
       const newTab = a.target === '_blank' || a.hasAttribute('download');
       if (!newTab) return;
       if (route(a.href, a.getAttribute('download') || a.textContent)) e.preventDefault();

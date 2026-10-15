@@ -31,12 +31,14 @@ export default function LoginPage() {
     try {
       const raw = new URL(window.location.href).searchParams.get('next');
       setNextPath(safeNextPath(raw));
+      // The phone app's "Request access" link opens this in Safari.
+      if (new URL(window.location.href).searchParams.get('mode') === 'signup' && !isNativeApp()) setMode('signup');
     } catch {}
   }, []);
 
-  // The phone apps offer no sign-up: Apple requires in-app account deletion
-  // from any app that creates accounts (guideline 5.1.1(v)), and FleetSuite
-  // accounts are made by admins anyway. Request Access stays on the web.
+  // The phone apps don't show the sign-up form itself: their "Request access"
+  // link opens it in Safari. Apple (guideline 5.1.1(v)) then requires in-app
+  // account deletion, which is Settings → Delete my account.
   useEffect(() => {
     if (!isNativeApp()) return;
     setInApp(true);
@@ -262,7 +264,13 @@ export default function LoginPage() {
         )}
 
         <div style={{ textAlign: 'center', marginTop: '28px', fontSize: '12px', lineHeight: '1.6', color: 'var(--login-text-muted, rgba(255,255,255,0.4))' }}>
-          {inApp && <div style={{ marginBottom: '8px' }}>Need an account? Ask a BMG admin.</div>}
+          {inApp && (
+            <div style={{ marginBottom: '8px' }}>
+              New to BMG?{' '}
+              {/* data-browser: Safari, not the app, which hides this form. */}
+              <a href="/login?mode=signup" target="_blank" rel="noopener noreferrer" data-browser style={{ ...footerLinkStyle, fontWeight: 700 }}>Request access</a>
+            </div>
+          )}
           {/* A new tab, which the phone apps hand to the browser: a page opened
               inside the app itself would have no way back to sign-in. */}
           <a href="/privacy" target="_blank" rel="noopener noreferrer" style={footerLinkStyle}>Privacy Policy</a>
