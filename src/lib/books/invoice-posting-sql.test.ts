@@ -59,7 +59,7 @@ async function freshDb(): Promise<PGlite> {
   for (const file of [
     '314-ledger.sql', '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '364-books-invoice-check.sql',
-    '367-books-invoice-posting.sql', '370-books-credit-memos.sql',
+    '367-books-invoice-posting.sql', '370-books-credit-memos.sql', '374-books-payment-check.sql', '376-books-payment-posting.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -667,7 +667,7 @@ describe('the posting job against the real functions', () => {
       let r = await run();
       expect(r).toMatchObject({ months: [JAN, FEB, MAR], posted: 0, replaced: 0, reversed: 0 });
       expect(r.notes).toEqual([
-        "NetSuite couldn't be asked about the invoices' and credit memos' lines (socket hang up), so nothing dated Feb 2025 or Mar 2025 was posted or changed this time.",
+        "NetSuite couldn't be asked about the invoices' and credit memos' lines (socket hang up), so no invoice or credit memo dated Feb 2025 or Mar 2025 was posted or changed this time.",
       ]);
 
       ns.fail = null;
@@ -675,7 +675,7 @@ describe('the posting job against the real functions', () => {
       r = await run();
       expect(r).toMatchObject({ posted: 0, replaced: 0, reversed: 0 });
       expect(r.notes).toEqual([
-        "NetSuite wouldn't say the lines' own amounts on the invoices and credit memos, so nothing dated Feb 2025 or Mar 2025 was posted or changed this time.",
+        "NetSuite wouldn't say the lines' own amounts on the invoices and credit memos, so no invoice or credit memo dated Feb 2025 or Mar 2025 was posted or changed this time.",
       ]);
       expect(await journal()).toEqual(before);
 
@@ -706,7 +706,7 @@ describe('the posting job against the real functions', () => {
         ],
       });
       expect(r.notes).toEqual([
-        "NetSuite account 420 isn't in the chart of accounts yet, so invoices and credit memos posting there weren't posted. Sync now on the chart of accounts page copies them.",
+        "NetSuite account 420 isn't in the chart of accounts yet, so invoices, credit memos and payments posting there weren't posted. Sync now on the chart of accounts page copies them.",
       ]);
       expect(await journal()).toEqual(before);
       expect(JSON.stringify(record().last_result)).not.toMatch(/\d\.\d|\$/);

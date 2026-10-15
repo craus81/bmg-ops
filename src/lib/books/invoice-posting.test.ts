@@ -2,9 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { BooksError } from './journal';
 import { workOutMonth, type ChartAccount, type InvoiceMonthData, type LineFactsRead } from './invoice-check';
 import {
-  decide, entryLines, failureReason, invoiceBooks, invoiceJournalEntry, parsePostingState, postingQueue, signature, unsaidFacts,
-  type InvoicePosting,
+  decide, decidePayment, entryLines, failureReason, invoiceBooks, invoiceJournalEntry, parsePostingState, paymentBooks, paymentEntryLines,
+  paymentJournalEntry, postingQueue, signature, unsaidFacts,
+  type InvoicePosting, type PaymentPosting,
 } from './invoice-posting';
+import { workOutPaymentMonth, type PaymentMonthData } from './payment-check';
 
 // Made-up books: '120' receivable, '400' income, '220' sales tax payable.
 const CHART: ChartAccount[] = [
@@ -227,6 +229,116 @@ describe('credit memos', () => {
     // With an invoice's signs the receivable would be debited, which no credit memo does.
     expect(decide(worked(memo({ lines: invoice().lines })), undefined)).toEqual({ kind: 'leave', why: 'total' });
     expect(decide(worked(memo({ total: '170.00' })), held())).toEqual({ kind: 'leave', why: 'total' });
+  });
+});
+
+describe('payments', () => {
+  // Besides the chart above: '110' Undeposited Funds, '100' a bank account, '480' sales discounts.
+  const PAYMENT_CHART: ChartAccount[] = [
+    ...CHART,
+    { netsuite_account_id: '110', number: '1100', name: 'Undeposited Funds', account_type: 'other_current_asset', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '100', number: '1000', name: 'Checking', account_type: 'bank', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '480', number: '4800', name: 'Discounts', account_type: 'income', company: null, active: true, is_summary: false },
+  ];
+  const ids = new Map([['120', 'a-120'], ['110', 'a-110'], ['480', 'a-480']]);
+
+  type Payment = PaymentMonthData['payments'][number];
+  // $162.00 of invoices paid with $3.24 off, as NetSuite posts it: $158.76 came in, receivables take off both.
+  const payment = (fields: Partial<Payment> = {}): Payment => ({
+    id: 'id-201', netsuite_id: '201', number: 'PMT201', date: '2026-09-10', total: '158.76', voided: false,
+    customer: 'A Customer', customer_id: CUSTOMER, companies: ['BMG'], applied: [],
+    netsuite: [
+      { line_id: '0', account: '110', debit: '158.76', credit: '0.00' },
+      { line_id: '1', account: '120', debit: '0.00', credit: '162.00' },
+      { line_id: '2', account: '480', debit: '3.24', credit: '0.00' },
+    ],
+    ...fields,
+  });
+  const paid = (p: Payment = payment()) => workOutPaymentMonth({ payments: [p] }, { company: 'BMG', chart: PAYMENT_CHART }).payments[0];
+
+  /** What the journal holds when PMT201 posted as it is now, as entry 8. */
+  const held = (fields: Partial<PaymentPosting> = {}, lines?: NonNullable<PaymentPosting['current']>['lines']): PaymentPosting => ({
+    source_type: 'payment',
+    source_id: '201',
+    entries: 1,
+    unreversed: ['e8'],
+    current: {
+      id: 'e8', entry_no: 8, entry_date: '2026-09-10',
+      lines: lines ?? [
+        { account: '110', debit: '158.76', credit: '0.00', division: null, source_line_ref: 'deposit', customer_id: null },
+        { account: '480', debit: '3.24', credit: '0.00', division: null, source_line_ref: 'discount', customer_id: null },
+        { account: '120', debit: '0.00', credit: '162.00', division: null, source_line_ref: 'receivable', customer_id: CUSTOMER },
+      ],
+    },
+    history: [{ entry_no: 8, entry_date: '2026-09-10', reversed_by: null }],
+    payment: { number: 'PMT201', deleted: false, voided: false },
+    ...fields,
+  });
+
+  it('posts the money, the discount and the receivable under the payment rule, the receivable carrying the customer', () => {
+    const w = paid();
+    expect(paymentEntryLines(w).map((l) => [l.lineId, l.account, l.cents])).toEqual([
+      ['deposit', '110', 15876], ['discount', '480', 324], ['receivable', '120', -16200],
+    ]);
+    const { entry } = paymentJournalEntry(w, 'BMG', 2, ids);
+    expect(entry).toMatchObject({
+      company: 'BMG', entryDate: '2026-09-10', sourceType: 'payment', sourceId: '201', postingRule: 'payment@1',
+      idempotencyKey: 'payment:201:2', memo: 'PMT201, A Customer', postedBy: null,
+    });
+    expect(entry!.lines).toEqual([
+      { accountId: 'a-110', debit: '158.76', credit: null, division: null, itemNumber: null, sourceLineRef: 'deposit', customerId: null },
+      { accountId: 'a-480', debit: '3.24', credit: null, division: null, itemNumber: null, sourceLineRef: 'discount', customerId: null },
+      { accountId: 'a-120', debit: null, credit: '162.00', division: null, itemNumber: null, sourceLineRef: 'receivable', customerId: CUSTOMER },
+    ]);
+    expect(paymentJournalEntry(w, 'BMG', 1, new Map([['120', 'a-120']]))).toEqual({ entry: null, missing: ['110', '480'] });
+  });
+
+  it('posts a payment nothing stands for, keeps one whose entry still fits, and replaces one NetSuite changed', () => {
+    expect(decidePayment(paid(), undefined)).toEqual({ kind: 'post' });
+    expect(decidePayment(paid(), held())).toEqual({ kind: 'keep' });
+    expect(decidePayment(paid(payment({ number: 'PMT201-A', customer: 'Renamed' })), held())).toEqual({ kind: 'keep' });
+    expect(decidePayment(paid(payment({ date: '2026-09-11' })), held())).toEqual({ kind: 'replace' });
+    expect(decidePayment(paid(payment({ customer_id: null })), held())).toEqual({ kind: 'replace' });
+    const banked = payment({ netsuite: payment().netsuite.map((l) => (l.line_id === '0' ? { ...l, account: '100' } : l)) });
+    expect(decidePayment(paid(banked), held())).toEqual({ kind: 'replace' });
+  });
+
+  it('reverses the entry of a voided payment or one that comes to nothing, and leaves one it can\'t work out or not copied yet', () => {
+    expect(decidePayment(paid(payment({ voided: true })), held())).toEqual({ kind: 'reverse', why: 'voided' });
+    expect(decidePayment(paid(payment({ voided: true })), undefined)).toEqual({ kind: 'keep' });
+    // $0, and NetSuite posts no lines for it.
+    const zero = payment({ total: '0.00', companies: [], netsuite: [] });
+    expect(paymentEntryLines(paid(zero))).toEqual([]);
+    expect(decidePayment(paid(zero), held())).toEqual({ kind: 'reverse', why: 'nothing' });
+    expect(decidePayment(paid(zero), undefined)).toEqual({ kind: 'keep' });
+    expect(decidePayment(paid(payment({ companies: [], netsuite: [] })), held())).toEqual({ kind: 'leave', why: 'waiting' });
+    // NetSuite's posting doesn't say where the money went.
+    const split = payment({
+      total: '162.00',
+      netsuite: [
+        { line_id: '1', account: '120', debit: '0.00', credit: '162.00' },
+        { line_id: '2', account: '110', debit: '100.00', credit: '0.00' },
+        { line_id: '3', account: '100', debit: '62.00', credit: '0.00' },
+      ],
+    });
+    expect(decidePayment(paid(split), held())).toEqual({ kind: 'leave', why: 'unworkable' });
+  });
+
+  it('says what the journal holds for a payment and what the next run does', () => {
+    expect(paymentBooks(paid(), undefined)).toEqual({ entryNo: null, next: 'post', earlier: [] });
+    expect(paymentBooks(paid(), held())).toEqual({ entryNo: 8, next: null, earlier: [] });
+    expect(paymentBooks(paid(payment({ voided: true })), held()).next).toBe('reverse');
+    expect(paymentBooks(paid(payment({ date: '2026-09-11' })), held()).next).toBe('replace');
+  });
+
+  it('builds an entry that fits what it is compared against once posted', () => {
+    const { entry } = paymentJournalEntry(paid(), 'BMG', 1, ids);
+    const back = new Map([...ids].map(([ns, id]) => [id, ns]));
+    const lines = entry!.lines.map((l) => ({
+      account: back.get(l.accountId)!, debit: String(l.debit ?? '0.00'), credit: String(l.credit ?? '0.00'),
+      division: l.division ?? null, source_line_ref: l.sourceLineRef ?? null, customer_id: l.customerId ?? null,
+    }));
+    expect(decidePayment(paid(), held({}, lines))).toEqual({ kind: 'keep' });
   });
 });
 

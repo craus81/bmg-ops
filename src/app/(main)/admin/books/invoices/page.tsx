@@ -7,8 +7,8 @@ import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 
 /**
- * Books → Invoices vs NetSuite (migrations 364, 370 and 374, docs/books.md
- * "Invoices" and "Payments").
+ * Books → Invoices vs NetSuite (migrations 364, 367, 370, 374 and 376,
+ * docs/books.md "Invoices" and "Payments").
  *
  * FleetSuite works out its own entry for every NetSuite invoice with the
  * invoice rule, and for every credit memo with the same rule the other way
@@ -16,8 +16,8 @@ import { apiFetch } from '@/lib/api-client';
  * same document, and shows what its own books hold for each: the posting
  * job (src/lib/books/invoice-posting.ts) posts BMG's every two hours, or on
  * "Post now". Customer payments are checked the same way with the payment
- * rule, and don't post yet. Super admins only while the books are built,
- * linked from the other books pages.
+ * rule, and post in the same run. Super admins only while the books are
+ * built, linked from the other books pages.
  */
 
 type Status = 'matches' | 'differs' | 'unworkable' | 'waiting';
@@ -124,7 +124,7 @@ interface Payload {
   month: string;
   months: string[];
   listsCopiedAt: string | null;
-  /** Whether this company's documents of the kind shown post to FleetSuite's books yet; payments don't. */
+  /** Whether this company's invoices, credit memos and payments post to FleetSuite's books yet. */
   posts: boolean;
   lastRun: { at: string; result: PostingRun } | null;
   summary: Summary;
@@ -169,19 +169,19 @@ const allMatch = (s: Summary) => s.differs + s.unworkable + s.waiting === 0;
 
 const count = (n: number, one: string, many: string) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 
-/** A posting run's counts in words, the ones that aren't zero. The run posts invoices and credit memos alike. */
+/** A posting run's counts in words, the ones that aren't zero. The run posts invoices, credit memos and payments alike. */
 function runCounts(run: PostingRun): string {
   const parts = [
     run.posted ? count(run.posted, 'new entry', 'new entries') : '',
     run.replaced ? `${count(run.replaced, 'entry', 'entries')} replaced` : '',
     run.reversed ? `${count(run.reversed, 'entry', 'entries')} reversed` : '',
     run.unchanged ? `${count(run.unchanged, 'entry', 'entries')} unchanged` : '',
-    run.left ? `${count(run.left, 'invoice or credit memo', 'invoices or credit memos')} left as they were` : '',
+    run.left ? `${count(run.left, 'document', 'documents')} left as they were` : '',
   ].filter(Boolean);
   return parts.length ? parts.join(', ') : 'nothing to post';
 }
 
-/** The Books chip for an invoice or credit memo. */
+/** The Books chip for an invoice, credit memo or payment. */
 function booksChip(books: Books): { label: string; color: string } {
   if (books.entryNo !== null) {
     if (books.next === 'replace') return { label: `Entry ${books.entryNo} · to replace`, color: AMBER };
@@ -191,7 +191,7 @@ function booksChip(books: Books): { label: string; color: string } {
   return books.next === 'post' ? { label: 'To post', color: GREY } : { label: 'Not posted', color: GREY };
 }
 
-/** What the books hold for an invoice or credit memo, in a sentence or two. */
+/** What the books hold for an invoice, credit memo or payment, in a sentence or two. */
 function booksText(books: Books): string {
   const now = books.entryNo !== null ? `In FleetSuite's books as entry ${books.entryNo}.` : "Not in FleetSuite's books.";
   const next = books.next === 'post' ? ' The next posting run posts it.'
@@ -423,8 +423,10 @@ export default function BooksInvoicesPage() {
                 was deposited to, Undeposited Funds or a bank account, a discount the customer took goes to the account NetSuite
                 booked it to, and receivables are credited with the total plus the discount. Where the money went and the discount
                 come from NetSuite&apos;s posting of the payment, since the copy of the payment doesn&apos;t keep them. Each entry
-                is checked account by account against what NetSuite posted for the same payment. Payments aren&apos;t posted to
-                FleetSuite&apos;s books yet; they will be once they&apos;ve been checked.
+                is checked account by account against what NetSuite posted for the same payment. Every two hours each BMG
+                payment FleetSuite can work out is posted to its own books, once, in the same run as invoices. When NetSuite
+                changes one its entry is reversed and the new one posted, and a voided or deleted one is reversed. Until the
+                books go live they can be emptied and posted again.
               </>
             ) : (
               <>
@@ -477,7 +479,7 @@ export default function BooksInvoicesPage() {
           {!data.lastRun && (
             <div style={banner(GREY)}>
               Nothing has been posted to FleetSuite&apos;s books yet. Posting runs every two hours, or press Post now. The first
-              run posts every invoice and credit memo since January 2025 and may take more than one run.
+              run posts every invoice, credit memo and payment since January 2025 and may take more than one run.
             </div>
           )}
           {run?.error && <div style={banner(RED)}>The last posting run failed {ago(data.lastRun!.at)}: {run.error}</div>}
@@ -490,7 +492,7 @@ export default function BooksInvoicesPage() {
           )}
           {!!run?.failedCount && (
             <div style={banner(RED)}>
-              {count(run.failedCount, 'invoice or credit memo', 'invoices or credit memos')} couldn&apos;t be posted or changed
+              {count(run.failedCount, 'document', 'documents')} couldn&apos;t be posted or changed
               {run.failed?.length ? `: ${run.failed.map((f) => `${f.number} (${f.reason})`).join('; ')}` : ''}
               {run.failed && run.failedCount > run.failed.length ? '; …' : ''}
             </div>

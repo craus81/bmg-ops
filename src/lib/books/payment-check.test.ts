@@ -243,4 +243,15 @@ describe('checkPaymentMonth', () => {
     ]);
     expect(m.accounts).toEqual({ '100': '1000 Checking', '110': '1100 Undeposited Funds', '120': '1200 Receivables', '480': '4800 Discounts' });
   });
+
+  it('says what FleetSuite\'s books hold for each payment when the company\'s payments post', () => {
+    const m = checkPaymentMonth(DATA, { company: 'BMG', chart: CHART }, (w) => (w.payment.netsuite_id === '201'
+      ? { entryNo: 7, next: null, earlier: [] }
+      : { entryNo: null, next: 'post', earlier: [] }));
+    expect(m.summary).toMatchObject({ invoices: 4, posted: 1, pending: 3 });
+    expect(m.invoices.map((p) => [p.number, p.books?.entryNo, p.books?.next])).toEqual([
+      ['PMT1', 7, null], ['PMT2', null, 'post'], ['NetSuite 203', null, 'post'], ['PMT6', null, 'post'],
+    ]);
+    expect(checkPaymentMonth(DATA, { company: 'BMG', chart: CHART }).invoices[0].books).toBeUndefined();
+  });
 });
