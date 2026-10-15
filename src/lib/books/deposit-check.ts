@@ -1,6 +1,6 @@
 import {
   centsOf, pickReceivable,
-  type AccountAmount, type ChartAccount, type CheckStatus, type InvoiceRowView, type InvoiceView, type MonthCheck,
+  type AccountAmount, type ChartAccount, type CheckStatus, type InvoiceBooks, type InvoiceRowView, type InvoiceView, type MonthCheck,
   type MonthReason, type MonthSummary, type NetSuitePosting, type Reason,
 } from './invoice-check';
 import { depositAccount } from './payment-check';
@@ -208,7 +208,7 @@ export interface DepositLink {
   amount: string | null;
 }
 
-/** What gl_deposit_month (migration 382) returns: the month's customer deposits and deposit applications. */
+/** What gl_deposit_month (migrations 382 and 383) returns: the month's customer deposits and deposit applications. */
 export interface DepositMonthData {
   deposits: Array<{
     netsuite_id: string;
@@ -220,6 +220,8 @@ export interface DepositMonthData {
     /** NetSuite's status for it, in its words; null when NetSuite wouldn't give it. */
     status: string | null;
     customer: string | null;
+    /** The FleetSuite customer the ledger mirror matched its NetSuite customer to; null when none. */
+    customer_id?: string | null;
     /** Companies NetSuite posted it to; empty when the GL copy has none of it. */
     companies: string[];
     /** What it applies: an application's deposit and invoices, a deposit's sales order. */
@@ -276,7 +278,8 @@ export interface WorkedDeposit {
 
 /**
  * Every deposit and application of the month worked out with the deposit
- * rule and checked: what checkDepositMonth shows.
+ * rule and checked: what checkDepositMonth shows, and what the posting job
+ * posts (src/lib/books/invoice-posting.ts).
  */
 export function workOutDepositMonth(
   data: DepositMonthData,
@@ -310,8 +313,16 @@ export function workOutDepositMonth(
   return { deposits: worked, account, notes };
 }
 
-/** One company's customer deposits and deposit applications dated in one month, each checked against NetSuite. */
-export function checkDepositMonth(data: DepositMonthData, opts: { company: string; chart: ChartAccount[] }): DepositMonthCheck {
+/**
+ * One company's customer deposits and deposit applications dated in one
+ * month, each checked against NetSuite. `books`, when the company's
+ * deposits post, says what FleetSuite's books hold for each.
+ */
+export function checkDepositMonth(
+  data: DepositMonthData,
+  opts: { company: string; chart: ChartAccount[] },
+  books?: (worked: WorkedDeposit) => InvoiceBooks,
+): DepositMonthCheck {
   const { deposits: worked, account, notes } = workOutDepositMonth(data, opts);
 
   const summary: MonthSummary = { invoices: 0, matches: 0, differs: 0, unworkable: 0, waiting: 0, withCost: 0 };
@@ -319,7 +330,8 @@ export function checkDepositMonth(data: DepositMonthData, opts: { company: strin
   const views: DepositView[] = [];
   const notInGl: string[] = [];
   const used = new Set<string>();
-  for (const { deposit: d, number, checked } of worked) {
+  for (const w of worked) {
+    const { deposit: d, number, checked } = w;
     if (d.companies.length === 0) {
       // In neither company's GL copy: only worth a word when FleetSuite would post it.
       if (checked.status !== 'matches') notInGl.push(number);
@@ -362,7 +374,13 @@ export function checkDepositMonth(data: DepositMonthData, opts: { company: strin
       applied: d.type === 'DepAppl'
         ? appliedTo(links).map((l) => ({ number: linkName(l), cents: linkCents(l) }))
         : (d.applications ?? []).flatMap((a) => appliedTo(a.links ?? []).map((l) => ({ number: linkName(l), cents: linkCents(l), date: a.date }))),
+      ...(books ? { books: books(w) } : {}),
     });
+  }
+
+  if (books) {
+    summary.posted = views.filter((v) => v.books && v.books.entryNo !== null).length;
+    summary.pending = views.filter((v) => v.books?.next).length;
   }
 
   if (notInGl.length) {

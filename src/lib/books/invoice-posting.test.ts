@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { BooksError } from './journal';
 import { workOutMonth, type ChartAccount, type InvoiceMonthData, type LineFactsRead } from './invoice-check';
 import {
-  decide, decidePayment, entryLines, failureReason, invoiceBooks, invoiceJournalEntry, parsePostingState, paymentBooks, paymentEntryLines,
-  paymentJournalEntry, postingQueue, signature, unsaidFacts,
-  type InvoicePosting, type PaymentPosting,
+  decide, decideDeposit, decidePayment, depositBooks, depositEntryLines, depositJournalEntry, depositPostingFor, entryLines, failureReason,
+  invoiceBooks, invoiceJournalEntry, parsePostingState, paymentBooks, paymentEntryLines, paymentJournalEntry, postingKey, postingQueue,
+  signature, unsaidFacts,
+  type DepositPosting, type InvoicePosting, type PaymentPosting,
 } from './invoice-posting';
 import { workOutPaymentMonth, type PaymentMonthData } from './payment-check';
+import { workOutDepositMonth, type DepositMonthData } from './deposit-check';
 
 // Made-up books: '120' receivable, '400' income, '220' sales tax payable.
 const CHART: ChartAccount[] = [
@@ -339,6 +341,145 @@ describe('payments', () => {
       division: l.division ?? null, source_line_ref: l.sourceLineRef ?? null, customer_id: l.customerId ?? null,
     }));
     expect(decidePayment(paid(), held({}, lines))).toEqual({ kind: 'keep' });
+  });
+});
+
+describe('deposits', () => {
+  // Besides the chart above: '110' Undeposited Funds, '100' a bank account, '230' customer deposits.
+  const DEPOSIT_CHART: ChartAccount[] = [
+    ...CHART,
+    { netsuite_account_id: '110', number: '1100', name: 'Undeposited Funds', account_type: 'other_current_asset', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '100', number: '1000', name: 'Checking', account_type: 'bank', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '230', number: '2300', name: 'Customer Deposits', account_type: 'other_current_liability', company: null, active: true, is_summary: false },
+  ];
+  const ids = new Map([['120', 'a-120'], ['110', 'a-110'], ['230', 'a-230']]);
+
+  type Doc = DepositMonthData['deposits'][number];
+  // A $500.00 deposit as NetSuite posts it: the money in Undeposited Funds, customer deposits credited.
+  const deposit = (fields: Partial<Doc> = {}): Doc => ({
+    netsuite_id: '301', type: 'CustDep', number: 'DEP301', date: '2026-09-10', total: '500.00', voided: false, status: null,
+    customer: 'A Customer', customer_id: CUSTOMER, companies: ['BMG'], links: [], applications: [],
+    netsuite: [
+      { line_id: '0', account: '110', debit: '500.00', credit: '0.00' },
+      { line_id: '1', account: '230', debit: '0.00', credit: '500.00' },
+    ],
+    ...fields,
+  });
+  // $300.00 of it applied to an invoice: customer deposits debited, receivables credited.
+  const application = (fields: Partial<Doc> = {}): Doc => deposit({
+    netsuite_id: '311', type: 'DepAppl', number: 'DA311', date: '2026-09-20', total: '300.00',
+    netsuite: [
+      { line_id: '0', account: '120', debit: '0.00', credit: '300.00' },
+      { line_id: '1', account: '230', debit: '300.00', credit: '0.00' },
+    ],
+    ...fields,
+  });
+  const dep = (d: Doc = deposit()) => workOutDepositMonth(
+    { deposits: [d], accounts: [{ account: '230', documents: 2 }], not_copied: [] },
+    { company: 'BMG', chart: DEPOSIT_CHART },
+  ).deposits[0];
+
+  /** What the journal holds when DEP301 posted as it is now, as entry 9. */
+  const held = (fields: Partial<DepositPosting> = {}, lines?: NonNullable<DepositPosting['current']>['lines']): DepositPosting => ({
+    source_type: 'customer_deposit',
+    source_id: '301',
+    entries: 1,
+    unreversed: ['e9'],
+    current: {
+      id: 'e9', entry_no: 9, entry_date: '2026-09-10',
+      lines: lines ?? [
+        { account: '110', debit: '500.00', credit: '0.00', division: null, source_line_ref: 'money', customer_id: null },
+        { account: '230', debit: '0.00', credit: '500.00', division: null, source_line_ref: 'deposits', customer_id: CUSTOMER },
+      ],
+    },
+    history: [{ entry_no: 9, entry_date: '2026-09-10', reversed_by: null }],
+    deposit: { number: 'DEP301', deleted: false, voided: false },
+    ...fields,
+  });
+
+  it('posts where a deposit\'s money went and credits customer deposits under the deposit rule, that line carrying the customer', () => {
+    const w = dep();
+    expect(depositEntryLines(w).map((l) => [l.lineId, l.account, l.cents])).toEqual([['money', '110', 50000], ['deposits', '230', -50000]]);
+    const { entry } = depositJournalEntry(w, 'BMG', 2, ids);
+    expect(entry).toMatchObject({
+      company: 'BMG', entryDate: '2026-09-10', sourceType: 'customer_deposit', sourceId: '301', postingRule: 'deposit@1',
+      idempotencyKey: 'customer_deposit:301:2', memo: 'DEP301, A Customer', postedBy: null,
+    });
+    expect(entry!.lines).toEqual([
+      { accountId: 'a-110', debit: '500.00', credit: null, division: null, itemNumber: null, sourceLineRef: 'money', customerId: null },
+      { accountId: 'a-230', debit: null, credit: '500.00', division: null, itemNumber: null, sourceLineRef: 'deposits', customerId: CUSTOMER },
+    ]);
+    expect(depositJournalEntry(w, 'BMG', 1, new Map([['230', 'a-230']]))).toEqual({ entry: null, missing: ['110'] });
+  });
+
+  it('posts an application out of customer deposits and off receivables, both lines carrying the customer', () => {
+    const { entry } = depositJournalEntry(dep(application()), 'BMG', 1, ids);
+    expect(entry).toMatchObject({
+      entryDate: '2026-09-20', sourceType: 'deposit_application', sourceId: '311', postingRule: 'deposit@1',
+      idempotencyKey: 'deposit_application:311:1', memo: 'DA311, A Customer',
+    });
+    expect(entry!.lines).toEqual([
+      { accountId: 'a-230', debit: '300.00', credit: null, division: null, itemNumber: null, sourceLineRef: 'deposits', customerId: CUSTOMER },
+      { accountId: 'a-120', debit: null, credit: '300.00', division: null, itemNumber: null, sourceLineRef: 'receivable', customerId: CUSTOMER },
+    ]);
+    // No number, and no customer FleetSuite matched: the memo goes by NetSuite's id, the lines by no customer.
+    const bare = depositJournalEntry(dep(application({ number: null, customer: null, customer_id: null })), 'BMG', 1, ids).entry!;
+    expect(bare.memo).toBe('NetSuite 311');
+    expect(bare.lines.map((l) => l.customerId)).toEqual([null, null]);
+  });
+
+  it('posts a deposit nothing stands for, keeps one whose entry still fits, and replaces one NetSuite changed', () => {
+    expect(decideDeposit(dep(), undefined)).toEqual({ kind: 'post' });
+    expect(decideDeposit(dep(), held())).toEqual({ kind: 'keep' });
+    expect(decideDeposit(dep(deposit({ number: 'DEP301-A', customer: 'Renamed', status: 'Fully Applied' })), held())).toEqual({ kind: 'keep' });
+    expect(decideDeposit(dep(deposit({ date: '2026-09-11' })), held())).toEqual({ kind: 'replace' });
+    expect(decideDeposit(dep(deposit({ customer_id: null })), held())).toEqual({ kind: 'replace' });
+    expect(decideDeposit(dep(deposit({ total: '450.00' })), held())).toEqual({ kind: 'replace' });
+    const banked = deposit({ netsuite: deposit().netsuite.map((l) => (l.line_id === '0' ? { ...l, account: '100' } : l)) });
+    expect(decideDeposit(dep(banked), held())).toEqual({ kind: 'replace' });
+  });
+
+  it('reverses the entry of a voided deposit or one that comes to nothing, and leaves one it can\'t work out or not in the GL copy yet', () => {
+    expect(decideDeposit(dep(deposit({ voided: true })), held())).toEqual({ kind: 'reverse', why: 'voided' });
+    expect(decideDeposit(dep(deposit({ voided: true })), undefined)).toEqual({ kind: 'keep' });
+    // $0, and NetSuite posts no lines for it.
+    const zero = deposit({ total: '0.00', companies: [], netsuite: [] });
+    expect(depositEntryLines(dep(zero))).toEqual([]);
+    expect(decideDeposit(dep(zero), held())).toEqual({ kind: 'reverse', why: 'nothing' });
+    expect(decideDeposit(dep(zero), undefined)).toEqual({ kind: 'keep' });
+    expect(decideDeposit(dep(deposit({ companies: [], netsuite: [] })), held())).toEqual({ kind: 'leave', why: 'waiting' });
+    // NetSuite's posting doesn't say where the money went.
+    const split = deposit({
+      netsuite: [
+        { line_id: '1', account: '230', debit: '0.00', credit: '500.00' },
+        { line_id: '2', account: '110', debit: '200.00', credit: '0.00' },
+        { line_id: '3', account: '100', debit: '300.00', credit: '0.00' },
+      ],
+    });
+    expect(decideDeposit(dep(split), held())).toEqual({ kind: 'leave', why: 'unworkable' });
+  });
+
+  it('says what the journal holds for a deposit and what the next run does, found by its kind and NetSuite id', () => {
+    expect(depositBooks(dep(), undefined)).toEqual({ entryNo: null, next: 'post', earlier: [] });
+    expect(depositBooks(dep(), held())).toEqual({ entryNo: 9, next: null, earlier: [] });
+    expect(depositBooks(dep(deposit({ voided: true })), held()).next).toBe('reverse');
+    expect(depositBooks(dep(deposit({ date: '2026-09-11' })), held()).next).toBe('replace');
+    const postings = new Map([[postingKey('customer_deposit', '301'), held()]]);
+    expect(depositPostingFor(postings, dep())).toBe(postings.get('customer_deposit:301'));
+    expect(depositPostingFor(postings, dep(application({ netsuite_id: '301' })))).toBeUndefined();
+  });
+
+  it('builds an entry that fits what it is compared against once posted', () => {
+    const back = new Map([...ids].map(([ns, id]) => [id, ns]));
+    for (const d of [deposit(), application()]) {
+      const { entry } = depositJournalEntry(dep(d), 'BMG', 1, ids);
+      const lines = entry!.lines.map((l) => ({
+        account: back.get(l.accountId)!, debit: String(l.debit ?? '0.00'), credit: String(l.credit ?? '0.00'),
+        division: l.division ?? null, source_line_ref: l.sourceLineRef ?? null, customer_id: l.customerId ?? null,
+      }));
+      const current = { id: 'e9', entry_no: 9, entry_date: d.date, lines };
+      expect(decideDeposit(dep(d), held({ current }))).toEqual({ kind: 'keep' });
+    }
   });
 });
 

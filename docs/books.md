@@ -15,8 +15,8 @@ credit memos, checked and posted the same way, the other way round,
 part 8, customer payments, checked against NetSuite with the payment rule
 and posted in the same run as invoices, part 9, a page that puts
 FleetSuite's books next to NetSuite's and shows what still differs and why,
-and part 10, customer deposits and their applications, copied from NetSuite
-and checked with the deposit rule.
+and part 10, customer deposits and their applications, copied from NetSuite,
+checked with the deposit rule and posted in the same run as invoices.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices` and the differences at
@@ -52,7 +52,8 @@ the accounts page; the others are linked from there.
 | Invoices and credit memos in the month NetSuite booked them to | `migrations/380-books-netsuite-month.sql`, `entryDate` in `src/lib/books/invoice-check.ts`; their tests are in the invoice test files |
 | Customer deposits, copied from NetSuite | `migrations/382-books-customer-deposits.sql`, `src/lib/books/netsuite-deposits.ts`, `src/app/api/cron/books-netsuite-deposits/route.ts`, `src/app/api/admin/books/deposits/route.ts` |
 | Deposit rule and its check, on the invoices page | `src/lib/books/deposit-rule.ts`, `src/lib/books/deposit-check.ts` |
-| Deposit tests | `src/lib/books/deposit-rule.test.ts`, `src/lib/books/deposit-check.test.ts`, `src/lib/books/netsuite-deposits.test.ts`, `src/lib/books/deposits-sql.test.ts` |
+| Deposits posted to the journal, with invoices | `migrations/383-books-deposit-posting.sql`, `src/lib/books/invoice-posting.ts` |
+| Deposit tests | `src/lib/books/deposit-rule.test.ts`, `src/lib/books/deposit-check.test.ts`, `src/lib/books/netsuite-deposits.test.ts`, `src/lib/books/deposits-sql.test.ts`, `src/lib/books/deposit-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
 QuickBooks and NetSuite history that importers replace wholesale. They stay
@@ -537,7 +538,8 @@ what the next posting run does about it.
   entry doesn't have. So does a discount split across two income or
   expense accounts, since neither is then plainly the discount.
 - Customer deposits, and applying them to invoices, are NetSuite documents
-  of their own, checked on their own ("Customer deposits" below). Bank
+  of their own, checked and posted on their own ("Customer deposits"
+  below). Bank
   deposits, which move the money from Undeposited Funds to the bank, aren't
   copied yet.
 
@@ -580,10 +582,10 @@ invoice's does, hasn't been seen yet.
 
 A customer deposit (NetSuite's CustDep) is money a customer pays ahead of
 an invoice; a deposit application (DepAppl) applies a deposit to an invoice,
-or to a refund. Both are copied from NetSuite and checked against its GL
-with the deposit rule (owner decision 2026-10-15); posting them to
-FleetSuite's journal comes once they match, as it did for invoices and
-payments.
+or to a refund. Both are copied from NetSuite, checked against its GL with
+the deposit rule (owner decision 2026-10-15), and posted to FleetSuite's
+journal in the same run as invoices and payments ("Posting deposits"
+below).
 
 ### Copying deposits
 
@@ -668,6 +670,38 @@ Not yet seen in NetSuite's data, so the check is what will show it:
 
 Refunds themselves (CustRfnd) and bank deposits (Deposit) aren't copied.
 
+### Posting deposits
+
+Every BMG customer deposit and deposit application dated from January 2025
+that the rule can work out posts to FleetSuite's journal in the same run as
+invoices and payments, the way payments do (owner decision 2026-10-15,
+after the deposits check): once, dated as the document is, with the rule
+`deposit@1`. A deposit's entries are filed as `customer_deposit` and keyed
+`customer_deposit:<NetSuite id>:<n>`, an application's as
+`deposit_application`. The customer deposits line, and an application's
+receivable, carry the document's customer: the FleetSuite customer the
+ledger mirror matched its NetSuite customer to (`ledger_customers`, an
+exact match, the one the mirror gives the customer's invoices and payments),
+or none until it has one.
+
+When NetSuite changes what a document posts (where a deposit's money went,
+the amount, the date or the customer) its entry is reversed and the new one
+posted in one transaction; a new number, memo or status alone changes
+nothing. One NetSuite voids, or no longer has (the copy marks it gone), has
+its entry reversed, and so does one that comes to nothing now. As for
+payments, one in neither company's GL copy is still looked at while an
+entry of it stands: at $0 its entry is reversed, otherwise the GL copy
+hasn't caught up and it keeps its entry. One the rule can't work out keeps
+whatever it has, and the next run looks again. 1084's join with its
+invoices.
+
+Migration 383's `gl_deposit_postings` reads what the journal holds for each
+deposit and application, as `gl_payment_postings` does for payments, and
+whether the copy of the deposits says it's voided or gone; its
+`gl_deposit_month` adds each document's FleetSuite customer. The Deposits
+switch on the invoices page shows the Books column and Post now, as the
+other switches do.
+
 ## Differences
 
 `/admin/books/differences` puts one company's own journal next to the copy
@@ -683,9 +717,10 @@ was replaced comes to its new entry within the month.
 
 Each month's NetSuite activity is split by the kind of document behind it:
 
-- the kinds FleetSuite posts for the company (invoices, credit memos and
-  payments for BMG) should come to the same as FleetSuite's entries for
-  the same documents, matched by NetSuite's internal id;
+- the kinds FleetSuite posts for the company (invoices, credit memos,
+  payments, customer deposits and deposit applications for BMG) should come
+  to the same as FleetSuite's entries for the same documents, matched by
+  NetSuite's internal id;
 - everything else is "not posted yet": the kinds FleetSuite has no rule
   for, and the cost of goods NetSuite books on an invoice or credit memo
   that wasn't fulfilled first, which FleetSuite will post with
@@ -714,7 +749,7 @@ the page says why for each:
 
 | Why | When |
 | --- | --- |
-| Dated before the books start | A payment NetSuite dated in 2024 and posted to 2025; FleetSuite only posts payments dated from 2025 (an invoice or credit memo like it posts in NetSuite's month) |
+| Dated before the books start | A payment, deposit or application NetSuite dated in 2024 and posted to 2025; FleetSuite only posts those dated from 2025 (an invoice or credit memo like it posts in NetSuite's month) |
 | Not posted | FleetSuite has never posted it; Invoices vs NetSuite shows why |
 | Voided | NetSuite voided it and FleetSuite reversed its entry, but the copy of NetSuite's ledger still has lines of it |
 | Reversed | FleetSuite reversed its entry and has none standing |
@@ -726,7 +761,11 @@ the page says why for each:
 Each document links to Invoices vs NetSuite (`?company=&kind=&month=&doc=`),
 which opens it with its line by line check, under the month that page lists
 it in: NetSuite's month for an invoice or credit memo, its own date's for a
-payment. When the copy of NetSuite's
+payment, deposit or application (both under the Deposits switch). What the
+copy of NetSuite's documents says of each (its number, customer, and whether
+it's voided or deleted) comes from the ledger mirror for invoices, credit
+memos and payments, and from the deposits copy for deposits and
+applications (migration 383). When the copy of NetSuite's
 ledger doesn't yet hold everything NetSuite's own totals say a month moved,
 the page says so, since NetSuite's side is then short.
 
