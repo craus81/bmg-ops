@@ -355,6 +355,14 @@ count for every month from January 2025.
   company. Invoices with no GL line in the copy (waiting for approval, which
   doesn't post, or newer than the last copy) are named in a note, not
   counted.
+- The copy of an invoice and the GL copy are read at different times, and
+  can number the same line differently (seen 2026-10-15 on an invoice's
+  sales tax lines). So a line only the copy of the invoice has and a line
+  only NetSuite's GL has, on the same account for the same amount, count as
+  one line under the copy's number, each NetSuite line once (owner decision
+  2026-10-15); the page shows NetSuite's number under it. A line whose
+  account or amount differs still differs, and so does a line both copies
+  have. Posting doesn't change: it goes by the copy's lines.
 - An invoice that wasn't fulfilled first relieves the stock itself: NetSuite
   books its cost on lines of their own, one to a cost of goods account and
   one to an inventory asset account. FleetSuite will post that cost with the
