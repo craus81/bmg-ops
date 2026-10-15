@@ -95,7 +95,7 @@ export async function sendProofApproval(
 
   const { data: job, error } = await service
     .from('graphics_jobs')
-    .select('id, job_number, title, customer, customer_approved, status, approval_proof_file_id, approval_reminder_count')
+    .select('id, job_number, title, customer, customer_approved, status, approval_proof_file_id, approval_reminder_count, rep_review_status')
     .eq('id', jobId)
     .single();
   if (error || !job) return { ok: false, status: 404, error: 'Job not found' };
@@ -240,6 +240,13 @@ export async function sendProofApproval(
     patch.approval_reminder_sent_at = null;
     patch.approval_reminder_count = 0;
     patch.approval_escalated_at = null;
+    // "Rep reviews first" (migration 378): the rep passing the proof on
+    // closes their review.
+    if (job.rep_review_status === 'pending') {
+      patch.rep_review_status = 'sent_to_customer';
+      patch.rep_review_decided_at = now;
+      patch.rep_review_decided_by = opts.actorId ?? null;
+    }
   }
   const { error: updErr } = await service.from('graphics_jobs').update(patch).eq('id', job.id);
   if (updErr) return { ok: false, status: 500, error: updErr.message };
