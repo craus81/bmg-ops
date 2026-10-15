@@ -146,6 +146,17 @@ export const deepLinks = {
   cniJobPhotos: (jobId: string) => `/admin/cni/jobs/${jobId}/photos`,
   /** Completion Photos: finished-work photos from every job, filterable. */
   completionPhotos: () => '/completion-photos',
+  /** Client Files: Dropbox /OFFICE/Clients searchable in the app. `q` prefills
+   *  the search; `folder` (dropbox_client_folders.id) narrows to one client
+   *  folder; `matches` opens the Check matches list. */
+  clientFiles: (opts?: { q?: string | null; folder?: string | null; matches?: boolean }) => {
+    const p = new URLSearchParams();
+    if (opts?.q) p.set('q', opts.q);
+    if (opts?.folder) p.set('folder', opts.folder);
+    if (opts?.matches) p.set('matches', '1');
+    const s = p.toString();
+    return `/client-files${s ? `?${s}` : ''}`;
+  },
   /** After-hours Calls: calls BMG's virtual assistant answered while the office was closed. */
   afterHoursCalls: () => '/after-hours-calls',
   /** One after-hours call: summary, transcript, recording, called-back tick. */

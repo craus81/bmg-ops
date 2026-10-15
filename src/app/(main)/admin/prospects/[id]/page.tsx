@@ -35,6 +35,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
+import ClientFilesSection from '@/components/ClientFilesSection';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import PhoneInput from '@/components/PhoneInput';
@@ -2591,8 +2592,17 @@ export default function CustomerRecordPage() {
             </div>
           )}
           <div style={card}>
-            <div style={eyebrow}>Prior artwork — Dropbox</div>
-            <DropboxProofSearch defaultQuery={name} />
+            {customer ? (
+              <>
+                <div style={eyebrow}>Client files — Dropbox</div>
+                <ClientFilesSection customerId={customer.id} customerName={customer.company_name || name} />
+              </>
+            ) : (
+              <>
+                <div style={eyebrow}>Prior artwork — Dropbox</div>
+                <DropboxProofSearch defaultQuery={name} />
+              </>
+            )}
           </div>
         </div>
 
