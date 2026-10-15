@@ -227,7 +227,7 @@ export async function searchFiles(query: string, fileExtensions?: string[]): Pro
 
 // ── Download File Content ──
 
-export async function downloadFile(path: string): Promise<{ buffer: Buffer; name: string; contentType: string }> {
+export async function downloadFile(path: string): Promise<{ buffer: Buffer; name: string; contentType: string; rev?: string }> {
   const res = await dropboxFetch('https://content.dropboxapi.com/2/files/download', (token) => ({
     method: 'POST',
     headers: {
@@ -249,6 +249,7 @@ export async function downloadFile(path: string): Promise<{ buffer: Buffer; name
     buffer,
     name: meta.name || 'file',
     contentType: meta.name?.endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream',
+    rev: typeof meta.rev === 'string' ? meta.rev : undefined,
   };
 }
 
@@ -296,4 +297,99 @@ export async function isConnected(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ── Folder listing (Client Files sync) ──
+
+/** One entry from files/list_folder, as the Client Files sync uses it. */
+export type DropboxListEntry =
+  | { tag: 'file'; id: string; name: string; path_lower: string; path_display: string; size: number; server_modified: string; rev: string }
+  | { tag: 'folder'; id: string; name: string; path_lower: string; path_display: string }
+  | { tag: 'deleted'; name: string; path_lower: string; path_display: string };
+
+export interface DropboxListPage {
+  entries: DropboxListEntry[];
+  cursor: string;
+  has_more: boolean;
+}
+
+/** list_folder/continue answered that the cursor is no longer valid; start a fresh listing. */
+export class DropboxCursorResetError extends Error {
+  constructor() {
+    super('Dropbox cursor reset');
+    this.name = 'DropboxCursorResetError';
+  }
+}
+
+function toListEntry(e: any): DropboxListEntry | null {
+  const tag = e?.['.tag'];
+  if (tag === 'file') {
+    return {
+      tag, id: e.id, name: e.name, path_lower: e.path_lower, path_display: e.path_display || e.path_lower,
+      size: Number(e.size) || 0, server_modified: e.server_modified, rev: e.rev,
+    };
+  }
+  if (tag === 'folder') return { tag, id: e.id, name: e.name, path_lower: e.path_lower, path_display: e.path_display || e.path_lower };
+  if (tag === 'deleted') return { tag, name: e.name, path_lower: e.path_lower, path_display: e.path_display || e.path_lower };
+  return null;
+}
+
+async function listCall(url: string, body: unknown): Promise<DropboxListPage> {
+  const res = await dropboxFetch(url, (token) => ({
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }));
+  if (!res.ok) {
+    const err = await res.text();
+    if (res.status === 409 && err.includes('reset')) throw new DropboxCursorResetError();
+    throw new Error(`Dropbox list failed (${res.status}): ${err.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  return {
+    entries: (data.entries || []).map(toListEntry).filter(Boolean) as DropboxListEntry[],
+    cursor: data.cursor,
+    has_more: !!data.has_more,
+  };
+}
+
+/** First page of a recursive listing of `path` (files and folders, not deleted ones). */
+export function listFolderRecursive(path: string, limit = 2000): Promise<DropboxListPage> {
+  return listCall('https://api.dropboxapi.com/2/files/list_folder', {
+    path, recursive: true, include_deleted: false, include_non_downloadable_files: false, limit,
+  });
+}
+
+/** Next page, or once caught up, everything that changed since the cursor (deletions included). */
+export function listFolderContinue(cursor: string): Promise<DropboxListPage> {
+  return listCall('https://api.dropboxapi.com/2/files/list_folder/continue', { cursor });
+}
+
+/** One item's metadata, or null when it no longer exists. */
+export async function getMetadata(path: string): Promise<DropboxListEntry | null> {
+  const res = await dropboxFetch('https://api.dropboxapi.com/2/files/get_metadata', (token) => ({
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  }));
+  if (res.status === 409) return null;
+  if (!res.ok) throw new Error(`Dropbox metadata failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+  return toListEntry(await res.json());
+}
+
+/**
+ * A 4-hour direct link to a file's bytes, so a download goes straight from
+ * Dropbox to the person instead of through a serverless function (print
+ * files run to hundreds of MB).
+ */
+export async function getTemporaryLink(path: string): Promise<string> {
+  const res = await dropboxFetch('https://api.dropboxapi.com/2/files/get_temporary_link', (token) => ({
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  }));
+  if (!res.ok) throw new Error(`Dropbox link failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+  const data = await res.json();
+  if (!data?.link) throw new Error('Dropbox returned no link');
+  return data.link as string;
 }

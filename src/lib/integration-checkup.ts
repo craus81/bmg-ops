@@ -184,6 +184,7 @@ export const ENV_SPECS: EnvSpec[] = [
   // --- Not wired up ---
   { name: 'DROPBOX_APP_KEY', group: 'optional', powers: 'Dropbox proof sync', whenMissing: 'off' },
   { name: 'DROPBOX_APP_SECRET', group: 'optional', powers: 'Dropbox proof sync', whenMissing: 'off' },
+  { name: 'DROPBOX_CLIENT_FILES_PATH', group: 'optional', powers: 'Which Dropbox folder Client Files copies; unset means /OFFICE/Clients', whenMissing: 'off' },
   { name: 'PAYCHEX_API_BASE', group: 'optional', powers: 'Payroll sync — blocked on the owner call about API scope', whenMissing: 'off' },
   { name: 'PAYCHEX_CLIENT_ID', group: 'optional', powers: 'Payroll sync — blocked on the owner call about API scope', whenMissing: 'off' },
   { name: 'PAYCHEX_CLIENT_SECRET', group: 'optional', powers: 'Payroll sync — blocked on the owner call about API scope', whenMissing: 'off' },
