@@ -66,6 +66,8 @@ export interface CheckRow {
   /** NetSuite booked the cost of the stock sold on this line: left to the fulfillment rule, not compared. */
   cost: boolean;
   same: boolean;
+  /** NetSuite's own number for the line, when the copy of NetSuite's GL has it under another one (pairRenumbered). */
+  netsuiteLine?: string;
 }
 
 export interface CheckedInvoice {
@@ -144,7 +146,38 @@ export function checkInvoice(
   if (netsuite.size === 0 && invoice.netsuite.length === 0 && entry.lines.length > 0) {
     return { status: 'waiting', waiting: 'gl', problems: [], rows };
   }
-  return { status: rows.every((r) => r.same) ? 'matches' : 'differs', problems: [], rows };
+  const paired = pairRenumbered(rows);
+  return { status: paired.every((r) => r.same) ? 'matches' : 'differs', problems: [], rows: paired };
+}
+
+/**
+ * The copy of an invoice and the copy of NetSuite's GL are read at different
+ * times, and can number the same line differently (seen on an invoice's
+ * sales tax lines). So a line only FleetSuite has and a line only NetSuite
+ * has, on the same account for the same amount, are taken as one line under
+ * the copy's number, each NetSuite line once (owner decision 2026-10-15).
+ * The money is the same either way; a line whose account or amount differs
+ * still differs, and so does a line both copies have.
+ */
+function pairRenumbered(rows: CheckRow[]): CheckRow[] {
+  const loose = (r: CheckRow) => !r.cost && r.lineId !== MAIN_LINE;
+  const theirs = rows.filter((r) => loose(r) && !r.fleetsuite && r.netsuite);
+  if (!theirs.length) return rows;
+  const taken = new Set<CheckRow>();
+  const found = new Map<CheckRow, CheckRow>();
+  for (const r of rows) {
+    if (!loose(r) || !r.fleetsuite || r.netsuite) continue;
+    const f = r.fleetsuite;
+    const t = theirs.find((x) => !taken.has(x) && x.netsuite!.account === f.account && x.netsuite!.cents === f.cents);
+    if (!t) continue;
+    taken.add(t);
+    found.set(r, t);
+  }
+  if (!found.size) return rows;
+  return rows.filter((r) => !taken.has(r)).map((r) => {
+    const t = found.get(r);
+    return t ? { ...r, netsuite: t.netsuite, same: true, netsuiteLine: t.lineId } : r;
+  });
 }
 
 // ── Reasons, in words ──────────────────────────────────────────────────────
@@ -448,6 +481,8 @@ export interface InvoiceRowView {
   netsuite: AccountAmount | null;
   cost: boolean;
   same: boolean;
+  /** NetSuite's own number for the line, when the copy of its GL has it under another one; matched by account and amount. */
+  netsuiteLine?: string;
   /** Present when NetSuite was asked about the invoice's lines and said something about this one. */
   says?: LineSays;
 }
@@ -732,6 +767,7 @@ export function checkMonth(
         netsuite: r.netsuite ? { account: r.netsuite.account, cents: r.netsuite.cents } : null,
         cost: r.cost,
         same: r.same,
+        ...(r.netsuiteLine ? { netsuiteLine: r.netsuiteLine } : {}),
         ...(says.has(r.lineId) ? { says: says.get(r.lineId) } : {}),
       };
     });

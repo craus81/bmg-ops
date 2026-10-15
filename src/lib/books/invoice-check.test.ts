@@ -70,6 +70,55 @@ describe('checkInvoice', () => {
     expect(check(LINES, [...POSTED, ns('8', '400', 0)]).status).toBe('matches');
   });
 
+  // Sales tax for three tax codes, all to one payable account.
+  const TAXED = { ...CTX, taxAccounts: new Map([['900', '220'], ['901', '220'], ['902', '220']]) };
+  const tax = (lineId: string, code: string, cents: number) => line(lineId, code, cents, { tax: true, itemNumber: null });
+  const THREE_TAX = [LINES[0], LINES[1], tax('3', '900', 600), tax('4', '901', 400), tax('5', '902', 200)];
+
+  it('matches lines NetSuite\'s GL numbers differently from the copy when their accounts and amounts are the same', () => {
+    // The copy of the invoice has its tax lines as 3, 4 and 5; NetSuite's GL has them as 7, 9 and 10.
+    const c = check(THREE_TAX, [...POSTED.slice(0, 3), ns('7', '220', -600), ns('9', '220', -400), ns('10', '220', -200)], TAXED);
+    expect(c.status).toBe('matches');
+    expect(c.rows.map((r) => [r.lineId, r.fleetsuite?.cents, r.netsuite?.cents, r.same, r.netsuiteLine ?? null])).toEqual([
+      ['0', 16200, 16200, true, null], ['1', -10000, -10000, true, null], ['2', -5000, -5000, true, null],
+      ['3', -600, -600, true, '7'], ['4', -400, -400, true, '9'], ['5', -200, -200, true, '10'],
+    ]);
+    expect(invoiceReasons(c, NAMES)).toEqual([]);
+  });
+
+  it('still differs when a line only one copy has goes to another account or amount than every line only the other has', () => {
+    const c = check(THREE_TAX, [...POSTED.slice(0, 3), ns('7', '220', -600), ns('9', '220', -450), ns('10', '221', -200)], TAXED);
+    expect(c.status).toBe('differs');
+    expect(c.rows.map((r) => [r.lineId, r.same, r.netsuiteLine ?? null])).toEqual([
+      ['0', true, null], ['1', true, null], ['2', true, null], ['3', true, '7'], ['4', false, null], ['5', false, null], ['9', false, null], ['10', false, null],
+    ]);
+    expect(invoiceReasons(c, NAMES).map((r) => r.text)).toEqual([
+      'NetSuite posted nothing for a sales tax line.',
+      "NetSuite posts to 2200 Sales Tax on a line the copy of the invoice doesn't have.",
+      "NetSuite posts to NetSuite account 221 on a line the copy of the invoice doesn't have.",
+    ]);
+  });
+
+  it('pairs each NetSuite line once, and never a line both copies have or the receivable', () => {
+    // Two tax lines of $5 in the copy and three in NetSuite's GL: one of NetSuite's is left over.
+    const lines = [LINES[0], LINES[1], tax('3', '900', 500), tax('4', '901', 500)];
+    const extra = check(lines, [ns('0', '120', 16000), ...POSTED.slice(1, 3), ns('7', '220', -500), ns('8', '220', -500), ns('9', '220', -500)], TAXED);
+    expect(extra.status).toBe('differs');
+    expect(extra.rows.map((r) => [r.lineId, r.netsuiteLine ?? null])).toEqual([['0', null], ['1', null], ['2', null], ['3', '7'], ['4', '8'], ['9', null]]);
+
+    // NetSuite's GL has the copy's line 3 for another amount, and the copy's amount on a line of its own: line 3 isn't left over.
+    const both = check(LINES, [...POSTED.slice(0, 3), ns('3', '220', -1000), ns('9', '220', -1200)]);
+    expect(both.status).toBe('differs');
+    expect(both.rows.map((r) => [r.lineId, r.netsuite?.cents, r.netsuiteLine ?? null])).toEqual([
+      ['0', 16200, null], ['1', -10000, null], ['2', -5000, null], ['3', -1000, null], ['9', -1200, null],
+    ]);
+
+    // The receivable is only ever NetSuite's main line, line 0.
+    const main = check(LINES, [ns('11', '120', 16200), ...POSTED.slice(1)]);
+    expect(main.status).toBe('differs');
+    expect(main.rows.map((r) => [r.lineId, r.netsuiteLine ?? null])).toEqual([['0', null], ['1', null], ['2', null], ['3', null], ['11', null]]);
+  });
+
   it('leaves out the cost of goods NetSuite books on an invoice that wasn\'t fulfilled first', () => {
     // Lines 4 and 5 relieve the part's stock: whatever amounts the copy gives them, they're not sales.
     const lines = [...LINES, line('4', '11', -3000), line('5', '11', 3000)];
@@ -488,6 +537,15 @@ describe('checkMonth', () => {
       "NetSuite wouldn't say the lines' quantities and the lines' rates on these invoices, so a line's quantity and rate aren't shown.",
     ]);
     expect(checkMonth(month, { ...opts, facts: { lines: new Map(), missing: [] } }).notes).toEqual([]);
+  });
+
+  it('shows NetSuite\'s own number for a line its GL numbers differently, matched by account and amount', () => {
+    const renumbered = invoice('INV111', { netsuite: [...invoice('X').netsuite.slice(0, 3), { line_id: '9', account: '220', debit: '0.00', credit: '12.00' }] });
+    const m = checkMonth({ invoices: [renumbered], items: ITEMS }, { company: 'BMG', chart: CHART, taxAccounts: TAX });
+    expect(m.summary).toMatchObject({ invoices: 1, matches: 1, differs: 0 });
+    expect(m.invoices[0].rows.map((r) => [r.label, r.netsuite?.cents, r.netsuiteLine ?? null])).toEqual([
+      ['Receivable', 16200, null], ['PART-A', -10000, null], ['INSTALL LABOR', -5000, null], ['Sales tax, Some County', -1200, '9'],
+    ]);
   });
 
   it('can\'t work out a line whose amount the copy lost', () => {

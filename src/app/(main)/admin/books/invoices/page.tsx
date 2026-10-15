@@ -89,6 +89,8 @@ interface Row {
   netsuite: Amount | null;
   cost: boolean;
   same: boolean;
+  /** NetSuite's own number for the line, when the copy of its GL has it under another one. */
+  netsuiteLine?: string;
   says?: Says;
 }
 
@@ -303,6 +305,11 @@ function InvoiceDetail({ invoice, accounts, one }: { invoice: Invoice; accounts:
                     {r.division && <span style={{ ...chip(GREY), marginLeft: '6px' }}>{r.division === 'upfit' ? 'Upfit' : 'Graphics'}</span>}
                     {r.cost && <span style={{ ...chip(GREY), marginLeft: '6px' }}>Cost of goods, for the fulfillment rule</span>}
                     {r.says && <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{saysText(r.says)}</div>}
+                    {r.netsuiteLine && (
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                        NetSuite&apos;s GL has it as line {r.netsuiteLine}, so it&apos;s matched by account and amount.
+                      </div>
+                    )}
                   </td>
                   <Side amount={r.fleetsuite} accounts={accounts} />
                   <Side amount={r.netsuite} accounts={accounts} />
