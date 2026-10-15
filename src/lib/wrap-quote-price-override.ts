@@ -14,6 +14,73 @@ export interface WrapPricingOverrides {
   labor_rates: Record<string, number>;
   /** The Qty Discount field as typed ('' = auto from the settings tiers). */
   discount_pct: string;
+  /** Install square feet per film id, typed over the measured total (whole job). */
+  labor_sqft: Record<string, number>;
+  /** Install line price per film id, typed over sq ft × rate (whole job). */
+  labor_line_totals: Record<string, number>;
+  /** Roll-priced material line price per film id, typed over the roll math. */
+  roll_material_totals: Record<string, number>;
+  /** Hours and $/hr for design / preparation / installation on this worksheet. */
+  sections: Partial<Record<LaborSectionKey, SectionOverride>>;
+  /** The rep's own lines (removal, rush fee…). They sit on top of the
+   *  graphics price and land on the estimate as their own lines. */
+  custom_lines: CustomLine[];
+}
+
+export type LaborSectionKey = 'design' | 'preparation' | 'installation';
+export const LABOR_SECTION_KEYS: LaborSectionKey[] = ['design', 'preparation', 'installation'];
+
+export interface SectionOverride { hours?: number; hourly?: number }
+
+export interface CustomLine {
+  id: string;
+  description: string;
+  qty: number;
+  unit_price: number;
+}
+
+/** Typed custom lines → clean rows; a line with no description and no price is dropped. */
+export function cleanCustomLines(raw: unknown): CustomLine[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CustomLine[] = [];
+  for (const l of raw) {
+    if (!l || typeof l !== 'object') continue;
+    const description = String((l as any).description ?? '').trim();
+    const qty = n((l as any).qty);
+    const price = n((l as any).unit_price);
+    if (!description && !(price > 0)) continue;
+    out.push({
+      id: typeof (l as any).id === 'string' && (l as any).id ? (l as any).id : `line-${out.length + 1}`,
+      description: description || 'Additional charge',
+      qty: qty > 0 ? qty : 1,
+      unit_price: Math.max(0, price),
+    });
+  }
+  return out;
+}
+
+/** What the custom lines add, in dollars. */
+export function customLinesTotal(lines: CustomLine[]): number {
+  return lines.reduce((sum, l) => sum + Math.round(l.qty * l.unit_price * 100) / 100, 0);
+}
+
+function cleanSections(raw: unknown): Partial<Record<LaborSectionKey, SectionOverride>> {
+  const out: Partial<Record<LaborSectionKey, SectionOverride>> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const k of LABOR_SECTION_KEYS) {
+    const r = (raw as any)[k];
+    if (!r || typeof r !== 'object') continue;
+    const o: SectionOverride = {};
+    if (r.hours != null && String(r.hours).trim() !== '' && Number.isFinite(Number(r.hours)) && Number(r.hours) >= 0) o.hours = Number(r.hours);
+    if (r.hourly != null && String(r.hourly).trim() !== '' && Number.isFinite(Number(r.hourly)) && Number(r.hourly) >= 0) o.hourly = Number(r.hourly);
+    if (o.hours != null || o.hourly != null) out[k] = o;
+  }
+  return out;
+}
+
+/** The builder's typed section fields ({design: {hours: '3'}}) → numbers. */
+export function parseSections(map: Partial<Record<LaborSectionKey, { hours?: string; hourly?: string }>>): Partial<Record<LaborSectionKey, SectionOverride>> {
+  return cleanSections(map);
 }
 
 const n = (v: unknown) => {
@@ -51,6 +118,11 @@ export function readPricingOverrides(raw: any): WrapPricingOverrides | null {
     vinyl_rates: rates(raw.vinyl_rates),
     labor_rates: rates(raw.labor_rates),
     discount_pct: typeof raw.discount_pct === 'string' ? raw.discount_pct : '',
+    labor_sqft: rates(raw.labor_sqft),
+    labor_line_totals: rates(raw.labor_line_totals),
+    roll_material_totals: rates(raw.roll_material_totals),
+    sections: cleanSections(raw.sections),
+    custom_lines: cleanCustomLines(raw.custom_lines),
   };
 }
 
