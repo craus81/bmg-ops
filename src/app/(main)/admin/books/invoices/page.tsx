@@ -7,8 +7,8 @@ import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 
 /**
- * Books → Invoices vs NetSuite (migrations 364, 367, 370, 374, 376 and 382,
- * docs/books.md "Invoices", "Payments" and "Customer deposits").
+ * Books → Invoices vs NetSuite (migrations 364, 367, 370, 374, 376, 382 and
+ * 383, docs/books.md "Invoices", "Payments" and "Customer deposits").
  *
  * FleetSuite works out its own entry for every NetSuite invoice with the
  * invoice rule, and for every credit memo with the same rule the other way
@@ -17,9 +17,9 @@ import { apiFetch } from '@/lib/api-client';
  * job (src/lib/books/invoice-posting.ts) posts BMG's every two hours, or on
  * "Post now". Customer payments are checked the same way with the payment
  * rule, and post in the same run. Customer deposits and their applications
- * are copied from NetSuite every two hours, or on "Copy now", and checked
- * with the deposit rule; they don't post yet. Super admins only while the
- * books are built, linked from the other books pages.
+ * are copied from NetSuite every two hours, or on "Copy now", checked with
+ * the deposit rule, and post in the same run too. Super admins only while
+ * the books are built, linked from the other books pages.
  */
 
 type Status = 'matches' | 'differs' | 'unworkable' | 'waiting';
@@ -149,7 +149,7 @@ interface Payload {
   month: string;
   months: string[];
   listsCopiedAt: string | null;
-  /** Whether this company's invoices, credit memos and payments post to FleetSuite's books yet. */
+  /** Whether this company's invoices, credit memos, payments and deposits post to FleetSuite's books yet. */
   posts: boolean;
   lastRun: { at: string; result: PostingRun } | null;
   /** Deposits only: how the last copy of them from NetSuite went; null before the first. */
@@ -196,7 +196,7 @@ const allMatch = (s: Summary) => s.differs + s.unworkable + s.waiting === 0;
 
 const count = (n: number, one: string, many: string) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 
-/** A posting run's counts in words, the ones that aren't zero. The run posts invoices, credit memos and payments alike. */
+/** A posting run's counts in words, the ones that aren't zero. The run posts invoices, credit memos, payments and deposits alike. */
 function runCounts(run: PostingRun): string {
   const parts = [
     run.posted ? count(run.posted, 'new entry', 'new entries') : '',
@@ -208,7 +208,7 @@ function runCounts(run: PostingRun): string {
   return parts.length ? parts.join(', ') : 'nothing to post';
 }
 
-/** The Books chip for an invoice, credit memo or payment. */
+/** The Books chip for an invoice, credit memo, payment, deposit or application. */
 function booksChip(books: Books): { label: string; color: string } {
   if (books.entryNo !== null) {
     if (books.next === 'replace') return { label: `Entry ${books.entryNo} · to replace`, color: AMBER };
@@ -218,7 +218,7 @@ function booksChip(books: Books): { label: string; color: string } {
   return books.next === 'post' ? { label: 'To post', color: GREY } : { label: 'Not posted', color: GREY };
 }
 
-/** What the books hold for an invoice, credit memo or payment, in a sentence or two. */
+/** What the books hold for an invoice, credit memo, payment, deposit or application, in a sentence or two. */
 function booksText(books: Books): string {
   const now = books.entryNo !== null ? `In FleetSuite's books as entry ${books.entryNo}.` : "Not in FleetSuite's books.";
   const next = books.next === 'post' ? ' The next posting run posts it.'
@@ -522,7 +522,10 @@ export default function BooksInvoicesPage() {
                 deposits account is credited with it. An application debits the customer deposits account and credits
                 receivables. Where a deposit&apos;s money went comes from NetSuite&apos;s posting of it, and the customer deposits
                 account is the one NetSuite&apos;s deposits use. Each entry is checked account by account against what NetSuite
-                posted for the same document. Deposits aren&apos;t posted to FleetSuite&apos;s books yet.
+                posted for the same document. Every two hours each BMG deposit and application FleetSuite can work out is posted
+                to its own books, once, in the same run as invoices and payments. When NetSuite changes one its entry is reversed
+                and the new one posted, and one NetSuite voids or no longer has is reversed. Until the books go live they can be
+                emptied and posted again.
               </>
             ) : kind === 'payment' ? (
               <>
@@ -619,7 +622,7 @@ export default function BooksInvoicesPage() {
           {!data.lastRun && (
             <div style={banner(GREY)}>
               Nothing has been posted to FleetSuite&apos;s books yet. Posting runs every two hours, or press Post now. The first
-              run posts every invoice, credit memo and payment since January 2025 and may take more than one run.
+              run posts every invoice, credit memo, payment and deposit since January 2025 and may take more than one run.
             </div>
           )}
           {run?.error && <div style={banner(RED)}>The last posting run failed {ago(data.lastRun!.at)}: {run.error}</div>}

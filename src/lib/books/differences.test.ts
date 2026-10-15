@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  accountNamer, compareMonth, copyHolds, COST, explainDocument, indexMonths, kindName, kindOf, kindRows, lastMonth, monthStatuses,
+  accountNamer, compareMonth, copyHolds, COST, explainDocument, indexMonths, kindName, kindOf, kindRows, lastMonth, listKindOf, monthStatuses,
   monthText, postedKinds, type DiffData, type DiffDocumentData,
 } from './differences';
 
@@ -30,7 +30,11 @@ describe('kinds', () => {
   it('compares FleetSuite\'s documents under the NetSuite type they copy, and its own kinds apart', () => {
     expect(kindOf('invoice')).toBe('CustInvc');
     expect(kindOf('payment')).toBe('CustPymt');
+    expect(kindOf('customer_deposit')).toBe('CustDep');
+    expect(kindOf('deposit_application')).toBe('DepAppl');
     expect(kindOf('opening_balance')).toBe('fleetsuite:opening_balance');
+    expect(kindName('CustDep')).toBe('Customer Deposit');
+    expect(kindName('DepAppl')).toBe('Deposit Application');
     expect(kindName('CustCred')).toBe('Credit Memo');
     expect(kindName('ItemShip')).toBe('Item Fulfillment');
     expect(kindName('SomethingNew')).toBe('SomethingNew');
@@ -39,8 +43,13 @@ describe('kinds', () => {
     expect(kindName('fleetsuite:vendor_bill')).toBe('Vendor bill (FleetSuite only)');
   });
 
+  it('lists deposits and their applications under the one Deposits switch of Invoices vs NetSuite', () => {
+    expect(['invoice', 'credit_memo', 'payment', 'customer_deposit', 'deposit_application'].map(listKindOf))
+      .toEqual(['invoice', 'credit_memo', 'payment', 'deposit', 'deposit']);
+  });
+
   it('takes a company as posting what its rules post, or what it holds entries of', () => {
-    expect([...postedKinds(data(), true)].sort()).toEqual(['CustCred', 'CustInvc', 'CustPymt']);
+    expect([...postedKinds(data(), true)].sort()).toEqual(['CustCred', 'CustDep', 'CustInvc', 'CustPymt', 'DepAppl']);
     expect([...postedKinds(data(), false)]).toEqual(['CustInvc']);
     expect([...postedKinds({ ...data(), fleetsuite: [] }, false)]).toEqual([]);
   });
@@ -202,6 +211,20 @@ describe('explainDocument', () => {
     const late = { type: 'CustInvc', number: 'INV77', date: '2025-05-12', month: '2025-12-01' };
     expect(explainDocument(doc({ netsuite: late }), ctx)).toMatchObject({ reason: 'month', listMonth: '2025-12-01' });
     expect(explainDocument(doc({ kind: 'payment', netsuite: { ...late, type: 'CustPymt' } }), ctx).listMonth).toBe('2025-05-01');
+  });
+
+  it('lists a deposit or application under Deposits by its own date, and says when NetSuite no longer has it', () => {
+    const late = { type: 'CustDep', number: 'DEP9', date: '2025-05-12', month: '2025-06-01' };
+    expect(explainDocument(doc({ kind: 'customer_deposit', netsuite: late }), ctx))
+      .toMatchObject({ reason: 'month', listKind: 'deposit', listMonth: '2025-05-01' });
+    const gone = explainDocument(doc({ kind: 'deposit_application', netsuite: null, copy: { number: 'DA9', customer: null, voided: false, deleted: true } }), ctx);
+    expect(gone).toMatchObject({ reason: 'gone', number: 'DA9', listKind: 'deposit', why: "Deleted in NetSuite. The next posting run reverses FleetSuite's entry." });
+    const early = explainDocument(doc({
+      kind: 'customer_deposit', netsuite: { ...late, date: '2024-12-30', month: '2025-01-01' }, fleetsuite: { entries: 0, standing: null },
+    }), ctx);
+    expect(early).toMatchObject({ reason: 'before_start', listMonth: null });
+    // Everything else is listed under its own kind.
+    expect(explainDocument(doc({}), ctx).listKind).toBe('invoice');
   });
 
   it('dates a document FleetSuite never posted by NetSuite\'s date', () => {

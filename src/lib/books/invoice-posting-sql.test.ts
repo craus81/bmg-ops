@@ -1,10 +1,11 @@
 // Migration 367 posts NetSuite's invoices to FleetSuite's own journal, and
 // migration 370 its credit memos; migration 380 puts each in the month
 // NetSuite booked it to. This runs migration 314 (with stand-ins for the app
-// tables it points at) and migrations 359–364, 367, 370 and 380 in an
-// in-memory Postgres (PGlite) as the app's server login and holds the
-// functions' rules, then runs the posting job against them with a fake
-// NetSuite that answers the job's own SuiteQL.
+// tables it points at) and migrations 359–364, 367, 370 and 380, with the
+// ones the job reads payments and deposits through (374, 376, 377, 382 and
+// 383), in an in-memory Postgres (PGlite) as the app's server login and
+// holds the functions' rules, then runs the posting job against them with a
+// fake NetSuite that answers the job's own SuiteQL.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -61,7 +62,7 @@ async function freshDb(): Promise<PGlite> {
     '314-ledger.sql', '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '364-books-invoice-check.sql',
     '367-books-invoice-posting.sql', '370-books-credit-memos.sql', '374-books-payment-check.sql', '376-books-payment-posting.sql',
-    '380-books-netsuite-month.sql',
+    '377-books-differences.sql', '380-books-netsuite-month.sql', '382-books-customer-deposits.sql', '383-books-deposit-posting.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -733,7 +734,7 @@ describe('the posting job against the real functions', () => {
         ],
       });
       expect(r.notes).toEqual([
-        "NetSuite account 420 isn't in the chart of accounts yet, so invoices, credit memos and payments posting there weren't posted. Sync now on the chart of accounts page copies them.",
+        "NetSuite account 420 isn't in the chart of accounts yet, so invoices, credit memos, payments and deposits posting there weren't posted. Sync now on the chart of accounts page copies them.",
       ]);
       expect(await journal()).toEqual(before);
       expect(JSON.stringify(record().last_result)).not.toMatch(/\d\.\d|\$/);

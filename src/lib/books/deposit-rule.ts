@@ -22,12 +22,21 @@ import { RECEIVABLE_LINE } from './payment-rule';
  * it.
  *
  * Pure: it works out a document's entry, or says why it can't, and posts
- * nothing. Amounts are whole cents, debit positive.
+ * nothing; the posting job (src/lib/books/invoice-posting.ts) posts it, the
+ * customer on the customer deposits line and an application's receivable.
+ * Amounts are whole cents, debit positive.
  */
 
 export const DEPOSIT_RULE = 'deposit@1';
 
 export type DepositType = 'CustDep' | 'DepAppl';
+
+/**
+ * What the journal files each one's entries under (gl_entries.source_type,
+ * migration 383), and keys them by: customer_deposit:<NetSuite id>:<n>.
+ */
+export const DEPOSIT_SOURCE_TYPE = { CustDep: 'customer_deposit', DepAppl: 'deposit_application' } as const satisfies Record<DepositType, string>;
+export type DepositSourceType = (typeof DEPOSIT_SOURCE_TYPE)[DepositType];
 
 /** The entry's lines, by what they post. Receivables are RECEIVABLE_LINE, as on a payment. */
 export const MONEY_LINE = 'money';

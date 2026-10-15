@@ -57,7 +57,9 @@ const monthName = (month: string) => `${MONTH_NAMES[Number(month.slice(5, 7)) - 
 const shortMonth = (month: string) => MONTH_NAMES[Number(month.slice(5, 7)) - 1].slice(0, 3);
 const dateText = (iso: string) => `${shortMonth(iso)} ${Number(iso.slice(8, 10))}, ${iso.slice(0, 4)}`;
 
-const DOC_NAMES: Record<string, string> = { invoice: 'Invoice', credit_memo: 'Credit memo', payment: 'Payment' };
+const DOC_NAMES: Record<string, string> = {
+  invoice: 'Invoice', credit_memo: 'Credit memo', payment: 'Payment', customer_deposit: 'Deposit', deposit_application: 'Deposit application',
+};
 
 function ago(iso: string): string {
   const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -361,7 +363,7 @@ export default function BooksDifferencesPage() {
                               {d.entryNo !== null && d.fleetsuiteDate && <span>FleetSuite&apos;s entry {d.entryNo}, dated {dateText(d.fleetsuiteDate)}.</span>}
                               {d.listMonth && (
                                 <Link
-                                  href={`/admin/books/invoices?${new URLSearchParams({ company, kind: d.kind, month: d.listMonth.slice(0, 7), doc: d.netsuiteId })}`}
+                                  href={`/admin/books/invoices?${new URLSearchParams({ company, kind: d.listKind, month: d.listMonth.slice(0, 7), doc: d.netsuiteId })}`}
                                   style={{ color: 'var(--text-secondary)', fontWeight: 700 }}
                                 >
                                   Open in Invoices vs NetSuite →

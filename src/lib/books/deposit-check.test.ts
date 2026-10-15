@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ChartAccount, NetSuitePosting } from './invoice-check';
-import { checkDeposit, checkDepositMonth, depositReasons, pickDepositsAccount, type DepositMonthData } from './deposit-check';
+import { checkDeposit, checkDepositMonth, depositReasons, pickDepositsAccount, type DepositMonthData, type WorkedDeposit } from './deposit-check';
 
 // Made-up books: '120' and '121' receivables, '110' Undeposited Funds, '100'
 // a bank account, '230' customer deposits, '231' an older deposits account,
@@ -250,6 +250,29 @@ describe('checkDepositMonth', () => {
       ['Receivable', { account: '120', cents: -30000 }, { account: '120', cents: -30000 }, true],
     ]);
     expect(m.accounts).toEqual({ '110': '1100 Undeposited Funds', '120': '1200 Receivables', '230': '2300 Customer Deposits' });
+  });
+
+  it('says what FleetSuite\'s books hold for each when the company\'s deposits post', () => {
+    const seen: string[] = [];
+    const books = (w: WorkedDeposit) => {
+      seen.push(w.number);
+      return w.deposit.netsuite_id === '301'
+        ? { entryNo: 4, next: null, earlier: [] }
+        : { entryNo: null, next: w.checked.status === 'differs' ? null : 'post' as const, earlier: [] };
+    };
+    const m = checkDepositMonth(DATA, { company: 'BMG', chart: CHART }, books);
+    // Only for the ones listed: not DEP4 or DEP5, in neither company's GL copy.
+    expect(seen).toEqual(['DEP1', 'DA11', 'NetSuite 303']);
+    expect(m.summary).toEqual({ invoices: 3, matches: 2, differs: 1, unworkable: 0, waiting: 0, withCost: 0, posted: 1, pending: 1 });
+    expect(m.invoices.map((d) => [d.number, d.books])).toEqual([
+      ['DEP1', { entryNo: 4, next: null, earlier: [] }],
+      ['DA11', { entryNo: null, next: 'post', earlier: [] }],
+      ['NetSuite 303', { entryNo: null, next: null, earlier: [] }],
+    ]);
+    // A company whose deposits don't post says nothing of the books.
+    const plain = checkDepositMonth(DATA, { company: 'BMG', chart: CHART });
+    expect(plain.summary.posted).toBeUndefined();
+    expect(plain.invoices.every((d) => d.books === undefined)).toBe(true);
   });
 
   it('says which accounts it took and names the documents it couldn\'t check', () => {

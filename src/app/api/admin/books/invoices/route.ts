@@ -13,8 +13,9 @@ import { DEPOSIT_RULE } from '@/lib/books/deposit-rule';
 import { checkDepositMonth, type DepositMonthData } from '@/lib/books/deposit-check';
 import { BOOKS_DEPOSITS_SYNC } from '@/lib/books/netsuite-deposits';
 import {
-  BOOKS_INVOICE_POSTING, POSTING_COMPANIES, invoiceBooks, paymentBooks, postInvoices, postingFor, postingKey, unsaidFacts,
-  type InvoicePosting, type PaymentPosting,
+  BOOKS_INVOICE_POSTING, POSTING_COMPANIES, depositBooks, depositPostingFor, invoiceBooks, paymentBooks, postInvoices, postingFor,
+  postingKey, unsaidFacts,
+  type DepositPosting, type InvoicePosting, type PaymentPosting,
 } from '@/lib/books/invoice-posting';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { compactSuiteqlError } from '@/lib/sales-order-sync';
@@ -44,9 +45,9 @@ const POSTING_BUDGET_MS = 240_000;
  * without and says so.
  *
  * For a company whose documents post (src/lib/books/invoice-posting.ts),
- * each invoice, credit memo or payment also says what FleetSuite's books hold
- * for it (migrations 367 and 376) and what the next posting run does about
- * it, and `lastRun` is how the last one went.
+ * each invoice, credit memo, payment, deposit or application also says what
+ * FleetSuite's books hold for it (migrations 367, 376 and 383) and what the
+ * next posting run does about it, and `lastRun` is how the last one went.
  *
  * Super admin only: the books are being built hidden, for the owner, until
  * they're ready (docs/books.md). It only reads.
@@ -111,9 +112,21 @@ export async function GET(req: NextRequest) {
     const failed = res.error || copy.error;
     if (failed) return NextResponse.json({ error: failed.message }, { status: 500 });
     const data = (res.data ?? {}) as Partial<DepositMonthData>;
+    const deposits = data.deposits ?? [];
+    let held: Map<string, DepositPosting> | null = null;
+    if (posts) {
+      const mine = deposits.filter((d) => d.companies.includes(company)).map((d) => d.netsuite_id);
+      held = new Map();
+      if (mine.length) {
+        const books = await service.rpc('gl_deposit_postings', { p_company: company, p_source_ids: mine, p_lines: true });
+        if (books.error) return NextResponse.json({ error: books.error.message }, { status: 500 });
+        for (const p of ((books.data as any)?.deposits ?? []) as DepositPosting[]) held.set(postingKey(p.source_type, p.source_id), p);
+      }
+    }
     const check = checkDepositMonth(
-      { deposits: data.deposits ?? [], accounts: data.accounts ?? [], not_copied: data.not_copied ?? [] },
+      { deposits, accounts: data.accounts ?? [], not_copied: data.not_copied ?? [] },
       { company, chart },
+      held ? (w) => depositBooks(w, depositPostingFor(held!, w)) : undefined,
     );
     if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });
     // How the last copy went, counts and words only.
@@ -129,8 +142,7 @@ export async function GET(req: NextRequest) {
           },
         }
       : null;
-    // Deposits don't post yet: the check comes first, as it did for invoices and payments.
-    return NextResponse.json({ rule: DEPOSIT_RULE, kind, ...page, listsCopiedAt: null, posts: false, copy: copied, ...check });
+    return NextResponse.json({ rule: DEPOSIT_RULE, kind, ...page, listsCopiedAt: null, posts, copy: copied, ...check });
   }
 
   if (kind === 'payment') {
@@ -198,10 +210,10 @@ export async function GET(req: NextRequest) {
 }
 
 /**
- * POST /api/admin/books/invoices — post invoices, credit memos and payments
- * to FleetSuite's books now rather than wait for the two-hourly run. Same job,
- * same record of how it went; the response says only how the run went, the
- * page reloads the rest.
+ * POST /api/admin/books/invoices — post invoices, credit memos, payments and
+ * deposits to FleetSuite's books now rather than wait for the two-hourly
+ * run. Same job, same record of how it went; the response says only how the
+ * run went, the page reloads the rest.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireSuperAdmin(req);

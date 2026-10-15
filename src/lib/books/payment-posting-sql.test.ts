@@ -1,7 +1,8 @@
 // Migration 376 reads what the journal holds for NetSuite's customer
 // payments, and the posting job posts them with the payment rule. This runs
 // migration 314 (with stand-ins for the app tables it points at) and
-// migrations 359–364, 367, 370, 374, 376 and 380 in an in-memory Postgres
+// migrations 359–364, 367, 370, 374, 376 and 380, with the ones the job
+// reads deposits through (377, 382 and 383), in an in-memory Postgres
 // (PGlite) as the app's server login and holds the function's rules, then
 // runs the posting job against them with payments only.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
@@ -61,7 +62,7 @@ async function freshDb(): Promise<PGlite> {
     '314-ledger.sql', '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '364-books-invoice-check.sql',
     '367-books-invoice-posting.sql', '370-books-credit-memos.sql', '374-books-payment-check.sql', '376-books-payment-posting.sql',
-    '380-books-netsuite-month.sql',
+    '377-books-differences.sql', '380-books-netsuite-month.sql', '382-books-customer-deposits.sql', '383-books-deposit-posting.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);

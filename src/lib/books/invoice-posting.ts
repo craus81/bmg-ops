@@ -19,6 +19,8 @@ import {
 import { readLineFacts } from './invoice-line-facts';
 import { PAYMENT_RULE, RECEIVABLE_LINE } from './payment-rule';
 import { workOutPaymentMonth, type PaymentMonthData, type WorkedPayment } from './payment-check';
+import { DEPOSIT_RULE, DEPOSIT_SOURCE_TYPE, DEPOSITS_LINE, type DepositSourceType } from './deposit-rule';
+import { workOutDepositMonth, type DepositMonthData, type WorkedDeposit } from './deposit-check';
 
 /**
  * NetSuite's invoices posted to FleetSuite's own journal with the invoice
@@ -26,9 +28,11 @@ import { workOutPaymentMonth, type PaymentMonthData, type WorkedPayment } from '
  * 2026-10-13, thread "Replacing NetSuite with FleetSuite"), and its credit
  * memos with the credit memo rule, the same the other way round (migration
  * 370; owner decision 2026-10-14). Everything below that says invoice holds
- * for a credit memo too, and for a customer payment, posted with the payment
- * rule (migration 376; owner decision 2026-10-15), except where the
- * payments' own section says otherwise.
+ * for a credit memo too, for a customer payment, posted with the payment
+ * rule (migration 376; owner decision 2026-10-15), and for a customer
+ * deposit or deposit application, posted with the deposit rule (migration
+ * 383; owner decision 2026-10-15), except where the payments' and deposits'
+ * own sections say otherwise.
  *
  * Every BMG invoice NetSuite booked into a month from January 2025 that the
  * rule can work out posts once, as the check on Invoices vs NetSuite shows
@@ -63,7 +67,7 @@ import { workOutPaymentMonth, type PaymentMonthData, type WorkedPayment } from '
 
 export const BOOKS_INVOICE_POSTING = 'books_invoice_posting';
 
-/** The companies whose invoices, credit memos and payments post. 1084's join once they've been checked against NetSuite. */
+/** The companies whose invoices, credit memos, payments and deposits post. 1084's join once they've been checked against NetSuite. */
 export const POSTING_COMPANIES: readonly BooksCompany[] = ['BMG'];
 
 /** Seconds a run holds the lock: past the routes' 300 s limit, so a run that dies lets go soon after. */
@@ -119,8 +123,8 @@ export interface InvoicePosting {
 /** Which kind of document it is: anything but a credit memo is an invoice. */
 const kindOf = (worked: WorkedInvoice): SalesDocKind => (worked.invoice.doc_type === 'credit_memo' ? 'credit_memo' : 'invoice');
 
-/** What the journal holds for a document is looked up by its kind and NetSuite id, as its entries name it. */
-export const postingKey = (kind: SalesDocKind, netsuiteId: string) => `${kind}:${netsuiteId}`;
+/** What the journal holds for a document is looked up by its kind (its entries' source type) and NetSuite id, as its entries name it. */
+export const postingKey = (kind: string, netsuiteId: string) => `${kind}:${netsuiteId}`;
 
 /** What the journal holds for a worked out document, from gl_invoice_postings' answer keyed by postingKey. */
 export const postingFor = (postings: Map<string, InvoicePosting>, worked: WorkedInvoice) =>
@@ -366,6 +370,108 @@ export function paymentJournalEntry(
   };
 }
 
+// ── Deposits ───────────────────────────────────────────────────────────────
+//
+// A customer deposit or deposit application posts as a payment does: no
+// lines of its own to wait for or add up (its entry is worked out from its
+// total with the deposit rule), what the journal holds for it from
+// gl_deposit_postings (migration 383), keyed customer_deposit:<NetSuite
+// id>:<n> or deposit_application:<NetSuite id>:<n>. Its customer goes on the
+// customer deposits line, what BMG holds for the customer, and on an
+// application's receivable, as on a payment's.
+
+/** What the journal holds for one customer deposit or deposit application (gl_deposit_postings, migration 383). */
+export interface DepositPosting extends Omit<InvoicePosting, 'source_type' | 'invoice'> {
+  source_type: DepositSourceType;
+  /** What the copy of NetSuite's deposits says of it now, deleted when NetSuite no longer lists it; null when the copy has none. */
+  deposit: { number: string | null; deleted: boolean; voided: boolean } | null;
+}
+
+/** What the journal holds for a worked out deposit or application, from gl_deposit_postings' answer keyed by postingKey. */
+export const depositPostingFor = (postings: Map<string, DepositPosting>, worked: WorkedDeposit) =>
+  postings.get(postingKey(DEPOSIT_SOURCE_TYPE[worked.deposit.type], worked.deposit.netsuite_id));
+
+/** The lines the deposit rule works out for a deposit or application; none when it posts nothing. */
+export function depositEntryLines(worked: WorkedDeposit): RuleLine[] {
+  return worked.checked.rows.flatMap((r) => (r.fleetsuite && r.fleetsuite.cents !== 0
+    ? [{ account: r.fleetsuite.account, cents: r.fleetsuite.cents, lineId: r.lineId, itemNumber: null, division: null }]
+    : []));
+}
+
+/** The customer a line of a deposit's or application's entry carries: on the customer deposits line and the receivable. */
+const depositCustomer = (worked: WorkedDeposit, lineId: string) =>
+  (lineId === DEPOSITS_LINE || lineId === RECEIVABLE_LINE ? worked.deposit.customer_id ?? null : null);
+
+const depositSignature = (worked: WorkedDeposit) => signature(
+  worked.deposit.date,
+  depositEntryLines(worked).map((l) => ({
+    account: l.account,
+    cents: l.cents,
+    division: null,
+    lineRef: l.lineId,
+    customerId: depositCustomer(worked, l.lineId),
+  })),
+);
+
+/** What to do about one deposit or application the rule has worked out, given what the journal holds for it. */
+export function decideDeposit(worked: WorkedDeposit, posting: DepositPosting | undefined): Decision {
+  const current = posting?.current ?? null;
+  if (worked.deposit.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep' };
+  const { status } = worked.checked;
+  if (status === 'waiting') return { kind: 'leave', why: 'waiting' };
+  if (status === 'unworkable') return { kind: 'leave', why: 'unworkable' };
+  if (depositEntryLines(worked).length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep' };
+  if (!current) return { kind: 'post' };
+  return postedSignature(current) === depositSignature(worked) ? { kind: 'keep' } : { kind: 'replace' };
+}
+
+/** What the journal holds for a deposit or application and what the next run does about it, for the invoices page. */
+export function depositBooks(worked: WorkedDeposit, posting: DepositPosting | undefined): InvoiceBooks {
+  return booksOf(decideDeposit(worked, posting), posting, true);
+}
+
+/**
+ * The journal entry for a deposit or application, its `generation`th: the
+ * rule's lines on the chart's accounts, the customer deposits line and the
+ * receivable carrying the customer, keyed `customer_deposit:…` or
+ * `deposit_application:…`. Null with the NetSuite accounts the chart doesn't
+ * have when it can't be built.
+ */
+export function depositJournalEntry(
+  worked: WorkedDeposit,
+  company: BooksCompany,
+  generation: number,
+  accountIds: Map<string, string>,
+): { entry: JournalEntryInput; missing: [] } | { entry: null; missing: string[] } {
+  const lines = depositEntryLines(worked);
+  const missing = [...new Set(lines.map((l) => l.account).filter((a) => !accountIds.has(a)))];
+  if (missing.length) return { entry: null, missing };
+  const d = worked.deposit;
+  const sourceType = DEPOSIT_SOURCE_TYPE[d.type];
+  return {
+    entry: {
+      company,
+      entryDate: d.date,
+      sourceType,
+      sourceId: d.netsuite_id,
+      postingRule: DEPOSIT_RULE,
+      idempotencyKey: `${sourceType}:${d.netsuite_id}:${generation}`,
+      memo: d.customer ? `${worked.number}, ${d.customer}` : worked.number,
+      postedBy: null,
+      lines: lines.map((l) => ({
+        accountId: accountIds.get(l.account)!,
+        debit: l.cents > 0 ? centsToAmount(l.cents) : null,
+        credit: l.cents < 0 ? centsToAmount(-l.cents) : null,
+        division: null,
+        itemNumber: null,
+        sourceLineRef: l.lineId,
+        customerId: depositCustomer(worked, l.lineId),
+      })),
+    },
+    missing: [],
+  };
+}
+
 /** Why a write failed, in words that carry no amount: the run's record is kept where amounts never go. */
 export function failureReason(err: unknown): string {
   const money = /\$|\bdebits?\b|\bcredits?\b|balance/i;
@@ -387,7 +493,7 @@ export interface InvoicePostingResult {
   replaced?: number;
   reversed?: number;
   unchanged?: number;
-  /** Invoices, credit memos and payments the rule can't work out yet, or whose copy was mid-refresh: whatever stands for them stayed. */
+  /** Invoices, credit memos, payments, deposits and applications the rule can't work out yet, or whose copy was mid-refresh: whatever stands for them stayed. */
   left?: number;
   /** Writes the journal refused or that failed, a few of them with why. */
   failedCount?: number;
@@ -518,15 +624,18 @@ export async function postInvoices(
 
     // 1. What NetSuite deleted or voided, and any second entry standing for one document.
     for (const company of POSTING_COMPANIES) {
-      const [all, paid] = await Promise.all([
+      const [all, paid, deposited] = await Promise.all([
         service.rpc('gl_invoice_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_payment_postings', { p_company: company, p_source_ids: null, p_lines: false }),
+        service.rpc('gl_deposit_postings', { p_company: company, p_source_ids: null, p_lines: false }),
       ]);
       if (all.error) throw new Error(all.error.message);
       if (paid.error) throw new Error(paid.error.message);
+      if (deposited.error) throw new Error(deposited.error.message);
       const held = [
         ...(((all.data as any)?.invoices ?? []) as InvoicePosting[]).map((p) => ({ posting: p, copy: p.invoice })),
         ...(((paid.data as any)?.payments ?? []) as PaymentPosting[]).map((p) => ({ posting: p, copy: p.payment })),
+        ...(((deposited.data as any)?.deposits ?? []) as DepositPosting[]).map((p) => ({ posting: p, copy: p.deposit })),
       ];
       const tasks: Array<() => Promise<void>> = [];
       for (const { posting: p, copy } of held) {
@@ -677,6 +786,32 @@ export async function postInvoices(
         if (result.partial) break;
       }
 
+      // The month's customer deposits and deposit applications, as its payments: one in neither company's GL copy
+      // is this company's only while an entry of it stands here.
+      const dep = await service.rpc('gl_deposit_month', { p_company: company, p_month: month });
+      if (dep.error) throw new Error(dep.error.message);
+      const depData = (dep.data ?? {}) as Partial<DepositMonthData>;
+      const deposits = workOutDepositMonth(
+        { deposits: depData.deposits ?? [], accounts: depData.accounts ?? [], not_copied: [] },
+        { company, chart: chartAccounts },
+      ).deposits.filter((w) => w.deposit.companies.length === 0 || w.deposit.companies.includes(company));
+      if (deposits.length) {
+        const held = await service.rpc('gl_deposit_postings', {
+          p_company: company, p_source_ids: deposits.map((w) => w.deposit.netsuite_id), p_lines: true,
+        });
+        if (held.error) throw new Error(held.error.message);
+        const postings = new Map((((held.data as any)?.deposits ?? []) as DepositPosting[]).map((p) => [postingKey(p.source_type, p.source_id), p]));
+        const tasks: Array<() => Promise<void>> = [];
+        for (const w of deposits) {
+          const posting = depositPostingFor(postings, w);
+          if (!w.deposit.companies.length && !posting?.current) continue;
+          enqueue(tasks, w.number, decideDeposit(w, posting), posting?.current ?? null,
+            () => depositJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
+        }
+        await runLimited(tasks, WRITERS);
+        if (result.partial) break;
+      }
+
       result.months!.push(month);
       state.resume = queue[i + 1] ?? null;
       await writeSyncStateCursor(service, BOOKS_INVOICE_POSTING, record());
@@ -694,7 +829,7 @@ export async function postInvoices(
     }
     if (missingAccounts.size) {
       notes.push(`NetSuite account${missingAccounts.size === 1 ? '' : 's'} ${listed([...missingAccounts])} ${missingAccounts.size === 1 ? "isn't" : "aren't"} `
-        + 'in the chart of accounts yet, so invoices, credit memos and payments posting there weren\'t posted. Sync now on the chart of accounts page copies them.');
+        + 'in the chart of accounts yet, so invoices, credit memos, payments and deposits posting there weren\'t posted. Sync now on the chart of accounts page copies them.');
     }
   } catch (err) {
     result.error = String((err as any)?.message || err).slice(0, 300);
