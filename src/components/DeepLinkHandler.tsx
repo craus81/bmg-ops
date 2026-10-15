@@ -8,8 +8,21 @@ import { useRouter } from 'next/navigation';
 // native Capacitor wrapper opens at its server.url root and the deep link is
 // lost. No-ops on the plain web build and on native if the URL host doesn't
 // match the app's own origin.
+// Sign-in links (staff invites, Magic Link, password reset) come back as
+// /auth/callback?next=…#access_token=…. That has to be a full page load: the
+// callback is a server route, and the Supabase client only reads the tokens
+// in the # when the page starts. A router.push left the app on a blank screen
+// and never signed the person in.
+function isAuthLink(path: string): boolean {
+  return path.startsWith('/auth/') || /[#&](access_token|error_code)=/.test(path);
+}
+
 export default function DeepLinkHandler() {
   const router = useRouter();
+  const go = (path: string) => {
+    if (isAuthLink(path)) window.location.replace(path);
+    else router.push(path);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -37,13 +50,13 @@ export default function DeepLinkHandler() {
         const launch = await App.getLaunchUrl();
         if (!cancelled && launch?.url) {
           const path = toInAppPath(launch.url);
-          if (path) router.push(path);
+          if (path) go(path);
         }
 
         // Warm start: app already running when the link is tapped.
         const handle = await App.addListener('appUrlOpen', (event) => {
           const path = toInAppPath(event.url);
-          if (path) router.push(path);
+          if (path) go(path);
         });
         if (cancelled) handle.remove();
         else removeListener = () => handle.remove();
