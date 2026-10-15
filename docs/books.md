@@ -11,10 +11,12 @@ copied from NetSuite, part 3, NetSuite's general ledger from 2025 copied
 and checked month by month, part 4, the NetSuite lists the posting rules
 need, part 5, the invoice rule, checked against NetSuite, part 6, every
 BMG invoice since 2025 posted to FleetSuite's own journal with it, part 7,
-credit memos, checked and posted the same way, the other way round, and
+credit memos, checked and posted the same way, the other way round,
 part 8, customer payments, checked against NetSuite with the payment rule
-and posted in the same run as invoices, and part 9, a page that puts
-FleetSuite's books next to NetSuite's and shows what still differs and why.
+and posted in the same run as invoices, part 9, a page that puts
+FleetSuite's books next to NetSuite's and shows what still differs and why,
+and part 10, customer deposits and their applications, copied from NetSuite
+and checked with the deposit rule.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices` and the differences at
@@ -48,6 +50,9 @@ the accounts page; the others are linked from there.
 | Differences vs NetSuite | `migrations/377-books-differences.sql`, `src/lib/books/differences.ts`, `src/app/(main)/admin/books/differences/page.tsx`, `src/app/api/admin/books/differences/route.ts` |
 | Differences tests | `src/lib/books/differences.test.ts`, `src/lib/books/differences-sql.test.ts` |
 | Invoices and credit memos in the month NetSuite booked them to | `migrations/380-books-netsuite-month.sql`, `entryDate` in `src/lib/books/invoice-check.ts`; their tests are in the invoice test files |
+| Customer deposits, copied from NetSuite | `migrations/382-books-customer-deposits.sql`, `src/lib/books/netsuite-deposits.ts`, `src/app/api/cron/books-netsuite-deposits/route.ts`, `src/app/api/admin/books/deposits/route.ts` |
+| Deposit rule and its check, on the invoices page | `src/lib/books/deposit-rule.ts`, `src/lib/books/deposit-check.ts` |
+| Deposit tests | `src/lib/books/deposit-rule.test.ts`, `src/lib/books/deposit-check.test.ts`, `src/lib/books/netsuite-deposits.test.ts`, `src/lib/books/deposits-sql.test.ts` |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
 QuickBooks and NetSuite history that importers replace wholesale. They stay
@@ -532,8 +537,9 @@ what the next posting run does about it.
   entry doesn't have. So does a discount split across two income or
   expense accounts, since neither is then plainly the discount.
 - Customer deposits, and applying them to invoices, are NetSuite documents
-  of their own and aren't copied yet. Nor are bank deposits, which move the
-  money from Undeposited Funds to the bank.
+  of their own, checked on their own ("Customer deposits" below). Bank
+  deposits, which move the money from Undeposited Funds to the bank, aren't
+  copied yet.
 
 ### Posting payments
 
@@ -569,6 +575,98 @@ comes back is read as a narrowed SuiteQL role, as for invoices, and marks
 nothing (`payments.problem` in the mirror's last result says so). Whether
 NetSuite's status for a voided customer payment reads Voided, as an
 invoice's does, hasn't been seen yet.
+
+## Customer deposits
+
+A customer deposit (NetSuite's CustDep) is money a customer pays ahead of
+an invoice; a deposit application (DepAppl) applies a deposit to an invoice,
+or to a refund. Both are copied from NetSuite and checked against its GL
+with the deposit rule (owner decision 2026-10-15); posting them to
+FleetSuite's journal comes once they match, as it did for invoices and
+payments.
+
+### Copying deposits
+
+The ledger mirror doesn't copy deposits, so the books copy them themselves
+(`src/lib/books/netsuite-deposits.ts`, into migration 382's
+`gl_netsuite_deposits`): every two hours at :16 on odd hours
+(`/api/cron/books-netsuite-deposits`), or when **Copy now** is pressed on
+the invoices page's Deposits switch, which runs the same job with the same
+four minutes. They aren't kept with the mirror's payments in
+`ledger_payments`: the mirror's delete sweep would mark them deleted there,
+and `gl_payment_month` would check them as payments.
+
+The run works like the estimates copy. It reads the documents NetSuite
+changed since the last run that finished, a day's overlap included (the
+first reaches back to 2000), newest first, 200 at a time, and saves its
+place after each page, so the first copy can span runs and a run cut short
+picks up where it stopped. For each page it reads what each document
+applies from NetSuite's transaction link table (`nexttransactionlinelink`,
+or `previoustransactionlinelink` when the account refuses the first, the
+pair the ledger mirror probes), with the type and number of each document
+linked: an application's deposit and invoices, a deposit's sales order.
+Two link rows for the same pair of documents are added together. When
+NetSuite answers neither table, the documents are copied without links,
+the ones already copied keep theirs, and the run says so.
+
+Once a run has read everything changed, it lists every deposit and
+application id NetSuite has and marks the ones NetSuite no longer has as
+gone (`gone_at`); a list with none, or with under half of what the copy
+holds, is read as cut short and marks nothing. A document NetSuite lists
+again is back. Rows are never deleted, nothing is written to NetSuite, and
+the run's record in `sync_state` (`books_netsuite_deposits`) holds counts
+and words, never an amount.
+
+### The deposit rule
+
+The deposit rule, `deposit@1` (`src/lib/books/deposit-rule.ts`):
+
+- A deposit debits the account its money went to, Undeposited Funds or a
+  bank account, and credits customer deposits, with its total. Where the
+  money went is the deposit's own choice, so it comes from NetSuite's
+  posting of the deposit, as a payment's does.
+- An application debits customer deposits and credits receivables with
+  what it applies.
+- A document of $0, a voided one, posts nothing.
+
+Customer deposits is the company's account that NetSuite's deposits credit
+and its applications debit, for the most of the company's documents in the
+GL copy; a receivable, income or expense account never is, and a tie goes
+to the lower NetSuite id. With more than one in use, the page says which
+was taken. The receivable is the company's, picked from the month's
+applications as it is from a month's payments.
+
+### Checking deposits
+
+The **Deposits** switch on the invoices page checks each deposit and
+application dated in the month against the GL lines NetSuite posted for it,
+account by account, to the cent, as payments are checked
+(`src/lib/books/deposit-check.ts`). Migration 382's
+`gl_deposit_month(company, month)` reads the month from the copy: each
+document with what it applies, a deposit's applications (found through
+their links), and NetSuite's GL lines for it from the GL copy. Opening one
+shows NetSuite's status for it, what it applies or what its applications
+applied it to, and the rule's lines next to NetSuite's. Above the list the
+page says when the copy last ran and how it went.
+
+- A document is a company's when NetSuite posted a GL line of it to that
+  company, as for payments; one in neither company's GL copy isn't counted,
+  and is named in a note unless it comes to $0.
+- A note also names the documents the GL copy has in the month that the
+  deposits copy doesn't have yet.
+
+Not yet seen in NetSuite's data, so the check is what will show it:
+
+- that a deposit puts its money on its main line and credits one customer
+  deposits account, and an application debits that account and credits
+  receivables;
+- that an application lists its deposit and the invoices it pays as its
+  previous documents in the link table, and a deposit its sales order;
+- that a voided deposit's status reads Voided, and which way NetSuite signs
+  the documents' totals (the copy keeps them positive);
+- that refunding a deposit goes through an application.
+
+Refunds themselves (CustRfnd) and bank deposits (Deposit) aren't copied.
 
 ## Differences
 

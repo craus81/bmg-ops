@@ -7,8 +7,8 @@ import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 
 /**
- * Books → Invoices vs NetSuite (migrations 364, 367, 370, 374 and 376,
- * docs/books.md "Invoices" and "Payments").
+ * Books → Invoices vs NetSuite (migrations 364, 367, 370, 374, 376 and 382,
+ * docs/books.md "Invoices", "Payments" and "Customer deposits").
  *
  * FleetSuite works out its own entry for every NetSuite invoice with the
  * invoice rule, and for every credit memo with the same rule the other way
@@ -16,19 +16,24 @@ import { apiFetch } from '@/lib/api-client';
  * same document, and shows what its own books hold for each: the posting
  * job (src/lib/books/invoice-posting.ts) posts BMG's every two hours, or on
  * "Post now". Customer payments are checked the same way with the payment
- * rule, and post in the same run. Super admins only while the books are
- * built, linked from the other books pages.
+ * rule, and post in the same run. Customer deposits and their applications
+ * are copied from NetSuite every two hours, or on "Copy now", and checked
+ * with the deposit rule; they don't post yet. Super admins only while the
+ * books are built, linked from the other books pages.
  */
 
 type Status = 'matches' | 'differs' | 'unworkable' | 'waiting';
 
-type Kind = 'invoice' | 'credit_memo' | 'payment';
+type Kind = 'invoice' | 'credit_memo' | 'payment' | 'deposit';
+const KINDS: readonly Kind[] = ['invoice', 'credit_memo', 'payment', 'deposit'];
 
 /** What each kind of document is called. */
 const WORDS: Record<Kind, { one: string; many: string; title: string; head: string }> = {
   invoice: { one: 'invoice', many: 'invoices', title: 'Invoices', head: 'Invoice' },
   credit_memo: { one: 'credit memo', many: 'credit memos', title: 'Credit memos', head: 'Credit memo' },
   payment: { one: 'payment', many: 'payments', title: 'Payments', head: 'Payment' },
+  // The Deposits switch lists deposit applications too, so its counts count both.
+  deposit: { one: 'deposit or application', many: 'deposits and applications', title: 'Deposits', head: 'Deposit' },
 };
 
 interface Summary {
@@ -62,6 +67,14 @@ interface PostingRun {
   failedCount?: number;
   failed?: Array<{ number: string; reason: string }>;
   partial?: boolean;
+  notes?: string[];
+  error?: string;
+}
+
+/** How the last copy of NetSuite's deposits went (src/lib/books/netsuite-deposits.ts); counts and words only. */
+interface CopyRun {
+  read: number;
+  partial: boolean;
   notes?: string[];
   error?: string;
 }
@@ -109,8 +122,16 @@ interface Invoice {
   reasons: string[];
   rows: Row[];
   books?: Books;
-  /** A payment's: what it was applied to, as the copy of the payment has it. */
-  applied?: Array<{ number: string; cents: number }>;
+  /** A payment's or a deposit application's: what it was applied to. A deposit's: what its applications applied it to, each on its date. */
+  applied?: Array<{ number: string; cents: number | null; date?: string }>;
+  /** A deposit's or deposit application's. */
+  type?: 'CustDep' | 'DepAppl';
+  /** NetSuite's status for a deposit or application, in its words. */
+  netsuiteStatus?: string;
+  /** An application's: the deposit it applies. */
+  deposit?: string;
+  /** A deposit's: the sales order NetSuite links it to. */
+  order?: string;
 }
 
 interface Reason {
@@ -131,6 +152,8 @@ interface Payload {
   /** Whether this company's invoices, credit memos and payments post to FleetSuite's books yet. */
   posts: boolean;
   lastRun: { at: string; result: PostingRun } | null;
+  /** Deposits only: how the last copy of them from NetSuite went; null before the first. */
+  copy?: { at: string; result: CopyRun } | null;
   summary: Summary;
   reasons: Reason[];
   notes: string[];
@@ -252,6 +275,21 @@ function saysText(says: Says): string {
   return `NetSuite: ${parts.join(', ')}`;
 }
 
+/** One document a payment or deposit was applied to, with its amount and date when known. */
+const appliedText = (a: NonNullable<Invoice['applied']>[number]) =>
+  `${a.number}${a.cents !== null ? ` (${fmt(a.cents)})` : ''}${a.date ? ` on ${dateText(a.date)}` : ''}`;
+
+/** What a deposit or deposit application is linked to, in a sentence. */
+function depositLinksText(invoice: Invoice): string | null {
+  const applied = (invoice.applied ?? []).map(appliedText).join(', ');
+  if (invoice.type === 'DepAppl') {
+    if (!invoice.deposit && !applied) return null;
+    return `Applies ${invoice.deposit ?? 'a deposit'}${applied ? ` to ${applied}` : ''}.`;
+  }
+  const parts = [invoice.order ? `For ${invoice.order}.` : '', applied ? `Applied to ${applied}.` : ''].filter(Boolean);
+  return parts.length ? parts.join(' ') : null;
+}
+
 const amountsText = (amounts: NonNullable<Invoice['amounts']>, one: string) => (amounts === 'own'
   ? `NetSuite spread a discount, markup or payment over this ${one}'s lines, so FleetSuite takes each line at its own amount, as NetSuite posts it.`
   : `NetSuite's own amounts for this ${one}'s lines don't add up to it, so FleetSuite took each line at its net amount.`);
@@ -273,9 +311,16 @@ function InvoiceDetail({ invoice, accounts, one }: { invoice: Invoice; accounts:
       {invoice.amounts && (
         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>{amountsText(invoice.amounts, one)}</div>
       )}
-      {!!invoice.applied?.length && (
+      {invoice.netsuiteStatus && (
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>NetSuite&apos;s status: {invoice.netsuiteStatus}.</div>
+      )}
+      {invoice.type ? (
+        depositLinksText(invoice) && (
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>{depositLinksText(invoice)}</div>
+        )
+      ) : !!invoice.applied?.length && (
         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>
-          Applied to {invoice.applied.map((a) => `${a.number} (${fmt(a.cents)})`).join(', ')}.
+          Applied to {invoice.applied.map(appliedText).join(', ')}.
         </div>
       )}
       {invoice.rows.length === 0 ? (
@@ -339,6 +384,8 @@ export default function BooksInvoicesPage() {
   const [checking, setChecking] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
   const [postError, setPostError] = useState('');
+  const [copying, setCopying] = useState(false);
+  const [copyError, setCopyError] = useState('');
   // A document a link asked for (Differences vs NetSuite), scrolled to once it's open.
   const scrollTo = useRef<string | null>(null);
 
@@ -370,7 +417,7 @@ export default function BooksInvoicesPage() {
     const q = new URLSearchParams(window.location.search);
     const askedKind = q.get('kind');
     const doc = q.get('doc');
-    load(q.get('company') ?? '', q.get('month') ?? '', askedKind === 'credit_memo' || askedKind === 'payment' ? askedKind : 'invoice')
+    load(q.get('company') ?? '', q.get('month') ?? '', KINDS.find((k) => k === askedKind) ?? 'invoice')
       .then(() => {
         if (!doc) return;
         scrollTo.current = doc;
@@ -428,6 +475,22 @@ export default function BooksInvoicesPage() {
     setPosting(false);
   };
 
+  // Copies NetSuite's deposits now. As with posting, how the copy went is
+  // recorded either way and shows in the banners after the reload.
+  const copyNow = async () => {
+    setCopying(true);
+    setCopyError('');
+    try {
+      const res = await apiFetch('/api/admin/books/deposits', { method: 'POST' });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `Copy failed (${res.status})`);
+    } catch (e: any) {
+      setCopyError(e?.message || 'Copy failed');
+    }
+    await load(company, month, kind);
+    setCopying(false);
+  };
+
   const s = data?.summary;
   const words = WORDS[kind];
   const years = [...new Set((data?.months ?? []).map((m) => m.slice(0, 4)))];
@@ -442,6 +505,8 @@ export default function BooksInvoicesPage() {
     && (inv.books.next !== null || (inv.books.entryNo === null && !inv.voided && inv.total !== 0)));
   const shown = (data?.invoices ?? []).filter((inv) => !onlyProblems || needsLook(inv));
   const run = data?.lastRun?.result;
+  const copied = kind === 'deposit' ? data?.copy : undefined;
+  const busy = loading || !!checking || posting || copying;
 
   return (
     <div>
@@ -449,7 +514,17 @@ export default function BooksInvoicesPage() {
         <div style={{ flex: '1 1 280px' }}>
           <div style={{ fontSize: '20px', fontWeight: 800 }}>{words.title} vs NetSuite</div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            {kind === 'payment' ? (
+            {kind === 'deposit' ? (
+              <>
+                NetSuite&apos;s customer deposits, money a customer pays ahead of an invoice, and the deposit applications that
+                apply them to invoices are copied from NetSuite every two hours. For each deposit FleetSuite works out its own
+                entry: the money goes to the account the deposit went to, Undeposited Funds or a bank account, and the customer
+                deposits account is credited with it. An application debits the customer deposits account and credits
+                receivables. Where a deposit&apos;s money went comes from NetSuite&apos;s posting of it, and the customer deposits
+                account is the one NetSuite&apos;s deposits use. Each entry is checked account by account against what NetSuite
+                posted for the same document. Deposits aren&apos;t posted to FleetSuite&apos;s books yet.
+              </>
+            ) : kind === 'payment' ? (
               <>
                 For every NetSuite customer payment FleetSuite works out its own entry: the money goes to the account the payment
                 was deposited to, Undeposited Funds or a bank account, a discount the customer took goes to the account NetSuite
@@ -483,7 +558,7 @@ export default function BooksInvoicesPage() {
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           <button
             onClick={checkEveryMonth}
-            disabled={!!checking || posting || loading || !data}
+            disabled={busy || !data}
             style={{
               padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)',
               color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: checking ? 'wait' : 'pointer',
@@ -491,10 +566,22 @@ export default function BooksInvoicesPage() {
           >
             {checking ? `Checking ${monthName(checking)}…` : 'Check every month'}
           </button>
+          {kind === 'deposit' && (
+            <button
+              onClick={copyNow}
+              disabled={busy}
+              style={{
+                padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)',
+                color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: copying ? 'wait' : 'pointer',
+              }}
+            >
+              {copying ? 'Copying… up to 4 minutes' : 'Copy now'}
+            </button>
+          )}
           {data?.posts && (
             <button
               onClick={postNow}
-              disabled={posting || !!checking || loading}
+              disabled={busy}
               style={{
                 padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)',
                 color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: posting ? 'wait' : 'pointer',
@@ -508,6 +595,25 @@ export default function BooksInvoicesPage() {
 
       {error && <div style={banner(RED)}>{error}</div>}
       {postError && <div style={banner(RED)}>{postError}</div>}
+      {copyError && <div style={banner(RED)}>{copyError}</div>}
+      {data && kind === 'deposit' && (
+        <>
+          {!copied && (
+            <div style={banner(GREY)}>
+              Nothing has been copied from NetSuite yet. The copy runs every two hours, or press Copy now.
+            </div>
+          )}
+          {copied?.result.error && <div style={banner(RED)}>The last copy failed {ago(copied.at)}: {copied.result.error}</div>}
+          {copied && !copied.result.error && (
+            <div style={banner(copied.result.partial ? AMBER : GREEN)}>
+              {copied.result.partial
+                ? `Still copying: the last run, ${ago(copied.at)}, read ${count(copied.result.read, 'deposit or application', 'deposits and applications')} and stopped for time. It carries on at the next run, or press Copy now.`
+                : `Copied from NetSuite ${ago(copied.at)}.`}
+            </div>
+          )}
+          {(copied?.result.notes ?? []).map((n) => <div key={n} style={banner(AMBER)}>{n}</div>)}
+        </>
+      )}
       {data?.posts && (
         <>
           {!data.lastRun && (
@@ -547,13 +653,13 @@ export default function BooksInvoicesPage() {
 
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
             {data.companies.map((c) => (
-              <button key={c.code} onClick={() => pick(c.code, month)} disabled={loading || !!checking || posting} style={button(c.code === company)}>
+              <button key={c.code} onClick={() => pick(c.code, month)} disabled={busy} style={button(c.code === company)}>
                 {c.name}
               </button>
             ))}
             <span style={{ borderLeft: '1px solid var(--border)', margin: '0 4px' }} />
-            {(['invoice', 'credit_memo', 'payment'] as const).map((k) => (
-              <button key={k} onClick={() => pick(company, month, k)} disabled={loading || !!checking || posting} style={button(k === kind)}>
+            {KINDS.map((k) => (
+              <button key={k} onClick={() => pick(company, month, k)} disabled={busy} style={button(k === kind)}>
                 {WORDS[k].title}
               </button>
             ))}
@@ -570,7 +676,7 @@ export default function BooksInvoicesPage() {
                     <button
                       key={m}
                       onClick={() => pick(company, m)}
-                      disabled={loading || !!checking || posting}
+                      disabled={busy}
                       title={!r ? 'Not checked yet' : allMatch(r) ? `Every ${words.one} matches NetSuite` : `${count(r.invoices - r.matches, `${words.one} doesn't`, `${words.many} don't`)} match`}
                       style={{ ...button(m === month), borderColor: m === month ? 'var(--text-primary)' : `${color}88`, color: r ? color : 'var(--text-primary)' }}
                     >
@@ -593,9 +699,11 @@ export default function BooksInvoicesPage() {
             {!!s.pending && <span style={chip(AMBER)}>{s.pending.toLocaleString('en-US')} for the next posting run</span>}
           </div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
-            {kind === 'payment'
-              ? `${words.title} dated this month that NetSuite posted to this company`
-              : `${words.title} NetSuite booked into this month for this company`}, checked with rule {data.rule}.
+            {kind === 'deposit'
+              ? 'Customer deposits and deposit applications dated this month that NetSuite posted to this company'
+              : kind === 'payment'
+                ? `${words.title} dated this month that NetSuite posted to this company`
+                : `${words.title} NetSuite booked into this month for this company`}, checked with rule {data.rule}.
             {data.listsCopiedAt && ` Items and tax codes as copied from NetSuite ${ago(data.listsCopiedAt)}.`}
             {!data.posts && ` This company's ${words.many} aren't posted to FleetSuite's books yet; they will be once they've been checked.`}
           </div>
@@ -650,7 +758,10 @@ export default function BooksInvoicesPage() {
                       onClick={() => setOpen(open === inv.netsuiteId ? null : inv.netsuiteId)}
                       style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }}
                     >
-                      <td style={{ ...textCell, fontWeight: 700 }}>{open === inv.netsuiteId ? '▾' : '▸'} {inv.number}</td>
+                      <td style={{ ...textCell, fontWeight: 700 }}>
+                        {open === inv.netsuiteId ? '▾' : '▸'} {inv.number}
+                        {inv.type === 'DepAppl' && <span style={{ ...chip(GREY), marginLeft: '6px' }}>Application</span>}
+                      </td>
                       <td style={{ ...cell, textAlign: 'left' }}>
                         {dateText(inv.date)}
                         {inv.booked && <div style={{ color: 'var(--text-muted)', fontSize: '11px' }}>booked {monthName(inv.booked.month)}</div>}
@@ -668,7 +779,15 @@ export default function BooksInvoicesPage() {
                       )}
                     </tr>
                     {open === inv.netsuiteId && (
-                      <tr><td colSpan={data.posts ? 6 : 5} style={{ padding: 0 }}><InvoiceDetail invoice={inv} accounts={data.accounts} one={words.one} /></td></tr>
+                      <tr>
+                        <td colSpan={data.posts ? 6 : 5} style={{ padding: 0 }}>
+                          <InvoiceDetail
+                            invoice={inv}
+                            accounts={data.accounts}
+                            one={inv.type === 'DepAppl' ? 'deposit application' : inv.type === 'CustDep' ? 'deposit' : words.one}
+                          />
+                        </td>
+                      </tr>
                     )}
                   </Fragment>
                 ))}
