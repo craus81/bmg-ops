@@ -189,21 +189,21 @@ export default function ClientFilesSection({ customerId, customerName }: Props) 
               ))}
             </div>
           )}
-          {isAdmin && (
-            <div style={{ marginTop: '8px', position: 'relative' }}>
-              <input
-                value={folderQuery} onChange={e => setFolderQuery(e.target.value)} placeholder="Link a Dropbox folder: type its name"
-                style={{ width: '100%', padding: '7px 9px', borderRadius: '8px', fontSize: '16px', background: 'var(--input-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-primary)' }}
-              />
-              {folderHits.map(f => (
-                <button
-                  key={f.id} disabled={busy} onClick={() => link(f.id)}
-                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '7px 9px', background: 'none', border: 'none', borderTop: '1px solid var(--border)', color: 'var(--text-primary)', fontSize: '12.5px', cursor: 'pointer' }}
-                >📁 {f.name} <span style={{ color: 'var(--text-muted)' }}>· {f.fileCount.toLocaleString()} files</span></button>
-              ))}
-            </div>
-          )}
         </>
+      )}
+      {isAdmin && linked !== null && (
+        <div style={{ marginTop: '8px', position: 'relative' }}>
+          <input
+            value={folderQuery} onChange={e => setFolderQuery(e.target.value)} placeholder={linked.length > 0 ? 'Link another Dropbox folder (an end customer): type its name' : 'Link a Dropbox folder: type its name'}
+            style={{ width: '100%', padding: '7px 9px', borderRadius: '8px', fontSize: '16px', background: 'var(--input-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-primary)' }}
+          />
+          {folderHits.map(f => (
+            <button
+              key={f.id} disabled={busy} onClick={() => link(f.id)}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '7px 9px', background: 'none', border: 'none', borderTop: '1px solid var(--border)', color: 'var(--text-primary)', fontSize: '12.5px', cursor: 'pointer' }}
+            >📁 {f.name} <span style={{ color: 'var(--text-muted)' }}>· {f.fileCount.toLocaleString()} files</span></button>
+          ))}
+        </div>
       )}
       {error && <div style={{ fontSize: '12px', color: 'var(--error)', marginTop: '6px' }}>{error}</div>}
     </div>
