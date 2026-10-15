@@ -47,6 +47,7 @@ the accounts page; the others are linked from there.
 | Payment tests | `src/lib/books/payment-rule.test.ts`, `src/lib/books/payment-check.test.ts`, `src/lib/books/payment-check-sql.test.ts`, `src/lib/books/payment-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Differences vs NetSuite | `migrations/377-books-differences.sql`, `src/lib/books/differences.ts`, `src/app/(main)/admin/books/differences/page.tsx`, `src/app/api/admin/books/differences/route.ts` |
 | Differences tests | `src/lib/books/differences.test.ts`, `src/lib/books/differences-sql.test.ts` |
+| Invoices and credit memos in the month NetSuite booked them to | `migrations/380-books-netsuite-month.sql`, `entryDate` in `src/lib/books/invoice-check.ts`; their tests are in the invoice test files |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
 QuickBooks and NetSuite history that importers replace wholesale. They stay
@@ -340,8 +341,10 @@ Posting invoices below). For every NetSuite invoice, `/admin/books/invoices` wor
 checks it line by line against the GL lines NetSuite posted for the same
 invoice, to the cent: the receivable against NetSuite's main line (line 0),
 every other line by NetSuite's line id. Migration 364's
-`gl_invoice_month(company, month)` reads one month: the invoices dated in it
-from the ledger mirror (migration 314) with their lines, NetSuite's GL lines
+`gl_invoice_month(company, month)` reads one month: the invoices NetSuite
+booked into it (since migration 380; before, the invoices dated in it), and
+those dated in it that the GL copy has booked into no month, from the ledger
+mirror (migration 314) with their lines, NetSuite's GL lines
 for each from the copy (migration 361), and the copied items and tax codes
 the lines name. The page shows how many invoices match, differ, can't be
 worked out or are waiting on a copy, why the others don't match, and each
@@ -397,10 +400,22 @@ counted.
 
 ## Posting invoices
 
-Every BMG invoice dated from January 2025 that the rule can work out posts
-to FleetSuite's own journal once, as Invoices vs NetSuite shows it, whether
-it matches NetSuite or not (owner decision 2026-10-13): during 2027 the
-differences are what the side-by-side run is for. 1084's invoices join once
+Every BMG invoice NetSuite booked into a month from January 2025 that the
+rule can work out posts to FleetSuite's own journal once, as Invoices vs
+NetSuite shows it, whether it matches NetSuite or not (owner decision
+2026-10-13): during 2027 the differences are what the side-by-side run is
+for.
+
+Each posts in the month NetSuite booked it to (owner decision 2026-10-15,
+migration 380). The Differences page showed why that matters. Invoices
+dated in 2023 and 2024 that NetSuite carried into January 2025 had never
+posted, since FleetSuite's books start then. An invoice entered after its
+own month had closed sat in its own month in FleetSuite but in a later one
+in NetSuite. The entry keeps the invoice's date when that falls in
+NetSuite's month. Otherwise it takes the month's first day, or its last
+when NetSuite booked it into an earlier month (`entryDate` in
+`src/lib/books/invoice-check.ts`). Invoices vs NetSuite lists such an
+invoice under NetSuite's month, marked with it. 1084's invoices join once
 they've been checked against NetSuite (`POSTING_COMPANIES` in
 `src/lib/books/invoice-posting.ts`). Nothing is written to NetSuite.
 
@@ -416,11 +431,12 @@ hours, after the GL copy at :26 and the ledger mirror's invoices at :35 on
 even hours) and from **Post now** on the invoices page. Each run goes
 through every month again:
 
-- An invoice with no entry gets one, dated as the invoice is and keyed
+- An invoice with no entry gets one, dated as above and keyed
   `invoice:<NetSuite id>:1`.
 - An invoice whose entry no longer fits what the rule works out now (an
   account, amount, division, line, customer or date changed in NetSuite, or
-  in the copies of its lines, items or GL) has its entry reversed and the
+  the month NetSuite booked it into, or the copies of its lines, items or
+  GL) has its entry reversed and the
   new one posted under the next generation's key, in one transaction
   (`gl_repost_entry`, migration 367), so an invoice is never left with its
   old entry reversed and no new one. A new memo or item name alone changes
@@ -592,17 +608,19 @@ the page says why for each:
 
 | Why | When |
 | --- | --- |
-| Dated before the books start | NetSuite dated it in 2024 and posted it to 2025; FleetSuite only posts documents dated from 2025 |
+| Dated before the books start | A payment NetSuite dated in 2024 and posted to 2025; FleetSuite only posts payments dated from 2025 (an invoice or credit memo like it posts in NetSuite's month) |
 | Not posted | FleetSuite has never posted it; Invoices vs NetSuite shows why |
 | Voided | NetSuite voided it and FleetSuite reversed its entry, but the copy of NetSuite's ledger still has lines of it |
 | Reversed | FleetSuite reversed its entry and has none standing |
 | Gone | FleetSuite's entry stands but this company has no line of it in the copy: deleted or voided in NetSuite (the next posting run reverses the entry), or posted to the other company |
-| Another month | FleetSuite's entry is dated in one month, NetSuite posted it to another |
+| Another month | FleetSuite's entry is dated in one month, NetSuite posted it to another; for an invoice or credit memo, until the next posting run moves it |
 | Cost of goods | Same month; only NetSuite's cost of goods lines differ |
 | Posted differently | Same month, different accounts or amounts |
 
 Each document links to Invoices vs NetSuite (`?company=&kind=&month=&doc=`),
-which opens it with its line by line check. When the copy of NetSuite's
+which opens it with its line by line check, under the month that page lists
+it in: NetSuite's month for an invoice or credit memo, its own date's for a
+payment. When the copy of NetSuite's
 ledger doesn't yet hold everything NetSuite's own totals say a month moved,
 the page says so, since NetSuite's side is then short.
 

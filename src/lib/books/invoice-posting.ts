@@ -12,7 +12,7 @@ import { COPY_FROM, monthOfDate, monthsBetween } from './netsuite-gl';
 import { BOOKS_LISTS_SYNC } from './netsuite-lists';
 import { MAIN_LINE, RULES, type RuleLine, type SalesDocKind } from './invoice-rule';
 import {
-  centsOf, workOutMonth,
+  centsOf, entryDate, workOutMonth,
   type ChartAccount, type InvoiceBooks, type InvoiceMonthData, type ItemAccountCount, type LineFacts,
   type LineFactsRead, type TaxAccountCount, type WorkedInvoice,
 } from './invoice-check';
@@ -30,10 +30,13 @@ import { workOutPaymentMonth, type PaymentMonthData, type WorkedPayment } from '
  * rule (migration 376; owner decision 2026-10-15), except where the
  * payments' own section says otherwise.
  *
- * Every BMG invoice dated from January 2025 that the rule can work out posts
- * once, as the check on Invoices vs NetSuite shows it, whether it matches
- * NetSuite or not: during 2027 the differences are what the side-by-side run
- * is for. Each run (/api/cron/books-invoice-posting at :48 on odd hours, and
+ * Every BMG invoice NetSuite booked into a month from January 2025 that the
+ * rule can work out posts once, as the check on Invoices vs NetSuite shows
+ * it, whether it matches NetSuite or not: during 2027 the differences are
+ * what the side-by-side run is for. It posts in the month NetSuite booked it
+ * to, whatever its own date (entryDate; migration 380), so an invoice dated
+ * before the books start that NetSuite carried into January 2025 posts on
+ * January 1. Each run (/api/cron/books-invoice-posting at :48 on odd hours, and
  * "Post now" on that page) goes through every month again:
  *
  *   - an invoice with no entry gets one;
@@ -159,7 +162,7 @@ const postedSignature = (current: NonNullable<InvoicePosting['current']>) => sig
 );
 
 const workedSignature = (worked: WorkedInvoice) => signature(
-  worked.invoice.date,
+  entryDate(worked.invoice),
   entryLines(worked).map((l) => ({
     account: l.account,
     cents: l.cents,
@@ -253,7 +256,7 @@ export function invoiceJournalEntry(
   return {
     entry: {
       company,
-      entryDate: inv.date,
+      entryDate: entryDate(inv),
       sourceType: kind,
       sourceId: inv.netsuite_id,
       postingRule: RULES[kind],
@@ -680,7 +683,7 @@ export async function postInvoices(
     }
 
     if (skippedMonths.length) {
-      notes.push(`${skippedWhy}, so no invoice or credit memo dated ${joined(skippedMonths.map(monthLabel), 'or')} was posted or changed this time.`);
+      notes.push(`${skippedWhy}, so no invoice or credit memo in ${joined(skippedMonths.map(monthLabel), 'or')} was posted or changed this time.`);
     }
     if (leftTotal.length) {
       const one = leftTotal.length === 1;

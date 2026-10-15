@@ -1,6 +1,7 @@
 // Migration 367 posts NetSuite's invoices to FleetSuite's own journal, and
-// migration 370 its credit memos. This runs migration 314 (with stand-ins
-// for the app tables it points at) and migrations 359–364, 367 and 370 in an
+// migration 370 its credit memos; migration 380 puts each in the month
+// NetSuite booked it to. This runs migration 314 (with stand-ins for the app
+// tables it points at) and migrations 359–364, 367, 370 and 380 in an
 // in-memory Postgres (PGlite) as the app's server login and holds the
 // functions' rules, then runs the posting job against them with a fake
 // NetSuite that answers the job's own SuiteQL.
@@ -60,6 +61,7 @@ async function freshDb(): Promise<PGlite> {
     '314-ledger.sql', '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '364-books-invoice-check.sql',
     '367-books-invoice-posting.sql', '370-books-credit-memos.sql', '374-books-payment-check.sql', '376-books-payment-posting.sql',
+    '380-books-netsuite-month.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -109,6 +111,8 @@ interface NsInvoice {
   ref: string;
   number: string;
   date: string;
+  /** The month NetSuite booked it to, 'YYYY-MM-01'; its date's month when left out. */
+  booked?: string;
   /** The company NetSuite posted it to; null when it hasn't posted it (waiting for approval, say). */
   company: 'BMG' | '1084' | null;
   customer?: string;
@@ -149,7 +153,7 @@ async function copy(pg: PGlite, inv: NsInvoice, lines: NsLine[] | null = inv.lin
     );
   }
   if (!inv.company || inv.deleted) return;
-  const month = `${inv.date.slice(0, 7)}-01`;
+  const month = inv.booked ?? `${inv.date.slice(0, 7)}-01`;
   await pg.query(
     `INSERT INTO gl_netsuite_transactions (netsuite_id, tran_type, tranid, trandate, posting_month, content_hash, sweep)
      VALUES ($1, $2, $3, $4, $5, 'x', 's')`,
@@ -256,6 +260,29 @@ describe('migrations 367 and 370\'s functions', () => {
       { line_id: '0', account: '120', debit: '0.00', credit: '4.00' },
       { line_id: '1', account: '400', debit: '4.00', credit: '0.00' },
     ]);
+  });
+
+  it('gl_invoice_month lists a document in the month NetSuite booked it to, and by its date when NetSuite booked it nowhere', async () => {
+    const extra: NsInvoice[] = [
+      // Dated before the books start, carried by NetSuite into February 2025.
+      { ref: '310', number: 'INV310', date: '2024-11-20', booked: FEB, company: 'BMG', lines: [part('5.00')] },
+      // Dated in January, booked into March.
+      { ref: '311', number: 'INV311', date: '2025-01-28', booked: MAR, company: 'BMG', lines: [part('6.00')] },
+      // Dated in February, not posted in NetSuite.
+      { ref: '312', number: 'INV312', date: '2025-02-25', company: null, lines: [part('7.00')] },
+    ];
+    for (const inv of extra) await copy(db, inv);
+    const listed = async (month: string) => (await one<InvoiceMonthData>(`SELECT gl_invoice_month('BMG', $1) AS r`, [month])).invoices
+      .map((i) => [i.number, i.date, i.posting_month]);
+    expect(await listed(JAN)).toEqual([]);
+    expect(await listed(FEB)).toEqual([
+      ['INV310', '2024-11-20', FEB], ['INV301', '2025-02-05', FEB], ['INV304', '2025-02-06', FEB], ['CM305', '2025-02-07', FEB],
+      ['INV312', '2025-02-25', null],
+    ]);
+    expect(await listed(MAR)).toEqual([['INV311', '2025-01-28', MAR]]);
+    expect(await listed('2024-11-01')).toEqual([]);
+    await db.query(`DELETE FROM ledger_invoices WHERE external_ref IN ('310', '311', '312')`);
+    await db.query(`DELETE FROM gl_netsuite_transactions WHERE netsuite_id IN ('310', '311', '312')`);
   });
 
   it('gl_repost_entry reverses a document\'s entry and posts its new one together', async () => {
@@ -667,7 +694,7 @@ describe('the posting job against the real functions', () => {
       let r = await run();
       expect(r).toMatchObject({ months: [JAN, FEB, MAR], posted: 0, replaced: 0, reversed: 0 });
       expect(r.notes).toEqual([
-        "NetSuite couldn't be asked about the invoices' and credit memos' lines (socket hang up), so no invoice or credit memo dated Feb 2025 or Mar 2025 was posted or changed this time.",
+        "NetSuite couldn't be asked about the invoices' and credit memos' lines (socket hang up), so no invoice or credit memo in Feb 2025 or Mar 2025 was posted or changed this time.",
       ]);
 
       ns.fail = null;
@@ -675,7 +702,7 @@ describe('the posting job against the real functions', () => {
       r = await run();
       expect(r).toMatchObject({ posted: 0, replaced: 0, reversed: 0 });
       expect(r.notes).toEqual([
-        "NetSuite wouldn't say the lines' own amounts on the invoices and credit memos, so no invoice or credit memo dated Feb 2025 or Mar 2025 was posted or changed this time.",
+        "NetSuite wouldn't say the lines' own amounts on the invoices and credit memos, so no invoice or credit memo in Feb 2025 or Mar 2025 was posted or changed this time.",
       ]);
       expect(await journal()).toEqual(before);
 
@@ -805,6 +832,47 @@ describe('the posting job against the real functions', () => {
         + 'INV208, CM403. Either the copies were caught mid-refresh, and the next run looks again, or the rule leaves out a line NetSuite posts, '
         + 'which Invoices vs NetSuite shows.',
       ]);
+    });
+  });
+
+  describe('documents NetSuite booked into another month', () => {
+    // Made-up: INV501 dated before the books start and carried into January 2025, INV502 dated in January and booked into
+    // March, CM503 dated in March and booked into February.
+    const MOVED = (): NsInvoice[] => [
+      { ref: '501', number: 'INV501', date: '2024-11-20', booked: JAN, company: 'BMG', lines: [labor('30.00')] },
+      { ref: '502', number: 'INV502', date: '2025-01-28', booked: MAR, company: 'BMG', lines: [labor('40.00')] },
+      { kind: 'credit_memo', ref: '503', number: 'CM503', date: '2025-03-03', booked: FEB, company: 'BMG', lines: [labor('5.00')] },
+    ];
+
+    beforeAll(async () => {
+      await startOver();
+      for (const inv of MOVED()) {
+        ns.invoices.set(inv.ref, inv);
+        await copy(pg, inv);
+      }
+    });
+
+    it('posts each in the month NetSuite booked it to, on its first day, or its last when NetSuite booked it earlier', async () => {
+      expect(await run()).toMatchObject({ months: [JAN, FEB, MAR], posted: 6, replaced: 0, reversed: 0, failedCount: 0 });
+      const moved = (await journal()).filter((e) => /:50\d:/.test(e.key ?? ''));
+      expect(moved.map((e) => [e.key, e.date])).toEqual([
+        ['invoice:501:1', '2025-01-01'],
+        ['credit_memo:503:1', '2025-02-28'],
+        ['invoice:502:1', '2025-03-01'],
+      ]);
+      expect(await run()).toMatchObject({ posted: 0, replaced: 0, reversed: 0, unchanged: 6 });
+    });
+
+    it('moves an entry to the month NetSuite now books its invoice into, the reversal staying in the old one', async () => {
+      const was = (await journal()).find((e) => e.key === 'invoice:202:1')!;
+      expect(was.date).toBe('2025-02-05');
+      await edit('202', (inv) => { inv.booked = MAR; });
+      expect(await run()).toMatchObject({ posted: 0, replaced: 1, reversed: 0, unchanged: 5, failedCount: 0 });
+      expect((await journal()).slice(-2)).toEqual([
+        { no: expect.any(Number), date: '2025-02-05', key: null, reverses: was.no, memo: 'INV202 changed in NetSuite' },
+        { no: expect.any(Number), date: '2025-03-01', key: 'invoice:202:2', reverses: null, memo: 'INV202, A Customer' },
+      ]);
+      expect(await run()).toMatchObject({ posted: 0, replaced: 0, unchanged: 6 });
     });
   });
 });

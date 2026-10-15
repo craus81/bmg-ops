@@ -359,7 +359,7 @@ export interface DiffDocumentData {
 }
 
 export type DiffReason =
-  /** Dated before FleetSuite's books start, posted by NetSuite to a month after. */
+  /** A payment dated before FleetSuite's books start, posted by NetSuite to a month after. */
   | 'before_start'
   /** No FleetSuite entry, ever. */
   | 'not_posted'
@@ -394,6 +394,8 @@ export interface DiffDocument {
   date: string | null;
   /** The month NetSuite posted it to for this company. */
   netsuiteMonth: string | null;
+  /** The month Invoices vs NetSuite lists it under; null when that page has no month for it. */
+  listMonth: string | null;
   /** The date of FleetSuite's entry that stands. */
   fleetsuiteDate: string | null;
   entryNo: number | null;
@@ -416,6 +418,14 @@ const monthOf = (iso: string) => `${iso.slice(0, 7)}-01`;
 /** How many accounts' differences the reason spells out before counting the rest. */
 const NAMED_ACCOUNTS = 2;
 
+/**
+ * FleetSuite's kinds of document that post in the month NetSuite booked them
+ * to, whatever their own date (entryDate in invoice-check.ts, migration 380),
+ * and that Invoices vs NetSuite lists under that month. Payments post and
+ * are listed by their own date.
+ */
+const IN_NETSUITE_MONTH: ReadonlySet<string> = new Set(['invoice', 'credit_memo']);
+
 function reasonFor(doc: DiffDocumentData, lines: DiffDocumentLine[], costAccounts: ReadonlySet<string>): { reason: DiffReason; why: string } {
   const ns = doc.netsuite;
   const standing = doc.fleetsuite?.standing ?? null;
@@ -423,7 +433,7 @@ function reasonFor(doc: DiffDocumentData, lines: DiffDocumentLine[], costAccount
 
   if (!standing) {
     if (!doc.fleetsuite?.entries) {
-      if (ns && ns.date < COPY_FROM) {
+      if (ns && ns.date < COPY_FROM && !IN_NETSUITE_MONTH.has(doc.kind)) {
         return {
           reason: 'before_start',
           why: `Dated ${dateText(ns.date)}, before FleetSuite's books start on January 1, 2025, so FleetSuite doesn't post it.`
@@ -482,13 +492,16 @@ export function explainDocument(
       || collator.compare(a.number ?? '', b.number ?? '')
       || collator.compare(a.name, b.name));
   const standing = doc.fleetsuite?.standing ?? null;
+  const date = doc.netsuite?.date ?? standing?.date ?? null;
+  const listed = IN_NETSUITE_MONTH.has(doc.kind) && doc.netsuite?.month ? doc.netsuite.month : date ? monthOf(date) : null;
   return {
     kind: doc.kind,
     netsuiteId: doc.netsuite_id,
     number: doc.netsuite?.number || doc.copy?.number || `NetSuite ${doc.netsuite_id}`,
     customer: doc.copy?.customer ?? null,
-    date: doc.netsuite?.date ?? standing?.date ?? null,
+    date,
     netsuiteMonth: doc.netsuite?.month ?? null,
+    listMonth: listed && listed >= COPY_FROM ? listed : null,
     fleetsuiteDate: standing?.date ?? null,
     entryNo: standing?.entry_no ?? null,
     netsuite: lines.reduce((s, l) => s + Math.max(0, l.netsuite), 0),

@@ -335,7 +335,11 @@ export function pickReceivable(
 
 // ── A month, from the database ─────────────────────────────────────────────
 
-/** What gl_invoice_month (migrations 364, 367 and 370) returns: the month's invoices and credit memos. */
+/**
+ * What gl_invoice_month (migrations 364, 367, 370 and 380) returns: the
+ * invoices and credit memos NetSuite booked into the month, and those dated
+ * in it that the copy of NetSuite's GL has booked into no month.
+ */
 export interface InvoiceMonthData {
   invoices: Array<{
     id: string;
@@ -344,6 +348,8 @@ export interface InvoiceMonthData {
     netsuite_id: string;
     number: string | null;
     date: string;
+    /** The month NetSuite booked it to, 'YYYY-MM-01' (migration 380); null when the GL copy has none of it. */
+    posting_month?: string | null;
     total: string;
     voided: boolean;
     customer: string | null;
@@ -371,6 +377,22 @@ export interface InvoiceMonthData {
     income_account: string | null;
     asset_account: string | null;
   }>;
+}
+
+/**
+ * The date FleetSuite's entry for an invoice or credit memo carries: its own,
+ * unless NetSuite booked it into another month, such as a 2024 invoice
+ * carried into January 2025 or one entered after its own month had closed.
+ * Then the entry goes in NetSuite's month, on its first day, or on its last
+ * when NetSuite booked it into an earlier month (owner decision 2026-10-15,
+ * migration 380).
+ */
+export function entryDate(doc: { date: string; posting_month?: string | null }): string {
+  const month = doc.posting_month;
+  if (!month || doc.date.slice(0, 7) === month.slice(0, 7)) return doc.date;
+  if (doc.date < month) return month;
+  const last = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0));
+  return last.toISOString().slice(0, 10);
 }
 
 /** Where a tax code's sales tax posted, as the lists copy counted it (src/lib/books/netsuite-lists.ts). */
@@ -434,6 +456,8 @@ export interface InvoiceView {
   netsuiteId: string;
   number: string;
   date: string;
+  /** When NetSuite booked it into another month than its date's: that month, and the date FleetSuite's entry carries (entryDate). */
+  booked?: { month: string; date: string };
   customer: string | null;
   total: number;
   voided: boolean;
@@ -667,6 +691,7 @@ export function checkMonth(
   const invoices: InvoiceView[] = [];
   const notInGl: string[] = [];
   const unfit: string[] = [];
+  const moved: string[] = [];
   const used = new Set<string>();
   for (const w of worked) {
     const { invoice: inv, number, checked: c, amounts, netLines, lineFacts } = w;
@@ -710,10 +735,13 @@ export function checkMonth(
         ...(says.has(r.lineId) ? { says: says.get(r.lineId) } : {}),
       };
     });
+    const bookedInto = inv.posting_month && inv.posting_month.slice(0, 7) !== inv.date.slice(0, 7) ? inv.posting_month : null;
+    if (bookedInto) moved.push(number);
     invoices.push({
       netsuiteId: inv.netsuite_id,
       number,
       date: inv.date,
+      ...(bookedInto ? { booked: { month: bookedInto, date: entryDate(inv) } } : {}),
       customer: inv.customer,
       total: centsOf(inv.total) ?? 0,
       voided: inv.voided,
@@ -733,6 +761,11 @@ export function checkMonth(
   }
   const notes: string[] = [];
   if (receivableNote) notes.push(receivableNote);
+  if (moved.length) {
+    const them = moved.length === 1 ? 'it' : 'them';
+    notes.push(`${plural(moved.length, `${words.one} dated in another month is`, `${words.many} dated in other months are`)} here because NetSuite `
+      + `booked ${them} into this month, so FleetSuite posts ${them} in this month too: ${moved.slice(0, 10).join(', ')}${moved.length > 10 ? ', …' : ''}.`);
+  }
   if (!opts.taxAccounts) notes.push("Where sales tax posts hasn't been read yet. Sync now on the NetSuite lists page reads it.");
   if (opts.facts && 'error' in opts.facts) {
     notes.push(`NetSuite couldn't be asked about these ${words.many}' lines just now (${opts.facts.error}), so cost of goods is recognized by `

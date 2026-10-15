@@ -24,10 +24,11 @@ const POSTING_BUDGET_MS = 240_000;
 
 /**
  * GET /api/admin/books/invoices?company=BMG&month=2026-09&kind=invoice — one
- * company's NetSuite invoices dated in a month, or with
- * `kind=credit_memo` its credit memos, each with the entry FleetSuite's rule
- * works out for it next to the GL lines NetSuite posted (migrations 364 and
- * 370), and why any differ. With `kind=payment` its customer payments, each
+ * company's NetSuite invoices that NetSuite booked into a month (or, when it
+ * hasn't booked them, dated in it), or with `kind=credit_memo` its credit
+ * memos, each with the entry FleetSuite's rule works out for it next to the
+ * GL lines NetSuite posted (migrations 364, 370 and 380), and why any
+ * differ. With `kind=payment` its customer payments dated in the month, each
  * checked with the payment rule (migration 374). With `summary=1` only the
  * counts come back, for checking every month in turn.
  *
