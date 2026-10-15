@@ -1,5 +1,5 @@
 /**
- * Server-side reads/writes for QC fixes (migration 380) shared by the public
+ * Server-side reads/writes for QC fixes (migration 381) shared by the public
  * link routes (/api/qc/[token]/…) and the staff routes (/api/qc-fixes/…).
  */
 

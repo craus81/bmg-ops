@@ -17,7 +17,7 @@ const supabase = createClient(
 );
 
 /**
- * GET /api/qc/[token] — a customer's QC fix link (migration 380).
+ * GET /api/qc/[token] — a customer's QC fix link (migration 381).
  *
  * No session: the link's token is the credential, like the PO-status
  * portal. Returns the customer's name and their team's reports from the

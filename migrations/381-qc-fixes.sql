@@ -1,4 +1,4 @@
--- Migration 380: QC fixes reported by a customer's QC team.
+-- Migration 381: QC fixes reported by a customer's QC team.
 --
 -- Owner ask 2026-10-15: move BMG's QC fix process out of monday.com, and
 -- make it simpler. Masterack's QC team (Chaquanna, QC director; Ron,

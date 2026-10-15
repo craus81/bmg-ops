@@ -436,7 +436,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/parts/transactions/route.ts': staff(),
   'src/app/api/pay-rates/route.ts': { kind: 'staff', contains: ['requireStaff(', 'requireAdmin('] },
   'src/app/api/phone-calls/route.ts': staff(),
-  // QC Fixes (migration 380): the staff side of a customer's QC fix link.
+  // QC Fixes (migration 381): the staff side of a customer's QC fix link.
   'src/app/api/qc-fixes/route.ts': staff(),
   'src/app/api/qc-fixes/photo/route.ts': staff(),
   'src/app/api/qc-fixes/fixed-email/route.ts': staff(),
