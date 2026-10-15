@@ -420,10 +420,11 @@ export default function BooksInvoicesPage() {
             {kind === 'payment' ? (
               <>
                 For every NetSuite customer payment FleetSuite works out its own entry: the money goes to the account the payment
-                was deposited to, Undeposited Funds or a bank account, and receivables are credited with its total. Where the money
-                went comes from NetSuite&apos;s posting of the payment, since the copy of the payment doesn&apos;t keep it. Each
-                entry is checked account by account against what NetSuite posted for the same payment. Payments aren&apos;t posted
-                to FleetSuite&apos;s books yet; they will be once they&apos;ve been checked.
+                was deposited to, Undeposited Funds or a bank account, a discount the customer took goes to the account NetSuite
+                booked it to, and receivables are credited with the total plus the discount. Where the money went and the discount
+                come from NetSuite&apos;s posting of the payment, since the copy of the payment doesn&apos;t keep them. Each entry
+                is checked account by account against what NetSuite posted for the same payment. Payments aren&apos;t posted to
+                FleetSuite&apos;s books yet; they will be once they&apos;ve been checked.
               </>
             ) : (
               <>

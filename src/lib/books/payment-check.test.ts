@@ -1,15 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import type { ChartAccount, NetSuitePosting } from './invoice-check';
-import { checkPayment, checkPaymentMonth, depositAccount, paymentReasons, type PaymentMonthData } from './payment-check';
+import { checkPayment, checkPaymentMonth, depositAccount, paymentDiscount, paymentReasons, type PaymentMonthData } from './payment-check';
 
 // Made-up books: '120' and '121' receivables, '110' Undeposited Funds, '100'
-// a bank account, '480' sales discounts.
+// a bank account, '480' sales discounts, '400' sales, '690' bank fees.
 const TYPES = new Map([
   ['120', 'accounts_receivable'], ['121', 'accounts_receivable'], ['110', 'other_current_asset'], ['100', 'bank'], ['480', 'income'],
+  ['400', 'income'], ['690', 'expense'],
 ]);
 const CTX: { receivable: string | null; accountTypes: Map<string, string> } = { receivable: '120', accountTypes: TYPES };
 const NAME: Record<string, string> = {
   '120': '1200 Receivables', '121': '1210 Receivables Other', '110': '1100 Undeposited Funds', '100': '1000 Checking', '480': '4800 Discounts',
+  '400': '4000 Sales', '690': '6900 Bank Fees',
 };
 const account = (id: string) => NAME[id] ?? `NetSuite account ${id}`;
 
@@ -17,17 +19,40 @@ const ns = (lineId: string, acct: string, cents: number): NetSuitePosting => ({ 
 
 // A $162.00 payment, as NetSuite posts it: the main line puts the money in Undeposited Funds, receivables take it off.
 const POSTED = [ns('0', '110', 16200), ns('1', '120', -16200)];
+// $162.00 of invoices paid with $3.24 off: $158.76 came in, and receivables take off the money and the discount.
+const DISCOUNTED = [ns('0', '110', 15876), ns('1', '120', -16200), ns('2', '480', 324)];
 
 const check = (cents: number | null, netsuite = POSTED, ctx = CTX) => checkPayment({ cents, netsuite }, ctx);
 const rows = (c: ReturnType<typeof check>) =>
   c.rows.map((r) => [r.lineId, r.role, r.fleetsuite && [r.fleetsuite.account, r.fleetsuite.cents], r.netsuite && [r.netsuite.account, r.netsuite.cents], r.same]);
 
 describe('depositAccount', () => {
-  it('is the account the main line debits, or the one account outside receivables NetSuite debits', () => {
+  it('is the account the main line debits, or the one account outside receivables, income and expenses NetSuite debits', () => {
     expect(depositAccount(POSTED, TYPES)).toBe('110');
+    expect(depositAccount(DISCOUNTED, TYPES)).toBe('110');
     expect(depositAccount([ns('0', '120', -16200), ns('1', '100', 16200)], TYPES)).toBe('100');
-    expect(depositAccount([ns('0', '120', -16200), ns('1', '110', 15876), ns('2', '480', 324)], TYPES)).toBeNull();
+    // No main line: a discount isn't where the money went.
+    expect(depositAccount([ns('0', '120', -16200), ns('1', '110', 15876), ns('2', '480', 324)], TYPES)).toBe('110');
+    expect(depositAccount([ns('0', '120', -16200), ns('1', '110', 10000), ns('2', '100', 6200)], TYPES)).toBeNull();
     expect(depositAccount([], TYPES)).toBeNull();
+  });
+});
+
+describe('paymentDiscount', () => {
+  it('is what NetSuite debits to the one income or expense account it debits for the payment', () => {
+    expect(paymentDiscount(DISCOUNTED, TYPES, '110')).toEqual({ account: '480', cents: 324 });
+    // Its lines on the account together.
+    expect(paymentDiscount([ns('0', '110', 15876), ns('1', '120', -16200), ns('2', '480', 200), ns('3', '480', 124)], TYPES, '110'))
+      .toEqual({ account: '480', cents: 324 });
+    expect(paymentDiscount([ns('0', '110', 15876), ns('1', '120', -16200), ns('2', '690', 324)], TYPES, '110')).toEqual({ account: '690', cents: 324 });
+  });
+
+  it('is none when NetSuite debits no income or expense account, credits one, or debits more than one', () => {
+    expect(paymentDiscount(POSTED, TYPES, '110')).toBeNull();
+    expect(paymentDiscount([ns('0', '110', 16200), ns('1', '120', -15876), ns('2', '400', -324)], TYPES, '110')).toBeNull();
+    expect(paymentDiscount([ns('0', '110', 15876), ns('1', '120', -16200), ns('2', '480', 224), ns('3', '690', 100)], TYPES, '110')).toBeNull();
+    // Nor is where the money went, however odd an account that is.
+    expect(paymentDiscount([ns('0', '480', 16200), ns('1', '120', -16200)], TYPES, '480')).toBeNull();
   });
 });
 
@@ -51,19 +76,52 @@ describe('checkPayment', () => {
     expect(c.rows[0].fleetsuite).toEqual({ account: '100', cents: 16200 });
   });
 
-  it('differs when NetSuite also books a discount the customer took', () => {
-    // $162.00 paid with $3.24 off: $158.76 came in.
-    const c = check(15876, [ns('0', '110', 15876), ns('1', '120', -16200), ns('2', '480', 324)]);
+  it('matches when NetSuite also books a discount the customer took, taking the money and the discount off receivables', () => {
+    const c = check(15876, DISCOUNTED);
+    expect(c.status).toBe('matches');
+    expect(rows(c)).toEqual([
+      ['deposit', 'deposit', ['110', 15876], ['110', 15876], true],
+      ['discount', 'discount', ['480', 324], ['480', 324], true],
+      ['receivable', 'receivable', ['120', -16200], ['120', -16200], true],
+    ]);
+    // Without its main line too.
+    expect(check(15876, [ns('1', '120', -16200), ns('2', '110', 15876), ns('3', '480', 324)]).status).toBe('matches');
+    // A $0 payment that only takes a discount.
+    expect(rows(check(0, [ns('1', '120', -324), ns('2', '480', 324)]))).toEqual([
+      ['discount', 'discount', ['480', 324], ['480', 324], true],
+      ['receivable', 'receivable', ['120', -324], ['120', -324], true],
+    ]);
+  });
+
+  it('differs when the discount and the money don\'t add up to what NetSuite took off receivables', () => {
+    const c = check(15876, [ns('0', '110', 15876), ns('1', '120', -16300), ns('2', '480', 324), ns('3', '121', 100)]);
+    expect(c.status).toBe('differs');
+    expect(paymentReasons(c, account).map((r) => r.key)).toEqual(['receivable_amount', 'other|121']);
+  });
+
+  it('differs, and names the lines, when NetSuite debits more than one income or expense account for the payment', () => {
+    const c = check(15876, [ns('0', '110', 15876), ns('1', '120', -16200), ns('2', '480', 224), ns('3', '690', 100)]);
     expect(c.status).toBe('differs');
     expect(rows(c)).toEqual([
       ['deposit', 'deposit', ['110', 15876], ['110', 15876], true],
       ['receivable', 'receivable', ['120', -15876], ['120', -16200], false],
-      ['account:480', 'other', null, ['480', 324], false],
+      ['account:480', 'other', null, ['480', 224], false],
+      ['account:690', 'other', null, ['690', 100], false],
     ]);
     expect(paymentReasons(c, account).map((r) => r.text)).toEqual([
       'What FleetSuite takes off receivables differs from what NetSuite took off.',
       'NetSuite also posts to 4800 Discounts, which the payment rule doesn\'t.',
+      'NetSuite also posts to 6900 Bank Fees, which the payment rule doesn\'t.',
     ]);
+  });
+
+  it('says so when FleetSuite\'s discount isn\'t what NetSuite booked', () => {
+    const c = {
+      status: 'differs' as const,
+      problems: [],
+      rows: [{ lineId: 'discount', role: 'discount' as const, fleetsuite: { account: '480', cents: 324 }, netsuite: { account: '480', cents: 300 }, same: false }],
+    };
+    expect(paymentReasons(c, account)).toEqual([{ key: 'discount|480', text: 'The discount differs from what NetSuite booked to 4800 Discounts.' }]);
   });
 
   it('says which receivable each side used when they differ', () => {
@@ -102,7 +160,7 @@ describe('checkPayment', () => {
     ]);
     expect(paymentReasons(noReceivable, account).map((r) => r.text)).toEqual(['The chart of accounts has no receivable account this company can use.']);
 
-    const nowhere = check(16200, [ns('0', '120', -16200), ns('1', '110', 15876), ns('2', '480', 324)]);
+    const nowhere = check(16200, [ns('0', '120', -16200), ns('1', '110', 10000), ns('2', '100', 6200)]);
     expect(nowhere.status).toBe('unworkable');
     expect(paymentReasons(nowhere, account).map((r) => r.text)).toEqual(["NetSuite's posting of the payment doesn't say which account the money went to."]);
     expect(check(null).problems).toEqual([{ kind: 'unreadable' }]);
@@ -150,16 +208,17 @@ describe('checkPaymentMonth', () => {
       payment(null, '203', '50.00', [['0', '100', '50.00', '0.00'], ['1', '120', '0.00', '50.00']]),
       payment('PMT4', '204', '75.00', []),
       payment('PMT5', '205', '0.00', [], { applied: [{ kind: 'credit_memo', number: 'CM105', amount: '20.00' }] }),
+      payment('PMT6', '206', '80.00', [['0', '110', '70.00', '0.00'], ['1', '120', '0.00', '70.00']]),
     ],
   };
 
   it('checks every payment the company posted and names the rest', () => {
     // Two receivables to choose from: NetSuite's payments used 1200 this month.
     const m = checkPaymentMonth(DATA, { company: 'BMG', chart: CHART });
-    expect(m.summary).toEqual({ invoices: 3, matches: 2, differs: 1, unworkable: 0, waiting: 0, withCost: 0 });
+    expect(m.summary).toEqual({ invoices: 4, matches: 3, differs: 1, unworkable: 0, waiting: 0, withCost: 0 });
     expect(m.reasons.map((r) => [r.text, r.invoices, r.examples])).toEqual([
-      ['NetSuite also posts to 4800 Discounts, which the payment rule doesn\'t.', 1, ['PMT2']],
-      ['What FleetSuite takes off receivables differs from what NetSuite took off.', 1, ['PMT2']],
+      ['The payment\'s total differs from what NetSuite put in 1100 Undeposited Funds.', 1, ['PMT6']],
+      ['What FleetSuite takes off receivables differs from what NetSuite took off.', 1, ['PMT6']],
     ]);
     expect(m.notes).toEqual([
       'BMG can use 2 receivable accounts, so FleetSuite used 1200 Receivables, the one NetSuite\'s payments used most this month.',
@@ -167,7 +226,7 @@ describe('checkPaymentMonth', () => {
         + 'or the copy, which runs every two hours, hasn\'t reached it yet.',
     ]);
     expect(m.invoices.map((p) => [p.number, p.status, p.total])).toEqual([
-      ['PMT1', 'matches', 16200], ['PMT2', 'differs', 15876], ['NetSuite 203', 'matches', 5000],
+      ['PMT1', 'matches', 16200], ['PMT2', 'matches', 15876], ['NetSuite 203', 'matches', 5000], ['PMT6', 'differs', 8000],
     ]);
     expect(m.invoices[0]).toMatchObject({
       netsuiteId: '201',
@@ -179,8 +238,8 @@ describe('checkPaymentMonth', () => {
     });
     expect(m.invoices[1].rows.map((r) => [r.label, r.fleetsuite, r.netsuite, r.same])).toEqual([
       ['Deposited to', { account: '110', cents: 15876 }, { account: '110', cents: 15876 }, true],
-      ['Receivable', { account: '120', cents: -15876 }, { account: '120', cents: -16200 }, false],
-      ['Other line', null, { account: '480', cents: 324 }, false],
+      ['Discount', { account: '480', cents: 324 }, { account: '480', cents: 324 }, true],
+      ['Receivable', { account: '120', cents: -16200 }, { account: '120', cents: -16200 }, true],
     ]);
     expect(m.accounts).toEqual({ '100': '1000 Checking', '110': '1100 Undeposited Funds', '120': '1200 Receivables', '480': '4800 Discounts' });
   });

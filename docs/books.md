@@ -470,10 +470,19 @@ choice, as an invoice line's item is. The ledger mirror's copy of the
 payment (migration 314's `ledger_payments`) doesn't keep it, so it comes
 from NetSuite's posting of the payment: the account its main line debits,
 or, should that line be missing or a receivable, the one account outside
-receivables NetSuite debits for it. The receivable is the company's, picked
-as for invoices; with more than one, it's the one NetSuite's payments used
-most that month. A payment of $0, one that only applies a credit to an
-invoice, posts nothing.
+receivables, income and expenses NetSuite debits for it. The receivable is
+the company's, picked as for invoices; with more than one, it's the one
+NetSuite's payments used most that month. A payment of $0, one that only
+applies a credit to an invoice, posts nothing.
+
+A discount the customer took goes to the account NetSuite booked it to, and
+receivables are credited with the money plus the discount, since that's what
+paid the invoices (owner decision 2026-10-15, after the check showed
+discounted payments differing). The copy of the payment doesn't keep the
+discount either, so it comes from NetSuite's posting the same way: what
+NetSuite debits to the one income or expense account it debits for the
+payment, other than where the money went. A payment of $0 that only takes a
+discount posts the discount alone.
 
 The check comes first (owner decision 2026-10-14), as it did for invoices,
 and payments post once it shows them matching. The **Payments** switch on
@@ -491,8 +500,9 @@ it was applied to. Payments aren't posted yet.
   counted. The mirror keeps a payment NetSuite deleted (its delete sweep
   covers only invoices and credit memos), so a deleted one shows in that
   note. Before payments post, the sweep needs to cover them too.
-- Anything else NetSuite posts for a payment, a discount the customer took
-  say, shows as a line FleetSuite's entry doesn't have.
+- Anything else NetSuite posts for a payment shows as a line FleetSuite's
+  entry doesn't have. So does a discount split across two income or
+  expense accounts, since neither is then plainly the discount.
 - Customer deposits, and applying them to invoices, are NetSuite documents
   of their own and aren't copied yet. Nor are bank deposits, which move the
   money from Undeposited Funds to the bank.

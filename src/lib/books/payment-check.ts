@@ -4,7 +4,7 @@ import {
   type MonthReason, type MonthSummary, type NetSuitePosting, type Reason,
 } from './invoice-check';
 import { MAIN_LINE } from './invoice-rule';
-import { DEPOSIT_LINE, RECEIVABLE_LINE, paymentEntry, type PaymentProblem } from './payment-rule';
+import { DEPOSIT_LINE, DISCOUNT_LINE, RECEIVABLE_LINE, paymentEntry, type PaymentProblem } from './payment-rule';
 
 /**
  * Each NetSuite customer payment checked against NetSuite (docs/books.md
@@ -15,10 +15,10 @@ import { DEPOSIT_LINE, RECEIVABLE_LINE, paymentEntry, type PaymentProblem } from
  */
 
 export interface PaymentRow {
-  /** DEPOSIT_LINE, RECEIVABLE_LINE, or `account:<id>` for an account only NetSuite posts to. */
+  /** DEPOSIT_LINE, DISCOUNT_LINE, RECEIVABLE_LINE, or `account:<id>` for an account only NetSuite posts to. */
   lineId: string;
-  /** What the account is to the payment: where its money went, receivables, or anything else NetSuite posts. */
-  role: 'deposit' | 'receivable' | 'other';
+  /** What the account is to the payment: where its money went, the discount, receivables, or anything else NetSuite posts. */
+  role: 'deposit' | 'discount' | 'receivable' | 'other';
   fleetsuite: AccountAmount | null;
   /** What NetSuite posted to the account for the payment, its lines on the account together. */
   netsuite: AccountAmount | null;
@@ -30,22 +30,46 @@ export interface CheckedPayment {
   /** Why it's waiting: NetSuite's GL copy has nothing for it yet. */
   waiting?: 'gl';
   problems: PaymentProblem[];
-  /** Where the money went, then receivables, then anything else NetSuite posts, in its order. */
+  /** Where the money went, the discount, then receivables, then anything else NetSuite posts, in its order. */
   rows: PaymentRow[];
 }
+
+/** Income and expense accounts: a discount goes to one, the money never does. */
+const INCOME_STATEMENT = new Set(['income', 'other_income', 'cost_of_goods_sold', 'expense', 'other_expense']);
+const onIncomeStatement = (account: string, accountTypes: Map<string, string>) => INCOME_STATEMENT.has(accountTypes.get(account) ?? '');
 
 /**
  * Where a payment's money went, as NetSuite posted it: the account its main
  * line debits, the one the payment was deposited to. Should that line be
- * missing or a receivable, the one account outside receivables NetSuite
- * debits for it. Null when NetSuite's posting doesn't say.
+ * missing or a receivable, the one account outside receivables, income and
+ * expenses NetSuite debits for it. Null when NetSuite's posting doesn't say.
  */
 export function depositAccount(netsuite: NetSuitePosting[], accountTypes: Map<string, string>): string | null {
   const outside = netsuite.filter((p) => p.cents > 0 && accountTypes.get(p.account) !== 'accounts_receivable');
   const main = outside.find((p) => p.lineId === MAIN_LINE);
   if (main) return main.account;
-  const accounts = [...new Set(outside.map((p) => p.account))];
+  const accounts = [...new Set(outside.filter((p) => !onIncomeStatement(p.account, accountTypes)).map((p) => p.account))];
   return accounts.length === 1 ? accounts[0] : null;
+}
+
+/**
+ * The discount the customer took, as NetSuite posted it: what NetSuite
+ * debits, its lines on the account together, to the one income or expense
+ * account it debits for the payment, other than where the money went. Null
+ * when it debits none, or more than one, which then show as lines the
+ * payment rule doesn't have.
+ */
+export function paymentDiscount(
+  netsuite: NetSuitePosting[],
+  accountTypes: Map<string, string>,
+  deposit: string | null,
+): { account: string; cents: number } | null {
+  const debited = new Map<string, number>();
+  for (const p of netsuite) {
+    if (p.account !== deposit && onIncomeStatement(p.account, accountTypes)) debited.set(p.account, (debited.get(p.account) ?? 0) + p.cents);
+  }
+  const taken = [...debited].filter(([, cents]) => cents > 0);
+  return taken.length === 1 ? { account: taken[0][0], cents: taken[0][1] } : null;
 }
 
 /** One payment. `cents` is its total, as the copy of the payment has it. */
@@ -63,7 +87,8 @@ export function checkPayment(
   for (const [account, cents] of posted) if (cents === 0) posted.delete(account);
 
   const deposit = depositAccount(payment.netsuite, ctx.accountTypes);
-  const entry = paymentEntry({ cents: payment.cents, depositAccount: deposit }, ctx.receivable);
+  const discount = paymentDiscount(payment.netsuite, ctx.accountTypes, deposit);
+  const entry = paymentEntry({ cents: payment.cents, depositAccount: deposit, discount }, ctx.receivable);
   const ours = new Map(entry.lines.map((l) => [l.lineId, l]));
 
   const rows: PaymentRow[] = [];
@@ -79,6 +104,7 @@ export function checkPayment(
     });
   };
   row(DEPOSIT_LINE, 'deposit', deposit);
+  row(DISCOUNT_LINE, 'discount', discount?.account ?? null);
   row(RECEIVABLE_LINE, 'receivable', ctx.receivable);
   for (const [account, cents] of posted) {
     if (shown.has(account)) continue;
@@ -128,6 +154,9 @@ export function paymentReasons(checked: CheckedPayment, account: (id: string) =>
       if (!f) add(zero);
       else if (n) add({ key: 'deposit_amount', text: `The payment's total differs from what NetSuite put in ${account(n.account)}.` });
       else add({ key: 'deposit_none', text: `NetSuite put nothing in ${account(f.account)} for the payment.` });
+    } else if (r.lineId === DISCOUNT_LINE) {
+      const at = (f ?? n)!.account;
+      add({ key: `discount|${at}`, text: `The discount differs from what NetSuite booked to ${account(at)}.` });
     } else if (r.lineId === RECEIVABLE_LINE) {
       if (!f) add(zero);
       else if (n) add({ key: 'receivable_amount', text: 'What FleetSuite takes off receivables differs from what NetSuite took off.' });
@@ -173,7 +202,9 @@ export interface PaymentMonthCheck extends Omit<MonthCheck, 'invoices'> {
   invoices: PaymentView[];
 }
 
-const ROW_LABELS: Record<PaymentRow['role'], string> = { deposit: 'Deposited to', receivable: 'Receivable', other: 'Other line' };
+const ROW_LABELS: Record<PaymentRow['role'], string> = {
+  deposit: 'Deposited to', discount: 'Discount', receivable: 'Receivable', other: 'Other line',
+};
 
 /** What a payment was applied to, by number; one not copied yet goes by NetSuite's reference ('CustInvc/123'). */
 const appliedName = (number: string) => {
