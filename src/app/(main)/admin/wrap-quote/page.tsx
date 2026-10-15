@@ -19,7 +19,7 @@ import { RollNesting, RollFilmInfo } from '@/components/RollNesting';
 import NumberInput from '@/components/NumberInput';
 import { CoverageProofPreview, type ProofFilmOption } from '@/components/PhotoCoverageProof';
 import BulkFilmBar from '@/components/BulkFilmBar';
-import { parseFinalPrice, parseRateMap, readPricingOverrides, scaleQuoteSnapshot } from '@/lib/wrap-quote-price-override';
+import { LABOR_SECTION_KEYS, cleanCustomLines, customLinesTotal, parseFinalPrice, parseRateMap, parseSections, readPricingOverrides, scaleQuoteSnapshot, type LaborSectionKey } from '@/lib/wrap-quote-price-override';
 import PhotoProofBoard from '@/components/PhotoProofBoard';
 import DrawingWorkspace, { QuickBar, ToolButton, barButtonStyle } from '@/components/DrawingWorkspace';
 import { partRowsForPage, proofParts, withPartSize } from '@/lib/proof-parts';
@@ -207,6 +207,8 @@ interface Measurement {
   substrate_id: string | null;
   /** Vinyl price for one of this shape, typed by the rep; null = by area. */
   price_override?: number | null;
+  /** Billed ft² for one of this shape, typed by the rep; null = measured. */
+  sqft_override?: number | null;
 }
 
 // The one email the builder still sends: the coverage picture for feedback.
@@ -538,6 +540,7 @@ export default function WrapQuotePage() {
         qty: Math.max(1, num(b.qty) || 1),
         substrate_id: b.substrate_id || null,
         price_override: b.price_override ?? null,
+        sqft_override: b.sqft_override ?? null,
       })));
   }, [photoProofs, proofPartsIndex]);
 
@@ -742,7 +745,7 @@ export default function WrapQuotePage() {
     const res = await apiFetch('/api/wrap-quote/open-estimate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ quoteId, attach: estAttach }),
+      body: JSON.stringify({ quoteId, attach: estAttach, keepEstimateLines: keepEstimateLines.current }),
     });
     const d = await res.json().catch(() => ({}));
     if (!res.ok || !d.estimateId) {
@@ -1133,12 +1136,16 @@ export default function WrapQuotePage() {
   const measurementPricing = (m: Measurement) => {
     const sub = substrateById(m.substrate_id);
     const bleed = sub ? num(sub.bleed_in) : 0;
-    const trimArea = unitAreaSqft(m, 0);
-    const billedArea = unitAreaSqft(m, bleed);
+    // A typed ft² is the billed area for one; it replaces the measured
+    // trim and bleed areas alike.
+    const sqftTyped = m.sqft_override != null && Number.isFinite(m.sqft_override);
+    const calcBilledArea = unitAreaSqft(m, bleed);
+    const trimArea = sqftTyped ? Math.max(0, num(m.sqft_override)) : unitAreaSqft(m, 0);
+    const billedArea = sqftTyped ? Math.max(0, num(m.sqft_override)) : calcBilledArea;
     const calcUnitPrice = billedArea * (sub ? quoteFilmRate(sub) : 0);
     const priced = m.price_override != null && Number.isFinite(m.price_override);
     const unitPrice = priced ? Math.max(0, num(m.price_override)) : calcUnitPrice;
-    return { sub, trimArea, billedArea, unitPrice, calcUnitPrice, priced, lineTotal: unitPrice * Math.max(1, num(m.qty)) };
+    return { sub, trimArea, billedArea, calcBilledArea, sqftTyped, unitPrice, calcUnitPrice, priced, lineTotal: unitPrice * Math.max(1, num(m.qty)) };
   };
 
   // Film choices for the photo proof sidebar — same active films and rates
@@ -1167,6 +1174,29 @@ export default function WrapQuotePage() {
   const filmLaborRate = (f: Film) => {
     const o = laborRates[f.id];
     return o !== undefined && o !== '' ? num(o) : num(f.labor_per_sqft);
+  };
+
+  // Hand edits typed on the Price & Estimate line list, all per worksheet
+  // ('' / missing = calculated): install ft² and install price per film,
+  // roll material price per film, hours and $/hr per labor section, and
+  // the rep's own extra lines. Saved in pricing_overrides.
+  const [laborSqft, setLaborSqft] = useState<Record<string, string>>({});
+  const [laborLineTotals, setLaborLineTotals] = useState<Record<string, string>>({});
+  const [rollMaterialTotals, setRollMaterialTotals] = useState<Record<string, string>>({});
+  const [sectionEdits, setSectionEdits] = useState<Partial<Record<LaborSectionKey, { hours?: string; hourly?: string }>>>({});
+  const [customLines, setCustomLines] = useState<{ id: string; description: string; qty: string; unit_price: string }[]>([]);
+  const typed = (map: Record<string, string>, key: string) => {
+    const v = map[key];
+    return v !== undefined && v.trim() !== '' && Number.isFinite(parseFloat(v)) ? Math.max(0, parseFloat(v)) : null;
+  };
+  // A labor section as this worksheet prices it: the company settings with
+  // any hours or $/hr typed on the line list.
+  const sectionFor = (k: LaborSectionKey): LaborSection => {
+    const base = settings[k];
+    const e = sectionEdits[k] || {};
+    const h = e.hours !== undefined && e.hours.trim() !== '' ? Math.max(0, num(e.hours)) : null;
+    const r = e.hourly !== undefined && e.hourly.trim() !== '' ? Math.max(0, num(e.hourly)) : null;
+    return { ...base, hours: h ?? num(base.hours), hourly: r ?? num(base.hourly) };
   };
 
   // The drawn canvas is ONE kit; this multiplies the sqft-driven pricing
@@ -1318,23 +1348,26 @@ export default function WrapQuotePage() {
       for (const [filmKey, row] of nestFilmBilling) {
         const film = substrateById(filmKey || null);
         if (!film) continue;
-        rollMaterials += (row.rollSqft + row.extraSqft) * quoteFilmRate(film);
+        rollMaterials += typed(rollMaterialTotals, filmKey) ?? (row.rollSqft + row.extraSqft) * quoteFilmRate(film);
         nestedRollSqft += row.rollSqft;
       }
       materials = rollMaterials;
       kitMaterials = rollMaterials / kitQty;
     }
     const filmTotals = [...byFilm.values()].map(({ film, sqft }) => {
-      const jobSqft = sqft * kitQty;
+      const calcSqft = sqft * kitQty;
+      const jobSqft = typed(laborSqft, film.id) ?? calcSqft;
+      const calcLabor = jobSqft * filmLaborRate(film);
+      const laborTotal = typed(laborLineTotals, film.id) ?? calcLabor;
       return {
-        id: film.id, label: filmLabel(film), sqft: jobSqft,
-        laborRate: filmLaborRate(film), laborTotal: jobSqft * filmLaborRate(film),
+        id: film.id, label: filmLabel(film), sqft: jobSqft, calcSqft,
+        laborRate: filmLaborRate(film), laborTotal, calcLabor,
       };
     });
     const filmLabor = filmTotals.reduce((sum, f) => sum + f.laborTotal, 0);
-    const design = laborSectionTotal(settings.design);
-    const prep = laborSectionTotal(settings.preparation);
-    const install = laborSectionTotal(settings.installation);
+    const design = laborSectionTotal(sectionFor('design'));
+    const prep = laborSectionTotal(sectionFor('preparation'));
+    const install = laborSectionTotal(sectionFor('installation'));
     const labor = design + prep + install + filmLabor;
     const preSubtotal = materials + labor;
 
@@ -1357,11 +1390,16 @@ export default function WrapQuotePage() {
     const afterDiscount = preSubtotal - discount;
     const minBump = !priceOverride && preSubtotal > 0 && afterDiscount < minCharge ? minCharge - afterDiscount : 0;
     const calcSubtotal = afterDiscount + minBump;
-    const subtotal = finalPrice ?? calcSubtotal;
+    const graphicsSubtotal = finalPrice ?? calcSubtotal;
     // Fold the adjustments into materials/labor proportionally: the NetSuite
     // estimate and invoice read materials_total + labor_total directly, so
-    // those two must always sum to what the customer was actually quoted.
-    const adjust = preSubtotal > 0 ? subtotal / preSubtotal : 1;
+    // those two must always sum to the graphics price the customer was quoted.
+    const adjust = preSubtotal > 0 ? graphicsSubtotal / preSubtotal : 1;
+    // The rep's own lines sit on top: no discount, minimum or final-price
+    // scaling, and they reach the estimate as their own lines.
+    const extraLines = cleanCustomLines(customLines);
+    const customTotal = customLinesTotal(extraLines);
+    const subtotal = graphicsSubtotal + customTotal;
 
     const tax = subtotal * num(settings.tax_rate) / 100;
     // Internal margin readout: what the billed film actually costs us
@@ -1387,14 +1425,14 @@ export default function WrapQuotePage() {
       kitQty, kitArea, kitMaterials,
       area, billedArea, materials, filmTotals, filmLabor, design, prep, install, labor,
       preSubtotal, tierPct, discountPct, discount, minCharge, minBump,
-      priceOverride, calcSubtotal, adjust,
+      priceOverride, calcSubtotal, adjust, graphicsSubtotal, extraLines, customTotal,
       adjMaterials: materials * adjust, adjLabor: labor * adjust,
       subtotal, tax, total: subtotal + tax,
       materialCost, uncostedFilms: [...uncostedFilms],
       nested, nestedRollSqft,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- substrates feed measurementPricing
-  }, [measurements, settings, substrates, laborRates, vinylRates, finalPriceText, packageQty, discountPctOverride, useRollPricing, nestPieces, nestFilmBilling]);
+  }, [measurements, settings, substrates, laborRates, vinylRates, finalPriceText, packageQty, discountPctOverride, useRollPricing, nestPieces, nestFilmBilling, laborSqft, laborLineTotals, rollMaterialTotals, sectionEdits, customLines]);
 
   // ----- Canvas drawing -----
   const svgPoint = (e: { clientX: number; clientY: number }): { x: number; y: number } | null => {
@@ -1789,6 +1827,11 @@ export default function WrapQuotePage() {
     setDiscountPctOverride('');
     setFinalPriceText('');
     setVinylRates({});
+    setLaborSqft({});
+    setLaborLineTotals({});
+    setRollMaterialTotals({});
+    setSectionEdits({});
+    setCustomLines([]);
     setCheckedIds(new Set());
     setPlacements({});
     setUseRollPricing(false);
@@ -1824,6 +1867,7 @@ export default function WrapQuotePage() {
         line_total: nested ? null : p.lineTotal,
         // The rep's typed price for one, so reopening restores it (staff only).
         price_override: !nested && p.priced ? p.unitPrice : null,
+        sqft_override: p.sqftTyped ? p.billedArea : null,
         // Canvas geometry (template-image pixels) so a saved quote can be
         // reopened in the estimator with its shapes intact.
         geometry: { rect: m.rect || null, line1: m.line1 || null, line2: m.line2 || null, poly: m.points || null },
@@ -1861,12 +1905,14 @@ export default function WrapQuotePage() {
           return {
             film_id: filmKey || null,
             label: film ? filmLabel(film) : 'No film',
-            rate_per_sqft: rate,
+            rate_per_sqft: typed(rollMaterialTotals, filmKey) != null && row.rollSqft + row.extraSqft > 0
+              ? typed(rollMaterialTotals, filmKey)! / (row.rollSqft + row.extraSqft)
+              : rate,
             rolls: row.rolls.map(r => ({ used_length_in: r.usedLengthIn, piece_count: r.pieceCount })),
             roll_sqft: row.rollSqft,
             graphic_sqft: row.graphicSqft,
             extra_area_sqft: row.extraSqft,
-            material_total: (row.rollSqft + row.extraSqft) * rate,
+            material_total: typed(rollMaterialTotals, filmKey) ?? (row.rollSqft + row.extraSqft) * rate,
           };
         }),
         unplaced: nestUsage.unplaced.map(p => ({ name: p.part ? `${p.name}-${p.part}` : p.name, w_in: p.w, h_in: p.h, film_id: p.filmKey || null })),
@@ -1894,10 +1940,10 @@ export default function WrapQuotePage() {
       attachments,
       measurements: lines,
       labor: {
-        design: { ...settings.design, total: totals.design },
-        preparation: { ...settings.preparation, total: totals.prep },
-        installation: { ...settings.installation, total: totals.install },
-        films: totals.filmTotals.map(f => ({ id: f.id, label: f.label, sqft: f.sqft, rate: f.laborRate, total: f.laborTotal })),
+        design: { ...sectionFor('design'), total: totals.design },
+        preparation: { ...sectionFor('preparation'), total: totals.prep },
+        installation: { ...sectionFor('installation'), total: totals.install },
+        films: totals.filmTotals.map(f => ({ id: f.id, label: f.label, sqft: f.sqft, rate: f.sqft > 0 ? f.laborTotal / f.sqft : f.laborRate, total: f.laborTotal })),
       },
       total_area_sqft: totals.area,
       package_qty: totals.kitQty,
@@ -1927,10 +1973,15 @@ export default function WrapQuotePage() {
       // What the rep typed, so reopening restores it; the snapshot above is
       // what the customer sees.
       pricing_overrides: {
-        final_price: totals.priceOverride ? totals.subtotal : null,
+        final_price: totals.priceOverride ? totals.graphicsSubtotal : null,
         vinyl_rates: parseRateMap(vinylRates),
         labor_rates: parseRateMap(laborRates),
         discount_pct: discountPctOverride.trim(),
+        labor_sqft: parseRateMap(laborSqft),
+        labor_line_totals: parseRateMap(laborLineTotals),
+        roll_material_totals: parseRateMap(rollMaterialTotals),
+        sections: parseSections(sectionEdits),
+        custom_lines: totals.extraLines,
       },
     };
     // A typed final price: scale every customer-visible line to it so the
@@ -2117,6 +2168,9 @@ export default function WrapQuotePage() {
   // there was nothing to draw). Add to Estimate reads it after saving.
   const pictureProblem = useRef<string | null>(null);
 
+  // Set by saveQuote when the rep chose to keep numbers typed on the
+  // estimate: the estimate refresh after the save links but doesn't rewrite.
+  const keepEstimateLines = useRef(false);
   const saveQuote = async (): Promise<string | null> => {
     // A crossed freeform outline shoelaces to less area than what's visually
     // filled — block the save (and therefore email/NetSuite) until it's
@@ -2125,6 +2179,31 @@ export default function WrapQuotePage() {
     if (crossed.length > 0) {
       await dialog.alert(`${crossed.map(m => m.name).join(', ')} ${crossed.length === 1 ? 'has' : 'have'} an outline that crosses itself, so the area can't be billed correctly. Select the shape and drag its corners apart, then save again.`);
       return null;
+    }
+    // Before this save rewrites the estimate's graphics lines, make sure
+    // nobody changed them on the estimate since the last save put them
+    // there; if they did, the rep picks whose numbers win.
+    keepEstimateLines.current = false;
+    const linkedEstimateId = forEstimate?.id || (savedQuoteId ? history.find(h => h.id === savedQuoteId)?.estimate_id : null) || null;
+    if (savedQuoteId && linkedEstimateId) {
+      try {
+        const res = await apiFetch('/api/wrap-quote/estimate-edits', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ quoteId: savedQuoteId, estimateId: linkedEstimateId }),
+        });
+        const d = await res.json().catch(() => ({}));
+        const edits: { summary: string }[] = Array.isArray(d.edits) ? d.edits : [];
+        if (edits.length > 0) {
+          const number = forEstimate?.number || 'its estimate';
+          const useBuilder = await dialog.confirm(
+            `These graphics lines were changed on Estimate ${number}:\n\n${edits.map(e => `• ${e.summary}`).join('\n')}\n\n`
+            + 'Saving here would put the builder\'s numbers back. The worksheet saves either way.',
+            { title: 'Changed on the estimate', confirmLabel: 'Use the builder\'s numbers', cancelLabel: 'Keep the estimate\'s numbers' },
+          );
+          keepEstimateLines.current = !useBuilder;
+        }
+      } catch { /* offline — save as before */ }
     }
     const snap = buildSnapshot();
     if (!savedQuoteId) snap.quote_number = await nextQuoteNumber();
@@ -2192,7 +2271,7 @@ export default function WrapQuotePage() {
       const res = await apiFetch('/api/wrap-quote/open-estimate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ quoteId, estimateId: forEstimate.id, attach: estAttach }),
+        body: JSON.stringify({ quoteId, estimateId: forEstimate.id, attach: estAttach, keepEstimateLines: keepEstimateLines.current }),
       });
       if (res.status === 409) {
         const d = await res.json().catch(() => ({}));
@@ -2393,6 +2472,7 @@ export default function WrapQuotePage() {
         area_in2: l.area_in2 != null ? num(l.area_in2) : undefined,
         perimeter_in: l.perimeter_in != null ? num(l.perimeter_in) : undefined,
         price_override: l.price_override != null && Number.isFinite(Number(l.price_override)) ? Number(l.price_override) : null,
+        sqft_override: l.sqft_override != null && Number.isFinite(Number(l.sqft_override)) ? Number(l.sqft_override) : null,
       };
       // Freeform shapes missing their cached metrics (hand-edited rows)
       // recompute from the outline when the template is calibrated.
@@ -2452,6 +2532,14 @@ export default function WrapQuotePage() {
       : Object.fromEntries(((q.labor?.films || []) as any[]).filter((f: any) => f.id).map((f: any) => [f.id, f.rate == null ? '' : String(f.rate)])));
     setVinylRates(po ? asText(po.vinyl_rates) : {});
     setFinalPriceText(po?.final_price != null ? String(po.final_price) : '');
+    setLaborSqft(po ? asText(po.labor_sqft) : {});
+    setLaborLineTotals(po ? asText(po.labor_line_totals) : {});
+    setRollMaterialTotals(po ? asText(po.roll_material_totals) : {});
+    setSectionEdits(po ? Object.fromEntries(Object.entries(po.sections).map(([k, v]) => [k, {
+      ...(v?.hours != null ? { hours: String(v.hours) } : {}),
+      ...(v?.hourly != null ? { hourly: String(v.hourly) } : {}),
+    }])) : {});
+    setCustomLines(po ? po.custom_lines.map(l => ({ id: l.id, description: l.description, qty: String(l.qty), unit_price: String(l.unit_price) })) : []);
     setPackageQty(String(Math.max(1, num(q.package_qty) || 1)));
     // Pin the saved discount % (clearing the field re-derives from the
     // settings tiers); older quotes have no adjustments and stay on auto.
@@ -3359,7 +3447,263 @@ export default function WrapQuotePage() {
 
   // Quote preview shared by the Quote tab and History view modal. `coverage`
   // overrides the stored diagram with a live render (Quote tab, pre-save).
-  const quotePreview = (q: { quote_number: string; vehicle_description: string | null; customer: any; project_type: string | null; project_notes: string | null; measurements: any[]; labor: any; subtotal: number; tax_rate: number; tax_amount: number; total: number; diagram_path?: string | null; photo_proofs?: PhotoProof[] | null; template_id?: string | null; attachments?: QuoteAttachment[] | null; created_at?: string; package_qty?: number | null; adjustments?: QuoteAdjustments | null; nesting?: NestingSnapshot | null }, coverage?: React.ReactNode) => (
+  // ----- Hand-editable line list (Price & Estimate) -----
+  // Every number the drawing works out can be typed over here. A typed box
+  // turns amber and ↺ clears it back to the calculated number; the edits
+  // save with the worksheet (shape fields on the shape, the rest in
+  // pricing_overrides) and flow to the estimate on save.
+  const patchLine = (id: string, patch: Partial<Pick<Measurement, 'qty' | 'price_override' | 'sqft_override'>>) => {
+    if (photoMode) {
+      setPhotoProofs(prev => prev.map(pr => ({ ...pr, boxes: pr.boxes.map(b => (b.id === id ? { ...b, ...patch } : b)) })));
+    } else {
+      updateMeasurement(id, patch);
+    }
+  };
+  const typedNum = (v: string): number | null => (v.trim() === '' || !Number.isFinite(parseFloat(v)) ? null : Math.max(0, parseFloat(v)));
+  const editCell = (opts: {
+    value: string;
+    placeholder: string;
+    edited: boolean;
+    onChange: (v: string) => void;
+    onReset?: () => void;
+    disabled?: boolean;
+    title?: string;
+    width?: string;
+    step?: string;
+    suffix?: string;
+  }) => (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', justifyContent: 'flex-end' }}>
+      <input
+        type="number" min="0" step={opts.step || '0.01'} value={opts.value} placeholder={opts.placeholder}
+        disabled={opts.disabled} title={opts.title}
+        onChange={e => opts.onChange(e.target.value)}
+        style={{
+          width: opts.width || '76px', padding: '4px 6px', borderRadius: '5px', fontSize: '11px', textAlign: 'right',
+          border: `1px solid ${opts.edited ? '#f59e0b' : theme.border}`,
+          background: opts.edited ? 'rgba(245,158,11,0.12)' : 'var(--input-bg)',
+          color: 'var(--text-primary)', opacity: opts.disabled ? 0.45 : 1,
+        }}
+      />
+      {opts.suffix && <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{opts.suffix}</span>}
+      <span style={{ width: '14px', display: 'inline-block' }}>
+        {opts.edited && opts.onReset && (
+          <button onClick={opts.onReset} title={`Back to calculated (${opts.placeholder})`} style={{ border: 'none', background: 'none', color: '#f59e0b', cursor: 'pointer', padding: 0, fontSize: '12px', lineHeight: 1 }}>↺</button>
+        )}
+      </span>
+    </span>
+  );
+  const editableLines = () => {
+    const td: React.CSSProperties = { padding: '4px 6px', borderBottom: `1px solid ${theme.border}`, textAlign: 'right', whiteSpace: 'nowrap' };
+    const tdL: React.CSSProperties = { ...td, textAlign: 'left', whiteSpace: 'normal' };
+    const th: React.CSSProperties = { textAlign: 'right', padding: '5px 6px', borderBottom: `1px solid ${theme.border}` };
+    const muted: React.CSSProperties = { color: 'var(--text-muted)', marginLeft: '6px', fontSize: '9px' };
+    const perKit = totals.kitQty > 1;
+    let editCount = 0;
+    const shapeRows = measurements.map(m => {
+      const p = measurementPricing(m);
+      if (p.sqftTyped) editCount++;
+      if (p.priced && !totals.nested) editCount++;
+      return (
+        <tr key={`m-${m.id}`}>
+          <td style={tdL}>
+            {m.name}
+            <span style={muted}>{p.sub ? filmLabel(p.sub) : 'No film'}{perKit ? ' · per kit' : ''}</span>
+          </td>
+          <td style={td}>{editCell({
+            value: m.sqft_override != null ? String(m.sqft_override) : '',
+            placeholder: fmt(p.calcBilledArea),
+            edited: p.sqftTyped,
+            onChange: v => patchLine(m.id, { sqft_override: typedNum(v) }),
+            onReset: () => patchLine(m.id, { sqft_override: null }),
+            title: 'Billed square feet for one of this shape',
+          })}</td>
+          <td style={td}>{editCell({
+            value: String(Math.max(1, num(m.qty))),
+            placeholder: '1',
+            edited: false,
+            step: '1',
+            width: '54px',
+            onChange: v => patchLine(m.id, { qty: Math.max(1, Math.round(num(v)) || 1) }),
+          })}</td>
+          <td style={td}>{editCell({
+            value: m.price_override != null && !totals.nested ? String(m.price_override) : '',
+            placeholder: totals.nested ? '—' : fmt(p.calcUnitPrice),
+            edited: p.priced && !totals.nested,
+            disabled: totals.nested,
+            title: totals.nested ? 'Roll pricing is on: type the price on the Material rows below' : 'Price for one of this shape',
+            onChange: v => patchLine(m.id, { price_override: typedNum(v) }),
+            onReset: () => patchLine(m.id, { price_override: null }),
+          })}</td>
+          <td style={td}>{totals.nested ? '—' : fmt(p.lineTotal)}</td>
+        </tr>
+      );
+    });
+    const rollRows = totals.nested ? [...nestFilmBilling.entries()].map(([filmKey, row]) => {
+      const film = substrateById(filmKey || null);
+      if (!film) return null;
+      const calc = (row.rollSqft + row.extraSqft) * quoteFilmRate(film);
+      const t = typed(rollMaterialTotals, filmKey);
+      if (t != null) editCount++;
+      return (
+        <tr key={`roll-${filmKey}`} style={{ fontWeight: 700 }}>
+          <td style={tdL}>Material — {filmLabel(film)}<span style={{ ...muted, fontWeight: 400 }}>{fmt(row.rollSqft + row.extraSqft)} ft² off the roll</span></td>
+          <td style={td}>{fmt(row.rollSqft + row.extraSqft)}</td>
+          <td style={td}>1</td>
+          <td style={td}>{editCell({
+            value: rollMaterialTotals[filmKey] ?? '',
+            placeholder: fmt(calc),
+            edited: t != null,
+            onChange: v => setRollMaterialTotals(prev => ({ ...prev, [filmKey]: v })),
+            onReset: () => setRollMaterialTotals(prev => { const n = { ...prev }; delete n[filmKey]; return n; }),
+          })}</td>
+          <td style={td}>{fmt(t ?? calc)}</td>
+        </tr>
+      );
+    }) : null;
+    const installRows = totals.filmTotals.map(f => {
+      const sqftEdited = typed(laborSqft, f.id) != null;
+      const totalEdited = typed(laborLineTotals, f.id) != null;
+      if (sqftEdited) editCount++;
+      if (totalEdited) editCount++;
+      return (
+        <tr key={`labor-${f.id}`}>
+          <td style={tdL}>Install — {f.label}<span style={muted}>@ ${fmt(f.laborRate)}/ft²</span></td>
+          <td style={td}>{editCell({
+            value: laborSqft[f.id] ?? '',
+            placeholder: fmt(f.calcSqft),
+            edited: sqftEdited,
+            onChange: v => setLaborSqft(prev => ({ ...prev, [f.id]: v })),
+            onReset: () => setLaborSqft(prev => { const n = { ...prev }; delete n[f.id]; return n; }),
+            title: 'Square feet installed (whole job)',
+          })}</td>
+          <td style={td}>1</td>
+          <td style={td}>{editCell({
+            value: laborLineTotals[f.id] ?? '',
+            placeholder: fmt(f.calcLabor),
+            edited: totalEdited,
+            onChange: v => setLaborLineTotals(prev => ({ ...prev, [f.id]: v })),
+            onReset: () => setLaborLineTotals(prev => { const n = { ...prev }; delete n[f.id]; return n; }),
+          })}</td>
+          <td style={td}>{fmt(f.laborTotal)}</td>
+        </tr>
+      );
+    });
+    const sectionRows = LABOR_SECTION_KEYS.map(k => {
+      const base = settings[k];
+      const sec = sectionFor(k);
+      const e = sectionEdits[k] || {};
+      const hoursEdited = (e.hours ?? '').trim() !== '';
+      const rateEdited = (e.hourly ?? '').trim() !== '';
+      if (hoursEdited) editCount++;
+      if (rateEdited) editCount++;
+      const fixed = num(sec.flat) + num(sec.extra);
+      const setField = (field: 'hours' | 'hourly', v: string | null) => setSectionEdits(prev => {
+        const cur = { ...(prev[k] || {}) };
+        if (v == null) delete cur[field]; else cur[field] = v;
+        return { ...prev, [k]: cur };
+      });
+      return (
+        <tr key={`sec-${k}`}>
+          <td style={tdL}>
+            {k === 'design' ? 'Design' : k === 'preparation' ? 'Preparation' : 'Installation'}
+            <span style={muted}>hours × rate{fixed > 0.005 ? ` + $${fmt(fixed)} flat` : ''}</span>
+          </td>
+          <td style={td} />
+          <td style={td}>{editCell({
+            value: e.hours ?? '',
+            placeholder: fmt(num(base.hours)),
+            edited: hoursEdited,
+            step: '0.25',
+            width: '54px',
+            suffix: 'h',
+            onChange: v => setField('hours', v),
+            onReset: () => setField('hours', null),
+          })}</td>
+          <td style={td}>{editCell({
+            value: e.hourly ?? '',
+            placeholder: fmt(num(base.hourly)),
+            edited: rateEdited,
+            suffix: '/h',
+            onChange: v => setField('hourly', v),
+            onReset: () => setField('hourly', null),
+          })}</td>
+          <td style={td}>{fmt(laborSectionTotal(sec))}</td>
+        </tr>
+      );
+    });
+    const updateCustom = (id: string, patch: Partial<{ description: string; qty: string; unit_price: string }>) =>
+      setCustomLines(prev => prev.map(l => (l.id === id ? { ...l, ...patch } : l)));
+    const customRows = customLines.map(l => (
+      <tr key={`custom-${l.id}`}>
+        <td style={tdL}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', width: '100%' }}>
+            <input
+              value={l.description} placeholder="Description (e.g. Old graphics removal)"
+              onChange={e => updateCustom(l.id, { description: e.target.value })}
+              style={{ flex: 1, minWidth: 0, padding: '4px 6px', borderRadius: '5px', fontSize: '11px', border: '1px solid #f59e0b', background: 'rgba(245,158,11,0.12)', color: 'var(--text-primary)' }}
+            />
+            <button onClick={() => setCustomLines(prev => prev.filter(x => x.id !== l.id))} title="Remove this line" style={{ border: 'none', background: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '12px' }}>✕</button>
+          </span>
+        </td>
+        <td style={td} />
+        <td style={td}>{editCell({ value: l.qty, placeholder: '1', edited: true, step: '1', width: '54px', onChange: v => updateCustom(l.id, { qty: v }) })}</td>
+        <td style={td}>{editCell({ value: l.unit_price, placeholder: '0.00', edited: true, onChange: v => updateCustom(l.id, { unit_price: v }) })}</td>
+        <td style={td}>{fmt((num(l.qty) > 0 ? num(l.qty) : 1) * Math.max(0, num(l.unit_price)))}</td>
+      </tr>
+    ));
+    const added = totals.extraLines.length;
+    return (
+      <div>
+        <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', minWidth: '520px', borderCollapse: 'collapse', fontSize: '11px', color: 'var(--text-primary)' }}>
+          <thead>
+            <tr style={{ color: 'var(--text-muted)', textTransform: 'uppercase', fontSize: '9px' }}>
+              <th style={{ ...th, textAlign: 'left' }}>Item</th>
+              <th style={th}>ft²</th>
+              <th style={th}>Qty</th>
+              <th style={th}>Price</th>
+              <th style={th}>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shapeRows}
+            {rollRows}
+            {perKit && !totals.nested && (
+              <tr style={{ fontWeight: 700 }}>
+                <td style={tdL}>Materials — {totals.kitQty} kits<span style={{ ...muted, fontWeight: 400 }}>{fmt(totals.kitArea)} ft² per kit</span></td>
+                <td style={td} />
+                <td style={td}>{totals.kitQty}</td>
+                <td style={td}>{fmt(totals.kitMaterials)}</td>
+                <td style={td}>{fmt(totals.materials)}</td>
+              </tr>
+            )}
+            {installRows}
+            {sectionRows}
+            {customRows}
+          </tbody>
+        </table>
+        </div>
+        <button
+          onClick={() => setCustomLines(prev => [...prev, { id: crypto.randomUUID(), description: '', qty: '1', unit_price: '' }])}
+          style={{ ...btnStyle('#a78bfa', 'transparent'), border: 'none', marginTop: '4px' }}
+        >+ Add line</button>
+        {(editCount > 0 || added > 0) && (
+          <div style={{ fontSize: '10px', fontWeight: 700, color: '#f59e0b', marginTop: '4px' }}>
+            {[editCount > 0 ? `${editCount} number${editCount === 1 ? '' : 's'} typed by hand` : '', added > 0 ? `${added} added line${added === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ')}.
+            {' '}Saved with the worksheet and carried to the estimate.
+            {added > 0 ? ' Added lines go on the estimate as their own lines, on top of any Final Price.' : ''}
+          </div>
+        )}
+        {totals.priceOverride && (
+          <div style={{ fontSize: '10px', fontWeight: 700, color: '#f59e0b', marginTop: '4px' }}>
+            Final Price is set, so the graphics lines above scale to ${fmt(totals.graphicsSubtotal)} on the estimate.
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const quotePreview = (q: { quote_number: string; vehicle_description: string | null; customer: any; project_type: string | null; project_notes: string | null; measurements: any[]; labor: any; subtotal: number; tax_rate: number; tax_amount: number; total: number; diagram_path?: string | null; photo_proofs?: PhotoProof[] | null; template_id?: string | null; attachments?: QuoteAttachment[] | null; created_at?: string; package_qty?: number | null; adjustments?: QuoteAdjustments | null; nesting?: NestingSnapshot | null }, coverage?: React.ReactNode, lines?: React.ReactNode) => (
     <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '18px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
         <div style={{ fontSize: '17px', fontWeight: 800, color: 'var(--text-primary)' }}>Wrap Quote <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700 }}>{q.quote_number}</span></div>
@@ -3420,6 +3764,7 @@ export default function WrapQuotePage() {
           </div>
         ));
       })()}
+      {lines ?? (
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
         <thead>
           <tr style={{ color: 'var(--text-muted)', textTransform: 'uppercase', fontSize: '9px' }}>
@@ -3498,8 +3843,18 @@ export default function WrapQuotePage() {
               </tr>
             );
           })}
+          {/* The rep's own lines (pricing_overrides.custom_lines). */}
+          {cleanCustomLines((q as any).pricing_overrides?.custom_lines).map(l => (
+            <tr key={`custom-${l.id}`} style={{ color: 'var(--text-primary)' }}>
+              <td style={{ padding: '5px 6px', borderBottom: `1px solid ${theme.border}` }}>{l.description}</td>
+              <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{l.qty}</td>
+              <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{fmt(l.unit_price)}</td>
+              <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{fmt(l.qty * l.unit_price)}</td>
+            </tr>
+          ))}
         </tbody>
       </table>
+      )}
       {(q.labor?.films || []).length > 0 && (
         <div style={{ marginTop: '8px', fontSize: '10px', color: 'var(--text-secondary)' }}>
           <b style={{ color: 'var(--text-primary)' }}>Film usage:</b>{' '}
@@ -4633,7 +4988,7 @@ export default function WrapQuotePage() {
               <div style={{ marginTop: '8px', fontSize: '10px', color: '#fbbf24', fontWeight: 700 }}>Nothing drawn yet — use the Estimator tab first.</div>
             )}
           </div>
-          {quotePreview({ ...buildSnapshot(), created_at: new Date().toISOString() } as any, liveCoverageDiagram())}
+          {quotePreview({ ...buildSnapshot(), created_at: new Date().toISOString() } as any, liveCoverageDiagram(), editableLines())}
         </div>
       )}
 

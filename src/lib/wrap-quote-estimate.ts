@@ -4,7 +4,8 @@ import { resolveLineTaxability } from '@/lib/line-taxability';
 import { FALLBACK_SALES_TAX_RATE } from '@/lib/sales-tax';
 import { FALLBACK_LABOR_RATE } from '@/lib/labor-rate';
 import { findItems } from '@/lib/netsuite';
-import { WRAP_VINYL_ITEM, WRAP_LABOR_ITEM, kitLineSplit } from '@/lib/graphics-invoice';
+import { WRAP_VINYL_ITEM, WRAP_LABOR_ITEM } from '@/lib/graphics-invoice';
+import { diffWrapEstimateLines, plannedWrapEstimateLines, type WrapLineEdit } from '@/lib/wrap-quote-estimate-lines';
 import { linkQuoteJobsToEstimate } from '@/lib/graphics-links';
 import { getSalesTaxRate } from '@/lib/sales-tax';
 import { getDefaultLaborRate } from '@/lib/labor-rate';
@@ -44,7 +45,7 @@ export async function addWrapQuoteToEstimate(
 ): Promise<{ status: number; body: any }> {
   const [{ data: estimate }, { data: quote }] = await Promise.all([
     supabase.from('estimates').select('id, tax_rate, tax_exempt, labor_rate, labor_hours_override, customer_approved, status, netsuite_so_id, vehicle_count, discount_type, discount_value').eq('id', estimateId).maybeSingle(),
-    supabase.from('wrap_quotes').select('id, quote_number, vehicle_description, materials_total, labor_total, package_qty').eq('id', wrapQuoteId).maybeSingle(),
+    supabase.from('wrap_quotes').select('id, quote_number, vehicle_description, materials_total, labor_total, package_qty, pricing_overrides').eq('id', wrapQuoteId).maybeSingle(),
   ]);
   if (!estimate) return result({ error: 'Estimate not found' }, { status: 404 });
   if (!quote) return result({ error: 'Wrap quote not found' }, { status: 404 });
@@ -60,11 +61,12 @@ export async function addWrapQuoteToEstimate(
     return result({ error: 'This estimate was accepted by the customer — its contents are locked. Start a new estimate instead.' }, { status: 409 });
   }
 
-  const materials = parseFloat(quote.materials_total) || 0;
-  const labor = parseFloat(quote.labor_total) || 0;
-  if (materials <= 0 && labor <= 0) {
+  const planned = plannedWrapEstimateLines(quote);
+  if (planned.length === 0) {
     return result({ error: 'The wrap quote has no material or labor amounts yet — price it first.' }, { status: 400 });
   }
+  const materials = parseFloat(quote.materials_total) || 0;
+  const labor = parseFloat(quote.labor_total) || 0;
 
   // Resolve the two standing NS items. Best-effort: if NetSuite is
   // unreachable the lines land unmatched and the builder's existing
@@ -76,10 +78,6 @@ export async function addWrapQuoteToEstimate(
     vinylId = items[WRAP_VINYL_ITEM.toUpperCase()]?.id || null;
     laborId = items[WRAP_LABOR_ITEM.toUpperCase()]?.id || null;
   } catch { /* NS down — lines still land, unmatched */ }
-
-  const kitQty = Math.max(1, parseInt(quote.package_qty, 10) || 1);
-  const vinylSplit = kitLineSplit(materials, kitQty);
-  const vehicle = quote.vehicle_description || null;
 
   // Replace any lines this quote already put on the estimate.
   await supabase.from('estimate_line_items').delete().eq('estimate_id', estimateId).eq('wrap_quote_id', wrapQuoteId);
@@ -93,37 +91,27 @@ export async function addWrapQuoteToEstimate(
     .maybeSingle();
   let sort = (maxRow?.sort_order ?? -1) + 1;
 
-  const lineRows = [
-    ...(materials > 0 ? [{
+  // Materials on the vinyl item (kit-split), labor on the install item, and
+  // the rep's own lines from the builder as plain custom lines. Labor is
+  // priced, not houred: wrap labor is billed at graphics rates inside the
+  // quote total — hours here would double-count at the estimate's shop
+  // labor rate.
+  const lineRows = planned.map(p => {
+    const nsId = p.item_number === WRAP_VINYL_ITEM ? vinylId : p.item_number === WRAP_LABOR_ITEM ? laborId : null;
+    return {
       estimate_id: estimateId,
       sort_order: sort++,
       wrap_quote_id: wrapQuoteId,
-      netsuite_item_id: vinylId,
-      item_number: WRAP_VINYL_ITEM,
-      description: `Vehicle graphics${vehicle ? ` — ${vehicle}` : ''}${kitQty > 1 ? ` (${kitQty} kits)` : ''} — ${quote.quote_number}`,
-      quantity: vinylSplit.quantity,
-      unit_price: vinylSplit.rate,
-      line_total: Math.round(vinylSplit.quantity * vinylSplit.rate * 100) / 100,
+      netsuite_item_id: nsId,
+      item_number: p.item_number,
+      description: p.description,
+      quantity: p.quantity,
+      unit_price: p.unit_price,
+      line_total: Math.round(p.quantity * p.unit_price * 100) / 100,
       labor_hours: 0,
-      is_custom: !vinylId,
-    }] : []),
-    ...(labor > 0 ? [{
-      estimate_id: estimateId,
-      sort_order: sort++,
-      wrap_quote_id: wrapQuoteId,
-      netsuite_item_id: laborId,
-      item_number: WRAP_LABOR_ITEM,
-      description: `Graphics install${vehicle ? ` — ${vehicle}` : ''} — ${quote.quote_number}`,
-      quantity: 1,
-      unit_price: Math.round(labor * 100) / 100,
-      line_total: Math.round(labor * 100) / 100,
-      // Priced, not houred: wrap labor is billed at graphics rates inside
-      // the quote total — hours here would double-count at the estimate's
-      // shop labor rate.
-      labor_hours: 0,
-      is_custom: !laborId,
-    }] : []),
-  ];
+      is_custom: p.is_custom || !nsId,
+    };
+  });
   // Stamp each new line's sales-tax answer (migration 336) so the totals
   // below and the NetSuite push agree with what the builder would quote.
   const stampedRows = await resolveLineTaxability(supabase, lineRows);
@@ -203,10 +191,11 @@ export async function openEstimateForWrapQuote(
   userId: string | null,
   attach?: WrapQuoteAttach,
   targetEstimateId?: string | null,
+  keepEstimateLines = false,
 ): Promise<{ status: number; body: any }> {
   const { data: quote } = await supabase
     .from('wrap_quotes')
-    .select('id, quote_number, vehicle_description, customer_id, customer, project_type, project_notes, estimate_id, estimate_attach, template_id, materials_total, labor_total')
+    .select('id, quote_number, vehicle_description, customer_id, customer, project_type, project_notes, estimate_id, estimate_attach, template_id, materials_total, labor_total, package_qty, pricing_overrides')
     .eq('id', wrapQuoteId)
     .maybeSingle();
   if (!quote) return result({ error: 'Wrap quote not found' }, { status: 404 });
@@ -221,13 +210,17 @@ export async function openEstimateForWrapQuote(
       .eq('id', existingId)
       .maybeSingle();
     if (est) {
-      const priced = (parseFloat(quote.materials_total) || 0) > 0 || (parseFloat(quote.labor_total) || 0) > 0;
+      const priced = plannedWrapEstimateLines(quote).length > 0;
       // An unpriced quote still opens its estimate — the lines land once
       // it has amounts. A locked estimate (accepted / converted) is
       // reported, not silently skipped.
-      if (priced) {
+      if (priced && !keepEstimateLines) {
         const r = await addWrapQuoteToEstimate(supabase, est.id, wrapQuoteId, attach);
         if (r.status === 409) return r;
+      } else if (priced && attach) {
+        // "Keep the estimate's numbers": the lines stay as they were edited
+        // on the estimate; only the picture/files choices follow the save.
+        await supabase.from('wrap_quotes').update({ estimate_attach: attach, updated_at: new Date().toISOString() }).eq('id', wrapQuoteId);
       } else if (!quote.estimate_id) {
         // Unpriced but arriving from an estimate: link now, lines later.
         await supabase.from('wrap_quotes').update({
@@ -314,10 +307,33 @@ export async function openEstimateForWrapQuote(
   }).eq('id', wrapQuoteId);
   await linkQuoteJobsToEstimate(supabase, wrapQuoteId, estimate.id);
 
-  const priced = (parseFloat(quote.materials_total) || 0) > 0 || (parseFloat(quote.labor_total) || 0) > 0;
+  const priced = plannedWrapEstimateLines(quote).length > 0;
   if (priced) {
     const r = await addWrapQuoteToEstimate(supabase, estimate.id, wrapQuoteId, attach);
     if (r.status >= 400) return r;
   }
   return result({ success: true, estimateId: estimate.id, estimateNumber: estimate.estimate_number, netsuiteEstimateNumber: null, created: true });
+}
+
+/**
+ * Has anyone changed this worksheet's lines on the estimate since the
+ * builder last wrote them? Called BEFORE the builder saves, while the quote
+ * row still holds the numbers that last save put on the estimate. A locked
+ * estimate answers no edits — the save reports the lock itself.
+ */
+export async function wrapQuoteEstimateEdits(
+  supabase: SupabaseClient,
+  wrapQuoteId: string,
+  estimateId: string,
+): Promise<WrapLineEdit[]> {
+  const [{ data: quote }, { data: estimate }, { data: lines }] = await Promise.all([
+    supabase.from('wrap_quotes').select('quote_number, vehicle_description, materials_total, labor_total, package_qty, pricing_overrides, estimate_id').eq('id', wrapQuoteId).maybeSingle(),
+    supabase.from('estimates').select('id, customer_approved, status, netsuite_so_id').eq('id', estimateId).maybeSingle(),
+    supabase.from('estimate_line_items').select('item_number, description, quantity, unit_price, sort_order').eq('estimate_id', estimateId).eq('wrap_quote_id', wrapQuoteId),
+  ]);
+  if (!quote || !estimate) return [];
+  if (estimate.netsuite_so_id || estimate.customer_approved || estimate.status === 'accepted') return [];
+  // Never on this estimate yet (first save from ?forEstimate): nothing to lose.
+  if (quote.estimate_id !== estimateId && (lines || []).length === 0) return [];
+  return diffWrapEstimateLines(plannedWrapEstimateLines(quote), lines || []);
 }

@@ -21,6 +21,9 @@ const Schema = z.object({
     attachments: z.boolean().optional(),
     films: z.boolean().optional(),
   }).optional(),
+  /** The rep chose "Keep the estimate's numbers" after the builder found
+   *  graphics lines changed on the estimate: link and go, don't rewrite. */
+  keepEstimateLines: z.boolean().optional(),
 });
 
 /**
@@ -40,7 +43,7 @@ export async function POST(req: NextRequest) {
   if (parsed.error) return parsed.error;
 
   try {
-    const { status, body } = await openEstimateForWrapQuote(supabase, parsed.data.quoteId, auth.user?.id || null, parsed.data.attach, parsed.data.estimateId || null);
+    const { status, body } = await openEstimateForWrapQuote(supabase, parsed.data.quoteId, auth.user?.id || null, parsed.data.attach, parsed.data.estimateId || null, !!parsed.data.keepEstimateLines);
     return NextResponse.json(body, { status });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });

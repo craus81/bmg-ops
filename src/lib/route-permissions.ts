@@ -608,6 +608,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/webhooks/retell/route.ts': webhook('Retell signs every delivery (HMAC-SHA256 of body + timestamp with the API key); an unverifiable payload is rejected before any write', 'verifyRetellSignature('),
   'src/app/api/wrap-quote/[id]/pdf/route.ts': staff(),
   'src/app/api/wrap-quote/create-customer/route.ts': staff(),
+  'src/app/api/wrap-quote/estimate-edits/route.ts': staff(),
   'src/app/api/wrap-quote/netsuite/route.ts': staff(),
   'src/app/api/wrap-quote/open-estimate/route.ts': staff(),
   'src/app/api/wrap-quote/read-proof/route.ts': staff(),

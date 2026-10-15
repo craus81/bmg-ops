@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseFinalPrice, parseRateMap, readPricingOverrides, scaleQuoteSnapshot } from './wrap-quote-price-override';
+import { customLinesTotal, parseFinalPrice, parseRateMap, readPricingOverrides, scaleQuoteSnapshot } from './wrap-quote-price-override';
 import { wrapQuoteDocModel } from './wrap-quote-document';
 
 const snap = {
@@ -79,9 +79,33 @@ describe('override parsing', () => {
 
   it('round-trips saved overrides and tolerates older rows', () => {
     expect(readPricingOverrides(null)).toBeNull();
+    const empty = { labor_sqft: {}, labor_line_totals: {}, roll_material_totals: {}, sections: {}, custom_lines: [] };
     expect(readPricingOverrides({ final_price: 1200, vinyl_rates: { f1: 9 }, labor_rates: { f1: '4' }, discount_pct: '5' })).toEqual({
-      final_price: 1200, vinyl_rates: { f1: 9 }, labor_rates: { f1: 4 }, discount_pct: '5',
+      final_price: 1200, vinyl_rates: { f1: 9 }, labor_rates: { f1: 4 }, discount_pct: '5', ...empty,
     });
-    expect(readPricingOverrides({ final_price: null })).toEqual({ final_price: null, vinyl_rates: {}, labor_rates: {}, discount_pct: '' });
+    expect(readPricingOverrides({ final_price: null })).toEqual({ final_price: null, vinyl_rates: {}, labor_rates: {}, discount_pct: '', ...empty });
+  });
+
+  it('reads line edits, section hours and custom lines', () => {
+    const po = readPricingOverrides({
+      labor_sqft: { f1: '120' },
+      labor_line_totals: { f1: 500 },
+      roll_material_totals: { f2: 300 },
+      sections: { design: { hours: '3', hourly: '' }, preparation: { hours: 'x' }, bogus: { hours: 2 } },
+      custom_lines: [
+        { id: 'a', description: ' Old graphics removal ', qty: 1, unit_price: '250' },
+        { id: 'b', description: '', qty: 2, unit_price: 0 },
+        { description: '', qty: 0, unit_price: 40 },
+      ],
+    });
+    expect(po!.labor_sqft).toEqual({ f1: 120 });
+    expect(po!.labor_line_totals).toEqual({ f1: 500 });
+    expect(po!.roll_material_totals).toEqual({ f2: 300 });
+    expect(po!.sections).toEqual({ design: { hours: 3 } });
+    expect(po!.custom_lines).toEqual([
+      { id: 'a', description: 'Old graphics removal', qty: 1, unit_price: 250 },
+      { id: 'line-2', description: 'Additional charge', qty: 1, unit_price: 40 },
+    ]);
+    expect(customLinesTotal(po!.custom_lines)).toBe(290);
   });
 });

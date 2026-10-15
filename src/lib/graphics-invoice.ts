@@ -11,6 +11,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { cleanCustomLines } from '@/lib/wrap-quote-price-override';
 import { findItems, getItemBasePrices } from '@/lib/netsuite';
 import { fetchPartRowsCI } from '@/lib/part-number';
 
@@ -213,7 +214,7 @@ export async function deriveWrapQuoteLines(
 
   const { data: quote } = await supabase
     .from('wrap_quotes')
-    .select('id, quote_number, vehicle_description, materials_total, labor_total, total, customer, package_qty')
+    .select('id, quote_number, vehicle_description, materials_total, labor_total, total, customer, package_qty, pricing_overrides')
     .eq('id', job.wrap_quote_id)
     .maybeSingle();
   if (!quote) return null;
@@ -253,6 +254,21 @@ export async function deriveWrapQuoteLines(
       rate: labor,
       found: !!laborItem,
       priced: true,
+      qtySource: 'quote',
+    });
+  }
+
+  // The rep's own lines from the Graphics Builder (removal, rush fee…) bill
+  // as they were typed; the reviewer picks their NetSuite item.
+  for (const l of cleanCustomLines((quote as any).pricing_overrides?.custom_lines)) {
+    lines.push({
+      partNumber: l.description,
+      itemId: null,
+      displayName: l.description,
+      quantity: l.qty,
+      rate: l.unit_price,
+      found: false,
+      priced: l.unit_price > 0,
       qtySource: 'quote',
     });
   }
