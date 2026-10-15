@@ -325,7 +325,7 @@ export function summarizeTotals(
 }
 
 /** NetSuite's transaction type codes, named as its screens name them. Any other code shows as it is. */
-const TRAN_TYPE_NAMES: Record<string, string> = {
+export const TRAN_TYPE_NAMES: Record<string, string> = {
   Build: 'Assembly Build', CardChrg: 'Credit Card', CardRfnd: 'Credit Card Refund', CashRfnd: 'Cash Refund',
   CashSale: 'Cash Sale', Check: 'Check', CustCred: 'Credit Memo', CustDep: 'Customer Deposit', CustInvc: 'Invoice',
   CustPymt: 'Payment', CustRfnd: 'Customer Refund', DepAppl: 'Deposit Application', Deposit: 'Deposit',

@@ -13,10 +13,12 @@ need, part 5, the invoice rule, checked against NetSuite, part 6, every
 BMG invoice since 2025 posted to FleetSuite's own journal with it, part 7,
 credit memos, checked and posted the same way, the other way round, and
 part 8, customer payments, checked against NetSuite with the payment rule
-and posted in the same run as invoices.
+and posted in the same run as invoices, and part 9, a page that puts
+FleetSuite's books next to NetSuite's and shows what still differs and why.
 The screens are the accounts page at `/admin/books`, the trial
-balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`
-and the invoices at `/admin/books/invoices`, which only super admins can
+balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
+the invoices at `/admin/books/invoices` and the differences at
+`/admin/books/differences`, which only super admins can
 open. Only they see the Books entry on the More page (Admin), which opens
 the accounts page; the others are linked from there.
 
@@ -43,6 +45,8 @@ the accounts page; the others are linked from there.
 | Payment rule and its check, on the invoices page | `src/lib/books/payment-rule.ts`, `src/lib/books/payment-check.ts`, `migrations/374-books-payment-check.sql` |
 | Payments posted to the journal, with invoices | `migrations/376-books-payment-posting.sql`, `src/lib/books/invoice-posting.ts`; the mirror's delete sweep in `src/lib/ledger/netsuite-mirror.ts` |
 | Payment tests | `src/lib/books/payment-rule.test.ts`, `src/lib/books/payment-check.test.ts`, `src/lib/books/payment-check-sql.test.ts`, `src/lib/books/payment-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
+| Differences vs NetSuite | `migrations/377-books-differences.sql`, `src/lib/books/differences.ts`, `src/app/(main)/admin/books/differences/page.tsx`, `src/app/api/admin/books/differences/route.ts` |
+| Differences tests | `src/lib/books/differences.test.ts`, `src/lib/books/differences-sql.test.ts` |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
 QuickBooks and NetSuite history that importers replace wholesale. They stay
@@ -541,6 +545,66 @@ comes back is read as a narrowed SuiteQL role, as for invoices, and marks
 nothing (`payments.problem` in the mirror's last result says so). Whether
 NetSuite's status for a voided customer payment reads Voided, as an
 invoice's does, hasn't been seen yet.
+
+## Differences
+
+`/admin/books/differences` puts one company's own journal next to the copy
+of NetSuite's general ledger, account by account and month by month, and
+shows what still differs and why (owner decision 2026-10-15). Months are
+compared by their activity, not their month-end balances, so a difference
+shows in the month it comes from rather than in every month after it; the
+trial balance check covers the balances. NetSuite's side counts in the
+month NetSuite posted to (its accounting period), FleetSuite's by each
+entry's date. A reversal counts with the document it reverses, and the
+posting job dates it as that document's entry, so a document whose entry
+was replaced comes to its new entry within the month.
+
+Each month's NetSuite activity is split by the kind of document behind it:
+
+- the kinds FleetSuite posts for the company (invoices, credit memos and
+  payments for BMG) should come to the same as FleetSuite's entries for
+  the same documents, matched by NetSuite's internal id;
+- everything else is "not posted yet": the kinds FleetSuite has no rule
+  for, and the cost of goods NetSuite books on an invoice or credit memo
+  that wasn't fulfilled first, which FleetSuite will post with
+  fulfillments. Migration 377's `gl_netsuite_cost_lines` recognizes those
+  lines by their accounts, as the invoice check does: a cost of goods sold
+  account or an item's inventory asset account, unless it is the income
+  account of the line's own item. NetSuite's own cost of goods flag isn't
+  copied, so a line it flags that went to another kind of account shows as
+  a difference here, though the invoice check leaves it out;
+- a FleetSuite entry of a kind NetSuite has no counterpart for (a typed
+  entry, an opening balance) is a difference of its own.
+
+For every account the page shows FleetSuite's activity, NetSuite's, the
+part of NetSuite's from kinds not posted yet, and what differs on the kinds
+FleetSuite posts (FleetSuite = NetSuite − not posted yet + differs). A
+month matches when nothing differs on any account; a month with nothing of
+the kinds FleetSuite posts on either side shows neither mark. The share of
+NetSuite's activity FleetSuite posts is what documents of those kinds moved
+over what all documents moved, each document's activity counted as its
+debits after its lines on the same account are netted.
+
+For the month picked, `gl_books_difference_documents` lists the documents
+of the kinds FleetSuite posts whose entries don't come to NetSuite's lines,
+account by account, the largest difference first (the page shows 300), and
+the page says why for each:
+
+| Why | When |
+| --- | --- |
+| Dated before the books start | NetSuite dated it in 2024 and posted it to 2025; FleetSuite only posts documents dated from 2025 |
+| Not posted | FleetSuite has never posted it; Invoices vs NetSuite shows why |
+| Voided | NetSuite voided it and FleetSuite reversed its entry, but the copy of NetSuite's ledger still has lines of it |
+| Reversed | FleetSuite reversed its entry and has none standing |
+| Gone | FleetSuite's entry stands but this company has no line of it in the copy: deleted or voided in NetSuite (the next posting run reverses the entry), or posted to the other company |
+| Another month | FleetSuite's entry is dated in one month, NetSuite posted it to another |
+| Cost of goods | Same month; only NetSuite's cost of goods lines differ |
+| Posted differently | Same month, different accounts or amounts |
+
+Each document links to Invoices vs NetSuite (`?company=&kind=&month=&doc=`),
+which opens it with its line by line check. When the copy of NetSuite's
+ledger doesn't yet hold everything NetSuite's own totals say a month moved,
+the page says so, since NetSuite's side is then short.
 
 ## Posting
 
