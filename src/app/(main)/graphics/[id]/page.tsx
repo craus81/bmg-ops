@@ -25,6 +25,8 @@ import ProofViewer from '@/components/ProofViewer';
 import { apiFetch } from '@/lib/api-client';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
+import { ProofRouteBar, RepReviewPanel } from '@/components/GraphicsProofRouting';
+import { isRepRoute, canActAsRep } from '@/lib/proof-rep-review-state';
 import { theme } from '@/lib/theme';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import RecordChanges from '@/components/RecordChanges';
@@ -973,11 +975,19 @@ export default function GraphicsJobRecordPage() {
   // Standard compose screen (docs/customer-email-standard.md): editable
   // recipients, bcc-me, personal message, attachments, live preview. The
   // proof-file radio picker rides along in the modal's intro slot.
-  const openApprovalPicker = () => {
-    // Pre-fill with the most recently uploaded file (common case: artist
-    // uploads the proof, then sends).
+  const openApprovalPicker = (proofFileId?: string | null) => {
+    // Pre-fill with the proof the rep reviewed, else the most recently
+    // uploaded file (common case: artist uploads the proof, then sends).
     setApprovalPickerOpen(true);
-    setApprovalPickerFileId(jobFiles[0]?.id || null);
+    setApprovalPickerFileId(proofFileId || jobFiles[0]?.id || null);
+  };
+
+  // "Rep reviews first" proofs (migration 378): re-read the job after a rep step.
+  const reloadJobRow = async () => {
+    if (!job) return;
+    const { data: fresh } = await supabase.from('graphics_jobs').select('*').eq('id', job.id).maybeSingle();
+    if (fresh) setJob(fresh as GraphicsJob);
+    loadHistory();
   };
 
   const closeApprovalPicker = () => {
@@ -1081,6 +1091,9 @@ export default function GraphicsJobRecordPage() {
   const category = job.job_category || 'production';
   const overdue = !!job.due_date && (parseLocalDate(job.due_date) || new Date()) < new Date();
   const ja = job as any; // approval columns aren't in the GraphicsJob type yet
+  // "Rep reviews first": the customer send is the rep's (or an admin's), and
+  // while a proof sits with the rep it goes out through the rep panel.
+  const showCustomerSend = !isRepRoute(ja) || (canActAsRep(ja, user?.id, isAdmin) && ja.rep_review_status !== 'pending');
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -1765,9 +1778,26 @@ export default function GraphicsJobRecordPage() {
       {/* ── Customer approval ── */}
       <div style={{ ...card, background: ja.customer_approved ? 'rgba(34,197,94,0.1)' : 'var(--card)', border: '1px solid ' + (ja.customer_approved ? 'rgba(34,197,94,0.3)' : 'var(--border)') }}>
         <div style={{ ...labelStyle, marginBottom: '6px' }}>Customer Approval</div>
+        <ProofRouteBar job={ja} people={profiles} meId={user?.id || null} onChanged={reloadJobRow} />
+        <RepReviewPanel
+          job={ja}
+          files={jobFiles}
+          people={profiles}
+          meId={user?.id || null}
+          isAdmin={isAdmin}
+          fileUrl={getFileUrl}
+          onOpenFile={openFileInApp}
+          onSendToCustomer={openApprovalPicker}
+          onChanged={reloadJobRow}
+        />
         {ja.customer_approved ? (
           <div style={{ fontSize: '11px', color: '#22c55e', fontWeight: 700 }}>
-            ✓ Approved {ja.customer_approved_at ? ` · ${new Date(ja.customer_approved_at).toLocaleString()}` : ''}
+            ✓ {ja.approval_verbal_note ? 'Approved verbally' : 'Approved'}
+            {ja.approval_verbal_note && getProfileName(ja.customer_approved_by) ? ` · recorded by ${getProfileName(ja.customer_approved_by)}` : ''}
+            {ja.customer_approved_at ? ` · ${new Date(ja.customer_approved_at).toLocaleString()}` : ''}
+            {ja.approval_verbal_note && (
+              <div style={{ fontWeight: 400, color: 'var(--text-body)', fontStyle: 'italic', marginTop: '2px', whiteSpace: 'pre-wrap' }}>“{ja.approval_verbal_note}”</div>
+            )}
             {ja.signed_document_storage_path && (
               <button
                 onClick={() => router.push(deepLinks.signedDocument('proof', job.id))}
@@ -1782,9 +1812,9 @@ export default function GraphicsJobRecordPage() {
             {ja.customer_rejection_reason && (
               <div style={{ fontSize: '11px', color: 'var(--text-body)', fontStyle: 'italic' }}>{ja.customer_rejection_reason}</div>
             )}
-            {!approvalPickerOpen && (
+            {!approvalPickerOpen && showCustomerSend && (
               <button
-                onClick={openApprovalPicker}
+                onClick={() => openApprovalPicker()}
                 style={{
                   marginTop: '6px', padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
                   background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
@@ -1810,9 +1840,9 @@ export default function GraphicsJobRecordPage() {
                 </div>
               );
             })()}
-            {!approvalPickerOpen && (
+            {!approvalPickerOpen && showCustomerSend && (
               <button
-                onClick={openApprovalPicker}
+                onClick={() => openApprovalPicker()}
                 style={{
                   padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
                   background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',

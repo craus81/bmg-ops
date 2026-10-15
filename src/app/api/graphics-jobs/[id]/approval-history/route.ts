@@ -37,7 +37,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   const { data: job, error } = await supabase
     .from('graphics_jobs')
-    .select('id, customer_approved, customer_rejected_at, customer_approved_via, customer_approved_delivery_target, customer_approved_time_on_page_seconds, signed_document_storage_path')
+    .select('id, customer_approved, customer_rejected_at, customer_approved_via, customer_approved_delivery_target, customer_approved_time_on_page_seconds, signed_document_storage_path, customer_approved_by, approval_verbal_note')
     .eq('id', jobId)
     .maybeSingle();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -94,6 +94,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   const nameIds = new Set<string>();
   for (const r of rounds) if (r.sent_by) nameIds.add(r.sent_by);
+  if (job.approval_verbal_note && job.customer_approved_by) nameIds.add(job.customer_approved_by);
   for (const e of [...emails, ...texts, ...(threadMsgs || [])]) if (e.sent_by) nameIds.add(e.sent_by);
   const fileIds = [...new Set(rounds.map(r => r.proof_file_id).filter(Boolean))] as string[];
 
@@ -166,8 +167,12 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     fileNames,
     decided
       ? {
-          via: job.customer_approved_via || null,
-          target: job.customer_approved_delivery_target || null,
+          // A rep's recorded verbal OK (migration 378) names who recorded it
+          // and how the customer approved.
+          via: job.approval_verbal_note ? 'verbal' : job.customer_approved_via || null,
+          target: job.approval_verbal_note
+            ? `${nameOf(job.customer_approved_by) || 'staff'}: "${job.approval_verbal_note}"`
+            : job.customer_approved_delivery_target || null,
           timeOnPageSeconds: job.customer_approved_time_on_page_seconds ?? null,
           signedDocument: !!job.signed_document_storage_path,
         }

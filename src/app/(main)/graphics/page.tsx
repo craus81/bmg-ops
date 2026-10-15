@@ -17,6 +17,8 @@
  * review modal flow lives on the board for that deep link only.
  */
 
+import { ProofRoutePicker } from '@/components/GraphicsProofRouting';
+import type { ProofRoute } from '@/lib/proof-rep-review-state';
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
@@ -268,6 +270,10 @@ export default function GraphicsPage() {
     po_number: '',
   });
   const [createAssignees, setCreateAssignees] = useState<string[]>([]);
+  // "Proof goes to" (migration 378): customer, or the rep first. A null rep
+  // means whoever enters the job.
+  const [createProofRoute, setCreateProofRoute] = useState<ProofRoute>('customer');
+  const [createProofRep, setCreateProofRep] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
   // Customer autocomplete
@@ -316,7 +322,7 @@ export default function GraphicsPage() {
     const loadProfiles = async () => {
       const { data } = await supabase
         .from('profiles')
-        .select('id, full_name, email')
+        .select('id, full_name, email, role, roles')
         .eq('status', 'approved');
       setProfiles((data as Profile[]) || []);
     };
@@ -877,6 +883,8 @@ export default function GraphicsPage() {
         po_number: createForm.po_number || null,
         status: initialStatus,
         created_by: user?.id,
+        proof_route: cat === 'internal' ? 'customer' : createProofRoute,
+        proof_rep_id: cat !== 'internal' && createProofRoute === 'rep' && createProofRep && createProofRep !== user?.id ? createProofRep : null,
         // Link back to the source PO / line item when the wizard was opened
         // from one, so the PO screen's job panels and dedupe logic see it.
         ...(prefillPoLink ? {
@@ -1082,6 +1090,8 @@ export default function GraphicsPage() {
         priority: 'normal', due_date: '', scheduled_install_date: '', install_location: '', ship_to: '', ship_speed: DEFAULT_GRAPHICS_SHIP_SPEED, po_number: '',
       });
       setCreateAssignees([]);
+      setCreateProofRoute('customer');
+      setCreateProofRep(null);
       setCreateFiles([]);
       setPrefillPoLink(null);
       setPrefillEstimateLink(null);
@@ -2329,6 +2339,19 @@ export default function GraphicsPage() {
                         </select>
                       </>
                     )}
+                  </div>
+                )}
+
+                {/* Proof goes to: customer, or the rep first */}
+                {createForm.job_category !== 'internal' && (
+                  <div style={{ marginBottom: '12px' }}>
+                    <ProofRoutePicker
+                      route={createProofRoute}
+                      repId={createProofRep}
+                      onChange={(r, id) => { setCreateProofRoute(r); setCreateProofRep(id); }}
+                      people={profiles}
+                      meId={user?.id || null}
+                    />
                   </div>
                 )}
 

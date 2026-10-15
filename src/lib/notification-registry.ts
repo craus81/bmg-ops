@@ -123,6 +123,8 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'graphics_reminder_escalation', label: 'A graphics job is still stuck', description: 'A job stayed past its reminder threshold, or has nobody assigned at all. Goes to whoever entered the job and to the owners.', area: 'graphics', defaultChannels: ['in_app', 'push', 'email'], audience: 'The person who created the job, plus super admins.' },
   { type: 'proof_sent', label: 'Proof sent to the customer', description: 'An artwork proof went out for approval.', area: 'graphics', defaultChannels: ['in_app'] },
   { type: 'proof_approved', label: 'Proof approved', description: 'The customer signed off on the artwork.', area: 'graphics', defaultChannels: ['in_app', 'push'] },
+  { type: 'proof_rep_review_requested', label: 'Proof sent to you for review', description: 'The art team sent you a proof to check before it goes to the customer. Nothing has gone out yet.', area: 'graphics', defaultChannels: ['in_app', 'push', 'email'], emailNow: true },
+  { type: 'proof_rep_review_update', label: 'Rep sent your proof back', description: 'The rep reviewing a proof you sent wants changes before it goes to the customer.', area: 'graphics', defaultChannels: ['in_app', 'push'] },
   { type: 'proof_stale', label: 'Proof waiting too long', description: 'A proof has sat unanswered long enough to block production. Nothing goes to the customer automatically — this is the prompt to resend it.', area: 'graphics', defaultChannels: ['in_app', 'push', 'email'] },
 
   // ── Shop floor & vehicles ─────────────────────────────────────────────

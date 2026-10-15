@@ -171,7 +171,7 @@ export default function GraphicsApprovalHistory<F extends ProofFile>({ jobId, re
           )}
           {d && r.outcome !== 'pending' && r.outcome !== 'superseded' && (d.via || d.timeOnPageSeconds != null) && (
             <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px', overflowWrap: 'anywhere' }}>
-              {d.via ? `Through ${VIA[d.via] || d.via}${d.target ? ` sent to ${d.target}` : ''}` : ''}
+              {d.via === 'verbal' ? `Approved verbally, recorded by ${d.target || 'staff'}` : d.via ? `Through ${VIA[d.via] || d.via}${d.target ? ` sent to ${d.target}` : ''}` : ''}
               {d.timeOnPageSeconds != null ? `${d.via ? ' · ' : ''}${Math.max(1, Math.round(d.timeOnPageSeconds / 60))} min on the page` : ''}
             </div>
           )}
