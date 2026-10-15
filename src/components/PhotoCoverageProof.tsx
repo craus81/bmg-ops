@@ -125,9 +125,12 @@ function labelTextWidth(text: string, fontSize: number): number {
 // solid label pill, since plain colored text over a photo is unreadable.
 // fontSize is in photo pixels — the editor passes one that works out to a
 // fixed size on screen, the preview the saved picture's size.
-function CoverageBoxShape({ box, photoW, fontSize, stroke, number }: { box: CoverageBox; photoW: number; fontSize: number; stroke?: string; number?: number }) {
+// A numbered box shows just its number unless `full` (the selected box), so a
+// proof with a dozen pieces doesn't bury the drawing under stacked tags — the
+// names and sizes are in the box list beside it.
+function CoverageBoxShape({ box, photoW, fontSize, stroke, number, full = true }: { box: CoverageBox; photoW: number; fontSize: number; stroke?: string; number?: number; full?: boolean }) {
   const caption = boxCaption(box);
-  const label = number != null ? (caption ? `${number} · ${caption}` : String(number)) : caption;
+  const label = number != null ? (caption && full ? `${number} · ${caption}` : String(number)) : caption;
   const pill = label ? labelPill(box.rect, fontSize, labelTextWidth(label, fontSize), photoW) : null;
   return (
     <>
@@ -1028,11 +1031,12 @@ export default function PhotoCoverageProof({
           cursor: spaceHeld ? 'grab' : tool === 'select' ? (zoom > 1 ? 'grab' : 'default') : 'crosshair',
         }}
       >
-        {boxes.map(b => {
+        {/* The selected box is drawn last so its full tag sits on top. */}
+        {[...boxes.filter(b => b.id !== selectedId), ...boxes.filter(b => b.id === selectedId)].map(b => {
           const sel = b.id === selectedId;
           return (
             <g key={b.id} onPointerDown={e => beginEdit(e, b, 'move')} style={{ cursor: tool === 'select' ? 'move' : 'crosshair' }}>
-              <CoverageBoxShape box={parts ? withPartSize(b, parts) : b} number={parts?.partOf.get(b.id)?.number} photoW={dim.w} fontSize={TAG_FONT_PX * k} stroke={sel ? '#f59e0b' : undefined} />
+              <CoverageBoxShape box={parts ? withPartSize(b, parts) : b} number={parts?.partOf.get(b.id)?.number} photoW={dim.w} fontSize={TAG_FONT_PX * k} stroke={sel ? '#f59e0b' : undefined} full={sel} />
               {sel && tool === 'select' && (
                 <g onPointerDown={e => beginEdit(e, b, 'resize')} style={{ cursor: 'nwse-resize' }}>
                   <rect
