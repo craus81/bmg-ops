@@ -7,11 +7,16 @@
  * linked to this customer (migration 379), with a search box across them
  * and a link to the full Client Files page.
  *
+ * A customer can own several folders: Masterack's own, plus ATCO and the
+ * other end customers BMG prints for through Masterack (Craig, 2026-10-15).
+ * With more than one linked, a chip per folder narrows the list to one end
+ * customer, and "See all" follows the chip.
+ *
  * With no folder linked yet it says so, shows any folder the matcher thinks
  * might be this customer, and lets an admin link one.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { apiFetch } from '@/lib/api-client';
 import { useAuth } from '@/components/AuthProvider';
 import { deepLinks } from '@/lib/deep-links';
@@ -34,6 +39,8 @@ export default function ClientFilesSection({ customerId, customerName }: Props) 
   const [total, setTotal] = useState(0);
   const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
+  /** One linked folder picked by its chip; null = all of them. */
+  const [onlyFolder, setOnlyFolder] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [folderQuery, setFolderQuery] = useState('');
@@ -49,7 +56,9 @@ export default function ClientFilesSection({ customerId, customerName }: Props) 
       const res = await apiFetch(`/api/client-files/folders?customer=${customerId}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Could not load client files');
-      setLinked(json.linked || []);
+      const list: ClientFolder[] = json.linked || [];
+      setLinked(list);
+      setOnlyFolder(prev => (prev && list.some(f => f.id === prev) ? prev : null));
       setSuggested(json.suggested || []);
     } catch (e: any) {
       setError(e.message);
@@ -64,7 +73,9 @@ export default function ClientFilesSection({ customerId, customerName }: Props) 
     let live = true;
     (async () => {
       try {
-        const p = new URLSearchParams({ customer: customerId, limit: String(SHOW) });
+        const p = new URLSearchParams({ limit: String(SHOW) });
+        if (onlyFolder) p.set('folder', onlyFolder);
+        else p.set('customer', customerId);
         if (q) p.set('q', q);
         const res = await apiFetch(`/api/client-files?${p.toString()}`);
         const json = await res.json();
@@ -77,7 +88,7 @@ export default function ClientFilesSection({ customerId, customerName }: Props) 
       }
     })();
     return () => { live = false; };
-  }, [linked, q, customerId]);
+  }, [linked, q, customerId, onlyFolder]);
 
   // Admin: find an unlinked folder to link here.
   useEffect(() => {
@@ -106,9 +117,18 @@ export default function ClientFilesSection({ customerId, customerName }: Props) 
     }
   };
 
-  const allHref = linked && linked.length === 1
-    ? deepLinks.clientFiles({ folder: linked[0].id })
-    : deepLinks.clientFiles({ q: customerName });
+  const many = !!linked && linked.length > 1;
+  const chipFolder = onlyFolder ?? (linked && linked.length === 1 ? linked[0].id : null);
+  const allHref = chipFolder
+    ? deepLinks.clientFiles({ folder: chipFolder, q: q || null })
+    : deepLinks.clientFiles({ customer: { id: customerId, name: customerName }, q: q || null });
+
+  const chip = (active: boolean): CSSProperties => ({
+    padding: '4px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+    border: `1px solid ${active ? 'var(--orange, #fb923c)' : 'var(--border-strong)'}`,
+    background: active ? 'rgba(251,146,60,0.15)' : 'transparent',
+    color: active ? 'var(--orange, #fb923c)' : 'var(--text-secondary)',
+  });
 
   return (
     <div>
@@ -116,11 +136,24 @@ export default function ClientFilesSection({ customerId, customerName }: Props) 
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Loading…</div>
       ) : linked.length > 0 ? (
         <>
-          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '6px' }}>
-            {linked.map(f => `📁 ${f.name}`).join(' · ')} · {linked.reduce((n, f) => n + f.fileCount, 0).toLocaleString()} files
-          </div>
+          {many ? (
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
+              <button onClick={() => setOnlyFolder(null)} style={chip(!onlyFolder)}>
+                All · {linked.reduce((n, f) => n + f.fileCount, 0).toLocaleString()}
+              </button>
+              {[...linked].sort((a, b) => a.name.localeCompare(b.name)).map(f => (
+                <button key={f.id} onClick={() => setOnlyFolder(f.id)} style={chip(onlyFolder === f.id)}>
+                  📁 {f.name} · {f.fileCount.toLocaleString()}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+              📁 {linked[0].name} · {linked[0].fileCount.toLocaleString()} files
+            </div>
+          )}
           <input
-            type="search" value={qInput} onChange={e => setQInput(e.target.value)} placeholder="🔍 Search this customer's files"
+            type="search" value={qInput} onChange={e => setQInput(e.target.value)} placeholder={onlyFolder ? `🔍 Search ${linked.find(f => f.id === onlyFolder)?.name ?? 'this folder'}` : "🔍 Search this customer's files"}
             style={{ width: '100%', padding: '7px 9px', borderRadius: '8px', fontSize: '16px', background: 'var(--input-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-primary)', marginBottom: '4px' }}
           />
           {files === null ? (
@@ -128,7 +161,12 @@ export default function ClientFilesSection({ customerId, customerName }: Props) 
           ) : files.length === 0 ? (
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>{q ? 'No files match.' : 'No files in this folder yet.'}</div>
           ) : (
-            files.map(f => <ClientFileRow key={f.id} file={f} compact hideClient={linked.length === 1} />)
+            files.map(f => (
+              <ClientFileRow
+                key={f.id} file={f} compact hideClient={!many || !!onlyFolder}
+                onClient={many ? folderId => setOnlyFolder(folderId) : undefined}
+              />
+            ))
           )}
           <a href={allHref} style={{ display: 'inline-block', marginTop: '8px', fontSize: '12px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none' }}>
             {total > SHOW ? `See all ${total.toLocaleString()} in Client Files →` : 'Open in Client Files →'}

@@ -10,7 +10,8 @@
  * wide screens) and, for admins, Check matches, where the Dropbox client
  * folders the matcher wasn't sure about get linked to the right customer.
  *
- * URL params (deepLinks.clientFiles): q, folder, matches=1.
+ * URL params (deepLinks.clientFiles): q, folder, customer (+ customerName,
+ * every folder linked to that customer), matches=1.
  */
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -82,6 +83,8 @@ function ClientFilesInner() {
   const [kind, setKind] = useState<ClientFileKind | ''>('');
   const [folder, setFolder] = useState<FolderOption | null>(params.get('folder') ? { id: params.get('folder')!, name: '' } : null);
   const [folders, setFolders] = useState<FolderOption[]>([]);
+  // Every folder linked to one customer, from the customer page's "See all".
+  const [customer, setCustomer] = useState<FolderOption | null>(params.get('customer') ? { id: params.get('customer')!, name: params.get('customerName') || 'This customer' } : null);
 
   const [files, setFiles] = useState<ClientFile[]>([]);
   const [total, setTotal] = useState<number | null>(null);
@@ -121,8 +124,9 @@ function ClientFilesInner() {
     if (q) p.set('q', q);
     if (kind) p.set('kind', kind);
     if (folder) p.set('folder', folder.id);
+    else if (customer) p.set('customer', customer.id);
     return p.toString();
-  }, [q, kind, folder]);
+  }, [q, kind, folder, customer]);
 
   useEffect(() => {
     if (authLoading || !isStaff || view !== 'files') return;
@@ -178,8 +182,8 @@ function ClientFilesInner() {
     }
   };
 
-  const anyFilter = !!(qInput || kind || folder);
-  const clearFilters = () => { setQInput(''); setQ(''); setKind(''); setFolder(null); };
+  const anyFilter = !!(qInput || kind || folder || customer);
+  const clearFilters = () => { setQInput(''); setQ(''); setKind(''); setFolder(null); setCustomer(null); };
 
   if (!authLoading && !isStaff) {
     return (
@@ -291,6 +295,9 @@ function ClientFilesInner() {
           {folder && !folders.some(f => f.id === folder.id) && <option value={folder.id}>{folder.name || 'This client'}</option>}
           {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
         </select>
+        {customer && !folder && (
+          <button onClick={() => setCustomer(null)} title="Show every client" style={chip(true)}>{customer.name}'s folders ✕</button>
+        )}
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           <button onClick={() => setKind('')} style={chip(kind === '')}>All</button>
           {CLIENT_FILE_KINDS.filter(k => k !== 'other').map(k => (
