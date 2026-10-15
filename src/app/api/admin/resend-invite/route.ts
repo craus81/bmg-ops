@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { deepLinks } from '@/lib/deep-links';
+import { deepLinks, inviteLinkFrom } from '@/lib/deep-links';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,9 +45,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Failed to generate invite link: ' + linkError.message }, { status: 500 });
       }
 
-      if (linkData?.properties?.action_link) {
-        inviteLink = linkData.properties.action_link;
-      }
+      inviteLink = inviteLinkFrom(linkData, appUrl, '/home') || inviteLink;
     } catch (linkErr: any) {
       return NextResponse.json({ error: 'Magic link generation error: ' + linkErr.message }, { status: 500 });
     }

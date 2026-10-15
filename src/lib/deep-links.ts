@@ -370,7 +370,23 @@ export const deepLinks = {
    *  (Authentication -> URL Configuration); an unlisted redirect_to is
    *  discarded silently and the Site URL is substituted. */
   authCallback: (next: string) => `/auth/callback?next=${encodeURIComponent(next)}`,
+  /** An invite/login email link that points straight at FleetSuite and signs
+   *  in wherever it opens (src/app/auth/confirm/page.tsx verifies the token
+   *  there). The phone app opens go.bmgfleet.com links itself, so a link
+   *  that Safari verified first (the Supabase action_link) left its session
+   *  in Safari, not the app. `tokenHash` is generateLink's hashed_token. */
+  authConfirm: (tokenHash: string, next: string) =>
+    `/auth/confirm?token_hash=${encodeURIComponent(tokenHash)}&type=magiclink&next=${encodeURIComponent(next)}`,
 };
+
+/** The link to put in an invite email, from supabase.auth.admin.generateLink's
+ *  result: the in-app confirm page when a hashed token came back, else the
+ *  Supabase action_link, else null. */
+export function inviteLinkFrom(linkData: any, appUrl: string, next: string): string | null {
+  const hashed = linkData?.properties?.hashed_token;
+  if (hashed) return `${appUrl}${deepLinks.authConfirm(hashed, next)}`;
+  return linkData?.properties?.action_link || null;
+}
 
 import { resolveFeatures } from '@/lib/features';
 

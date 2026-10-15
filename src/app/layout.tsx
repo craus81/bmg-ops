@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
+import DeepLinkHandler from '@/components/DeepLinkHandler';
 
 export const dynamic = "force-dynamic";
 
@@ -75,6 +76,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             keyboard users bypass the global header/nav. Targets the #main
             anchor that ClientProviders renders around the page content. */}
         <a href="#main" className="skip-to-main">Skip to main content</a>
+        {/* Here, not in ClientProviders: a phone that isn't signed in sits on
+            /login, outside every ClientProviders layout, and an invite link
+            opened there was ignored. */}
+        <DeepLinkHandler />
         {children}
       </body>
     </html>

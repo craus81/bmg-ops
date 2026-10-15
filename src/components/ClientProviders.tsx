@@ -10,7 +10,6 @@ import { DialogProvider } from '@/components/DialogProvider';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
 import AiChat from '@/components/AiChat';
-import DeepLinkHandler from '@/components/DeepLinkHandler';
 import NativeLinkHandler from '@/components/NativeLinkHandler';
 import NativePushHandler from '@/components/NativePushHandler';
 import NativeSiriKey from '@/components/NativeSiriKey';
@@ -120,7 +119,6 @@ export default function ClientProviders({ children }: { children: React.ReactNod
         <AppProvider>
           <PopoutProvider>
             <DialogProvider>
-              <DeepLinkHandler />
               <NativeLinkHandler />
               <NativePushHandler />
               <NativeSiriKey />
