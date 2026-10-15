@@ -11,14 +11,20 @@ import type { RuleLine } from './invoice-rule';
  * during 2027 FleetSuite copies NetSuite's choice exactly. The receivable is
  * the company's, as the invoice rule picks it.
  *
+ * A discount the customer took goes to its own account, and receivables are
+ * credited with it too: the invoices are paid by the money plus the
+ * discount. The copy of the payment doesn't keep the discount either, so it
+ * comes from NetSuite's posting the same way.
+ *
  * Pure: it works out a payment's entry, or says why it can't, and posts
  * nothing. Amounts are whole cents, debit positive.
  */
 
 export const PAYMENT_RULE = 'payment@1';
 
-/** The entry's two lines, by what they post. */
+/** The entry's lines, by what they post. */
 export const DEPOSIT_LINE = 'deposit';
+export const DISCOUNT_LINE = 'discount';
 export const RECEIVABLE_LINE = 'receivable';
 
 export type PaymentProblem =
@@ -34,26 +40,30 @@ export interface PaymentRuleResult {
 
 /**
  * One payment's entry. `cents` is its total, null when the copy's can't be
- * read; a payment of $0, one that only applies a credit to an invoice, posts
- * nothing.
+ * read, and `discount` what the customer took off, with the account it goes
+ * to. A payment of $0 with no discount, one that only applies a credit to an
+ * invoice, posts nothing.
  */
 export function paymentEntry(
-  payment: { cents: number | null; depositAccount: string | null },
+  payment: { cents: number | null; depositAccount: string | null; discount?: { account: string; cents: number } | null },
   receivable: string | null,
 ): PaymentRuleResult {
   if (payment.cents === null) return { lines: [], problems: [{ kind: 'unreadable' }] };
-  if (payment.cents === 0) return { lines: [], problems: [] };
+  const discount = payment.discount?.cents ? payment.discount : null;
+  if (payment.cents === 0 && !discount) return { lines: [], problems: [] };
 
   const problems: PaymentProblem[] = [];
-  if (!payment.depositAccount) problems.push({ kind: 'no_deposit_account' });
+  if (payment.cents !== 0 && !payment.depositAccount) problems.push({ kind: 'no_deposit_account' });
   if (!receivable) problems.push({ kind: 'no_receivable' });
   if (problems.length) return { lines: [], problems };
 
-  return {
-    lines: [
-      { account: payment.depositAccount!, cents: payment.cents, lineId: DEPOSIT_LINE, itemNumber: null, division: null },
-      { account: receivable!, cents: -payment.cents, lineId: RECEIVABLE_LINE, itemNumber: null, division: null },
-    ],
-    problems,
-  };
+  const lines: RuleLine[] = [];
+  if (payment.cents !== 0) {
+    lines.push({ account: payment.depositAccount!, cents: payment.cents, lineId: DEPOSIT_LINE, itemNumber: null, division: null });
+  }
+  if (discount) lines.push({ account: discount.account, cents: discount.cents, lineId: DISCOUNT_LINE, itemNumber: null, division: null });
+  lines.push({
+    account: receivable!, cents: -(payment.cents + (discount?.cents ?? 0)), lineId: RECEIVABLE_LINE, itemNumber: null, division: null,
+  });
+  return { lines, problems };
 }
