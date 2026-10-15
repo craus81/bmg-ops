@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  centsOf, checkInvoice, checkMonth, costLines, invoiceReasons, pickReceivable, problemReason, summarize, withOwnAmounts,
+  centsOf, checkInvoice, checkMonth, costLines, entryDate, invoiceReasons, pickReceivable, problemReason, summarize, withOwnAmounts,
   type ChartAccount, type CheckContext, type InvoiceMonthData, type LineFacts, type NetSuitePosting, type ReasonNames,
 } from './invoice-check';
 import type { InvoiceLine, RuleItem } from './invoice-rule';
@@ -496,6 +496,28 @@ describe('checkMonth', () => {
       .toEqual(["A line's amount couldn't be read from the copy of the invoice."]);
   });
 
+  it('marks the invoices NetSuite booked into this month from another, with the date FleetSuite posts them on', () => {
+    const m = checkMonth(
+      {
+        invoices: [
+          invoice('INV101', { date: '2024-11-20', posting_month: '2026-09-01' }),
+          invoice('INV102', { date: '2026-09-15', posting_month: '2026-09-01' }),
+          invoice('INV103', { date: '2026-05-12', posting_month: '2026-09-01' }),
+        ],
+        items: ITEMS,
+      },
+      { company: 'BMG', chart: CHART, taxAccounts: TAX },
+    );
+    expect(m.invoices.map((i) => [i.number, i.booked ?? null])).toEqual([
+      ['INV101', { month: '2026-09-01', date: '2026-09-01' }],
+      ['INV102', null],
+      ['INV103', { month: '2026-09-01', date: '2026-09-01' }],
+    ]);
+    expect(m.notes).toEqual([
+      '2 invoices dated in other months are here because NetSuite booked them into this month, so FleetSuite posts them in this month too: INV101, INV103.',
+    ]);
+  });
+
   it('checks a month of credit memos, in their own words', () => {
     // NetSuite's signed amounts come back the other way round on a credit memo, and it credits receivables.
     const memo = (number: string, fields: Partial<InvoiceMonthData['invoices'][number]> = {}) => invoice(number, {
@@ -532,6 +554,22 @@ describe('checkMonth', () => {
       "1 more credit memo dated this month isn't in the copy of NetSuite's GL for either company: CM104. NetSuite may not have posted it, "
       + "or the copy, which runs every two hours, hasn't reached it yet.",
     ]);
+  });
+});
+
+describe('entryDate', () => {
+  it('keeps a document\'s own date when NetSuite booked it into that date\'s month, or into none the copy has', () => {
+    expect(entryDate({ date: '2025-05-12', posting_month: '2025-05-01' })).toBe('2025-05-12');
+    expect(entryDate({ date: '2025-05-12', posting_month: null })).toBe('2025-05-12');
+    expect(entryDate({ date: '2025-05-12' })).toBe('2025-05-12');
+  });
+
+  it('moves it into the month NetSuite booked it to: the first day when that month is later, the last when it\'s earlier', () => {
+    expect(entryDate({ date: '2023-09-14', posting_month: '2025-01-01' })).toBe('2025-01-01');
+    expect(entryDate({ date: '2025-05-12', posting_month: '2025-12-01' })).toBe('2025-12-01');
+    expect(entryDate({ date: '2026-01-03', posting_month: '2025-12-01' })).toBe('2025-12-31');
+    expect(entryDate({ date: '2025-03-02', posting_month: '2025-02-01' })).toBe('2025-02-28');
+    expect(entryDate({ date: '2024-03-02', posting_month: '2024-02-01' })).toBe('2024-02-29');
   });
 });
 

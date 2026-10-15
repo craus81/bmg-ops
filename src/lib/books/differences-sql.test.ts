@@ -1,10 +1,10 @@
 // Migration 377 puts FleetSuite's journal next to the copy of NetSuite's
 // general ledger for the differences page. This runs migration 314 (with
 // stand-ins for the app tables it points at) and migrations 359–364, 367,
-// 370, 374, 376 and 377 in an in-memory Postgres (PGlite) as the app's server
-// login, copies a made-up month of NetSuite documents, posts FleetSuite's
-// entries for some of them, and holds what the three functions return, and
-// what the page's comparison makes of it.
+// 370, 374, 376, 377 and 380 in an in-memory Postgres (PGlite) as the app's
+// server login, copies a made-up month of NetSuite documents, posts
+// FleetSuite's entries for some of them, and holds what the three functions
+// return, and what the page's comparison makes of it.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -53,7 +53,7 @@ async function freshDb(): Promise<PGlite> {
     '314-ledger.sql', '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '364-books-invoice-check.sql',
     '367-books-invoice-posting.sql', '370-books-credit-memos.sql', '374-books-payment-check.sql', '376-books-payment-posting.sql',
-    '377-books-differences.sql',
+    '377-books-differences.sql', '380-books-netsuite-month.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -315,10 +315,10 @@ describe("migration 377's functions", () => {
       ['INV1003', 'month', 0, 8000],
     ]);
 
-    // January 2025: dated before the books start.
+    // January 2025: dated before the books start, an invoice FleetSuite posts in the month NetSuite booked it to.
     const jan = await documents('2025-01-01');
-    expect(jan.documents.map((d) => explainDocument(d, ctx)).map((d) => [d.reason, d.why])).toEqual([
-      ['before_start', "Dated Dec 31, 2024, before FleetSuite's books start on January 1, 2025, so FleetSuite doesn't post it. NetSuite posted it to January 2025."],
+    expect(jan.documents.map((d) => explainDocument(d, ctx)).map((d) => [d.number, d.reason, d.why, d.listMonth])).toEqual([
+      ['INV1010', 'not_posted', "FleetSuite hasn't posted it. Invoices vs NetSuite shows why.", '2025-01-01'],
     ]);
   });
 

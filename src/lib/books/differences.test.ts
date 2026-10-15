@@ -189,6 +189,21 @@ describe('explainDocument', () => {
     });
   });
 
+  it('says FleetSuite doesn\'t post a payment dated before its books start, but posts an invoice like it in NetSuite\'s month', () => {
+    const early = { type: 'CustPymt', number: 'PYMT9', date: '2024-12-30', month: '2025-01-01' };
+    const payment = explainDocument(doc({ kind: 'payment', netsuite: early, fleetsuite: { entries: 0, standing: null } }), ctx);
+    expect(payment).toMatchObject({ reason: 'before_start', listMonth: null });
+    expect(payment.why).toBe("Dated Dec 30, 2024, before FleetSuite's books start on January 1, 2025, so FleetSuite doesn't post it. NetSuite posted it to January 2025.");
+    const invoice = explainDocument(doc({ netsuite: { ...early, type: 'CustInvc' }, fleetsuite: { entries: 0, standing: null } }), ctx);
+    expect(invoice).toMatchObject({ reason: 'not_posted', listMonth: '2025-01-01' });
+  });
+
+  it('links an invoice to the month NetSuite booked it into, and a payment to its own date\'s', () => {
+    const late = { type: 'CustInvc', number: 'INV77', date: '2025-05-12', month: '2025-12-01' };
+    expect(explainDocument(doc({ netsuite: late }), ctx)).toMatchObject({ reason: 'month', listMonth: '2025-12-01' });
+    expect(explainDocument(doc({ kind: 'payment', netsuite: { ...late, type: 'CustPymt' } }), ctx).listMonth).toBe('2025-05-01');
+  });
+
   it('dates a document FleetSuite never posted by NetSuite\'s date', () => {
     const d = explainDocument(doc({ fleetsuite: { entries: 0, standing: null } }), ctx);
     expect(d).toMatchObject({ reason: 'not_posted', date: '2026-09-03', fleetsuiteDate: null, entryNo: null, netsuite: 1000 });

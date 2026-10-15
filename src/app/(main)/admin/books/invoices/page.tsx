@@ -96,6 +96,8 @@ interface Invoice {
   netsuiteId: string;
   number: string;
   date: string;
+  /** NetSuite booked it into another month than its date's: that month, and the date FleetSuite's entry carries. */
+  booked?: { month: string; date: string };
   customer: string | null;
   total: number;
   voided: boolean;
@@ -255,6 +257,11 @@ const amountsText = (amounts: NonNullable<Invoice['amounts']>, one: string) => (
 function InvoiceDetail({ invoice, accounts, one }: { invoice: Invoice; accounts: Record<string, string>; one: string }) {
   return (
     <div style={{ padding: '8px 10px 12px', background: 'var(--bg)' }}>
+      {invoice.booked && (
+        <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+          Dated {dateText(invoice.date)}, but NetSuite booked it into {monthName(invoice.booked.month)}, so FleetSuite&apos;s entry is dated {dateText(invoice.booked.date)}.
+        </div>
+      )}
       {invoice.books && (
         <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>{booksText(invoice.books)}</div>
       )}
@@ -579,7 +586,9 @@ export default function BooksInvoicesPage() {
             {!!s.pending && <span style={chip(AMBER)}>{s.pending.toLocaleString('en-US')} for the next posting run</span>}
           </div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
-            {words.title} dated this month that NetSuite posted to this company, checked with rule {data.rule}.
+            {kind === 'payment'
+              ? `${words.title} dated this month that NetSuite posted to this company`
+              : `${words.title} NetSuite booked into this month for this company`}, checked with rule {data.rule}.
             {data.listsCopiedAt && ` Items and tax codes as copied from NetSuite ${ago(data.listsCopiedAt)}.`}
             {!data.posts && ` This company's ${words.many} aren't posted to FleetSuite's books yet; they will be once they've been checked.`}
           </div>
@@ -635,7 +644,10 @@ export default function BooksInvoicesPage() {
                       style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }}
                     >
                       <td style={{ ...textCell, fontWeight: 700 }}>{open === inv.netsuiteId ? '▾' : '▸'} {inv.number}</td>
-                      <td style={{ ...cell, textAlign: 'left' }}>{dateText(inv.date)}</td>
+                      <td style={{ ...cell, textAlign: 'left' }}>
+                        {dateText(inv.date)}
+                        {inv.booked && <div style={{ color: 'var(--text-muted)', fontSize: '11px' }}>booked {monthName(inv.booked.month)}</div>}
+                      </td>
                       <td style={textCell}>{inv.customer ?? ''}</td>
                       <td style={cell}>{fmt(inv.total)}</td>
                       <td style={{ ...cell, textAlign: 'left' }}>

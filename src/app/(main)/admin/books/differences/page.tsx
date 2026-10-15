@@ -46,9 +46,6 @@ const RED = '#ef4444';
 const AMBER = '#fbbf24';
 const GREY = '#94a3b8';
 
-/** The first month of FleetSuite's books; Invoices vs NetSuite has nothing earlier. */
-const BOOKS_START = '2025-01-01';
-
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const fmt = (cents: number) => money.format(cents / 100);
 const amount = (cents: number) => (cents ? fmt(cents) : '—');
@@ -362,9 +359,9 @@ export default function BooksDifferencesPage() {
                             <div style={{ color: 'var(--text-muted)', marginTop: '8px', display: 'flex', gap: '4px 12px', flexWrap: 'wrap' }}>
                               {d.netsuiteMonth && <span>NetSuite posted it to {monthName(d.netsuiteMonth)}.</span>}
                               {d.entryNo !== null && d.fleetsuiteDate && <span>FleetSuite&apos;s entry {d.entryNo}, dated {dateText(d.fleetsuiteDate)}.</span>}
-                              {d.date && d.date >= BOOKS_START && (
+                              {d.listMonth && (
                                 <Link
-                                  href={`/admin/books/invoices?${new URLSearchParams({ company, kind: d.kind, month: d.date.slice(0, 7), doc: d.netsuiteId })}`}
+                                  href={`/admin/books/invoices?${new URLSearchParams({ company, kind: d.kind, month: d.listMonth.slice(0, 7), doc: d.netsuiteId })}`}
                                   style={{ color: 'var(--text-secondary)', fontWeight: 700 }}
                                 >
                                   Open in Invoices vs NetSuite →
