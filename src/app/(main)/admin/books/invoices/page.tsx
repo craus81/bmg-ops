@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
@@ -325,6 +325,8 @@ export default function BooksInvoicesPage() {
   const [checking, setChecking] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
   const [postError, setPostError] = useState('');
+  // A document a link asked for (Differences vs NetSuite), scrolled to once it's open.
+  const scrollTo = useRef<string | null>(null);
 
   const load = useCallback(async (nextCompany: string, nextMonth: string, nextKind: Kind) => {
     try {
@@ -350,9 +352,25 @@ export default function BooksInvoicesPage() {
   useEffect(() => {
     if (authLoading) return;
     if (!hasRole('super_admin')) { router.push('/home'); return; }
-    load('', '', 'invoice');
+    // A link may name the company, kind, month and document to open (?company=BMG&kind=payment&month=2026-09&doc=123).
+    const q = new URLSearchParams(window.location.search);
+    const askedKind = q.get('kind');
+    const doc = q.get('doc');
+    load(q.get('company') ?? '', q.get('month') ?? '', askedKind === 'credit_memo' || askedKind === 'payment' ? askedKind : 'invoice')
+      .then(() => {
+        if (!doc) return;
+        scrollTo.current = doc;
+        setOnlyProblems(false);
+        setOpen(doc);
+      });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it
   }, [authLoading, router, load]);
+
+  useEffect(() => {
+    if (!open || scrollTo.current !== open) return;
+    scrollTo.current = null;
+    document.getElementById(`doc-${open}`)?.scrollIntoView({ block: 'center' });
+  }, [open, data]);
 
   const pick = (nextCompany: string, nextMonth: string, nextKind: Kind = kind) => {
     setLoading(true);
@@ -444,6 +462,8 @@ export default function BooksInvoicesPage() {
             <Link href="/admin/books/trial-balance" style={{ color: 'var(--text-secondary)' }}>Trial balance vs NetSuite</Link>
             {' · '}
             <Link href="/admin/books/lists" style={{ color: 'var(--text-secondary)' }}>NetSuite lists</Link>
+            {' · '}
+            <Link href="/admin/books/differences" style={{ color: 'var(--text-secondary)' }}>Differences vs NetSuite</Link>
           </div>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -610,6 +630,7 @@ export default function BooksInvoicesPage() {
                 {shown.map((inv) => (
                   <Fragment key={inv.netsuiteId}>
                     <tr
+                      id={`doc-${inv.netsuiteId}`}
                       onClick={() => setOpen(open === inv.netsuiteId ? null : inv.netsuiteId)}
                       style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }}
                     >
