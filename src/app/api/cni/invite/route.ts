@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { deepLinks } from '@/lib/deep-links';
+import { deepLinks, inviteLinkFrom } from '@/lib/deep-links';
 
 export const dynamic = 'force-dynamic';
 
@@ -177,8 +177,8 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      if (!linkError && linkData?.properties?.action_link) {
-        inviteLink = linkData.properties.action_link;
+      if (!linkError) {
+        inviteLink = inviteLinkFrom(linkData, appUrl, '/cni/onboarding') || inviteLink;
       }
     } catch (linkErr: any) {
       console.warn('Magic link generation error:', linkErr.message);

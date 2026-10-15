@@ -47,9 +47,17 @@ export default function DeepLinkHandler() {
         const { App } = await import('@capacitor/app');
 
         // Cold start: app launched by tapping the email link.
+        // getLaunchUrl keeps answering with the same URL for the life of the
+        // app, and auth links reload the page, so follow each one only once
+        // or the reload would follow it again, forever.
         const launch = await App.getLaunchUrl();
         if (!cancelled && launch?.url) {
-          const path = toInAppPath(launch.url);
+          let seen = false;
+          try {
+            seen = sessionStorage.getItem('bmg-launch-url') === launch.url;
+            sessionStorage.setItem('bmg-launch-url', launch.url);
+          } catch { /* storage off: follow it, as before */ }
+          const path = seen ? null : toInAppPath(launch.url);
           if (path) go(path);
         }
 
