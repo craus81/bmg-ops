@@ -10,7 +10,8 @@ import { readLineFacts } from '@/lib/books/invoice-line-facts';
 import { PAYMENT_RULE } from '@/lib/books/payment-rule';
 import { checkPaymentMonth, type PaymentMonthData } from '@/lib/books/payment-check';
 import {
-  BOOKS_INVOICE_POSTING, POSTING_COMPANIES, invoiceBooks, postInvoices, postingFor, postingKey, unsaidFacts, type InvoicePosting,
+  BOOKS_INVOICE_POSTING, POSTING_COMPANIES, invoiceBooks, paymentBooks, postInvoices, postingFor, postingKey, unsaidFacts,
+  type InvoicePosting, type PaymentPosting,
 } from '@/lib/books/invoice-posting';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { compactSuiteqlError } from '@/lib/sales-order-sync';
@@ -27,8 +28,8 @@ const POSTING_BUDGET_MS = 240_000;
  * `kind=credit_memo` its credit memos, each with the entry FleetSuite's rule
  * works out for it next to the GL lines NetSuite posted (migrations 364 and
  * 370), and why any differ. With `kind=payment` its customer payments, each
- * checked with the payment rule (migration 374); they don't post yet. With
- * `summary=1` only the counts come back, for checking every month in turn.
+ * checked with the payment rule (migration 374). With `summary=1` only the
+ * counts come back, for checking every month in turn.
  *
  * What the copy of the invoices' lines doesn't keep (which lines are cost of
  * goods, a discount or markup set at the top, each line's own amount,
@@ -36,9 +37,10 @@ const POSTING_BUDGET_MS = 240_000;
  * (src/lib/books/invoice-line-facts.ts); when it can't be, the check goes
  * without and says so.
  *
- * For a company whose invoices post (src/lib/books/invoice-posting.ts),
- * each invoice also says what FleetSuite's books hold for it and what the
- * next posting run does about it, and `lastRun` is how the last one went.
+ * For a company whose documents post (src/lib/books/invoice-posting.ts),
+ * each invoice, credit memo or payment also says what FleetSuite's books hold
+ * for it (migrations 367 and 376) and what the next posting run does about
+ * it, and `lastRun` is how the last one went.
  *
  * Super admin only: the books are being built hidden, for the owner, until
  * they're ready (docs/books.md). It only reads.
@@ -91,12 +93,26 @@ export async function GET(req: NextRequest) {
     lastRun: posting.data ? { at: posting.data.updated_at, result: posting.data.last_result } : null,
   };
 
+  // Whether the company's documents post, and so what its books hold for each and what the next run does.
+  const posts = (POSTING_COMPANIES as readonly string[]).includes(company);
+
   if (kind === 'payment') {
     const paid = await service.rpc('gl_payment_month', { p_company: company, p_month: month });
     if (paid.error) return NextResponse.json({ error: paid.error.message }, { status: 500 });
-    const check = checkPaymentMonth({ payments: ((paid.data ?? {}) as Partial<PaymentMonthData>).payments ?? [] }, { company, chart });
+    const payments = ((paid.data ?? {}) as Partial<PaymentMonthData>).payments ?? [];
+    let held: Map<string, PaymentPosting> | null = null;
+    if (posts) {
+      const mine = payments.filter((p) => p.companies.includes(company)).map((p) => p.netsuite_id);
+      held = new Map();
+      if (mine.length) {
+        const res = await service.rpc('gl_payment_postings', { p_company: company, p_source_ids: mine, p_lines: true });
+        if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
+        for (const p of ((res.data as any)?.payments ?? []) as PaymentPosting[]) held.set(p.source_id, p);
+      }
+    }
+    const check = checkPaymentMonth({ payments }, { company, chart }, held ? (w) => paymentBooks(w, held!.get(w.payment.netsuite_id)) : undefined);
     if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });
-    return NextResponse.json({ rule: PAYMENT_RULE, kind, ...page, listsCopiedAt: null, posts: false, ...check });
+    return NextResponse.json({ rule: PAYMENT_RULE, kind, ...page, listsCopiedAt: null, posts, ...check });
   }
 
   const res = await service.rpc('gl_invoice_month', { p_company: company, p_month: month });
@@ -113,9 +129,7 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // What FleetSuite's books hold for the company's invoices, when they post,
-  // and what the next run does: nothing in a month NetSuite couldn't say enough about.
-  const posts = (POSTING_COMPANIES as readonly string[]).includes(company);
+  // What the next run does about the company's invoices: nothing in a month NetSuite couldn't say enough about.
   const decides = !!facts && 'lines' in facts && unsaidFacts(facts).length === 0;
   let postings: Map<string, InvoicePosting> | null = null;
   if (posts) {
@@ -147,8 +161,8 @@ export async function GET(req: NextRequest) {
 }
 
 /**
- * POST /api/admin/books/invoices — post invoices and credit memos to
- * FleetSuite's books now rather than wait for the two-hourly run. Same job,
+ * POST /api/admin/books/invoices — post invoices, credit memos and payments
+ * to FleetSuite's books now rather than wait for the two-hourly run. Same job,
  * same record of how it went; the response says only how the run went, the
  * page reloads the rest.
  */

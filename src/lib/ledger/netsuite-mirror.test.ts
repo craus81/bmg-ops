@@ -201,6 +201,7 @@ describe('parseNsMirrorResume', () => {
     expect(parseNsMirrorResume({
       resume: { ...base, tombstoneAfter: '500', repairAfter: { appliedExternalId: 'CustInvc/7', id: 'app-3' } },
     })).toEqual({ ...base, tombstoneAfter: '500', repairAfter: { appliedExternalId: 'CustInvc/7', id: 'app-3' } });
+    expect(parseNsMirrorResume({ resume: { ...base, paymentTombstoneAfter: '7450' } })).toEqual({ ...base, paymentTombstoneAfter: '7450' });
   });
 
   it('rejects nonsense rather than resuming from it', () => {
@@ -238,7 +239,7 @@ interface NsTxn {
   lines?: NsLine[];
 }
 interface NsPayment {
-  id: number; tranid?: string; trandate?: string; total?: string; memo?: string;
+  id: number; tranid?: string; trandate?: string; total?: string; memo?: string; label?: string;
   entity?: number; companyname?: string | null; entityid?: string | null;
   /** previousdoc ids this payment was applied to. */
   applies?: { previousdoc: number; foreignamount: string }[];
@@ -362,10 +363,11 @@ function installNetSuite(world: NsWorld): void {
         .filter(id => !(world.deletedIds || []).includes(id))
         .map(id => {
           const txn = world.txns.find(t => t.id === id);
+          const payment = (world.payments || []).find(p => p.id === id);
           return {
             id,
             status: txn?.status ?? 'A',
-            ...(withLabel ? { label: txn?.label ?? 'Invoice : Open' } : {}),
+            ...(withLabel ? { label: txn?.label ?? payment?.label ?? 'Invoice : Open' } : {}),
           };
         });
     }
@@ -1052,7 +1054,7 @@ describe('runNetSuiteMirror — payments probe and mirror', () => {
     const result = await runNetSuiteMirror(service as any, { deadline: DEADLINE() });
 
     expect(result.capabilities.payments).toMatchObject({ permitted: true, linkTable: 'nexttransactionlinelink' });
-    expect(result.payments).toEqual({ mirrored: 1, applications: 3 });
+    expect(result.payments).toEqual({ mirrored: 1, applications: 3, tombstoned: 0, voided: 0 });
 
     const payment = service.tables['ledger_payments'][0];
     expect(payment).toMatchObject({
@@ -1152,7 +1154,7 @@ describe('runNetSuiteMirror — payments probe and mirror', () => {
 
     const first = await runNetSuiteMirror(service as any, { deadline: 1_000_000 + 3_600_000 });
 
-    expect(first.payments).toEqual({ mirrored: 100, applications: 0 });
+    expect(first.payments).toEqual({ mirrored: 100, applications: 0, tombstoned: 0, voided: 0 });
     expect(first.partial).toBe(true);
     expect(first.resume?.paymentsBeforeId).toBe('6051');
     // The header window drained, but advancing last_synced_at now would put
@@ -1165,7 +1167,7 @@ describe('runNetSuiteMirror — payments probe and mirror', () => {
       .map(c => String(c[0]))
       .filter(q => q.includes("t.type = 'CustPymt'") && q.includes('ORDER BY t.id DESC'));
     expect(payQueries.some(q => q.includes('AND t.id < 6051'))).toBe(true);
-    expect(second.payments).toEqual({ mirrored: 50, applications: 0 });
+    expect(second.payments).toEqual({ mirrored: 50, applications: 0, tombstoned: 0, voided: 0 });
     expect(service.tables['ledger_payments']).toHaveLength(150);
     // Drained: the cursor is cleared and the watermark finally moves.
     expect(second.resume?.paymentsBeforeId).toBeUndefined();
@@ -1190,6 +1192,114 @@ describe('runNetSuiteMirror — payments probe and mirror', () => {
 
     expect(result.resume).toBeUndefined();
     expect(service.tables['sync_state'][0].last_synced_at).toBeTruthy();
+  });
+});
+
+describe('runNetSuiteMirror — payments\' delete sweep', () => {
+  const mirrored = (ref: number, extra: Record<string, unknown> = {}) => ({
+    id: `pay-${ref}`, source: 'netsuite', external_id: `CustPymt/${ref}`, external_ref: String(ref),
+    direction: 'in', party_kind: 'customer', payment_date: '2026-03-10', deleted_at: null, voided: false, ...extra,
+  });
+  const sweepQueries = () => suiteqlAll.mock.calls.map(c => String(c[0])).filter(q => q.includes("t.type IN ('CustPymt')"));
+
+  it('marks payments NetSuite no longer returns as deleted, and voids the ones whose label says so', async () => {
+    installNetSuite({
+      txns: [],
+      payments: [{ id: 7001 }, { id: 7002, label: 'Payment : Voided' }],
+      deletedIds: [7003],
+    });
+    const { service } = recordingService({
+      ledger_payments: [
+        mirrored(7003),
+        // QuickBooks history is never NetSuite's to delete.
+        mirrored(7004, { id: 'qbo-7004', source: 'quickbooks', external_id: 'qbo-7004' }),
+      ],
+    });
+
+    const result = await runNetSuiteMirror(service as any, { deadline: DEADLINE() });
+
+    expect(result.payments).toEqual({ mirrored: 2, applications: 0, tombstoned: 1, voided: 1 });
+    const rows = service.tables['ledger_payments'];
+    expect(rows.find(r => r.external_ref === '7003').deleted_at).toBeTruthy();
+    expect(rows.find(r => r.external_ref === '7002').voided).toBe(true);
+    expect(rows.find(r => r.external_ref === '7001').voided).toBeFalsy();
+    expect(rows.find(r => r.external_ref === '7001').deleted_at).toBeNull();
+    expect(rows.find(r => r.id === 'qbo-7004').deleted_at).toBeNull();
+    // Never a physical delete, and the sweep asked about payments only.
+    expect(rows).toHaveLength(4);
+    expect(sweepQueries()).toHaveLength(1);
+    expect(sweepQueries()[0]).not.toContain('CustInvc');
+  });
+
+  it('does not sweep while the payments pass is still paging', async () => {
+    installNetSuite({ txns: [], payments: Array.from({ length: 150 }, (_, i) => ({ id: 6001 + i })), deletedIds: [7003] });
+    const { service } = recordingService({ ledger_payments: [mirrored(7003)] });
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const pages = suiteql.getMockImplementation()!;
+    suiteql.mockImplementation(async (...args: any[]) => {
+      const out: any = await (pages as any)(...args);
+      if (String(args[0]).includes("t.type = 'CustPymt'") && String(args[0]).includes('ORDER BY t.id DESC')) now += 40_000;
+      return out;
+    });
+
+    const result = await runNetSuiteMirror(service as any, { deadline: 1_000_000 + 3_600_000 });
+
+    expect(result.payments).toMatchObject({ mirrored: 100, tombstoned: 0 });
+    expect(sweepQueries()).toEqual([]);
+    expect(service.tables['ledger_payments'].find(r => r.external_ref === '7003').deleted_at).toBeNull();
+  });
+
+  it('a payment NetSuite returns again is UN-tombstoned', async () => {
+    installNetSuite({ txns: [], payments: [{ id: 7100 }] });
+    const { service } = recordingService({ ledger_payments: [mirrored(7100, { deleted_at: '2026-09-01T00:00:00Z' })] });
+
+    await runNetSuiteMirror(service as any, { deadline: DEADLINE() });
+
+    expect(service.tables['ledger_payments']).toHaveLength(1);
+    expect(service.tables['ledger_payments'][0].deleted_at).toBeNull();
+  });
+
+  it('a sweep where NOTHING came back is read as a narrowed role, not as deleted payments', async () => {
+    installNetSuite({ txns: [], payments: [], deletedIds: [7201, 7202] });
+    const { service } = recordingService({ ledger_payments: [mirrored(7201), mirrored(7202)] });
+
+    const result = await runNetSuiteMirror(service as any, { deadline: DEADLINE() });
+
+    expect(result.payments).toMatchObject({ tombstoned: 0 });
+    expect((result.payments as any).problem).toContain('2 mirrored payments came back missing');
+    expect(service.tables['ledger_payments'].every(r => r.deleted_at === null)).toBe(true);
+    expect(result.partial).toBe(true);
+    expect(nestedErrorKeys(lastResultOf(service))).toEqual([]);
+  });
+
+  it('a sweep the phase cuts short saves its place, and the next run carries on above it', async () => {
+    const refs = Array.from({ length: 160 }, (_, i) => 7301 + i);
+    installNetSuite({ txns: [], payments: [], deletedIds: [7460] });
+    const { service } = recordingService({ ledger_payments: refs.map(ref => mirrored(ref)) });
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const all = suiteqlAll.getMockImplementation()!;
+    suiteqlAll.mockImplementation(async (...args: any[]) => {
+      const out: any = await (all as any)(...args);
+      if (String(args[0]).includes("t.type IN ('CustPymt')")) now += 40_000;
+      return out;
+    });
+
+    const first = await runNetSuiteMirror(service as any, { deadline: 1_000_000 + 3_600_000 });
+
+    expect(first.partial).toBe(true);
+    expect(first.resume?.paymentTombstoneAfter).toBe('7450');
+    expect(service.tables['ledger_payments'].every(r => r.deleted_at === null)).toBe(true);
+
+    const second = await runNetSuiteMirror(service as any, { deadline: 1_000_000 + 3_600_000 });
+
+    // Only the ten above the cursor were asked about, and the one gone is marked.
+    expect(sweepQueries()[1]).toContain('7451');
+    expect(sweepQueries()[1]).not.toContain('7450,');
+    expect(second.payments).toMatchObject({ tombstoned: 1 });
+    expect(service.tables['ledger_payments'].find(r => r.external_ref === '7460').deleted_at).toBeTruthy();
+    expect(second.resume?.paymentTombstoneAfter).toBeUndefined();
   });
 });
 

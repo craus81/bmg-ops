@@ -17,6 +17,8 @@ import {
   type LineFactsRead, type TaxAccountCount, type WorkedInvoice,
 } from './invoice-check';
 import { readLineFacts } from './invoice-line-facts';
+import { PAYMENT_RULE, RECEIVABLE_LINE } from './payment-rule';
+import { workOutPaymentMonth, type PaymentMonthData, type WorkedPayment } from './payment-check';
 
 /**
  * NetSuite's invoices posted to FleetSuite's own journal with the invoice
@@ -24,7 +26,9 @@ import { readLineFacts } from './invoice-line-facts';
  * 2026-10-13, thread "Replacing NetSuite with FleetSuite"), and its credit
  * memos with the credit memo rule, the same the other way round (migration
  * 370; owner decision 2026-10-14). Everything below that says invoice holds
- * for a credit memo too.
+ * for a credit memo too, and for a customer payment, posted with the payment
+ * rule (migration 376; owner decision 2026-10-15), except where the
+ * payments' own section says otherwise.
  *
  * Every BMG invoice dated from January 2025 that the rule can work out posts
  * once, as the check on Invoices vs NetSuite shows it, whether it matches
@@ -56,7 +60,7 @@ import { readLineFacts } from './invoice-line-facts';
 
 export const BOOKS_INVOICE_POSTING = 'books_invoice_posting';
 
-/** The companies whose invoices and credit memos post. 1084's join once they've been checked against NetSuite. */
+/** The companies whose invoices, credit memos and payments post. 1084's join once they've been checked against NetSuite. */
 export const POSTING_COMPANIES: readonly BooksCompany[] = ['BMG'];
 
 /** Seconds a run holds the lock: past the routes' 300 s limit, so a run that dies lets go soon after. */
@@ -214,7 +218,11 @@ export function unsaidFacts(facts: LineFactsRead): Array<(typeof NEEDED_FACTS)[n
  * nothing is shown as next.
  */
 export function invoiceBooks(worked: WorkedInvoice, posting: InvoicePosting | undefined, decides = true): InvoiceBooks {
-  const d = decide(worked, posting);
+  return booksOf(decide(worked, posting), posting, decides);
+}
+
+/** What the journal holds for a document and what the next run does about it, given the run's decision. */
+function booksOf(d: Decision, posting: Pick<InvoicePosting, 'current' | 'history'> | undefined, decides: boolean): InvoiceBooks {
   const current = posting?.current ?? null;
   return {
     entryNo: current?.entry_no ?? null,
@@ -266,6 +274,95 @@ export function invoiceJournalEntry(
   };
 }
 
+// ── Payments ───────────────────────────────────────────────────────────────
+//
+// A payment posts as an invoice does, with two differences: it has no lines
+// of its own to wait for or add up (its entry is the money, any discount and
+// the receivable), and what the journal holds for it comes from
+// gl_payment_postings (migration 376), keyed payment:<NetSuite id>:<n>.
+
+/** What the journal holds for one customer payment (gl_payment_postings, migration 376). */
+export interface PaymentPosting extends Omit<InvoicePosting, 'source_type' | 'invoice'> {
+  source_type: 'payment';
+  /** What the ledger mirror's copy of the payment says of it now; null when the copy has none. */
+  payment: { number: string | null; deleted: boolean; voided: boolean } | null;
+}
+
+/** The lines the payment rule works out for a payment: where the money went, any discount and the receivable; none when it posts nothing. */
+export function paymentEntryLines(worked: WorkedPayment): RuleLine[] {
+  return worked.checked.rows.flatMap((r) => (r.fleetsuite && r.fleetsuite.cents !== 0
+    ? [{ account: r.fleetsuite.account, cents: r.fleetsuite.cents, lineId: r.lineId, itemNumber: null, division: null }]
+    : []));
+}
+
+const paymentSignature = (worked: WorkedPayment) => signature(
+  worked.payment.date,
+  paymentEntryLines(worked).map((l) => ({
+    account: l.account,
+    cents: l.cents,
+    division: null,
+    lineRef: l.lineId,
+    customerId: l.lineId === RECEIVABLE_LINE ? worked.payment.customer_id ?? null : null,
+  })),
+);
+
+/** What to do about one payment the rule has worked out, given what the journal holds for it. */
+export function decidePayment(worked: WorkedPayment, posting: PaymentPosting | undefined): Decision {
+  const current = posting?.current ?? null;
+  if (worked.payment.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep' };
+  const { status } = worked.checked;
+  if (status === 'waiting') return { kind: 'leave', why: 'waiting' };
+  if (status === 'unworkable') return { kind: 'leave', why: 'unworkable' };
+  if (paymentEntryLines(worked).length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep' };
+  if (!current) return { kind: 'post' };
+  return postedSignature(current) === paymentSignature(worked) ? { kind: 'keep' } : { kind: 'replace' };
+}
+
+/** What the journal holds for a payment and what the next run does about it, for the invoices page. */
+export function paymentBooks(worked: WorkedPayment, posting: PaymentPosting | undefined): InvoiceBooks {
+  return booksOf(decidePayment(worked, posting), posting, true);
+}
+
+/**
+ * The journal entry for a payment, its `generation`th: the rule's lines on
+ * the chart's accounts, the receivable carrying the customer, keyed
+ * `payment:…`. Null with the NetSuite accounts the chart doesn't have when
+ * it can't be built.
+ */
+export function paymentJournalEntry(
+  worked: WorkedPayment,
+  company: BooksCompany,
+  generation: number,
+  accountIds: Map<string, string>,
+): { entry: JournalEntryInput; missing: [] } | { entry: null; missing: string[] } {
+  const lines = paymentEntryLines(worked);
+  const missing = [...new Set(lines.map((l) => l.account).filter((a) => !accountIds.has(a)))];
+  if (missing.length) return { entry: null, missing };
+  const p = worked.payment;
+  return {
+    entry: {
+      company,
+      entryDate: p.date,
+      sourceType: 'payment',
+      sourceId: p.netsuite_id,
+      postingRule: PAYMENT_RULE,
+      idempotencyKey: `payment:${p.netsuite_id}:${generation}`,
+      memo: p.customer ? `${worked.number}, ${p.customer}` : worked.number,
+      postedBy: null,
+      lines: lines.map((l) => ({
+        accountId: accountIds.get(l.account)!,
+        debit: l.cents > 0 ? centsToAmount(l.cents) : null,
+        credit: l.cents < 0 ? centsToAmount(-l.cents) : null,
+        division: null,
+        itemNumber: null,
+        sourceLineRef: l.lineId,
+        customerId: l.lineId === RECEIVABLE_LINE ? p.customer_id ?? null : null,
+      })),
+    },
+    missing: [],
+  };
+}
+
 /** Why a write failed, in words that carry no amount: the run's record is kept where amounts never go. */
 export function failureReason(err: unknown): string {
   const money = /\$|\bdebits?\b|\bcredits?\b|balance/i;
@@ -287,7 +384,7 @@ export interface InvoicePostingResult {
   replaced?: number;
   reversed?: number;
   unchanged?: number;
-  /** Invoices the rule can't work out yet, or whose copy was mid-refresh: whatever stands for them stayed. */
+  /** Invoices, credit memos and payments the rule can't work out yet, or whose copy was mid-refresh: whatever stands for them stayed. */
   left?: number;
   /** Writes the journal refused or that failed, a few of them with why. */
   failedCount?: number;
@@ -416,17 +513,25 @@ export async function postInvoices(
       }
     };
 
-    // 1. What NetSuite deleted or voided, and any second entry standing for one invoice.
+    // 1. What NetSuite deleted or voided, and any second entry standing for one document.
     for (const company of POSTING_COMPANIES) {
-      const all = await service.rpc('gl_invoice_postings', { p_company: company, p_source_ids: null, p_lines: false });
+      const [all, paid] = await Promise.all([
+        service.rpc('gl_invoice_postings', { p_company: company, p_source_ids: null, p_lines: false }),
+        service.rpc('gl_payment_postings', { p_company: company, p_source_ids: null, p_lines: false }),
+      ]);
       if (all.error) throw new Error(all.error.message);
+      if (paid.error) throw new Error(paid.error.message);
+      const held = [
+        ...(((all.data as any)?.invoices ?? []) as InvoicePosting[]).map((p) => ({ posting: p, copy: p.invoice })),
+        ...(((paid.data as any)?.payments ?? []) as PaymentPosting[]).map((p) => ({ posting: p, copy: p.payment })),
+      ];
       const tasks: Array<() => Promise<void>> = [];
-      for (const p of ((all.data as any)?.invoices ?? []) as InvoicePosting[]) {
-        const number = p.invoice?.number || `NetSuite ${p.source_id}`;
+      for (const { posting: p, copy } of held) {
+        const number = copy?.number || `NetSuite ${p.source_id}`;
         for (const extra of p.unreversed.slice(1)) {
           tasks.push(() => reverse(number, extra, `${number} had another entry standing`));
         }
-        const gone = p.invoice?.deleted ? 'deleted' : p.invoice?.voided ? 'voided' : null;
+        const gone = copy?.deleted ? 'deleted' : copy?.voided ? 'voided' : null;
         if (p.current && gone) {
           const entryId = p.current.id;
           tasks.push(() => reverse(number, entryId, `${number} ${gone} in NetSuite`));
@@ -442,6 +547,54 @@ export async function postInvoices(
     const leftTotal: Array<{ number: string; kind: SalesDocKind }> = [];
     const missingAccounts = new Set<string>();
     const queue = postingQueue(POSTING_COMPANIES, months, state.resume);
+
+    /** Queues the writes a decision about one document calls for, or counts it when it calls for none. */
+    const enqueue = (
+      tasks: Array<() => Promise<void>>,
+      number: string,
+      d: Decision,
+      current: { id: string } | null,
+      build: () => { entry: JournalEntryInput; missing: [] } | { entry: null; missing: string[] },
+    ) => {
+      if (d.kind === 'keep') {
+        if (current) result.unchanged! += 1;
+        return;
+      }
+      if (d.kind === 'leave') {
+        result.left! += 1;
+        return;
+      }
+      if (d.kind === 'reverse') {
+        const memo = `${number} ${d.why === 'voided' ? 'voided' : 'comes to nothing'} in NetSuite`;
+        tasks.push(() => reverse(number, current!.id, memo));
+        return;
+      }
+      const built = build();
+      if (!built.entry) {
+        for (const a of built.missing) missingAccounts.add(a);
+        failed(number, new Error(`It posts to NetSuite account ${built.missing.join(', ')}, which the chart of accounts doesn't have`));
+        return;
+      }
+      const entry = built.entry;
+      tasks.push(async () => {
+        if (timeLeft() < WRITE_MIN_LEFT_MS) {
+          result.partial = true;
+          return;
+        }
+        try {
+          if (d.kind === 'post') {
+            const posted = await postEntry(service, entry);
+            if (posted.alreadyPosted) result.unchanged! += 1;
+            else result.posted! += 1;
+          } else {
+            await repostEntry(service, { entryId: current!.id, memo: `${number} changed in NetSuite`, entry });
+            result.replaced! += 1;
+          }
+        } catch (err) {
+          failed(number, err);
+        }
+      });
+    };
 
     for (const [i, { company, month }] of queue.entries()) {
       if (timeLeft() < MIN_LEFT_MS) {
@@ -487,49 +640,38 @@ export async function postInvoices(
           for (const w of worked) {
             const posting = postingFor(postings, w);
             const d = decide(w, posting);
-            if (d.kind === 'keep') {
-              if (posting?.current) result.unchanged! += 1;
-              continue;
-            }
-            if (d.kind === 'leave') {
-              result.left! += 1;
-              if (d.why === 'total') leftTotal.push({ number: w.number, kind: kindOf(w) });
-              continue;
-            }
-            if (d.kind === 'reverse') {
-              const memo = `${w.number} ${d.why === 'voided' ? 'voided' : 'comes to nothing'} in NetSuite`;
-              tasks.push(() => reverse(w.number, posting!.current!.id, memo));
-              continue;
-            }
-            const built = invoiceJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds);
-            if (!built.entry) {
-              for (const a of built.missing) missingAccounts.add(a);
-              failed(w.number, new Error(`It posts to NetSuite account ${built.missing.join(', ')}, which the chart of accounts doesn't have`));
-              continue;
-            }
-            const entry = built.entry;
-            tasks.push(async () => {
-              if (timeLeft() < WRITE_MIN_LEFT_MS) {
-                result.partial = true;
-                return;
-              }
-              try {
-                if (d.kind === 'post') {
-                  const posted = await postEntry(service, entry);
-                  if (posted.alreadyPosted) result.unchanged! += 1;
-                  else result.posted! += 1;
-                } else {
-                  await repostEntry(service, { entryId: posting!.current!.id, memo: `${w.number} changed in NetSuite`, entry });
-                  result.replaced! += 1;
-                }
-              } catch (err) {
-                failed(w.number, err);
-              }
-            });
+            if (d.kind === 'leave' && d.why === 'total') leftTotal.push({ number: w.number, kind: kindOf(w) });
+            enqueue(tasks, w.number, d, posting?.current ?? null, () => invoiceJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
           }
           await runLimited(tasks, WRITERS);
           if (result.partial) break;
         }
+      }
+
+      // The month's payments: no lines of their own, so nothing to ask NetSuite. One in neither company's GL copy
+      // is this company's only while an entry of it stands here: NetSuite posts nothing for it now (a $0 payment
+      // posts no lines), or the copy hasn't caught up with it, and the decision tells the two apart.
+      const paid = await service.rpc('gl_payment_month', { p_company: company, p_month: month });
+      if (paid.error) throw new Error(paid.error.message);
+      const payments = workOutPaymentMonth(
+        { payments: ((paid.data ?? {}) as Partial<PaymentMonthData>).payments ?? [] },
+        { company, chart: chartAccounts },
+      ).payments.filter((w) => w.payment.companies.length === 0 || w.payment.companies.includes(company));
+      if (payments.length) {
+        const held = await service.rpc('gl_payment_postings', {
+          p_company: company, p_source_ids: payments.map((w) => w.payment.netsuite_id), p_lines: true,
+        });
+        if (held.error) throw new Error(held.error.message);
+        const postings = new Map((((held.data as any)?.payments ?? []) as PaymentPosting[]).map((p) => [p.source_id, p]));
+        const tasks: Array<() => Promise<void>> = [];
+        for (const w of payments) {
+          const posting = postings.get(w.payment.netsuite_id);
+          if (!w.payment.companies.length && !posting?.current) continue;
+          enqueue(tasks, w.number, decidePayment(w, posting), posting?.current ?? null,
+            () => paymentJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
+        }
+        await runLimited(tasks, WRITERS);
+        if (result.partial) break;
       }
 
       result.months!.push(month);
@@ -538,7 +680,7 @@ export async function postInvoices(
     }
 
     if (skippedMonths.length) {
-      notes.push(`${skippedWhy}, so nothing dated ${joined(skippedMonths.map(monthLabel), 'or')} was posted or changed this time.`);
+      notes.push(`${skippedWhy}, so no invoice or credit memo dated ${joined(skippedMonths.map(monthLabel), 'or')} was posted or changed this time.`);
     }
     if (leftTotal.length) {
       const one = leftTotal.length === 1;
@@ -549,7 +691,7 @@ export async function postInvoices(
     }
     if (missingAccounts.size) {
       notes.push(`NetSuite account${missingAccounts.size === 1 ? '' : 's'} ${listed([...missingAccounts])} ${missingAccounts.size === 1 ? "isn't" : "aren't"} `
-        + 'in the chart of accounts yet, so invoices and credit memos posting there weren\'t posted. Sync now on the chart of accounts page copies them.');
+        + 'in the chart of accounts yet, so invoices, credit memos and payments posting there weren\'t posted. Sync now on the chart of accounts page copies them.');
     }
   } catch (err) {
     result.error = String((err as any)?.message || err).slice(0, 300);

@@ -12,7 +12,8 @@ and checked month by month, part 4, the NetSuite lists the posting rules
 need, part 5, the invoice rule, checked against NetSuite, part 6, every
 BMG invoice since 2025 posted to FleetSuite's own journal with it, part 7,
 credit memos, checked and posted the same way, the other way round, and
-part 8, customer payments, checked against NetSuite with the payment rule.
+part 8, customer payments, checked against NetSuite with the payment rule
+and posted in the same run as invoices.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`
 and the invoices at `/admin/books/invoices`, which only super admins can
@@ -40,7 +41,8 @@ the accounts page; the others are linked from there.
 | Invoice posting tests | `src/lib/books/invoice-posting.test.ts`, `src/lib/books/invoice-posting-sql.test.ts` |
 | Credit memos, checked and posted like invoices | `migrations/370-books-credit-memos.sql`, with the invoice files above; their tests are in the invoice test files |
 | Payment rule and its check, on the invoices page | `src/lib/books/payment-rule.ts`, `src/lib/books/payment-check.ts`, `migrations/374-books-payment-check.sql` |
-| Payment tests | `src/lib/books/payment-rule.test.ts`, `src/lib/books/payment-check.test.ts`, `src/lib/books/payment-check-sql.test.ts` |
+| Payments posted to the journal, with invoices | `migrations/376-books-payment-posting.sql`, `src/lib/books/invoice-posting.ts`; the mirror's delete sweep in `src/lib/ledger/netsuite-mirror.ts` |
+| Payment tests | `src/lib/books/payment-rule.test.ts`, `src/lib/books/payment-check.test.ts`, `src/lib/books/payment-check-sql.test.ts`, `src/lib/books/payment-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
 QuickBooks and NetSuite history that importers replace wholesale. They stay
@@ -484,28 +486,61 @@ NetSuite debits to the one income or expense account it debits for the
 payment, other than where the money went. A payment of $0 that only takes a
 discount posts the discount alone.
 
-The check comes first (owner decision 2026-10-14), as it did for invoices,
-and payments post once it shows them matching. The **Payments** switch on
-the invoices page checks every NetSuite customer payment against the GL
-lines NetSuite posted for it, account by account, to the cent. NetSuite's
-lines on one account are added together, since it may take a payment off
-receivables on a line for each invoice it pays. Migration 374's
-`gl_payment_month(company, month)` reads one month: the payments dated in it
-from the ledger mirror, with what each was applied to and NetSuite's GL
-lines for each from the copy (migration 361). Opening a payment shows what
-it was applied to. Payments aren't posted yet.
+The check came first (owner decision 2026-10-14), as it did for invoices.
+The **Payments** switch on the invoices page checks every NetSuite customer
+payment against the GL lines NetSuite posted for it, account by account, to
+the cent. NetSuite's lines on one account are added together, since it may
+take a payment off receivables on a line for each invoice it pays.
+Migration 374's `gl_payment_month(company, month)` reads one month: the
+payments dated in it from the ledger mirror, with what each was applied to
+and NetSuite's GL lines for each from the copy (migration 361). Opening a
+payment shows what it was applied to, its entry in FleetSuite's books and
+what the next posting run does about it.
 
 - A payment is a company's when NetSuite posted a GL line of it to that
   company. Payments with no GL line in the copy are named in a note, not
-  counted. The mirror keeps a payment NetSuite deleted (its delete sweep
-  covers only invoices and credit memos), so a deleted one shows in that
-  note. Before payments post, the sweep needs to cover them too.
+  counted.
 - Anything else NetSuite posts for a payment shows as a line FleetSuite's
   entry doesn't have. So does a discount split across two income or
   expense accounts, since neither is then plainly the discount.
 - Customer deposits, and applying them to invoices, are NetSuite documents
   of their own and aren't copied yet. Nor are bank deposits, which move the
   money from Undeposited Funds to the bank.
+
+### Posting payments
+
+Every BMG customer payment dated from January 2025 that the rule can work
+out posts to FleetSuite's journal in the same run as invoices and credit
+memos, the same way (owner decision 2026-10-15): once, dated as the payment
+is, with the rule `payment@1` and keys of its own
+(`payment:<NetSuite id>:<n>`), the receivable line carrying the payment's
+customer. When NetSuite changes what a payment posts (where the money went,
+the discount, the amount, the customer or the date) its entry is reversed
+and the new one posted in one transaction; a new number or memo alone
+changes nothing. A payment NetSuite voids or deletes has its entry reversed,
+and so does one that comes to nothing now. NetSuite posts no GL lines for a
+$0 payment, so a payment in neither company's GL copy is still looked at
+while an entry of it stands: at $0 its entry is reversed, otherwise the copy
+hasn't caught up and it keeps its entry. A payment the rule can't work out
+keeps whatever it has too, and the next run looks again. 1084's payments
+join with its invoices.
+
+Migration 376's `gl_payment_postings` reads what the journal holds for each
+payment, as `gl_invoice_postings` does for invoices: the entry that stands
+and its lines, every earlier entry and what reversed it, and whether the
+ledger mirror's copy of the payment says it's deleted or voided.
+
+The mirror marks payments NetSuite deleted the way it marks invoices
+(`src/lib/ledger/netsuite-mirror.ts`, at the end of phase 3). Once the
+payments pass has nothing left to read, the same delete sweep asks NetSuite
+which mirrored payments still exist, 150 at a time, marks the rest deleted,
+and marks voided the ones whose NetSuite status says Voided, carrying on
+from `paymentTombstoneAfter` when it runs out of time. A payment NetSuite
+returns again is no longer marked deleted. A sweep in which not one payment
+comes back is read as a narrowed SuiteQL role, as for invoices, and marks
+nothing (`payments.problem` in the mirror's last result says so). Whether
+NetSuite's status for a voided customer payment reads Voided, as an
+invoice's does, hasn't been seen yet.
 
 ## Posting
 

@@ -136,6 +136,8 @@ System Health → Connections:
   any of them, because not one id in the whole sweep came back present —
   which reads as a narrowed role rather than as deleted history. Nothing was
   tombstoned; check the SuiteQL role's transaction access.
+  `payments: { problem: … }` is the same refusal from the customer
+  payments' own sweep, which runs after the payments pass drains.
 
 ## Rollback
 

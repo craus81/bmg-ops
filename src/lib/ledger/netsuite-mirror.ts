@@ -30,7 +30,8 @@ import { replaceChildren, stampSynced, upsertRows, writeSyncStateCursor } from '
  *
  *   (1) headers + lines   150 s   the mirror itself
  *   (2) tombstones         20 s   rows NetSuite no longer returns
- *   (3) payments           30 s   probe, then mirror when permitted
+ *   (3) payments           30 s   probe, then mirror when permitted, then
+ *                                  their own tombstone sweep once drained
  *   (4) PDFs               25 s   through the PDF RESTlet, R2-gated
  *   (5) repair          the rest  DB-only; the ONE uncapped phase
  *
@@ -105,8 +106,9 @@ const DAY_MS = 86_400_000;
  * The cursor a partial run leaves in `sync_state.last_result.resume`.
  *
  * `beforeId` continues the header window (and `windowClosed` says that
- * window is spent); `paymentsBeforeId`, `tombstoneAfter` and `repairAfter`
- * continue the three passes that can outlast one run. `repairAfter` is a
+ * window is spent); `paymentsBeforeId`, `tombstoneAfter`,
+ * `paymentTombstoneAfter` and `repairAfter` continue the four passes that
+ * can outlast one run. `repairAfter` is a
  * COMPOSITE because `applied_external_id` is not unique (two payments may
  * each apply to the same invoice) — see the keyset predicate in phase (5).
  */
@@ -147,6 +149,8 @@ export interface NsMirrorResume {
   paymentsBeforeId?: string;
   /** Continue the tombstone sweep above this `ledger_invoices.external_ref`. */
   tombstoneAfter?: string;
+  /** Continue the payments' tombstone sweep above this `ledger_payments.external_ref`. */
+  paymentTombstoneAfter?: string;
   /** Continue the repair sweep after this `ledger_payment_applications` row. */
   repairAfter?: { appliedExternalId: string; id: string };
 }
@@ -154,7 +158,9 @@ export interface NsMirrorResume {
 export function parseNsMirrorResume(lastResult: unknown): NsMirrorResume | null {
   const r = (lastResult as any)?.resume;
   if (!r || typeof r !== 'object') return null;
-  const { windowStartedAt, since, beforeId, processed, windowClosed, paymentsBeforeId, tombstoneAfter, repairAfter } = r;
+  const {
+    windowStartedAt, since, beforeId, processed, windowClosed, paymentsBeforeId, tombstoneAfter, paymentTombstoneAfter, repairAfter,
+  } = r;
   if (typeof windowStartedAt !== 'string' || typeof since !== 'string') return null;
   // Absent is a meaning ("this window has committed no page"); a malformed
   // value is not — resuming from one would put a stored string into SQL.
@@ -170,6 +176,7 @@ export function parseNsMirrorResume(lastResult: unknown): NsMirrorResume | null 
   if (windowClosed === true) out.windowClosed = true;
   if (typeof paymentsBeforeId === 'string' && /^\d+$/.test(paymentsBeforeId)) out.paymentsBeforeId = paymentsBeforeId;
   if (typeof tombstoneAfter === 'string' && tombstoneAfter) out.tombstoneAfter = tombstoneAfter;
+  if (typeof paymentTombstoneAfter === 'string' && paymentTombstoneAfter) out.paymentTombstoneAfter = paymentTombstoneAfter;
   if (
     repairAfter && typeof repairAfter === 'object'
     && typeof repairAfter.appliedExternalId === 'string' && repairAfter.appliedExternalId
@@ -291,14 +298,44 @@ function buildPaymentHeaderQuery(sinceIso: string, beforeId: string | null): str
  * their status. `label` rides along only when the account accepts
  * BUILTIN.DF — the same column the header ladder settles.
  */
-function buildTombstoneQuery(ids: string[], withLabel: boolean): string {
+function buildTombstoneQuery(ids: string[], withLabel: boolean, types: readonly NsSweptType[]): string {
   const label = withLabel ? ', BUILTIN.DF(t.status) AS label' : '';
   return `
       SELECT t.id, t.status${label}
       FROM transaction t
-      WHERE t.type IN ('CustInvc', 'CustCred')
+      WHERE t.type IN (${types.map(t => `'${t}'`).join(', ')})
         AND t.id IN (${ids.join(', ')})
     `;
+}
+
+type NsSweptType = 'CustInvc' | 'CustCred' | 'CustPymt';
+
+/**
+ * What the delete sweep walks: a mirrored table and the NetSuite types its
+ * rows are. Both tables keep NetSuite's internal id in `external_ref`, which
+ * is unique across transaction TYPES, so ordering by it is a total order and
+ * `.gt()` skips nothing at a batch boundary.
+ */
+interface NsSweep {
+  table: 'ledger_invoices' | 'ledger_payments';
+  types: readonly NsSweptType[];
+  /** How a refusal to act names the rows, in the run's record. */
+  rows: string;
+}
+
+const INVOICE_SWEEP: NsSweep = { table: 'ledger_invoices', types: ['CustInvc', 'CustCred'], rows: 'mirrored rows' };
+const PAYMENT_SWEEP: NsSweep = { table: 'ledger_payments', types: ['CustPymt'], rows: 'mirrored payments' };
+
+/** Where a sweep has got to, kept by the run so a sweep cut short by an error still counts what it did. */
+interface NsSweepState {
+  /** Continue above this `external_ref`; null starts from the top. */
+  after: string | null;
+  tombstoned: number;
+  voided: number;
+  /** The sweep reached the end of the table this run. */
+  done: boolean;
+  /** Set only when it refused to act on what it read. */
+  problem: string | null;
 }
 
 /**
@@ -370,7 +407,11 @@ export interface NsMirrorResult {
   /** Set only when the sweep refused to act on what it read (see phase (2)). */
   tombstones?: { problem: string };
   pdfs: { stored: number; failed: number; unsupported: number; skipped?: string };
-  payments: { mirrored: number; applications: number } | { permitted: false; reason: string };
+  /**
+   * `tombstoned` and `voided` are the payments' delete sweep (end of phase
+   * (3)); `problem` is set only when that sweep refused to act on what it read.
+   */
+  payments: { mirrored: number; applications: number; tombstoned: number; voided: number; problem?: string } | { permitted: false; reason: string };
   partial: boolean;
   resume?: NsMirrorResume;
   error?: string;
@@ -753,7 +794,8 @@ export async function runNetSuiteMirror(
 
   const resume = parseNsMirrorResume(lastResult);
   const win = await openWindow(service, stateRow ?? null, resume);
-  let tombstoneAfter: string | null = resume?.tombstoneAfter ?? null;
+  const invoiceSweep: NsSweepState = { after: resume?.tombstoneAfter ?? null, tombstoned: 0, voided: 0, done: true, problem: null };
+  const paymentSweep: NsSweepState = { after: resume?.paymentTombstoneAfter ?? null, tombstoned: 0, voided: 0, done: true, problem: null };
   let repairAfter: { appliedExternalId: string; id: string } | null = resume?.repairAfter ?? null;
   // The payments pass is capped at 30 s and pages newest-first, so it takes
   // many runs to walk a decade of CustPymt history. Without this cursor every
@@ -764,8 +806,6 @@ export async function runNetSuiteMirror(
   let modified = 0;
   let synced = 0;
   let lineCount = 0;
-  let tombstoned = 0;
-  let voided = 0;
   let repaired = 0;
   const dupes = { count: 0, samples: [] as string[], seen: new Set<string>() };
   const pdfs: { stored: number; failed: number; unsupported: number; skipped?: string } =
@@ -785,8 +825,6 @@ export async function runNetSuiteMirror(
    *  narrow this to its initial null at every read below. */
   let columns = null as readonly NsOptionalColumn[] | null;
   let drained = false;
-  let tombstonesDone = true;
-  let tombstoneProblem: string | null = null;
   let paymentsDone = true;
   let pdfsDone = true;
   let repairDone = true;
@@ -829,7 +867,8 @@ export async function runNetSuiteMirror(
     processed: win.processed,
     ...(windowClosed() ? { windowClosed: true as const } : {}),
     ...(paymentsBeforeId ? { paymentsBeforeId } : {}),
-    ...(tombstoneAfter ? { tombstoneAfter } : {}),
+    ...(invoiceSweep.after ? { tombstoneAfter: invoiceSweep.after } : {}),
+    ...(paymentSweep.after ? { paymentTombstoneAfter: paymentSweep.after } : {}),
     ...(repairAfter ? { repairAfter } : {}),
   });
 
@@ -997,112 +1036,25 @@ export async function runNetSuiteMirror(
   // rows the window has not reached yet, which is pointless, not wrong.
   if (drained && !error) {
     if (deadline - Date.now() < MIN_PHASE_MS) {
-      tombstonesDone = false;
+      invoiceSweep.done = false;
     } else {
-      const tombstoneDeadline = Math.min(Date.now() + budgets.tombstonesMs, deadline);
-      // A batch whose ids ALL came back missing is ambiguous: either those
-      // transactions really were deleted, or this role can no longer see
-      // them (a subsidiary or segment restriction answers with an empty set,
-      // not an error). Soft-deleting the whole mirror 150 rows at a time on
-      // that reading is not a risk worth taking, so such a batch is HELD
-      // until another batch in the same run proves the query still returns
-      // rows. If none ever does, nothing is tombstoned and the run says why.
-      const deferredGone: string[] = [];
-      const tombstoneEntry = tombstoneAfter;
-      let sawAlive = false;
       try {
-        for (;;) {
-          if (Date.now() >= tombstoneDeadline) { tombstonesDone = false; break; }
-          // external_ref is the NetSuite internal id, which is unique across
-          // transaction TYPES — a CustInvc and a CustCred can never share
-          // one — so ordering by it is a total order and `.gt()` skips
-          // nothing at a batch boundary.
-          let q = service
-            .from('ledger_invoices')
-            .select('id, external_ref, voided')
-            .eq('source', 'netsuite')
-            .is('deleted_at', null)
-            .order('external_ref')
-            .order('id')
-            .limit(TOMBSTONE_BATCH);
-          if (tombstoneAfter) q = q.gt('external_ref', tombstoneAfter);
-          const { data, error: readError } = await q;
-          if (readError) throw new Error(`tombstone enumeration: ${readError.message}`);
-          const batch = data || [];
-          if (batch.length === 0) { tombstoneAfter = null; break; }
-
-          const refs = batch.map(r => safeIntId(r.external_ref, 'external_ref'));
-          const alive = await suiteqlQueryAll(
-            buildTombstoneQuery(refs, (settled || []).includes('status_label')), 1000, SUITEQL_OPTS,
-          );
-          const byId = new Map<string, any>(alive.map((r: any) => [String(r.id), r]));
-
-          const gone = batch.filter(r => !byId.has(String(r.external_ref))).map(r => String(r.id));
-          const nowVoid = batch
-            .filter(r => !r.voided && /void/i.test(String(byId.get(String(r.external_ref))?.label ?? '')))
-            .map(r => String(r.id));
-
-          if (byId.size === 0) {
-            // Nothing at all came back for these ids. Hold them.
-            deferredGone.push(...gone);
-            tombstoneAfter = String(batch[batch.length - 1].external_ref);
-            // Five batches in a row and still not one live id: stop paying
-            // for queries that cannot produce a tombstone either way.
-            if (!sawAlive && deferredGone.length >= TOMBSTONE_BATCH * 5) break;
-            if (batch.length < TOMBSTONE_BATCH) { tombstoneAfter = null; break; }
-            continue;
-          }
-          sawAlive = true;
-
-          const deletedAt = new Date().toISOString();
-          for (const ids of chunk(gone, FILTER_CHUNK)) {
-            const { error: updateError } = await service.from('ledger_invoices').update({ deleted_at: deletedAt }).in('id', ids);
-            if (updateError) throw new Error(`tombstone write: ${updateError.message}`);
-            tombstoned += ids.length;
-          }
-          for (const ids of chunk(nowVoid, FILTER_CHUNK)) {
-            const { error: updateError } = await service.from('ledger_invoices').update({ voided: true }).in('id', ids);
-            if (updateError) throw new Error(`void write: ${updateError.message}`);
-            voided += ids.length;
-          }
-
-          tombstoneAfter = String(batch[batch.length - 1].external_ref);
-          if (batch.length < TOMBSTONE_BATCH) { tombstoneAfter = null; break; }
-        }
-
-        if (deferredGone.length > 0) {
-          if (sawAlive) {
-            // Another batch this run proved the query still returns rows, so
-            // absence really does mean deleted.
-            const deletedAt = new Date().toISOString();
-            for (const ids of chunk(deferredGone, FILTER_CHUNK)) {
-              const { error: updateError } = await service.from('ledger_invoices').update({ deleted_at: deletedAt }).in('id', ids);
-              if (updateError) throw new Error(`tombstone write: ${updateError.message}`);
-              tombstoned += ids.length;
-            }
-          } else {
-            // Not one id in the whole sweep came back. That reads as a
-            // narrowed role, not as history disappearing — nothing is
-            // tombstoned, and the next run retries the same rows.
-            tombstonesDone = false;
-            tombstoneAfter = tombstoneEntry;
-            tombstoneProblem = `${deferredGone.length} mirrored rows came back missing and no batch returned a single live id — read as a narrowed SuiteQL role, not as deletions; nothing was tombstoned (docs/netsuite-ledger-grants.md)`;
-          }
-        }
+        await sweepTombstones(INVOICE_SWEEP, invoiceSweep, Math.min(Date.now() + budgets.tombstonesMs, deadline));
       } catch (err) {
-        tombstonesDone = false;
+        invoiceSweep.done = false;
         fail(`tombstone sweep: ${compactSuiteqlError(err)}`);
         console.error('[ledger-ns-mirror]', error);
       }
     }
   } else if (!drained) {
-    tombstonesDone = false;
+    invoiceSweep.done = false;
   }
 
   // ── (3) payments: probe, then mirror when permitted ────────────────────
   if (!error) {
     if (deadline - Date.now() < MIN_PHASE_MS) {
       paymentsDone = false;
+      paymentSweep.done = false;
     } else {
       const paymentsDeadline = Math.min(Date.now() + budgets.paymentsMs, deadline);
       paymentsCap = await probePayments();
@@ -1120,14 +1072,31 @@ export async function runNetSuiteMirror(
           fail(`customer payments: ${compactSuiteqlError(err)}`);
           console.error('[ledger-ns-mirror]', error);
         }
+        // What NetSuite deleted since, with what's left of the phase, and
+        // only once the pass has drained, as the invoices' sweep waits for
+        // the window: until then it would ask about payments the pass has
+        // not reached yet.
+        if (!paymentsDone || error || paymentsDeadline - Date.now() < MIN_PHASE_MS) {
+          paymentSweep.done = false;
+        } else {
+          try {
+            await sweepTombstones(PAYMENT_SWEEP, paymentSweep, paymentsDeadline);
+          } catch (err) {
+            paymentSweep.done = false;
+            fail(`payment tombstone sweep: ${compactSuiteqlError(err)}`);
+            console.error('[ledger-ns-mirror]', error);
+          }
+        }
       } else {
         // Nothing to resume: a cursor left over from when the grant existed
         // would pin the window open forever.
         paymentsBeforeId = null;
+        paymentSweep.after = null;
       }
     }
   } else {
     paymentsDone = false;
+    paymentSweep.done = false;
   }
 
   // ── (4) PDFs ───────────────────────────────────────────────────────────
@@ -1169,23 +1138,29 @@ export async function runNetSuiteMirror(
     }
   }
 
-  const partial = !error && (!drained || !tombstonesDone || !paymentsDone || !pdfsDone || !repairDone);
-  const carriesCursor = !drained || !!paymentsBeforeId || !!tombstoneAfter || !!repairAfter;
+  const partial = !error && (!drained || !invoiceSweep.done || !paymentsDone || !paymentSweep.done || !pdfsDone || !repairDone);
+  const carriesCursor = !drained || !!paymentsBeforeId || !!invoiceSweep.after || !!paymentSweep.after || !!repairAfter;
   const result: NsMirrorResult = {
     modified,
     synced,
     lines: lineCount,
-    tombstoned,
-    voided,
+    tombstoned: invoiceSweep.tombstoned,
+    voided: invoiceSweep.voided,
     repaired,
     droppedColumns,
     columnsSettled,
     capabilities: { payments: paymentsCap },
     customers: { duplicateNetsuiteIds: dupes.count, samples: dupes.samples },
-    ...(tombstoneProblem ? { tombstones: { problem: tombstoneProblem } } : {}),
+    ...(invoiceSweep.problem ? { tombstones: { problem: invoiceSweep.problem } } : {}),
     pdfs,
     payments: paymentsCap.permitted
-      ? { mirrored: paymentsMirrored, applications: applicationsWritten }
+      ? {
+        mirrored: paymentsMirrored,
+        applications: applicationsWritten,
+        tombstoned: paymentSweep.tombstoned,
+        voided: paymentSweep.voided,
+        ...(paymentSweep.problem ? { problem: paymentSweep.problem } : {}),
+      }
       : { permitted: false, reason: paymentsCap.reason || NOT_PERMITTED_REASON },
     partial,
     ...(carriesCursor ? { resume: buildResume() } : {}),
@@ -1213,6 +1188,100 @@ export async function runNetSuiteMirror(
   return result;
 
   // ── phase implementations (closures over the run's state) ──────────────
+
+  /**
+   * One stretch of the delete sweep over a mirrored table: asks NetSuite
+   * which of its rows still exist, 150 at a time from `state.after`, marks
+   * the rest deleted, and voided where NetSuite's status label says so.
+   * Progress goes into `state` as it's made, so a sweep an error cuts short
+   * still counts what it did and the next run carries on from there.
+   */
+  async function sweepTombstones(sweep: NsSweep, state: NsSweepState, phaseDeadline: number): Promise<void> {
+    // A batch whose ids ALL came back missing is ambiguous: either those
+    // transactions really were deleted, or this role can no longer see
+    // them (a subsidiary or segment restriction answers with an empty set,
+    // not an error). Soft-deleting the whole mirror 150 rows at a time on
+    // that reading is not a risk worth taking, so such a batch is HELD
+    // until another batch in the same sweep proves the query still returns
+    // rows. If none ever does, nothing is tombstoned and the run says why.
+    const deferredGone: string[] = [];
+    const entry = state.after;
+    let sawAlive = false;
+    state.done = true;
+    for (;;) {
+      if (Date.now() >= phaseDeadline) { state.done = false; break; }
+      let q = service
+        .from(sweep.table)
+        .select('id, external_ref, voided')
+        .eq('source', 'netsuite')
+        .is('deleted_at', null)
+        .order('external_ref')
+        .order('id')
+        .limit(TOMBSTONE_BATCH);
+      if (state.after) q = q.gt('external_ref', state.after);
+      const { data, error: readError } = await q;
+      if (readError) throw new Error(`tombstone enumeration: ${readError.message}`);
+      const batch = data || [];
+      if (batch.length === 0) { state.after = null; break; }
+
+      const refs = batch.map(r => safeIntId(r.external_ref, 'external_ref'));
+      const alive = await suiteqlQueryAll(
+        buildTombstoneQuery(refs, (settled || []).includes('status_label'), sweep.types), 1000, SUITEQL_OPTS,
+      );
+      const byId = new Map<string, any>(alive.map((r: any) => [String(r.id), r]));
+
+      const gone = batch.filter(r => !byId.has(String(r.external_ref))).map(r => String(r.id));
+      const nowVoid = batch
+        .filter(r => !r.voided && /void/i.test(String(byId.get(String(r.external_ref))?.label ?? '')))
+        .map(r => String(r.id));
+
+      if (byId.size === 0) {
+        // Nothing at all came back for these ids. Hold them.
+        deferredGone.push(...gone);
+        state.after = String(batch[batch.length - 1].external_ref);
+        // Five batches in a row and still not one live id: stop paying
+        // for queries that cannot produce a tombstone either way.
+        if (!sawAlive && deferredGone.length >= TOMBSTONE_BATCH * 5) break;
+        if (batch.length < TOMBSTONE_BATCH) { state.after = null; break; }
+        continue;
+      }
+      sawAlive = true;
+
+      const deletedAt = new Date().toISOString();
+      for (const ids of chunk(gone, FILTER_CHUNK)) {
+        const { error: updateError } = await service.from(sweep.table).update({ deleted_at: deletedAt }).in('id', ids);
+        if (updateError) throw new Error(`tombstone write: ${updateError.message}`);
+        state.tombstoned += ids.length;
+      }
+      for (const ids of chunk(nowVoid, FILTER_CHUNK)) {
+        const { error: updateError } = await service.from(sweep.table).update({ voided: true }).in('id', ids);
+        if (updateError) throw new Error(`void write: ${updateError.message}`);
+        state.voided += ids.length;
+      }
+
+      state.after = String(batch[batch.length - 1].external_ref);
+      if (batch.length < TOMBSTONE_BATCH) { state.after = null; break; }
+    }
+
+    if (deferredGone.length === 0) return;
+    if (sawAlive) {
+      // Another batch this sweep proved the query still returns rows, so
+      // absence really does mean deleted.
+      const deletedAt = new Date().toISOString();
+      for (const ids of chunk(deferredGone, FILTER_CHUNK)) {
+        const { error: updateError } = await service.from(sweep.table).update({ deleted_at: deletedAt }).in('id', ids);
+        if (updateError) throw new Error(`tombstone write: ${updateError.message}`);
+        state.tombstoned += ids.length;
+      }
+    } else {
+      // Not one id in the whole sweep came back. That reads as a narrowed
+      // role, not as history disappearing — nothing is tombstoned, and the
+      // next run retries the same rows.
+      state.done = false;
+      state.after = entry;
+      state.problem = `${deferredGone.length} ${sweep.rows} came back missing and no batch returned a single live id — read as a narrowed SuiteQL role, not as deletions; nothing was tombstoned (docs/netsuite-ledger-grants.md)`;
+    }
+  }
 
   /**
    * Can this integration role read customer payments, and which link table
@@ -1317,6 +1386,10 @@ export async function runNetSuiteMirror(
             party_name: nsPartyName(row),
             total: abs(row.total) ?? 0,
             memo: row.memo ? String(row.memo) : null,
+            // NetSuite just returned it, so it isn't deleted: the payments'
+            // delete sweep infers deletion from absence, which a narrowed
+            // role can fake, and only this clears it (see mapNsHeader).
+            deleted_at: null,
             post_cutover: false,
             sync_token: row.lastmodifieddate != null ? String(row.lastmodifieddate) : null,
             source_updated_at: row.lastmodifieddate ?? null,

@@ -1,6 +1,6 @@
 import {
   centsOf, pickReceivable,
-  type AccountAmount, type ChartAccount, type CheckStatus, type InvoiceRowView, type InvoiceView, type MonthCheck,
+  type AccountAmount, type ChartAccount, type CheckStatus, type InvoiceBooks, type InvoiceRowView, type InvoiceView, type MonthCheck,
   type MonthReason, type MonthSummary, type NetSuitePosting, type Reason,
 } from './invoice-check';
 import { MAIN_LINE } from './invoice-rule';
@@ -214,8 +214,22 @@ const appliedName = (number: string) => {
 
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 
-/** One company's customer payments dated in one month, each checked against NetSuite. */
-export function checkPaymentMonth(data: PaymentMonthData, opts: { company: string; chart: ChartAccount[] }): PaymentMonthCheck {
+/** One payment of the month, worked out with the payment rule and checked against NetSuite. */
+export interface WorkedPayment {
+  payment: PaymentMonthData['payments'][number];
+  number: string;
+  checked: CheckedPayment;
+}
+
+/**
+ * Every payment of the month worked out with the payment rule and checked:
+ * what checkPaymentMonth shows, and what the posting job posts
+ * (src/lib/books/invoice-posting.ts).
+ */
+export function workOutPaymentMonth(
+  data: PaymentMonthData,
+  opts: { company: string; chart: ChartAccount[] },
+): { payments: WorkedPayment[]; account: (id: string) => string; receivableNote: string | null } {
   const accountTypes = new Map<string, string>();
   const accountNames = new Map<string, string>();
   for (const a of opts.chart) {
@@ -230,14 +244,33 @@ export function checkPaymentMonth(data: PaymentMonthData, opts: { company: strin
   const receivable = pickReceivable(opts.chart, opts.company, data.payments.flatMap(postings), 'payments');
   const ctx = { receivable: receivable.account, accountTypes };
 
+  const payments = data.payments.map((p): WorkedPayment => ({
+    payment: p,
+    number: p.number || `NetSuite ${p.netsuite_id}`,
+    checked: checkPayment({ cents: centsOf(p.total), netsuite: postings(p) }, ctx),
+  }));
+  return { payments, account, receivableNote: receivable.note };
+}
+
+/**
+ * One company's customer payments dated in one month, each checked against
+ * NetSuite. `books`, when the company's payments post, says what
+ * FleetSuite's books hold for each.
+ */
+export function checkPaymentMonth(
+  data: PaymentMonthData,
+  opts: { company: string; chart: ChartAccount[] },
+  books?: (worked: WorkedPayment) => InvoiceBooks,
+): PaymentMonthCheck {
+  const { payments: worked, account, receivableNote } = workOutPaymentMonth(data, opts);
+
   const summary: MonthSummary = { invoices: 0, matches: 0, differs: 0, unworkable: 0, waiting: 0, withCost: 0 };
   const reasons = new Map<string, MonthReason>();
   const views: PaymentView[] = [];
   const notInGl: string[] = [];
   const used = new Set<string>();
-  for (const p of data.payments) {
-    const number = p.number || `NetSuite ${p.netsuite_id}`;
-    const checked = checkPayment({ cents: centsOf(p.total), netsuite: postings(p) }, ctx);
+  for (const w of worked) {
+    const { payment: p, number, checked } = w;
     if (p.companies.length === 0) {
       // In neither company's GL copy: only worth a word when FleetSuite would post it.
       if (checked.status !== 'matches') notInGl.push(number);
@@ -271,11 +304,16 @@ export function checkPaymentMonth(data: PaymentMonthData, opts: { company: strin
       reasons: why.map((r) => r.text),
       rows,
       applied: p.applied.map((a) => ({ number: appliedName(a.number), cents: centsOf(a.amount) ?? 0 })),
+      ...(books ? { books: books(w) } : {}),
     });
   }
 
+  if (books) {
+    summary.posted = views.filter((v) => v.books && v.books.entryNo !== null).length;
+    summary.pending = views.filter((v) => v.books?.next).length;
+  }
   const notes: string[] = [];
-  if (receivable.note) notes.push(receivable.note);
+  if (receivableNote) notes.push(receivableNote);
   if (notInGl.length) {
     const them = notInGl.length === 1 ? 'it' : 'them';
     notes.push(`${plural(notInGl.length, 'more payment', 'more payments')} dated this month ${notInGl.length === 1 ? "isn't" : "aren't"} in the copy `
