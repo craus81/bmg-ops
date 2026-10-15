@@ -9,6 +9,9 @@ import { checkMonth, type ChartAccount, type InvoiceMonthData, type ItemAccountC
 import { readLineFacts } from '@/lib/books/invoice-line-facts';
 import { PAYMENT_RULE } from '@/lib/books/payment-rule';
 import { checkPaymentMonth, type PaymentMonthData } from '@/lib/books/payment-check';
+import { DEPOSIT_RULE } from '@/lib/books/deposit-rule';
+import { checkDepositMonth, type DepositMonthData } from '@/lib/books/deposit-check';
+import { BOOKS_DEPOSITS_SYNC } from '@/lib/books/netsuite-deposits';
 import {
   BOOKS_INVOICE_POSTING, POSTING_COMPANIES, invoiceBooks, paymentBooks, postInvoices, postingFor, postingKey, unsaidFacts,
   type InvoicePosting, type PaymentPosting,
@@ -29,8 +32,10 @@ const POSTING_BUDGET_MS = 240_000;
  * memos, each with the entry FleetSuite's rule works out for it next to the
  * GL lines NetSuite posted (migrations 364, 370 and 380), and why any
  * differ. With `kind=payment` its customer payments dated in the month, each
- * checked with the payment rule (migration 374). With `summary=1` only the
- * counts come back, for checking every month in turn.
+ * checked with the payment rule (migration 374), and with `kind=deposit` its
+ * customer deposits and deposit applications, checked with the deposit rule
+ * (migration 382), with how the last copy of them from NetSuite went. With
+ * `summary=1` only the counts come back, for checking every month in turn.
  *
  * What the copy of the invoices' lines doesn't keep (which lines are cost of
  * goods, a discount or markup set at the top, each line's own amount,
@@ -84,7 +89,8 @@ export async function GET(req: NextRequest) {
     : months.includes(previous) ? previous : months[0];
 
   const askedKind = params.get('kind');
-  const kind: SalesDocKind | 'payment' = askedKind === 'credit_memo' || askedKind === 'payment' ? askedKind : 'invoice';
+  const kind: SalesDocKind | 'payment' | 'deposit' =
+    askedKind === 'credit_memo' || askedKind === 'payment' || askedKind === 'deposit' ? askedKind : 'invoice';
   const chart = accounts.data.map(({ company_id, ...a }) => ({ ...a, company: company_id ? codeOf.get(company_id) ?? null : null }));
   const page = {
     companies: (companies.data || []).map((c) => ({ code: c.code, name: c.name })),
@@ -96,6 +102,36 @@ export async function GET(req: NextRequest) {
 
   // Whether the company's documents post, and so what its books hold for each and what the next run does.
   const posts = (POSTING_COMPANIES as readonly string[]).includes(company);
+
+  if (kind === 'deposit') {
+    const [res, copy] = await Promise.all([
+      service.rpc('gl_deposit_month', { p_company: company, p_month: month }),
+      service.from('sync_state').select('last_result, updated_at').eq('sync_type', BOOKS_DEPOSITS_SYNC).maybeSingle(),
+    ]);
+    const failed = res.error || copy.error;
+    if (failed) return NextResponse.json({ error: failed.message }, { status: 500 });
+    const data = (res.data ?? {}) as Partial<DepositMonthData>;
+    const check = checkDepositMonth(
+      { deposits: data.deposits ?? [], accounts: data.accounts ?? [], not_copied: data.not_copied ?? [] },
+      { company, chart },
+    );
+    if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });
+    // How the last copy went, counts and words only.
+    const last = (copy.data?.last_result ?? null) as { read?: number; partial?: boolean; notes?: string[]; error?: string } | null;
+    const copied = copy.data
+      ? {
+          at: copy.data.updated_at,
+          result: {
+            read: Number(last?.read) || 0,
+            partial: !!last?.partial,
+            ...(Array.isArray(last?.notes) ? { notes: last.notes.map(String) } : {}),
+            ...(last?.error ? { error: String(last.error) } : {}),
+          },
+        }
+      : null;
+    // Deposits don't post yet: the check comes first, as it did for invoices and payments.
+    return NextResponse.json({ rule: DEPOSIT_RULE, kind, ...page, listsCopiedAt: null, posts: false, copy: copied, ...check });
+  }
 
   if (kind === 'payment') {
     const paid = await service.rpc('gl_payment_month', { p_company: company, p_month: month });
