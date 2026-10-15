@@ -60,6 +60,7 @@ export default function MorePage() {
       items: [
         { title: 'Customers', sub: 'Customers & sales pipeline', path: '/admin/prospects', show: F('prospects') },
         { title: 'After-hours Calls', sub: 'Calls the virtual assistant answered while we were closed · summary, recording, call back', path: '/after-hours-calls', show: INTERNAL_STAFF_ROLES.some(r => hasRole(r)) },
+        { title: 'QC Fixes', sub: 'Issues Masterack\'s QC team reports through their link · fix-by date, mark fixed', path: '/qc-fixes', show: INTERNAL_STAFF_ROLES.some(r => hasRole(r)) },
         { title: 'Credit Applications', sub: 'Review net-terms applications from the public form', path: '/admin/credit-applications', show: F('credit_applications') },
         { title: 'Estimates', sub: 'Build estimates & push to NetSuite', path: '/estimates', show: F('estimates') },
         { title: 'Pricing Requests', sub: 'Masterack pricing requests: pictures, notes, the price you sent, and the PO it became', path: '/pricing-requests', show: F('estimates') },

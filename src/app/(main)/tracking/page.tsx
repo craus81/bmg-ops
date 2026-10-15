@@ -15,6 +15,7 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import StatusBadge from '@/components/StatusBadge';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
+import VehicleQcFixes from '@/components/VehicleQcFixes';
 import { openOrCreateVehicleThread } from '@/lib/customer-thread';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import { deepLinks } from '@/lib/deep-links';
@@ -3266,6 +3267,8 @@ export default function TrackingPage() {
                         </div>
                       )}
                     </DropZone>
+
+                    <VehicleQcFixes vin={vehicle.vin} />
 
                     {/* Photo Timeline — unified check-in / during / completion / design files / proofs */}
                     <div style={{ marginBottom: '12px' }}>

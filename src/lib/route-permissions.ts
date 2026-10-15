@@ -436,6 +436,17 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/parts/transactions/route.ts': staff(),
   'src/app/api/pay-rates/route.ts': { kind: 'staff', contains: ['requireStaff(', 'requireAdmin('] },
   'src/app/api/phone-calls/route.ts': staff(),
+  // QC Fixes (migration 381): the staff side of a customer's QC fix link.
+  'src/app/api/qc-fixes/route.ts': staff(),
+  'src/app/api/qc-fixes/photo/route.ts': staff(),
+  'src/app/api/qc-fixes/fixed-email/route.ts': staff(),
+  // Reading the links is staff (the page shows them); issuing, regenerating,
+  // revoking and setting who is emailed is admin.
+  'src/app/api/qc-fixes/link/route.ts': { kind: 'admin', contains: ['requireAdmin(', 'requireStaff('] },
+  // A customer's QC fix link (/qc/<token>): no login, like the PO-status portal.
+  'src/app/api/qc/[token]/route.ts': token('customer QC fix link; the token (customers.qc_token) is the credential, reads and reports are rate-limited per IP, reads return only that customer\'s own reports, and a report can only claim photos uploaded under the same token', 'resolveQcCustomer('),
+  'src/app/api/qc/[token]/photo/route.ts': token('one photo upload for a QC fix report; token-resolved customer, rate-limited, images only, size-capped, stored unclaimed until that customer\'s report claims it', 'resolveQcCustomer('),
+  'src/app/api/qc/[token]/photo/[photoId]/route.ts': token('serves a QC fix photo through the customer\'s link (page + emails); the photo must belong to the token customer, and the redirect is a short-lived signed URL', 'resolveQcCustomer('),
   'src/app/api/po-receipts/route.ts': feature('parts_ordering'),
   'src/app/api/receiving/exceptions/route.ts': feature('parts_ordering'),
   'src/app/api/pos/audit-invoices/route.ts': admin(),
