@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import type { ChartAccount, NetSuitePosting } from './invoice-check';
+import type { ChartAccount, InvoiceBooks, NetSuitePosting } from './invoice-check';
 import type { BillAccounts, BillItem, BillLine } from './bill-rule';
 import {
   billReasons, checkBill, checkBillMonth, itemsWithoutAccount, lineSigns, pickPayables, pickReceivedAccount, withOwnBillAmounts, workOutBillMonth,
-  type BillMonthData,
+  type BillMonthData, type WorkedBill,
 } from './bill-check';
 
 // Made-up books: '200' and '201' payables, '205' received not billed, '206'
@@ -158,6 +158,13 @@ describe('checkBill', () => {
       ['account:610', 'item', ['610', 12000], ['610', 12000], true],
       ['account:205', 'received', ['205', 3000], ['205', 3000], true],
     ]);
+    // The entry it posts, line by line, payables first.
+    expect(c.lines.map((l) => [l.lineId, l.account, l.cents, l.itemNumber, l.role])).toEqual([
+      ['payables', '200', -65000, null, 'payables'],
+      ['1', '530', 50000, null, 'expense'],
+      ['2', '610', 12000, 'SUPPLY-2', 'item'],
+      ['3', '205', 3000, 'WIDGET-1', 'received'],
+    ]);
     // However NetSuite splits its lines over the accounts.
     expect(bill(LINES, [ns('0', '200', -65000), ns('5', '530', 20000), ns('6', '530', 30000), ns('2', '610', 12000), ns('3', '205', 3000)]).status)
       .toBe('matches');
@@ -173,9 +180,9 @@ describe('checkBill', () => {
   });
 
   it('waits for the GL copy, then for the lines, and matches $0 with nothing on either side', () => {
-    expect(bill(LINES, [])).toEqual({ status: 'waiting', waiting: 'gl', problems: [], rows: [] });
-    expect(bill(null)).toEqual({ status: 'waiting', waiting: 'lines', problems: [], rows: [] });
-    expect(bill([], [], true, 0)).toEqual({ status: 'matches', problems: [], rows: [] });
+    expect(bill(LINES, [])).toEqual({ status: 'waiting', waiting: 'gl', problems: [], rows: [], lines: [] });
+    expect(bill(null)).toEqual({ status: 'waiting', waiting: 'lines', problems: [], rows: [], lines: [] });
+    expect(bill([], [], true, 0)).toEqual({ status: 'matches', problems: [], rows: [], lines: [] });
     // An account NetSuite's lines come to nothing on is the same as none.
     expect(bill([], [ns('0', '200', 500), ns('1', '200', -500)], true, 0).status).toBe('matches');
   });
@@ -205,6 +212,8 @@ describe('checkBill', () => {
     const c = bill([line('1', '999', 65000)]);
     expect(c.status).toBe('unworkable');
     expect(c.problems).toEqual([{ kind: 'not_copied', lineId: '1', itemId: '999' }]);
+    // A document posts whole or not at all.
+    expect(c.lines).toEqual([]);
     expect(rows(c).map((r) => [r[0], r[2], r[4]])).toEqual([
       ['account:200', null, false], ['account:530', null, false], ['account:610', null, false], ['account:205', null, false],
     ]);
@@ -341,6 +350,27 @@ describe('checkBillMonth', () => {
       "The copy of NetSuite's GL has 1 bill or bill credit of this company's booked into this month that the copy of the bills doesn't: "
         + 'B-709. The bills copy runs every two hours and may not have reached it yet, or NetSuite deleted it and the GL copy hasn\'t caught up.',
     ]);
+  });
+
+  it('says what FleetSuite\'s books hold for each of the company\'s and what the next run does, when its bills post', () => {
+    const asked: string[] = [];
+    const books = (w: WorkedBill): InvoiceBooks => {
+      asked.push(w.number);
+      if (w.number === 'B-701') return { entryNo: 12, next: null, earlier: [{ entryNo: 9, reversedBy: 11 }] };
+      return { entryNo: null, next: w.checked.status === 'waiting' ? null : 'post', earlier: [] };
+    };
+    const m = checkBillMonth(MONTH, { company: 'BMG', chart: CHART }, books);
+    // Not B-705, which neither company's GL copy has.
+    expect(asked).toEqual(['B-701', 'VC-702', 'B-703', 'B-704']);
+    expect(m.invoices.map((b) => [b.number, b.books?.entryNo, b.books?.next])).toEqual([
+      ['B-701', 12, null], ['VC-702', null, 'post'], ['B-703', null, 'post'], ['B-704', null, null],
+    ]);
+    expect(m.invoices[0].books?.earlier).toEqual([{ entryNo: 9, reversedBy: 11 }]);
+    expect(m.summary).toMatchObject({ posted: 1, pending: 2 });
+    // A company whose bills don't post yet gets neither.
+    const without = checkBillMonth(MONTH, { company: 'BMG', chart: CHART });
+    expect(without.invoices.map((b) => b.books)).toEqual([undefined, undefined, undefined, undefined]);
+    expect([without.summary.posted, without.summary.pending]).toEqual([undefined, undefined]);
   });
 
   it('uses the vendor\'s own payables account when the company can use it', () => {

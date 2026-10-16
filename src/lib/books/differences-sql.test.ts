@@ -1,11 +1,12 @@
 // Migration 377 puts FleetSuite's journal next to the copy of NetSuite's
 // general ledger for the differences page. This runs migration 314 (with
 // stand-ins for the app tables it points at) and migrations 359–364, 367,
-// 370, 374, 376, 377, 380, 382 and 383 (which gives
-// gl_books_difference_documents the deposits) in an in-memory Postgres
-// (PGlite) as the app's server login, copies a made-up month of NetSuite
-// documents, posts FleetSuite's entries for some of them, and holds what the
-// three functions return, and what the page's comparison makes of it.
+// 370, 374, 376, 377, 380 and 382–386 (383 and 386 give
+// gl_books_difference_documents the deposits and the bills) in an in-memory
+// Postgres (PGlite) as the app's server login, copies a made-up month of
+// NetSuite documents, posts FleetSuite's entries for some of them, and holds
+// what the three functions return, and what the page's comparison makes of
+// it.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -55,6 +56,7 @@ async function freshDb(): Promise<PGlite> {
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '364-books-invoice-check.sql',
     '367-books-invoice-posting.sql', '370-books-credit-memos.sql', '374-books-payment-check.sql', '376-books-payment-posting.sql',
     '377-books-differences.sql', '380-books-netsuite-month.sql', '382-books-customer-deposits.sql', '383-books-deposit-posting.sql',
+    '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -156,9 +158,9 @@ describe("migration 377's functions", () => {
     await mirrorInvoice(db, '1008', '2026-09-16');
     await copyTxn(db, '1009', 'CustInvc', '2026-09-17', SEP, [['0', 'BMG', '120', 1200], ['1', 'BMG', '400', -1200]]);
     await mirrorInvoice(db, '1009', '2026-09-17', { voided: true });
-    // A payment that matches, a bill and a journal FleetSuite doesn't post.
+    // A payment that matches, and an expense report and a journal FleetSuite doesn't post.
     await copyTxn(db, '2001', 'CustPymt', '2026-09-18', SEP, [['0', 'BMG', '110', 10700], ['1', 'BMG', '120', -10700]]);
-    await copyTxn(db, '3001', 'VendBill', '2026-09-19', SEP, [['0', 'BMG', '200', -50000], ['1', 'BMG', '600', 50000]]);
+    await copyTxn(db, '3001', 'ExpRept', '2026-09-19', SEP, [['0', 'BMG', '200', -50000], ['1', 'BMG', '600', 50000]]);
     await copyTxn(db, '4001', 'Journal', '2026-09-20', SEP, [['1', 'BMG', '600', 2000], ['2', 'BMG', '110', -2000]]);
     // INV1010 is dated before the books start, posted by NetSuite to January 2025.
     await copyTxn(db, '1010', 'CustInvc', '2024-12-31', '2025-01-01', [['0', 'BMG', '120', 900], ['1', 'BMG', '400', -900]]);
@@ -202,12 +204,12 @@ describe("migration 377's functions", () => {
       '110 CustPymt 107.00', '110 Journal -20.00',
       '120 CustInvc 239.00', '120 CustPymt -107.00',
       '130 cost -40.00',
-      '200 VendBill -500.00',
+      '200 ExpRept -500.00',
       '220 CustInvc -7.00',
       '400 CustInvc -202.00',
       '500 cost 40.00',
       '510 CustInvc -30.00',
-      '600 Journal 20.00', '600 VendBill 500.00',
+      '600 ExpRept 500.00', '600 Journal 20.00',
     ]);
     // INV1002's three entries come to its new one; INV1008's and INV1009's two come to nothing.
     expect(sep(data.fleetsuite)).toEqual([
@@ -229,8 +231,8 @@ describe("migration 377's functions", () => {
     expect(data.netsuite_kinds.filter((k) => k.month === SEP).sort(byKind)).toEqual([
       { month: SEP, kind: 'CustInvc', documents: 6, moved: '239.00' },
       { month: SEP, kind: 'CustPymt', documents: 1, moved: '107.00' },
+      { month: SEP, kind: 'ExpRept', documents: 1, moved: '500.00' },
       { month: SEP, kind: 'Journal', documents: 1, moved: '20.00' },
-      { month: SEP, kind: 'VendBill', documents: 1, moved: '500.00' },
       { month: SEP, kind: 'cost', documents: 1, moved: '40.00' },
     ]);
     expect(data.fleetsuite_kinds.filter((k) => k.month === SEP).sort(byKind)).toEqual([
@@ -267,7 +269,7 @@ describe("migration 377's functions", () => {
       ['Invoice', 'posted', 6, 6, 7],
       ['Payment', 'posted', 1, 1, 0],
       ['Cost of goods on invoices', 'cost', 1, null, null],
-      ['Bill', 'not_posted', 1, null, null],
+      ['Expense Report', 'not_posted', 1, null, null],
       ['Journal', 'not_posted', 1, null, null],
       ['Typed entry (FleetSuite only)', 'fleetsuite_only', null, 1, null],
     ]);

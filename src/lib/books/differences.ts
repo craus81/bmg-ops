@@ -1,5 +1,6 @@
 import { COPY_FROM, monthsBetween, toCents, TRAN_TYPE_NAMES } from './netsuite-gl';
 import { DEPOSIT_SOURCE_TYPE } from './deposit-rule';
+import { BILL_SOURCE_TYPE } from './bill-rule';
 
 /**
  * What still differs between FleetSuite's own books and NetSuite's, and why
@@ -28,12 +29,20 @@ export const NETSUITE_TYPE: Readonly<Record<string, string>> = {
   payment: 'CustPymt',
   [DEPOSIT_SOURCE_TYPE.CustDep]: 'CustDep',
   [DEPOSIT_SOURCE_TYPE.DepAppl]: 'DepAppl',
+  [BILL_SOURCE_TYPE.VendBill]: 'VendBill',
+  [BILL_SOURCE_TYPE.VendCred]: 'VendCred',
 };
 
 const DEPOSIT_KINDS: ReadonlySet<string> = new Set(Object.values(DEPOSIT_SOURCE_TYPE));
+const BILL_KINDS: ReadonlySet<string> = new Set(Object.values(BILL_SOURCE_TYPE));
 
-/** The switch of Invoices vs NetSuite that lists a kind of FleetSuite document: deposits and their applications share one. */
-export const listKindOf = (sourceType: string): string => (DEPOSIT_KINDS.has(sourceType) ? 'deposit' : sourceType);
+/**
+ * The switch of Invoices vs NetSuite that lists a kind of FleetSuite
+ * document: deposits and their applications share one, and bills and bill
+ * credits another.
+ */
+export const listKindOf = (sourceType: string): string =>
+  (DEPOSIT_KINDS.has(sourceType) ? 'deposit' : BILL_KINDS.has(sourceType) ? 'bill' : sourceType);
 
 /** NetSuite's lines booking the cost of stock on invoices and credit memos (gl_netsuite_cost_lines): FleetSuite posts that with fulfillments. */
 export const COST = 'cost';
@@ -353,7 +362,7 @@ export function kindRows(cmp: MonthComparison, counts: Record<string, number> | 
 
 /** One document of a month as gl_books_difference_documents returns it. */
 export interface DiffDocumentData {
-  /** FleetSuite's source type: 'invoice', 'credit_memo', 'payment', 'customer_deposit' or 'deposit_application'. */
+  /** FleetSuite's source type: 'invoice', 'credit_memo', 'payment', 'customer_deposit', 'deposit_application', 'vendor_bill' or 'vendor_credit'. */
   kind: string;
   netsuite_id: string;
   /** Every account either side moved this month. */
@@ -362,7 +371,11 @@ export interface DiffDocumentData {
   netsuite: { type: string; number: string | null; date: string; month: string | null } | null;
   /** FleetSuite's journal: how many entries it has had and the one that stands. */
   fleetsuite: { entries: number; standing: { entry_no: number; date: string } | null } | null;
-  /** The copy of NetSuite's invoices, credit memos, payments or deposits (deleted: a deposit NetSuite no longer lists). */
+  /**
+   * The copy of NetSuite's invoices, credit memos, payments, deposits or
+   * bills (deleted: a deposit or bill NetSuite no longer lists); a bill's
+   * customer is its vendor.
+   */
   copy: { number: string | null; customer: string | null; voided: boolean; deleted: boolean } | null;
 }
 
@@ -397,6 +410,7 @@ export interface DiffDocument {
   kind: string;
   netsuiteId: string;
   number: string;
+  /** The customer, or a bill's or bill credit's vendor. */
   customer: string | null;
   /** NetSuite's date for it, else FleetSuite's. */
   date: string | null;
@@ -430,11 +444,11 @@ const NAMED_ACCOUNTS = 2;
 
 /**
  * FleetSuite's kinds of document that post in the month NetSuite booked them
- * to, whatever their own date (entryDate in invoice-check.ts, migration 380),
- * and that Invoices vs NetSuite lists under that month. Payments, deposits
- * and applications post and are listed by their own date.
+ * to, whatever their own date (entryDate in invoice-check.ts, migrations 380
+ * and 386), and that Invoices vs NetSuite lists under that month. Payments,
+ * deposits and applications post and are listed by their own date.
  */
-const IN_NETSUITE_MONTH: ReadonlySet<string> = new Set(['invoice', 'credit_memo']);
+const IN_NETSUITE_MONTH: ReadonlySet<string> = new Set(['invoice', 'credit_memo', ...BILL_KINDS]);
 
 function reasonFor(doc: DiffDocumentData, lines: DiffDocumentLine[], costAccounts: ReadonlySet<string>): { reason: DiffReason; why: string } {
   const ns = doc.netsuite;

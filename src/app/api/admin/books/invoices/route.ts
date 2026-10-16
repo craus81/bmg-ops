@@ -13,12 +13,12 @@ import { DEPOSIT_RULE } from '@/lib/books/deposit-rule';
 import { checkDepositMonth, type DepositMonthData } from '@/lib/books/deposit-check';
 import { BOOKS_DEPOSITS_SYNC } from '@/lib/books/netsuite-deposits';
 import { BILL_RULE } from '@/lib/books/bill-rule';
-import { checkBillMonth, itemsWithoutAccount, type BillMonthData } from '@/lib/books/bill-check';
+import { checkBillMonth } from '@/lib/books/bill-check';
 import { BOOKS_BILLS_SYNC } from '@/lib/books/netsuite-bills';
 import {
-  BOOKS_INVOICE_POSTING, POSTING_COMPANIES, depositBooks, depositPostingFor, invoiceBooks, paymentBooks, postInvoices, postingFor,
-  postingKey, unsaidFacts,
-  type DepositPosting, type InvoicePosting, type PaymentPosting,
+  BOOKS_INVOICE_POSTING, POSTING_COMPANIES, billBooks, billPostingFor, depositBooks, depositPostingFor, invoiceBooks, paymentBooks,
+  postInvoices, postingFor, postingKey, readBillMonth, unsaidFacts,
+  type BillPosting, type DepositPosting, type InvoicePosting, type PaymentPosting,
 } from '@/lib/books/invoice-posting';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { compactSuiteqlError } from '@/lib/sales-order-sync';
@@ -50,10 +50,10 @@ const POSTING_BUDGET_MS = 240_000;
  * without and says so.
  *
  * For a company whose documents post (src/lib/books/invoice-posting.ts),
- * each invoice, credit memo, payment, deposit or application (bills don't
- * post yet) also says what
- * FleetSuite's books hold for it (migrations 367, 376 and 383) and what the
- * next posting run does about it, and `lastRun` is how the last one went.
+ * each invoice, credit memo, payment, deposit, application, bill or bill
+ * credit also says what FleetSuite's books hold for it (migrations 367, 376,
+ * 383 and 386) and what the next posting run does about it, and `lastRun` is
+ * how the last one went.
  *
  * Super admin only: the books are being built hidden, for the owner, until
  * they're ready (docs/books.md). It only reads.
@@ -126,28 +126,28 @@ export async function GET(req: NextRequest) {
   };
 
   if (kind === 'bill') {
-    const [res, copy] = await Promise.all([
-      service.rpc('gl_bill_month', { p_company: company, p_month: month }),
+    // The month as the posting job reads it, so what this shows is what it posts.
+    const [read, copy] = await Promise.all([
+      readBillMonth(service, company, month).then((data) => ({ data, error: null }), (err: Error) => ({ data: null, error: err })),
       service.from('sync_state').select('last_result, updated_at').eq('sync_type', BOOKS_BILLS_SYNC).maybeSingle(),
     ]);
-    const failed = res.error || copy.error;
+    const failed = read.error || copy.error;
     if (failed) return NextResponse.json({ error: failed.message }, { status: 500 });
-    const data = (res.data ?? {}) as Partial<BillMonthData>;
-    // Items the copy has no account for go where NetSuite posts their bill lines.
-    const unplaced = itemsWithoutAccount(data.items ?? []);
-    const placed = unplaced.length ? await service.rpc('gl_bill_item_accounts', { p_items: unplaced }) : null;
-    if (placed?.error) return NextResponse.json({ error: placed.error.message }, { status: 500 });
-    const check = checkBillMonth(
-      {
-        bills: data.bills ?? [], items: data.items ?? [], receipt_accounts: data.receipt_accounts ?? [], not_copied: data.not_copied ?? [],
-        item_accounts: (placed?.data ?? []) as NonNullable<BillMonthData['item_accounts']>,
-      },
-      { company, chart },
-    );
+    const data = read.data!;
+    let held: Map<string, BillPosting> | null = null;
+    if (posts) {
+      const mine = data.bills.filter((b) => b.companies.includes(company)).map((b) => b.netsuite_id);
+      held = new Map();
+      if (mine.length) {
+        const books = await service.rpc('gl_bill_postings', { p_company: company, p_source_ids: mine, p_lines: true });
+        if (books.error) return NextResponse.json({ error: books.error.message }, { status: 500 });
+        for (const p of ((books.data as any)?.bills ?? []) as BillPosting[]) held.set(postingKey(p.source_type, p.source_id), p);
+      }
+    }
+    const check = checkBillMonth(data, { company, chart }, held ? (w) => billBooks(w, billPostingFor(held!, w)) : undefined);
     if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });
-    // Bills don't post yet: they're checked first, as deposits were.
     return NextResponse.json({
-      rule: BILL_RULE, kind, ...page, listsCopiedAt: lists.data?.updated_at ?? null, posts: false, copy: copyOf(copy.data), ...check,
+      rule: BILL_RULE, kind, ...page, listsCopiedAt: lists.data?.updated_at ?? null, posts, copy: copyOf(copy.data), ...check,
     });
   }
 
@@ -244,10 +244,10 @@ export async function GET(req: NextRequest) {
 }
 
 /**
- * POST /api/admin/books/invoices — post invoices, credit memos, payments and
- * deposits to FleetSuite's books now rather than wait for the two-hourly
- * run. Same job, same record of how it went; the response says only how the
- * run went, the page reloads the rest.
+ * POST /api/admin/books/invoices — post invoices, credit memos, payments,
+ * deposits and bills to FleetSuite's books now rather than wait for the
+ * two-hourly run. Same job, same record of how it went; the response says
+ * only how the run went, the page reloads the rest.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireSuperAdmin(req);

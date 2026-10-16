@@ -21,6 +21,8 @@ import { PAYMENT_RULE, RECEIVABLE_LINE } from './payment-rule';
 import { workOutPaymentMonth, type PaymentMonthData, type WorkedPayment } from './payment-check';
 import { DEPOSIT_RULE, DEPOSIT_SOURCE_TYPE, DEPOSITS_LINE, type DepositSourceType } from './deposit-rule';
 import { workOutDepositMonth, type DepositMonthData, type WorkedDeposit } from './deposit-check';
+import { BILL_RULE, BILL_SOURCE_TYPE, PAYABLES_LINE, type BillSourceType } from './bill-rule';
+import { itemsWithoutAccount, workOutBillMonth, type BillMonthData, type WorkedBill } from './bill-check';
 
 /**
  * NetSuite's invoices posted to FleetSuite's own journal with the invoice
@@ -29,10 +31,11 @@ import { workOutDepositMonth, type DepositMonthData, type WorkedDeposit } from '
  * memos with the credit memo rule, the same the other way round (migration
  * 370; owner decision 2026-10-14). Everything below that says invoice holds
  * for a credit memo too, for a customer payment, posted with the payment
- * rule (migration 376; owner decision 2026-10-15), and for a customer
- * deposit or deposit application, posted with the deposit rule (migration
- * 383; owner decision 2026-10-15), except where the payments' and deposits'
- * own sections say otherwise.
+ * rule (migration 376; owner decision 2026-10-15), for a customer deposit or
+ * deposit application, posted with the deposit rule (migration 383; owner
+ * decision 2026-10-15), and for a vendor bill or bill credit, posted with the
+ * bill rule (migration 386; owner decision 2026-10-16), except where the
+ * payments', deposits' and bills' own sections say otherwise.
  *
  * Every BMG invoice NetSuite booked into a month from January 2025 that the
  * rule can work out posts once, as the check on Invoices vs NetSuite shows
@@ -52,8 +55,9 @@ import { workOutDepositMonth, type DepositMonthData, type WorkedDeposit } from '
  *   - one the rule can't work out yet, or whose lines don't add up to its
  *     total in the copy (caught mid-refresh), keeps whatever it has.
  *
- * A month whose invoice lines NetSuite couldn't be asked about is left as it
- * is, since its entries could come out different without those answers. The
+ * A month whose invoice lines NetSuite couldn't be asked about has its
+ * invoices and credit memos left as they are, since their entries could come
+ * out different without those answers. The
  * run takes the NetSuite GL copy's lock: it reads that copy, so it never runs
  * while the copy is changing it, and two runs never overlap.
  *
@@ -67,7 +71,7 @@ import { workOutDepositMonth, type DepositMonthData, type WorkedDeposit } from '
 
 export const BOOKS_INVOICE_POSTING = 'books_invoice_posting';
 
-/** The companies whose invoices, credit memos, payments and deposits post. 1084's join once they've been checked against NetSuite. */
+/** The companies whose invoices, credit memos, payments, deposits and bills post. 1084's join once they've been checked against NetSuite. */
 export const POSTING_COMPANIES: readonly BooksCompany[] = ['BMG'];
 
 /** Seconds a run holds the lock: past the routes' 300 s limit, so a run that dies lets go soon after. */
@@ -102,6 +106,8 @@ export interface PostedLine {
   division: string | null;
   source_line_ref: string | null;
   customer_id: string | null;
+  /** The vendor on a bill's payables line (gl_bill_postings, migration 386); the other documents' reads leave it out. */
+  vendor_ref?: string | null;
 }
 
 /** What the journal holds for one invoice or credit memo (gl_invoice_postings, migrations 367 and 370). */
@@ -142,15 +148,17 @@ interface SignatureLine {
   division: string | null;
   lineRef: string | null;
   customerId: string | null;
+  vendorRef?: string | null;
 }
 
 /**
  * What an entry says, as text two entries can be compared by: its date and
- * each line's account, amount, division, invoice line and customer. Memos
- * and item numbers only describe, so a rename doesn't re-post anything.
+ * each line's account, amount, division, document line, customer and
+ * vendor. Memos and item numbers only describe, so a rename doesn't re-post
+ * anything.
  */
 export function signature(date: string, lines: SignatureLine[]): string {
-  const keyed = lines.map((l) => [l.account, l.cents, l.division ?? '', l.lineRef ?? '', l.customerId ?? ''].join('|'));
+  const keyed = lines.map((l) => [l.account, l.cents, l.division ?? '', l.lineRef ?? '', l.customerId ?? '', l.vendorRef ?? ''].join('|'));
   return [date, ...keyed.sort()].join('\n');
 }
 
@@ -162,6 +170,7 @@ const postedSignature = (current: NonNullable<InvoicePosting['current']>) => sig
     division: l.division,
     lineRef: l.source_line_ref,
     customerId: l.customer_id,
+    vendorRef: l.vendor_ref ?? null,
   })),
 );
 
@@ -472,6 +481,137 @@ export function depositJournalEntry(
   };
 }
 
+// ── Bills ──────────────────────────────────────────────────────────────────
+//
+// A vendor bill or bill credit posts as an invoice does: in the month
+// NetSuite booked it to (entryDate), from its copied lines, which must come
+// to its total, line by line as the bill rule works them out. What the
+// journal holds for it comes from gl_bill_postings (migration 386), keyed
+// vendor_bill:<NetSuite id>:<n> or vendor_credit:<NetSuite id>:<n>. Its
+// vendor goes on the payables line, what BMG owes the vendor, as the
+// vendor's NetSuite id (vendor_ref). As for payments, one in neither
+// company's GL copy is looked at only while an entry of it stands.
+
+/** What the journal holds for one vendor bill or bill credit (gl_bill_postings, migration 386). */
+export interface BillPosting extends Omit<InvoicePosting, 'source_type' | 'invoice'> {
+  source_type: BillSourceType;
+  /** What the copy of NetSuite's bills says of it now, deleted when NetSuite no longer lists it; null when the copy has none. */
+  bill: { number: string | null; deleted: boolean; voided: boolean } | null;
+}
+
+/** What the journal holds for a worked out bill or bill credit, from gl_bill_postings' answer keyed by postingKey. */
+export const billPostingFor = (postings: Map<string, BillPosting>, worked: WorkedBill) =>
+  postings.get(postingKey(BILL_SOURCE_TYPE[worked.bill.type], worked.bill.netsuite_id));
+
+/** The vendor a line of a bill's or bill credit's entry carries: on the payables line. */
+const billVendor = (worked: WorkedBill, lineId: string) =>
+  (lineId === PAYABLES_LINE ? worked.bill.vendor_netsuite_id ?? null : null);
+
+const billSignature = (worked: WorkedBill) => signature(
+  entryDate(worked.bill),
+  worked.checked.lines.map((l) => ({
+    account: l.account,
+    cents: l.cents,
+    division: null,
+    lineRef: l.lineId,
+    customerId: null,
+    vendorRef: billVendor(worked, l.lineId),
+  })),
+);
+
+/** What to do about one bill or bill credit the rule has worked out, given what the journal holds for it. */
+export function decideBill(worked: WorkedBill, posting: BillPosting | undefined): Decision {
+  const current = posting?.current ?? null;
+  if (worked.bill.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep' };
+  const { status, lines } = worked.checked;
+  if (status === 'waiting') return { kind: 'leave', why: 'waiting' };
+  if (status === 'unworkable') return { kind: 'leave', why: 'unworkable' };
+
+  // Payables are a bill's total as a credit, a bill credit's as a debit (the
+  // copy keeps both totals unsigned), so lines that don't come to it are the
+  // copy's lines caught mid-refresh, or taken the wrong way round, not the
+  // document.
+  const payables = lines.find((l) => l.lineId === PAYABLES_LINE)?.cents ?? 0;
+  const total = centsOf(worked.bill.total);
+  if (total === null || payables !== (worked.bill.type === 'VendCred' ? total : -total)) return { kind: 'leave', why: 'total' };
+
+  if (lines.length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep' };
+  if (!current) return { kind: 'post' };
+  return postedSignature(current) === billSignature(worked) ? { kind: 'keep' } : { kind: 'replace' };
+}
+
+/** What the journal holds for a bill or bill credit and what the next run does about it, for the invoices page. */
+export function billBooks(worked: WorkedBill, posting: BillPosting | undefined): InvoiceBooks {
+  return booksOf(decideBill(worked, posting), posting, true);
+}
+
+/**
+ * The journal entry for a bill or bill credit, its `generation`th: the
+ * rule's lines on the chart's accounts, in the month NetSuite booked it to,
+ * the payables line carrying the vendor, keyed `vendor_bill:…` or
+ * `vendor_credit:…`. Null with the NetSuite accounts the chart doesn't have
+ * when it can't be built.
+ */
+export function billJournalEntry(
+  worked: WorkedBill,
+  company: BooksCompany,
+  generation: number,
+  accountIds: Map<string, string>,
+): { entry: JournalEntryInput; missing: [] } | { entry: null; missing: string[] } {
+  const { lines } = worked.checked;
+  const missing = [...new Set(lines.map((l) => l.account).filter((a) => !accountIds.has(a)))];
+  if (missing.length) return { entry: null, missing };
+  const b = worked.bill;
+  const sourceType = BILL_SOURCE_TYPE[b.type];
+  return {
+    entry: {
+      company,
+      entryDate: entryDate(b),
+      sourceType,
+      sourceId: b.netsuite_id,
+      postingRule: BILL_RULE,
+      idempotencyKey: `${sourceType}:${b.netsuite_id}:${generation}`,
+      memo: b.vendor ? `${worked.number}, ${b.vendor}` : worked.number,
+      postedBy: null,
+      lines: lines.map((l) => ({
+        accountId: accountIds.get(l.account)!,
+        debit: l.cents > 0 ? centsToAmount(l.cents) : null,
+        credit: l.cents < 0 ? centsToAmount(-l.cents) : null,
+        division: null,
+        itemNumber: l.itemNumber,
+        sourceLineRef: l.lineId,
+        vendorRef: billVendor(worked, l.lineId),
+      })),
+    },
+    missing: [],
+  };
+}
+
+/**
+ * One company's vendor bills and bill credits for one month, as the bill
+ * check takes them: gl_bill_month (migration 384), and where NetSuite posts
+ * the bill lines of the items the copy of its items has no account for
+ * (gl_bill_item_accounts, migration 385). The invoices page and the posting
+ * job both read a month with it, so what the one shows is what the other
+ * posts.
+ */
+export async function readBillMonth(service: SupabaseClient, company: string, month: string): Promise<BillMonthData> {
+  const res = await service.rpc('gl_bill_month', { p_company: company, p_month: month });
+  if (res.error) throw new Error(res.error.message);
+  const data = (res.data ?? {}) as Partial<BillMonthData>;
+  const items = data.items ?? [];
+  const unplaced = itemsWithoutAccount(items);
+  const placed = unplaced.length ? await service.rpc('gl_bill_item_accounts', { p_items: unplaced }) : null;
+  if (placed?.error) throw new Error(placed.error.message);
+  return {
+    bills: data.bills ?? [],
+    items,
+    receipt_accounts: data.receipt_accounts ?? [],
+    not_copied: data.not_copied ?? [],
+    item_accounts: (placed?.data ?? []) as NonNullable<BillMonthData['item_accounts']>,
+  };
+}
+
 /** Why a write failed, in words that carry no amount: the run's record is kept where amounts never go. */
 export function failureReason(err: unknown): string {
   const money = /\$|\bdebits?\b|\bcredits?\b|balance/i;
@@ -493,7 +633,7 @@ export interface InvoicePostingResult {
   replaced?: number;
   reversed?: number;
   unchanged?: number;
-  /** Invoices, credit memos, payments, deposits and applications the rule can't work out yet, or whose copy was mid-refresh: whatever stands for them stayed. */
+  /** Documents the rule can't work out yet, or whose copy was mid-refresh, of every kind the run posts: whatever stands for them stayed. */
   left?: number;
   /** Writes the journal refused or that failed, a few of them with why. */
   failedCount?: number;
@@ -542,15 +682,21 @@ const plural = (n: number, one: string, many: string) => `${n.toLocaleString('en
 const listed = (items: string[], max = 10) => `${items.slice(0, max).join(', ')}${items.length > max ? ', …' : ''}`;
 const joined = (words: string[], last: 'and' | 'or') =>
   (words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} ${last} ${words[words.length - 1]}`);
-/** '2 invoices and 1 credit memo', for documents of these kinds. */
-const documents = (kinds: SalesDocKind[]) => {
-  const invoices = kinds.filter((k) => k === 'invoice').length;
-  const memos = kinds.length - invoices;
-  return joined([
-    invoices ? plural(invoices, 'invoice', 'invoices') : '',
-    memos ? plural(memos, 'credit memo', 'credit memos') : '',
-  ].filter(Boolean), 'and');
+/** The kinds of document a run can leave for not coming to their totals, in words. */
+const DOCUMENT_WORDS: Record<SalesDocKind | BillSourceType, [string, string]> = {
+  invoice: ['invoice', 'invoices'],
+  credit_memo: ['credit memo', 'credit memos'],
+  vendor_bill: ['bill', 'bills'],
+  vendor_credit: ['bill credit', 'bill credits'],
 };
+/** '2 invoices and 1 credit memo', for documents of these kinds. */
+const documents = (kinds: Array<keyof typeof DOCUMENT_WORDS>) => joined(
+  (Object.keys(DOCUMENT_WORDS) as Array<keyof typeof DOCUMENT_WORDS>).flatMap((k) => {
+    const n = kinds.filter((x) => x === k).length;
+    return n ? [plural(n, ...DOCUMENT_WORDS[k])] : [];
+  }),
+  'and',
+);
 
 async function runLimited(tasks: Array<() => Promise<void>>, limit: number): Promise<void> {
   let next = 0;
@@ -624,18 +770,21 @@ export async function postInvoices(
 
     // 1. What NetSuite deleted or voided, and any second entry standing for one document.
     for (const company of POSTING_COMPANIES) {
-      const [all, paid, deposited] = await Promise.all([
+      const [all, paid, deposited, billed] = await Promise.all([
         service.rpc('gl_invoice_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_payment_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_deposit_postings', { p_company: company, p_source_ids: null, p_lines: false }),
+        service.rpc('gl_bill_postings', { p_company: company, p_source_ids: null, p_lines: false }),
       ]);
       if (all.error) throw new Error(all.error.message);
       if (paid.error) throw new Error(paid.error.message);
       if (deposited.error) throw new Error(deposited.error.message);
+      if (billed.error) throw new Error(billed.error.message);
       const held = [
         ...(((all.data as any)?.invoices ?? []) as InvoicePosting[]).map((p) => ({ posting: p, copy: p.invoice })),
         ...(((paid.data as any)?.payments ?? []) as PaymentPosting[]).map((p) => ({ posting: p, copy: p.payment })),
         ...(((deposited.data as any)?.deposits ?? []) as DepositPosting[]).map((p) => ({ posting: p, copy: p.deposit })),
+        ...(((billed.data as any)?.bills ?? []) as BillPosting[]).map((p) => ({ posting: p, copy: p.bill })),
       ];
       const tasks: Array<() => Promise<void>> = [];
       for (const { posting: p, copy } of held) {
@@ -656,7 +805,7 @@ export async function postInvoices(
     const months = monthsBetween(COPY_FROM, monthOfDate(new Date(now()).toISOString().slice(0, 10))!);
     const skippedMonths: string[] = [];
     let skippedWhy = '';
-    const leftTotal: Array<{ number: string; kind: SalesDocKind }> = [];
+    const leftTotal: Array<{ number: string; kind: keyof typeof DOCUMENT_WORDS }> = [];
     const missingAccounts = new Set<string>();
     const queue = postingQueue(POSTING_COMPANIES, months, state.resume);
 
@@ -812,6 +961,29 @@ export async function postInvoices(
         if (result.partial) break;
       }
 
+      // The month's vendor bills and bill credits, those NetSuite booked into it as for invoices: no lines to ask
+      // NetSuite about, as the copy keeps them. One in neither company's GL copy is this company's only while an entry
+      // of it stands here, as for payments.
+      const bills = workOutBillMonth(await readBillMonth(service, company, month), { company, chart: chartAccounts })
+        .bills.filter((w) => w.bill.companies.length === 0 || w.bill.companies.includes(company));
+      if (bills.length) {
+        const held = await service.rpc('gl_bill_postings', {
+          p_company: company, p_source_ids: bills.map((w) => w.bill.netsuite_id), p_lines: true,
+        });
+        if (held.error) throw new Error(held.error.message);
+        const postings = new Map((((held.data as any)?.bills ?? []) as BillPosting[]).map((p) => [postingKey(p.source_type, p.source_id), p]));
+        const tasks: Array<() => Promise<void>> = [];
+        for (const w of bills) {
+          const posting = billPostingFor(postings, w);
+          if (!w.bill.companies.length && !posting?.current) continue;
+          const d = decideBill(w, posting);
+          if (d.kind === 'leave' && d.why === 'total') leftTotal.push({ number: w.number, kind: BILL_SOURCE_TYPE[w.bill.type] });
+          enqueue(tasks, w.number, d, posting?.current ?? null, () => billJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
+        }
+        await runLimited(tasks, WRITERS);
+        if (result.partial) break;
+      }
+
       result.months!.push(month);
       state.resume = queue[i + 1] ?? null;
       await writeSyncStateCursor(service, BOOKS_INVOICE_POSTING, record());
@@ -829,7 +1001,7 @@ export async function postInvoices(
     }
     if (missingAccounts.size) {
       notes.push(`NetSuite account${missingAccounts.size === 1 ? '' : 's'} ${listed([...missingAccounts])} ${missingAccounts.size === 1 ? "isn't" : "aren't"} `
-        + 'in the chart of accounts yet, so invoices, credit memos, payments and deposits posting there weren\'t posted. Sync now on the chart of accounts page copies them.');
+        + 'in the chart of accounts yet, so invoices, credit memos, payments, deposits and bills posting there weren\'t posted. Sync now on the chart of accounts page copies them.');
     }
   } catch (err) {
     result.error = String((err as any)?.message || err).slice(0, 300);
