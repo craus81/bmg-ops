@@ -1,8 +1,9 @@
 // Migration 386 reads what the journal holds for NetSuite's vendor bills and
 // bill credits, and lets the differences page say what the copy of the bills
-// holds for one; the posting job posts them with the bill rule. This runs
+// holds for one; the posting job posts them with the bill rule, even to an
+// account NetSuite has made inactive since (migration 387). This runs
 // migration 314 (with stand-ins for the app tables it points at) and
-// migrations 359–364, 367, 370, 374, 376, 377, 380 and 382–386 in an
+// migrations 359–364, 367, 370, 374, 376, 377, 380, 382–386 and 387 in an
 // in-memory Postgres (PGlite) as the app's server login and holds the
 // functions' rules, then runs the posting job against them with bills only.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
@@ -29,8 +30,8 @@ import { NETSUITE_TYPE } from './differences';
 /**
  * Made-up chart: '200' BMG's payables, '210' 1084's, '205' received not
  * billed, '130' inventory, '530' subcontractors, '531' subcontractors no
- * longer used, '610' shop supplies, '480' vendor discounts, '615' building
- * repairs.
+ * longer used, '532' subcontractors only 1084 may use, '610' shop supplies,
+ * '480' vendor discounts, '615' building repairs.
  */
 const ACCOUNTS: Array<[string, string, string, string, 'BMG' | '1084' | null, boolean]> = [
   ['200', '2000', 'Accounts Payable', 'accounts_payable', 'BMG', true],
@@ -39,6 +40,7 @@ const ACCOUNTS: Array<[string, string, string, string, 'BMG' | '1084' | null, bo
   ['130', '1300', 'Inventory', 'other_current_asset', null, true],
   ['530', '5300', 'Subcontractors', 'expense', null, true],
   ['531', '5310', 'Old Subcontractors', 'expense', null, false],
+  ['532', '5320', 'Subcontractors 1084', 'expense', '1084', true],
   ['610', '6100', 'Shop Supplies', 'expense', null, true],
   ['480', '4800', 'Vendor Discounts', 'other_income', null, true],
   ['615', '6150', 'Building Repairs', 'expense', null, true],
@@ -69,7 +71,7 @@ async function freshDb(): Promise<PGlite> {
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '364-books-invoice-check.sql',
     '367-books-invoice-posting.sql', '370-books-credit-memos.sql', '374-books-payment-check.sql', '376-books-payment-posting.sql',
     '377-books-differences.sql', '380-books-netsuite-month.sql', '382-books-customer-deposits.sql', '383-books-deposit-posting.sql',
-    '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql',
+    '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -562,12 +564,19 @@ describe('the posting job, for bills', () => {
 
   it('posts a bill once the rule can work it out, and names one the journal refuses, without amounts', async () => {
     await pg.query(`INSERT INTO gl_netsuite_lists (kind, netsuite_id, name, active, details) VALUES ('item', '999', 'LABOR-9', true, '{"item_type": "Service", "expense_account": "530"}')`);
-    // To a subcontractors account no longer used.
+    // To a subcontractors account NetSuite has made inactive since, as the Apex loan bills are, and to one only 1084 may use.
     await add({ ref: '810', type: 'VendBill', number: 'B-810', date: '2025-03-07', company: 'BMG', total: '9.00', lines: [{ id: '1', account: '531', cents: 900 }] });
+    await add({ ref: '811', type: 'VendBill', number: 'B-811', date: '2025-03-08', company: 'BMG', total: '8.00', lines: [{ id: '1', account: '532', cents: 800 }] });
 
     const r = await run();
-    expect(r).toMatchObject({ posted: 1, failedCount: 1, failed: [{ number: 'B-810', reason: 'Account 5310 (Old Subcontractors) is inactive' }] });
-    expect((await journal()).slice(-1)[0]).toMatchObject({ date: '2025-02-20', key: 'vendor_bill:803:1' });
+    expect(r).toMatchObject({ posted: 2, failedCount: 1, failed: [{ number: 'B-811', reason: 'Account 5320 (Subcontractors 1084) belongs to another company' }] });
+    const posted = (await journal()).slice(-2);
+    expect(posted.map((e) => [e.date, e.key])).toEqual([['2025-02-20', 'vendor_bill:803:1'], ['2025-03-07', 'vendor_bill:810:1']]);
+    // The inactive account takes the bill line NetSuite posted to it.
+    expect((await linesOf(posted[1].no)).map((l: any) => [l.account, l.debit, l.credit])).toEqual([
+      ['200', '0.00', '9.00'],
+      ['531', '9.00', '0.00'],
+    ]);
     expect(JSON.stringify(store.get(BOOKS_INVOICE_POSTING).last_result)).not.toMatch(/\d\.\d|\$/);
   });
 

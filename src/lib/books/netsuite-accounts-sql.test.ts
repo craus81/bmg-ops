@@ -1,8 +1,11 @@
 // Migration 360 keeps FleetSuite's chart of accounts in step with NetSuite's
-// through gl_sync_netsuite_accounts(). This runs migrations 359 and 360 in an
-// in-memory Postgres (PGlite) as the app's server login and holds the rules:
-// matched on NetSuite's id, changes follow NetSuite, nothing posted to is
-// retyped, and a cut-short list never marks accounts gone.
+// through gl_sync_netsuite_accounts(), and migration 387 lets documents
+// copied from NetSuite post to accounts NetSuite has made inactive since.
+// This runs migrations 359, 360 and 387 in an in-memory Postgres (PGlite) as
+// the app's server login and holds the rules: matched on NetSuite's id,
+// changes follow NetSuite, nothing posted to is retyped, a cut-short list
+// never marks accounts gone, and only a typed entry is refused an account
+// NetSuite has made inactive.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -15,7 +18,7 @@ import { ACCOUNTS_QUERY, ACCOUNT_SUBSIDIARIES_QUERY, SUBSIDIARIES_QUERY, syncBoo
 let db: PGlite;
 
 // A fresh database with Supabase's API roles and default grants, migrations
-// 359 and 360 run twice as the owner, then the app's server login.
+// 359, 360 and 387 run twice as the owner, then the app's server login.
 async function freshDb(): Promise<PGlite> {
   const pg = new PGlite();
   await pg.exec(`
@@ -27,7 +30,7 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
   `);
-  for (const file of ['359-books-ledger-core.sql', '360-books-netsuite-accounts.sql']) {
+  for (const file of ['359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '387-books-retired-accounts.sql']) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
     await pg.exec(sql); // must be safe to re-run
@@ -89,11 +92,12 @@ const CHART: NsAccount[] = [
 const chartWith = (changes: Record<string, Partial<NsAccount>>, drop: string[] = []) =>
   CHART.filter((a) => !drop.includes(a.netsuite_id)).map((a) => ({ ...a, ...(changes[a.netsuite_id] ?? {}) }));
 
-const postTo = (accountId: string, other: string, key: string) => db.query(
-  'SELECT gl_post_entry($1::jsonb)',
+const postTo = (accountId: string, other: string, key: string, over: Record<string, unknown> = {}) => db.query<{ r: { id: string } }>(
+  'SELECT gl_post_entry($1::jsonb) AS r',
   [JSON.stringify({
     company: 'BMG', entry_date: '2026-11-03', source_type: 'invoice', posting_rule: 'invoice@1', idempotency_key: key,
     lines: [{ account_id: accountId, debit: '10.00' }, { account_id: other, credit: '10.00' }],
+    ...over,
   })],
 );
 
@@ -226,6 +230,37 @@ describe('later syncs', () => {
 describe('the journal and the synced chart', () => {
   it('refuses postings to a heading', async () => {
     await expect(postTo(await idOf('110'), await idOf('111'), 'sync-test:2')).rejects.toThrow(/is a heading/);
+    await expect(postTo(await idOf('110'), await idOf('111'), 'sync-test:2b', { source_type: 'vendor_bill', posting_rule: 'bill@1' })).rejects.toThrow(/is a heading/);
+  });
+
+  it('posts a document copied from NetSuite to an account NetSuite has made inactive since, but no typed entry', async () => {
+    await sync(chartWith({ '600': { active: false } }));
+    expect(await account('600')).toMatchObject({ active: false });
+    const supplies = await idOf('600');
+    const bank = await idOf('111');
+
+    // Every kind of document the posting job copies from NetSuite, and an opening balance worked out from its GL.
+    const kinds = ['invoice', 'credit_memo', 'payment', 'customer_deposit', 'deposit_application', 'vendor_bill', 'vendor_credit', 'opening_balance'];
+    const posted: string[] = [];
+    for (const kind of kinds) {
+      const r = await postTo(supplies, bank, `retired:${kind}`, { source_type: kind, posting_rule: `${kind}@1` });
+      posted.push(r.rows[0].r.id);
+    }
+    const lines = await db.query<{ source_type: string; n: number }>(
+      `SELECT e.source_type, count(*)::int AS n FROM gl_lines l JOIN gl_entries e ON e.id = l.entry_id
+       WHERE l.account_id = $1 GROUP BY e.source_type ORDER BY e.source_type`, [supplies],
+    );
+    expect(lines.rows).toEqual([...kinds].sort().map((source_type) => ({ source_type, n: 1 })));
+
+    // A typed entry still can't, on either side.
+    await expect(postTo(supplies, bank, 'retired:typed', { source_type: 'manual', posting_rule: 'manual' })).rejects.toThrow(/account 60100 \(Shop Supplies\) is inactive/);
+    await expect(postTo(bank, supplies, 'retired:typed-credit', { source_type: 'manual', posting_rule: 'manual' })).rejects.toThrow(/is inactive/);
+    // A reversal undoes what its original hit.
+    await expect(db.query('SELECT gl_reverse_entry($1, NULL, NULL, NULL, NULL)', [posted[0]])).resolves.toBeDefined();
+
+    // Active again in NetSuite: typed entries can use it again.
+    await sync(CHART);
+    await expect(postTo(supplies, bank, 'retired:typed', { source_type: 'manual', posting_rule: 'manual' })).resolves.toBeDefined();
   });
 
   it('lets only the service role run the sync', async () => {

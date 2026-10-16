@@ -60,6 +60,7 @@ the accounts page; the others are linked from there.
 | Bill rule and its check, on the invoices page | `src/lib/books/bill-rule.ts`, `src/lib/books/bill-check.ts`; where an item with no account posts: `migrations/385-books-bill-item-accounts.sql` |
 | Bills posted to the journal, with invoices | `migrations/386-books-bill-posting.sql`, `src/lib/books/invoice-posting.ts` |
 | Bill tests | `src/lib/books/bill-rule.test.ts`, `src/lib/books/bill-check.test.ts`, `src/lib/books/netsuite-bills.test.ts`, `src/lib/books/bills-sql.test.ts`, `src/lib/books/bill-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
+| Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
 QuickBooks and NetSuite history that importers replace wholesale. They stay
@@ -83,6 +84,15 @@ These hold for any writer, including a direct insert with the service role.
   months.
 - A typed entry (`source_type = 'manual'`) can't post to a control account
   (AR, AP, inventory). Only the documents behind those accounts post there.
+- A typed entry can't post to an inactive account either. Documents copied
+  from NetSuite post to the accounts NetSuite posted them to, even ones it
+  has made inactive since, and so do opening balances, which are worked out
+  from the copy of NetSuite's general ledger (owner decision 2026-10-16,
+  after twelve 2025 bills to 23700 Apex Commercial - Printer Loan were
+  refused; migration 387). The checks against NetSuite are what hold those
+  entries to NetSuite. A reversal may hit an account made inactive since
+  its original posted. Once FleetSuite makes its own documents, whatever
+  picks their accounts has to keep off inactive ones itself.
 - An account restricted to one company can't be used by the other. Once an
   account has postings, its type and company can't change.
 - A heading (summary) account takes no postings.
@@ -112,7 +122,8 @@ How a sync works (`syncBooksAccounts`, which hands the list to
   accounts keep the company limits they had and the run says why.
 - Accounts match on NetSuite's internal id (`netsuite_account_id`). New ones
   are added. Number, name, parent, inactive flag, description and company
-  follow NetSuite.
+  follow NetSuite. An inactive account takes no typed entries, but
+  documents copied from NetSuite still post to it.
 - Non-posting and statistical accounts are left out. A NetSuite type this
   code doesn't know is left out and listed on the page, so it can be added
   to `NETSUITE_ACCOUNT_TYPES`.
@@ -472,8 +483,9 @@ through every month again:
   the top, or the lines' own amounts, is left as it is, since its entries
   could come out different without them. The run's notes say which months.
 - An invoice posting to an account the chart doesn't have yet, or one the
-  journal refuses (an account made inactive since, say), isn't posted. The
-  run lists a few by number, with why.
+  journal refuses (an account limited to the other company, say), isn't
+  posted. The run lists a few by number, with why. An account NetSuite has
+  made inactive since still takes what NetSuite posted to it.
 
 The receivable line carries the invoice's customer in FleetSuite, as the
 ledger mirror matched it (`customer_id`, which `gl_invoice_month` now

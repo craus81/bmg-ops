@@ -1,7 +1,9 @@
 // FleetSuite's own journal (migration 359) protects itself in the database:
 // entries balance, posted rows never change, closed months refuse postings,
 // and the journal can only be emptied before the books go live. This runs
-// the migration in an in-memory Postgres (PGlite) and holds each rule.
+// the migration in an in-memory Postgres (PGlite), then migrations 360 and
+// 387, which replace its line check as production has it, and holds each
+// rule.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -87,10 +89,12 @@ beforeAll(async () => {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
   `);
-  // The migration runs as the owner, like the deploy does...
-  const sql = readFileSync(path.resolve(__dirname, '../../../migrations/359-books-ledger-core.sql'), 'utf8');
-  await db.exec(sql);
-  await db.exec(sql); // must be safe to re-run
+  // The migrations run as the owner, like the deploy does...
+  for (const file of ['359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '387-books-retired-accounts.sql']) {
+    const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
+    await db.exec(sql);
+    await db.exec(sql); // must be safe to re-run
+  }
   // ...and everything after runs as the app's server login.
   await db.exec('SET ROLE service_role');
 
@@ -289,7 +293,7 @@ describe('posting', () => {
     expect(lines.rows).toEqual([{ company_id: coolSpringsId }]);
   });
 
-  it('refuses an inactive account, and an account\'s type change once it has postings', async () => {
+  it('refuses a typed entry to an inactive account, and an account\'s type change once it has postings', async () => {
     const r = await db.query<{ id: string }>(`INSERT INTO gl_accounts (number, name, account_type, active) VALUES ('69999', 'Old Expense', 'expense', false) RETURNING id`);
     await expect(post(typed([
       { account_id: r.rows[0].id, debit: '1.00' },

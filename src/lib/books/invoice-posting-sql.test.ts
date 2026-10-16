@@ -1,11 +1,12 @@
 // Migration 367 posts NetSuite's invoices to FleetSuite's own journal, and
 // migration 370 its credit memos; migration 380 puts each in the month
-// NetSuite booked it to. This runs migration 314 (with stand-ins for the app
-// tables it points at) and migrations 359–364, 367, 370 and 380, with the
-// ones the job reads payments, deposits and bills through (374, 376, 377 and
-// 382–386), in an in-memory Postgres (PGlite) as the app's server login and
-// holds the functions' rules, then runs the posting job against them with a
-// fake NetSuite that answers the job's own SuiteQL.
+// NetSuite booked it to, and migration 387 lets one post to an account
+// NetSuite has made inactive since. This runs migration 314 (with stand-ins
+// for the app tables it points at) and migrations 359–364, 367, 370, 380 and
+// 387, with the ones the job reads payments, deposits and bills through (374,
+// 376, 377 and 382–386), in an in-memory Postgres (PGlite) as the app's
+// server login and holds the functions' rules, then runs the posting job
+// against them with a fake NetSuite that answers the job's own SuiteQL.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -28,13 +29,18 @@ import { BOOKS_LISTS_SYNC } from './netsuite-lists';
 import type { InvoiceMonthData } from './invoice-check';
 
 const CUSTOMER = '6f1f6a52-8a43-4b8e-9a0e-2d9c1f0b7c11';
-/** Made-up chart: '120' BMG's receivable, '121' 1084's, '400' income, '220' sales tax, '410' an income account no longer used. */
+/**
+ * Made-up chart: '120' BMG's receivable, '121' 1084's, '400' income, '220'
+ * sales tax, '410' an income account no longer used, '411' an income account
+ * only 1084 may use.
+ */
 const ACCOUNT: Record<string, string> = {
   120: 'a0000000-0000-4000-8000-000000000120',
   121: 'a0000000-0000-4000-8000-000000000121',
   400: 'a0000000-0000-4000-8000-000000000400',
   220: 'a0000000-0000-4000-8000-000000000220',
   410: 'a0000000-0000-4000-8000-000000000410',
+  411: 'a0000000-0000-4000-8000-000000000411',
 };
 const JAN = '2025-01-01';
 const FEB = '2025-02-01';
@@ -63,7 +69,7 @@ async function freshDb(): Promise<PGlite> {
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '364-books-invoice-check.sql',
     '367-books-invoice-posting.sql', '370-books-credit-memos.sql', '374-books-payment-check.sql', '376-books-payment-posting.sql',
     '377-books-differences.sql', '380-books-netsuite-month.sql', '382-books-customer-deposits.sql', '383-books-deposit-posting.sql',
-    '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql',
+    '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -77,13 +83,15 @@ async function freshDb(): Promise<PGlite> {
       ('${ACCOUNT[121]}', '1210', 'Receivables 1084', 'accounts_receivable', '121', (SELECT id FROM gl_companies WHERE code = '1084'), true),
       ('${ACCOUNT[400]}', '4000', 'Sales', 'income', '400', NULL, true),
       ('${ACCOUNT[220]}', '2200', 'Sales Tax', 'other_current_liability', '220', NULL, true),
-      ('${ACCOUNT[410]}', '4100', 'Old Sales', 'income', '410', NULL, false);
+      ('${ACCOUNT[410]}', '4100', 'Old Sales', 'income', '410', NULL, false),
+      ('${ACCOUNT[411]}', '4110', 'Rent Income 1084', 'income', '411', (SELECT id FROM gl_companies WHERE code = '1084'), true);
     INSERT INTO gl_netsuite_lists (kind, netsuite_id, name, active, details) VALUES
       ('item', '11', 'PART-A', true, '{"item_type": "InvtPart", "income_account": "400", "asset_account": "130"}'),
       ('item', '12', 'RENT', true, '{"item_type": "Service", "income_account": "401"}'),
       ('item', '13', 'INSTALL LABOR', true, '{"item_type": "Service", "income_account": "400"}'),
       ('item', '14', 'OLD-PART', true, '{"item_type": "Service", "income_account": "410"}'),
       ('item', '15', 'NEW-PART', true, '{"item_type": "Service", "income_account": "420"}'),
+      ('item', '16', 'BLDG-RENT', true, '{"item_type": "Service", "income_account": "411"}'),
       ('tax_code', '900', 'Some County', true, '{"rate": 7.5}');
   `);
   await pg.exec('SET ROLE service_role');
@@ -324,7 +332,7 @@ describe('migrations 367 and 370\'s functions', () => {
       [second.id, entry('1084', 'invoice:301:3', '301', '12.00'), /another document's/],
       [second.id, entry('BMG', 'manual:1', '301', '12.00', { source_type: 'manual' }), /another document's/],
       // The new entry can't post: the journal's own rules hold, and the old entry stays as it was.
-      [second.id, entry('BMG', 'invoice:301:3', '301', '12.00', { lines: [{ account_id: ACCOUNT[120], debit: '12.00' }, { account_id: ACCOUNT[410], credit: '12.00' }] }), /account 4100 \(Old Sales\) is inactive/],
+      [second.id, entry('BMG', 'invoice:301:3', '301', '12.00', { lines: [{ account_id: ACCOUNT[120], debit: '12.00' }, { account_id: ACCOUNT[411], credit: '12.00' }] }), /account 4110 \(Rent Income 1084\) belongs to another company/],
       [second.id, entry('BMG', 'invoice:301:3', '301', '12.00', { lines: [{ account_id: ACCOUNT[120], debit: '12.00' }, { account_id: ACCOUNT[400], credit: '11.00' }] }), /does not balance/],
       [second.id, entry('BMG', 'invoice:301:1', '301', '12.00'), /invoice:301:1 has already posted, so entry 3 stays as it is/],
       // An entry already reversed, or a reversal.
@@ -716,9 +724,11 @@ describe('the posting job against the real functions', () => {
 
     it('says which invoices the journal refused or the chart can\'t take, without amounts', async () => {
       const more: NsInvoice[] = [
-        // To an income account no longer used, and to one the chart doesn't have yet.
+        // To an income account NetSuite has made inactive since, to one the chart doesn't have yet,
+        // and to one only 1084 may use.
         { ref: '209', number: 'INV209', date: '2025-03-08', company: 'BMG', lines: [{ id: '1', kind: 'item', item: '14', number: 'OLD-PART', amount: '15.00', account: '410' }] },
         { ref: '210', number: 'INV210', date: '2025-03-09', company: 'BMG', lines: [{ id: '1', kind: 'item', item: '15', number: 'NEW-PART', amount: '16.00', account: '420' }] },
+        { ref: '211', number: 'INV211', date: '2025-03-10', company: 'BMG', lines: [{ id: '1', kind: 'item', item: '16', number: 'BLDG-RENT', amount: '17.00', account: '411' }] },
       ];
       for (const inv of more) {
         ns.invoices.set(inv.ref, inv);
@@ -727,17 +737,24 @@ describe('the posting job against the real functions', () => {
       const before = await journal();
       const r = await run();
       expect(r).toMatchObject({
-        posted: 0,
+        posted: 1,
         failedCount: 2,
         failed: [
           { number: 'INV210', reason: "It posts to NetSuite account 420, which the chart of accounts doesn't have" },
-          { number: 'INV209', reason: 'Account 4100 (Old Sales) is inactive' },
+          { number: 'INV211', reason: 'Account 4110 (Rent Income 1084) belongs to another company' },
         ],
       });
       expect(r.notes).toEqual([
         "NetSuite account 420 isn't in the chart of accounts yet, so invoices, credit memos, payments, deposits and bills posting there weren't posted. Sync now on the chart of accounts page copies them.",
       ]);
-      expect(await journal()).toEqual(before);
+      // The inactive account takes the invoice NetSuite posted to it; nothing else changed.
+      const after = await journal();
+      expect(after.slice(0, before.length)).toEqual(before);
+      expect(after.slice(before.length).map((e) => [e.date, e.key])).toEqual([['2025-03-08', 'invoice:209:1']]);
+      expect((await linesOf(after.at(-1)!.no)).map((l: any) => [l.account, l.debit, l.credit])).toEqual([
+        ['120', '15.00', '0.00'],
+        ['410', '0.00', '15.00'],
+      ]);
       expect(JSON.stringify(record().last_result)).not.toMatch(/\d\.\d|\$/);
     });
 

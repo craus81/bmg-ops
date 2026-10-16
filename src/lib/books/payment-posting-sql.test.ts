@@ -1,7 +1,7 @@
 // Migration 376 reads what the journal holds for NetSuite's customer
 // payments, and the posting job posts them with the payment rule. This runs
 // migration 314 (with stand-ins for the app tables it points at) and
-// migrations 359–364, 367, 370, 374, 376 and 380, with the ones the job
+// migrations 359–364, 367, 370, 374, 376, 380 and 387, with the ones the job
 // reads deposits and bills through (377 and 382–386), in an in-memory
 // Postgres (PGlite) as the app's server login and holds the function's
 // rules, then runs the posting job against them with payments only.
@@ -29,7 +29,7 @@ const CUSTOMER = '6f1f6a52-8a43-4b8e-9a0e-2d9c1f0b7c11';
 /**
  * Made-up chart: '120' BMG's receivable, '121' 1084's, '110' Undeposited
  * Funds, '100' a bank account, '480' sales discounts, '490' a discount
- * account no longer used.
+ * account no longer used, '491' a discount account only 1084 may use.
  */
 const ACCOUNT: Record<string, string> = {
   120: 'a0000000-0000-4000-8000-000000000120',
@@ -38,6 +38,7 @@ const ACCOUNT: Record<string, string> = {
   100: 'a0000000-0000-4000-8000-000000000100',
   480: 'a0000000-0000-4000-8000-000000000480',
   490: 'a0000000-0000-4000-8000-000000000490',
+  491: 'a0000000-0000-4000-8000-000000000491',
 };
 const JAN = '2025-01-01';
 const FEB = '2025-02-01';
@@ -63,7 +64,7 @@ async function freshDb(): Promise<PGlite> {
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '364-books-invoice-check.sql',
     '367-books-invoice-posting.sql', '370-books-credit-memos.sql', '374-books-payment-check.sql', '376-books-payment-posting.sql',
     '377-books-differences.sql', '380-books-netsuite-month.sql', '382-books-customer-deposits.sql', '383-books-deposit-posting.sql',
-    '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql',
+    '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -78,7 +79,8 @@ async function freshDb(): Promise<PGlite> {
       ('${ACCOUNT[110]}', '1100', 'Undeposited Funds', 'other_current_asset', '110', NULL, true),
       ('${ACCOUNT[100]}', '1000', 'Checking', 'bank', '100', NULL, true),
       ('${ACCOUNT[480]}', '4800', 'Discounts', 'income', '480', NULL, true),
-      ('${ACCOUNT[490]}', '4900', 'Old Discounts', 'income', '490', NULL, false);
+      ('${ACCOUNT[490]}', '4900', 'Old Discounts', 'income', '490', NULL, false),
+      ('${ACCOUNT[491]}', '4910', 'Discounts 1084', 'income', '491', (SELECT id FROM gl_companies WHERE code = '1084'), true);
   `);
   await pg.exec('SET ROLE service_role');
   return pg;
@@ -424,13 +426,18 @@ describe('the posting job, for payments', () => {
 
   it('posts a payment once the rule can work it out, and names one the journal refuses, without amounts', async () => {
     await edit('503', (p) => { p.deposit = '110'; });
-    // To a discount account no longer used.
+    // To a discount account NetSuite has made inactive since, and to one only 1084 may use.
     payments.set('508', { ref: '508', number: 'PMT508', date: '2025-03-07', company: 'BMG', total: '9.00', discount: '1.00', discountAccount: '490' });
+    payments.set('509', { ref: '509', number: 'PMT509', date: '2025-03-08', company: 'BMG', total: '8.00', discount: '2.00', discountAccount: '491' });
     await copy(pg, payments.get('508')!);
+    await copy(pg, payments.get('509')!);
 
     const r = await run();
-    expect(r).toMatchObject({ posted: 1, failedCount: 1, failed: [{ number: 'PMT508', reason: 'Account 4900 (Old Discounts) is inactive' }] });
-    expect((await journal()).slice(-1)[0].key).toBe('payment:503:1');
+    expect(r).toMatchObject({ posted: 2, failedCount: 1, failed: [{ number: 'PMT509', reason: 'Account 4910 (Discounts 1084) belongs to another company' }] });
+    const posted = (await journal()).slice(-2);
+    expect(posted.map((e) => e.key)).toEqual(['payment:503:1', 'payment:508:1']);
+    // The inactive account takes the discount NetSuite posted to it.
+    expect((await linesOf(posted[1].no)).filter((l: any) => l.account === '490').map((l: any) => [l.debit, l.credit])).toEqual([['1.00', '0.00']]);
     expect(JSON.stringify(store.get(BOOKS_INVOICE_POSTING).last_result)).not.toMatch(/\d\.\d|\$/);
   });
 });
