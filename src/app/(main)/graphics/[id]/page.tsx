@@ -1793,6 +1793,7 @@ export default function GraphicsJobRecordPage() {
         {ja.customer_approved ? (
           <div style={{ fontSize: '11px', color: '#22c55e', fontWeight: 700 }}>
             ✓ {ja.approval_verbal_note ? 'Approved verbally' : 'Approved'}
+            {!ja.approval_verbal_note && ja.customer_responder ? <span style={{ color: 'var(--text-primary)' }}> by {ja.customer_responder}</span> : ''}
             {ja.approval_verbal_note && getProfileName(ja.customer_approved_by) ? ` · recorded by ${getProfileName(ja.customer_approved_by)}` : ''}
             {ja.customer_approved_at ? ` · ${new Date(ja.customer_approved_at).toLocaleString()}` : ''}
             {ja.approval_verbal_note && (
@@ -1808,7 +1809,17 @@ export default function GraphicsJobRecordPage() {
           </div>
         ) : ja.customer_rejected_at ? (
           <div>
-            <div style={{ fontSize: '11px', color: '#ef4444', fontWeight: 700, marginBottom: '4px' }}>Changes requested</div>
+            <div style={{ fontSize: '11px', color: '#ef4444', fontWeight: 700, marginBottom: '4px' }}>
+              Changes requested
+              {/* Who asked (migration 387). Older shared links can't say,
+                  so those say so rather than naming the first recipient. */}
+              <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>
+                {ja.customer_responder
+                  ? <> by <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{ja.customer_responder}</span></>
+                  : ' · sender not recorded'}
+                {` · ${new Date(ja.customer_rejected_at).toLocaleString()}`}
+              </span>
+            </div>
             {ja.customer_rejection_reason && (
               <div style={{ fontSize: '11px', color: 'var(--text-body)', fontStyle: 'italic' }}>{ja.customer_rejection_reason}</div>
             )}

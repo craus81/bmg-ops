@@ -7,7 +7,9 @@
  * / just-submitted screens), and the E-SIGN action card — agreement
  * checkbox, Accept, Request Changes with a required reason — including
  * the audit fields the routes record (time on page, delivery channel and
- * target from the link's ?via/?to params).
+ * target from the link's ?via/?to params). A link minted for one person
+ * (?own=1, proofs only) says "Responding as <them>" with a "Not you?"
+ * box, so staff can see which recipient answered.
  *
  * Each page supplies only its DOCUMENT body and copy, so the flows can't
  * drift apart in how approval itself works — the drift this replaces was
@@ -97,6 +99,12 @@ export default function ApprovalPageShell({
   const token = params?.token || '';
   const deliveryChannel = searchParams?.get('via') === 'sms' ? 'sms_link' : 'email_link';
   const deliveryTarget = searchParams?.get('to') || null;
+  // Proof emails go one per recipient (?own=1), so the link's ?to IS the
+  // person reading it. Older shared links named only the first recipient
+  // and must not claim to know who is responding.
+  const ownLink = kind === 'proof' && searchParams?.get('own') === '1' && !!deliveryTarget;
+  const [notMe, setNotMe] = useState(false);
+  const [typedName, setTypedName] = useState('');
 
   const [status, setStatus] = useState<ApprovalStatus>('loading');
   const [data, setData] = useState<any>(null);
@@ -151,6 +159,9 @@ export default function ApprovalPageShell({
           timeOnPageSeconds,
           deliveryChannel,
           deliveryTarget,
+          ownLink,
+          // Who the person says they are when the link was forwarded to them.
+          responder: ownLink && notMe && typedName.trim() ? typedName.trim() : undefined,
           reason: action === 'reject' ? rejectReason.trim() : undefined,
           // The exact sentence the customer checked — frozen into the
           // signed snapshot server-side.
@@ -207,6 +218,32 @@ export default function ApprovalPageShell({
   return (
     <ApprovalFrame>
       {renderDocument(data)}
+
+      {ownLink && (
+        <div style={{ marginTop: '18px', fontSize: '12px', color: '#475569' }}>
+          {notMe ? (
+            <label style={{ display: 'block' }}>
+              <span style={{ fontWeight: 700, color: '#0f172a' }}>Your name</span>
+              <input
+                value={typedName}
+                onChange={e => setTypedName(e.target.value)}
+                placeholder="So BMG knows who is responding"
+                maxLength={120}
+                style={{ display: 'block', width: '100%', marginTop: '4px', padding: '8px 10px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', fontFamily: 'inherit' }}
+              />
+            </label>
+          ) : (
+            <>
+              Responding as <strong style={{ color: '#0f172a', overflowWrap: 'anywhere' }}>{deliveryTarget}</strong>
+              {' · '}
+              <button
+                onClick={() => setNotMe(true)}
+                style={{ padding: 0, border: 'none', background: 'none', color: '#1d4ed8', fontSize: '12px', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}
+              >Not you?</button>
+            </>
+          )}
+        </div>
+      )}
 
       {rejectMode ? (
         <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px', marginTop: '18px' }}>
