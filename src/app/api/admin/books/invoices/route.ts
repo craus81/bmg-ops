@@ -57,7 +57,8 @@ const POSTING_BUDGET_MS = 240_000;
  * each invoice, credit memo, payment, deposit, application, bill, bill
  * credit or bill payment also says what FleetSuite's books hold for it
  * (migrations 367, 376, 383, 386 and 390) and what the next posting run does
- * about it, and `lastRun` is how the last one went.
+ * about it, or that it has nothing to post, and `lastRun` is how the last one
+ * went.
  *
  * Super admin only: the books are being built hidden, for the owner, until
  * they're ready (docs/books.md). It only reads.

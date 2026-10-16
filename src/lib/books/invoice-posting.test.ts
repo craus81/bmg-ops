@@ -114,14 +114,14 @@ describe('decide', () => {
 
   it('reverses the entry of a voided invoice, and posts nothing for one never posted', () => {
     expect(decide(worked(invoice({ voided: true })), posting())).toEqual({ kind: 'reverse', why: 'voided' });
-    expect(decide(worked(invoice({ voided: true })), undefined)).toEqual({ kind: 'keep' });
+    expect(decide(worked(invoice({ voided: true })), undefined)).toEqual({ kind: 'keep', why: 'voided' });
   });
 
   it('reverses the entry of an invoice that comes to nothing now', () => {
     const zero = invoice({ total: '0.00', lines: invoice().lines.map((l) => ({ ...l, amount: '0.00', netamount: '0' })), netsuite: [] });
     expect(entryLines(worked(zero))).toEqual([]);
     expect(decide(worked(zero), posting())).toEqual({ kind: 'reverse', why: 'nothing' });
-    expect(decide(worked(zero), undefined)).toEqual({ kind: 'keep' });
+    expect(decide(worked(zero), undefined)).toEqual({ kind: 'keep', why: 'nothing' });
   });
 
   it('leaves whatever stands when the rule can\'t work the invoice out or its lines aren\'t copied yet', () => {
@@ -150,9 +150,27 @@ describe('invoiceBooks', () => {
     expect(invoiceBooks(worked(invoice(), { taxAccounts: null }), undefined)).toEqual({ entryNo: null, next: null, earlier: [] });
   });
 
+  it('says an invoice has nothing to post when none of its entries stands and NetSuite voided it, or it comes to $0', () => {
+    const zero = invoice({ total: '0.00', lines: invoice().lines.map((l) => ({ ...l, amount: '0.00', netamount: '0' })), netsuite: [] });
+    expect(invoiceBooks(worked(invoice({ voided: true })), undefined)).toEqual({ entryNo: null, next: null, earlier: [], nothingToPost: 'voided' });
+    expect(invoiceBooks(worked(zero), undefined)).toEqual({ entryNo: null, next: null, earlier: [], nothingToPost: 'zero' });
+    // Its reversed entry still shows.
+    const reversed = posting({ unreversed: [], current: null, history: [{ entry_no: 7, entry_date: '2026-09-15', reversed_by: 8 }] });
+    expect(invoiceBooks(worked(invoice({ voided: true })), reversed))
+      .toEqual({ entryNo: null, next: null, earlier: [{ entryNo: 7, reversedBy: 8 }], nothingToPost: 'voided' });
+    // While its entry stands, the next run reverses that instead.
+    expect(invoiceBooks(worked(zero), posting())).toEqual({ entryNo: 7, next: 'reverse', earlier: [] });
+    // Never of one still to post, or that the rule can't work out, or whose lines don't come to its total yet.
+    expect(invoiceBooks(worked(), undefined)).not.toHaveProperty('nothingToPost');
+    expect(invoiceBooks(worked(invoice(), { taxAccounts: null }), undefined)).not.toHaveProperty('nothingToPost');
+    expect(invoiceBooks(worked(invoice({ total: '0.00' })), undefined)).toEqual({ entryNo: null, next: null, earlier: [] });
+  });
+
   it('says nothing is next when NetSuite couldn\'t say enough about the month\'s lines', () => {
     expect(invoiceBooks(worked(), undefined, false)).toEqual({ entryNo: null, next: null, earlier: [] });
     expect(invoiceBooks(worked(invoice({ voided: true })), posting(), false)).toMatchObject({ entryNo: 7, next: null });
+    // What has nothing to post doesn't wait on the run.
+    expect(invoiceBooks(worked(invoice({ voided: true })), undefined, false)).toEqual({ entryNo: null, next: null, earlier: [], nothingToPost: 'voided' });
     expect(unsaidFacts({ lines: new Map(), missing: ['quantity', 'rate'] })).toEqual([]);
     expect(unsaidFacts({ lines: new Map(), missing: ['rate', 'amount', 'cogs'] }).map((f) => f.fact)).toEqual(['cogs', 'amount']);
   });
@@ -309,12 +327,12 @@ describe('payments', () => {
 
   it('reverses the entry of a voided payment or one that comes to nothing, and leaves one it can\'t work out or not copied yet', () => {
     expect(decidePayment(paid(payment({ voided: true })), held())).toEqual({ kind: 'reverse', why: 'voided' });
-    expect(decidePayment(paid(payment({ voided: true })), undefined)).toEqual({ kind: 'keep' });
+    expect(decidePayment(paid(payment({ voided: true })), undefined)).toEqual({ kind: 'keep', why: 'voided' });
     // $0, and NetSuite posts no lines for it.
     const zero = payment({ total: '0.00', companies: [], netsuite: [] });
     expect(paymentEntryLines(paid(zero))).toEqual([]);
     expect(decidePayment(paid(zero), held())).toEqual({ kind: 'reverse', why: 'nothing' });
-    expect(decidePayment(paid(zero), undefined)).toEqual({ kind: 'keep' });
+    expect(decidePayment(paid(zero), undefined)).toEqual({ kind: 'keep', why: 'nothing' });
     expect(decidePayment(paid(payment({ companies: [], netsuite: [] })), held())).toEqual({ kind: 'leave', why: 'waiting' });
     // NetSuite's posting doesn't say where the money went.
     const split = payment({
@@ -333,6 +351,10 @@ describe('payments', () => {
     expect(paymentBooks(paid(), held())).toEqual({ entryNo: 8, next: null, earlier: [] });
     expect(paymentBooks(paid(payment({ voided: true })), held()).next).toBe('reverse');
     expect(paymentBooks(paid(payment({ date: '2026-09-11' })), held()).next).toBe('replace');
+    // Nothing to post, with none of its entries standing: voided, or $0.
+    expect(paymentBooks(paid(payment({ voided: true })), undefined)).toEqual({ entryNo: null, next: null, earlier: [], nothingToPost: 'voided' });
+    expect(paymentBooks(paid(payment({ total: '0.00', companies: [], netsuite: [] })), undefined)).toMatchObject({ nothingToPost: 'zero' });
+    expect(paymentBooks(paid(payment({ voided: true })), held())).not.toHaveProperty('nothingToPost');
   });
 
   it('builds an entry that fits what it is compared against once posted', () => {
@@ -443,12 +465,12 @@ describe('deposits', () => {
 
   it('reverses the entry of a voided deposit or one that comes to nothing, and leaves one it can\'t work out or not in the GL copy yet', () => {
     expect(decideDeposit(dep(deposit({ voided: true })), held())).toEqual({ kind: 'reverse', why: 'voided' });
-    expect(decideDeposit(dep(deposit({ voided: true })), undefined)).toEqual({ kind: 'keep' });
+    expect(decideDeposit(dep(deposit({ voided: true })), undefined)).toEqual({ kind: 'keep', why: 'voided' });
     // $0, and NetSuite posts no lines for it.
     const zero = deposit({ total: '0.00', companies: [], netsuite: [] });
     expect(depositEntryLines(dep(zero))).toEqual([]);
     expect(decideDeposit(dep(zero), held())).toEqual({ kind: 'reverse', why: 'nothing' });
-    expect(decideDeposit(dep(zero), undefined)).toEqual({ kind: 'keep' });
+    expect(decideDeposit(dep(zero), undefined)).toEqual({ kind: 'keep', why: 'nothing' });
     expect(decideDeposit(dep(deposit({ companies: [], netsuite: [] })), held())).toEqual({ kind: 'leave', why: 'waiting' });
     // NetSuite's posting doesn't say where the money went.
     const split = deposit({
@@ -466,6 +488,9 @@ describe('deposits', () => {
     expect(depositBooks(dep(), held())).toEqual({ entryNo: 9, next: null, earlier: [] });
     expect(depositBooks(dep(deposit({ voided: true })), held()).next).toBe('reverse');
     expect(depositBooks(dep(deposit({ date: '2026-09-11' })), held()).next).toBe('replace');
+    expect(depositBooks(dep(deposit({ voided: true })), undefined)).toEqual({ entryNo: null, next: null, earlier: [], nothingToPost: 'voided' });
+    expect(depositBooks(dep(deposit({ total: '0.00', companies: [], netsuite: [] })), undefined)).toMatchObject({ nothingToPost: 'zero' });
+    expect(depositBooks(dep(deposit({ voided: true })), held())).not.toHaveProperty('nothingToPost');
     const postings = new Map([[postingKey('customer_deposit', '301'), held()]]);
     expect(depositPostingFor(postings, dep())).toBe(postings.get('customer_deposit:301'));
     expect(depositPostingFor(postings, dep(application({ netsuite_id: '301' })))).toBeUndefined();
@@ -612,12 +637,12 @@ describe('bills', () => {
 
   it('reverses the entry of a voided bill or one that comes to nothing, and leaves one it can\'t work out or not copied yet', () => {
     expect(decideBill(one(bill({ voided: true })), held())).toEqual({ kind: 'reverse', why: 'voided' });
-    expect(decideBill(one(bill({ voided: true })), undefined)).toEqual({ kind: 'keep' });
+    expect(decideBill(one(bill({ voided: true })), undefined)).toEqual({ kind: 'keep', why: 'voided' });
     // $0, and NetSuite posts no lines for it.
     const zero = bill({ total: '0.00', lines: [copied('1', null, '530', '0.00')], companies: [], netsuite: [] });
     expect(one(zero).checked.lines).toEqual([]);
     expect(decideBill(one(zero), held())).toEqual({ kind: 'reverse', why: 'nothing' });
-    expect(decideBill(one(zero), undefined)).toEqual({ kind: 'keep' });
+    expect(decideBill(one(zero), undefined)).toEqual({ kind: 'keep', why: 'nothing' });
     // Not in the GL copy yet, or its lines not copied yet.
     expect(decideBill(one(bill({ companies: [], netsuite: [] })), held())).toEqual({ kind: 'leave', why: 'waiting' });
     expect(decideBill(one(bill({ lines: null })), held())).toEqual({ kind: 'leave', why: 'waiting' });
@@ -643,6 +668,11 @@ describe('bills', () => {
     expect(billBooks(one(bill({ voided: true })), held()).next).toBe('reverse');
     expect(billBooks(one(bill({ date: '2026-09-09' })), held()).next).toBe('replace');
     expect(billBooks(one(bill({ total: '660.00' })), held()).next).toBeNull();
+    expect(billBooks(one(bill({ voided: true })), undefined)).toEqual({ entryNo: null, next: null, earlier: [], nothingToPost: 'voided' });
+    const zero = bill({ total: '0.00', lines: [copied('1', null, '530', '0.00')], companies: [], netsuite: [] });
+    expect(billBooks(one(zero), undefined)).toMatchObject({ nothingToPost: 'zero' });
+    // Lines that don't come to its total yet aren't nothing to post.
+    expect(billBooks(one(bill({ total: '660.00' })), undefined)).not.toHaveProperty('nothingToPost');
     const postings = new Map([[postingKey('vendor_bill', '701'), held()]]);
     expect(billPostingFor(postings, one())).toBe(postings.get('vendor_bill:701'));
     expect(billPostingFor(postings, one(credit({ netsuite_id: '701' })))).toBeUndefined();
@@ -750,12 +780,12 @@ describe('bill payments', () => {
 
   it('reverses the entry of a voided bill payment or one that comes to nothing, and leaves one it can\'t work out or not in the GL copy yet', () => {
     expect(decideBillPayment(one(payment({ voided: true })), held())).toEqual({ kind: 'reverse', why: 'voided' });
-    expect(decideBillPayment(one(payment({ voided: true })), undefined)).toEqual({ kind: 'keep' });
+    expect(decideBillPayment(one(payment({ voided: true })), undefined)).toEqual({ kind: 'keep', why: 'voided' });
     // $0: it only applies a bill credit to a bill, and NetSuite posts no lines for it.
     const zero = payment({ total: '0.00', companies: [], netsuite: [] });
     expect(one(zero).checked.lines).toEqual([]);
     expect(decideBillPayment(one(zero), held())).toEqual({ kind: 'reverse', why: 'nothing' });
-    expect(decideBillPayment(one(zero), undefined)).toEqual({ kind: 'keep' });
+    expect(decideBillPayment(one(zero), undefined)).toEqual({ kind: 'keep', why: 'nothing' });
     expect(decideBillPayment(one(payment({ companies: [], netsuite: [] })), held())).toEqual({ kind: 'leave', why: 'waiting' });
     // NetSuite's posting doesn't say where the money came from: no main line, and two accounts credited.
     const split = payment({
@@ -773,6 +803,11 @@ describe('bill payments', () => {
     expect(billPaymentBooks(one(payment({ voided: true })), held()).next).toBe('reverse');
     expect(billPaymentBooks(one(payment({ date: '2026-09-09' })), held()).next).toBe('replace');
     expect(billPaymentBooks(one(payment({ companies: [], netsuite: [] })), held()).next).toBeNull();
+    expect(billPaymentBooks(one(payment({ voided: true })), undefined)).toEqual({ entryNo: null, next: null, earlier: [], nothingToPost: 'voided' });
+    expect(billPaymentBooks(one(payment({ total: '0.00', companies: [], netsuite: [] })), undefined)).toMatchObject({ nothingToPost: 'zero' });
+    // $0 with a discount taken still posts: payables and the discount.
+    const discountOnly = payment({ total: '0.00', netsuite: [gl('1', '200', '13.00', '0.00'), gl('2', '485', '0.00', '13.00')] });
+    expect(billPaymentBooks(one(discountOnly), undefined)).toEqual({ entryNo: null, next: 'post', earlier: [] });
     // Its first entry, reversed when NetSuite changed the payment.
     const again = held({
       entries: 2,

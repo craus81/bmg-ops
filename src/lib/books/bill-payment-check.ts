@@ -1,5 +1,5 @@
 import {
-  centsOf, entryDate,
+  booksCounts, centsOf, entryDate,
   type AccountAmount, type ChartAccount, type CheckStatus, type InvoiceBooks, type InvoiceRowView, type InvoiceView, type MonthCheck,
   type MonthReason, type MonthSummary, type NetSuitePosting, type Reason,
 } from './invoice-check';
@@ -341,10 +341,7 @@ export function checkBillPaymentMonth(
     });
   }
 
-  if (books) {
-    summary.posted = views.filter((v) => v.books && v.books.entryNo !== null).length;
-    summary.pending = views.filter((v) => v.books?.next).length;
-  }
+  if (books) Object.assign(summary, booksCounts(views));
 
   if (moved.length) {
     const them = moved.length === 1 ? 'it' : 'them';

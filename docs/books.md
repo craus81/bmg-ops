@@ -516,9 +516,15 @@ cron's response carries any amount.
 
 On the invoices page each invoice shows its entry ("Entry 12") and what the
 next run will do to it: post, replace or reverse. Opening it lists its
-earlier entries and what reversed them. Until a company's books go live the
-journal can be emptied (`resetJournal`), and the next run posts every
-invoice again.
+earlier entries and what reversed them. One with no entry standing that
+NetSuite voided, or that comes to $0, reads "Nothing to post" (owner
+decision 2026-10-16), on every switch: each month counts those apart from
+the ones in the books, and after Check every month the banner says how many
+have nothing to post and why, so books that hold fewer documents than
+NetSuite has explain themselves. The list of the ones that don't match or
+aren't posted as they should be leaves them out. Until a company's books go
+live the journal can be emptied (`resetJournal`), and the next run posts
+every invoice again.
 
 ## Payments
 

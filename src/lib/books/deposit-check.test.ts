@@ -263,7 +263,9 @@ describe('checkDepositMonth', () => {
     const m = checkDepositMonth(DATA, { company: 'BMG', chart: CHART }, books);
     // Only for the ones listed: not DEP4 or DEP5, in neither company's GL copy.
     expect(seen).toEqual(['DEP1', 'DA11', 'NetSuite 303']);
-    expect(m.summary).toEqual({ invoices: 3, matches: 2, differs: 1, unworkable: 0, waiting: 0, withCost: 0, posted: 1, pending: 1 });
+    expect(m.summary).toEqual({
+      invoices: 3, matches: 2, differs: 1, unworkable: 0, waiting: 0, withCost: 0, posted: 1, pending: 1, nothingToPost: { voided: 0, zero: 0 },
+    });
     expect(m.invoices.map((d) => [d.number, d.books])).toEqual([
       ['DEP1', { entryNo: 4, next: null, earlier: [] }],
       ['DA11', { entryNo: null, next: 'post', earlier: [] }],
