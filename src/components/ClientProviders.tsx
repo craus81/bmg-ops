@@ -14,6 +14,7 @@ import NativeLinkHandler from '@/components/NativeLinkHandler';
 import NativePushHandler from '@/components/NativePushHandler';
 import NativeSiriKey from '@/components/NativeSiriKey';
 import UsageTelemetry from '@/components/UsageTelemetry';
+import DuoLayoutWatcher from '@/components/DuoLayoutWatcher';
 
 function PendingScreen() {
   const { signOut } = useAuth();
@@ -101,7 +102,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   if (profile?.deactivated) return <DeniedScreen closed />;
 
   return (
-    <div style={{ minHeight: 'calc(100vh / var(--ts))', paddingBottom: '85px', background: 'var(--bg)' }}>
+    <div className="app-shell" style={{ minHeight: 'calc(100vh / var(--ts))', paddingBottom: '85px', background: 'var(--bg)' }}>
       <Header activePartNumber={activePart?.part_number} activeEndCustomer={activePart?.end_customer} />
       <main id="main" style={{ maxWidth: '1200px', margin: '0 auto', padding: '14px 20px', boxSizing: 'border-box' }}>
         {children}
@@ -123,6 +124,7 @@ export default function ClientProviders({ children }: { children: React.ReactNod
               <NativePushHandler />
               <NativeSiriKey />
               <UsageTelemetry />
+              <DuoLayoutWatcher />
               <AppShell>{children}</AppShell>
             </DialogProvider>
           </PopoutProvider>

@@ -409,7 +409,7 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
           }}>Exit</button>
         </div>
       )}
-      <header style={{
+      <header className="app-header" style={{
         background: theme.headerBg,
         padding: '12px 12px',
         paddingTop: 'calc(12px + env(safe-area-inset-top, 0px))',

@@ -557,3 +557,75 @@ button {
   .est-lbl-short { display: inline; }
   .est-part-action { padding: 8px 10px !important; flex: 1 1 auto; }
 }
+
+/* ===== iPhone Duo =====
+   DuoLayoutWatcher stamps these on <html> (rules in src/lib/duo-layout.ts):
+   data-sidenav on the folding iPhone's short, wide screens, data-duo-wide
+   when there's room for two panes. Regular phones, iPads and computers never
+   get either, so nothing below touches them. !important because the app's
+   layout lives in inline styles. */
+html[data-sidenav] {
+  --rail-w: calc(64px + env(safe-area-inset-right, 0px));
+}
+
+/* Tabs: a rail down the right edge, where Apple puts the clock and its own
+   tab bars on this phone, instead of a bar along the bottom. */
+html[data-sidenav] .app-nav {
+  top: 0 !important; bottom: 0 !important; left: auto !important; right: 0 !important;
+  width: var(--rail-w);
+  flex-direction: column; justify-content: flex-start; align-items: stretch;
+  gap: 4px !important;
+  border-top: none !important;
+  border-left: 1px solid var(--border-strong);
+  padding: calc(10px + env(safe-area-inset-top, 0px)) calc(4px + env(safe-area-inset-right, 0px)) calc(10px + env(safe-area-inset-bottom, 0px)) 4px !important;
+  overflow-y: auto;
+}
+html[data-sidenav] .app-nav-tab { flex: 0 0 auto !important; padding: 8px 2px !important; }
+html[data-sidenav] .app-shell {
+  padding-right: var(--rail-w) !important;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important;
+}
+/* The shell already clears the rail (and the right inset inside it). */
+html[data-sidenav] .app-header { padding-right: 12px !important; }
+html[data-sidenav] .palette-fab { bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important; }
+html[data-sidenav] .ai-chat-panel {
+  right: calc(var(--rail-w) + 12px) !important;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important;
+}
+
+/* Home: money tiles two across on the small screen, one row of four on the big one. */
+html[data-sidenav] .dash-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+html[data-duo-wide] .dash-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+/* Keep the dashboard's main column + right rail (it drops to one column under 860px). */
+html[data-duo-wide] .dash-cols { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) !important; }
+
+/* In-Shop: the tapped vehicle docks on the right, beside the list, instead of
+   a pop-up over it. Tapping another vehicle swaps it; ✕ closes. */
+html[data-duo-wide] {
+  --inshop-pane-w: calc((100vw / var(--ts) - var(--rail-w)) * 0.52);
+}
+html[data-duo-wide] .inshop-backdrop { display: none !important; }
+html[data-duo-wide] .inshop-detail {
+  top: calc(var(--hdr-h, 64px) + 12px) !important;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px)) !important;
+  left: auto !important;
+  right: calc(var(--rail-w) + 12px) !important;
+  transform: none !important;
+  width: var(--inshop-pane-w) !important;
+  max-height: none !important;
+  z-index: 90 !important;
+}
+html[data-duo-wide] .inshop-has-detail { margin-right: calc(var(--inshop-pane-w) + 4px); }
+
+/* Scan & Log: capture on the left half, shift banner and today's scans on
+   the right, with a gap down the middle so nothing sits in the fold. */
+html[data-duo-wide] .scan-step {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
+  column-gap: 44px;
+  align-items: start;
+}
+html[data-duo-wide] .scan-capture { grid-column: 1; grid-row: 1 / span 2; }
+html[data-duo-wide] .scan-head { grid-column: 2; grid-row: 1; }
+html[data-duo-wide] .scan-list { grid-column: 2; grid-row: 2; }
