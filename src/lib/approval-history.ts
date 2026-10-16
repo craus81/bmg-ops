@@ -50,6 +50,8 @@ export interface HistoryRound {
   outcome: RoundOutcome;
   decidedAt: string | null;
   rejectionReason: string | null;
+  /** Who approved or asked for changes (migration 388); null = not known. */
+  respondedBy: string | null;
   messages: HistoryMessage[];
 }
 
@@ -77,6 +79,7 @@ export interface RoundRow {
   outcome: RoundOutcome;
   decided_at: string | null;
   rejection_reason: string | null;
+  responded_by?: string | null;
   created_at?: string | null;
 }
 
@@ -122,6 +125,7 @@ export function buildApprovalHistory(
     outcome: r.outcome,
     decidedAt: r.decided_at || null,
     rejectionReason: r.rejection_reason || null,
+    respondedBy: r.responded_by || null,
     messages: [],
   }));
 

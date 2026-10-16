@@ -202,7 +202,7 @@ export async function sendProofApproval(
   if (previewOnly) {
     const html = buildNotificationEmail(emailTitle, emailBody, `${appUrl}/approve/proof/`, 'Review Proof', {
       ...emailOpts,
-      ctaNote: 'A unique, secure link is generated when you send.',
+      ctaNote: `A unique, secure link is generated for each person when you send.${emailList.length > 1 ? ` Each email also lists the others it went to.` : ''}`,
     });
     return { ok: true, preview: { to: emailList.join(', ') || null, subject, html } };
   }
@@ -237,6 +237,7 @@ export async function sendProofApproval(
     // the reminder cycle — a fresh send restarts the clock.
     patch.customer_rejected_at = null;
     patch.customer_rejection_reason = null;
+    patch.customer_responder = null;
     patch.approval_reminder_sent_at = null;
     patch.approval_reminder_count = 0;
     patch.approval_escalated_at = null;
@@ -273,28 +274,52 @@ export async function sendProofApproval(
   }
 
   if (emailList.length > 0) {
-    const link = `${appUrl}/approve/proof/${token}?via=email&to=${encodeURIComponent(emailList[0])}`;
-    const html = buildNotificationEmail(emailTitle, emailBody, link, 'Review Proof', {
-      ...emailOpts,
-      ctaNote: `This link expires in ${expiryDays} days.`,
-    });
+    // One email per person, each link naming its reader (?to=…&own=1), so
+    // the job can say WHO approved or asked for changes. A single shared
+    // link named only the first address, whoever clicked (thread "Who
+    // sent the change request", 2026-10-16). The compose screen's cc row
+    // gets its own copies too; each email lists everyone else it went to.
+    const cc = (opts.cc || []).map(e => e.trim()).filter(Boolean);
+    const people = [...new Set([...emailList, ...cc].map(e => e.toLowerCase()))]
+      .map(lower => [...emailList, ...cc].find(e => e.toLowerCase() === lower)!);
     const bcc = (opts.bcc || []).map(e => e.trim()).filter(Boolean);
-    try {
-      const ok = await sendEmail(
-        emailList, subject, html, undefined,
-        emailAttachments.length > 0 ? emailAttachments : undefined,
-        opts.actorEmail || undefined,
-        bcc.length > 0 ? bcc : undefined,
-        { kind: 'proof_approval', cc: opts.cc || null, sentBy: opts.actorId || null, contextUrl: deepLinks.graphicsJob(jobId), customerId: historyCustomerId },
-      );
-      dispatch.email = { target: emailList.join(', '), ok, attachments: emailAttachments.length, bcc: bcc.length > 0 ? bcc.join(', ') : undefined, cc: (opts.cc || []).length > 0 ? (opts.cc || []).join(', ') : undefined };
-    } catch (err: any) {
-      dispatch.email = { target: emailList.join(', '), ok: false, error: err?.message };
+    const sent: string[] = [];
+    const failed: string[] = [];
+    let lastError: string | undefined;
+    for (const [i, person] of people.entries()) {
+      const link = `${appUrl}/approve/proof/${token}?via=email&to=${encodeURIComponent(person)}&own=1`;
+      const html = buildNotificationEmail(emailTitle, emailBody, link, 'Review Proof', {
+        ...emailOpts,
+        ctaNote: proofCtaNote(expiryDays, people.filter(p => p !== person)),
+      });
+      try {
+        const ok = await sendEmail(
+          person, subject, html, undefined,
+          emailAttachments.length > 0 ? emailAttachments : undefined,
+          opts.actorEmail || undefined,
+          // The sender's own copy rides on the first email only.
+          i === 0 && bcc.length > 0 ? bcc : undefined,
+          { kind: 'proof_approval', cc: null, sentBy: opts.actorId || null, contextUrl: deepLinks.graphicsJob(jobId), customerId: historyCustomerId },
+        );
+        (ok ? sent : failed).push(person);
+      } catch (err: any) {
+        failed.push(person);
+        lastError = err?.message;
+      }
     }
+    dispatch.email = {
+      target: sent.length > 0
+        ? `${sent.join(', ')}${failed.length > 0 ? ` (not sent to ${failed.join(', ')})` : ''}`
+        : people.join(', '),
+      ok: sent.length > 0,
+      attachments: emailAttachments.length,
+      bcc: bcc.length > 0 ? bcc.join(', ') : undefined,
+      ...(sent.length === 0 && lastError ? { error: lastError } : {}),
+    };
   }
 
   if (phone && !reminder) {
-    const link = `${appUrl}/approve/proof/${token}?via=sms&to=${encodeURIComponent(phone)}`;
+    const link = `${appUrl}/approve/proof/${token}?via=sms&to=${encodeURIComponent(phone)}&own=1`;
     const smsBody = `[BMG Fleet] Your graphic proof${rev} is ready for review: ${link}`;
     const smsMeta = { kind: 'proof_approval', sentBy: opts.actorId || null, contextUrl: deepLinks.graphicsJob(jobId) };
     try {
@@ -320,4 +345,12 @@ export async function sendProofApproval(
     approvalUrl: `${appUrl}/approve/proof/${token}`,
     dispatch,
   };
+}
+
+/** The small line under the proof email's button: the expiry, and who
+ *  else got a copy (each person now gets their own email, so nobody sees
+ *  the others in the To line). */
+export function proofCtaNote(expiryDays: number, others: string[]): string {
+  const expiry = `This link expires in ${expiryDays} days.`;
+  return others.length > 0 ? `Also sent to ${others.join(', ')}. ${expiry}` : expiry;
 }

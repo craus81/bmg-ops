@@ -1,5 +1,5 @@
 // Migration 360 keeps FleetSuite's chart of accounts in step with NetSuite's
-// through gl_sync_netsuite_accounts(), and migration 387 lets documents
+// through gl_sync_netsuite_accounts(), and migration 388 lets documents
 // copied from NetSuite post to accounts NetSuite has made inactive since.
 // This runs migrations 359, 360 and 387 in an in-memory Postgres (PGlite) as
 // the app's server login and holds the rules: matched on NetSuite's id,

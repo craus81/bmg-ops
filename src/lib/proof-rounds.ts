@@ -251,12 +251,16 @@ export async function closeProofRound(
   jobId: string,
   outcome: 'approved' | 'rejected',
   rejectionReason?: string | null,
+  respondedBy?: string | null,
 ): Promise<void> {
   try {
     const patch: Record<string, unknown> = {
       outcome,
       decided_at: new Date().toISOString(),
     };
+    // Who answered (migration 388); left out when unknown so a database
+    // without the column still closes the round.
+    if (respondedBy) patch.responded_by = respondedBy;
     // The CHECK constraint requires a reason on a rejection; a customer
     // who rejected without typing one still gets an honest placeholder
     // rather than the write failing.

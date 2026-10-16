@@ -47,7 +47,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const [roundsRes, emailsRes, textsRes, threadsRes] = await Promise.all([
     supabase
       .from('graphics_proof_rounds')
-      .select('round_number, addressing, proof_file_id, sent_at, sent_by, outcome, decided_at, rejection_reason, created_at')
+      .select('round_number, addressing, proof_file_id, sent_at, sent_by, outcome, decided_at, rejection_reason, responded_by, created_at')
       .eq('job_id', jobId)
       .order('round_number'),
     supabase

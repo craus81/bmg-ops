@@ -9,6 +9,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { r2Get, r2PresignGet, r2Upload } from '@/lib/r2';
 import { validateBody, z } from '@/lib/validate';
 import { closeProofRound } from '@/lib/proof-rounds';
+import { resolveProofResponder } from '@/lib/proof-responder';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,6 +20,10 @@ const ApprovalSchema = z.object({
   timeOnPageSeconds: z.number().int().nonnegative().max(86_400).optional().nullable(),
   deliveryChannel: z.enum(['sms_link', 'email_link']).optional().nullable(),
   deliveryTarget: z.string().max(254).optional().nullable(),
+  // The link was minted for one person (?own=1), so deliveryTarget is them.
+  ownLink: z.boolean().optional().nullable(),
+  // The name a reader typed after "Not you?" (a forwarded email).
+  responder: z.string().trim().max(120).optional().nullable(),
 });
 
 const supabase = createClient(
@@ -152,6 +157,11 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   if (job.customer_rejected_at) return NextResponse.json({ error: 'Already rejected' }, { status: 409 });
 
   const metadata = captureMetadata(req, body);
+  const responder = await resolveProofResponder(supabase, {
+    ownLink: body.ownLink,
+    deliveryTarget: metadata.deliveryTarget,
+    typedName: body.responder,
+  });
 
   if (action === 'reject') {
     const reason = (body.reason || '').trim();
@@ -167,6 +177,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
         customer_approved_via: metadata.deliveryChannel,
         customer_approved_delivery_target: metadata.deliveryTarget,
         customer_approved_time_on_page_seconds: metadata.timeOnPageSeconds,
+        customer_responder: responder,
         status: 'revision',
         updated_at: new Date().toISOString(),
       })
@@ -174,16 +185,16 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
 
     // R6-10: close the open round with the reason, so the NEXT send can
     // carry "addressing: <this>" and the job's round count is real.
-    await closeProofRound(supabase, job.id, 'rejected', reason);
+    await closeProofRound(supabase, job.id, 'rejected', reason, responder);
 
     await supabase.from('graphics_status_history').insert({
       job_id: job.id,
       from_status: job.status,
       to_status: 'revision',
-      note: `Customer requested changes: ${reason}`,
+      note: `${responder ? `${responder} requested` : 'Customer requested'} changes: ${reason}`,
     });
 
-    await notifyGraphicsTeam(job, 'revision', reason);
+    await notifyGraphicsTeam(job, 'revision', reason, responder);
     return NextResponse.json({ status: 'submitted_rejected' });
   }
 
@@ -219,7 +230,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   // Server-held: a link-holder could otherwise freeze arbitrary text into
   // the hash-verified record (Round 3 finding). The page displays this
   // exact canonical sentence, so real customers see no change.
-  const snapshotHtml = renderProofHtml(job, files || [], metadata, AGREEMENT_TEXT, signedProofPaths);
+  const snapshotHtml = renderProofHtml(job, files || [], { ...metadata, responder }, AGREEMENT_TEXT, signedProofPaths);
   let signedPath: string | null = null;
   let signedHash: string | null = null;
   try {
@@ -245,6 +256,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
       customer_approved_via: metadata.deliveryChannel,
       customer_approved_delivery_target: metadata.deliveryTarget,
       customer_approved_time_on_page_seconds: metadata.timeOnPageSeconds,
+      customer_responder: responder,
       signed_document_storage_path: signedPath,
       signed_document_hash: signedHash,
       signed_proof_storage_paths: signedProofPaths.length > 0 ? signedProofPaths : null,
@@ -252,20 +264,20 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
     })
     .eq('id', job.id);
 
-  await closeProofRound(supabase, job.id, 'approved');
+  await closeProofRound(supabase, job.id, 'approved', null, responder);
 
   await supabase.from('graphics_status_history').insert({
     job_id: job.id,
     from_status: job.status,
     to_status: job.status,
-    note: 'Customer approved proof via magic link',
+    note: responder ? `${responder} approved the proof via magic link` : 'Customer approved proof via magic link',
   });
 
-  await notifyGraphicsTeam(job, 'approved');
+  await notifyGraphicsTeam(job, 'approved', undefined, responder);
   return NextResponse.json({ status: 'submitted_accepted' });
 }
 
-async function notifyGraphicsTeam(job: any, verdict: 'approved' | 'revision', reason?: string) {
+async function notifyGraphicsTeam(job: any, verdict: 'approved' | 'revision', reason?: string, responder?: string | null) {
   const targetIds = new Set<string>();
   if (job.created_by) targetIds.add(job.created_by);
   if (job.assigned_to) targetIds.add(job.assigned_to);
@@ -283,9 +295,10 @@ async function notifyGraphicsTeam(job: any, verdict: 'approved' | 'revision', re
   const title = verdict === 'approved'
     ? `Proof approved: ${job.title || `Job #${job.job_number}`}`
     : `Proof revision requested: ${job.title || `Job #${job.job_number}`}`;
+  const who = responder || job.customer || 'Customer';
   const body = verdict === 'approved'
-    ? `${job.customer || 'Customer'} approved the proof. You can move to production.`
-    : `${job.customer || 'Customer'} requested changes: ${reason || '(no reason)'}`;
+    ? `${who} approved the proof. You can move to production.`
+    : `${who} requested changes: ${reason || '(no reason)'}`;
 
   await notifyMany(Array.from(targetIds), {
     type: verdict === 'approved' ? 'proof_approved' : 'proof_revision_requested',
@@ -341,6 +354,7 @@ ul li { border-top:1px solid #e2e8f0; padding:10px 0; }
       <div>Approved at: ${esc(approvedAt)}</div>
       <div>IP: ${esc(meta.ip)}</div>
       <div>User agent: ${esc(meta.userAgent)}</div>
+      ${meta.responder ? `<div>Approved by: ${esc(meta.responder)}</div>` : ''}
       ${meta.deliveryChannel ? `<div>Delivered via: ${esc(meta.deliveryChannel)}${meta.deliveryTarget ? ' to ' + esc(meta.deliveryTarget) : ''}</div>` : ''}
       ${typeof meta.timeOnPageSeconds === 'number' ? `<div>Time on page: ${meta.timeOnPageSeconds}s</div>` : ''}
     </div>

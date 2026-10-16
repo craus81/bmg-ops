@@ -162,6 +162,9 @@ export default function GraphicsApprovalHistory<F extends ProofFile>({ jobId, re
         <div style={{ padding: '6px 10px', background: outcome.bg, borderTop: '1px solid var(--border)' }}>
           <div style={{ fontSize: '11px', fontWeight: 700, color: outcome.color }}>
             {r.outcome === 'approved' ? '✓ ' : r.outcome === 'rejected' ? '↺ ' : ''}{outcome.label}
+            {r.respondedBy && (r.outcome === 'approved' || r.outcome === 'rejected') && (
+              <span style={{ color: 'var(--text-primary)' }}> by {r.respondedBy}</span>
+            )}
             {r.decidedAt && <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}> · {fmtWhen(r.decidedAt)}</span>}
           </div>
           {r.rejectionReason && (
