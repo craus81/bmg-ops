@@ -95,6 +95,11 @@ interface CustomerMetrics {
   last_order_date: string | null;
 }
 
+// What the Contact column shows: the record's own Contact Name when set,
+// otherwise its first contact (decision maker first). NetSuite-synced
+// customers never get Contact Name filled, only contact rows.
+interface ContactSummary { name: string; email: string | null; others: number }
+
 const OPP_STAGES: Record<string, string> = { lead: 'Lead', quoted: 'Quoted', negotiating: 'Negotiating', won: 'Won', lost: 'Lost' };
 
 const inputStyle: React.CSSProperties = {
@@ -165,6 +170,7 @@ export default function ProspectsPage() {
   // Contacts directory tab
   const [allContacts, setAllContacts] = useState<DirectoryContact[]>([]);
   const [contactsLoaded, setContactsLoaded] = useState(false);
+  const [contactRowsByProspect, setContactRowsByProspect] = useState<Record<string, { name: string; email: string | null; is_decision_maker: boolean }[]>>({});
   const [contactSearch, setContactSearch] = useState('');
   const [syncingContacts, setSyncingContacts] = useState(false);
 
@@ -218,6 +224,7 @@ export default function ProspectsPage() {
     loadProfiles();
     loadOpenQuoteCustomers();
     loadTags();
+    loadContactSummaries();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once when auth + profile resolve
   }, [authLoading, user, profile]);
 
@@ -343,6 +350,27 @@ export default function ProspectsPage() {
     const map: Record<string, string[]> = {};
     for (const t of rows || []) (map[t.prospect_id] = map[t.prospect_id] || []).push(t.tag);
     setTagsByProspect(map);
+  };
+
+  const loadContactSummaries = async () => {
+    const { data: rows, error } = await fetchAllRows<{ prospect_id: string; name: string; email: string | null; is_decision_maker: boolean }>((from, to) =>
+      supabase.from('prospect_contacts').select('prospect_id, name, email, is_decision_maker')
+        .order('is_decision_maker', { ascending: false }).order('name').order('id').range(from, to));
+    if (error) console.error('Contact summary load error:', error);
+    const map: Record<string, { name: string; email: string | null; is_decision_maker: boolean }[]> = {};
+    for (const c of rows || []) if (c.name?.trim()) (map[c.prospect_id] = map[c.prospect_id] || []).push(c);
+    setContactRowsByProspect(map);
+  };
+
+  const contactFor = (p: Prospect): ContactSummary | null => {
+    const rows = contactRowsByProspect[p.id] || [];
+    const own = p.contact_name?.trim();
+    if (own) {
+      const others = rows.filter(c => c.name.trim().toLowerCase() !== own.toLowerCase()).length;
+      return { name: own, email: p.email, others };
+    }
+    if (rows.length === 0) return null;
+    return { name: rows[0].name, email: rows[0].email, others: rows.length - 1 };
   };
 
   const loadAllContacts = async () => {
@@ -666,7 +694,7 @@ export default function ProspectsPage() {
       const threshold = spendTierFilter === '10k' ? 10000 : spendTierFilter === '50k' ? 50000 : 100000;
       if (ytd < threshold) return false;
     }
-    if (search) return matchSearch(p.company_name, p.contact_name, p.email, p.notes);
+    if (search) return matchSearch(p.company_name, p.contact_name, p.email, p.notes, ...(contactRowsByProspect[p.id] || []).map(c => c.name));
     return true;
   });
 
@@ -675,7 +703,7 @@ export default function ProspectsPage() {
   // float above real revenue.
   const { sorted, sort, toggle, set: setSort } = useTableSort(filtered, {
     company: p => p.company_name,
-    contact: p => p.contact_name?.toLowerCase() || null,
+    contact: p => contactFor(p)?.name.toLowerCase() || null,
     ytd: p => customerMetrics[p.id]?.ytd_spend || null,
     total: p => customerMetrics[p.id]?.total_spend || null,
     last: p => customerMetrics[p.id]?.last_order_date || null,
@@ -763,7 +791,7 @@ export default function ProspectsPage() {
         return {
           Company: p.company_name,
           Owner: profiles[p.created_by || ''] || '',
-          'Contact Name': p.contact_name || '',
+          'Contact Name': contactFor(p)?.name || '',
           Email: p.email || '',
           Phone: p.phone || '',
           Address: p.address || '',
@@ -1176,12 +1204,17 @@ export default function ProspectsPage() {
                           {kindOf(prospect) === 'prospects' && prospect.status === 'lost' && badge('LOST', '#ef4444', 'rgba(239,68,68,0.1)')}
                         </td>
                         <td style={tdStyle}>
-                          {prospect.contact_name ? (
-                            <>
-                              <span style={{ color: 'var(--text-secondary)' }}>{prospect.contact_name}</span>
-                              {prospect.email && <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>{prospect.email}</div>}
-                            </>
-                          ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                          {(() => {
+                            const c = contactFor(prospect);
+                            if (!c) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
+                            return (
+                              <>
+                                <span style={{ color: 'var(--text-secondary)' }}>{c.name}</span>
+                                {c.others > 0 && <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginLeft: '6px', whiteSpace: 'nowrap' }}>+{c.others} more</span>}
+                                {c.email && <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>{c.email}</div>}
+                              </>
+                            );
+                          })()}
                         </td>
                         {!vendorsTab && (
                           <td style={numStyle}>
