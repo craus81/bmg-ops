@@ -30,12 +30,20 @@ import { isLayoutItem, type RuleLine } from './invoice-rule';
  * account, and where received stock is held.
  *
  * Pure: it works out a document's entry, or says why it can't, and posts
- * nothing. Amounts are whole cents, debit positive.
+ * nothing; the posting job (src/lib/books/invoice-posting.ts) posts it, the
+ * vendor on the payables line. Amounts are whole cents, debit positive.
  */
 
 export const BILL_RULE = 'bill@1';
 
 export type BillType = 'VendBill' | 'VendCred';
+
+/**
+ * What the journal files each one's entries under (gl_entries.source_type,
+ * migration 386), and keys them by: vendor_bill:<NetSuite id>:<n>.
+ */
+export const BILL_SOURCE_TYPE = { VendBill: 'vendor_bill', VendCred: 'vendor_credit' } as const satisfies Record<BillType, string>;
+export type BillSourceType = (typeof BILL_SOURCE_TYPE)[BillType];
 
 /** The entry's payables line; the other lines are the document's, by NetSuite's line id. */
 export const PAYABLES_LINE = 'payables';

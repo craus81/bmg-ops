@@ -6,13 +6,13 @@ import {
 
 const SEP = '2026-09-01';
 
-/** NetSuite's invoice and bill in September, and FleetSuite's entry for the invoice. */
+/** NetSuite's invoice and expense report in September, and FleetSuite's entry for the invoice. */
 const data = (fleetsuiteSales = '-100.00'): DiffData => ({
   netsuite: [
     { month: SEP, account: '120', kind: 'CustInvc', net: '100.00' },
     { month: SEP, account: '400', kind: 'CustInvc', net: '-100.00' },
-    { month: SEP, account: '600', kind: 'VendBill', net: '30.00' },
-    { month: SEP, account: '200', kind: 'VendBill', net: '-30.00' },
+    { month: SEP, account: '600', kind: 'ExpRept', net: '30.00' },
+    { month: SEP, account: '200', kind: 'ExpRept', net: '-30.00' },
   ],
   fleetsuite: [
     { month: SEP, account: '120', kind: 'invoice', net: '100.00' },
@@ -21,7 +21,7 @@ const data = (fleetsuiteSales = '-100.00'): DiffData => ({
   ],
   netsuite_kinds: [
     { month: SEP, kind: 'CustInvc', documents: 1, moved: '100.00' },
-    { month: SEP, kind: 'VendBill', documents: 1, moved: '30.00' },
+    { month: SEP, kind: 'ExpRept', documents: 1, moved: '30.00' },
   ],
   fleetsuite_kinds: [{ month: SEP, kind: 'invoice', documents: 1, moved: '100.00' }],
 });
@@ -32,24 +32,27 @@ describe('kinds', () => {
     expect(kindOf('payment')).toBe('CustPymt');
     expect(kindOf('customer_deposit')).toBe('CustDep');
     expect(kindOf('deposit_application')).toBe('DepAppl');
+    expect(kindOf('vendor_bill')).toBe('VendBill');
+    expect(kindOf('vendor_credit')).toBe('VendCred');
     expect(kindOf('opening_balance')).toBe('fleetsuite:opening_balance');
     expect(kindName('CustDep')).toBe('Customer Deposit');
     expect(kindName('DepAppl')).toBe('Deposit Application');
     expect(kindName('CustCred')).toBe('Credit Memo');
+    expect(kindName('VendCred')).toBe('Bill Credit');
     expect(kindName('ItemShip')).toBe('Item Fulfillment');
     expect(kindName('SomethingNew')).toBe('SomethingNew');
     expect(kindName(COST)).toBe('Cost of goods on invoices');
     expect(kindName('fleetsuite:opening_balance')).toBe('Opening balance (FleetSuite only)');
-    expect(kindName('fleetsuite:vendor_bill')).toBe('Vendor bill (FleetSuite only)');
+    expect(kindName('fleetsuite:bill_payment')).toBe('Bill payment (FleetSuite only)');
   });
 
-  it('lists deposits and their applications under the one Deposits switch of Invoices vs NetSuite', () => {
-    expect(['invoice', 'credit_memo', 'payment', 'customer_deposit', 'deposit_application'].map(listKindOf))
-      .toEqual(['invoice', 'credit_memo', 'payment', 'deposit', 'deposit']);
+  it('lists deposits and their applications under the one Deposits switch of Invoices vs NetSuite, and bills and bill credits under Bills', () => {
+    expect(['invoice', 'credit_memo', 'payment', 'customer_deposit', 'deposit_application', 'vendor_bill', 'vendor_credit'].map(listKindOf))
+      .toEqual(['invoice', 'credit_memo', 'payment', 'deposit', 'deposit', 'bill', 'bill']);
   });
 
   it('takes a company as posting what its rules post, or what it holds entries of', () => {
-    expect([...postedKinds(data(), true)].sort()).toEqual(['CustCred', 'CustDep', 'CustInvc', 'CustPymt', 'DepAppl']);
+    expect([...postedKinds(data(), true)].sort()).toEqual(['CustCred', 'CustDep', 'CustInvc', 'CustPymt', 'DepAppl', 'VendBill', 'VendCred']);
     expect([...postedKinds(data(), false)]).toEqual(['CustInvc']);
     expect([...postedKinds({ ...data(), fleetsuite: [] }, false)]).toEqual([]);
   });
@@ -90,7 +93,7 @@ describe('compareMonth', () => {
     expect(cmp.differing).toBe(2);
     expect(kindRows(cmp, { invoice: 0 }).map((k) => [k.name, k.state, k.differing])).toEqual([
       ['Invoice', 'posted', 0],
-      ['Bill', 'not_posted', null],
+      ['Expense Report', 'not_posted', null],
       ['Typed entry (FleetSuite only)', 'fleetsuite_only', null],
     ]);
   });
@@ -225,6 +228,19 @@ describe('explainDocument', () => {
     expect(early).toMatchObject({ reason: 'before_start', listMonth: null });
     // Everything else is listed under its own kind.
     expect(explainDocument(doc({}), ctx).listKind).toBe('invoice');
+  });
+
+  it('lists a bill or bill credit under Bills in the month NetSuite booked it into, as an invoice, and names its vendor', () => {
+    const late = { type: 'VendBill', number: 'B-9', date: '2025-05-12', month: '2025-06-01' };
+    const bill = explainDocument(doc({
+      kind: 'vendor_bill', netsuite: late, copy: { number: 'B-9', customer: 'Sample Supply Co', voided: false, deleted: false },
+    }), ctx);
+    expect(bill).toMatchObject({ reason: 'month', listKind: 'bill', listMonth: '2025-06-01', customer: 'Sample Supply Co' });
+    // Dated before the books start but booked into January 2025: FleetSuite posts it there, as it does an invoice.
+    const early = explainDocument(doc({
+      kind: 'vendor_credit', netsuite: { ...late, type: 'VendCred', date: '2024-12-30', month: '2025-01-01' }, fleetsuite: { entries: 0, standing: null },
+    }), ctx);
+    expect(early).toMatchObject({ reason: 'not_posted', listKind: 'bill', listMonth: '2025-01-01' });
   });
 
   it('dates a document FleetSuite never posted by NetSuite\'s date', () => {

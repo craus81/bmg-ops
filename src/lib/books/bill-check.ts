@@ -1,12 +1,12 @@
 import {
   centsOf, entryDate,
-  type AccountAmount, type ChartAccount, type CheckStatus, type InvoiceRowView, type InvoiceView, type MonthCheck,
+  type AccountAmount, type ChartAccount, type CheckStatus, type InvoiceBooks, type InvoiceRowView, type InvoiceView, type MonthCheck,
   type MonthReason, type MonthSummary, type NetSuitePosting, type Reason,
 } from './invoice-check';
 import { isLayoutItem } from './invoice-rule';
 import {
   PAYABLES_LINE, STOCK_TYPES, billEntry, billItemAccount,
-  type BillAccounts, type BillItem, type BillLine, type BillLineRole, type BillProblem, type BillType,
+  type BillAccounts, type BillItem, type BillLine, type BillLineRole, type BillProblem, type BillRuleLine, type BillType,
 } from './bill-rule';
 
 /**
@@ -14,8 +14,9 @@ import {
  * (docs/books.md "Vendor bills"): FleetSuite's own entry from the bill rule
  * next to the GL lines NetSuite posted for the same document (the copy,
  * migration 361), account by account, to the cent, as deposits are checked
- * (src/lib/books/deposit-check.ts). Pure; amounts are whole cents, debit
- * positive.
+ * (src/lib/books/deposit-check.ts), and the entry the posting job posts
+ * for it (src/lib/books/invoice-posting.ts). Pure; amounts are whole cents,
+ * debit positive.
  */
 
 export interface BillRow {
@@ -37,6 +38,8 @@ export interface CheckedBill {
   problems: BillProblem[];
   /** The rule's accounts in the order its lines come, payables first, then anything else NetSuite posts, in its order. */
   rows: BillRow[];
+  /** The rule's entry line by line, payables first, as it posts; empty when it's waiting or can't be worked out. */
+  lines: BillRuleLine[];
 }
 
 /** One bill or bill credit, its lines signed debit positive (lineSigns); null when they haven't been copied. */
@@ -45,9 +48,9 @@ export function checkBill(
   ctx: { accounts: BillAccounts; accountTypes: Map<string, string> },
 ): CheckedBill {
   if (doc.netsuite.length === 0 && doc.cents !== null && doc.cents !== 0) {
-    return { status: 'waiting', waiting: 'gl', problems: [], rows: [] };
+    return { status: 'waiting', waiting: 'gl', problems: [], rows: [], lines: [] };
   }
-  if (doc.lines === null) return { status: 'waiting', waiting: 'lines', problems: [], rows: [] };
+  if (doc.lines === null) return { status: 'waiting', waiting: 'lines', problems: [], rows: [], lines: [] };
 
   // Each side, one amount to each account; an account a side's lines come to nothing on is the same as none.
   const posted = new Map<string, number>();
@@ -84,8 +87,8 @@ export function checkBill(
     });
   }
 
-  if (entry.problems.length) return { status: 'unworkable', problems: entry.problems, rows };
-  return { status: rows.every((r) => r.same) ? 'matches' : 'differs', problems: [], rows };
+  if (entry.problems.length) return { status: 'unworkable', problems: entry.problems, rows, lines: [] };
+  return { status: rows.every((r) => r.same) ? 'matches' : 'differs', problems: [], rows, lines: entry.lines };
 }
 
 // ── The accounts ───────────────────────────────────────────────────────────
@@ -512,8 +515,16 @@ export function workOutBillMonth(
   return { bills: worked, account, notes };
 }
 
-/** One company's vendor bills and bill credits for one month, each checked against NetSuite. */
-export function checkBillMonth(data: BillMonthData, opts: { company: string; chart: ChartAccount[] }): BillMonthCheck {
+/**
+ * One company's vendor bills and bill credits for one month, each checked
+ * against NetSuite. `books`, when the company's bills post, says what
+ * FleetSuite's books hold for each.
+ */
+export function checkBillMonth(
+  data: BillMonthData,
+  opts: { company: string; chart: ChartAccount[] },
+  books?: (worked: WorkedBill) => InvoiceBooks,
+): BillMonthCheck {
   const { bills: worked, account, notes } = workOutBillMonth(data, opts);
   const itemNames = new Map((data.items ?? []).map((i) => [i.netsuite_id, i.name]));
 
@@ -524,7 +535,8 @@ export function checkBillMonth(data: BillMonthData, opts: { company: string; cha
   const moved: string[] = [];
   const unfit: string[] = [];
   const used = new Set<string>();
-  for (const { bill: b, number, lines, amounts, checked } of worked) {
+  for (const w of worked) {
+    const { bill: b, number, lines, amounts, checked } = w;
     if (b.companies.length === 0) {
       // In neither company's GL copy: only worth a word when FleetSuite would post it.
       if (checked.status !== 'matches') notInGl.push(number);
@@ -577,7 +589,13 @@ export function checkBillMonth(data: BillMonthData, opts: { company: string; cha
       ...(b.status ? { netsuiteStatus: b.status } : {}),
       from: (b.links ?? []).filter((l) => ORDERED_FROM[b.type].has(l.type ?? '')).map(linkName),
       lines: shownLines,
+      ...(books ? { books: books(w) } : {}),
     });
+  }
+
+  if (books) {
+    summary.posted = views.filter((v) => v.books && v.books.entryNo !== null).length;
+    summary.pending = views.filter((v) => v.books?.next).length;
   }
 
   if (moved.length) {
