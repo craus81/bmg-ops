@@ -27,7 +27,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import ProofViewer from '@/components/ProofViewer';
-import { isNativeApp } from '@/lib/native-files';
+import { isNativeApp, ensureFreshSession } from '@/lib/native-files';
 
 type Opened =
   | { kind: 'loading'; url: string; name: string }
@@ -85,9 +85,11 @@ export default function NativeLinkHandler() {
       const name = nameHint(url, hint);
       setOpened({ kind: 'loading', url, name });
       try {
-        // Default credentials: the session cookie goes to our own routes,
+        // Renew an expired token first (the app may have been asleep); then
+        // default credentials: the session cookie goes to our own routes,
         // and a redirect on to a presigned R2 link is fetched without it, so
         // R2's "*" CORS rule applies.
+        if (!url.startsWith('blob:')) await ensureFreshSession();
         const res = await fetch(url);
         if (run !== runRef.current) return;
         if (!res.ok) {

@@ -8,6 +8,23 @@
 // Print). Computers keep the plain links.
 
 import { storageDownloadUrl } from './storage';
+import { createClient } from './supabase-browser';
+
+/**
+ * Make sure the session cookie holds a live access token before a plain
+ * fetch or link relies on it. apiFetch sends a fresh token in a header, but
+ * file links ride on the cookie alone, and the app's web view stops the
+ * Supabase refresh timer while the phone is locked or the app is in the
+ * background. Open the app an hour later, tap a file, and the cookie's
+ * token has expired: the route answers "Unauthorized" (Craig, 2026-10-16,
+ * Client Files). getSession() refreshes an expired session and writes it
+ * back to the cookie, so the next request carries a good one.
+ */
+export async function ensureFreshSession(): Promise<void> {
+  try {
+    await createClient().auth.getSession();
+  } catch { /* the request below reports any real sign-in problem */ }
+}
 
 export function isNativeApp(): boolean {
   if (typeof window === 'undefined') return false;
@@ -41,6 +58,7 @@ export async function fetchStoredFile(
   fileName: string,
   fileType?: string | null,
 ): Promise<File> {
+  await ensureFreshSession();
   const res = await fetch(`${storageDownloadUrl(bucket, path, fileName)}&format=json`, { credentials: 'include' });
   const body = await res.json().catch(() => ({}));
   if (!res.ok || !body?.url) throw new Error(body?.error || `HTTP ${res.status}`);
