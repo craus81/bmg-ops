@@ -1,7 +1,7 @@
 // Migration 377 puts FleetSuite's journal next to the copy of NetSuite's
 // general ledger for the differences page. This runs migration 314 (with
 // stand-ins for the app tables it points at) and migrations 359–364, 367,
-// 370, 374, 376, 377, 380 and 382–386 (383 and 386 give
+// 370, 374, 376, 377, 380 and 382–387 (383 and 386 give
 // gl_books_difference_documents the deposits and the bills) in an in-memory
 // Postgres (PGlite) as the app's server login, copies a made-up month of
 // NetSuite documents, posts FleetSuite's entries for some of them, and holds
@@ -56,7 +56,7 @@ async function freshDb(): Promise<PGlite> {
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '364-books-invoice-check.sql',
     '367-books-invoice-posting.sql', '370-books-credit-memos.sql', '374-books-payment-check.sql', '376-books-payment-posting.sql',
     '377-books-differences.sql', '380-books-netsuite-month.sql', '382-books-customer-deposits.sql', '383-books-deposit-posting.sql',
-    '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql',
+    '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);

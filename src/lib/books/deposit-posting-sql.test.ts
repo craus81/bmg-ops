@@ -3,10 +3,10 @@
 // lets the differences page say what the copy of the deposits holds for one;
 // the posting job posts them with the deposit rule. This runs migration 314
 // (with stand-ins for the app tables it points at) and migrations 359–364,
-// 367, 370, 374, 376, 377, 380, 382 and 383, with the ones the job reads
-// bills through (384–386), in an in-memory Postgres (PGlite) as the app's
-// server login and holds the functions' rules, then runs the posting job
-// against them with deposits only.
+// 367, 370, 374, 376, 377, 380, 382, 383 and 387, with the ones the job
+// reads bills through (384–386), in an in-memory Postgres (PGlite) as the
+// app's server login and holds the functions' rules, then runs the posting
+// job against them with deposits only.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -33,8 +33,8 @@ const CUSTOMER = '6f1f6a52-8a43-4b8e-9a0e-2d9c1f0b7c11';
 const OTHER_CUSTOMER = '0b6a0e1c-7f2d-4a51-9c3e-5d8e2f1a4b22';
 /**
  * Made-up chart: '120' BMG's receivable, '121' 1084's, '110' Undeposited
- * Funds, '100' a bank account, '101' a bank account no longer used, '230'
- * customer deposits.
+ * Funds, '100' a bank account, '101' a bank account no longer used, '102' a
+ * bank account only 1084 may use, '230' customer deposits.
  */
 const ACCOUNT: Record<string, string> = {
   120: 'a0000000-0000-4000-8000-000000000120',
@@ -42,6 +42,7 @@ const ACCOUNT: Record<string, string> = {
   110: 'a0000000-0000-4000-8000-000000000110',
   100: 'a0000000-0000-4000-8000-000000000100',
   101: 'a0000000-0000-4000-8000-000000000101',
+  102: 'a0000000-0000-4000-8000-000000000102',
   230: 'a0000000-0000-4000-8000-000000000230',
 };
 const JAN = '2025-01-01';
@@ -69,7 +70,7 @@ async function freshDb(): Promise<PGlite> {
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '364-books-invoice-check.sql',
     '367-books-invoice-posting.sql', '370-books-credit-memos.sql', '374-books-payment-check.sql', '376-books-payment-posting.sql',
     '377-books-differences.sql', '380-books-netsuite-month.sql', '382-books-customer-deposits.sql', '383-books-deposit-posting.sql',
-    '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql',
+    '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -84,6 +85,7 @@ async function freshDb(): Promise<PGlite> {
       ('${ACCOUNT[110]}', '1100', 'Undeposited Funds', 'other_current_asset', '110', NULL, true),
       ('${ACCOUNT[100]}', '1000', 'Checking', 'bank', '100', NULL, true),
       ('${ACCOUNT[101]}', '1010', 'Old Checking', 'bank', '101', NULL, false),
+      ('${ACCOUNT[102]}', '1020', 'Checking 1084', 'bank', '102', (SELECT id FROM gl_companies WHERE code = '1084'), true),
       ('${ACCOUNT[230]}', '2300', 'Customer Deposits', 'other_current_liability', '230', NULL, true);
     -- The ledger mirror's customers: NetSuite's 77 matched to a FleetSuite customer, 78 not yet, 79 by hand.
     INSERT INTO ledger_customers (source, external_id, external_ref, display_name, cleaned_name, customer_id, match_status) VALUES
@@ -489,13 +491,18 @@ describe('the posting job, for deposits', () => {
 
   it('posts a deposit once the rule can work it out, and names one the journal refuses, without amounts', async () => {
     await edit('603', (d) => { d.money = '110'; });
-    // Into a bank account no longer used.
+    // Into a bank account NetSuite has made inactive since, and into one only 1084 may use.
     deposits.set('609', { ref: '609', type: 'CustDep', number: 'DEP609', date: '2025-03-07', company: 'BMG', total: '9.00', money: '101' });
+    deposits.set('611', { ref: '611', type: 'CustDep', number: 'DEP611', date: '2025-03-08', company: 'BMG', total: '8.00', money: '102' });
     await copy(pg, deposits.get('609')!);
+    await copy(pg, deposits.get('611')!);
 
     const r = await run();
-    expect(r).toMatchObject({ posted: 1, failedCount: 1, failed: [{ number: 'DEP609', reason: 'Account 1010 (Old Checking) is inactive' }] });
-    expect((await journal()).slice(-1)[0].key).toBe('customer_deposit:603:1');
+    expect(r).toMatchObject({ posted: 2, failedCount: 1, failed: [{ number: 'DEP611', reason: 'Account 1020 (Checking 1084) belongs to another company' }] });
+    const posted = (await journal()).slice(-2);
+    expect(posted.map((e) => e.key)).toEqual(['customer_deposit:603:1', 'customer_deposit:609:1']);
+    // The inactive account takes the deposit NetSuite put into it.
+    expect((await linesOf(posted[1].no)).filter((l: any) => l.account === '101').map((l: any) => [l.debit, l.credit])).toEqual([['9.00', '0.00']]);
     expect(JSON.stringify(store.get(BOOKS_INVOICE_POSTING).last_result)).not.toMatch(/\d\.\d|\$/);
   });
 
