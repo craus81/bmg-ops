@@ -774,7 +774,7 @@ export default function OpsDashboard() {
   // invoicing queue, PO backlog, pipeline — so the row goes as a unit for a
   // viewer the money rule excludes (src/lib/money-visibility.ts).
   const kpis = !canSeeMoney ? null : (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '10px', marginBottom: '12px' }}>
+    <div className="dash-kpis" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '10px', marginBottom: '12px' }}>
       <button onClick={() => router.push('/invoices?tab=sent')} style={{ ...card, textAlign: 'left', padding: '14px 16px 12px', cursor: 'pointer' }}>
         <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.7px', color: 'var(--text-muted)' }}>
           Invoiced · {today.toLocaleDateString('en-US', { month: 'long' })}
