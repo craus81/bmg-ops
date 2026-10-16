@@ -73,6 +73,7 @@ const pub = (why: string): RouteGuard => ({ kind: 'public', contains: [], why })
 export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // FleetSuite's own books, built hidden for the owner (docs/books.md).
   'src/app/api/admin/books/accounts/route.ts': superAdmin(),
+  'src/app/api/admin/books/bills/route.ts': superAdmin(),
   'src/app/api/admin/books/deposits/route.ts': superAdmin(),
   'src/app/api/admin/books/differences/route.ts': superAdmin(),
   'src/app/api/admin/books/invoices/route.ts': superAdmin(),
@@ -81,6 +82,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cron/books-netsuite-gl/route.ts': cron('requireSuperAdmin('),
   'src/app/api/cron/books-invoice-posting/route.ts': cron('requireSuperAdmin('),
   'src/app/api/cron/books-netsuite-deposits/route.ts': cron('requireSuperAdmin('),
+  'src/app/api/cron/books-netsuite-bills/route.ts': cron('requireSuperAdmin('),
   'src/app/api/admin/bulk-upload-proofs/route.ts': admin(),
   'src/app/api/admin/bulk-upload-templates/route.ts': admin(),
   'src/app/api/admin/calibrate-templates/route.ts': staff(),

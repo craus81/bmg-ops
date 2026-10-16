@@ -15,8 +15,10 @@ credit memos, checked and posted the same way, the other way round,
 part 8, customer payments, checked against NetSuite with the payment rule
 and posted in the same run as invoices, part 9, a page that puts
 FleetSuite's books next to NetSuite's and shows what still differs and why,
-and part 10, customer deposits and their applications, copied from NetSuite,
-checked with the deposit rule and posted in the same run as invoices.
+part 10, customer deposits and their applications, copied from NetSuite,
+checked with the deposit rule and posted in the same run as invoices, and
+part 11, vendor bills and bill credits, copied from NetSuite and checked
+with the bill rule.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices` and the differences at
@@ -54,6 +56,9 @@ the accounts page; the others are linked from there.
 | Deposit rule and its check, on the invoices page | `src/lib/books/deposit-rule.ts`, `src/lib/books/deposit-check.ts` |
 | Deposits posted to the journal, with invoices | `migrations/383-books-deposit-posting.sql`, `src/lib/books/invoice-posting.ts` |
 | Deposit tests | `src/lib/books/deposit-rule.test.ts`, `src/lib/books/deposit-check.test.ts`, `src/lib/books/netsuite-deposits.test.ts`, `src/lib/books/deposits-sql.test.ts`, `src/lib/books/deposit-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
+| Vendor bills and bill credits, copied from NetSuite | `migrations/384-books-vendor-bills.sql`, `src/lib/books/netsuite-bills.ts`, `src/app/api/cron/books-netsuite-bills/route.ts`, `src/app/api/admin/books/bills/route.ts` |
+| Bill rule and its check, on the invoices page | `src/lib/books/bill-rule.ts`, `src/lib/books/bill-check.ts` |
+| Bill tests | `src/lib/books/bill-rule.test.ts`, `src/lib/books/bill-check.test.ts`, `src/lib/books/netsuite-bills.test.ts`, `src/lib/books/bills-sql.test.ts` |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
 QuickBooks and NetSuite history that importers replace wholesale. They stay
@@ -701,6 +706,114 @@ whether the copy of the deposits says it's voided or gone; its
 `gl_deposit_month` adds each document's FleetSuite customer. The Deposits
 switch on the invoices page shows the Books column and Post now, as the
 other switches do.
+
+## Vendor bills
+
+A vendor bill (NetSuite's VendBill) is what BMG owes a vendor; a bill
+credit (VendCred) takes some of it back. Both are copied from NetSuite with
+their lines and checked against its GL with the bill rule (owner decision
+2026-10-16), as deposits were before they posted. They don't post to
+FleetSuite's journal yet: that comes once the check shows the rule matches.
+
+### Copying bills
+
+The ledger mirror's `ledger_bills` (migration 314) holds QuickBooks' bills,
+and its delete sweep takes the NetSuite rows of its tables for its own
+documents, so the books copy bills themselves
+(`src/lib/books/netsuite-bills.ts`, into migration 384's
+`gl_netsuite_bills`): every two hours at :39 on odd hours
+(`/api/cron/books-netsuite-bills`), done by :43, before the posting run at
+:48, or when **Copy now** is pressed on the invoices page's Bills switch,
+which runs the same job with the same four minutes.
+
+The run works like the deposits copy: the documents NetSuite changed since
+the last run that finished, a day's overlap included (the first reaches
+back to 2000), newest first, 200 at a time, with its place saved after each
+page. For each page it reads:
+
+- each document's lines but the payables line, from `transactionline`: the
+  item, the expense account (`expenseaccount`, on an expense line), the net
+  amount, quantity, memo and whether it's a tax line. When NetSuite won't
+  give the expense account, the lines are copied without it and the run
+  says so; when it won't give the lines at all, the documents already
+  copied keep theirs. A document with a line that has no line id keeps the
+  lines it has, and is named.
+- the documents each came from, in NetSuite's transaction link table (the
+  pair the deposits copy probes): a bill's purchase order and item
+  receipts, a bill credit's vendor return. When NetSuite answers neither
+  table, the documents already copied keep their links.
+
+The status and vendor in words come from `BUILTIN.DF`; without them,
+voided ones aren't marked voided and vendors are named from the copy of
+NetSuite's vendors, which `gl_bill_month` prefers anyway. Once a run has
+read everything changed, it lists every bill and bill credit id NetSuite
+has and marks the ones it no longer has as gone, with the same guard
+against a list that looks cut short. Rows are never deleted, nothing is
+written to NetSuite, and the run's record in `sync_state`
+(`books_netsuite_bills`) holds counts and words, never an amount. Totals
+are kept positive; lines keep NetSuite's signs.
+
+### The bill rule
+
+The bill rule, `bill@1` (`src/lib/books/bill-rule.ts`):
+
+- Payables are credited with the bill's total: the vendor's own payables
+  account (the vendors copy) when the company can use it, else the
+  company's only one; with more than one, the one the month's NetSuite
+  bills used most, and the page says so.
+- An expense line, an installer's labor say, is debited to its own account.
+- A stock item (inventory or an assembly) is debited to the account
+  NetSuite holds received stock against until it's billed, when the bill
+  came from a purchase order or item receipt and the company's item
+  receipts post to such an account; otherwise to the item's asset account,
+  as the bill itself brings the stock in. That account is the liability
+  the company's item receipts credit, for the most of its receipts in the
+  GL copy.
+- Any other item (non-stock, service, other charge) is debited to its
+  expense account; a discount or markup to its own account.
+- A bill credit posts the same way, the other way round: its signed amounts
+  carry the direction. A bill credit's stock counts as ordered when it came
+  from a vendor return or its shipment.
+- A line of $0, and a subtotal, description or item group line, post
+  nothing. A tax line, an expense line with no account, an item not in the
+  copy of NetSuite's items or with no account of the kind it needs, ordered
+  stock whose links haven't been copied, or no payables account: the
+  document can't be worked out, and posts nothing.
+
+Which way NetSuite signs bill lines isn't assumed: the month's documents
+say (a bill's lines come to more than nothing, a bill credit's to less),
+and the check turns them round when most of them say the other way.
+
+### Checking bills
+
+The **Bills** switch on the invoices page checks each bill and bill credit
+NetSuite booked into the month (or, when it hasn't booked one, dated in it)
+against the GL lines NetSuite posted for it, account by account, to the
+cent, as deposits are checked (`src/lib/books/bill-check.ts`). Migration
+384's `gl_bill_month(company, month)` reads the month from the copy: each
+document with its lines and links, its vendor's name and payables account
+from the vendors copy, and NetSuite's GL lines for it; the items its lines
+name; the accounts the company's item receipts credit across the GL copy;
+and the GL copy's bills and bill credits the bills copy doesn't have yet.
+Opening one shows NetSuite's status for it, what it came from, its lines,
+and the rule's accounts next to NetSuite's. Where FleetSuite and NetSuite
+put the same amount in different accounts, the page gives it as one reason
+(FleetSuite used this, NetSuite that).
+
+Not yet seen in NetSuite's data, so the check is what will show it:
+
+- that `transactionline.expenseaccount` gives an expense line's account,
+  and `netamount` is in BMG's own currency, as the GL is (a bill in another
+  currency is the one to look at);
+- that a bill from a purchase order puts its stock in the account the item
+  receipts credit, and whether NetSuite does the same for non-stock items
+  received on a receipt (the rule sends those to their expense account);
+- that a bill links its purchase order and receipts as previous documents,
+  and a bill credit its vendor return;
+- whether BMG's bills have tax lines, landed costs or discounts that post
+  elsewhere.
+
+Bill payments (VendPymt) aren't copied yet; they come with posting.
 
 ## Differences
 

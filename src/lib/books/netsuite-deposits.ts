@@ -57,12 +57,12 @@ export const LINK_TABLES: readonly LinkTable[] = ['nexttransactionlinelink', 'pr
 // ── Queries ────────────────────────────────────────────────────────────────
 
 /** SuiteQL wants MM/DD/YYYY; the window is date-granular by design. */
-function toSuiteqlDate(iso: string): string {
+export function toSuiteqlDate(iso: string): string {
   const d = new Date(iso);
   return `${d.getUTCMonth() + 1}/${d.getUTCDate()}/${d.getUTCFullYear()}`;
 }
 
-const idList = (ids: string[]) => {
+export const idList = (ids: string[]) => {
   const safe = ids.filter((id) => /^\d+$/.test(id));
   if (!safe.length) throw new Error('No NetSuite ids to read');
   return safe.join(', ');
