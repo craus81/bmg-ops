@@ -24,9 +24,9 @@ import { apiFetch } from '@/lib/api-client';
  * credits are copied the same way, checked with the bill rule, and post in
  * the same run as well. Bill payments are copied the same way, checked with
  * the bill payment rule, and post in the same run too. Checks and credit
- * card charges and refunds are copied the same way and checked with the
- * spending rule; they don't post yet. Super admins only while the books are
- * built, linked from the other books pages.
+ * card charges and refunds are copied the same way, checked with the
+ * spending rule, and post in the same run as well. Super admins only while
+ * the books are built, linked from the other books pages.
  */
 
 type Status = 'matches' | 'differs' | 'unworkable' | 'waiting';
@@ -195,7 +195,7 @@ interface Payload {
   month: string;
   months: string[];
   listsCopiedAt: string | null;
-  /** Whether this company's invoices, credit memos, payments, deposits, bills and bill payments post to FleetSuite's books yet. */
+  /** Whether this company's invoices, credit memos, payments, deposits, bills, bill payments, checks and card charges post to FleetSuite's books yet. */
   posts: boolean;
   lastRun: { at: string; result: PostingRun } | null;
   /** Deposits, bills, bill payments and checks and cards only: how the last copy of them from NetSuite went; null before the first. */
@@ -242,7 +242,7 @@ const allMatch = (s: Summary) => s.differs + s.unworkable + s.waiting === 0;
 
 const count = (n: number, one: string, many: string) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 
-/** A posting run's counts in words, the ones that aren't zero. The run posts invoices, credit memos, payments, deposits, bills and bill payments alike. */
+/** A posting run's counts in words, the ones that aren't zero. The run posts every kind of document on this page alike. */
 function runCounts(run: PostingRun): string {
   const parts = [
     run.posted ? count(run.posted, 'new entry', 'new entries') : '',
@@ -254,7 +254,7 @@ function runCounts(run: PostingRun): string {
   return parts.length ? parts.join(', ') : 'nothing to post';
 }
 
-/** The Books chip for an invoice, credit memo, payment, deposit, application, bill, bill credit or bill payment. */
+/** The Books chip for a document of any kind on this page. */
 function booksChip(books: Books): { label: string; color: string } {
   if (books.entryNo !== null) {
     if (books.next === 'replace') return { label: `Entry ${books.entryNo} · to replace`, color: AMBER };
@@ -265,7 +265,7 @@ function booksChip(books: Books): { label: string; color: string } {
   return books.next === 'post' ? { label: 'To post', color: GREY } : { label: 'Not posted', color: GREY };
 }
 
-/** What the books hold for an invoice, credit memo, payment, deposit, application, bill, bill credit or bill payment, in a sentence or two. */
+/** What the books hold for a document of any kind on this page, in a sentence or two. */
 function booksText(books: Books): string {
   const now = books.entryNo !== null ? `In FleetSuite's books as entry ${books.entryNo}.`
     : books.nothingToPost ? `Nothing to post: ${books.nothingToPost === 'voided' ? 'NetSuite voided it' : 'it comes to $0'}.`
@@ -619,8 +619,10 @@ export default function BooksInvoicesPage() {
                 debited to its own account, a non-stock item to its expense account, and a stock item to its asset account. A
                 card refund works the other way round. Which bank account or card it was comes from NetSuite&apos;s posting of
                 the document, since the copy of it doesn&apos;t keep that. Each entry is checked account by account against what
-                NetSuite posted for the same document. They aren&apos;t posted to FleetSuite&apos;s books yet: that comes once
-                they&apos;ve been checked.
+                NetSuite posted for the same document. Every two hours each BMG check, card charge and refund FleetSuite can work
+                out is posted to its own books, once, in the month NetSuite booked it into, in the same run as invoices. When
+                NetSuite changes one its entry is reversed and the new one posted, and one NetSuite voids or no longer has is
+                reversed. Until the books go live they can be emptied and posted again.
               </>
             ) : kind === 'bill_payment' ? (
               <>
@@ -756,7 +758,8 @@ export default function BooksInvoicesPage() {
           {!data.lastRun && (
             <div style={banner(GREY)}>
               Nothing has been posted to FleetSuite&apos;s books yet. Posting runs every two hours, or press Post now. The first
-              run posts every invoice, credit memo, payment, deposit, bill and bill payment since January 2025 and may take more than one run.
+              run posts every invoice, credit memo, payment, deposit, bill, bill payment, check and card charge since January 2025 and
+              may take more than one run.
             </div>
           )}
           {run?.error && <div style={banner(RED)}>The last posting run failed {ago(data.lastRun!.at)}: {run.error}</div>}

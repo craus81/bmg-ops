@@ -31,6 +31,13 @@ export const SPENDING_RULE = 'spending@1';
 
 export type SpendingType = 'Check' | 'CardChrg' | 'CardRfnd';
 
+/**
+ * What the journal files each one's entries under (gl_entries.source_type,
+ * migration 392), and keys them by: check:<NetSuite id>:<n>.
+ */
+export const SPENDING_SOURCE_TYPE = { Check: 'check', CardChrg: 'card_charge', CardRfnd: 'card_refund' } as const satisfies Record<SpendingType, string>;
+export type SpendingSourceType = (typeof SPENDING_SOURCE_TYPE)[SpendingType];
+
 /** The documents that put money back, whose lines are credits and whose account is debited. */
 export const REFUND_TYPES: ReadonlySet<SpendingType> = new Set(['CardRfnd']);
 

@@ -1,6 +1,6 @@
 import {
-  centsOf, entryDate,
-  type AccountAmount, type ChartAccount, type CheckStatus, type InvoiceRowView, type InvoiceView, type MonthCheck,
+  booksCounts, centsOf, entryDate,
+  type AccountAmount, type ChartAccount, type CheckStatus, type InvoiceBooks, type InvoiceRowView, type InvoiceView, type MonthCheck,
   type MonthReason, type MonthSummary, type NetSuitePosting, type Reason,
 } from './invoice-check';
 import { MAIN_LINE, isLayoutItem } from './invoice-rule';
@@ -18,7 +18,8 @@ import {
  * against NetSuite (docs/books.md "Checks and card charges"): FleetSuite's
  * own entry from the spending rule next to the GL lines NetSuite posted for
  * the same document (the copy, migration 361), account by account, to the
- * cent, as bills are checked (src/lib/books/bill-check.ts). Pure; amounts
+ * cent, as bills are checked (src/lib/books/bill-check.ts), and the entry the
+ * posting job posts for it (src/lib/books/invoice-posting.ts). Pure; amounts
  * are whole cents, debit positive.
  */
 
@@ -352,8 +353,16 @@ export function workOutSpendingMonth(
   return { documents, account };
 }
 
-/** One company's checks and card charges and refunds for one month, each checked against NetSuite. */
-export function checkSpendingMonth(data: SpendingMonthData, opts: { company: string; chart: ChartAccount[] }): SpendingMonthCheck {
+/**
+ * One company's checks and card charges and refunds for one month, each
+ * checked against NetSuite. `books`, when the company's checks and card
+ * charges post, says what FleetSuite's books hold for each.
+ */
+export function checkSpendingMonth(
+  data: SpendingMonthData,
+  opts: { company: string; chart: ChartAccount[] },
+  books?: (worked: WorkedSpending) => InvoiceBooks,
+): SpendingMonthCheck {
   const { documents: worked, account } = workOutSpendingMonth(data, opts);
   const itemNames = new Map((data.items ?? []).map((i) => [i.netsuite_id, i.name]));
 
@@ -420,8 +429,11 @@ export function checkSpendingMonth(data: SpendingMonthData, opts: { company: str
       type: d.type,
       ...(d.status ? { netsuiteStatus: d.status } : {}),
       lines: shownLines,
+      ...(books ? { books: books(w) } : {}),
     });
   }
+
+  if (books) Object.assign(summary, booksCounts(views));
 
   if (moved.length) {
     const them = moved.length === 1 ? 'it' : 'them';

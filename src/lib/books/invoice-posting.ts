@@ -23,8 +23,11 @@ import { DEPOSIT_RULE, DEPOSIT_SOURCE_TYPE, DEPOSITS_LINE, type DepositSourceTyp
 import { workOutDepositMonth, type DepositMonthData, type WorkedDeposit } from './deposit-check';
 import { BILL_RULE, BILL_SOURCE_TYPE, PAYABLES_LINE, type BillSourceType } from './bill-rule';
 import { itemsWithoutAccount, workOutBillMonth, type BillMonthData, type WorkedBill } from './bill-check';
-import { BILL_PAYMENT_RULE, BILL_PAYMENT_SOURCE_TYPE } from './bill-payment-rule';
+import { BILL_PAYMENT_RULE, BILL_PAYMENT_SOURCE_TYPE, PAID_FROM_LINE } from './bill-payment-rule';
 import { workOutBillPaymentMonth, type BillPaymentMonthData, type WorkedBillPayment } from './bill-payment-check';
+import { REFUND_TYPES, SPENDING_RULE, SPENDING_SOURCE_TYPE, type SpendingSourceType } from './spending-rule';
+import { workOutSpendingMonth, type WorkedSpending } from './spending-check';
+import { readSpendingMonth } from './netsuite-spending';
 
 /**
  * NetSuite's invoices posted to FleetSuite's own journal with the invoice
@@ -36,10 +39,12 @@ import { workOutBillPaymentMonth, type BillPaymentMonthData, type WorkedBillPaym
  * rule (migration 376; owner decision 2026-10-15), for a customer deposit or
  * deposit application, posted with the deposit rule (migration 383; owner
  * decision 2026-10-15), for a vendor bill or bill credit, posted with the
- * bill rule (migration 386; owner decision 2026-10-16), and for a bill
+ * bill rule (migration 386; owner decision 2026-10-16), for a bill
  * payment, posted with the bill payment rule (migration 390; owner decision
- * 2026-10-16), except where the payments', deposits', bills' and bill
- * payments' own sections say otherwise.
+ * 2026-10-16), and for a check, credit card charge or credit card refund,
+ * posted with the spending rule (migration 392; owner decision 2026-10-16),
+ * except where the payments', deposits', bills', bill payments' and checks'
+ * own sections say otherwise.
  *
  * Every BMG invoice NetSuite booked into a month from January 2025 that the
  * rule can work out posts once, as the check on Invoices vs NetSuite shows
@@ -75,7 +80,7 @@ import { workOutBillPaymentMonth, type BillPaymentMonthData, type WorkedBillPaym
 
 export const BOOKS_INVOICE_POSTING = 'books_invoice_posting';
 
-/** The companies whose invoices, credit memos, payments, deposits, bills and bill payments post. 1084's join once they've been checked against NetSuite. */
+/** The companies whose invoices, credit memos, payments, deposits, bills, bill payments, checks and card charges post. 1084's join once they've been checked against NetSuite. */
 export const POSTING_COMPANIES: readonly BooksCompany[] = ['BMG'];
 
 /** Seconds a run holds the lock: past the routes' 300 s limit, so a run that dies lets go soon after. */
@@ -110,7 +115,7 @@ export interface PostedLine {
   division: string | null;
   source_line_ref: string | null;
   customer_id: string | null;
-  /** The vendor on a bill's or bill payment's payables line (gl_bill_postings and gl_bill_payment_postings, migrations 386 and 390); the other documents' reads leave it out. */
+  /** The vendor on a bill's or bill payment's payables line (gl_bill_postings and gl_bill_payment_postings, migrations 386 and 390; gl_spending_postings, migration 392, gives none); the other documents' reads leave it out. */
   vendor_ref?: string | null;
 }
 
@@ -711,6 +716,99 @@ export function billPaymentJournalEntry(
   };
 }
 
+// ── Checks and card charges ────────────────────────────────────────────────
+//
+// A check, credit card charge or credit card refund posts as a bill does, in
+// the month NetSuite booked it to (entryDate), from its copied lines, which
+// must come to its total, with the account the money comes out of in place of
+// payables. What the journal holds for it comes from gl_spending_postings
+// (migration 392), keyed check:<NetSuite id>:<n>, card_charge:… or
+// card_refund:…. No line carries a vendor, as nothing is owed on one; its
+// payee is in the entry's memo. As for payments, one in neither company's GL
+// copy is looked at only while an entry of it stands.
+
+/** What the journal holds for one check, card charge or card refund (gl_spending_postings, migration 392). */
+export interface SpendingPosting extends Omit<InvoicePosting, 'source_type' | 'invoice'> {
+  source_type: SpendingSourceType;
+  /** What the copy of NetSuite's checks and card charges and refunds says of it now, deleted when NetSuite no longer lists it; null when the copy has none. */
+  document: { number: string | null; deleted: boolean; voided: boolean } | null;
+}
+
+/** What the journal holds for a worked out check, card charge or card refund, from gl_spending_postings' answer keyed by postingKey. */
+export const spendingPostingFor = (postings: Map<string, SpendingPosting>, worked: WorkedSpending) =>
+  postings.get(postingKey(SPENDING_SOURCE_TYPE[worked.doc.type], worked.doc.netsuite_id));
+
+const spendingSignature = (worked: WorkedSpending) => signature(
+  entryDate(worked.doc),
+  worked.checked.lines.map((l) => ({ account: l.account, cents: l.cents, division: null, lineRef: l.lineId, customerId: null })),
+);
+
+/** What to do about one check, card charge or card refund the rule has worked out, given what the journal holds for it. */
+export function decideSpending(worked: WorkedSpending, posting: SpendingPosting | undefined): Decision {
+  const current = posting?.current ?? null;
+  if (worked.doc.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep', why: 'voided' };
+  const { status, lines } = worked.checked;
+  if (status === 'waiting') return { kind: 'leave', why: 'waiting' };
+  if (status === 'unworkable') return { kind: 'leave', why: 'unworkable' };
+
+  // The account the money comes out of is credited with a check's or a charge's total and debited with a refund's
+  // (the copy keeps totals unsigned), so lines that don't come to it are the copy's lines caught mid-refresh, or
+  // taken the wrong way round, not the document.
+  const paidFrom = lines.find((l) => l.lineId === PAID_FROM_LINE)?.cents ?? 0;
+  const total = centsOf(worked.doc.total);
+  if (total === null || paidFrom !== (REFUND_TYPES.has(worked.doc.type) ? total : -total)) return { kind: 'leave', why: 'total' };
+
+  if (lines.length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep', why: 'nothing' };
+  if (!current) return { kind: 'post' };
+  return postedSignature(current) === spendingSignature(worked) ? { kind: 'keep' } : { kind: 'replace' };
+}
+
+/** What the journal holds for a check, card charge or card refund and what the next run does about it, for the invoices page. */
+export function spendingBooks(worked: WorkedSpending, posting: SpendingPosting | undefined): InvoiceBooks {
+  return booksOf(decideSpending(worked, posting), posting, true);
+}
+
+/**
+ * The journal entry for a check, card charge or card refund, its
+ * `generation`th: the rule's lines on the chart's accounts, in the month
+ * NetSuite booked it to, keyed `check:…`, `card_charge:…` or `card_refund:…`.
+ * Null with the NetSuite accounts the chart doesn't have when it can't be
+ * built.
+ */
+export function spendingJournalEntry(
+  worked: WorkedSpending,
+  company: BooksCompany,
+  generation: number,
+  accountIds: Map<string, string>,
+): { entry: JournalEntryInput; missing: [] } | { entry: null; missing: string[] } {
+  const { lines } = worked.checked;
+  const missing = [...new Set(lines.map((l) => l.account).filter((a) => !accountIds.has(a)))];
+  if (missing.length) return { entry: null, missing };
+  const d = worked.doc;
+  const sourceType = SPENDING_SOURCE_TYPE[d.type];
+  return {
+    entry: {
+      company,
+      entryDate: entryDate(d),
+      sourceType,
+      sourceId: d.netsuite_id,
+      postingRule: SPENDING_RULE,
+      idempotencyKey: `${sourceType}:${d.netsuite_id}:${generation}`,
+      memo: d.payee ? `${worked.number}, ${d.payee}` : worked.number,
+      postedBy: null,
+      lines: lines.map((l) => ({
+        accountId: accountIds.get(l.account)!,
+        debit: l.cents > 0 ? centsToAmount(l.cents) : null,
+        credit: l.cents < 0 ? centsToAmount(-l.cents) : null,
+        division: null,
+        itemNumber: l.itemNumber,
+        sourceLineRef: l.lineId,
+      })),
+    },
+    missing: [],
+  };
+}
+
 /** Why a write failed, in words that carry no amount: the run's record is kept where amounts never go. */
 export function failureReason(err: unknown): string {
   const money = /\$|\bdebits?\b|\bcredits?\b|balance/i;
@@ -782,11 +880,14 @@ const listed = (items: string[], max = 10) => `${items.slice(0, max).join(', ')}
 const joined = (words: string[], last: 'and' | 'or') =>
   (words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} ${last} ${words[words.length - 1]}`);
 /** The kinds of document a run can leave for not coming to their totals, in words. */
-const DOCUMENT_WORDS: Record<SalesDocKind | BillSourceType, [string, string]> = {
+const DOCUMENT_WORDS: Record<SalesDocKind | BillSourceType | SpendingSourceType, [string, string]> = {
   invoice: ['invoice', 'invoices'],
   credit_memo: ['credit memo', 'credit memos'],
   vendor_bill: ['bill', 'bills'],
   vendor_credit: ['bill credit', 'bill credits'],
+  check: ['check', 'checks'],
+  card_charge: ['card charge', 'card charges'],
+  card_refund: ['card refund', 'card refunds'],
 };
 /** '2 invoices and 1 credit memo', for documents of these kinds. */
 const documents = (kinds: Array<keyof typeof DOCUMENT_WORDS>) => joined(
@@ -869,24 +970,27 @@ export async function postInvoices(
 
     // 1. What NetSuite deleted or voided, and any second entry standing for one document.
     for (const company of POSTING_COMPANIES) {
-      const [all, paid, deposited, billed, paidOut] = await Promise.all([
+      const [all, paid, deposited, billed, paidOut, spent] = await Promise.all([
         service.rpc('gl_invoice_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_payment_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_deposit_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_bill_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_bill_payment_postings', { p_company: company, p_source_ids: null, p_lines: false }),
+        service.rpc('gl_spending_postings', { p_company: company, p_source_ids: null, p_lines: false }),
       ]);
       if (all.error) throw new Error(all.error.message);
       if (paid.error) throw new Error(paid.error.message);
       if (deposited.error) throw new Error(deposited.error.message);
       if (billed.error) throw new Error(billed.error.message);
       if (paidOut.error) throw new Error(paidOut.error.message);
+      if (spent.error) throw new Error(spent.error.message);
       const held = [
         ...(((all.data as any)?.invoices ?? []) as InvoicePosting[]).map((p) => ({ posting: p, copy: p.invoice })),
         ...(((paid.data as any)?.payments ?? []) as PaymentPosting[]).map((p) => ({ posting: p, copy: p.payment })),
         ...(((deposited.data as any)?.deposits ?? []) as DepositPosting[]).map((p) => ({ posting: p, copy: p.deposit })),
         ...(((billed.data as any)?.bills ?? []) as BillPosting[]).map((p) => ({ posting: p, copy: p.bill })),
         ...(((paidOut.data as any)?.payments ?? []) as BillPaymentPosting[]).map((p) => ({ posting: p, copy: p.payment })),
+        ...(((spent.data as any)?.documents ?? []) as SpendingPosting[]).map((p) => ({ posting: p, copy: p.document })),
       ];
       const tasks: Array<() => Promise<void>> = [];
       for (const { posting: p, copy } of held) {
@@ -1112,6 +1216,29 @@ export async function postInvoices(
         if (result.partial) break;
       }
 
+      // The month's checks and card charges and refunds, those NetSuite booked into it as for bills, read as the Checks
+      // and cards switch reads them, so the account the money comes out of is picked the same way. One in neither
+      // company's GL copy is this company's only while an entry of it stands here, as for payments.
+      const spending = workOutSpendingMonth(await readSpendingMonth(service, company, month), { company, chart: chartAccounts })
+        .documents.filter((w) => w.doc.companies.length === 0 || w.doc.companies.includes(company));
+      if (spending.length) {
+        const held = await service.rpc('gl_spending_postings', {
+          p_company: company, p_source_ids: spending.map((w) => w.doc.netsuite_id), p_lines: true,
+        });
+        if (held.error) throw new Error(held.error.message);
+        const postings = new Map((((held.data as any)?.documents ?? []) as SpendingPosting[]).map((p) => [postingKey(p.source_type, p.source_id), p]));
+        const tasks: Array<() => Promise<void>> = [];
+        for (const w of spending) {
+          const posting = spendingPostingFor(postings, w);
+          if (!w.doc.companies.length && !posting?.current) continue;
+          const d = decideSpending(w, posting);
+          if (d.kind === 'leave' && d.why === 'total') leftTotal.push({ number: w.number, kind: SPENDING_SOURCE_TYPE[w.doc.type] });
+          enqueue(tasks, w.number, d, posting?.current ?? null, () => spendingJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
+        }
+        await runLimited(tasks, WRITERS);
+        if (result.partial) break;
+      }
+
       result.months!.push(month);
       state.resume = queue[i + 1] ?? null;
       await writeSyncStateCursor(service, BOOKS_INVOICE_POSTING, record());
@@ -1129,7 +1256,8 @@ export async function postInvoices(
     }
     if (missingAccounts.size) {
       notes.push(`NetSuite account${missingAccounts.size === 1 ? '' : 's'} ${listed([...missingAccounts])} ${missingAccounts.size === 1 ? "isn't" : "aren't"} `
-        + 'in the chart of accounts yet, so invoices, credit memos, payments, deposits, bills and bill payments posting there weren\'t posted. Sync now on the chart of accounts page copies them.');
+        + 'in the chart of accounts yet, so invoices, credit memos, payments, deposits, bills, bill payments, checks and card charges posting there '
+        + 'weren\'t posted. Sync now on the chart of accounts page copies them.');
     }
   } catch (err) {
     result.error = String((err as any)?.message || err).slice(0, 300);

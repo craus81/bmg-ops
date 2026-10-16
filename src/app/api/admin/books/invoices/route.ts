@@ -23,8 +23,8 @@ import { checkSpendingMonth } from '@/lib/books/spending-check';
 import { BOOKS_SPENDING_SYNC, readSpendingMonth } from '@/lib/books/netsuite-spending';
 import {
   BOOKS_INVOICE_POSTING, POSTING_COMPANIES, billBooks, billPaymentBooks, billPostingFor, depositBooks, depositPostingFor, invoiceBooks,
-  paymentBooks, postInvoices, postingFor, postingKey, readBillMonth, unsaidFacts,
-  type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type PaymentPosting,
+  paymentBooks, postInvoices, postingFor, postingKey, readBillMonth, spendingBooks, spendingPostingFor, unsaidFacts,
+  type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type PaymentPosting, type SpendingPosting,
 } from '@/lib/books/invoice-posting';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { compactSuiteqlError } from '@/lib/sales-order-sync';
@@ -60,9 +60,9 @@ const POSTING_BUDGET_MS = 240_000;
  *
  * For a company whose documents post (src/lib/books/invoice-posting.ts),
  * each invoice, credit memo, payment, deposit, application, bill, bill
- * credit or bill payment (checks and card charges don't post yet) also says
- * what FleetSuite's books hold for it (migrations 367, 376, 383, 386 and
- * 390) and what the next posting run does about it, or that it has nothing
+ * credit, bill payment, check, card charge or card refund also says what
+ * FleetSuite's books hold for it (migrations 367, 376, 383, 386, 390 and
+ * 392) and what the next posting run does about it, or that it has nothing
  * to post, and `lastRun` is how the last one went.
  *
  * Super admin only: the books are being built hidden, for the owner, until
@@ -145,11 +145,21 @@ export async function GET(req: NextRequest) {
     ]);
     const failed = read.error || copy.error;
     if (failed) return NextResponse.json({ error: failed.message }, { status: 500 });
-    const check = checkSpendingMonth(read.data!, { company, chart });
+    const data = read.data!;
+    let held: Map<string, SpendingPosting> | null = null;
+    if (posts) {
+      const mine = data.documents.filter((d) => d.companies.includes(company)).map((d) => d.netsuite_id);
+      held = new Map();
+      if (mine.length) {
+        const books = await service.rpc('gl_spending_postings', { p_company: company, p_source_ids: mine, p_lines: true });
+        if (books.error) return NextResponse.json({ error: books.error.message }, { status: 500 });
+        for (const p of ((books.data as any)?.documents ?? []) as SpendingPosting[]) held.set(postingKey(p.source_type, p.source_id), p);
+      }
+    }
+    const check = checkSpendingMonth(data, { company, chart }, held ? (w) => spendingBooks(w, spendingPostingFor(held!, w)) : undefined);
     if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });
-    // Checks and card charges don't post yet: they're checked first, as bills were.
     return NextResponse.json({
-      rule: SPENDING_RULE, kind, ...page, listsCopiedAt: lists.data?.updated_at ?? null, posts: false, copy: copyOf(copy.data), ...check,
+      rule: SPENDING_RULE, kind, ...page, listsCopiedAt: lists.data?.updated_at ?? null, posts, copy: copyOf(copy.data), ...check,
     });
   }
 
@@ -303,8 +313,8 @@ export async function GET(req: NextRequest) {
 
 /**
  * POST /api/admin/books/invoices — post invoices, credit memos, payments,
- * deposits, bills and bill payments to FleetSuite's books now rather than
- * wait for the two-hourly run. Same job, same record of how it went; the
+ * deposits, bills, bill payments, checks and card charges to FleetSuite's
+ * books now rather than wait for the two-hourly run. Same job, same record of how it went; the
  * response says only how the run went, the page reloads the rest.
  */
 export async function POST(req: NextRequest) {

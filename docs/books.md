@@ -21,8 +21,8 @@ part 11, vendor bills and bill credits, copied from NetSuite, checked with
 the bill rule and posted in the same run as invoices, and the bill
 payments that pay them, copied from NetSuite, checked with the bill
 payment rule and posted in the same run too, and part 12, checks and
-credit card charges and refunds, copied from NetSuite and checked with the
-spending rule.
+credit card charges and refunds, copied from NetSuite, checked with the
+spending rule and posted in the same run as invoices.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices` and the differences at
@@ -70,7 +70,8 @@ the accounts page; the others are linked from there.
 | Bill payment tests | `src/lib/books/bill-payment-rule.test.ts`, `src/lib/books/bill-payment-check.test.ts`, `src/lib/books/netsuite-bill-payments.test.ts`, `src/lib/books/bill-payments-sql.test.ts`, `src/lib/books/bill-payment-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Checks and credit card charges and refunds, copied from NetSuite | `migrations/391-books-checks-and-cards.sql`, `src/lib/books/netsuite-spending.ts`, `src/app/api/cron/books-netsuite-spending/route.ts`, `src/app/api/admin/books/spending/route.ts` |
 | Spending rule and its check, on the invoices page | `src/lib/books/spending-rule.ts`, `src/lib/books/spending-check.ts` |
-| Check and card tests | `src/lib/books/spending-rule.test.ts`, `src/lib/books/spending-check.test.ts`, `src/lib/books/netsuite-spending.test.ts`, `src/lib/books/spending-sql.test.ts` |
+| Checks and card charges posted to the journal, with invoices | `migrations/392-books-spending-posting.sql`, `src/lib/books/invoice-posting.ts` |
+| Check and card tests | `src/lib/books/spending-rule.test.ts`, `src/lib/books/spending-check.test.ts`, `src/lib/books/netsuite-spending.test.ts`, `src/lib/books/spending-sql.test.ts`, `src/lib/books/spending-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -1063,9 +1064,8 @@ BMG's Chase card say; a credit card refund (CardRfnd) puts money back on
 the card. None of them goes through payables: the money comes straight out
 of the account the document names. All three are copied from NetSuite with
 their lines and checked against its GL with the spending rule (owner
-decision 2026-10-16, "Checks and cards"), as bills were before they
-posted. They don't post to FleetSuite's journal yet: that comes after the
-check, on the owner's OK.
+decision 2026-10-16, "Checks and cards"), and posted to FleetSuite's
+journal in the same run as invoices, as bills are.
 
 ### Copying checks and card charges
 
@@ -1159,6 +1159,46 @@ Not yet seen in NetSuite's data, so the check is what will show it:
 - a document in another currency, whose total the copy keeps in that
   currency while NetSuite's GL is in BMG's.
 
+### Posting checks and card charges
+
+Every BMG check, credit card charge and credit card refund NetSuite booked
+into a month from January 2025 that the rule can work out posts to
+FleetSuite's journal in the same run as invoices, whether it matches
+NetSuite or not, as bills do (owner decision 2026-10-16, "Checks and
+cards", after the check): once, in the month NetSuite booked it into,
+dated as a bill is (`entryDate`), with the rule `spending@1`. A check's
+entries are filed as `check` and keyed `check:<NetSuite id>:<n>`, a card
+charge's as `card_charge` and a card refund's as `card_refund`. Each of
+the rule's lines is a line of the entry, with its NetSuite line id
+(`source_line_ref`) and item; the account the money comes out of is
+`paid_from`. No line carries a vendor: nothing is owed on a check or a
+card, as it is on a bill's payables, so the payee is in the entry's memo,
+and the copy keeps NetSuite's id for it.
+
+When NetSuite changes what a document posts (an account, an amount, a
+line, the bank account or card, its date or the month it's booked into,
+or the copies of its lines, items or GL) its entry is reversed and the new
+one posted in one transaction; a new number, memo, status or payee alone
+changes nothing. One NetSuite voids, or no longer has (the copy marks it
+gone), has its entry reversed, and so does one that comes to nothing now.
+The account the money comes out of must be credited with a check's or a
+charge's total, and debited with a refund's, so one whose copied lines
+come out any other way (caught mid-refresh, or signed the other way round)
+keeps whatever it has, and the run's notes name it, as for bills. One the
+rule can't work out, or whose lines or GL lines aren't copied yet, keeps
+whatever it has too, and the next run looks again. As for payments, one in
+neither company's GL copy is looked at only while an entry of it stands.
+1084's join with its invoices.
+
+The posting job and the Checks and cards switch read a month the same way
+(`readSpendingMonth` in `src/lib/books/netsuite-spending.ts`:
+`gl_spending_month`, and `gl_spending_item_accounts` for items with no
+account), so what the page shows is what posts. Migration 392's
+`gl_spending_postings` reads what the journal holds for each check, card
+charge and card refund, as `gl_bill_postings` does for bills, and whether
+the copy says it's voided or gone. The Checks and cards switch shows the
+Books column and Post now, as the other switches do.
+
 ## Differences
 
 `/admin/books/differences` puts one company's own journal next to the copy
@@ -1176,9 +1216,9 @@ Each month's NetSuite activity is split by the kind of document behind it:
 
 - the kinds FleetSuite posts for the company (invoices, credit memos,
   payments, customer deposits, deposit applications, vendor bills, bill
-  credits and bill payments for BMG) should come to the same as
-  FleetSuite's entries for the same documents, matched by NetSuite's
-  internal id;
+  credits, bill payments, checks, credit card charges and credit card
+  refunds for BMG) should come to the same as FleetSuite's entries for the
+  same documents, matched by NetSuite's internal id;
 - everything else is "not posted yet": the kinds FleetSuite has no rule
   for, and the cost of goods NetSuite books on an invoice or credit memo
   that wasn't fulfilled first, which FleetSuite will post with
@@ -1207,29 +1247,32 @@ the page says why for each:
 
 | Why | When |
 | --- | --- |
-| Dated before the books start | A payment, deposit or application NetSuite dated in 2024 and posted to 2025; FleetSuite only posts those dated from 2025 (an invoice, credit memo, bill, bill credit or bill payment like it posts in NetSuite's month) |
+| Dated before the books start | A payment, deposit or application NetSuite dated in 2024 and posted to 2025; FleetSuite only posts those dated from 2025 (an invoice, credit memo, bill, bill credit, bill payment, check or card charge like it posts in NetSuite's month) |
 | Not posted | FleetSuite has never posted it; Invoices vs NetSuite shows why |
 | Voided | NetSuite voided it and FleetSuite reversed its entry, but the copy of NetSuite's ledger still has lines of it |
 | Reversed | FleetSuite reversed its entry and has none standing |
 | Gone | FleetSuite's entry stands but this company has no line of it in the copy: deleted or voided in NetSuite (the next posting run reverses the entry), or posted to the other company |
-| Another month | FleetSuite's entry is dated in one month, NetSuite posted it to another; for an invoice, credit memo, bill, bill credit or bill payment, until the next posting run moves it |
+| Another month | FleetSuite's entry is dated in one month, NetSuite posted it to another; for an invoice, credit memo, bill, bill credit, bill payment, check or card charge, until the next posting run moves it |
 | Cost of goods | Same month; only NetSuite's cost of goods lines differ |
 | Posted differently | Same month, different accounts or amounts |
 
 Each document links to Invoices vs NetSuite (`?company=&kind=&month=&doc=`),
 which opens it with its line by line check, under the month that page lists
-it in: NetSuite's month for an invoice, credit memo, bill, bill credit or
-bill payment (bills and bill credits under the Bills switch, bill payments
-under Bill payments), its own date's for a payment, deposit or application
-(deposits and applications under the Deposits switch). What the copy of
-NetSuite's documents says of each (its number, customer or vendor, and
-whether it's voided or deleted) comes from the ledger mirror for invoices,
-credit memos and payments, from the deposits copy for deposits and
-applications (migration 383), from the bills copy for bills and bill
-credits (migration 386), and from the bill payments copy for bill payments
-(migration 390). When the copy of NetSuite's
-ledger doesn't yet hold everything NetSuite's own totals say a month moved,
-the page says so, since NetSuite's side is then short.
+it in: NetSuite's month for an invoice, credit memo, bill, bill credit,
+bill payment, check, card charge or card refund (bills and bill credits
+under the Bills switch, bill payments under Bill payments, checks and card
+charges and refunds under Checks and cards), its own date's for a payment,
+deposit or application (deposits and applications under the Deposits
+switch). What the copy of NetSuite's documents says of each (its number,
+customer, vendor or payee, and whether it's voided or deleted) comes from
+the ledger mirror for invoices, credit memos and payments, from the
+deposits copy for deposits and applications (migration 383), from the
+bills copy for bills and bill credits (migration 386), from the bill
+payments copy for bill payments (migration 390), and from the checks and
+cards copy for checks, card charges and card refunds (migration 392). When
+the copy of NetSuite's ledger doesn't yet hold everything NetSuite's own
+totals say a month moved, the page says so, since NetSuite's side is then
+short.
 
 ## Posting
 
