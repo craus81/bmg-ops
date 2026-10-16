@@ -3,8 +3,9 @@ import {
   type AccountAmount, type ChartAccount, type CheckStatus, type InvoiceRowView, type InvoiceView, type MonthCheck,
   type MonthReason, type MonthSummary, type NetSuitePosting, type Reason,
 } from './invoice-check';
+import { isLayoutItem } from './invoice-rule';
 import {
-  PAYABLES_LINE, STOCK_TYPES, billEntry,
+  PAYABLES_LINE, STOCK_TYPES, billEntry, billItemAccount,
   type BillAccounts, type BillItem, type BillLine, type BillLineRole, type BillProblem, type BillType,
 } from './bill-rule';
 
@@ -192,7 +193,9 @@ export function billProblemReason(p: BillProblem, type: BillType): Reason {
     case 'no_item_account':
       return {
         key: `no_item_account|${p.itemId}`,
-        text: `${p.itemNumber} has no ${p.stock ? 'asset' : 'expense'} account in the copy of NetSuite's items.`,
+        text: p.stock
+          ? `${p.itemNumber} has no asset account in the copy of NetSuite's items.`
+          : `${p.itemNumber} has no expense account in the copy of NetSuite's items, and no copied bill shows where NetSuite posts it.`,
       };
     case 'tax':
       return { key: `tax|${type}`, text: `The ${DOC[type]} has a tax line, which the bill rule doesn't post yet.` };
@@ -261,6 +264,8 @@ export interface BillLink {
   type: string | null;
   number: string | null;
   amount: string | null;
+  /** The bill's own lines the link is on, by line id; left out when the copy couldn't read them line by line. */
+  lines?: string[];
 }
 
 /** What gl_bill_month (migration 384) returns: the month's vendor bills and bill credits. */
@@ -287,7 +292,10 @@ export interface BillMonthData {
       line_id: string;
       item: string | null;
       account: string | null;
+      /** Its net amount, a discount line's amount shared out over the lines above it. */
       amount: string | null;
+      /** Its own amount; null when NetSuite didn't give it, left out on a line copied before migration 385. */
+      own_amount?: string | null;
       quantity: string | null;
       memo: string | null;
       tax: boolean;
@@ -309,6 +317,60 @@ export interface BillMonthData {
   receipt_accounts: Array<{ account: string; documents: number }>;
   /** Bills and bill credits the GL copy has in the month that the copy of the documents doesn't. */
   not_copied: Array<{ netsuite_id: string; type: string; number: string | null }>;
+  /**
+   * Where NetSuite's GL posted the bill lines of the month's items the copy
+   * of NetSuite's items has no account for (gl_bill_item_accounts, migration
+   * 385); left out when not read.
+   */
+  item_accounts?: Array<{ item: string; account: string; lines: number }>;
+}
+
+/**
+ * The month's items a bill line could post to that the copy of NetSuite's
+ * items has no account for, a discount item say: the ones to ask
+ * gl_bill_item_accounts (migration 385) about.
+ */
+export function itemsWithoutAccount(items: BillMonthData['items']): string[] {
+  return items
+    .filter((i) => !STOCK_TYPES.has(i.item_type ?? '') && !isLayoutItem(i.netsuite_id, i.item_type)
+      && !billItemAccount({ number: i.name, type: i.item_type, assetAccount: i.asset_account, expenseAccount: i.expense_account, incomeAccount: i.income_account }))
+    .map((i) => i.netsuite_id);
+}
+
+/**
+ * A document's lines at their own amounts (NetSuite's foreignamount) rather
+ * than their net ones, when every line that posts has one and they come to
+ * the same: NetSuite shares a discount line's amount out over the lines
+ * above it in their net amounts, but books each line at its own amount and
+ * the discount on a line of its own. `lines` are signed debit positive, the
+ * own amounts as NetSuite gives them, either way round. 'net' when the own
+ * amounts don't change anything or some line has none, 'unfit' when they
+ * don't come to the same, and the lines stay at their net amounts.
+ */
+export function withOwnBillAmounts(
+  lines: BillLine[],
+  copied: Array<{ own_amount?: string | null }>,
+  items: Map<string, BillItem>,
+): { lines: BillLine[]; amounts: 'own' | 'net' | 'unfit' } {
+  let net = 0;
+  let own = 0;
+  const owns: Array<number | null> = [];
+  for (const [i, line] of lines.entries()) {
+    owns.push(null);
+    // Tax and lines that never post keep their amounts: a subtotal's net amount repeats the lines it adds up.
+    if (line.tax || line.cents === null || (line.itemId && isLayoutItem(line.itemId, items.get(line.itemId)?.type))) continue;
+    const raw = copied[i]?.own_amount;
+    if (raw === undefined || raw === null) return { lines, amounts: 'net' };
+    const cents = centsOf(raw);
+    if (cents === null) return { lines, amounts: 'unfit' };
+    owns[i] = cents;
+    net += line.cents;
+    own += cents;
+  }
+  const turn = own === net ? 1 : own === -net ? -1 : 0;
+  if (turn === 0) return { lines, amounts: 'unfit' };
+  if (owns.every((c, i) => c === null || c * turn === lines[i].cents)) return { lines, amounts: 'net' };
+  return { lines: lines.map((l, i) => (owns[i] === null ? l : { ...l, cents: owns[i]! * turn || 0 })), amounts: 'own' };
 }
 
 /** One of a document's lines, to show: what it is, and its amount as the document has it (a bill credit's lines positive too). */
@@ -347,14 +409,18 @@ const DOC_WORDS: Record<string, string> = {
 const linkName = (l: BillLink) => l.number || `NetSuite ${DOC_WORDS[l.type ?? ''] ?? 'document'} ${l.netsuite_id}`;
 
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+/** A line whose item isn't in the copy: NetSuite's own lines carry ids below 1, its subtotal -2. */
+const ownLineLabel = (itemId: string) => (itemId === '-2' ? 'Subtotal' : isLayoutItem(itemId, null) ? "NetSuite's own line" : `Item ${itemId}`);
 const listed = (numbers: string[]) => `${numbers.slice(0, 10).join(', ')}${numbers.length > 10 ? ', …' : ''}`;
 
 /** One document of the month, worked out with the bill rule and checked against NetSuite. */
 export interface WorkedBill {
   bill: BillMonthData['bills'][number];
   number: string;
-  /** Its lines, signed debit positive; null until they've been copied. */
+  /** Its lines as the rule takes them, signed debit positive; null until they've been copied. */
   lines: BillLine[] | null;
+  /** Which amounts its lines went in at (withOwnBillAmounts); null until they've been copied. */
+  amounts: 'own' | 'net' | 'unfit' | null;
   checked: CheckedBill;
 }
 
@@ -387,13 +453,26 @@ export function workOutBillMonth(
   const payables = pickPayables(opts.chart, opts.company, data.bills.flatMap(postings), account);
   const received = pickReceivedAccount(data.receipt_accounts ?? [], opts.company, accountTypes, account);
   const signs = lineSigns(data.bills);
+  // For an item with no account in the copy: the account NetSuite posted most of its bill lines to, the lower id on a tie.
+  const most = new Map<string, { account: string; lines: number }>();
+  for (const u of data.item_accounts ?? []) {
+    const lines = Number(u.lines) || 0;
+    const was = most.get(u.item);
+    if (!was || lines > was.lines || (lines === was.lines && Number(u.account) < Number(was.account))) most.set(u.item, { account: u.account, lines });
+  }
+  const posted = new Map([...most].map(([item, u]) => [item, u.account]));
 
   const notes: string[] = [];
   if (data.bills.length && payables.note) notes.push(payables.note);
   if (data.bills.length && received.note) notes.push(received.note);
 
   const worked = data.bills.map((b): WorkedBill => {
-    const lines = b.lines?.map((l): BillLine => {
+    const orders = b.links ? b.links.filter((l) => ORDERED_FROM[b.type].has(l.type ?? '')) : null;
+    const ordered = orders ? orders.length > 0 : null;
+    // Line by line, when the copy says which of the document's lines its orders are on.
+    const ids = new Set((b.lines ?? []).map((l) => l.line_id));
+    const fromOrders = orders?.some((o) => o.lines?.some((id) => ids.has(id))) ? new Set(orders.flatMap((o) => o.lines ?? [])) : null;
+    const netLines = b.lines?.map((l): BillLine => {
       const cents = l.amount === null ? null : centsOf(l.amount);
       return {
         lineId: l.line_id,
@@ -401,18 +480,22 @@ export function workOutBillMonth(
         account: l.account,
         cents: cents === null || cents === 0 ? cents : signs[b.type] * cents,
         tax: !!l.tax,
+        ordered: fromOrders ? fromOrders.has(l.line_id) : null,
       };
     }) ?? null;
-    const ordered = b.links ? b.links.some((l) => ORDERED_FROM[b.type].has(l.type ?? '')) : null;
+    const own = netLines ? withOwnBillAmounts(netLines, b.lines!, items) : null;
+    const lines = own?.lines ?? null;
     const accounts: BillAccounts = {
       items,
       payables: b.vendor_payables && payables.candidates.has(b.vendor_payables) ? b.vendor_payables : payables.fallback,
       received: received.account,
+      posted,
     };
     return {
       bill: b,
       number: b.number || `NetSuite ${b.netsuite_id}`,
       lines,
+      amounts: own?.amounts ?? null,
       checked: checkBill({ cents: centsOf(b.total), lines, ordered, netsuite: postings(b) }, { accounts, accountTypes }),
     };
   });
@@ -420,7 +503,7 @@ export function workOutBillMonth(
   // Ordered stock with nowhere to be held: say why it goes to the items' asset accounts.
   const stockOrdered = worked.some((w) => w.lines?.some((l) => {
     const type = l.itemId ? items.get(l.itemId)?.type : null;
-    return !!type && STOCK_TYPES.has(type) && !!w.bill.links?.some((k) => ORDERED_FROM[w.bill.type].has(k.type ?? ''));
+    return !!type && STOCK_TYPES.has(type) && (l.ordered ?? !!w.bill.links?.some((k) => ORDERED_FROM[w.bill.type].has(k.type ?? '')));
   }));
   if (stockOrdered && !received.account) {
     notes.push(`The copy of NetSuite's GL has no item receipt of ${opts.company}'s that holds received stock in an account until it's billed, `
@@ -439,8 +522,9 @@ export function checkBillMonth(data: BillMonthData, opts: { company: string; cha
   const views: BillView[] = [];
   const notInGl: string[] = [];
   const moved: string[] = [];
+  const unfit: string[] = [];
   const used = new Set<string>();
-  for (const { bill: b, number, lines, checked } of worked) {
+  for (const { bill: b, number, lines, amounts, checked } of worked) {
     if (b.companies.length === 0) {
       // In neither company's GL copy: only worth a word when FleetSuite would post it.
       if (checked.status !== 'matches') notInGl.push(number);
@@ -448,6 +532,7 @@ export function checkBillMonth(data: BillMonthData, opts: { company: string; cha
     }
 
     const why = billReasons(checked, b.type, account);
+    if (amounts === 'unfit') unfit.push(number);
     summary.invoices += 1;
     summary[checked.status] += 1;
     for (const r of why) {
@@ -466,7 +551,7 @@ export function checkBillMonth(data: BillMonthData, opts: { company: string; cha
       const copied = b.lines![i];
       return {
         label: l.tax ? 'Tax'
-          : l.itemId ? itemNames.get(l.itemId) ?? `Item ${l.itemId}`
+          : l.itemId ? itemNames.get(l.itemId) ?? ownLineLabel(l.itemId)
             : l.account ? `Expense to ${account(l.account)}` : 'Expense',
         quantity: copied.quantity,
         memo: copied.memo,
@@ -485,6 +570,7 @@ export function checkBillMonth(data: BillMonthData, opts: { company: string; cha
       voided: b.voided,
       status: checked.status,
       ...(checked.waiting ? { waiting: checked.waiting } : {}),
+      ...(amounts === 'own' || amounts === 'unfit' ? { amounts } : {}),
       reasons: why.map((r) => r.text),
       rows,
       type: b.type,
@@ -511,6 +597,11 @@ export function checkBillMonth(data: BillMonthData, opts: { company: string; cha
     notes.push(`The copy of NetSuite's GL has ${plural(missing.length, 'bill or bill credit', 'bills and bill credits')} of this company's `
       + `booked into this month that the copy of the bills doesn't: ${listed(missing)}. The bills copy runs every two hours and may not have `
       + `reached ${them} yet, or NetSuite deleted ${them} and the GL copy hasn't caught up.`);
+  }
+  if (unfit.length) {
+    notes.push(`NetSuite's own amounts for the lines of ${plural(unfit.length, 'bill or bill credit', 'bills and bill credits')} don't add up `
+      + `to ${unfit.length === 1 ? 'it' : 'them'}, so FleetSuite took ${unfit.length === 1 ? 'its' : 'their'} lines at their net amounts, `
+      + `with any discount shared out over them: ${listed(unfit)}.`);
   }
 
   return {

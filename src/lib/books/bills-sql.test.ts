@@ -1,9 +1,10 @@
 // Migration 384 keeps a copy of NetSuite's vendor bills and bill credits,
-// with their lines, and reads a month of them for the bill rule's check.
-// This runs migrations 359–363 and 384 in an in-memory Postgres (PGlite) as
-// the app's server login and holds the functions' rules, then runs the
-// whole copy job against them with a fake NetSuite that answers the job's
-// own SuiteQL, and checks a month end to end.
+// with their lines, and reads a month of them for the bill rule's check;
+// migration 385 says where NetSuite posts the bill lines of an item the copy
+// of its items has no account for. This runs migrations 359–363, 384 and 385
+// in an in-memory Postgres (PGlite) as the app's server login and holds the
+// functions' rules, then runs the whole copy job against them with a fake
+// NetSuite that answers the job's own SuiteQL, and checks a month end to end.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -25,12 +26,12 @@ vi.mock('@/lib/system-health', () => ({
 }));
 
 import type { ChartAccount } from './invoice-check';
-import { checkBillMonth, type BillMonthData } from './bill-check';
-import { BILL_IDS_QUERY, BOOKS_BILLS_SYNC, copyNetSuiteBills } from './netsuite-bills';
+import { checkBillMonth, itemsWithoutAccount, type BillMonthData } from './bill-check';
+import { BILL_IDS_QUERY, BOOKS_BILLS_SYNC, COPY_VERSION, copyNetSuiteBills } from './netsuite-bills';
 
 // A fresh database with Supabase's API roles and default grants, migrations
-// 359–363 and 384 run twice as the owner, 1084 linked to subsidiary 5 (as
-// the account sync does).
+// 359–363, 384 and 385 run twice as the owner, 1084 linked to subsidiary 5
+// (as the account sync does).
 async function freshDb(): Promise<PGlite> {
   const pg = new PGlite();
   await pg.exec(`
@@ -45,6 +46,7 @@ async function freshDb(): Promise<PGlite> {
   for (const file of [
     '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '384-books-vendor-bills.sql',
+    '385-books-bill-item-accounts.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -81,8 +83,11 @@ async function listed(pg: PGlite, kind: string, id: string, name: string, detail
   );
 }
 
-type Line = { line_id: string; item: string | null; account: string | null; amount: string | null; quantity: string | null; memo: string | null; tax: boolean };
-type Link = { netsuite_id: string; type: string | null; number: string | null; amount: string | null; link_type: string | null };
+type Line = {
+  line_id: string; item: string | null; account: string | null; amount: string | null; own_amount?: string | null; quantity: string | null;
+  memo: string | null; tax: boolean;
+};
+type Link = { netsuite_id: string; type: string | null; number: string | null; amount: string | null; link_type: string | null; lines?: string[] };
 const line = (lineId: string, item: string | null, account: string | null, amount: string): Line => ({
   line_id: lineId, item, account, amount, quantity: null, memo: null, tax: false,
 });
@@ -172,7 +177,7 @@ describe('the bills functions', () => {
   });
 
   it('lets only the service role read the copy or run the functions, and the one write that changes rows says which', async () => {
-    for (const fn of ['gl_netsuite_bills_apply(jsonb)', 'gl_netsuite_bills_finish(jsonb)', 'gl_bill_month(text, date)']) {
+    for (const fn of ['gl_netsuite_bills_apply(jsonb)', 'gl_netsuite_bills_finish(jsonb)', 'gl_bill_month(text, date)', 'gl_bill_item_accounts(text[])']) {
       for (const role of ['anon', 'authenticated']) {
         const r = await db.query<{ ok: boolean }>(`SELECT has_function_privilege($1, $2, 'EXECUTE') AS ok`, [role, fn]);
         expect(r.rows[0].ok, `${role} ${fn}`).toBe(false);
@@ -195,15 +200,17 @@ describe('the bills functions', () => {
     expect((await body('gl_netsuite_bills_apply')).match(/\b(INSERT|UPDATE|DELETE)\b/g)).toEqual(['INSERT', 'UPDATE']);
     expect(await body('gl_netsuite_bills_apply')).toMatch(/ON CONFLICT \(netsuite_id\) DO UPDATE SET/);
     expect(await body('gl_bill_month')).not.toMatch(/\b(INSERT|UPDATE|DELETE|TRUNCATE)\b/i);
+    expect(await body('gl_bill_item_accounts')).not.toMatch(/\b(INSERT|UPDATE|DELETE|TRUNCATE)\b/i);
   });
 });
 
 // Made-up books: '200' payables, '205' received not billed, '130' inventory,
-// '530' subcontractors and '610' shop supplies (BMG); '210' and '615' 1084's.
+// '530' subcontractors, '610' shop supplies and '480' vendor discounts (BMG);
+// '210' and '615' 1084's.
 const NAMES: Record<string, [string, string]> = {
   '200': ['2000 Accounts Payable', 'accounts_payable'], '205': ['2050 Received Not Billed', 'other_current_liability'],
   '130': ['1300 Inventory', 'other_current_asset'], '530': ['5300 Subcontractors', 'expense'], '610': ['6100 Shop Supplies', 'expense'],
-  '210': ['2100 Accounts Payable', 'accounts_payable'], '615': ['6150 Building Repairs', 'expense'],
+  '480': ['4800 Vendor Discounts', 'other_income'], '210': ['2100 Accounts Payable', 'accounts_payable'], '615': ['6150 Building Repairs', 'expense'],
 };
 const CHART: ChartAccount[] = Object.entries(NAMES).map(([id, [label, type]]) => ({
   netsuite_account_id: id, number: label.split(' ')[0], name: label.split(' ').slice(1).join(' '), account_type: type,
@@ -329,6 +336,74 @@ describe('gl_bill_month (migration 384)', () => {
   });
 });
 
+describe('a discount and a line added on a purchase order\'s bill (migration 385)', () => {
+  let db: PGlite;
+  const own = (l: Line, amount: string): Line => ({ ...l, own_amount: amount });
+  beforeAll(async () => {
+    db = await freshDb();
+    // September 2026: B-720, $100.00 of stock from PO621 less 8% (a subtotal,
+    // then the discount, which the copy of NetSuite's items has no account
+    // for), and B-721, $300.00 of stock from PO622's line with $30.00 more
+    // added on the bill itself. B-722 (July) and B-724 (June) take the same
+    // discount, and B-723, gone from NetSuite, put it somewhere else.
+    await gl(db, '720', 'VendBill', 'B-720', '2026-09-10', 'BMG', [['0', '200', '0.00', '92.00'], ['1', '205', '100.00', '0.00'], ['3', '480', '0.00', '8.00']]);
+    await gl(db, '721', 'VendBill', 'B-721', '2026-09-14', 'BMG', [['0', '200', '0.00', '330.00'], ['1', '205', '300.00', '0.00'], ['2', '130', '30.00', '0.00']]);
+    await gl(db, '722', 'VendBill', 'B-722', '2026-07-02', 'BMG', [['0', '200', '0.00', '46.00'], ['1', '610', '50.00', '0.00'], ['2', '480', '0.00', '4.00']]);
+    await gl(db, '723', 'VendBill', 'B-723', '2026-07-09', 'BMG', [['0', '200', '0.00', '9.00'], ['1', '530', '10.00', '0.00'], ['2', '615', '0.00', '1.00']]);
+    await gl(db, '724', 'VendBill', 'B-724', '2026-06-04', 'BMG', [['0', '200', '0.00', '19.00'], ['1', '530', '20.00', '0.00'], ['2', '530', '0.00', '1.00']]);
+    await gl(db, '631', 'ItemRcpt', 'IR631', '2026-09-02', 'BMG', [['1', '130', '100.00', '0.00'], ['2', '205', '0.00', '100.00']]);
+    await listed(db, 'vendor', '50', 'Sample Supply Co', { payables_account: '200' });
+    await listed(db, 'item', '901', 'WIDGET-1', { item_type: 'InvtPart', asset_account: '130' });
+    await listed(db, 'item', '902', 'SUPPLY-2', { item_type: 'NonInvtPart', expense_account: '610' });
+    await listed(db, 'item', '904', 'DISC-8', { item_type: 'Discount' });
+    await db.exec('SET ROLE service_role');
+    await db.query('SELECT gl_netsuite_bills_apply($1::jsonb)', [JSON.stringify({ rows: [
+      doc('720', 'VendBill', 'B-720', '2026-09-10', '92.00', {
+        lines: [own(line('1', '901', null, '-92.00'), '-100.00'), own(line('2', '-2', null, '-100.00'), '-100.00'), own(line('3', '904', null, '0.00'), '8.00')],
+        links: [{ ...link('621', 'PurchOrd', 'PO621', '100.00'), lines: ['1'] }],
+      }),
+      doc('721', 'VendBill', 'B-721', '2026-09-14', '330.00', {
+        lines: [own(line('1', '901', null, '-300.00'), '-300.00'), own(line('2', '901', null, '-30.00'), '-30.00')],
+        links: [{ ...link('622', 'PurchOrd', 'PO622', '300.00'), lines: ['1'] }],
+      }),
+      doc('722', 'VendBill', 'B-722', '2026-07-02', '46.00', { lines: [own(line('1', '902', null, '-46.00'), '-50.00'), own(line('2', '904', null, '0.00'), '4.00')] }),
+      doc('723', 'VendBill', 'B-723', '2026-07-09', '9.00', { lines: [own(line('1', null, '530', '-9.00'), '-10.00'), own(line('2', '904', null, '0.00'), '1.00')] }),
+      doc('724', 'VendBill', 'B-724', '2026-06-04', '19.00', { lines: [own(line('1', null, '530', '-19.00'), '-20.00'), own(line('2', '904', null, '0.00'), '1.00')] }),
+    ] })]);
+    await db.query('SELECT gl_netsuite_bills_finish($1::jsonb)', [JSON.stringify({ netsuite_ids: ['720', '721', '722', '724'] })]);
+  }, 60_000);
+  afterAll(async () => { await db?.close(); });
+
+  const itemAccounts = async (items: string[] | null) =>
+    (await db.query<{ r: NonNullable<BillMonthData['item_accounts']> }>('SELECT gl_bill_item_accounts($1::text[]) AS r', [items])).rows[0].r;
+
+  it('says where NetSuite posted the bill lines of the items asked about, most used first, leaving out what NetSuite deleted', async () => {
+    expect(await itemAccounts(['904', '902', '999'])).toEqual([
+      { item: '902', account: '610', lines: 1 },
+      { item: '904', account: '480', lines: 2 },
+      { item: '904', account: '530', lines: 1 },
+    ]);
+    expect(await itemAccounts([])).toEqual([]);
+    expect(await itemAccounts(null)).toEqual([]);
+  });
+
+  it('checks the month end to end, as the page does', async () => {
+    const data = (await db.query<{ r: BillMonthData }>('SELECT gl_bill_month($1, $2::date) AS r', ['BMG', '2026-09-01'])).rows[0].r;
+    expect(itemsWithoutAccount(data.items)).toEqual(['904']);
+    const m = checkBillMonth({ ...data, item_accounts: await itemAccounts(itemsWithoutAccount(data.items)) }, { company: 'BMG', chart: CHART });
+    expect(m.summary).toMatchObject({ invoices: 2, matches: 2, differs: 0, unworkable: 0 });
+    const [b720, b721] = m.invoices;
+    expect([b720.amounts, b721.amounts]).toEqual(['own', undefined]);
+    expect(b720.lines.map((l) => [l.label, l.cents])).toEqual([['WIDGET-1', 10000], ['Subtotal', 10000], ['DISC-8', -800]]);
+    expect(b720.rows.map((r) => [r.label, r.fleetsuite?.account, r.fleetsuite?.cents, r.same])).toEqual([
+      ['Payables', '200', -9200, true], ['Received stock', '205', 10000, true], ['Items', '480', -800, true],
+    ]);
+    expect(b721.rows.map((r) => [r.label, r.fleetsuite?.account, r.fleetsuite?.cents, r.same])).toEqual([
+      ['Payables', '200', -33000, true], ['Received stock', '205', 30000, true], ['Inventory', '130', 3000, true],
+    ]);
+  });
+});
+
 // ── The copy job ───────────────────────────────────────────────────────────
 
 interface NsDoc {
@@ -352,6 +427,8 @@ interface NsLine {
   item?: number | null;
   account?: number | null;
   amount: number | string;
+  /** Its own amount (foreignamount): the amount's when left out; null for one NetSuite leaves out. */
+  own?: number | string | null;
   quantity?: number | null;
   memo?: string | null;
   tax?: boolean;
@@ -367,7 +444,7 @@ class FakeNetSuite {
   lines: NsLine[] = [];
   /** Documents the bills come from: purchase orders and receipts. */
   others: Array<{ id: number; type: string; tranid: string | null }> = [];
-  links: Array<{ previousdoc: number; nextdoc: number; foreignamount: number | string | null; linktype: string | null }> = [];
+  links: Array<{ previousdoc: number; nextdoc: number; nextline?: number | null; foreignamount: number | string | null; linktype: string | null }> = [];
   /** Columns, records and link tables this account refuses. */
   refuse = new Set<string>();
   /** The ids NetSuite lists when asked for all of them; every document's when null. */
@@ -403,18 +480,23 @@ class FakeNetSuite {
     const table = /FROM (nexttransactionlinelink|previoustransactionlinelink)/.exec(q)?.[1];
     if (table) {
       if (this.refuse.has(table)) throw rejected(`Search error occurred: Record '${table}' was not found.`);
-      return this.links.filter((l) => ids.includes(l.nextdoc)).map((l) => ({ ...l }));
+      const withLines = q.includes('nextline');
+      if (withLines && this.refuse.has('nextline')) throw rejected(`Search error occurred: Field 'nextline' for record '${table}' was not found.`);
+      return this.links.filter((l) => ids.includes(l.nextdoc)).map(({ nextline, ...l }) => (withLines ? { ...l, nextline: nextline ?? null } : l));
     }
     if (q.includes('FROM transactionline tl')) {
       if (this.refuse.has('transactionline')) throw rejected("Search error occurred: Record 'transactionLine' was not found.");
       const withAccount = q.includes('tl.expenseaccount');
       if (withAccount && this.refuse.has('expenseaccount')) throw rejected("Search error occurred: Field 'expenseaccount' for record 'transactionLine' was not found.");
+      const own = q.includes('tl.foreignamount AS own_amount');
       return this.lines
         .filter((l) => ids.includes(l.bill))
         .sort((a, b) => a.bill - b.bill || (a.id ?? 0) - (b.id ?? 0))
         .map((l) => ({
           bill_id: l.bill, line_id: l.id, item: l.item ?? null, amount: l.amount, quantity: l.quantity ?? null, memo: l.memo ?? null,
           taxline: l.tax ? 'T' : 'F', ...(withAccount ? { account: l.account ?? null } : {}),
+          // SuiteQL leaves a null column out of the row.
+          ...(own && l.own !== null ? { own_amount: l.own ?? l.amount } : {}),
         }));
     }
     if (q.includes('SELECT t.id, t.type, t.tranid')) {
@@ -444,10 +526,11 @@ function netsuite(): FakeNetSuite {
   ];
   ns.others = [{ id: 601, type: 'PurchOrd', tranid: 'PO601' }, { id: 611, type: 'ItemRcpt', tranid: 'IR611' }];
   ns.links = [
-    // NetSuite lists the bill's purchase order in two parts.
-    { previousdoc: 601, nextdoc: 701, foreignamount: '-600.00', linktype: 'Bill' },
-    { previousdoc: 601, nextdoc: 701, foreignamount: '-50.00', linktype: 'Bill' },
-    { previousdoc: 611, nextdoc: 701, foreignamount: 30, linktype: 'Receipt/Bill' },
+    // NetSuite lists the bill's purchase order line by line.
+    { previousdoc: 601, nextdoc: 701, nextline: 1, foreignamount: '-500.00', linktype: 'Bill' },
+    { previousdoc: 601, nextdoc: 701, nextline: 3, foreignamount: '-30.00', linktype: 'Bill' },
+    { previousdoc: 601, nextdoc: 701, nextline: 2, foreignamount: '-120.00', linktype: 'Bill' },
+    { previousdoc: 611, nextdoc: 701, nextline: 3, foreignamount: 30, linktype: 'Receipt/Bill' },
   ];
   return ns;
 }
@@ -511,9 +594,13 @@ describe('the copy job against the real functions', () => {
   )).rows;
   const recorded = () => store.get(BOOKS_BILLS_SYNC);
   const B701_LINES: Line[] = [
-    { line_id: '1', item: null, account: '530', amount: '-500.00', quantity: null, memo: 'Labor', tax: false },
-    { line_id: '2', item: '902', account: null, amount: '-120.00', quantity: '-4', memo: null, tax: false },
-    { line_id: '3', item: '901', account: null, amount: '-30.00', quantity: '-1', memo: null, tax: false },
+    { line_id: '1', item: null, account: '530', amount: '-500.00', own_amount: '-500.00', quantity: null, memo: 'Labor', tax: false },
+    { line_id: '2', item: '902', account: null, amount: '-120.00', own_amount: '-120.00', quantity: '-4', memo: null, tax: false },
+    { line_id: '3', item: '901', account: null, amount: '-30.00', own_amount: '-30.00', quantity: '-1', memo: null, tax: false },
+  ];
+  const B701_LINKS: Link[] = [
+    { netsuite_id: '601', type: 'PurchOrd', number: 'PO601', amount: '650.00', link_type: 'Bill', lines: ['1', '2', '3'] },
+    { netsuite_id: '611', type: 'ItemRcpt', number: 'IR611', amount: '30.00', link_type: 'Receipt/Bill', lines: ['3'] },
   ];
 
   it('copies every bill and bill credit, newest first a page at a time, with its lines and what it came from', async () => {
@@ -525,25 +612,21 @@ describe('the copy job against the real functions', () => {
     expect(ns.headerPages).toBe(3);
     expect(await copied()).toEqual([
       { id: '701', type: 'VendBill', number: 'B-701', date: '2026-09-08', total: '650.00', voided: false, label: 'Open', vendor: 'V-50 Vendor Co', vendor_id: '50', gone: false,
-        lines: B701_LINES,
-        links: [
-          { netsuite_id: '601', type: 'PurchOrd', number: 'PO601', amount: '650.00', link_type: 'Bill' },
-          { netsuite_id: '611', type: 'ItemRcpt', number: 'IR611', amount: '30.00', link_type: 'Receipt/Bill' },
-        ] },
+        lines: B701_LINES, links: B701_LINKS },
       { id: '702', type: 'VendCred', number: 'VC-702', date: '2026-09-12', total: '120.00', voided: false, label: 'Open', vendor: 'V-50 Vendor Co', vendor_id: '50', gone: false,
-        lines: [{ line_id: '1', item: '902', account: null, amount: '120.00', quantity: '4', memo: null, tax: false }], links: [] },
+        lines: [{ line_id: '1', item: '902', account: null, amount: '120.00', own_amount: '120.00', quantity: '4', memo: null, tax: false }], links: [] },
       { id: '703', type: 'VendBill', number: 'B-703', date: '2026-09-15', total: '80.00', voided: false, label: 'Paid In Full', vendor: 'V-51 Vendor Co', vendor_id: '51', gone: false,
-        lines: [{ line_id: '1', item: null, account: '615', amount: '-80.00', quantity: null, memo: null, tax: false }], links: [] },
+        lines: [{ line_id: '1', item: null, account: '615', amount: '-80.00', own_amount: '-80.00', quantity: null, memo: null, tax: false }], links: [] },
       // A voided bill NetSuite gives no lines for has none.
       { id: '704', type: 'VendBill', number: 'B-704', date: '2026-09-20', total: '0.00', voided: true, label: 'Voided', vendor: 'V-50 Vendor Co', vendor_id: '50', gone: false,
         lines: [], links: [] },
       { id: '705', type: 'VendBill', number: null, date: '2026-10-02', total: '200.00', voided: false, label: null, vendor: null, vendor_id: null, gone: false,
-        lines: [{ line_id: '1', item: null, account: '530', amount: '-200.00', quantity: null, memo: null, tax: false }], links: [] },
+        lines: [{ line_id: '1', item: null, account: '530', amount: '-200.00', own_amount: '-200.00', quantity: null, memo: null, tax: false }], links: [] },
     ]);
     // The window closed at the time it was opened, and the record holds counts and words, never an amount.
     const record = recorded();
     expect(record.last_synced_at).toBe(new Date(clock).toISOString());
-    expect(record.last_result).toEqual({ read: 5, added: 5, changed: 0, gone: 0, linkTable: 'nexttransactionlinelink' });
+    expect(record.last_result).toEqual({ read: 5, added: 5, changed: 0, gone: 0, linkTable: 'nexttransactionlinelink', version: COPY_VERSION });
   });
 
   it('reads only what NetSuite changed since the last run, a day\'s overlap included', async () => {
@@ -554,6 +637,28 @@ describe('the copy job against the real functions', () => {
     const r = await run(ns);
     expect(r).toMatchObject({ read: 1, added: 0, changed: 1, gone: 0 });
     expect((await copied()).find((d) => d.id === '703')).toMatchObject({ total: '85.00', lines: [{ line_id: '1', amount: '-85.00' }] });
+  });
+
+  it('starts over from the first bill when the copy was made before what it keeps changed, so every document gets it', async () => {
+    clock += 2 * 3600_000;
+    // The first version's record: no version, its window closed two hours ago, and a run of it cut short below B-702.
+    store.set(BOOKS_BILLS_SYNC, {
+      sync_type: BOOKS_BILLS_SYNC,
+      last_synced_at: new Date(clock - 2 * 3600_000).toISOString(),
+      last_result: { read: 1, resume: { windowStartedAt: new Date(clock - 3600_000).toISOString(), since: '2026-10-15T13:39:00.000Z', beforeId: '702', processed: 1 } },
+    });
+    const ns = netsuite();
+    ns.lines[0] = { ...ns.lines[0], own: '-520.00', amount: '-500.00' };
+    const r = await run(ns);
+    // Every document, though none changed since the last window: the old run's place and window don't count.
+    expect(r).toMatchObject({ read: 5 });
+    expect(recorded().last_result).toMatchObject({ version: COPY_VERSION });
+    expect(recorded().last_result.resume).toBeUndefined();
+    expect((await copied()).find((d) => d.id === '701')?.lines?.[0]).toMatchObject({ amount: '-500.00', own_amount: '-520.00' });
+
+    // Then only what changed, as before.
+    clock += 2 * 3600_000;
+    expect(await run(netsuite())).toMatchObject({ read: 0 });
   });
 
   it('carries on where a run cut short by time stopped, and closes the window only when it drains', async () => {
@@ -650,6 +755,34 @@ describe('the copy job against the real functions', () => {
     ]);
     expect((await copied()).find((d) => d.id === '701')).toMatchObject({ label: 'Paid In Full' });
     expect((await copied()).find((d) => d.id === '701')?.links).toHaveLength(2);
+  });
+
+  it('reads the links document by document when NetSuite won\'t say which lines they\'re on, and says so', async () => {
+    clock += 2 * 3600_000;
+    const ns = netsuite();
+    ns.docs = ns.docs.filter((d) => d.id !== 704).map((d) => ({ ...d, modified: '2026-10-16' }));
+    ns.refuse.add('nextline');
+    const r = await run(ns);
+    expect(r).toMatchObject({ read: 4, linkTable: 'nexttransactionlinelink' });
+    expect(r.notes).toEqual([
+      "NetSuite wouldn't say which of a document's lines came from its purchase order, so received stock goes by the document as a whole.",
+    ]);
+    expect((await copied()).find((d) => d.id === '701')?.links).toEqual(B701_LINKS.map(({ lines: _l, ...l }) => l));
+
+    // Line by line again the next time NetSuite says.
+    clock += 2 * 3600_000;
+    ns.refuse.delete('nextline');
+    expect((await run(ns)).notes).toBeUndefined();
+    expect((await copied()).find((d) => d.id === '701')?.links).toEqual(B701_LINKS);
+  });
+
+  it('copies a line\'s own amount as none when NetSuite leaves it out', async () => {
+    clock += 2 * 3600_000;
+    const ns = netsuite();
+    ns.docs = ns.docs.filter((d) => d.id !== 704).map((d) => ({ ...d, modified: '2026-10-16' }));
+    ns.lines[1] = { ...ns.lines[1], own: null };
+    await run(ns);
+    expect((await copied()).find((d) => d.id === '701')?.lines?.map((l) => l.own_amount)).toEqual(['-500.00', '-120.00', null]);
   });
 
   it('copies without the status and vendor in words when NetSuite won\'t give them, and says so', async () => {

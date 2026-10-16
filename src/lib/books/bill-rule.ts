@@ -9,11 +9,17 @@ import { isLayoutItem, type RuleLine } from './invoice-rule';
  *
  * - an expense line, an installer's labor say, to its own account;
  * - a stock item (inventory or an assembly) to the account NetSuite holds
- *   received stock against until it's billed, when the bill came from a
- *   purchase order and the company's item receipts post to one; otherwise
- *   to the item's asset account, as the bill itself brings the stock in;
+ *   received stock against until it's billed, when the line came from a
+ *   purchase order's line (or the bill from a purchase order, when NetSuite
+ *   doesn't say line by line) and the company's item receipts post to such
+ *   an account; otherwise to the item's asset account, as the bill itself
+ *   brings the stock in: a line added on a purchase order's bill, say;
  * - any other item (non-stock, service, other charge) to its expense
- *   account, or a discount or markup to its own account.
+ *   account, or a discount or markup to its own account; an item the copy
+ *   has no account for goes where NetSuite posts its bill lines.
+ *
+ * Each line goes in at its own amount: a discount line is a credit of its
+ * own (src/lib/books/bill-check.ts withOwnBillAmounts).
  *
  * A bill credit takes some of what BMG owes back, so it posts the same way
  * the other way round: its signed amounts carry the direction.
@@ -50,6 +56,12 @@ export interface BillLine {
   /** Debit positive: a bill's line is positive, a bill credit's negative. Null when it couldn't be read. */
   cents: number | null;
   tax: boolean;
+  /**
+   * Whether the line came from a purchase order's line (a vendor return's,
+   * on a bill credit); null or left out when NetSuite doesn't say line by
+   * line, and the document's `ordered` goes.
+   */
+  ordered?: boolean | null;
 }
 
 export interface BillItem {
@@ -69,6 +81,13 @@ export interface BillAccounts {
   payables: string | null;
   /** Where NetSuite holds received stock until it's billed; null when the company's item receipts post nowhere. */
   received: string | null;
+  /** Where NetSuite posts each item's bill lines (gl_bill_item_accounts, migration 385), for an item the copy has no account for. */
+  posted?: Map<string, string>;
+}
+
+/** The account the copy of NetSuite's items gives a non-stock item's bill line: its expense account, or a discount's or markup's own. */
+export function billItemAccount(item: BillItem): string | null {
+  return item.expenseAccount ?? (item.type && OWN_ACCOUNT_TYPES.has(item.type) ? item.incomeAccount : null);
 }
 
 /** What a line of the entry is to the document. */
@@ -96,8 +115,9 @@ export interface BillRuleResult {
 /**
  * One bill's or bill credit's entry. `ordered` says whether it came from a
  * purchase order (or a receipt, or for a bill credit a vendor return); null
- * when what it's linked to hasn't been copied. A line of $0 posts nothing,
- * and a document of $0 posts nothing at all.
+ * when what it's linked to hasn't been copied. A line's own `ordered`, when
+ * NetSuite said, goes before it. A line of $0 posts nothing, and a document
+ * of $0 posts nothing at all.
  */
 export function billEntry(doc: { lines: BillLine[]; ordered: boolean | null }, accounts: BillAccounts): BillRuleResult {
   const out: BillRuleLine[] = [];
@@ -133,9 +153,10 @@ export function billEntry(doc: { lines: BillLine[]; ordered: boolean | null }, a
     }
 
     if (item.type && STOCK_TYPES.has(item.type)) {
-      if (accounts.received && doc.ordered === null) {
+      const ordered = line.ordered ?? doc.ordered;
+      if (accounts.received && ordered === null) {
         needsLinks = true;
-      } else if (accounts.received && doc.ordered) {
+      } else if (accounts.received && ordered) {
         post(accounts.received, line.cents, line.lineId, 'received', item.number);
       } else if (item.assetAccount) {
         post(item.assetAccount, line.cents, line.lineId, 'stock', item.number);
@@ -144,7 +165,7 @@ export function billEntry(doc: { lines: BillLine[]; ordered: boolean | null }, a
       }
       continue;
     }
-    const account = item.expenseAccount ?? (item.type && OWN_ACCOUNT_TYPES.has(item.type) ? item.incomeAccount : null);
+    const account = billItemAccount(item) ?? accounts.posted?.get(line.itemId) ?? null;
     if (account) post(account, line.cents, line.lineId, 'item', item.number);
     else problems.push({ kind: 'no_item_account', lineId: line.lineId, itemId: line.itemId, itemNumber: item.number, stock: false });
   }

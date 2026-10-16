@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { BILL_RULE, PAYABLES_LINE, billEntry, type BillAccounts, type BillItem, type BillLine } from './bill-rule';
+import { BILL_RULE, PAYABLES_LINE, billEntry, billItemAccount, type BillAccounts, type BillItem, type BillLine } from './bill-rule';
 
 // Made-up books: '200' payables, '205' received not billed, '130' inventory,
 // '530' subcontractors, '610' shop supplies, '520' freight in, '480' vendor
@@ -60,6 +60,43 @@ describe('billEntry (bill@1)', () => {
     expect(entry([line('1', '901', 30000)], null, noReceipts).problems).toEqual([]);
     // Non-stock items go to their expense account either way.
     expect(posted(entry([line('1', '902', 500)], true))).toEqual([[PAYABLES_LINE, 'payables', '200', -500], ['1', 'item', '610', 500]]);
+  });
+
+  it('decides received stock line by line when NetSuite says which lines came from the purchase order', () => {
+    // A line added on a purchase order's bill brings its stock in on the bill itself.
+    const r = entry([{ ...line('1', '901', 30000), ordered: true }, { ...line('2', '901', 4000), ordered: false }], true);
+    expect(r.problems).toEqual([]);
+    expect(posted(r)).toEqual([
+      [PAYABLES_LINE, 'payables', '200', -34000],
+      ['1', 'received', '205', 30000],
+      ['2', 'stock', '130', 4000],
+    ]);
+    // A line NetSuite says nothing about goes by the document, which needs its links copied.
+    expect(posted(entry([{ ...line('1', '901', 30000), ordered: null }], true))).toEqual([[PAYABLES_LINE, 'payables', '200', -30000], ['1', 'received', '205', 30000]]);
+    expect(entry([{ ...line('1', '901', 30000), ordered: null }], null).problems).toEqual([{ kind: 'no_links' }]);
+    expect(posted(entry([{ ...line('1', '901', 30000), ordered: true }], null))).toEqual([[PAYABLES_LINE, 'payables', '200', -30000], ['1', 'received', '205', 30000]]);
+    expect(posted(entry([{ ...line('1', '901', 30000), ordered: false }], null))).toEqual([[PAYABLES_LINE, 'payables', '200', -30000], ['1', 'stock', '130', 30000]]);
+  });
+
+  it('puts an item the copy has no account for where NetSuite posts its bill lines, never before the copy\'s own', () => {
+    const accounts = { ...ACCOUNTS, posted: new Map([['905', '530'], ['904', '999'], ['906', '130']]) };
+    const r = entry([line('1', '905', 900), line('2', '904', -100)], false, accounts);
+    expect(r.problems).toEqual([]);
+    expect(posted(r)).toEqual([[PAYABLES_LINE, 'payables', '200', -800], ['1', 'item', '530', 900], ['2', 'item', '480', -100]]);
+    // Stock never goes by it: with no asset account it's a problem still.
+    expect(entry([line('1', '906', 1100)], false, accounts).problems).toEqual([
+      { kind: 'no_item_account', lineId: '1', itemId: '906', itemNumber: 'ASSY-6', stock: true },
+    ]);
+  });
+
+  it('gives a non-stock item its expense account from the copy, or a discount\'s or markup\'s own', () => {
+    expect(billItemAccount(ITEMS.get('902')!)).toBe('610');
+    expect(billItemAccount(ITEMS.get('904')!)).toBe('480');
+    expect(billItemAccount(item('MARKUP', 'Markup', { incomeAccount: '481' }))).toBe('481');
+    expect(billItemAccount(ITEMS.get('905')!)).toBeNull();
+    // Only a discount or markup posts to its income account.
+    expect(billItemAccount(item('SVC', 'Service', { incomeAccount: '400' }))).toBeNull();
+    expect(billItemAccount(item('DISC-2', 'Discount', { expenseAccount: '520', incomeAccount: '480' }))).toBe('520');
   });
 
   it('posts a bill credit the other way round', () => {

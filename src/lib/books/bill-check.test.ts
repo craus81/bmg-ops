@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import type { ChartAccount, NetSuitePosting } from './invoice-check';
 import type { BillAccounts, BillItem, BillLine } from './bill-rule';
 import {
-  billReasons, checkBill, checkBillMonth, lineSigns, pickPayables, pickReceivedAccount, workOutBillMonth, type BillMonthData,
+  billReasons, checkBill, checkBillMonth, itemsWithoutAccount, lineSigns, pickPayables, pickReceivedAccount, withOwnBillAmounts, workOutBillMonth,
+  type BillMonthData,
 } from './bill-check';
 
 // Made-up books: '200' and '201' payables, '205' received not billed, '206'
@@ -108,6 +109,42 @@ describe('lineSigns', () => {
     expect(lineSigns([])).toEqual({ VendBill: 1, VendCred: 1 });
     expect(lineSigns([{ type: 'VendBill', lines: null }, doc('VendBill', '50.00', '-50.00'), doc('VendCred', null)])).toEqual({ VendBill: 1, VendCred: 1 });
     expect(lineSigns([doc('VendBill', '-5.00'), doc('VendBill', '5.00')])).toEqual({ VendBill: 1, VendCred: 1 });
+  });
+});
+
+describe('withOwnBillAmounts', () => {
+  const items = new Map<string, BillItem>([...ITEMS, ['904', { number: 'DISC', type: 'Discount', assetAccount: null, expenseAccount: null, incomeAccount: '480' }]]);
+  const owns = (...amounts: Array<string | null | undefined>) => amounts.map((a) => (a === undefined ? {} : { own_amount: a }));
+  // $100.00 of stock less 8%: NetSuite shares the discount out over the line above it in the net amounts.
+  const NET = [line('1', '901', 9200), line('2', '904', 0)];
+
+  it('takes the lines at their own amounts when they come to the same, the discount on a line of its own', () => {
+    expect(withOwnBillAmounts(NET, owns('100.00', '-8.00'), items)).toEqual({ amounts: 'own', lines: [line('1', '901', 10000), line('2', '904', -800)] });
+    // Own amounts signed the other way round from the lines.
+    expect(withOwnBillAmounts(NET, owns('-100.00', '8.00'), items)).toEqual({ amounts: 'own', lines: [line('1', '901', 10000), line('2', '904', -800)] });
+  });
+
+  it('keeps the net amounts when the own ones change nothing, or some line that posts has none', () => {
+    expect(withOwnBillAmounts(LINES, owns('500.00', '120.00', '30.00'), items)).toEqual({ amounts: 'net', lines: LINES });
+    expect(withOwnBillAmounts(LINES, owns('-500.00', '-120.00', '-30.00'), items)).toEqual({ amounts: 'net', lines: LINES });
+    // Copied before the copy kept them, or NetSuite didn't give one.
+    expect(withOwnBillAmounts(NET, owns(undefined, '-8.00'), items)).toEqual({ amounts: 'net', lines: NET });
+    expect(withOwnBillAmounts(NET, owns('100.00', null), items)).toEqual({ amounts: 'net', lines: NET });
+  });
+
+  it('keeps the net amounts, and says so, when the own ones don\'t come to the same or can\'t be read', () => {
+    expect(withOwnBillAmounts(NET, owns('100.00', '-5.00'), items)).toEqual({ amounts: 'unfit', lines: NET });
+    expect(withOwnBillAmounts(NET, owns('lots', '-8.00'), items)).toEqual({ amounts: 'unfit', lines: NET });
+  });
+
+  it('leaves tax, unreadable lines and lines that never post as they are', () => {
+    const lines = [line('1', '901', 9200), line('2', '-2', 9200), line('3', '904', 0), { ...expense('4', null, 500), tax: true }, line('5', '902', null)];
+    expect(withOwnBillAmounts(lines, owns('100.00', '100.00', '-8.00', '7.00', '3.00'), items)).toEqual({
+      amounts: 'own',
+      lines: [line('1', '901', 10000), line('2', '-2', 9200), line('3', '904', -800), { ...expense('4', null, 500), tax: true }, line('5', '902', null)],
+    });
+    // Nothing to go by: nothing changes.
+    expect(withOwnBillAmounts([], [], items)).toEqual({ amounts: 'net', lines: [] });
   });
 });
 
@@ -328,6 +365,144 @@ describe('checkBillMonth', () => {
       from: [],
       reasons: ["FleetSuite can't tell whether the bill came from a purchase order: what it's linked to hasn't been copied from NetSuite yet."],
     });
+  });
+
+  // A $92.00 bill from a purchase order: $100.00 of stock, a subtotal, and 8% off it, NetSuite's net amounts sharing the discount out.
+  const DISC = { netsuite_id: '904', name: 'DISC', item_type: 'Discount', asset_account: null, expense_account: null, income_account: '480' };
+  const ownAmountsNote = (n: string) => n.startsWith("NetSuite's own amounts");
+  const discounted = monthBill({
+    netsuite_id: '710', number: 'B-710', total: '92.00',
+    lines: [
+      copied('1', '901', null, '-92.00', { own_amount: '-100.00', quantity: '-1' }),
+      copied('2', '-2', null, '-100.00', { own_amount: '-100.00' }),
+      copied('3', '904', null, '0.00', { own_amount: '8.00' }),
+    ],
+    links: [{ netsuite_id: '601', type: 'PurchOrd', number: 'PO601', amount: '92.00' }],
+    netsuite: gl(['0', '200', -9200], ['1', '205', 10000], ['3', '480', -800]),
+  });
+
+  it('matches a discount on a bill at the lines\' own amounts, the discount a credit of its own', () => {
+    const m = checkBillMonth({ ...MONTH, bills: [discounted], items: [...MONTH.items, DISC] }, { company: 'BMG', chart: CHART });
+    expect(m.invoices[0]).toMatchObject({
+      status: 'matches',
+      amounts: 'own',
+      reasons: [],
+      lines: [
+        { label: 'WIDGET-1', quantity: '-1', cents: 10000 },
+        { label: 'Subtotal', quantity: null, cents: 10000 },
+        { label: 'DISC', quantity: null, cents: -800 },
+      ],
+    });
+    expect(m.notes.filter(ownAmountsNote)).toEqual([]);
+    expect(m.invoices[0].rows.map((r) => [r.label, r.fleetsuite?.account, r.fleetsuite?.cents, r.same])).toEqual([
+      ['Payables', '200', -9200, true], ['Received stock', '205', 10000, true], ['Items', '480', -800, true],
+    ]);
+    // Copied before the copy kept the own amounts: the net ones share the discount out, and the check says how it differs.
+    const old = { ...discounted, lines: discounted.lines!.map(({ own_amount: _o, ...l }) => l) };
+    const before = checkBillMonth({ ...MONTH, bills: [old], items: [...MONTH.items, DISC] }, { company: 'BMG', chart: CHART });
+    expect(before.invoices[0]).toMatchObject({
+      status: 'differs',
+      reasons: [
+        'What FleetSuite posts to 2050 Received Not Billed differs from what NetSuite posted there.',
+        "NetSuite also posts to 4800 Vendor Discounts, which the bill rule doesn't.",
+      ],
+    });
+    expect(before.invoices[0]).not.toHaveProperty('amounts');
+    expect(before.notes.filter(ownAmountsNote)).toEqual([]);
+  });
+
+  it('says when a document\'s lines don\'t add up at their own amounts, and uses the net ones', () => {
+    const unfit = { ...discounted, lines: discounted.lines!.map((l) => (l.line_id === '3' ? { ...l, own_amount: '5.00' } : l)) };
+    const m = checkBillMonth({ ...MONTH, bills: [unfit], items: [...MONTH.items, DISC] }, { company: 'BMG', chart: CHART });
+    expect(m.invoices[0]).toMatchObject({ status: 'differs', amounts: 'unfit' });
+    expect(m.invoices[0].lines.map((l) => l.cents)).toEqual([9200, 10000, 0]);
+    expect(m.notes.filter(ownAmountsNote)).toEqual([
+      "NetSuite's own amounts for the lines of 1 bill or bill credit don't add up to it, so FleetSuite took its lines at their net amounts, "
+        + 'with any discount shared out over them: B-710.',
+    ]);
+    // Whether it matches or not; a document NetSuite booked into neither company's GL isn't named.
+    const plain = (fields: Partial<MonthBill>) => monthBill({ lines: MONTH.bills[0].lines!.map((l) => ({ ...l, own_amount: '1.00' })), ...fields });
+    const two = checkBillMonth({
+      ...MONTH, bills: [plain({}), plain({ netsuite_id: '713', number: 'B-713' }), plain({ netsuite_id: '714', number: 'B-714', companies: [], netsuite: [] })],
+    }, { company: 'BMG', chart: CHART });
+    expect(two.invoices.map((b) => [b.number, b.status, b.amounts])).toEqual([['B-701', 'matches', 'unfit'], ['B-713', 'matches', 'unfit']]);
+    expect(two.notes.filter(ownAmountsNote)).toEqual([
+      "NetSuite's own amounts for the lines of 2 bills and bill credits don't add up to them, so FleetSuite took their lines at their net amounts, "
+        + 'with any discount shared out over them: B-701, B-713.',
+    ]);
+  });
+
+  it('puts an item the copy of NetSuite\'s items has no account for where NetSuite posted most of its bill lines', () => {
+    const items = [...MONTH.items, { ...DISC, income_account: null }];
+    expect(itemsWithoutAccount(items)).toEqual(['904']);
+    const worked = (item_accounts?: BillMonthData['item_accounts']) =>
+      workOutBillMonth({ ...MONTH, bills: [discounted], items, item_accounts }, { company: 'BMG', chart: CHART }).bills[0].checked;
+    expect(worked([{ item: '904', account: '530', lines: 1 }, { item: '904', account: '480', lines: 6 }]).status).toBe('matches');
+    // The lower NetSuite id on a tie.
+    const tie = worked([{ item: '904', account: '481', lines: 2 }, { item: '904', account: '480', lines: 2 }]);
+    expect(tie.rows.find((r) => r.role === 'item')?.fleetsuite).toEqual({ account: '480', cents: -800 });
+    expect(worked([{ item: '904', account: '480', lines: 2 }, { item: '904', account: '481', lines: 3 }]).rows.find((r) => r.role === 'item')?.fleetsuite)
+      .toEqual({ account: '481', cents: -800 });
+    // Nowhere to go by: it can't be worked out, and says why.
+    expect(worked([{ item: '905', account: '480', lines: 9 }]).status).toBe('unworkable');
+    expect(checkBillMonth({ ...MONTH, bills: [discounted], items }, { company: 'BMG', chart: CHART }).invoices[0]).toMatchObject({
+      status: 'unworkable',
+      reasons: ["DISC has no expense account in the copy of NetSuite's items, and no copied bill shows where NetSuite posts it."],
+    });
+  });
+
+  it('asks only about the non-stock items the copy has no account for', () => {
+    expect(itemsWithoutAccount([
+      ...MONTH.items,
+      { ...DISC, netsuite_id: '905' },
+      { netsuite_id: '906', name: 'ASSY-6', item_type: 'Assembly', asset_account: null, expense_account: null, income_account: null },
+      { netsuite_id: '907', name: 'SUB', item_type: 'Subtotal', asset_account: null, expense_account: null, income_account: null },
+      { netsuite_id: '-2', name: 'Subtotal', item_type: null, asset_account: null, expense_account: null, income_account: null },
+      { netsuite_id: '908', name: 'SVC', item_type: 'Service', asset_account: null, expense_account: null, income_account: '400' },
+      { netsuite_id: '909', name: 'MARKUP', item_type: 'Markup', asset_account: null, expense_account: null, income_account: null },
+    ])).toEqual(['908', '909']);
+  });
+
+  it('decides received stock line by line: a line added on a purchase order\'s bill brings its stock in on the bill', () => {
+    // $300.00 of stock from PO601's line, and $30.00 more added on the bill itself.
+    const added = monthBill({
+      netsuite_id: '711', number: 'B-711', total: '330.00',
+      lines: [copied('1', '901', null, '-300.00'), copied('2', '901', null, '-30.00')],
+      links: [{ netsuite_id: '601', type: 'PurchOrd', number: 'PO601', amount: '300.00', lines: ['1'] }],
+      netsuite: gl(['0', '200', -33000], ['1', '205', 30000], ['2', '130', 3000]),
+    });
+    const m = checkBillMonth({ ...MONTH, bills: [added] }, { company: 'BMG', chart: CHART });
+    expect(m.invoices[0].status).toBe('matches');
+    expect(m.invoices[0].rows.map((r) => [r.label, r.fleetsuite?.account, r.fleetsuite?.cents, r.same])).toEqual([
+      ['Payables', '200', -33000, true], ['Received stock', '205', 30000, true], ['Inventory', '130', 3000, true],
+    ]);
+    // A receipt's lines count as the order's, and every order's and receipt's lines count.
+    const received = { ...added, links: [{ netsuite_id: '611', type: 'ItemRcpt', number: 'IR611', amount: '300.00', lines: ['1'] }] };
+    expect(checkBillMonth({ ...MONTH, bills: [received] }, { company: 'BMG', chart: CHART }).invoices[0].status).toBe('matches');
+    const both = {
+      ...added,
+      links: [
+        { netsuite_id: '601', type: 'PurchOrd', number: 'PO601', amount: '300.00', lines: ['1'] },
+        { netsuite_id: '611', type: 'ItemRcpt', number: 'IR611', amount: '30.00', lines: ['2'] },
+      ],
+      netsuite: gl(['0', '200', -33000], ['1', '205', 33000]),
+    };
+    expect(checkBillMonth({ ...MONTH, bills: [both] }, { company: 'BMG', chart: CHART }).invoices[0].status).toBe('matches');
+    // A link that isn't an order or a receipt makes nothing ordered, whatever lines it's on: here a bill credit's to the bill it credits.
+    const credit = monthBill({
+      netsuite_id: '712', type: 'VendCred', number: 'VC-712', total: '30.00',
+      lines: [copied('1', '901', null, '30.00')],
+      links: [{ netsuite_id: '701', type: 'VendBill', number: 'B-701', amount: '30.00', lines: ['1'] }],
+      netsuite: gl(['0', '200', 3000], ['1', '130', -3000]),
+    });
+    expect(checkBillMonth({ ...MONTH, bills: [credit] }, { company: 'BMG', chart: CHART }).invoices[0]).toMatchObject({ status: 'matches', from: [] });
+    // Links on none of the document's own lines (its payables line, say) say nothing line by line: it goes by the document.
+    const header = { ...added, links: [{ netsuite_id: '601', type: 'PurchOrd', number: 'PO601', amount: '330.00', lines: ['0'] }] };
+    const byDocument = workOutBillMonth({ ...MONTH, bills: [header] }, { company: 'BMG', chart: CHART }).bills[0];
+    expect(byDocument.lines?.map((l) => l.ordered)).toEqual([null, null]);
+    expect(byDocument.checked.rows.map((r) => [r.role, r.fleetsuite?.account, r.fleetsuite?.cents])).toEqual([
+      ['payables', '200', -33000], ['received', '205', 33000], ['other', undefined, undefined],
+    ]);
   });
 
   it('puts ordered stock in its asset account when no item receipt holds received stock, and says why', () => {

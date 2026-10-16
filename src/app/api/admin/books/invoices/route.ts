@@ -13,7 +13,7 @@ import { DEPOSIT_RULE } from '@/lib/books/deposit-rule';
 import { checkDepositMonth, type DepositMonthData } from '@/lib/books/deposit-check';
 import { BOOKS_DEPOSITS_SYNC } from '@/lib/books/netsuite-deposits';
 import { BILL_RULE } from '@/lib/books/bill-rule';
-import { checkBillMonth, type BillMonthData } from '@/lib/books/bill-check';
+import { checkBillMonth, itemsWithoutAccount, type BillMonthData } from '@/lib/books/bill-check';
 import { BOOKS_BILLS_SYNC } from '@/lib/books/netsuite-bills';
 import {
   BOOKS_INVOICE_POSTING, POSTING_COMPANIES, depositBooks, depositPostingFor, invoiceBooks, paymentBooks, postInvoices, postingFor,
@@ -133,8 +133,15 @@ export async function GET(req: NextRequest) {
     const failed = res.error || copy.error;
     if (failed) return NextResponse.json({ error: failed.message }, { status: 500 });
     const data = (res.data ?? {}) as Partial<BillMonthData>;
+    // Items the copy has no account for go where NetSuite posts their bill lines.
+    const unplaced = itemsWithoutAccount(data.items ?? []);
+    const placed = unplaced.length ? await service.rpc('gl_bill_item_accounts', { p_items: unplaced }) : null;
+    if (placed?.error) return NextResponse.json({ error: placed.error.message }, { status: 500 });
     const check = checkBillMonth(
-      { bills: data.bills ?? [], items: data.items ?? [], receipt_accounts: data.receipt_accounts ?? [], not_copied: data.not_copied ?? [] },
+      {
+        bills: data.bills ?? [], items: data.items ?? [], receipt_accounts: data.receipt_accounts ?? [], not_copied: data.not_copied ?? [],
+        item_accounts: (placed?.data ?? []) as NonNullable<BillMonthData['item_accounts']>,
+      },
       { company, chart },
     );
     if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });

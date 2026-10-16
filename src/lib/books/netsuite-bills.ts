@@ -6,7 +6,7 @@ import { isoDate } from '@/lib/financials-data';
 import { compactSuiteqlError, parseSoSyncResume, type SoSyncResume } from '@/lib/sales-order-sync';
 import { centsToString, toCents } from './netsuite-gl';
 import {
-  LINK_TABLES, depositLinksQuery, idList, linkedDocumentsQuery, linksByDocument, toSuiteqlDate,
+  LINK_TABLES, idList, linkedDocumentsQuery, linksByDocument, toSuiteqlDate,
   type CopyLink, type LinkTable,
 } from './netsuite-deposits';
 import type { BillType } from './bill-rule';
@@ -23,11 +23,13 @@ import type { BillType } from './bill-rule';
  * first a page at a time, with a saved cursor, so the first copy of the
  * whole history can span runs and a run cut short loses nothing. For each
  * page it also reads each document's lines (its items and expense lines,
- * not the payables line), and the documents it came from in NetSuite's
- * transaction link table: a bill's purchase order and item receipts. Once
- * the window has drained, it lists every bill and bill credit id NetSuite
- * has, and gl_netsuite_bills_finish marks the ones NetSuite no longer has
- * as gone.
+ * not the payables line), each at its net amount and its own, and the
+ * documents it came from in NetSuite's transaction link table, line by
+ * line: a bill's purchase order and item receipts. Once the window has
+ * drained, it lists every bill and bill credit id NetSuite has, and
+ * gl_netsuite_bills_finish marks the ones NetSuite no longer has as gone.
+ * When what the copy keeps changes (COPY_VERSION), the next run starts over
+ * from the first bill, so the documents copied before get it too.
  *
  * Nothing is written to NetSuite. The run is recorded in sync_state as
  * 'books_netsuite_bills' and left out of HEALTH_MONITORS, like the other
@@ -48,6 +50,12 @@ const FIRST_RUN_SINCE = '2000-01-01T00:00:00Z';
 const MIN_LEFT_MS = 20_000;
 /** NetSuite throws the odd UNEXPECTED_ERROR that succeeds on re-send. */
 const SUITEQL_OPTS = { retries: 2 };
+/**
+ * What the copy keeps of each document; a run finds the copy made by an
+ * older version and starts over from the first bill. 2 (2026-10-16): each
+ * line's own amount, and the lines each link is on.
+ */
+export const COPY_VERSION = 2;
 
 type Row = Record<string, unknown>;
 
@@ -76,11 +84,21 @@ export function billHeaderQuery(sinceIso: string, beforeId: string | null, withL
 export function billLinesQuery(ids: string[], withAccount: boolean): string {
   const account = withAccount ? ' tl.expenseaccount AS account,' : '';
   return `
-      SELECT tl.transaction AS bill_id, tl.id AS line_id, tl.item,${account} tl.netamount AS amount, tl.quantity, tl.memo, tl.taxline
+      SELECT tl.transaction AS bill_id, tl.id AS line_id, tl.item,${account} tl.netamount AS amount, tl.foreignamount AS own_amount,
+             tl.quantity, tl.memo, tl.taxline
       FROM transactionline tl
       WHERE tl.transaction IN (${idList(ids)})
         AND tl.mainline = 'F'
       ORDER BY tl.transaction, tl.id
+    `;
+}
+
+/** What the documents came from, from NetSuite's transaction link table; `withLines` asks which of each document's lines a link is on. */
+export function billLinksQuery(table: LinkTable, ids: string[], withLines: boolean): string {
+  return `
+      SELECT previousdoc, nextdoc,${withLines ? ' nextline,' : ''} foreignamount, linktype
+      FROM ${table}
+      WHERE nextdoc IN (${idList(ids)})
     `;
 }
 
@@ -89,15 +107,17 @@ export const BILL_IDS_QUERY = `SELECT t.id FROM transaction t WHERE t.type IN ('
 
 // ── Rows ───────────────────────────────────────────────────────────────────
 
-/** One line of a bill or bill credit, as gl_netsuite_bills_apply takes it; the amount signed as NetSuite gives it. */
+/** One line of a bill or bill credit, as gl_netsuite_bills_apply takes it; the amounts signed as NetSuite gives them. */
 export interface CopyLine {
   line_id: string;
   /** The item's NetSuite id; null on an expense line. NetSuite's own lines, a subtotal say, carry ids below 1. */
   item: string | null;
   /** The line's expense account, when NetSuite gives one. */
   account: string | null;
-  /** Null when NetSuite sent an amount FleetSuite can't read. */
+  /** Its net amount (netamount): a discount line's amount is shared out over the lines above it. Null when NetSuite sent one FleetSuite can't read. */
   amount: string | null;
+  /** Its own amount (foreignamount), as the document shows it; null when NetSuite didn't give one FleetSuite can read. */
+  own_amount: string | null;
   quantity: string | null;
   memo: string | null;
   tax: boolean;
@@ -143,6 +163,14 @@ export function linesByBill(rows: Row[]): { lines: Map<string, CopyLine[]>; unre
     } catch {
       amount = null;
     }
+    let own: string | null = null;
+    if (text(r.own_amount) !== '') {
+      try {
+        own = centsToString(toCents(r.own_amount));
+      } catch {
+        own = null;
+      }
+    }
     const item = /^-?\d+$/.test(text(r.item)) ? text(r.item) : null;
     const list = lines.get(bill) ?? [];
     list.push({
@@ -150,6 +178,7 @@ export function linesByBill(rows: Row[]): { lines: Map<string, CopyLine[]>; unre
       item,
       account: numericId(r.account),
       amount,
+      own_amount: own,
       quantity: text(r.quantity) || null,
       memo: text(r.memo) || null,
       tax: isTrue(r.taxline),
@@ -249,18 +278,21 @@ export async function copyNetSuiteBills(
   const timeLeft = () => opts.deadline - now();
   const startedAt = now();
 
-  // Open the window, or carry on with the one a run cut short.
+  // Open the window, or carry on with the one a run cut short. A copy an
+  // older version of this run made starts over, so every document gets
+  // what this version keeps.
   const { data: state } = await service
     .from('sync_state')
     .select('last_synced_at, last_result')
     .eq('sync_type', BOOKS_BILLS_SYNC)
     .maybeSingle();
-  const resume = parseSoSyncResume(state?.last_result);
+  const current = Number((state?.last_result as Record<string, unknown> | null | undefined)?.version) === COPY_VERSION;
+  const resume = current ? parseSoSyncResume(state?.last_result) : null;
   const win: { windowStartedAt: string; since: string; beforeId: string | null; processed: number } = resume
     ? { ...resume }
     : (() => {
         // Overlap one day so edits right around a run are never missed.
-        const since = new Date(state?.last_synced_at || FIRST_RUN_SINCE);
+        const since = new Date((current && state?.last_synced_at) || FIRST_RUN_SINCE);
         since.setUTCDate(since.getUTCDate() - 1);
         return { windowStartedAt: new Date(now()).toISOString(), since: since.toISOString(), beforeId: null, processed: 0 };
       })();
@@ -273,12 +305,13 @@ export async function copyNetSuiteBills(
   // undefined: not tried yet this run; false: NetSuite refused it this run.
   let withAccount: boolean | undefined;
   let linesRefused = false;
-  let linkTable: LinkTable | null | undefined;
+  // How the links are read: from which table, and whether line by line. Undefined: not found yet this run; null: NetSuite answered no way.
+  let linkRead: { table: LinkTable; lines: boolean } | null | undefined;
   let drained = false;
   let stage = 'opening the window';
 
   const record = (): Record<string, unknown> => {
-    const out: Record<string, unknown> = { ...result };
+    const out: Record<string, unknown> = { ...result, version: COPY_VERSION };
     const said = [...notes];
     if (unreadable.length) {
       said.push(`NetSuite sent ${unreadable.length === 1 ? 'a document' : `${unreadable.length} documents`} with no date or a total `
@@ -346,32 +379,36 @@ export async function copyNetSuiteBills(
     return rows;
   };
 
-  // A page's link rows; null when NetSuite answers neither link table.
+  // A page's link rows; null when NetSuite answers neither link table. Line by line in either table first, then by document.
+  const LINK_READS = [true, false].flatMap((lines) => LINK_TABLES.map((table) => ({ table, lines })));
   const readLinks = async (ids: string[]): Promise<Row[] | null> => {
     const rows: Row[] = [];
     for (let i = 0; i < ids.length; i += ID_CHUNK) {
       const chunk = ids.slice(i, i + ID_CHUNK);
-      if (linkTable === undefined) {
+      if (linkRead === undefined) {
         let refused: unknown = null;
-        for (const table of LINK_TABLES) {
+        for (const read of LINK_READS) {
           try {
-            rows.push(...await query(depositLinksQuery(table, chunk)));
-            linkTable = table;
+            rows.push(...await query(billLinksQuery(read.table, chunk, read.lines)));
+            linkRead = read;
             break;
           } catch (err) {
             if (!isRejected(err)) throw err;
             refused = err;
           }
         }
-        if (linkTable === undefined) {
-          linkTable = null;
+        if (linkRead === undefined) {
+          linkRead = null;
           notes.push(`NetSuite wouldn't list what the documents are linked to (${compactSuiteqlError(refused)}), so which bills came from `
             + 'a purchase order isn\'t copied this time.');
+        } else if (linkRead && !linkRead.lines) {
+          notes.push("NetSuite wouldn't say which of a document's lines came from its purchase order, so received stock goes by the "
+            + 'document as a whole.');
         }
-      } else if (linkTable !== null) {
-        rows.push(...await query(depositLinksQuery(linkTable, chunk)));
+      } else if (linkRead !== null) {
+        rows.push(...await query(billLinksQuery(linkRead.table, chunk, linkRead.lines)));
       }
-      if (linkTable === null) return null;
+      if (linkRead === null) return null;
     }
     return rows;
   };
@@ -419,7 +456,7 @@ export async function copyNetSuiteBills(
       const linkRows = ids.length ? await readLinks(ids) : [];
       if (linkRows) {
         const linked = [...new Set(linkRows.map((l) => numericId(l.previousdoc)).filter((id): id is string => id !== null))];
-        links = linksByDocument(linkRows, linked.length ? await readNames(linked) : new Map());
+        links = linksByDocument(linkRows, linked.length ? await readNames(linked) : new Map(), { lines: !!linkRead?.lines });
       }
 
       stage = 'writing the copy';
@@ -462,7 +499,7 @@ export async function copyNetSuiteBills(
     result.error = `${stage}: ${compactSuiteqlError(err)}`;
     console.error('[books] NetSuite bills copy:', result.error);
   }
-  if (linkTable !== undefined) result.linkTable = linkTable;
+  if (linkRead !== undefined) result.linkTable = linkRead?.table ?? null;
 
   const recorded = record();
   const heartbeat = await recordHeartbeat(service, BOOKS_BILLS_SYNC, recorded, {

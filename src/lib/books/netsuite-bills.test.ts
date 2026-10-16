@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi.fn(), suiteqlQueryAll: vi.fn() }));
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
 
-import { BILL_IDS_QUERY, billHeaderQuery, billLinesQuery, linesByBill, mapBills } from './netsuite-bills';
+import { BILL_IDS_QUERY, billHeaderQuery, billLinesQuery, billLinksQuery, linesByBill, mapBills } from './netsuite-bills';
 
 describe('the copy\'s queries', () => {
   it('reads bills and bill credits modified since the window opened, newest first, below the cursor', () => {
@@ -21,22 +21,33 @@ describe('the copy\'s queries', () => {
     expect(billHeaderQuery('2026-10-14T13:39:00Z', '1; DROP', false)).not.toContain('DROP');
   });
 
-  it('reads a page\'s lines but the payables line, with each expense line\'s account when asked, by NetSuite id only', () => {
+  it('reads a page\'s lines but the payables line, each at its net and own amount, with each expense line\'s account when asked, by NetSuite id only', () => {
     expect(billLinesQuery(['11', 'x', '12'], true)).toMatch(
-      /SELECT tl\.transaction AS bill_id, tl\.id AS line_id, tl\.item, tl\.expenseaccount AS account, tl\.netamount AS amount, tl\.quantity, tl\.memo, tl\.taxline\s+FROM transactionline tl\s+WHERE tl\.transaction IN \(11, 12\)\s+AND tl\.mainline = 'F'\s+ORDER BY tl\.transaction, tl\.id/,
+      /SELECT tl\.transaction AS bill_id, tl\.id AS line_id, tl\.item, tl\.expenseaccount AS account, tl\.netamount AS amount, tl\.foreignamount AS own_amount,\s+tl\.quantity, tl\.memo, tl\.taxline\s+FROM transactionline tl\s+WHERE tl\.transaction IN \(11, 12\)\s+AND tl\.mainline = 'F'\s+ORDER BY tl\.transaction, tl\.id/,
     );
-    expect(billLinesQuery(['11'], false)).toContain('SELECT tl.transaction AS bill_id, tl.id AS line_id, tl.item, tl.netamount AS amount,');
+    expect(billLinesQuery(['11'], false)).toContain('SELECT tl.transaction AS bill_id, tl.id AS line_id, tl.item, tl.netamount AS amount, tl.foreignamount AS own_amount,');
     expect(() => billLinesQuery(['x'], true)).toThrow('No NetSuite ids to read');
     expect(BILL_IDS_QUERY).toBe("SELECT t.id FROM transaction t WHERE t.type IN ('VendBill', 'VendCred') ORDER BY t.id");
+  });
+
+  it('reads what the documents came from, with the line each link is on when asked', () => {
+    expect(billLinksQuery('nexttransactionlinelink', ['11', '12'], true)).toMatch(
+      /SELECT previousdoc, nextdoc, nextline, foreignamount, linktype\s+FROM nexttransactionlinelink\s+WHERE nextdoc IN \(11, 12\)/,
+    );
+    expect(billLinksQuery('previoustransactionlinelink', ['11'], false)).toMatch(
+      /SELECT previousdoc, nextdoc, foreignamount, linktype\s+FROM previoustransactionlinelink\s+WHERE nextdoc IN \(11\)/,
+    );
   });
 });
 
 describe('linesByBill', () => {
   it('gives each document its lines in NetSuite\'s order, amounts signed as NetSuite gives them', () => {
     const { lines, unreadable } = linesByBill([
-      { bill_id: 701, line_id: 3, item: 901, account: null, amount: '-30', quantity: -1, memo: null, taxline: 'F' },
-      { bill_id: 701, line_id: 1, item: null, account: 530, amount: -500, quantity: null, memo: 'Labor', taxline: 'F' },
-      { bill_id: 702, line_id: 1, item: 902, account: '610', amount: '120.5', quantity: '4', memo: ' ', taxline: 'T' },
+      { bill_id: 701, line_id: 3, item: 901, account: null, amount: '-27.60', own_amount: '-30', quantity: -1, memo: null, taxline: 'F' },
+      { bill_id: 701, line_id: 1, item: null, account: 530, amount: -500, own_amount: -500, quantity: null, memo: 'Labor', taxline: 'F' },
+      // A discount line: its amount is shared out over the lines above it, so its net amount is nothing.
+      { bill_id: 701, line_id: 4, item: 905, amount: 0, own_amount: '2.4', taxline: 'F' },
+      { bill_id: 702, line_id: 1, item: 902, account: '610', amount: '120.5', own_amount: 'lots', quantity: '4', memo: ' ', taxline: 'T' },
       // NetSuite's own lines carry item ids below 1; anything else that isn't an id is no item.
       { bill_id: 702, line_id: 2, item: -2, amount: 0 },
       { bill_id: 702, line_id: 3, item: 'n/a', amount: null },
@@ -44,13 +55,15 @@ describe('linesByBill', () => {
     expect(unreadable).toEqual(new Set());
     expect(Object.fromEntries(lines)).toEqual({
       701: [
-        { line_id: '1', item: null, account: '530', amount: '-500.00', quantity: null, memo: 'Labor', tax: false },
-        { line_id: '3', item: '901', account: null, amount: '-30.00', quantity: '-1', memo: null, tax: false },
+        { line_id: '1', item: null, account: '530', amount: '-500.00', own_amount: '-500.00', quantity: null, memo: 'Labor', tax: false },
+        { line_id: '3', item: '901', account: null, amount: '-27.60', own_amount: '-30.00', quantity: '-1', memo: null, tax: false },
+        { line_id: '4', item: '905', account: null, amount: '0.00', own_amount: '2.40', quantity: null, memo: null, tax: false },
       ],
+      // An own amount NetSuite didn't give, or one FleetSuite can't read, is none.
       702: [
-        { line_id: '1', item: '902', account: '610', amount: '120.50', quantity: '4', memo: null, tax: true },
-        { line_id: '2', item: '-2', account: null, amount: '0.00', quantity: null, memo: null, tax: false },
-        { line_id: '3', item: null, account: null, amount: '0.00', quantity: null, memo: null, tax: false },
+        { line_id: '1', item: '902', account: '610', amount: '120.50', own_amount: null, quantity: '4', memo: null, tax: true },
+        { line_id: '2', item: '-2', account: null, amount: '0.00', own_amount: null, quantity: null, memo: null, tax: false },
+        { line_id: '3', item: null, account: null, amount: '0.00', own_amount: null, quantity: null, memo: null, tax: false },
       ],
     });
   });
@@ -62,7 +75,7 @@ describe('linesByBill', () => {
       { bill_id: 702, line_id: null, amount: '5' },
       { bill_id: null, line_id: 1, amount: '5' },
     ]);
-    expect(lines.get('701')).toEqual([{ line_id: '1', item: null, account: null, amount: null, quantity: null, memo: null, tax: false }]);
+    expect(lines.get('701')).toEqual([{ line_id: '1', item: null, account: null, amount: null, own_amount: null, quantity: null, memo: null, tax: false }]);
     expect(lines.has('702')).toBe(false);
     expect(unreadable).toEqual(new Set(['702']));
   });
@@ -73,7 +86,7 @@ describe('mapBills', () => {
     id: 701, type: 'VendBill', tranid: 'B-701', trandate: '9/8/2026', status: 'A', status_label: 'Open', memo: 'Parts for the shop',
     total: '-650', vendor_id: 50, vendor_name: 'V-50 Sample Supply Co', ...fields,
   });
-  const LINES = [{ line_id: '1', item: null, account: '530', amount: '-650.00', quantity: null, memo: null, tax: false }];
+  const LINES = [{ line_id: '1', item: null, account: '530', amount: '-650.00', own_amount: '-650.00', quantity: null, memo: null, tax: false }];
 
   it('keeps what the check needs, totals positive and in cents\' form', () => {
     const links = new Map([['701', [{ netsuite_id: '601', type: 'PurchOrd', number: 'PO601', amount: '650.00', link_type: 'Bill' }]]]);
