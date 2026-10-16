@@ -33,6 +33,10 @@
       "schedule": "39 1,3,5,7,9,11,13,15,17,19,21,23 * * *"
     },
     {
+      "path": "/api/cron/books-netsuite-bill-payments",
+      "schedule": "21 1,3,5,7,9,11,13,15,17,19,21,23 * * *"
+    },
+    {
       "path": "/api/cron/metric-snapshots",
       "schedule": "30 4 * * *"
     },

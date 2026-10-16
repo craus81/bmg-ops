@@ -15,6 +15,9 @@ import { BOOKS_DEPOSITS_SYNC } from '@/lib/books/netsuite-deposits';
 import { BILL_RULE } from '@/lib/books/bill-rule';
 import { checkBillMonth } from '@/lib/books/bill-check';
 import { BOOKS_BILLS_SYNC } from '@/lib/books/netsuite-bills';
+import { BILL_PAYMENT_RULE } from '@/lib/books/bill-payment-rule';
+import { checkBillPaymentMonth, type BillPaymentMonthData } from '@/lib/books/bill-payment-check';
+import { BOOKS_BILL_PAYMENTS_SYNC } from '@/lib/books/netsuite-bill-payments';
 import {
   BOOKS_INVOICE_POSTING, POSTING_COMPANIES, billBooks, billPostingFor, depositBooks, depositPostingFor, invoiceBooks, paymentBooks,
   postInvoices, postingFor, postingKey, readBillMonth, unsaidFacts,
@@ -38,10 +41,11 @@ const POSTING_BUDGET_MS = 240_000;
  * differ. With `kind=payment` its customer payments dated in the month, each
  * checked with the payment rule (migration 374), and with `kind=deposit` its
  * customer deposits and deposit applications, checked with the deposit rule
- * (migration 382), and with `kind=bill` its vendor bills and bill credits,
- * checked with the bill rule (migration 384), each with how the last copy of
- * them from NetSuite went. With `summary=1` only the counts come back, for
- * checking every month in turn.
+ * (migration 382), with `kind=bill` its vendor bills and bill credits,
+ * checked with the bill rule (migration 384), and with `kind=bill_payment`
+ * its bill payments, checked with the bill payment rule (migration 389),
+ * each with how the last copy of them from NetSuite went. With `summary=1`
+ * only the counts come back, for checking every month in turn.
  *
  * What the copy of the invoices' lines doesn't keep (which lines are cost of
  * goods, a discount or markup set at the top, each line's own amount,
@@ -51,9 +55,9 @@ const POSTING_BUDGET_MS = 240_000;
  *
  * For a company whose documents post (src/lib/books/invoice-posting.ts),
  * each invoice, credit memo, payment, deposit, application, bill or bill
- * credit also says what FleetSuite's books hold for it (migrations 367, 376,
- * 383 and 386) and what the next posting run does about it, and `lastRun` is
- * how the last one went.
+ * credit (bill payments don't post yet) also says what FleetSuite's books
+ * hold for it (migrations 367, 376, 383 and 386) and what the next posting
+ * run does about it, and `lastRun` is how the last one went.
  *
  * Super admin only: the books are being built hidden, for the owner, until
  * they're ready (docs/books.md). It only reads.
@@ -96,8 +100,10 @@ export async function GET(req: NextRequest) {
     : months.includes(previous) ? previous : months[0];
 
   const askedKind = params.get('kind');
-  const kind: SalesDocKind | 'payment' | 'deposit' | 'bill' =
-    askedKind === 'credit_memo' || askedKind === 'payment' || askedKind === 'deposit' || askedKind === 'bill' ? askedKind : 'invoice';
+  const kind: SalesDocKind | 'payment' | 'deposit' | 'bill' | 'bill_payment' =
+    askedKind === 'credit_memo' || askedKind === 'payment' || askedKind === 'deposit' || askedKind === 'bill' || askedKind === 'bill_payment'
+      ? askedKind
+      : 'invoice';
   const chart = accounts.data.map(({ company_id, ...a }) => ({ ...a, company: company_id ? codeOf.get(company_id) ?? null : null }));
   const page = {
     companies: (companies.data || []).map((c) => ({ code: c.code, name: c.name })),
@@ -124,6 +130,22 @@ export async function GET(req: NextRequest) {
       },
     };
   };
+
+  if (kind === 'bill_payment') {
+    const [res, copy] = await Promise.all([
+      service.rpc('gl_bill_payment_month', { p_company: company, p_month: month }),
+      service.from('sync_state').select('last_result, updated_at').eq('sync_type', BOOKS_BILL_PAYMENTS_SYNC).maybeSingle(),
+    ]);
+    const failed = res.error || copy.error;
+    if (failed) return NextResponse.json({ error: failed.message }, { status: 500 });
+    const data = (res.data ?? {}) as Partial<BillPaymentMonthData>;
+    const check = checkBillPaymentMonth({ payments: data.payments ?? [], not_copied: data.not_copied ?? [] }, { company, chart });
+    if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });
+    // Bill payments don't post yet: they're checked first, as bills were.
+    return NextResponse.json({
+      rule: BILL_PAYMENT_RULE, kind, ...page, listsCopiedAt: lists.data?.updated_at ?? null, posts: false, copy: copyOf(copy.data), ...check,
+    });
+  }
 
   if (kind === 'bill') {
     // The month as the posting job reads it, so what this shows is what it posts.

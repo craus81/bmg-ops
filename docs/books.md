@@ -16,9 +16,11 @@ part 8, customer payments, checked against NetSuite with the payment rule
 and posted in the same run as invoices, part 9, a page that puts
 FleetSuite's books next to NetSuite's and shows what still differs and why,
 part 10, customer deposits and their applications, copied from NetSuite,
-checked with the deposit rule and posted in the same run as invoices, and
+checked with the deposit rule and posted in the same run as invoices,
 part 11, vendor bills and bill credits, copied from NetSuite, checked with
-the bill rule and posted in the same run as invoices.
+the bill rule and posted in the same run as invoices, and the bill
+payments that pay them, copied from NetSuite and checked with the bill
+payment rule, not posted yet.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices` and the differences at
@@ -60,6 +62,9 @@ the accounts page; the others are linked from there.
 | Bill rule and its check, on the invoices page | `src/lib/books/bill-rule.ts`, `src/lib/books/bill-check.ts`; where an item with no account posts: `migrations/385-books-bill-item-accounts.sql` |
 | Bills posted to the journal, with invoices | `migrations/386-books-bill-posting.sql`, `src/lib/books/invoice-posting.ts` |
 | Bill tests | `src/lib/books/bill-rule.test.ts`, `src/lib/books/bill-check.test.ts`, `src/lib/books/netsuite-bills.test.ts`, `src/lib/books/bills-sql.test.ts`, `src/lib/books/bill-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
+| Bill payments, copied from NetSuite | `migrations/389-books-bill-payments.sql`, `src/lib/books/netsuite-bill-payments.ts`, `src/app/api/cron/books-netsuite-bill-payments/route.ts`, `src/app/api/admin/books/bill-payments/route.ts` |
+| Bill payment rule and its check, on the invoices page | `src/lib/books/bill-payment-rule.ts`, `src/lib/books/bill-payment-check.ts` |
+| Bill payment tests | `src/lib/books/bill-payment-rule.test.ts`, `src/lib/books/bill-payment-check.test.ts`, `src/lib/books/netsuite-bill-payments.test.ts`, `src/lib/books/bill-payments-sql.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -859,7 +864,8 @@ NetSuite's data, so the check is what will show it:
 - that a bill credit links its vendor return;
 - whether BMG's bills have tax lines or landed costs.
 
-Bill payments (VendPymt) aren't copied yet; they come next.
+Bill payments are copied and checked on their own ("Bill payments"
+below).
 
 ### Posting bills
 
@@ -900,6 +906,106 @@ The Bills switch shows the Books column and Post now, as the other
 switches do. Not yet seen in NetSuite's data: a bill in another currency,
 whose total the copy keeps in that currency; should its lines be in BMG's,
 it won't come to its total and stays unposted, named in the run's notes.
+
+## Bill payments
+
+A bill payment (NetSuite's VendPymt) pays what BMG owes a vendor: it takes
+the bills it pays off payables, and the money comes out of the account it
+was paid from. Bill payments are copied from NetSuite with the bills each
+one paid and checked against its GL with the bill payment rule (owner
+decision 2026-10-16, "Bill payments"), as bills were before they posted.
+They don't post to FleetSuite's journal yet: that comes after a preview
+and the owner's OK.
+
+### Copying bill payments
+
+The ledger mirror copies only customer payments from NetSuite, so the books
+copy bill payments themselves (`src/lib/books/netsuite-bill-payments.ts`,
+into migration 389's `gl_netsuite_bill_payments`): every two hours at :21
+on odd hours (`/api/cron/books-netsuite-bill-payments`), done by :25, after
+the deposits copy and before the GL copy at :26, or when **Copy now** is
+pressed on the invoices page's Bill payments switch, which runs the same
+job with the same four minutes.
+
+The run works like the deposits copy: the payments NetSuite changed since
+the last run that finished, a day's overlap included (the first reaches
+back to 2000), newest first, 200 at a time, with its place saved after
+each page. For each page it reads what each payment paid from NetSuite's
+transaction link table (the pair the deposits copy probes), with the type
+and number of each bill or bill credit paid; when NetSuite answers neither
+table, the payments already copied keep what they had. A payment's lines
+aren't read: the rule needs only NetSuite's posting of it. The status and
+payee in words come from `BUILTIN.DF`; without them, voided ones aren't
+marked voided and vendors are named from the copy of NetSuite's vendors,
+which `gl_bill_payment_month` prefers anyway. Once a run has read
+everything changed, it lists every bill payment id NetSuite has and marks
+the ones it no longer has as gone, with the same guard against a list that
+looks cut short. Rows are never deleted, nothing is written to NetSuite,
+and the run's record in `sync_state` (`books_netsuite_bill_payments`)
+holds counts and words, never an amount. Totals are kept positive.
+
+### The bill payment rule
+
+The bill payment rule, `bill_payment@1`
+(`src/lib/books/bill-payment-rule.ts`), is the payment rule the other way
+round:
+
+- Payables are debited with what the payment paid off: the money plus any
+  discount taken. The payables account is picked as the bill rule picks
+  it: the vendor's own payables account (the vendors copy) when the
+  company can use it, else the company's only one; with more than one, the
+  one the month's NetSuite bill payments used most, and the page says so.
+  So a payment takes what it pays out of the account its vendor's bills
+  put it in.
+- The money comes out of the account the payment was paid from, a bank
+  account or a credit card. That's the payment's own choice, and the copy
+  of the payment doesn't keep it, so it comes from NetSuite's posting of
+  the payment: the account its main line credits, or, should that line be
+  missing or payables, the one account outside payables, income and
+  expenses NetSuite credits for it.
+- A discount BMG took goes to the account NetSuite booked it to: what
+  NetSuite credits to the one income or expense account it credits for the
+  payment, other than where the money came from.
+- A payment of $0 with no discount, one that only applies a bill credit to
+  a bill, posts nothing. A payment whose total can't be read, or whose
+  money NetSuite's posting doesn't place, or a company with no payables
+  account: it can't be worked out, and posts nothing.
+
+### Checking bill payments
+
+The **Bill payments** switch on the invoices page checks each bill payment
+NetSuite booked into the month (or, when it hasn't booked one, dated in
+it) against the GL lines NetSuite posted for it, account by account, to
+the cent, as customer payments are checked
+(`src/lib/books/bill-payment-check.ts`). NetSuite's lines on one account
+are added together. Migration 389's `gl_bill_payment_month(company,
+month)` reads the month from the copy: each payment with what it paid, its
+vendor's name and payables account from the vendors copy, and NetSuite's
+GL lines for it; and the GL copy's bill payments the copy doesn't have
+yet. Opening one shows NetSuite's status for it, the bills it paid and the
+rule's accounts next to NetSuite's.
+
+- A payment is a company's when NetSuite posted a GL line of it to that
+  company. Payments with no GL line in the copy are named in a note, not
+  counted.
+- Anything else NetSuite posts for a payment shows as a line FleetSuite's
+  entry doesn't have. So does a discount split across two income or
+  expense accounts, since neither is then plainly the discount.
+- Where FleetSuite and NetSuite take the payment off different payables
+  accounts, the page gives it as one reason (FleetSuite used this,
+  NetSuite that).
+
+Not yet seen in NetSuite's data, so the check is what will show it:
+
+- that NetSuite's link table lists the bills a payment paid with the
+  payment as the next document, as it does for customer payments;
+- whether BMG pays bills by credit card, and where NetSuite books a
+  discount BMG took;
+- how NetSuite's GL holds a voided bill payment, which matters once they
+  post;
+- a payment in another currency, whose total the copy keeps in that
+  currency while NetSuite's GL is in BMG's: it would show as differing
+  from what NetSuite took out of the account it was paid from.
 
 ## Differences
 

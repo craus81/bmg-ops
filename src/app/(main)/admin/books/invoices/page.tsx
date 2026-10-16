@@ -8,8 +8,8 @@ import { apiFetch } from '@/lib/api-client';
 
 /**
  * Books → Invoices vs NetSuite (migrations 364, 367, 370, 374, 376, 382, 383,
- * 384 and 386, docs/books.md "Invoices", "Payments", "Customer deposits" and
- * "Vendor bills").
+ * 384, 386 and 389, docs/books.md "Invoices", "Payments", "Customer
+ * deposits", "Vendor bills" and "Bill payments").
  *
  * FleetSuite works out its own entry for every NetSuite invoice with the
  * invoice rule, and for every credit memo with the same rule the other way
@@ -21,14 +21,15 @@ import { apiFetch } from '@/lib/api-client';
  * are copied from NetSuite every two hours, or on "Copy now", checked with
  * the deposit rule, and post in the same run too. Vendor bills and bill
  * credits are copied the same way, checked with the bill rule, and post in
- * the same run as well. Super admins only while the books are built, linked
- * from the other books pages.
+ * the same run as well. Bill payments are copied the same way and checked
+ * with the bill payment rule; they don't post yet. Super admins only while
+ * the books are built, linked from the other books pages.
  */
 
 type Status = 'matches' | 'differs' | 'unworkable' | 'waiting';
 
-type Kind = 'invoice' | 'credit_memo' | 'payment' | 'deposit' | 'bill';
-const KINDS: readonly Kind[] = ['invoice', 'credit_memo', 'payment', 'deposit', 'bill'];
+type Kind = 'invoice' | 'credit_memo' | 'payment' | 'deposit' | 'bill' | 'bill_payment';
+const KINDS: readonly Kind[] = ['invoice', 'credit_memo', 'payment', 'deposit', 'bill', 'bill_payment'];
 
 /** What each kind of document is called. */
 const WORDS: Record<Kind, { one: string; many: string; title: string; head: string }> = {
@@ -39,10 +40,16 @@ const WORDS: Record<Kind, { one: string; many: string; title: string; head: stri
   deposit: { one: 'deposit or application', many: 'deposits and applications', title: 'Deposits', head: 'Deposit' },
   // And the Bills switch lists bill credits too.
   bill: { one: 'bill or bill credit', many: 'bills and bill credits', title: 'Bills', head: 'Bill' },
+  bill_payment: { one: 'bill payment', many: 'bill payments', title: 'Bill payments', head: 'Bill payment' },
 };
 
 /** The kinds of document copied from NetSuite by the books themselves, each with its Copy now. */
-const COPIED: Partial<Record<Kind, string>> = { deposit: '/api/admin/books/deposits', bill: '/api/admin/books/bills' };
+const COPIED: Partial<Record<Kind, string>> = {
+  deposit: '/api/admin/books/deposits', bill: '/api/admin/books/bills', bill_payment: '/api/admin/books/bill-payments',
+};
+
+/** The kinds of document that are a vendor's, not a customer's. */
+const VENDOR_KINDS: ReadonlySet<Kind> = new Set(['bill', 'bill_payment']);
 
 interface Summary {
   /** Invoices, credit memos or payments, whichever kind the month was checked for. */
@@ -79,7 +86,11 @@ interface PostingRun {
   error?: string;
 }
 
-/** How the last copy of NetSuite's deposits or bills went (src/lib/books/netsuite-deposits.ts, netsuite-bills.ts); counts and words only. */
+/**
+ * How the last copy of NetSuite's deposits, bills or bill payments went
+ * (src/lib/books/netsuite-deposits.ts, netsuite-bills.ts,
+ * netsuite-bill-payments.ts); counts and words only.
+ */
 interface CopyRun {
   read: number;
   partial: boolean;
@@ -130,11 +141,15 @@ interface Invoice {
   reasons: string[];
   rows: Row[];
   books?: Books;
-  /** A payment's or a deposit application's: what it was applied to. A deposit's: what its applications applied it to, each on its date. */
+  /**
+   * A payment's or a deposit application's: what it was applied to. A
+   * deposit's: what its applications applied it to, each on its date. A bill
+   * payment's: the bills it paid.
+   */
   applied?: Array<{ number: string; cents: number | null; date?: string }>;
-  /** A deposit's or deposit application's, a bill's or bill credit's. */
-  type?: 'CustDep' | 'DepAppl' | 'VendBill' | 'VendCred';
-  /** NetSuite's status for a deposit, application, bill or bill credit, in its words. */
+  /** A deposit's or deposit application's, a bill's or bill credit's, a bill payment's. */
+  type?: 'CustDep' | 'DepAppl' | 'VendBill' | 'VendCred' | 'VendPymt';
+  /** NetSuite's status for a deposit, application, bill, bill credit or bill payment, in its words. */
   netsuiteStatus?: string;
   /** An application's: the deposit it applies. */
   deposit?: string;
@@ -161,10 +176,10 @@ interface Payload {
   month: string;
   months: string[];
   listsCopiedAt: string | null;
-  /** Whether this company's invoices, credit memos, payments, deposits and bills post to FleetSuite's books yet. */
+  /** Whether this company's invoices, credit memos, payments, deposits and bills post to FleetSuite's books yet; bill payments don't. */
   posts: boolean;
   lastRun: { at: string; result: PostingRun } | null;
-  /** Deposits and bills only: how the last copy of them from NetSuite went; null before the first. */
+  /** Deposits, bills and bill payments only: how the last copy of them from NetSuite went; null before the first. */
   copy?: { at: string; result: CopyRun } | null;
   summary: Summary;
   reasons: Reason[];
@@ -291,10 +306,11 @@ function saysText(says: Says): string {
 const appliedText = (a: NonNullable<Invoice['applied']>[number]) =>
   `${a.number}${a.cents !== null ? ` (${fmt(a.cents)})` : ''}${a.date ? ` on ${dateText(a.date)}` : ''}`;
 
-/** What a deposit or deposit application is linked to, in a sentence. */
-function depositLinksText(invoice: Invoice): string | null {
-  if (invoice.type !== 'CustDep' && invoice.type !== 'DepAppl') return null;
+/** What a deposit, deposit application or bill payment is linked to, in a sentence. */
+function linksText(invoice: Invoice): string | null {
   const applied = (invoice.applied ?? []).map(appliedText).join(', ');
+  if (invoice.type === 'VendPymt') return applied ? `Paid ${applied}.` : null;
+  if (invoice.type !== 'CustDep' && invoice.type !== 'DepAppl') return null;
   if (invoice.type === 'DepAppl') {
     if (!invoice.deposit && !applied) return null;
     return `Applies ${invoice.deposit ?? 'a deposit'}${applied ? ` to ${applied}` : ''}.`;
@@ -346,8 +362,8 @@ function InvoiceDetail({ invoice, accounts, one }: { invoice: Invoice; accounts:
         </div>
       )}
       {invoice.type ? (
-        depositLinksText(invoice) && (
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>{depositLinksText(invoice)}</div>
+        linksText(invoice) && (
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>{linksText(invoice)}</div>
         )
       ) : !!invoice.applied?.length && (
         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>
@@ -506,8 +522,9 @@ export default function BooksInvoicesPage() {
     setPosting(false);
   };
 
-  // Copies NetSuite's deposits, or bills, now. As with posting, how the copy
-  // went is recorded either way and shows in the banners after the reload.
+  // Copies NetSuite's deposits, bills or bill payments now. As with posting,
+  // how the copy went is recorded either way and shows in the banners after
+  // the reload.
   const copyNow = async () => {
     const path = COPIED[kind];
     if (!path) return;
@@ -547,7 +564,18 @@ export default function BooksInvoicesPage() {
         <div style={{ flex: '1 1 280px' }}>
           <div style={{ fontSize: '20px', fontWeight: 800 }}>{words.title} vs NetSuite</div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            {kind === 'bill' ? (
+            {kind === 'bill_payment' ? (
+              <>
+                NetSuite&apos;s bill payments, the money BMG pays its vendors against their bills, are copied from NetSuite
+                every two hours with the bills each one paid. For each payment FleetSuite works out its own entry: payables are
+                debited with what it paid off, the money comes out of the account it was paid from, a bank account or a credit
+                card, and a discount BMG took goes to the account NetSuite booked it to. Where the money came from and the
+                discount come from NetSuite&apos;s posting of the payment, since the copy of the payment doesn&apos;t keep them,
+                and payables are the vendor&apos;s, as for its bills. Each entry is checked account by account against what
+                NetSuite posted for the same payment. Bill payments aren&apos;t posted to FleetSuite&apos;s books yet: they
+                will be once they&apos;ve been checked.
+              </>
+            ) : kind === 'bill' ? (
               <>
                 NetSuite&apos;s vendor bills, what BMG owes its vendors, and the bill credits that take some of it back are copied
                 from NetSuite every two hours with their lines. For each bill FleetSuite works out its own entry: payables are
@@ -752,10 +780,12 @@ export default function BooksInvoicesPage() {
               ? 'Customer deposits and deposit applications dated this month that NetSuite posted to this company'
               : kind === 'bill'
                 ? 'Vendor bills and bill credits NetSuite booked into this month for this company'
+              : kind === 'bill_payment'
+                ? 'Bill payments NetSuite booked into this month for this company'
               : kind === 'payment'
                 ? `${words.title} dated this month that NetSuite posted to this company`
                 : `${words.title} NetSuite booked into this month for this company`}, checked with rule {data.rule}.
-            {data.listsCopiedAt && ` Items and ${kind === 'bill' ? 'vendors' : 'tax codes'} as copied from NetSuite ${ago(data.listsCopiedAt)}.`}
+            {data.listsCopiedAt && ` ${kind === 'bill_payment' ? 'Vendors' : `Items and ${kind === 'bill' ? 'vendors' : 'tax codes'}`} as copied from NetSuite ${ago(data.listsCopiedAt)}.`}
             {!data.posts && ` This company's ${words.many} aren't posted to FleetSuite's books yet; they will be once they've been checked.`}
           </div>
 
@@ -789,7 +819,7 @@ export default function BooksInvoicesPage() {
                 <tr style={{ color: 'var(--text-secondary)' }}>
                   <th style={{ ...cell, textAlign: 'left' }}>{words.head}</th>
                   <th style={{ ...cell, textAlign: 'left' }}>Date</th>
-                  <th style={{ ...cell, textAlign: 'left' }}>{kind === 'bill' ? 'Vendor' : 'Customer'}</th>
+                  <th style={{ ...cell, textAlign: 'left' }}>{VENDOR_KINDS.has(kind) ? 'Vendor' : 'Customer'}</th>
                   <th style={cell}>Total</th>
                   <th style={{ ...cell, textAlign: 'left' }}>Check</th>
                   {data.posts && <th style={{ ...cell, textAlign: 'left' }}>Books</th>}

@@ -34,9 +34,9 @@ export interface CheckedPayment {
   rows: PaymentRow[];
 }
 
-/** Income and expense accounts: a discount goes to one, the money never does. */
+/** Income and expense accounts: a discount goes to one, the money never does (a bill payment's neither, src/lib/books/bill-payment-check.ts). */
 const INCOME_STATEMENT = new Set(['income', 'other_income', 'cost_of_goods_sold', 'expense', 'other_expense']);
-const onIncomeStatement = (account: string, accountTypes: Map<string, string>) => INCOME_STATEMENT.has(accountTypes.get(account) ?? '');
+export const onIncomeStatement = (account: string, accountTypes: Map<string, string>) => INCOME_STATEMENT.has(accountTypes.get(account) ?? '');
 
 /**
  * Where a payment's money went, as NetSuite posted it: the account its main
