@@ -3,14 +3,16 @@ import { BooksError } from './journal';
 import { workOutMonth, type ChartAccount, type InvoiceMonthData, type LineFactsRead } from './invoice-check';
 import {
   billBooks, billJournalEntry, billPaymentBooks, billPaymentJournalEntry, billPostingFor, decide, decideBill, decideBillPayment, decideDeposit,
-  decidePayment, depositBooks, depositEntryLines, depositJournalEntry, depositPostingFor, entryLines, failureReason, invoiceBooks,
-  invoiceJournalEntry, parsePostingState, paymentBooks, paymentEntryLines, paymentJournalEntry, postingKey, postingQueue, signature, unsaidFacts,
-  type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type PaymentPosting,
+  decidePayment, decideSpending, depositBooks, depositEntryLines, depositJournalEntry, depositPostingFor, entryLines, failureReason, invoiceBooks,
+  invoiceJournalEntry, parsePostingState, paymentBooks, paymentEntryLines, paymentJournalEntry, postingKey, postingQueue, signature,
+  spendingBooks, spendingJournalEntry, spendingPostingFor, unsaidFacts,
+  type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type PaymentPosting, type SpendingPosting,
 } from './invoice-posting';
 import { workOutPaymentMonth, type PaymentMonthData } from './payment-check';
 import { workOutDepositMonth, type DepositMonthData } from './deposit-check';
 import { workOutBillMonth, type BillMonthData } from './bill-check';
 import { workOutBillPaymentMonth, type BillPaymentMonthData } from './bill-payment-check';
+import { workOutSpendingMonth, type SpendingMonthData } from './spending-check';
 
 // Made-up books: '120' receivable, '400' income, '220' sales tax payable.
 const CHART: ChartAccount[] = [
@@ -828,6 +830,215 @@ describe('bill payments', () => {
       }));
       const current = { id: 'e21', entry_no: 21, entry_date: entry!.entryDate, lines };
       expect(decideBillPayment(w, held({ current })), JSON.stringify(d)).toEqual({ kind: 'keep' });
+    }
+  });
+});
+
+describe('checks and card charges', () => {
+  // Made-up books: '100' checking, '220' the Chase card, '130' inventory, '610' shop supplies, '640' meals.
+  const SPEND_CHART: ChartAccount[] = [
+    { netsuite_account_id: '100', number: '1000', name: 'Checking', account_type: 'bank', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '220', number: '2200', name: 'Chase Card', account_type: 'credit_card', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '130', number: '1300', name: 'Inventory', account_type: 'other_current_asset', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '610', number: '6100', name: 'Shop Supplies', account_type: 'expense', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '640', number: '6400', name: 'Meals', account_type: 'expense', company: null, active: true, is_summary: false },
+  ];
+  const ids = new Map(['100', '220', '130', '610', '640'].map((a) => [a, `a-${a}`]));
+
+  type Doc = SpendingMonthData['documents'][number];
+  type Line = NonNullable<Doc['lines']>[number];
+  type Posted = Doc['netsuite'][number];
+  const copied = (lineId: string, item: string | null, account: string | null, amount: string): Line => ({
+    line_id: lineId, item, account, amount, quantity: null, memo: null, tax: false,
+  });
+  const gl = (lineId: string, account: string, debit: string, credit: string): Posted => ({ line_id: lineId, account, debit, credit });
+  // A $165.12 check for meals and supplies, as NetSuite posts it; NetSuite gives the check's lines negative.
+  const check = (fields: Partial<Doc> = {}): Doc => ({
+    netsuite_id: '801', type: 'Check', number: '10234', date: '2026-09-03', posting_month: '2026-09-01', total: '165.12', voided: false,
+    status: null, payee: 'Sample Supply Co', payee_netsuite_id: '50', companies: ['BMG'],
+    lines: [copied('1', null, '640', '-45.12'), copied('2', '902', null, '-120.00')],
+    netsuite: [gl('0', '100', '0.00', '165.12'), gl('1', '640', '45.12', '0.00'), gl('2', '610', '120.00', '0.00')],
+    ...fields,
+  });
+  // $300.00 of stock on the card, which NetSuite gives no number.
+  const charge = (fields: Partial<Doc> = {}): Doc => check({
+    netsuite_id: '802', type: 'CardChrg', number: null, date: '2026-09-10', total: '300.00', payee: 'Another Supplier', payee_netsuite_id: '51',
+    lines: [copied('1', '901', null, '-300.00')],
+    netsuite: [gl('0', '220', '0.00', '300.00'), gl('1', '130', '300.00', '0.00')],
+    ...fields,
+  });
+  // $25.99 of supplies refunded to the card: the card debited, the supplies' account credited; NetSuite gives a refund's lines positive.
+  const refund = (fields: Partial<Doc> = {}): Doc => check({
+    netsuite_id: '803', type: 'CardRfnd', number: 'R-803', date: '2026-09-15', total: '25.99', payee: 'Another Supplier', payee_netsuite_id: '51',
+    lines: [copied('1', null, '610', '25.99')],
+    netsuite: [gl('0', '220', '25.99', '0.00'), gl('1', '610', '0.00', '25.99')],
+    ...fields,
+  });
+  const month = (documents: Doc[]) => workOutSpendingMonth(
+    {
+      documents,
+      items: [
+        { netsuite_id: '901', name: 'WIDGET-1', item_type: 'InvtPart', asset_account: '130', expense_account: null, income_account: null },
+        { netsuite_id: '902', name: 'SUPPLY-2', item_type: 'NonInvtPart', asset_account: null, expense_account: '610', income_account: null },
+      ],
+      not_copied: [],
+    },
+    { company: 'BMG', chart: SPEND_CHART },
+  ).documents;
+  const one = (d: Doc = check()) => month([d])[0];
+
+  /** What the journal holds when check 10234 posted as it is now, as entry 31. */
+  const held = (fields: Partial<SpendingPosting> = {}): SpendingPosting => ({
+    source_type: 'check',
+    source_id: '801',
+    entries: 1,
+    unreversed: ['e31'],
+    current: {
+      id: 'e31', entry_no: 31, entry_date: '2026-09-03',
+      lines: [
+        { account: '100', debit: '0.00', credit: '165.12', division: null, source_line_ref: 'paid_from', customer_id: null, vendor_ref: null },
+        { account: '640', debit: '45.12', credit: '0.00', division: null, source_line_ref: '1', customer_id: null, vendor_ref: null },
+        { account: '610', debit: '120.00', credit: '0.00', division: null, source_line_ref: '2', customer_id: null, vendor_ref: null },
+      ],
+    },
+    history: [{ entry_no: 31, entry_date: '2026-09-03', reversed_by: null }],
+    document: { number: '10234', deleted: false, voided: false },
+    ...fields,
+  });
+
+  it('posts the rule\'s lines under the spending rule in the month NetSuite booked it into, the money out of its account first, no vendor on any', () => {
+    const { entry } = spendingJournalEntry(one(), 'BMG', 2, ids);
+    expect(entry).toMatchObject({
+      company: 'BMG', entryDate: '2026-09-03', sourceType: 'check', sourceId: '801', postingRule: 'spending@1',
+      idempotencyKey: 'check:801:2', memo: '10234, Sample Supply Co', postedBy: null,
+    });
+    expect(entry!.lines).toEqual([
+      { accountId: 'a-100', debit: null, credit: '165.12', division: null, itemNumber: null, sourceLineRef: 'paid_from' },
+      { accountId: 'a-640', debit: '45.12', credit: null, division: null, itemNumber: null, sourceLineRef: '1' },
+      { accountId: 'a-610', debit: '120.00', credit: null, division: null, itemNumber: 'SUPPLY-2', sourceLineRef: '2' },
+    ]);
+    // Dated in August, booked into September: the entry goes on September's first day.
+    expect(spendingJournalEntry(one(check({ date: '2026-08-30' })), 'BMG', 1, ids).entry!.entryDate).toBe('2026-09-01');
+    // No number and no payee: the memo goes by NetSuite's id.
+    expect(spendingJournalEntry(one(check({ number: null, payee: null, payee_netsuite_id: null })), 'BMG', 1, ids).entry!.memo).toBe('NetSuite 801');
+    expect(spendingJournalEntry(one(), 'BMG', 1, new Map([['100', 'a-100']]))).toEqual({ entry: null, missing: ['640', '610'] });
+  });
+
+  it('posts a card charge and a card refund under their own kinds, the refund the other way round', () => {
+    const { entry: charged } = spendingJournalEntry(one(charge()), 'BMG', 1, ids);
+    expect(charged).toMatchObject({
+      entryDate: '2026-09-10', sourceType: 'card_charge', sourceId: '802', postingRule: 'spending@1', idempotencyKey: 'card_charge:802:1',
+      memo: 'NetSuite 802, Another Supplier',
+    });
+    expect(charged!.lines).toEqual([
+      { accountId: 'a-220', debit: null, credit: '300.00', division: null, itemNumber: null, sourceLineRef: 'paid_from' },
+      { accountId: 'a-130', debit: '300.00', credit: null, division: null, itemNumber: 'WIDGET-1', sourceLineRef: '1' },
+    ]);
+    const { entry: refunded } = spendingJournalEntry(one(refund()), 'BMG', 1, ids);
+    expect(refunded).toMatchObject({
+      entryDate: '2026-09-15', sourceType: 'card_refund', sourceId: '803', postingRule: 'spending@1', idempotencyKey: 'card_refund:803:1',
+      memo: 'R-803, Another Supplier',
+    });
+    expect(refunded!.lines).toEqual([
+      { accountId: 'a-220', debit: '25.99', credit: null, division: null, itemNumber: null, sourceLineRef: 'paid_from' },
+      { accountId: 'a-610', debit: null, credit: '25.99', division: null, itemNumber: null, sourceLineRef: '1' },
+    ]);
+  });
+
+  it('posts one nothing stands for, keeps one whose entry still fits, and replaces one NetSuite changed', () => {
+    expect(decideSpending(one(), undefined)).toEqual({ kind: 'post' });
+    expect(decideSpending(one(), held())).toEqual({ kind: 'keep' });
+    // A new number, status or payee only describes: only the entry's memo carries them.
+    expect(decideSpending(one(check({ number: '10234-A', status: 'Cleared', payee: 'Renamed Supply', payee_netsuite_id: '51' })), held()))
+      .toEqual({ kind: 'keep' });
+    // NetSuite posted more to meals than the copy's lines say: FleetSuite posts what the rule works out, and Differences shows the gap.
+    const off = one(check({ netsuite: [gl('0', '100', '0.00', '165.12'), gl('1', '640', '50.12', '0.00'), gl('2', '610', '115.00', '0.00')] }));
+    expect(off.checked.status).toBe('differs');
+    expect(decideSpending(off, undefined)).toEqual({ kind: 'post' });
+    const changed: Array<Partial<Doc>> = [
+      { date: '2026-09-04' },
+      // Booked into October now: the entry moves to October's first day.
+      { posting_month: '2026-10-01' },
+      {
+        total: '175.12', lines: [copied('1', null, '640', '-55.12'), copied('2', '902', null, '-120.00')],
+        netsuite: [gl('0', '100', '0.00', '175.12'), gl('1', '640', '55.12', '0.00'), gl('2', '610', '120.00', '0.00')],
+      },
+      { lines: [copied('1', null, '610', '-45.12'), copied('2', '902', null, '-120.00')] },
+      // Paid by card.
+      { netsuite: [gl('0', '220', '0.00', '165.12'), gl('1', '640', '45.12', '0.00'), gl('2', '610', '120.00', '0.00')] },
+    ];
+    for (const fields of changed) expect(decideSpending(one(check(fields)), held()), JSON.stringify(fields)).toEqual({ kind: 'replace' });
+  });
+
+  it('reverses the entry of a voided one or one that comes to nothing, and leaves one it can\'t work out or not copied yet', () => {
+    expect(decideSpending(one(check({ voided: true })), held())).toEqual({ kind: 'reverse', why: 'voided' });
+    expect(decideSpending(one(check({ voided: true })), undefined)).toEqual({ kind: 'keep', why: 'voided' });
+    // $0, and NetSuite posts no lines for it.
+    const zero = check({ total: '0.00', lines: [copied('1', null, '640', '0.00')], companies: [], netsuite: [] });
+    expect(one(zero).checked.lines).toEqual([]);
+    expect(decideSpending(one(zero), held())).toEqual({ kind: 'reverse', why: 'nothing' });
+    expect(decideSpending(one(zero), undefined)).toEqual({ kind: 'keep', why: 'nothing' });
+    // Not in the GL copy yet, or its lines not copied yet.
+    expect(decideSpending(one(check({ companies: [], netsuite: [] })), held())).toEqual({ kind: 'leave', why: 'waiting' });
+    expect(decideSpending(one(check({ lines: null })), held())).toEqual({ kind: 'leave', why: 'waiting' });
+    // An item the copy of NetSuite's items doesn't have.
+    expect(decideSpending(one(check({ lines: [copied('1', '999', null, '-165.12')] })), held())).toEqual({ kind: 'leave', why: 'unworkable' });
+    // NetSuite's posting doesn't say where the money came from: no main line, and two accounts credited.
+    const split = check({
+      netsuite: [gl('1', '640', '45.12', '0.00'), gl('2', '610', '120.00', '0.00'), gl('3', '100', '0.00', '100.00'), gl('4', '220', '0.00', '65.12')],
+    });
+    expect(decideSpending(one(split), held())).toEqual({ kind: 'leave', why: 'unworkable' });
+    expect(decideSpending(one(split), undefined)).toEqual({ kind: 'leave', why: 'unworkable' });
+  });
+
+  it('leaves whatever stands when the lines don\'t come to the total, as when the copy is caught mid-refresh or reads them the wrong way round', () => {
+    expect(decideSpending(one(check({ total: '170.00' })), held())).toEqual({ kind: 'leave', why: 'total' });
+    expect(decideSpending(one(check({ total: '170.00' })), undefined)).toEqual({ kind: 'leave', why: 'total' });
+    // The copy's total can't be read: nothing is posted or reversed on the strength of it, lines or none.
+    expect(decideSpending(one(check({ total: 'n/a' })), held())).toEqual({ kind: 'leave', why: 'total' });
+    expect(decideSpending(one(check({ total: 'n/a', lines: [], companies: [], netsuite: [] })), held())).toEqual({ kind: 'leave', why: 'total' });
+    // Most of the month's refunds sign their lines one way and this one the other: it comes out a charge to the card.
+    const refunds = month([
+      refund({ netsuite_id: '804', number: 'R-804' }),
+      refund({ netsuite_id: '805', number: 'R-805' }),
+      refund({ lines: [copied('1', null, '610', '-25.99')] }),
+    ]);
+    expect(refunds.map((w) => decideSpending(w, undefined))).toEqual([{ kind: 'post' }, { kind: 'post' }, { kind: 'leave', why: 'total' }]);
+  });
+
+  it('says what the journal holds for one and what the next run does, found by its kind and NetSuite id', () => {
+    expect(spendingBooks(one(), undefined)).toEqual({ entryNo: null, next: 'post', earlier: [] });
+    expect(spendingBooks(one(), held())).toEqual({ entryNo: 31, next: null, earlier: [] });
+    expect(spendingBooks(one(check({ voided: true })), held()).next).toBe('reverse');
+    expect(spendingBooks(one(check({ date: '2026-09-04' })), held()).next).toBe('replace');
+    expect(spendingBooks(one(check({ total: '170.00' })), held()).next).toBeNull();
+    expect(spendingBooks(one(check({ voided: true })), undefined)).toEqual({ entryNo: null, next: null, earlier: [], nothingToPost: 'voided' });
+    expect(spendingBooks(one(check({ total: '0.00', lines: [], companies: [], netsuite: [] })), undefined)).toMatchObject({ nothingToPost: 'zero' });
+    // Lines that don't come to its total yet aren't nothing to post.
+    expect(spendingBooks(one(check({ total: '170.00' })), undefined)).not.toHaveProperty('nothingToPost');
+    // Its first entry, reversed when NetSuite changed the check.
+    const again = held({
+      entries: 2,
+      history: [{ entry_no: 24, entry_date: '2026-09-03', reversed_by: 30 }, { entry_no: 31, entry_date: '2026-09-03', reversed_by: null }],
+    });
+    expect(spendingBooks(one(), again)).toEqual({ entryNo: 31, next: null, earlier: [{ entryNo: 24, reversedBy: 30 }] });
+    const postings = new Map([[postingKey('check', '801'), held()]]);
+    expect(spendingPostingFor(postings, one())).toBe(postings.get('check:801'));
+    // A card charge with the check's NetSuite id is another document.
+    expect(spendingPostingFor(postings, one(charge({ netsuite_id: '801' })))).toBeUndefined();
+  });
+
+  it('builds an entry that fits what it is compared against once posted', () => {
+    const back = new Map([...ids].map(([ns, id]) => [id, ns]));
+    for (const d of [check(), charge(), refund(), check({ date: '2026-08-30' })]) {
+      const w = one(d);
+      const { entry } = spendingJournalEntry(w, 'BMG', 1, ids);
+      const lines = entry!.lines.map((l) => ({
+        account: back.get(l.accountId)!, debit: String(l.debit ?? '0.00'), credit: String(l.credit ?? '0.00'),
+        division: l.division ?? null, source_line_ref: l.sourceLineRef ?? null, customer_id: l.customerId ?? null, vendor_ref: l.vendorRef ?? null,
+      }));
+      const current = { id: 'e31', entry_no: 31, entry_date: entry!.entryDate, lines };
+      expect(decideSpending(w, held({ current })), JSON.stringify(d)).toEqual({ kind: 'keep' });
     }
   });
 });

@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import type { ChartAccount, NetSuitePosting } from './invoice-check';
+import type { ChartAccount, InvoiceBooks, NetSuitePosting } from './invoice-check';
 import type { BillItem, BillLine } from './bill-rule';
 import { PAID_FROM_LINE } from './bill-payment-rule';
 import type { SpendingType } from './spending-rule';
 import {
   checkSpending, checkSpendingMonth, spendingAccount, spendingLineSigns, spendingReasons, workOutSpendingMonth,
-  type SpendingMonthData,
+  type SpendingMonthData, type WorkedSpending,
 } from './spending-check';
 
 // Made-up books: '100' the bank, '220' the Chase card, '130' inventory,
@@ -294,6 +294,35 @@ describe('checkSpendingMonth', () => {
         + "card charges and refunds doesn't: 10249. That copy runs every two hours and may not have reached it yet, or NetSuite deleted it "
         + "and the GL copy hasn't caught up.",
     ]);
+  });
+
+  it('says what FleetSuite\'s books hold for each of the company\'s and what the next run does, when its checks and cards post', () => {
+    const asked: string[] = [];
+    const books = (w: WorkedSpending): InvoiceBooks => {
+      asked.push(w.number);
+      if (w.number === '10234') return { entryNo: 31, next: null, earlier: [{ entryNo: 24, reversedBy: 30 }] };
+      return { entryNo: null, next: 'post', earlier: [] };
+    };
+    const m = checkSpendingMonth(MONTH, { company: 'BMG', chart: CHART }, books);
+    // Not 10240, which neither company's GL copy has.
+    expect(asked).toEqual(['10234', 'NetSuite 802', 'R-803', '10220', 'C-805']);
+    expect(m.invoices.map((d) => [d.number, d.books?.entryNo, d.books?.next])).toEqual([
+      ['10234', 31, null], ['NetSuite 802', null, 'post'], ['R-803', null, 'post'], ['10220', null, 'post'], ['C-805', null, 'post'],
+    ]);
+    expect(m.invoices[0].books?.earlier).toEqual([{ entryNo: 24, reversedBy: 30 }]);
+    expect(m.summary).toMatchObject({ posted: 1, pending: 4 });
+    // A company whose checks and cards don't post yet gets neither.
+    const without = checkSpendingMonth(MONTH, { company: 'BMG', chart: CHART });
+    expect(without.invoices.map((d) => d.books)).toEqual([undefined, undefined, undefined, undefined, undefined]);
+    expect([without.summary.posted, without.summary.pending]).toEqual([undefined, undefined]);
+  });
+
+  it('counts the checks and cards with nothing to post apart from the ones in FleetSuite\'s books', () => {
+    const books = (w: WorkedSpending): InvoiceBooks => (w.number === '10234' ? { entryNo: 31, next: null, earlier: [] }
+      : w.number === 'R-803' ? { entryNo: null, next: null, earlier: [], nothingToPost: 'voided' }
+        : { entryNo: null, next: null, earlier: [], nothingToPost: 'zero' });
+    expect(checkSpendingMonth(MONTH, { company: 'BMG', chart: CHART }, books).summary)
+      .toMatchObject({ invoices: 5, posted: 1, pending: 0, nothingToPost: { voided: 1, zero: 3 } });
   });
 
   it('counts what doesn\'t match by reason, and shows NetSuite\'s status, a voided check\'s too', () => {
