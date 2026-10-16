@@ -250,7 +250,7 @@ function ClientFilesInner() {
       </div>
       <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
         <a href={clientFileUrl(selected)} target="_blank" rel="noopener noreferrer" style={btn(true)}>Open</a>
-        <a href={clientFileUrl(selected, true)} style={btn()}>⬇ Download</a>
+        <a href={clientFileUrl(selected, true)} download={selected.name} style={btn()}>⬇ Download</a>
         <button onClick={() => copyLink(selected)} style={btn()}>🔗 Copy link</button>
       </div>
       <div style={{ marginTop: '10px' }}><CopiedBadge copied={selected.copied} /></div>
