@@ -57,7 +57,7 @@ the accounts page; the others are linked from there.
 | Deposits posted to the journal, with invoices | `migrations/383-books-deposit-posting.sql`, `src/lib/books/invoice-posting.ts` |
 | Deposit tests | `src/lib/books/deposit-rule.test.ts`, `src/lib/books/deposit-check.test.ts`, `src/lib/books/netsuite-deposits.test.ts`, `src/lib/books/deposits-sql.test.ts`, `src/lib/books/deposit-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Vendor bills and bill credits, copied from NetSuite | `migrations/384-books-vendor-bills.sql`, `src/lib/books/netsuite-bills.ts`, `src/app/api/cron/books-netsuite-bills/route.ts`, `src/app/api/admin/books/bills/route.ts` |
-| Bill rule and its check, on the invoices page | `src/lib/books/bill-rule.ts`, `src/lib/books/bill-check.ts` |
+| Bill rule and its check, on the invoices page | `src/lib/books/bill-rule.ts`, `src/lib/books/bill-check.ts`; where an item with no account posts: `migrations/385-books-bill-item-accounts.sql` |
 | Bill tests | `src/lib/books/bill-rule.test.ts`, `src/lib/books/bill-check.test.ts`, `src/lib/books/netsuite-bills.test.ts`, `src/lib/books/bills-sql.test.ts` |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -733,15 +733,26 @@ page. For each page it reads:
 
 - each document's lines but the payables line, from `transactionline`: the
   item, the expense account (`expenseaccount`, on an expense line), the net
-  amount, quantity, memo and whether it's a tax line. When NetSuite won't
-  give the expense account, the lines are copied without it and the run
-  says so; when it won't give the lines at all, the documents already
-  copied keep theirs. A document with a line that has no line id keeps the
-  lines it has, and is named.
+  amount (`netamount`, which shares a discount line's amount out over the
+  lines above it) and the line's own amount (`foreignamount`), quantity,
+  memo and whether it's a tax line. When NetSuite won't give the expense
+  account, the lines are copied without it and the run says so; when it
+  won't give the lines at all, the documents already copied keep theirs. A
+  document with a line that has no line id keeps the lines it has, and is
+  named.
 - the documents each came from, in NetSuite's transaction link table (the
   pair the deposits copy probes): a bill's purchase order and item
-  receipts, a bill credit's vendor return. When NetSuite answers neither
-  table, the documents already copied keep their links.
+  receipts, a bill credit's vendor return, and line by line (`nextline`)
+  which of the document's own lines each link is on. When NetSuite won't
+  say line by line, the links are read document by document and the run
+  says so; when it answers neither table, the documents already copied
+  keep their links.
+
+What the copy keeps has a version (`COPY_VERSION`, in the run's record).
+When it goes up, the next run starts over from the first bill, ignoring an
+older run's place and window, so the documents copied before get the new
+detail too. Version 2 (2026-10-16) added the own amounts and the lines each
+link is on.
 
 The status and vendor in words come from `BUILTIN.DF`; without them,
 voided ones aren't marked voided and vendors are named from the copy of
@@ -763,14 +774,30 @@ The bill rule, `bill@1` (`src/lib/books/bill-rule.ts`):
   bills used most, and the page says so.
 - An expense line, an installer's labor say, is debited to its own account.
 - A stock item (inventory or an assembly) is debited to the account
-  NetSuite holds received stock against until it's billed, when the bill
-  came from a purchase order or item receipt and the company's item
-  receipts post to such an account; otherwise to the item's asset account,
-  as the bill itself brings the stock in. That account is the liability
-  the company's item receipts credit, for the most of its receipts in the
-  GL copy.
+  NetSuite holds received stock against until it's billed, when the line
+  came from a purchase order's or item receipt's line and the company's
+  item receipts post to such an account; otherwise to the item's asset
+  account, as the bill itself brings the stock in: a line added on a
+  purchase order's bill, say. When NetSuite doesn't say which lines a link
+  is on (or names none of the document's own lines, only its payables
+  line), the bill as a whole goes: every stock line is received when it
+  came from a purchase order or receipt. The received account is the
+  liability the company's item receipts credit, for the most of its
+  receipts in the GL copy.
 - Any other item (non-stock, service, other charge) is debited to its
-  expense account; a discount or markup to its own account.
+  expense account; a discount or markup to its own account. An item the
+  copy of NetSuite's items has no such account for (a discount, whose
+  account the items copy doesn't read, say) goes where NetSuite's GL posted
+  most of its lines on the copied bills, the lower NetSuite id on a tie
+  (migration 385's `gl_bill_item_accounts`).
+- Each line goes in at its own amount, a discount as a credit on a line of
+  its own, as NetSuite books it; its net amount has the discount shared out
+  over it, and the discount line reads $0 net. That's so as long as the
+  own amounts come to the same as the net ones, either way round
+  (`withOwnBillAmounts` in `bill-check.ts`), and the bill's detail says so.
+  When they don't, the net amounts go and the month names the bill; a line
+  copied before version 2, with no own amount, keeps its net amount too.
+  Tax and lines that never post keep their amounts.
 - A bill credit posts the same way, the other way round: its signed amounts
   carry the direction. A bill credit's stock counts as ordered when it came
   from a vendor return or its shipment.
@@ -800,18 +827,23 @@ and the rule's accounts next to NetSuite's. Where FleetSuite and NetSuite
 put the same amount in different accounts, the page gives it as one reason
 (FleetSuite used this, NetSuite that).
 
-Not yet seen in NetSuite's data, so the check is what will show it:
+The owner's first look at the check (2026-10-16) found two bills that
+didn't match: one with a discount, which NetSuite booked at the lines' own
+amounts with the discount on its own line, and one with a stock line added
+on a purchase order's bill, which NetSuite put in the item's asset account
+while the lines from the order went to received stock. The rule above
+takes both (owner decision 2026-10-16, "Fix both"). Not yet seen in
+NetSuite's data, so the check is what will show it:
 
 - that `transactionline.expenseaccount` gives an expense line's account,
-  and `netamount` is in BMG's own currency, as the GL is (a bill in another
-  currency is the one to look at);
-- that a bill from a purchase order puts its stock in the account the item
-  receipts credit, and whether NetSuite does the same for non-stock items
-  received on a receipt (the rule sends those to their expense account);
-- that a bill links its purchase order and receipts as previous documents,
-  and a bill credit its vendor return;
-- whether BMG's bills have tax lines, landed costs or discounts that post
-  elsewhere.
+  and `netamount` and `foreignamount` are in BMG's own currency, as the GL
+  is (a bill in another currency is the one to look at: its own amounts
+  wouldn't add up, so it keeps its net ones);
+- whether NetSuite puts non-stock items received on a receipt in the
+  account the receipts credit (the rule sends those to their expense
+  account);
+- that a bill credit links its vendor return;
+- whether BMG's bills have tax lines or landed costs.
 
 Bill payments (VendPymt) aren't copied yet; they come with posting.
 

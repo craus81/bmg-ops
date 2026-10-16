@@ -67,6 +67,22 @@ describe('linksByDocument', () => {
     expect(linksByDocument([...rows, { previousdoc: 501, nextdoc: 311, foreignamount: 'n/a' }], names).get('311')![0].amount).toBeNull();
   });
 
+  it('says which of the document\'s own lines each link is on, when asked', () => {
+    const rows = [
+      { previousdoc: 501, nextdoc: 311, nextline: 10, foreignamount: '100.00', linktype: 'Payment' },
+      { previousdoc: 501, nextdoc: 311, nextline: '2', foreignamount: '200.00', linktype: 'Payment' },
+      // Twice on one line, and a row without its line.
+      { previousdoc: 501, nextdoc: 311, nextline: 2, foreignamount: 0, linktype: 'Payment' },
+      { previousdoc: 301, nextdoc: 311, nextline: null, foreignamount: 50, linktype: 'Deposit Application' },
+    ];
+    expect(linksByDocument(rows, names, { lines: true }).get('311')).toEqual([
+      { netsuite_id: '301', type: 'CustDep', number: 'DEP1', amount: '50.00', link_type: 'Deposit Application', lines: [] },
+      { netsuite_id: '501', type: 'CustInvc', number: 'INV501', amount: '300.00', link_type: 'Payment', lines: ['2', '10'] },
+    ]);
+    // Not asked: nothing about lines, as the deposits copy keeps them.
+    expect(linksByDocument(rows, names).get('311')!.every((l) => !('lines' in l))).toBe(true);
+  });
+
   it('leaves out rows without both ids, and a document linked to itself', () => {
     expect(linksByDocument([
       { previousdoc: null, nextdoc: 311, foreignamount: 1 },

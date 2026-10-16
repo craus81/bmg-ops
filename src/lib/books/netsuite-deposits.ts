@@ -114,6 +114,8 @@ export interface CopyLink {
   number: string | null;
   amount: string | null;
   link_type: string | null;
+  /** The linking document's own lines the link is on, by NetSuite line id, when the run read them: a bill's lines that came from its purchase order, say. */
+  lines?: string[];
 }
 
 export interface DepositCopyRow {
@@ -136,10 +138,15 @@ export interface DepositCopyRow {
  * NetSuite's link rows → what each document applies, by document. Two rows
  * linking the same pair of documents (one per line, say) are one link, their
  * amounts added up, so the result doesn't depend on the order NetSuite
- * lists them in.
+ * lists them in. With `opts.lines`, the rows carry `nextline` and each link
+ * says which of the document's own lines it's on.
  */
-export function linksByDocument(rows: Row[], names: Map<string, { type: string | null; number: string | null }>): Map<string, CopyLink[]> {
-  const cents = new Map<string, Map<string, { cents: number | null; linkType: string | null }>>();
+export function linksByDocument(
+  rows: Row[],
+  names: Map<string, { type: string | null; number: string | null }>,
+  opts: { lines?: boolean } = {},
+): Map<string, CopyLink[]> {
+  const cents = new Map<string, Map<string, { cents: number | null; linkType: string | null; lines: Set<string> }>>();
   for (const r of rows) {
     const next = numericId(r.nextdoc);
     const previous = numericId(r.previousdoc);
@@ -154,9 +161,13 @@ export function linksByDocument(rows: Row[], names: Map<string, { type: string |
     }
     const byPrevious = cents.get(next) ?? new Map();
     const was = byPrevious.get(previous);
+    const lines = was?.lines ?? new Set<string>();
+    const line = numericId(r.nextline);
+    if (line) lines.add(line);
     byPrevious.set(previous, {
       cents: was ? (was.cents === null || amount === null ? null : was.cents + amount) : amount,
       linkType: was?.linkType ?? (text(r.linktype) || null),
+      lines,
     });
     cents.set(next, byPrevious);
   }
@@ -170,6 +181,7 @@ export function linksByDocument(rows: Row[], names: Map<string, { type: string |
         number: names.get(id)?.number ?? null,
         amount: l.cents === null ? null : centsToString(l.cents),
         link_type: l.linkType,
+        ...(opts.lines ? { lines: [...l.lines].sort((a, b) => Number(a) - Number(b)) } : {}),
       })));
   }
   return out;
