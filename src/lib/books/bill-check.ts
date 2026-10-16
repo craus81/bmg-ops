@@ -98,13 +98,15 @@ export function checkBill(
  * accounts has them, and the one a bill whose vendor has none of the
  * company's goes to: the company's only one, or with more than one the one
  * NetSuite's bills (`postings`, every GL line of the month's documents)
- * used most this month, and a note saying so.
+ * used most this month, and a note saying so. Bill payments pick theirs the
+ * same way (src/lib/books/bill-payment-check.ts), from the month's payments.
  */
 export function pickPayables(
   chart: ChartAccount[],
   company: string,
   postings: NetSuitePosting[],
   name: (id: string) => string,
+  many = 'bills',
 ): { candidates: Set<string>; fallback: string | null; note: string | null } {
   const candidates = new Set(chart
     .filter((a) => a.account_type === 'accounts_payable' && a.active && !a.is_summary && a.netsuite_account_id
@@ -121,7 +123,7 @@ export function pickPayables(
     candidates,
     fallback,
     note: `${company} can use ${candidates.size} payables accounts, so for a vendor with none of its own FleetSuite used ${name(fallback)}, `
-      + (most ? "the one NetSuite's bills used most this month." : 'the first in the chart.'),
+      + (most ? `the one NetSuite's ${many} used most this month.` : 'the first in the chart.'),
   };
 }
 

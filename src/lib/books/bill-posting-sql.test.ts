@@ -1,7 +1,7 @@
 // Migration 386 reads what the journal holds for NetSuite's vendor bills and
 // bill credits, and lets the differences page say what the copy of the bills
 // holds for one; the posting job posts them with the bill rule, even to an
-// account NetSuite has made inactive since (migration 388). This runs
+// account NetSuite has made inactive since (migration 387). This runs
 // migration 314 (with stand-ins for the app tables it points at) and
 // migrations 359–364, 367, 370, 374, 376, 377, 380, 382–386 and 387 in an
 // in-memory Postgres (PGlite) as the app's server login and holds the
