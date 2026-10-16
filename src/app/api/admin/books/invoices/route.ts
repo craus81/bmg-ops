@@ -12,6 +12,9 @@ import { checkPaymentMonth, type PaymentMonthData } from '@/lib/books/payment-ch
 import { DEPOSIT_RULE } from '@/lib/books/deposit-rule';
 import { checkDepositMonth, type DepositMonthData } from '@/lib/books/deposit-check';
 import { BOOKS_DEPOSITS_SYNC } from '@/lib/books/netsuite-deposits';
+import { BILL_RULE } from '@/lib/books/bill-rule';
+import { checkBillMonth, type BillMonthData } from '@/lib/books/bill-check';
+import { BOOKS_BILLS_SYNC } from '@/lib/books/netsuite-bills';
 import {
   BOOKS_INVOICE_POSTING, POSTING_COMPANIES, depositBooks, depositPostingFor, invoiceBooks, paymentBooks, postInvoices, postingFor,
   postingKey, unsaidFacts,
@@ -35,8 +38,10 @@ const POSTING_BUDGET_MS = 240_000;
  * differ. With `kind=payment` its customer payments dated in the month, each
  * checked with the payment rule (migration 374), and with `kind=deposit` its
  * customer deposits and deposit applications, checked with the deposit rule
- * (migration 382), with how the last copy of them from NetSuite went. With
- * `summary=1` only the counts come back, for checking every month in turn.
+ * (migration 382), and with `kind=bill` its vendor bills and bill credits,
+ * checked with the bill rule (migration 384), each with how the last copy of
+ * them from NetSuite went. With `summary=1` only the counts come back, for
+ * checking every month in turn.
  *
  * What the copy of the invoices' lines doesn't keep (which lines are cost of
  * goods, a discount or markup set at the top, each line's own amount,
@@ -45,7 +50,8 @@ const POSTING_BUDGET_MS = 240_000;
  * without and says so.
  *
  * For a company whose documents post (src/lib/books/invoice-posting.ts),
- * each invoice, credit memo, payment, deposit or application also says what
+ * each invoice, credit memo, payment, deposit or application (bills don't
+ * post yet) also says what
  * FleetSuite's books hold for it (migrations 367, 376 and 383) and what the
  * next posting run does about it, and `lastRun` is how the last one went.
  *
@@ -90,8 +96,8 @@ export async function GET(req: NextRequest) {
     : months.includes(previous) ? previous : months[0];
 
   const askedKind = params.get('kind');
-  const kind: SalesDocKind | 'payment' | 'deposit' =
-    askedKind === 'credit_memo' || askedKind === 'payment' || askedKind === 'deposit' ? askedKind : 'invoice';
+  const kind: SalesDocKind | 'payment' | 'deposit' | 'bill' =
+    askedKind === 'credit_memo' || askedKind === 'payment' || askedKind === 'deposit' || askedKind === 'bill' ? askedKind : 'invoice';
   const chart = accounts.data.map(({ company_id, ...a }) => ({ ...a, company: company_id ? codeOf.get(company_id) ?? null : null }));
   const page = {
     companies: (companies.data || []).map((c) => ({ code: c.code, name: c.name })),
@@ -103,6 +109,40 @@ export async function GET(req: NextRequest) {
 
   // Whether the company's documents post, and so what its books hold for each and what the next run does.
   const posts = (POSTING_COMPANIES as readonly string[]).includes(company);
+
+  // How the last copy of a kind of document from NetSuite went, counts and words only.
+  const copyOf = (copy: { last_result: unknown; updated_at: string } | null) => {
+    if (!copy) return null;
+    const last = (copy.last_result ?? null) as { read?: number; partial?: boolean; notes?: string[]; error?: string } | null;
+    return {
+      at: copy.updated_at,
+      result: {
+        read: Number(last?.read) || 0,
+        partial: !!last?.partial,
+        ...(Array.isArray(last?.notes) ? { notes: last.notes.map(String) } : {}),
+        ...(last?.error ? { error: String(last.error) } : {}),
+      },
+    };
+  };
+
+  if (kind === 'bill') {
+    const [res, copy] = await Promise.all([
+      service.rpc('gl_bill_month', { p_company: company, p_month: month }),
+      service.from('sync_state').select('last_result, updated_at').eq('sync_type', BOOKS_BILLS_SYNC).maybeSingle(),
+    ]);
+    const failed = res.error || copy.error;
+    if (failed) return NextResponse.json({ error: failed.message }, { status: 500 });
+    const data = (res.data ?? {}) as Partial<BillMonthData>;
+    const check = checkBillMonth(
+      { bills: data.bills ?? [], items: data.items ?? [], receipt_accounts: data.receipt_accounts ?? [], not_copied: data.not_copied ?? [] },
+      { company, chart },
+    );
+    if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });
+    // Bills don't post yet: they're checked first, as deposits were.
+    return NextResponse.json({
+      rule: BILL_RULE, kind, ...page, listsCopiedAt: lists.data?.updated_at ?? null, posts: false, copy: copyOf(copy.data), ...check,
+    });
+  }
 
   if (kind === 'deposit') {
     const [res, copy] = await Promise.all([
@@ -129,20 +169,7 @@ export async function GET(req: NextRequest) {
       held ? (w) => depositBooks(w, depositPostingFor(held!, w)) : undefined,
     );
     if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });
-    // How the last copy went, counts and words only.
-    const last = (copy.data?.last_result ?? null) as { read?: number; partial?: boolean; notes?: string[]; error?: string } | null;
-    const copied = copy.data
-      ? {
-          at: copy.data.updated_at,
-          result: {
-            read: Number(last?.read) || 0,
-            partial: !!last?.partial,
-            ...(Array.isArray(last?.notes) ? { notes: last.notes.map(String) } : {}),
-            ...(last?.error ? { error: String(last.error) } : {}),
-          },
-        }
-      : null;
-    return NextResponse.json({ rule: DEPOSIT_RULE, kind, ...page, listsCopiedAt: null, posts, copy: copied, ...check });
+    return NextResponse.json({ rule: DEPOSIT_RULE, kind, ...page, listsCopiedAt: null, posts, copy: copyOf(copy.data), ...check });
   }
 
   if (kind === 'payment') {

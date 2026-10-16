@@ -96,16 +96,21 @@ export interface RuleResult {
 }
 
 /**
- * A line that never posts: a subtotal, description or item group line, which
+ * An item that never posts: a subtotal, description or item group, which
  * repeats amounts, or one of NetSuite's own lines, its subtotal say. Those
  * carry an item id below 1 (the subtotal is item -2): none is a real item,
- * so no item list has them.
+ * so no item list has them. A bill's lines are told apart the same way
+ * (src/lib/books/bill-rule.ts).
  */
+export function isLayoutItem(itemId: string, type: string | null | undefined): boolean {
+  if (/^(-\d+|0+)$/.test(itemId)) return true;
+  return !!type && LAYOUT_TYPES.has(type);
+}
+
+/** An invoice line that never posts (isLayoutItem). */
 export function isLayoutLine(line: InvoiceLine, items: Map<string, RuleItem>): boolean {
   if (line.tax || !line.itemId) return false;
-  if (/^(-\d+|0+)$/.test(line.itemId)) return true;
-  const type = items.get(line.itemId)?.type;
-  return !!type && LAYOUT_TYPES.has(type);
+  return isLayoutItem(line.itemId, items.get(line.itemId)?.type);
 }
 
 export function invoiceEntry(lines: InvoiceLine[], accounts: RuleAccounts): RuleResult {
