@@ -12,6 +12,9 @@
  * With more than one linked, a chip per folder narrows the list to one end
  * customer, and "See all" follows the chip.
  *
+ * Several files come down as one zip (Craig, 2026-10-16): "Pick files" ticks
+ * rows for a zip, "Zip a folder" zips the whole folder or a sub-folder.
+ *
  * With no folder linked yet it says so, shows any folder the matcher thinks
  * might be this customer, and lets an admin link one.
  */
@@ -22,8 +25,11 @@ import { useAuth } from '@/components/AuthProvider';
 import { deepLinks } from '@/lib/deep-links';
 import ClientFileRow, { type ClientFile } from '@/components/ClientFileRow';
 import { setFolderMatch, type ClientFolder } from '@/components/ClientFolderMatches';
+import { ZipBar, FolderZipList } from '@/components/ClientFilesDownload';
 
 const SHOW = 8;
+/** Rows added by "Show more" (and shown at once when picking files for a zip). */
+const MORE = 50;
 
 interface Props {
   /** customers.id (the NetSuite mirror row). */
@@ -45,6 +51,9 @@ export default function ClientFilesSection({ customerId, customerName }: Props) 
   const [busy, setBusy] = useState(false);
   const [folderQuery, setFolderQuery] = useState('');
   const [folderHits, setFolderHits] = useState<ClientFolder[]>([]);
+  const [limit, setLimit] = useState(SHOW);
+  const [mode, setMode] = useState<'pick' | 'folders' | null>(null);
+  const [picked, setPicked] = useState<Map<string, ClientFile>>(new Map());
 
   useEffect(() => {
     const t = setTimeout(() => setQ(qInput.trim()), 300);
@@ -73,7 +82,7 @@ export default function ClientFilesSection({ customerId, customerName }: Props) 
     let live = true;
     (async () => {
       try {
-        const p = new URLSearchParams({ limit: String(SHOW) });
+        const p = new URLSearchParams({ limit: String(limit) });
         if (onlyFolder) p.set('folder', onlyFolder);
         else p.set('customer', customerId);
         if (q) p.set('q', q);
@@ -88,7 +97,17 @@ export default function ClientFilesSection({ customerId, customerName }: Props) 
       }
     })();
     return () => { live = false; };
-  }, [linked, q, customerId, onlyFolder]);
+  }, [linked, q, customerId, onlyFolder, limit]);
+
+  const startPicking = () => {
+    setMode(m => (m === 'pick' ? null : 'pick'));
+    setLimit(l => Math.max(l, MORE));
+  };
+  const togglePick = (f: ClientFile) => setPicked(prev => {
+    const next = new Map(prev);
+    if (next.has(f.id)) next.delete(f.id); else next.set(f.id, f);
+    return next;
+  });
 
   // Admin: find an unlinked folder to link here.
   useEffect(() => {
@@ -164,9 +183,36 @@ export default function ClientFilesSection({ customerId, customerName }: Props) 
             files.map(f => (
               <ClientFileRow
                 key={f.id} file={f} compact hideClient={!many || !!onlyFolder}
-                onClient={many ? folderId => setOnlyFolder(folderId) : undefined}
+                onClient={many && mode !== 'pick' ? folderId => setOnlyFolder(folderId) : undefined}
+                checked={picked.has(f.id)}
+                onCheck={mode === 'pick' ? () => togglePick(f) : undefined}
               />
             ))
+          )}
+          {files && files.length < total && (
+            <button onClick={() => setLimit(l => l + MORE)} style={{ display: 'block', marginTop: '6px', padding: '6px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-strong)' }}>
+              Show more ({(total - files.length).toLocaleString()} left)
+            </button>
+          )}
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '10px' }}>
+            <button onClick={startPicking} style={chip(mode === 'pick')}>☑ Pick files to zip</button>
+            <button onClick={() => setMode(m => (m === 'folders' ? null : 'folders'))} style={chip(mode === 'folders')}>📁 Zip a folder</button>
+          </div>
+          {mode === 'pick' && files && (
+            <ZipBar
+              picked={[...picked.values()]}
+              label={chipFolder ? linked.find(f => f.id === chipFolder)?.name || customerName : customerName}
+              total={files.length}
+              onSelectAll={() => setPicked(prev => { const next = new Map(prev); for (const f of files) next.set(f.id, f); return next; })}
+              onClear={() => setPicked(new Map())}
+            />
+          )}
+          {mode === 'folders' && (
+            <div style={{ marginTop: '8px' }}>
+              {(chipFolder ? linked.filter(f => f.id === chipFolder) : linked).map(f => (
+                <FolderZipList key={f.id} folderId={f.id} folderName={f.name} />
+              ))}
+            </div>
           )}
           <a href={allHref} style={{ display: 'inline-block', marginTop: '8px', fontSize: '12px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none' }}>
             {total > SHOW ? `See all ${total.toLocaleString()} in Client Files →` : 'Open in Client Files →'}

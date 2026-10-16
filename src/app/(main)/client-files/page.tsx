@@ -22,6 +22,7 @@ import { INTERNAL_STAFF_ROLES } from '@/lib/features';
 import { CLIENT_FILE_KINDS, KIND_LABELS, formatBytes, type ClientFileKind } from '@/lib/client-files';
 import ClientFileRow, { FileTile, CopiedBadge, clientFileUrl, fmtFileDate, type ClientFile } from '@/components/ClientFileRow';
 import ClientFolderMatches from '@/components/ClientFolderMatches';
+import { ZipBar, FolderZipList } from '@/components/ClientFilesDownload';
 
 const PAGE_SIZE = 50;
 
@@ -96,6 +97,9 @@ function ClientFilesInner() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [reviewCount, setReviewCount] = useState<number | null>(null);
+  // Several files as one zip (Craig, 2026-10-16): tick files, or zip a folder.
+  const [mode, setMode] = useState<'pick' | 'folders' | null>(null);
+  const [picked, setPicked] = useState<Map<string, ClientFile>>(new Map());
   const reqId = useRef(0);
 
   useEffect(() => {
@@ -323,6 +327,21 @@ function ClientFilesInner() {
         }}>Could not load files: {error}</div>
       )}
 
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '10px' }}>
+        <button onClick={() => setMode(m => (m === 'pick' ? null : 'pick'))} style={chip(mode === 'pick')}>☑ Pick files to zip</button>
+        <button
+          onClick={() => setMode(m => (m === 'folders' ? null : 'folders'))}
+          disabled={!folder}
+          title={folder ? undefined : 'Pick a client first'}
+          style={{ ...chip(mode === 'folders' && !!folder), opacity: folder ? 1 : 0.5 }}
+        >📁 Zip a folder{folder ? '' : ' (pick a client first)'}</button>
+      </div>
+      {mode === 'folders' && folder && (
+        <div style={{ padding: '10px 12px', borderRadius: '12px', marginBottom: '12px', background: 'var(--card)', border: '1px solid var(--border)' }}>
+          <FolderZipList folderId={folder.id} folderName={folder.name || 'Client files'} />
+        </div>
+      )}
+
       {loading ? (
         <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Loading…</div>
       ) : files.length === 0 && !error ? (
@@ -338,13 +357,28 @@ function ClientFilesInner() {
                 file={f}
                 selected={wide && f.id === selectedId}
                 onSelect={wide ? () => setSelectedId(f.id) : undefined}
-                onClient={(id, name) => setFolder({ id, name })}
+                onClient={mode === 'pick' ? undefined : (id, name) => setFolder({ id, name })}
+                checked={picked.has(f.id)}
+                onCheck={mode === 'pick' ? () => setPicked(prev => {
+                  const next = new Map(prev);
+                  if (next.has(f.id)) next.delete(f.id); else next.set(f.id, f);
+                  return next;
+                }) : undefined}
               />
             ))}
             {hasMore && (
               <div style={{ textAlign: 'center', marginTop: '6px' }}>
                 <button onClick={loadMore} disabled={loadingMore} style={btn()}>{loadingMore ? 'Loading…' : 'Load more'}</button>
               </div>
+            )}
+            {mode === 'pick' && (
+              <ZipBar
+                picked={[...picked.values()]}
+                label={folder?.name || q || 'Client files'}
+                total={files.length}
+                onSelectAll={() => setPicked(prev => { const next = new Map(prev); for (const f of files) next.set(f.id, f); return next; })}
+                onClear={() => setPicked(new Map())}
+              />
             )}
           </div>
           {wide && preview}
