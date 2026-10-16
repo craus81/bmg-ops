@@ -6,6 +6,7 @@ import { toJpegIfHeic } from '@/lib/heic';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { createClient } from '@/lib/supabase-browser';
 import { looseOrFilter } from '@/lib/loose-search';
+import { useImageDrop } from '@/lib/use-image-drop';
 
 export interface CreatedPart {
   id: string;
@@ -109,6 +110,7 @@ export function CreateNetsuiteItemModal({
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const photoInput = useRef<HTMLInputElement>(null);
+  const { dragging: photoDragging, dropProps: photoDropProps } = useImageDrop(setPhoto, { disabled: submitting });
   useEffect(() => {
     if (!photo) { setPhotoPreview(null); return; }
     const url = URL.createObjectURL(photo);
@@ -365,7 +367,14 @@ export function CreateNetsuiteItemModal({
               style={{ display: 'none' }}
               onChange={e => { const f = e.target.files?.[0]; if (f) setPhoto(f); e.target.value = ''; }}
             />
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div
+              {...photoDropProps}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '10px', borderRadius: '10px',
+                border: `2px dashed ${photoDragging ? '#60a5fa' : 'var(--border)'}`,
+                background: photoDragging ? 'rgba(96,165,250,0.10)' : 'transparent',
+              }}
+            >
               {photoPreview && (
                 <img src={photoPreview} alt="" style={{ width: '56px', height: '56px', objectFit: 'cover', borderRadius: '8px', border: '1px solid var(--border)' }} />
               )}
@@ -382,6 +391,9 @@ export function CreateNetsuiteItemModal({
                   Remove
                 </button>
               )}
+              <span className="drop-hint" style={{ fontSize: '11px', color: photoDragging ? '#60a5fa' : 'var(--text-muted)', fontWeight: photoDragging ? 700 : 400 }}>
+                {photoDragging ? 'Drop to use this picture' : 'or drag a picture here, or paste one (Ctrl/Cmd+V)'}
+              </span>
             </div>
             <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
               Shows on estimates, the customer approval page and the Parts catalog.

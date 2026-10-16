@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase-browser';
 import AddToEstimateModal from '@/components/AddToEstimateModal';
 import { loadKits, normItem, type KitWithMembers } from '@/lib/part-kits';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { useImageDrop } from '@/lib/use-image-drop';
 
 /**
  * The Ranger-Design-style catalog browser (roadmap N4-A): a faceted,
@@ -290,6 +291,12 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
       setBusyPart(null);
     }
   };
+
+  // Drop or paste a picture onto an open part record (admins, like Add photo).
+  const { dragging: detailDragging, dropProps: detailDropProps } = useImageDrop(
+    f => { if (detail) void uploadPhoto(detail.id, f); },
+    { disabled: !open || !isAdmin || !detail || busyPart === detail.id },
+  );
 
   // Vehicle-card photo: straight to storage + a direct row update — staff
   // RLS on vehicle_platforms allows it, no API route needed.
@@ -787,7 +794,21 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
             </div>
 
             <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div style={{ aspectRatio: '16/9', background: 'var(--subtle-bg, rgba(128,128,128,0.08))', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative' }}>
+              <div
+                {...(isAdmin ? detailDropProps : {})}
+                style={{
+                  aspectRatio: '16/9', background: 'var(--subtle-bg, rgba(128,128,128,0.08))', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative',
+                  outline: detailDragging ? '2px dashed #60a5fa' : 'none', outlineOffset: '-2px',
+                }}
+              >
+                {detailDragging && (
+                  <div style={{ position: 'absolute', inset: 0, zIndex: 1, background: 'rgba(96,165,250,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '13px', fontWeight: 800, color: '#60a5fa', pointerEvents: 'none' }}>
+                    Drop to {detail.image_path ? 'replace' : 'add'} the photo
+                  </div>
+                )}
+                {busyPart === detail.id && !detailDragging && (
+                  <div style={{ position: 'absolute', top: '8px', left: '8px', padding: '3px 8px', borderRadius: '6px', background: 'var(--card)', fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>Uploading…</div>
+                )}
                 {detail.image_path ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={imageUrl(detail.image_path)} alt={detail.display_name || detail.item_number} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
@@ -800,6 +821,11 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                     disabled={busyPart === detail.id}
                     style={{ position: 'absolute', bottom: '8px', right: '8px', padding: '5px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '11px', fontWeight: 700, cursor: 'pointer', color: 'var(--text-primary)' }}
                   >{detail.image_path ? 'Change photo' : 'Add photo'}</button>
+                )}
+                {isAdmin && (
+                  <span className="drop-hint" style={{ position: 'absolute', bottom: '12px', left: '10px', fontSize: '10px', color: 'var(--text-muted)' }}>
+                    Drag a picture here or paste one (Ctrl/Cmd+V)
+                  </span>
                 )}
               </div>
 

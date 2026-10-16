@@ -528,6 +528,12 @@ button {
   .palette-fab { display: none !important; }
 }
 
+/* Picture boxes (use-image-drop): the "drag or paste" hint only makes
+   sense with a mouse, so phones and tablets just see the photo button. */
+@media (pointer: coarse) {
+  .drop-hint { display: none !important; }
+}
+
 /* ── No zoom-on-focus on touch screens ──────────────────────────────────
    iOS zooms the page in when a field whose text is under 16px gets focus,
    and never zooms back out. In the iPhone app it's worse: Capacitor turns
