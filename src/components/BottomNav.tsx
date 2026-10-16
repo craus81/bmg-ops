@@ -71,7 +71,9 @@ export default function BottomNav() {
   };
 
   return (
-    <nav style={{
+    // On iPhone Duo screens globals.css turns this into a rail down the right
+    // edge (html[data-sidenav], src/lib/duo-layout.ts).
+    <nav className="app-nav" style={{
       position: 'fixed', bottom: 0, left: 0, right: 0,
       background: theme.navBg,
       borderTop: `1px solid ${theme.border}`,
@@ -90,7 +92,7 @@ export default function BottomNav() {
             key={tab.id}
             aria-label={tab.label}
             title={tab.label}
-            className={active ? undefined : 'bottom-nav-tab'}
+            className={active ? 'app-nav-tab' : 'app-nav-tab bottom-nav-tab'}
             onClick={() => tab.id === AI_TAB_ID
               ? window.dispatchEvent(new Event(AI_CHAT_TOGGLE_EVENT))
               : router.push(tab.path)}

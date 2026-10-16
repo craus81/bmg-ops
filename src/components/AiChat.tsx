@@ -550,7 +550,7 @@ export default function AiChat() {
 
       {/* Chat panel */}
       {isOpen && (
-        <div style={isFullScreen ? {
+        <div className="ai-chat-panel" style={isFullScreen ? {
           // Full-screen mode: cover the page content area but leave the
           // sticky header and bottom nav visible (Ashley's spec).
           position: 'fixed',

@@ -518,9 +518,11 @@ export default function TrackingPage() {
   }, [expandedId, vehicleSalesOrders]);
 
   // Lock body scroll while a vehicle detail modal is open (Esc is bound on
-  // the backdrop, see closeOnEscape).
+  // the backdrop, see closeOnEscape). Not on the iPhone Duo's big screen,
+  // where the details sit beside a list that has to keep scrolling.
   useEffect(() => {
     if (!expandedId) return;
+    if (document.documentElement.hasAttribute('data-duo-wide')) return;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
@@ -1509,7 +1511,7 @@ export default function TrackingPage() {
   };
 
   return (
-    <div>
+    <div className={expandedId ? 'inshop-page inshop-has-detail' : 'inshop-page'}>
       {/* Page Header */}
       <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
         <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>
@@ -1951,15 +1953,18 @@ export default function TrackingPage() {
                     {/* Backdrop */}
                     <div
                       ref={closeOnEscape(() => setExpandedId(null))}
+                      className="inshop-backdrop"
                       style={{
                         position: 'fixed', inset: 0,
                         background: 'rgba(0,0,0,0.55)',
                         zIndex: 1000,
                       }}
                     />
-                    {/* Modal */}
+                    {/* Modal. On the iPhone Duo's big screen globals.css docks it
+                        beside the list instead (html[data-duo-wide]). */}
                     <div
                       onClick={(e) => e.stopPropagation()}
+                      className="inshop-detail"
                       style={{
                         position: 'fixed', top: '50%', left: '50%',
                         transform: 'translate(-50%, -50%)',

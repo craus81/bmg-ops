@@ -1205,7 +1205,11 @@ export default function ScanPage() {
 
       {/* ─── STEP 3: Scan VINs ─── */}
       {step === 'scan' && (
-        <div>
+        // On the iPhone Duo's big screen globals.css splits this at the fold:
+        // capture on the left, the shift banner and today's list on the right
+        // (html[data-duo-wide]). Elsewhere the three blocks stack as before.
+        <div className="scan-step">
+          <div className="scan-head">
           {/* Locked banner */}
           <div style={{
             padding: '10px 14px', borderRadius: '10px', marginBottom: '12px',
@@ -1282,6 +1286,9 @@ export default function ScanPage() {
             <ProofViewer url={showProof.url} filename={showProof.name} onClose={() => setShowProof(null)} />
           )}
 
+          </div>
+
+          <div className="scan-capture">
           {/* Camera / Text toggle (the RFID flow has its own inside the component) */}
           {!isVerizonRfid && (
             <div style={{ display: 'flex', gap: '4px', marginBottom: '10px', background: theme.card, borderRadius: '10px', padding: '3px' }}>
@@ -1506,8 +1513,10 @@ export default function ScanPage() {
             </div>
           )}
 
+          </div>
+
           {scans.length > 0 && (
-            <div>
+            <div className="scan-list">
               <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
                 Today&apos;s Scans ({scans.length})
               </div>
