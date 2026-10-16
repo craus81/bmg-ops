@@ -8,8 +8,9 @@ import { apiFetch } from '@/lib/api-client';
 
 /**
  * Books → Invoices vs NetSuite (migrations 364, 367, 370, 374, 376, 382, 383,
- * 384, 386, 389 and 390, docs/books.md "Invoices", "Payments", "Customer
- * deposits", "Vendor bills" and "Bill payments").
+ * 384, 386, 389, 390 and 391, docs/books.md "Invoices", "Payments",
+ * "Customer deposits", "Vendor bills", "Bill payments" and "Checks and card
+ * charges").
  *
  * FleetSuite works out its own entry for every NetSuite invoice with the
  * invoice rule, and for every credit memo with the same rule the other way
@@ -22,14 +23,16 @@ import { apiFetch } from '@/lib/api-client';
  * the deposit rule, and post in the same run too. Vendor bills and bill
  * credits are copied the same way, checked with the bill rule, and post in
  * the same run as well. Bill payments are copied the same way, checked with
- * the bill payment rule, and post in the same run too. Super admins only
- * while the books are built, linked from the other books pages.
+ * the bill payment rule, and post in the same run too. Checks and credit
+ * card charges and refunds are copied the same way and checked with the
+ * spending rule; they don't post yet. Super admins only while the books are
+ * built, linked from the other books pages.
  */
 
 type Status = 'matches' | 'differs' | 'unworkable' | 'waiting';
 
-type Kind = 'invoice' | 'credit_memo' | 'payment' | 'deposit' | 'bill' | 'bill_payment';
-const KINDS: readonly Kind[] = ['invoice', 'credit_memo', 'payment', 'deposit', 'bill', 'bill_payment'];
+type Kind = 'invoice' | 'credit_memo' | 'payment' | 'deposit' | 'bill' | 'bill_payment' | 'spending';
+const KINDS: readonly Kind[] = ['invoice', 'credit_memo', 'payment', 'deposit', 'bill', 'bill_payment', 'spending'];
 
 /** What each kind of document is called. */
 const WORDS: Record<Kind, { one: string; many: string; title: string; head: string }> = {
@@ -41,15 +44,21 @@ const WORDS: Record<Kind, { one: string; many: string; title: string; head: stri
   // And the Bills switch lists bill credits too.
   bill: { one: 'bill or bill credit', many: 'bills and bill credits', title: 'Bills', head: 'Bill' },
   bill_payment: { one: 'bill payment', many: 'bill payments', title: 'Bill payments', head: 'Bill payment' },
+  // And the Checks and cards switch lists checks, card charges and card refunds.
+  spending: { one: 'check, card charge or refund', many: 'checks, card charges and refunds', title: 'Checks and cards', head: 'Number' },
 };
 
 /** The kinds of document copied from NetSuite by the books themselves, each with its Copy now. */
 const COPIED: Partial<Record<Kind, string>> = {
   deposit: '/api/admin/books/deposits', bill: '/api/admin/books/bills', bill_payment: '/api/admin/books/bill-payments',
+  spending: '/api/admin/books/spending',
 };
 
 /** The kinds of document that are a vendor's, not a customer's. */
 const VENDOR_KINDS: ReadonlySet<Kind> = new Set(['bill', 'bill_payment']);
+
+/** What each check and card document is called, and its chip in the list. */
+const SPENDING_WORDS: Record<'Check' | 'CardChrg' | 'CardRfnd', string> = { Check: 'check', CardChrg: 'card charge', CardRfnd: 'card refund' };
 
 interface Summary {
   /** Invoices, credit memos or payments, whichever kind the month was checked for. */
@@ -96,9 +105,10 @@ interface PostingRun {
 }
 
 /**
- * How the last copy of NetSuite's deposits, bills or bill payments went
- * (src/lib/books/netsuite-deposits.ts, netsuite-bills.ts,
- * netsuite-bill-payments.ts); counts and words only.
+ * How the last copy of NetSuite's deposits, bills, bill payments or checks
+ * and card charges went (src/lib/books/netsuite-deposits.ts,
+ * netsuite-bills.ts, netsuite-bill-payments.ts, netsuite-spending.ts);
+ * counts and words only.
  */
 interface CopyRun {
   read: number;
@@ -156,9 +166,9 @@ interface Invoice {
    * payment's: the bills it paid.
    */
   applied?: Array<{ number: string; cents: number | null; date?: string }>;
-  /** A deposit's or deposit application's, a bill's or bill credit's, a bill payment's. */
-  type?: 'CustDep' | 'DepAppl' | 'VendBill' | 'VendCred' | 'VendPymt';
-  /** NetSuite's status for a deposit, application, bill, bill credit or bill payment, in its words. */
+  /** A deposit's or deposit application's, a bill's or bill credit's, a bill payment's, a check's or card charge's or refund's. */
+  type?: 'CustDep' | 'DepAppl' | 'VendBill' | 'VendCred' | 'VendPymt' | 'Check' | 'CardChrg' | 'CardRfnd';
+  /** NetSuite's status for a deposit, application, bill, bill credit, bill payment, check or card charge, in its words. */
   netsuiteStatus?: string;
   /** An application's: the deposit it applies. */
   deposit?: string;
@@ -166,7 +176,7 @@ interface Invoice {
   order?: string;
   /** A bill's: the purchase orders and receipts it came from; a bill credit's vendor return. */
   from?: string[];
-  /** A bill's or bill credit's lines, as copied from NetSuite; amounts in cents, as the document has them. */
+  /** A bill's or bill credit's, a check's or card charge's or refund's lines, as copied from NetSuite; amounts in cents, as the document has them. */
   lines?: Array<{ label: string; quantity: string | null; memo: string | null; cents: number | null }>;
 }
 
@@ -188,7 +198,7 @@ interface Payload {
   /** Whether this company's invoices, credit memos, payments, deposits, bills and bill payments post to FleetSuite's books yet. */
   posts: boolean;
   lastRun: { at: string; result: PostingRun } | null;
-  /** Deposits, bills and bill payments only: how the last copy of them from NetSuite went; null before the first. */
+  /** Deposits, bills, bill payments and checks and cards only: how the last copy of them from NetSuite went; null before the first. */
   copy?: { at: string; result: CopyRun } | null;
   summary: Summary;
   reasons: Reason[];
@@ -555,7 +565,7 @@ export default function BooksInvoicesPage() {
     setPosting(false);
   };
 
-  // Copies NetSuite's deposits, bills or bill payments now. As with posting,
+  // Copies NetSuite's deposits, bills, bill payments or checks and card charges now. As with posting,
   // how the copy went is recorded either way and shows in the banners after
   // the reload.
   const copyNow = async () => {
@@ -600,7 +610,19 @@ export default function BooksInvoicesPage() {
         <div style={{ flex: '1 1 280px' }}>
           <div style={{ fontSize: '20px', fontWeight: 800 }}>{words.title} vs NetSuite</div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            {kind === 'bill_payment' ? (
+            {kind === 'spending' ? (
+              <>
+                NetSuite&apos;s checks, money BMG pays straight from a bank account, and its credit card charges and refunds,
+                purchases on a card and money a vendor puts back on it, are copied from NetSuite every two hours with their
+                lines. For each one FleetSuite works out its own entry the way a bill&apos;s is worked out, with the bank account
+                or card the money comes out of in place of payables: that account is credited with the total, an expense line is
+                debited to its own account, a non-stock item to its expense account, and a stock item to its asset account. A
+                card refund works the other way round. Which bank account or card it was comes from NetSuite&apos;s posting of
+                the document, since the copy of it doesn&apos;t keep that. Each entry is checked account by account against what
+                NetSuite posted for the same document. They aren&apos;t posted to FleetSuite&apos;s books yet: that comes once
+                they&apos;ve been checked.
+              </>
+            ) : kind === 'bill_payment' ? (
               <>
                 NetSuite&apos;s bill payments, the money BMG pays its vendors against their bills, are copied from NetSuite
                 every two hours with the bills each one paid. For each payment FleetSuite works out its own entry: payables are
@@ -826,10 +848,12 @@ export default function BooksInvoicesPage() {
                 ? 'Vendor bills and bill credits NetSuite booked into this month for this company'
               : kind === 'bill_payment'
                 ? 'Bill payments NetSuite booked into this month for this company'
+              : kind === 'spending'
+                ? 'Checks and credit card charges and refunds NetSuite booked into this month for this company'
               : kind === 'payment'
                 ? `${words.title} dated this month that NetSuite posted to this company`
                 : `${words.title} NetSuite booked into this month for this company`}, checked with rule {data.rule}.
-            {data.listsCopiedAt && ` ${kind === 'bill_payment' ? 'Vendors' : `Items and ${kind === 'bill' ? 'vendors' : 'tax codes'}`} as copied from NetSuite ${ago(data.listsCopiedAt)}.`}
+            {data.listsCopiedAt && ` ${kind === 'bill_payment' ? 'Vendors' : `Items and ${kind === 'bill' || kind === 'spending' ? 'vendors' : 'tax codes'}`} as copied from NetSuite ${ago(data.listsCopiedAt)}.`}
             {!data.posts && ` This company's ${words.many} aren't posted to FleetSuite's books yet; they will be once they've been checked.`}
           </div>
 
@@ -863,7 +887,7 @@ export default function BooksInvoicesPage() {
                 <tr style={{ color: 'var(--text-secondary)' }}>
                   <th style={{ ...cell, textAlign: 'left' }}>{words.head}</th>
                   <th style={{ ...cell, textAlign: 'left' }}>Date</th>
-                  <th style={{ ...cell, textAlign: 'left' }}>{VENDOR_KINDS.has(kind) ? 'Vendor' : 'Customer'}</th>
+                  <th style={{ ...cell, textAlign: 'left' }}>{kind === 'spending' ? 'Payee' : VENDOR_KINDS.has(kind) ? 'Vendor' : 'Customer'}</th>
                   <th style={cell}>Total</th>
                   <th style={{ ...cell, textAlign: 'left' }}>Check</th>
                   {data.posts && <th style={{ ...cell, textAlign: 'left' }}>Books</th>}
@@ -889,6 +913,9 @@ export default function BooksInvoicesPage() {
                         {open === inv.netsuiteId ? '▾' : '▸'} {inv.number}
                         {inv.type === 'DepAppl' && <span style={{ ...chip(GREY), marginLeft: '6px' }}>Application</span>}
                         {inv.type === 'VendCred' && <span style={{ ...chip(GREY), marginLeft: '6px' }}>Credit</span>}
+                        {(inv.type === 'Check' || inv.type === 'CardChrg' || inv.type === 'CardRfnd') && (
+                          <span style={{ ...chip(GREY), marginLeft: '6px' }}>{SPENDING_WORDS[inv.type].replace(/^./, (c) => c.toUpperCase())}</span>
+                        )}
                       </td>
                       <td style={{ ...cell, textAlign: 'left' }}>
                         {dateText(inv.date)}
@@ -913,7 +940,8 @@ export default function BooksInvoicesPage() {
                             invoice={inv}
                             accounts={data.accounts}
                             one={inv.type === 'DepAppl' ? 'deposit application' : inv.type === 'CustDep' ? 'deposit'
-                              : inv.type === 'VendCred' ? 'bill credit' : inv.type === 'VendBill' ? 'bill' : words.one}
+                              : inv.type === 'VendCred' ? 'bill credit' : inv.type === 'VendBill' ? 'bill'
+                                : inv.type === 'Check' || inv.type === 'CardChrg' || inv.type === 'CardRfnd' ? SPENDING_WORDS[inv.type] : words.one}
                           />
                         </td>
                       </tr>
