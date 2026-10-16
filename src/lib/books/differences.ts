@@ -1,6 +1,7 @@
 import { COPY_FROM, monthsBetween, toCents, TRAN_TYPE_NAMES } from './netsuite-gl';
 import { DEPOSIT_SOURCE_TYPE } from './deposit-rule';
 import { BILL_SOURCE_TYPE } from './bill-rule';
+import { BILL_PAYMENT_SOURCE_TYPE } from './bill-payment-rule';
 
 /**
  * What still differs between FleetSuite's own books and NetSuite's, and why
@@ -31,6 +32,7 @@ export const NETSUITE_TYPE: Readonly<Record<string, string>> = {
   [DEPOSIT_SOURCE_TYPE.DepAppl]: 'DepAppl',
   [BILL_SOURCE_TYPE.VendBill]: 'VendBill',
   [BILL_SOURCE_TYPE.VendCred]: 'VendCred',
+  [BILL_PAYMENT_SOURCE_TYPE]: 'VendPymt',
 };
 
 const DEPOSIT_KINDS: ReadonlySet<string> = new Set(Object.values(DEPOSIT_SOURCE_TYPE));
@@ -362,7 +364,7 @@ export function kindRows(cmp: MonthComparison, counts: Record<string, number> | 
 
 /** One document of a month as gl_books_difference_documents returns it. */
 export interface DiffDocumentData {
-  /** FleetSuite's source type: 'invoice', 'credit_memo', 'payment', 'customer_deposit', 'deposit_application', 'vendor_bill' or 'vendor_credit'. */
+  /** FleetSuite's source type: 'invoice', 'credit_memo', 'payment', 'customer_deposit', 'deposit_application', 'vendor_bill', 'vendor_credit' or 'bill_payment'. */
   kind: string;
   netsuite_id: string;
   /** Every account either side moved this month. */
@@ -372,9 +374,9 @@ export interface DiffDocumentData {
   /** FleetSuite's journal: how many entries it has had and the one that stands. */
   fleetsuite: { entries: number; standing: { entry_no: number; date: string } | null } | null;
   /**
-   * The copy of NetSuite's invoices, credit memos, payments, deposits or
-   * bills (deleted: a deposit or bill NetSuite no longer lists); a bill's
-   * customer is its vendor.
+   * The copy of NetSuite's invoices, credit memos, payments, deposits, bills
+   * or bill payments (deleted: a deposit, bill or bill payment NetSuite no
+   * longer lists); a bill's or bill payment's customer is its vendor.
    */
   copy: { number: string | null; customer: string | null; voided: boolean; deleted: boolean } | null;
 }
@@ -410,7 +412,7 @@ export interface DiffDocument {
   kind: string;
   netsuiteId: string;
   number: string;
-  /** The customer, or a bill's or bill credit's vendor. */
+  /** The customer, or a bill's, bill credit's or bill payment's vendor. */
   customer: string | null;
   /** NetSuite's date for it, else FleetSuite's. */
   date: string | null;
@@ -444,11 +446,11 @@ const NAMED_ACCOUNTS = 2;
 
 /**
  * FleetSuite's kinds of document that post in the month NetSuite booked them
- * to, whatever their own date (entryDate in invoice-check.ts, migrations 380
- * and 386), and that Invoices vs NetSuite lists under that month. Payments,
- * deposits and applications post and are listed by their own date.
+ * to, whatever their own date (entryDate in invoice-check.ts, migrations 380,
+ * 386 and 390), and that Invoices vs NetSuite lists under that month.
+ * Payments, deposits and applications post and are listed by their own date.
  */
-const IN_NETSUITE_MONTH: ReadonlySet<string> = new Set(['invoice', 'credit_memo', ...BILL_KINDS]);
+const IN_NETSUITE_MONTH: ReadonlySet<string> = new Set(['invoice', 'credit_memo', ...BILL_KINDS, BILL_PAYMENT_SOURCE_TYPE]);
 
 function reasonFor(doc: DiffDocumentData, lines: DiffDocumentLine[], costAccounts: ReadonlySet<string>): { reason: DiffReason; why: string } {
   const ns = doc.netsuite;

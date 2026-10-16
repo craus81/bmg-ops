@@ -26,6 +26,9 @@ import { PAYABLES_LINE } from './bill-rule';
 
 export const BILL_PAYMENT_RULE = 'bill_payment@1';
 
+/** What a bill payment's journal entries are filed as (migration 390), keyed bill_payment:<NetSuite id>:<n>. */
+export const BILL_PAYMENT_SOURCE_TYPE = 'bill_payment';
+
 /** The entry's lines, by what they post: payables (PAYABLES_LINE), where the money came from, and the discount. */
 export const PAID_FROM_LINE = 'paid_from';
 export const DISCOUNT_LINE = 'discount';

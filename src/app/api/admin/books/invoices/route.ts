@@ -19,9 +19,9 @@ import { BILL_PAYMENT_RULE } from '@/lib/books/bill-payment-rule';
 import { checkBillPaymentMonth, type BillPaymentMonthData } from '@/lib/books/bill-payment-check';
 import { BOOKS_BILL_PAYMENTS_SYNC } from '@/lib/books/netsuite-bill-payments';
 import {
-  BOOKS_INVOICE_POSTING, POSTING_COMPANIES, billBooks, billPostingFor, depositBooks, depositPostingFor, invoiceBooks, paymentBooks,
-  postInvoices, postingFor, postingKey, readBillMonth, unsaidFacts,
-  type BillPosting, type DepositPosting, type InvoicePosting, type PaymentPosting,
+  BOOKS_INVOICE_POSTING, POSTING_COMPANIES, billBooks, billPaymentBooks, billPostingFor, depositBooks, depositPostingFor, invoiceBooks,
+  paymentBooks, postInvoices, postingFor, postingKey, readBillMonth, unsaidFacts,
+  type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type PaymentPosting,
 } from '@/lib/books/invoice-posting';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { compactSuiteqlError } from '@/lib/sales-order-sync';
@@ -54,10 +54,10 @@ const POSTING_BUDGET_MS = 240_000;
  * without and says so.
  *
  * For a company whose documents post (src/lib/books/invoice-posting.ts),
- * each invoice, credit memo, payment, deposit, application, bill or bill
- * credit (bill payments don't post yet) also says what FleetSuite's books
- * hold for it (migrations 367, 376, 383 and 386) and what the next posting
- * run does about it, and `lastRun` is how the last one went.
+ * each invoice, credit memo, payment, deposit, application, bill, bill
+ * credit or bill payment also says what FleetSuite's books hold for it
+ * (migrations 367, 376, 383, 386 and 390) and what the next posting run does
+ * about it, and `lastRun` is how the last one went.
  *
  * Super admin only: the books are being built hidden, for the owner, until
  * they're ready (docs/books.md). It only reads.
@@ -139,11 +139,25 @@ export async function GET(req: NextRequest) {
     const failed = res.error || copy.error;
     if (failed) return NextResponse.json({ error: failed.message }, { status: 500 });
     const data = (res.data ?? {}) as Partial<BillPaymentMonthData>;
-    const check = checkBillPaymentMonth({ payments: data.payments ?? [], not_copied: data.not_copied ?? [] }, { company, chart });
+    const payments = data.payments ?? [];
+    let held: Map<string, BillPaymentPosting> | null = null;
+    if (posts) {
+      const mine = payments.filter((p) => p.companies.includes(company)).map((p) => p.netsuite_id);
+      held = new Map();
+      if (mine.length) {
+        const books = await service.rpc('gl_bill_payment_postings', { p_company: company, p_source_ids: mine, p_lines: true });
+        if (books.error) return NextResponse.json({ error: books.error.message }, { status: 500 });
+        for (const p of ((books.data as any)?.payments ?? []) as BillPaymentPosting[]) held.set(p.source_id, p);
+      }
+    }
+    const check = checkBillPaymentMonth(
+      { payments, not_copied: data.not_copied ?? [] },
+      { company, chart },
+      held ? (w) => billPaymentBooks(w, held!.get(w.payment.netsuite_id)) : undefined,
+    );
     if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });
-    // Bill payments don't post yet: they're checked first, as bills were.
     return NextResponse.json({
-      rule: BILL_PAYMENT_RULE, kind, ...page, listsCopiedAt: lists.data?.updated_at ?? null, posts: false, copy: copyOf(copy.data), ...check,
+      rule: BILL_PAYMENT_RULE, kind, ...page, listsCopiedAt: lists.data?.updated_at ?? null, posts, copy: copyOf(copy.data), ...check,
     });
   }
 
@@ -267,9 +281,9 @@ export async function GET(req: NextRequest) {
 
 /**
  * POST /api/admin/books/invoices — post invoices, credit memos, payments,
- * deposits and bills to FleetSuite's books now rather than wait for the
- * two-hourly run. Same job, same record of how it went; the response says
- * only how the run went, the page reloads the rest.
+ * deposits, bills and bill payments to FleetSuite's books now rather than
+ * wait for the two-hourly run. Same job, same record of how it went; the
+ * response says only how the run went, the page reloads the rest.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireSuperAdmin(req);

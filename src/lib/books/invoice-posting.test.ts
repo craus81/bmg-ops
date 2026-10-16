@@ -2,14 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { BooksError } from './journal';
 import { workOutMonth, type ChartAccount, type InvoiceMonthData, type LineFactsRead } from './invoice-check';
 import {
-  billBooks, billJournalEntry, billPostingFor, decide, decideBill, decideDeposit, decidePayment, depositBooks, depositEntryLines,
-  depositJournalEntry, depositPostingFor, entryLines, failureReason, invoiceBooks, invoiceJournalEntry, parsePostingState, paymentBooks,
-  paymentEntryLines, paymentJournalEntry, postingKey, postingQueue, signature, unsaidFacts,
-  type BillPosting, type DepositPosting, type InvoicePosting, type PaymentPosting,
+  billBooks, billJournalEntry, billPaymentBooks, billPaymentJournalEntry, billPostingFor, decide, decideBill, decideBillPayment, decideDeposit,
+  decidePayment, depositBooks, depositEntryLines, depositJournalEntry, depositPostingFor, entryLines, failureReason, invoiceBooks,
+  invoiceJournalEntry, parsePostingState, paymentBooks, paymentEntryLines, paymentJournalEntry, postingKey, postingQueue, signature, unsaidFacts,
+  type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type PaymentPosting,
 } from './invoice-posting';
 import { workOutPaymentMonth, type PaymentMonthData } from './payment-check';
 import { workOutDepositMonth, type DepositMonthData } from './deposit-check';
 import { workOutBillMonth, type BillMonthData } from './bill-check';
+import { workOutBillPaymentMonth, type BillPaymentMonthData } from './bill-payment-check';
 
 // Made-up books: '120' receivable, '400' income, '220' sales tax payable.
 const CHART: ChartAccount[] = [
@@ -658,6 +659,140 @@ describe('bills', () => {
       }));
       const current = { id: 'e11', entry_no: 11, entry_date: entry!.entryDate, lines };
       expect(decideBill(w, held({ current }))).toEqual({ kind: 'keep' });
+    }
+  });
+});
+
+describe('bill payments', () => {
+  // Made-up books: '200' payables, '100' checking, '220' a company card, '485' purchase discounts.
+  const PAY_CHART: ChartAccount[] = [
+    { netsuite_account_id: '200', number: '2000', name: 'Accounts Payable', account_type: 'accounts_payable', company: 'BMG', active: true, is_summary: false },
+    { netsuite_account_id: '100', number: '1000', name: 'Checking', account_type: 'bank', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '220', number: '2200', name: 'Company Card', account_type: 'credit_card', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '485', number: '4850', name: 'Purchase Discounts', account_type: 'other_income', company: null, active: true, is_summary: false },
+  ];
+  const ids = new Map(['200', '100', '220', '485'].map((a) => [a, `a-${a}`]));
+
+  type Doc = BillPaymentMonthData['payments'][number];
+  type Posted = Doc['netsuite'][number];
+  const gl = (lineId: string, account: string, debit: string, credit: string): Posted => ({ line_id: lineId, account, debit, credit });
+  // $650.00 of bills paid with $13.00 off, as NetSuite posts it: $637.00 out of checking, payables take off the money and the discount.
+  const payment = (fields: Partial<Doc> = {}): Doc => ({
+    netsuite_id: '801', number: 'CHK1001', date: '2026-09-08', posting_month: '2026-09-01', total: '637.00', voided: false,
+    status: 'Online Bill Pay', vendor: 'Sample Supply Co', vendor_netsuite_id: '50', vendor_payables: '200', companies: ['BMG'],
+    links: [{ netsuite_id: '701', type: 'VendBill', number: 'B-701', amount: '650.00' }],
+    netsuite: [gl('0', '100', '0.00', '637.00'), gl('1', '200', '650.00', '0.00'), gl('2', '485', '0.00', '13.00')],
+    ...fields,
+  });
+  const one = (d: Doc = payment()) => workOutBillPaymentMonth({ payments: [d], not_copied: [] }, { company: 'BMG', chart: PAY_CHART }).payments[0];
+
+  /** What the journal holds when CHK1001 posted as it is now, as entry 21. */
+  const held = (fields: Partial<BillPaymentPosting> = {}): BillPaymentPosting => ({
+    source_type: 'bill_payment',
+    source_id: '801',
+    entries: 1,
+    unreversed: ['e21'],
+    current: {
+      id: 'e21', entry_no: 21, entry_date: '2026-09-08',
+      lines: [
+        { account: '200', debit: '650.00', credit: '0.00', division: null, source_line_ref: 'payables', customer_id: null, vendor_ref: '50' },
+        { account: '100', debit: '0.00', credit: '637.00', division: null, source_line_ref: 'paid_from', customer_id: null, vendor_ref: null },
+        { account: '485', debit: '0.00', credit: '13.00', division: null, source_line_ref: 'discount', customer_id: null, vendor_ref: null },
+      ],
+    },
+    history: [{ entry_no: 21, entry_date: '2026-09-08', reversed_by: null }],
+    payment: { number: 'CHK1001', deleted: false, voided: false },
+    ...fields,
+  });
+
+  it('posts payables, the money and the discount under the bill payment rule in the month NetSuite booked it into, payables carrying the vendor', () => {
+    const { entry } = billPaymentJournalEntry(one(), 'BMG', 2, ids);
+    expect(entry).toMatchObject({
+      company: 'BMG', entryDate: '2026-09-08', sourceType: 'bill_payment', sourceId: '801', postingRule: 'bill_payment@1',
+      idempotencyKey: 'bill_payment:801:2', memo: 'CHK1001, Sample Supply Co', postedBy: null,
+    });
+    expect(entry!.lines).toEqual([
+      { accountId: 'a-200', debit: '650.00', credit: null, division: null, itemNumber: null, sourceLineRef: 'payables', vendorRef: '50' },
+      { accountId: 'a-100', debit: null, credit: '637.00', division: null, itemNumber: null, sourceLineRef: 'paid_from', vendorRef: null },
+      { accountId: 'a-485', debit: null, credit: '13.00', division: null, itemNumber: null, sourceLineRef: 'discount', vendorRef: null },
+    ]);
+    // Dated in August, booked into September: the entry goes on September's first day.
+    expect(billPaymentJournalEntry(one(payment({ date: '2026-08-30' })), 'BMG', 1, ids).entry!.entryDate).toBe('2026-09-01');
+    // No number and no vendor: the memo goes by NetSuite's id, the payables line by no vendor.
+    const bare = billPaymentJournalEntry(one(payment({ number: null, vendor: null, vendor_netsuite_id: null })), 'BMG', 1, ids).entry!;
+    expect(bare.memo).toBe('NetSuite 801');
+    expect(bare.lines.map((l) => l.vendorRef)).toEqual([null, null, null]);
+    expect(billPaymentJournalEntry(one(), 'BMG', 1, new Map([['200', 'a-200']]))).toEqual({ entry: null, missing: ['100', '485'] });
+  });
+
+  it('posts a bill payment nothing stands for, keeps one whose entry still fits, and replaces one NetSuite changed', () => {
+    expect(decideBillPayment(one(), undefined)).toEqual({ kind: 'post' });
+    expect(decideBillPayment(one(), held())).toEqual({ kind: 'keep' });
+    // A new number, status or vendor name only describes, as do the bills it paid.
+    expect(decideBillPayment(one(payment({ number: 'CHK1001-A', status: 'Cleared', vendor: 'Renamed Supply', links: [] })), held()))
+      .toEqual({ kind: 'keep' });
+    // NetSuite took out more than the copy's total: FleetSuite posts what the rule works out, and Differences shows the gap.
+    const short = one(payment({ total: '640.00' }));
+    expect(short.checked.status).toBe('differs');
+    expect(decideBillPayment(short, undefined)).toEqual({ kind: 'post' });
+    const changed: Array<Partial<Doc>> = [
+      { date: '2026-09-09' },
+      // Booked into October now: the entry moves to October's first day.
+      { posting_month: '2026-10-01' },
+      { vendor_netsuite_id: '51' },
+      // A bigger discount: less money out, the same off payables.
+      { total: '630.00', netsuite: [gl('0', '100', '0.00', '630.00'), gl('1', '200', '650.00', '0.00'), gl('2', '485', '0.00', '20.00')] },
+      // Paid by card.
+      { netsuite: [gl('0', '220', '0.00', '637.00'), gl('1', '200', '650.00', '0.00'), gl('2', '485', '0.00', '13.00')] },
+    ];
+    for (const fields of changed) expect(decideBillPayment(one(payment(fields)), held()), JSON.stringify(fields)).toEqual({ kind: 'replace' });
+  });
+
+  it('reverses the entry of a voided bill payment or one that comes to nothing, and leaves one it can\'t work out or not in the GL copy yet', () => {
+    expect(decideBillPayment(one(payment({ voided: true })), held())).toEqual({ kind: 'reverse', why: 'voided' });
+    expect(decideBillPayment(one(payment({ voided: true })), undefined)).toEqual({ kind: 'keep' });
+    // $0: it only applies a bill credit to a bill, and NetSuite posts no lines for it.
+    const zero = payment({ total: '0.00', companies: [], netsuite: [] });
+    expect(one(zero).checked.lines).toEqual([]);
+    expect(decideBillPayment(one(zero), held())).toEqual({ kind: 'reverse', why: 'nothing' });
+    expect(decideBillPayment(one(zero), undefined)).toEqual({ kind: 'keep' });
+    expect(decideBillPayment(one(payment({ companies: [], netsuite: [] })), held())).toEqual({ kind: 'leave', why: 'waiting' });
+    // NetSuite's posting doesn't say where the money came from: no main line, and two accounts credited.
+    const split = payment({
+      netsuite: [gl('1', '200', '650.00', '0.00'), gl('2', '100', '0.00', '400.00'), gl('3', '220', '0.00', '237.00'), gl('4', '485', '0.00', '13.00')],
+    });
+    expect(decideBillPayment(one(split), held())).toEqual({ kind: 'leave', why: 'unworkable' });
+    expect(decideBillPayment(one(split), undefined)).toEqual({ kind: 'leave', why: 'unworkable' });
+    // The copy's total can't be read.
+    expect(decideBillPayment(one(payment({ total: 'n/a' })), held())).toEqual({ kind: 'leave', why: 'unworkable' });
+  });
+
+  it('says what the journal holds for a bill payment and what the next run does', () => {
+    expect(billPaymentBooks(one(), undefined)).toEqual({ entryNo: null, next: 'post', earlier: [] });
+    expect(billPaymentBooks(one(), held())).toEqual({ entryNo: 21, next: null, earlier: [] });
+    expect(billPaymentBooks(one(payment({ voided: true })), held()).next).toBe('reverse');
+    expect(billPaymentBooks(one(payment({ date: '2026-09-09' })), held()).next).toBe('replace');
+    expect(billPaymentBooks(one(payment({ companies: [], netsuite: [] })), held()).next).toBeNull();
+    // Its first entry, reversed when NetSuite changed the payment.
+    const again = held({
+      entries: 2,
+      history: [{ entry_no: 14, entry_date: '2026-09-08', reversed_by: 20 }, { entry_no: 21, entry_date: '2026-09-08', reversed_by: null }],
+    });
+    expect(billPaymentBooks(one(), again)).toEqual({ entryNo: 21, next: null, earlier: [{ entryNo: 14, reversedBy: 20 }] });
+  });
+
+  it('builds an entry that fits what it is compared against once posted', () => {
+    const back = new Map([...ids].map(([ns, id]) => [id, ns]));
+    const paidInFull = payment({ total: '650.00', netsuite: [gl('0', '100', '0.00', '650.00'), gl('1', '200', '650.00', '0.00')] });
+    for (const d of [payment(), payment({ date: '2026-08-30' }), payment({ vendor_netsuite_id: null }), paidInFull]) {
+      const w = one(d);
+      const { entry } = billPaymentJournalEntry(w, 'BMG', 1, ids);
+      const lines = entry!.lines.map((l) => ({
+        account: back.get(l.accountId)!, debit: String(l.debit ?? '0.00'), credit: String(l.credit ?? '0.00'),
+        division: l.division ?? null, source_line_ref: l.sourceLineRef ?? null, customer_id: l.customerId ?? null, vendor_ref: l.vendorRef ?? null,
+      }));
+      const current = { id: 'e21', entry_no: 21, entry_date: entry!.entryDate, lines };
+      expect(decideBillPayment(w, held({ current })), JSON.stringify(d)).toEqual({ kind: 'keep' });
     }
   });
 });

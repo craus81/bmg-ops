@@ -1,6 +1,6 @@
 import {
   centsOf, entryDate,
-  type AccountAmount, type ChartAccount, type CheckStatus, type InvoiceRowView, type InvoiceView, type MonthCheck,
+  type AccountAmount, type ChartAccount, type CheckStatus, type InvoiceBooks, type InvoiceRowView, type InvoiceView, type MonthCheck,
   type MonthReason, type MonthSummary, type NetSuitePosting, type Reason,
 } from './invoice-check';
 import { MAIN_LINE, type RuleLine } from './invoice-rule';
@@ -14,8 +14,9 @@ import { DISCOUNT_LINE, PAID_FROM_LINE, billPaymentEntry, type BillPaymentProble
  * payments"): FleetSuite's own entry from the bill payment rule next to the
  * GL lines NetSuite posted for the same payment (the copy, migration 361),
  * account by account, to the cent, as customer payments are checked
- * (src/lib/books/payment-check.ts). Pure; amounts are whole cents, debit
- * positive.
+ * (src/lib/books/payment-check.ts), and the entry the posting job posts for
+ * it (src/lib/books/invoice-posting.ts). Pure; amounts are whole cents,
+ * debit positive.
  */
 
 export interface BillPaymentRow {
@@ -278,8 +279,16 @@ export function workOutBillPaymentMonth(
   return { payments, account, notes };
 }
 
-/** One company's bill payments for one month, each checked against NetSuite. */
-export function checkBillPaymentMonth(data: BillPaymentMonthData, opts: { company: string; chart: ChartAccount[] }): BillPaymentMonthCheck {
+/**
+ * One company's bill payments for one month, each checked against NetSuite.
+ * `books`, when the company's bill payments post, says what FleetSuite's
+ * books hold for each.
+ */
+export function checkBillPaymentMonth(
+  data: BillPaymentMonthData,
+  opts: { company: string; chart: ChartAccount[] },
+  books?: (worked: WorkedBillPayment) => InvoiceBooks,
+): BillPaymentMonthCheck {
   const { payments: worked, account, notes } = workOutBillPaymentMonth(data, opts);
 
   const summary: MonthSummary = { invoices: 0, matches: 0, differs: 0, unworkable: 0, waiting: 0, withCost: 0 };
@@ -288,7 +297,8 @@ export function checkBillPaymentMonth(data: BillPaymentMonthData, opts: { compan
   const notInGl: string[] = [];
   const moved: string[] = [];
   const used = new Set<string>();
-  for (const { payment: p, number, checked } of worked) {
+  for (const w of worked) {
+    const { payment: p, number, checked } = w;
     if (p.companies.length === 0) {
       // In neither company's GL copy: only worth a word when FleetSuite would post it.
       if (checked.status !== 'matches') notInGl.push(number);
@@ -327,7 +337,13 @@ export function checkBillPaymentMonth(data: BillPaymentMonthData, opts: { compan
       type: 'VendPymt',
       ...(p.status ? { netsuiteStatus: p.status } : {}),
       applied: (p.links ?? []).map((d) => ({ number: paidName(d), cents: d.amount === null ? null : centsOf(d.amount) })),
+      ...(books ? { books: books(w) } : {}),
     });
+  }
+
+  if (books) {
+    summary.posted = views.filter((v) => v.books && v.books.entryNo !== null).length;
+    summary.pending = views.filter((v) => v.books?.next).length;
   }
 
   if (moved.length) {

@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import type { ChartAccount, NetSuitePosting } from './invoice-check';
+import type { ChartAccount, InvoiceBooks, NetSuitePosting } from './invoice-check';
 import {
   billPaymentDiscount, billPaymentReasons, checkBillPayment, checkBillPaymentMonth, paidFromAccount, type BillPaymentMonthData,
+  type WorkedBillPayment,
 } from './bill-payment-check';
 
 // Made-up books: '200' and '201' payables (BMG's), '210' 1084's, '100' a
@@ -316,6 +317,28 @@ describe('checkBillPaymentMonth', () => {
       '100': '1000 Checking', '200': '2000 Accounts Payable', '201': '2010 Accounts Payable Other', '220': '2200 Company Card',
       '485': '4850 Purchase Discounts',
     });
+  });
+
+  it('says what FleetSuite\'s books hold for each of the company\'s and what the next run does, when its bill payments post', () => {
+    const asked: string[] = [];
+    const books = (w: WorkedBillPayment): InvoiceBooks => {
+      asked.push(w.number);
+      if (w.number === 'CHK1001') return { entryNo: 21, next: null, earlier: [{ entryNo: 14, reversedBy: 20 }] };
+      return { entryNo: null, next: 'post', earlier: [] };
+    };
+    const m = checkBillPaymentMonth(DATA, { company: 'BMG', chart: CHART }, books);
+    // Not CHK1004 or CHK1005, which neither company's GL copy has.
+    expect(asked).toEqual(['CHK1007', 'CHK1001', 'CHK1002', 'NetSuite 803', 'CHK1006', 'CHK1008']);
+    expect(m.invoices.map((p) => [p.number, p.books?.entryNo, p.books?.next])).toEqual([
+      ['CHK1007', null, 'post'], ['CHK1001', 21, null], ['CHK1002', null, 'post'], ['NetSuite 803', null, 'post'],
+      ['CHK1006', null, 'post'], ['CHK1008', null, 'post'],
+    ]);
+    expect(m.invoices[1].books?.earlier).toEqual([{ entryNo: 14, reversedBy: 20 }]);
+    expect(m.summary).toMatchObject({ posted: 1, pending: 5 });
+    // A company whose bill payments don't post yet gets neither.
+    const without = checkBillPaymentMonth(DATA, { company: 'BMG', chart: CHART });
+    expect(without.invoices.map((p) => p.books)).toEqual([undefined, undefined, undefined, undefined, undefined, undefined]);
+    expect([without.summary.posted, without.summary.pending]).toEqual([undefined, undefined]);
   });
 
   it('takes the company\'s only payables account without a word, and says nothing of a month with no payments', () => {
