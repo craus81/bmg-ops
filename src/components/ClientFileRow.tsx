@@ -90,7 +90,14 @@ export default function ClientFileRow({ file, selected, onSelect, onClient, hide
   const picking = !!onCheck;
   return (
     <div
-      onClick={picking ? onCheck : onSelect}
+      onClick={e => {
+        // Links and buttons inside the row do their own thing. They must not
+        // stopPropagation: the iPhone app's NativeLinkHandler listens on
+        // window, and a stopped click never reaches it, so the link went to
+        // Safari (no session: "Unauthorized", Craig 2026-10-16).
+        if ((e.target as Element).closest?.('a, button')) return;
+        (picking ? onCheck : onSelect)?.();
+      }}
       style={{
         display: 'flex', alignItems: 'center', gap: compact ? '10px' : '12px',
         padding: compact ? '8px 0' : '10px 12px',
@@ -134,7 +141,6 @@ export default function ClientFileRow({ file, selected, onSelect, onClient, hide
         href={clientFileUrl(file)}
         target="_blank"
         rel="noopener noreferrer"
-        onClick={e => e.stopPropagation()}
         style={{
           flexShrink: 0, padding: compact ? '6px 10px' : '8px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 800,
           background: 'var(--accent, #2563eb)', color: '#fff', textDecoration: 'none', whiteSpace: 'nowrap',
