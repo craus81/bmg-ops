@@ -18,6 +18,9 @@ import { BOOKS_BILLS_SYNC } from '@/lib/books/netsuite-bills';
 import { BILL_PAYMENT_RULE } from '@/lib/books/bill-payment-rule';
 import { checkBillPaymentMonth, type BillPaymentMonthData } from '@/lib/books/bill-payment-check';
 import { BOOKS_BILL_PAYMENTS_SYNC } from '@/lib/books/netsuite-bill-payments';
+import { SPENDING_RULE } from '@/lib/books/spending-rule';
+import { checkSpendingMonth } from '@/lib/books/spending-check';
+import { BOOKS_SPENDING_SYNC, readSpendingMonth } from '@/lib/books/netsuite-spending';
 import {
   BOOKS_INVOICE_POSTING, POSTING_COMPANIES, billBooks, billPaymentBooks, billPostingFor, depositBooks, depositPostingFor, invoiceBooks,
   paymentBooks, postInvoices, postingFor, postingKey, readBillMonth, unsaidFacts,
@@ -42,10 +45,12 @@ const POSTING_BUDGET_MS = 240_000;
  * checked with the payment rule (migration 374), and with `kind=deposit` its
  * customer deposits and deposit applications, checked with the deposit rule
  * (migration 382), with `kind=bill` its vendor bills and bill credits,
- * checked with the bill rule (migration 384), and with `kind=bill_payment`
- * its bill payments, checked with the bill payment rule (migration 389),
- * each with how the last copy of them from NetSuite went. With `summary=1`
- * only the counts come back, for checking every month in turn.
+ * checked with the bill rule (migration 384), with `kind=bill_payment` its
+ * bill payments, checked with the bill payment rule (migration 389), and
+ * with `kind=spending` its checks and credit card charges and refunds,
+ * checked with the spending rule (migration 391), each with how the last
+ * copy of them from NetSuite went. With `summary=1` only the counts come
+ * back, for checking every month in turn.
  *
  * What the copy of the invoices' lines doesn't keep (which lines are cost of
  * goods, a discount or markup set at the top, each line's own amount,
@@ -55,10 +60,10 @@ const POSTING_BUDGET_MS = 240_000;
  *
  * For a company whose documents post (src/lib/books/invoice-posting.ts),
  * each invoice, credit memo, payment, deposit, application, bill, bill
- * credit or bill payment also says what FleetSuite's books hold for it
- * (migrations 367, 376, 383, 386 and 390) and what the next posting run does
- * about it, or that it has nothing to post, and `lastRun` is how the last one
- * went.
+ * credit or bill payment (checks and card charges don't post yet) also says
+ * what FleetSuite's books hold for it (migrations 367, 376, 383, 386 and
+ * 390) and what the next posting run does about it, or that it has nothing
+ * to post, and `lastRun` is how the last one went.
  *
  * Super admin only: the books are being built hidden, for the owner, until
  * they're ready (docs/books.md). It only reads.
@@ -101,8 +106,9 @@ export async function GET(req: NextRequest) {
     : months.includes(previous) ? previous : months[0];
 
   const askedKind = params.get('kind');
-  const kind: SalesDocKind | 'payment' | 'deposit' | 'bill' | 'bill_payment' =
+  const kind: SalesDocKind | 'payment' | 'deposit' | 'bill' | 'bill_payment' | 'spending' =
     askedKind === 'credit_memo' || askedKind === 'payment' || askedKind === 'deposit' || askedKind === 'bill' || askedKind === 'bill_payment'
+      || askedKind === 'spending'
       ? askedKind
       : 'invoice';
   const chart = accounts.data.map(({ company_id, ...a }) => ({ ...a, company: company_id ? codeOf.get(company_id) ?? null : null }));
@@ -131,6 +137,21 @@ export async function GET(req: NextRequest) {
       },
     };
   };
+
+  if (kind === 'spending') {
+    const [read, copy] = await Promise.all([
+      readSpendingMonth(service, company, month).then((data) => ({ data, error: null }), (err: Error) => ({ data: null, error: err })),
+      service.from('sync_state').select('last_result, updated_at').eq('sync_type', BOOKS_SPENDING_SYNC).maybeSingle(),
+    ]);
+    const failed = read.error || copy.error;
+    if (failed) return NextResponse.json({ error: failed.message }, { status: 500 });
+    const check = checkSpendingMonth(read.data!, { company, chart });
+    if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });
+    // Checks and card charges don't post yet: they're checked first, as bills were.
+    return NextResponse.json({
+      rule: SPENDING_RULE, kind, ...page, listsCopiedAt: lists.data?.updated_at ?? null, posts: false, copy: copyOf(copy.data), ...check,
+    });
+  }
 
   if (kind === 'bill_payment') {
     const [res, copy] = await Promise.all([

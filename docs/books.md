@@ -20,7 +20,9 @@ checked with the deposit rule and posted in the same run as invoices,
 part 11, vendor bills and bill credits, copied from NetSuite, checked with
 the bill rule and posted in the same run as invoices, and the bill
 payments that pay them, copied from NetSuite, checked with the bill
-payment rule and posted in the same run too.
+payment rule and posted in the same run too, and part 12, checks and
+credit card charges and refunds, copied from NetSuite and checked with the
+spending rule.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices` and the differences at
@@ -66,6 +68,9 @@ the accounts page; the others are linked from there.
 | Bill payment rule and its check, on the invoices page | `src/lib/books/bill-payment-rule.ts`, `src/lib/books/bill-payment-check.ts` |
 | Bill payments posted to the journal, with invoices | `migrations/390-books-bill-payment-posting.sql`, `src/lib/books/invoice-posting.ts` |
 | Bill payment tests | `src/lib/books/bill-payment-rule.test.ts`, `src/lib/books/bill-payment-check.test.ts`, `src/lib/books/netsuite-bill-payments.test.ts`, `src/lib/books/bill-payments-sql.test.ts`, `src/lib/books/bill-payment-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
+| Checks and credit card charges and refunds, copied from NetSuite | `migrations/391-books-checks-and-cards.sql`, `src/lib/books/netsuite-spending.ts`, `src/app/api/cron/books-netsuite-spending/route.ts`, `src/app/api/admin/books/spending/route.ts` |
+| Spending rule and its check, on the invoices page | `src/lib/books/spending-rule.ts`, `src/lib/books/spending-check.ts` |
+| Check and card tests | `src/lib/books/spending-rule.test.ts`, `src/lib/books/spending-check.test.ts`, `src/lib/books/netsuite-spending.test.ts`, `src/lib/books/spending-sql.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -1049,6 +1054,110 @@ and what the page shows is what posts. Migration 390's
 payment, as `gl_bill_postings` does for bills, and whether the copy of the
 bill payments says it's voided or gone. The Bill payments switch shows the
 Books column and Post now, as the other switches do.
+
+## Checks and card charges
+
+A check (NetSuite's Check) pays for something straight from a bank
+account, and a credit card charge (CardChrg) puts it on a credit card,
+BMG's Chase card say; a credit card refund (CardRfnd) puts money back on
+the card. None of them goes through payables: the money comes straight out
+of the account the document names. All three are copied from NetSuite with
+their lines and checked against its GL with the spending rule (owner
+decision 2026-10-16, "Checks and cards"), as bills were before they
+posted. They don't post to FleetSuite's journal yet: that comes after the
+check, on the owner's OK.
+
+### Copying checks and card charges
+
+The ledger mirror's `ledger_bills` (migration 314) has slots for checks and
+card charges, but it holds QuickBooks' documents, and its delete sweep
+takes the NetSuite rows of its tables for its own documents, so the books
+copy them themselves (`src/lib/books/netsuite-spending.ts`, into migration
+391's `gl_netsuite_spending`): every two hours at :33 on odd hours
+(`/api/cron/books-netsuite-spending`), done by :37, after the GL copy and
+before the bills copy at :39, or when **Copy now** is pressed on the
+invoices page's Checks and cards switch, which runs the same job with the
+same four minutes.
+
+The run works like the bills copy: the documents NetSuite changed since
+the last run that finished, a day's overlap included (the first reaches
+back to 2000), newest first, 200 at a time, with its place saved after
+each page. For each page it reads each document's lines but the one for
+the account the money comes out of, the same way and with the same
+fallbacks as a bill's lines are read: the item, the expense account, the
+net and own amounts, quantity, memo and whether it's a tax line. Nothing on
+a check or a card is ordered first, so what a document is linked to isn't
+read. The status and payee in words come from `BUILTIN.DF`; without them,
+voided ones aren't marked voided and only payees that are vendors are
+named, from the copy of NetSuite's vendors, which `gl_spending_month`
+prefers anyway. A payee may be anyone NetSuite lists: a vendor, an
+employee, or another name. Once a run has read everything changed, it
+lists every check, card charge and card refund id NetSuite has and marks
+the ones it no longer has as gone, with the same guard against a list that
+looks cut short. What the copy keeps has a version, as the bills copy's
+does (`COPY_VERSION`, 1). Rows are never deleted, nothing is written to
+NetSuite, and the run's record in `sync_state` (`books_netsuite_spending`)
+holds counts and words, never an amount. Totals are kept positive; lines
+keep NetSuite's signs.
+
+### The spending rule
+
+The spending rule, `spending@1` (`src/lib/books/spending-rule.ts`), is the
+bill rule with the account the money comes out of in place of payables:
+
+- That account, the bank account a check is drawn on or the card a charge
+  is put on, is credited with the document's total. It's the document's
+  own choice, and the copy of the document doesn't keep it, so it comes
+  from NetSuite's posting of the document, as a bill payment's does: the
+  account on its main line, or, should that line be missing, the one
+  account outside income and expenses NetSuite posts the other way from
+  the document's lines.
+- Each line is debited where the bill rule puts a bill's line: an expense
+  line to its own account, a non-stock item to its expense account (a
+  discount or markup to its own), and a stock item to its asset account,
+  since nothing on a check or a card is ordered and received first. An item
+  the copy of NetSuite's items has no such account for goes where NetSuite's
+  GL posted most of its lines on the copied checks, card charges and
+  refunds (`gl_spending_item_accounts`). Lines go in at their own amounts
+  when they add up, as a bill's do.
+- A card refund posts the same way, the other way round: its lines are
+  credited and the card debited, as a bill credit is to a bill.
+- A line of $0, and a subtotal or description line, post nothing, and a
+  document of $0 posts nothing at all. A tax line, an expense line with no
+  account, an item not in the copy of NetSuite's items or with no account
+  of the kind it needs, or no account the money comes out of: the document
+  can't be worked out.
+
+Which way NetSuite signs the lines isn't assumed, as for bills: the
+month's documents say (a check's or a charge's lines come to more than
+nothing, a refund's to less).
+
+### Checking checks and card charges
+
+The **Checks and cards** switch on the invoices page checks each check,
+card charge and card refund NetSuite booked into the month (or, when it
+hasn't booked one, dated in it) against the GL lines NetSuite posted for
+it, account by account, to the cent, as bills are checked
+(`src/lib/books/spending-check.ts`). Migration 391's
+`gl_spending_month(company, month)` reads the month from the copy: each
+document with its lines, its payee and NetSuite's GL lines for it; the
+items its lines name; and the GL copy's checks and card charges the copy
+doesn't have yet. Opening one shows NetSuite's status for it, its lines,
+and the rule's accounts next to NetSuite's, the bank account or card as
+"Paid from" ("Refunded to" on a refund). Where FleetSuite and NetSuite put
+the same amount in different accounts, the page gives it as one reason
+(FleetSuite used this, NetSuite that).
+
+Not yet seen in NetSuite's data, so the check is what will show it:
+
+- that NetSuite's GL keeps the bank account or card on a check's or a
+  charge's main line (line 0), as it keeps payables on a bill's;
+- whether BMG's checks or card charges have tax lines, or items NetSuite
+  books somewhere other than their expense or asset accounts;
+- how NetSuite holds a voided check: zeroed, or kept and reversed by a
+  journal;
+- a document in another currency, whose total the copy keeps in that
+  currency while NetSuite's GL is in BMG's.
 
 ## Differences
 
