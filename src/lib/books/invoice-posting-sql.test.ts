@@ -1,6 +1,6 @@
 // Migration 367 posts NetSuite's invoices to FleetSuite's own journal, and
 // migration 370 its credit memos; migration 380 puts each in the month
-// NetSuite booked it to, and migration 387 lets one post to an account
+// NetSuite booked it to, and migration 388 lets one post to an account
 // NetSuite has made inactive since. This runs migration 314 (with stand-ins
 // for the app tables it points at) and migrations 359–364, 367, 370, 380 and
 // 387, with the ones the job reads payments, deposits and bills through (374,

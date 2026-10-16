@@ -1811,7 +1811,7 @@ export default function GraphicsJobRecordPage() {
           <div>
             <div style={{ fontSize: '11px', color: '#ef4444', fontWeight: 700, marginBottom: '4px' }}>
               Changes requested
-              {/* Who asked (migration 387). Older shared links can't say,
+              {/* Who asked (migration 388). Older shared links can't say,
                   so those say so rather than naming the first recipient. */}
               <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>
                 {ja.customer_responder

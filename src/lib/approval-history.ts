@@ -50,7 +50,7 @@ export interface HistoryRound {
   outcome: RoundOutcome;
   decidedAt: string | null;
   rejectionReason: string | null;
-  /** Who approved or asked for changes (migration 387); null = not known. */
+  /** Who approved or asked for changes (migration 388); null = not known. */
   respondedBy: string | null;
   messages: HistoryMessage[];
 }

@@ -258,7 +258,7 @@ export async function closeProofRound(
       outcome,
       decided_at: new Date().toISOString(),
     };
-    // Who answered (migration 387); left out when unknown so a database
+    // Who answered (migration 388); left out when unknown so a database
     // without the column still closes the round.
     if (respondedBy) patch.responded_by = respondedBy;
     // The CHECK constraint requires a reason on a rejection; a customer
