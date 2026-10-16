@@ -295,6 +295,8 @@ export interface MonthSummary {
   /** When the company's invoices post: how many have an entry in FleetSuite's books, and how many the next posting run changes. */
   posted?: number;
   pending?: number;
+  /** And how many have nothing to post, because NetSuite voided them or they come to $0. */
+  nothingToPost?: { voided: number; zero: number };
 }
 
 export interface MonthReason extends Reason {
@@ -514,6 +516,25 @@ export interface InvoiceBooks {
   next: 'post' | 'replace' | 'reverse' | null;
   /** Its earlier entries, oldest first, each with the entry that reversed it. */
   earlier: Array<{ entryNo: number; reversedBy: number | null }>;
+  /** Set when no entry stands for it and none should, because NetSuite voided it or it comes to $0. */
+  nothingToPost?: 'voided' | 'zero';
+}
+
+/**
+ * What a month's documents come to in FleetSuite's books, when the
+ * company's documents post: how many have an entry, how many the next
+ * posting run changes, and how many have nothing to post.
+ */
+export function booksCounts(views: ReadonlyArray<{ books?: InvoiceBooks }>): Required<Pick<MonthSummary, 'posted' | 'pending' | 'nothingToPost'>> {
+  const books = views.flatMap((v) => (v.books ? [v.books] : []));
+  return {
+    posted: books.filter((b) => b.entryNo !== null).length,
+    pending: books.filter((b) => b.next).length,
+    nothingToPost: {
+      voided: books.filter((b) => b.nothingToPost === 'voided').length,
+      zero: books.filter((b) => b.nothingToPost === 'zero').length,
+    },
+  };
 }
 
 export interface MonthCheck {
@@ -791,10 +812,7 @@ export function checkMonth(
   }
 
   const { summary, reasons } = summarize(checked, names);
-  if (books) {
-    summary.posted = invoices.filter((i) => i.books && i.books.entryNo !== null).length;
-    summary.pending = invoices.filter((i) => i.books?.next).length;
-  }
+  if (books) Object.assign(summary, booksCounts(invoices));
   const notes: string[] = [];
   if (receivableNote) notes.push(receivableNote);
   if (moved.length) {

@@ -341,6 +341,14 @@ describe('checkBillPaymentMonth', () => {
     expect([without.summary.posted, without.summary.pending]).toEqual([undefined, undefined]);
   });
 
+  it('counts the bill payments with nothing to post apart from the ones in FleetSuite\'s books', () => {
+    const books = (w: WorkedBillPayment): InvoiceBooks => (w.number === 'CHK1001' ? { entryNo: 21, next: null, earlier: [] }
+      : w.number === 'CHK1002' ? { entryNo: null, next: null, earlier: [], nothingToPost: 'voided' }
+        : { entryNo: null, next: null, earlier: [], nothingToPost: 'zero' });
+    expect(checkBillPaymentMonth(DATA, { company: 'BMG', chart: CHART }, books).summary)
+      .toMatchObject({ invoices: 6, posted: 1, pending: 0, nothingToPost: { voided: 1, zero: 4 } });
+  });
+
   it('takes the company\'s only payables account without a word, and says nothing of a month with no payments', () => {
     const only = CHART.filter((a) => a.netsuite_account_id !== '201');
     const m = checkBillPaymentMonth({ payments: DATA.payments.slice(1, 2), not_copied: [] }, { company: 'BMG', chart: only });

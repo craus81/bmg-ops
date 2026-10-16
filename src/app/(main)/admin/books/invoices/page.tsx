@@ -62,6 +62,13 @@ interface Summary {
   /** When the company's documents post. */
   posted?: number;
   pending?: number;
+  nothingToPost?: NothingToPost;
+}
+
+/** How many documents have nothing to post: NetSuite voided them, or they come to $0. */
+interface NothingToPost {
+  voided: number;
+  zero: number;
 }
 
 /** What FleetSuite's books hold for an invoice, and what the next posting run does about it. */
@@ -69,6 +76,8 @@ interface Books {
   entryNo: number | null;
   next: 'post' | 'replace' | 'reverse' | null;
   earlier: Array<{ entryNo: number; reversedBy: number | null }>;
+  /** No entry stands and none should, because NetSuite voided it or it comes to $0. */
+  nothingToPost?: 'voided' | 'zero';
 }
 
 /** How the last posting run went (src/lib/books/invoice-posting.ts); counts only. */
@@ -242,12 +251,15 @@ function booksChip(books: Books): { label: string; color: string } {
     if (books.next === 'reverse') return { label: `Entry ${books.entryNo} · to reverse`, color: AMBER };
     return { label: `Entry ${books.entryNo}`, color: GREEN };
   }
+  if (books.nothingToPost) return { label: 'Nothing to post', color: GREY };
   return books.next === 'post' ? { label: 'To post', color: GREY } : { label: 'Not posted', color: GREY };
 }
 
 /** What the books hold for an invoice, credit memo, payment, deposit, application, bill, bill credit or bill payment, in a sentence or two. */
 function booksText(books: Books): string {
-  const now = books.entryNo !== null ? `In FleetSuite's books as entry ${books.entryNo}.` : "Not in FleetSuite's books.";
+  const now = books.entryNo !== null ? `In FleetSuite's books as entry ${books.entryNo}.`
+    : books.nothingToPost ? `Nothing to post: ${books.nothingToPost === 'voided' ? 'NetSuite voided it' : 'it comes to $0'}.`
+      : "Not in FleetSuite's books.";
   const next = books.next === 'post' ? ' The next posting run posts it.'
     : books.next === 'replace' ? ' It no longer fits what the rule works out, so the next posting run reverses it and posts the new entry.'
       : books.next === 'reverse' ? ' NetSuite voided it or it comes to nothing now, so the next posting run reverses it.'
@@ -256,6 +268,27 @@ function booksText(books: Books): string {
     ? ` Earlier: ${books.earlier.map((e) => (e.reversedBy ? `entry ${e.entryNo}, reversed by ${e.reversedBy}` : `entry ${e.entryNo}`)).join('; ')}.`
     : '';
   return `${now}${next}${earlier}`;
+}
+
+const nothingCount = (n: NothingToPost | undefined) => (n?.voided ?? 0) + (n?.zero ?? 0);
+
+/** Why documents have nothing to post, in words: "9 voided and 6 at $0", or "NetSuite voided them" when they all were. */
+function nothingWhy(n: NothingToPost): string {
+  const one = nothingCount(n) === 1;
+  if (n.voided && n.zero) return `${n.voided.toLocaleString('en-US')} voided and ${n.zero.toLocaleString('en-US')} at $0`;
+  if (n.voided) return one ? 'NetSuite voided it' : 'NetSuite voided them';
+  return one ? 'it comes to $0' : 'they come to $0';
+}
+
+/**
+ * How many have nothing to post and why, as a sentence; `rest` when they're
+ * all the ones the books don't hold. Empty when none do.
+ */
+function nothingSentence(n: NothingToPost, rest: boolean): string {
+  const total = nothingCount(n);
+  if (!total) return '';
+  const who = total === 1 ? (rest ? 'The other one has' : 'One has') : `${rest ? 'The other ' : ''}${total.toLocaleString('en-US')} have`;
+  return ` ${who} nothing to post: ${nothingWhy(n)}.`;
 }
 
 const banner = (color: string): React.CSSProperties => ({
@@ -549,10 +582,13 @@ export default function BooksInvoicesPage() {
   const matchingMonths = Object.values(checkedMonths).filter(allMatch).length;
   const checkedInvoices = Object.values(checkedMonths).reduce((n, r) => n + r.invoices, 0);
   const checkedPosted = Object.values(checkedMonths).reduce((n, r) => n + (r.posted ?? 0), 0);
-  // A matching invoice needs a look when the next run changes its entry, or when it has none though it should
-  // (not voided, not $0): NetSuite couldn't say enough about its lines, say, or its copy is mid-refresh.
+  const checkedNothing = Object.values(checkedMonths).reduce((n, r) => ({
+    voided: n.voided + (r.nothingToPost?.voided ?? 0), zero: n.zero + (r.nothingToPost?.zero ?? 0),
+  }), { voided: 0, zero: 0 });
+  // A matching invoice needs a look when the next run changes its entry, or when it has none though it has something
+  // to post: NetSuite couldn't say enough about its lines, say, or its copy is mid-refresh.
   const needsLook = (inv: Invoice) => inv.status !== 'matches' || (!!inv.books
-    && (inv.books.next !== null || (inv.books.entryNo === null && !inv.voided && inv.total !== 0)));
+    && (inv.books.next !== null || (inv.books.entryNo === null && !inv.books.nothingToPost)));
   const shown = (data?.invoices ?? []).filter((inv) => !onlyProblems || needsLook(inv));
   const run = data?.lastRun?.result;
   const copied = COPIED[kind] ? data?.copy : undefined;
@@ -726,6 +762,7 @@ export default function BooksInvoicesPage() {
             <div style={banner(matchingMonths === checkedCount ? GREEN : AMBER)}>
               Every {words.one} matches NetSuite in {matchingMonths} of {checkedCount} months.
               {data.posts && ` FleetSuite's books hold ${checkedPosted.toLocaleString('en-US')} of these ${count(checkedInvoices, words.one, words.many)}.`}
+              {data.posts && nothingSentence(checkedNothing, checkedPosted + nothingCount(checkedNothing) === checkedInvoices)}
             </div>
           )}
           {data.notes.map((n) => <div key={n} style={banner(AMBER)}>{n}</div>)}
@@ -776,6 +813,11 @@ export default function BooksInvoicesPage() {
             {s.waiting > 0 && <span style={chip(GREY)}>{s.waiting.toLocaleString('en-US')} waiting on a copy</span>}
             {s.posted !== undefined && <span style={chip(GREEN)}>{s.posted.toLocaleString('en-US')} in FleetSuite&apos;s books</span>}
             {!!s.pending && <span style={chip(AMBER)}>{s.pending.toLocaleString('en-US')} for the next posting run</span>}
+            {!!s.nothingToPost && nothingCount(s.nothingToPost) > 0 && (
+              <span style={chip(GREY)} title={`Nothing to post: ${nothingWhy(s.nothingToPost)}`}>
+                {nothingCount(s.nothingToPost).toLocaleString('en-US')} with nothing to post
+              </span>
+            )}
           </div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
             {kind === 'deposit'
@@ -831,7 +873,9 @@ export default function BooksInvoicesPage() {
                 {shown.length === 0 && (
                   <tr><td colSpan={data.posts ? 6 : 5} style={{ padding: '12px', color: 'var(--text-muted)' }}>
                     {s.invoices === 0 ? `No ${words.many} for this company this month.`
-                      : data.posts ? `Every ${words.one} matches NetSuite and is in FleetSuite's books.` : `Every ${words.one} matches NetSuite.`}
+                      : data.posts
+                        ? `Every ${words.one} matches NetSuite and is in FleetSuite's books${nothingCount(s.nothingToPost) ? ', or has nothing to post' : ''}.`
+                        : `Every ${words.one} matches NetSuite.`}
                   </td></tr>
                 )}
                 {shown.map((inv) => (

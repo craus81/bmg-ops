@@ -196,8 +196,8 @@ export type Decision =
   | { kind: 'replace' }
   /** Reverse what stands and post nothing: NetSuite voided it, or it comes to nothing now. */
   | { kind: 'reverse'; why: 'voided' | 'nothing' }
-  /** What stands is right, or nothing stands and nothing should. */
-  | { kind: 'keep' }
+  /** What stands is right, or nothing stands and nothing should, `why` then saying why: NetSuite voided it, or it comes to nothing. */
+  | { kind: 'keep'; why?: 'voided' | 'nothing' }
   /**
    * Whatever stands stays: the rule can't work it out yet, its lines aren't
    * copied yet, or they don't add up to its total in the copy (caught
@@ -208,7 +208,7 @@ export type Decision =
 /** What to do about one invoice the rule has worked out, given what the journal holds for it. */
 export function decide(worked: WorkedInvoice, posting: InvoicePosting | undefined): Decision {
   const current = posting?.current ?? null;
-  if (worked.invoice.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep' };
+  if (worked.invoice.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep', why: 'voided' };
   const { status } = worked.checked;
   if (status === 'waiting') return { kind: 'leave', why: 'waiting' };
   if (status === 'unworkable') return { kind: 'leave', why: 'unworkable' };
@@ -221,7 +221,7 @@ export function decide(worked: WorkedInvoice, posting: InvoicePosting | undefine
   const total = centsOf(worked.invoice.total);
   if (receivable !== (total !== null && kindOf(worked) === 'credit_memo' ? -total : total)) return { kind: 'leave', why: 'total' };
 
-  if (lines.length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep' };
+  if (lines.length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep', why: 'nothing' };
   if (!current) return { kind: 'post' };
   return postedSignature(current) === workedSignature(worked) ? { kind: 'keep' } : { kind: 'replace' };
 }
@@ -241,7 +241,10 @@ export function invoiceBooks(worked: WorkedInvoice, posting: InvoicePosting | un
   return booksOf(decide(worked, posting), posting, decides);
 }
 
-/** What the journal holds for a document and what the next run does about it, given the run's decision. */
+/**
+ * What the journal holds for a document and what the next run does about
+ * it, given the run's decision, and whether it has nothing to post.
+ */
 function booksOf(d: Decision, posting: Pick<InvoicePosting, 'current' | 'history'> | undefined, decides: boolean): InvoiceBooks {
   const current = posting?.current ?? null;
   return {
@@ -250,6 +253,7 @@ function booksOf(d: Decision, posting: Pick<InvoicePosting, 'current' | 'history
     earlier: (posting?.history ?? [])
       .filter((h) => h.entry_no !== current?.entry_no)
       .map((h) => ({ entryNo: h.entry_no, reversedBy: h.reversed_by })),
+    ...(d.kind === 'keep' && d.why ? { nothingToPost: d.why === 'voided' ? 'voided' as const : 'zero' as const } : {}),
   };
 }
 
@@ -329,11 +333,11 @@ const paymentSignature = (worked: WorkedPayment) => signature(
 /** What to do about one payment the rule has worked out, given what the journal holds for it. */
 export function decidePayment(worked: WorkedPayment, posting: PaymentPosting | undefined): Decision {
   const current = posting?.current ?? null;
-  if (worked.payment.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep' };
+  if (worked.payment.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep', why: 'voided' };
   const { status } = worked.checked;
   if (status === 'waiting') return { kind: 'leave', why: 'waiting' };
   if (status === 'unworkable') return { kind: 'leave', why: 'unworkable' };
-  if (paymentEntryLines(worked).length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep' };
+  if (paymentEntryLines(worked).length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep', why: 'nothing' };
   if (!current) return { kind: 'post' };
   return postedSignature(current) === paymentSignature(worked) ? { kind: 'keep' } : { kind: 'replace' };
 }
@@ -429,11 +433,11 @@ const depositSignature = (worked: WorkedDeposit) => signature(
 /** What to do about one deposit or application the rule has worked out, given what the journal holds for it. */
 export function decideDeposit(worked: WorkedDeposit, posting: DepositPosting | undefined): Decision {
   const current = posting?.current ?? null;
-  if (worked.deposit.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep' };
+  if (worked.deposit.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep', why: 'voided' };
   const { status } = worked.checked;
   if (status === 'waiting') return { kind: 'leave', why: 'waiting' };
   if (status === 'unworkable') return { kind: 'leave', why: 'unworkable' };
-  if (depositEntryLines(worked).length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep' };
+  if (depositEntryLines(worked).length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep', why: 'nothing' };
   if (!current) return { kind: 'post' };
   return postedSignature(current) === depositSignature(worked) ? { kind: 'keep' } : { kind: 'replace' };
 }
@@ -526,7 +530,7 @@ const billSignature = (worked: WorkedBill) => signature(
 /** What to do about one bill or bill credit the rule has worked out, given what the journal holds for it. */
 export function decideBill(worked: WorkedBill, posting: BillPosting | undefined): Decision {
   const current = posting?.current ?? null;
-  if (worked.bill.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep' };
+  if (worked.bill.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep', why: 'voided' };
   const { status, lines } = worked.checked;
   if (status === 'waiting') return { kind: 'leave', why: 'waiting' };
   if (status === 'unworkable') return { kind: 'leave', why: 'unworkable' };
@@ -539,7 +543,7 @@ export function decideBill(worked: WorkedBill, posting: BillPosting | undefined)
   const total = centsOf(worked.bill.total);
   if (total === null || payables !== (worked.bill.type === 'VendCred' ? total : -total)) return { kind: 'leave', why: 'total' };
 
-  if (lines.length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep' };
+  if (lines.length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep', why: 'nothing' };
   if (!current) return { kind: 'post' };
   return postedSignature(current) === billSignature(worked) ? { kind: 'keep' } : { kind: 'replace' };
 }
@@ -653,11 +657,11 @@ const billPaymentSignature = (worked: WorkedBillPayment) => signature(
 /** What to do about one bill payment the rule has worked out, given what the journal holds for it. */
 export function decideBillPayment(worked: WorkedBillPayment, posting: BillPaymentPosting | undefined): Decision {
   const current = posting?.current ?? null;
-  if (worked.payment.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep' };
+  if (worked.payment.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep', why: 'voided' };
   const { status, lines } = worked.checked;
   if (status === 'waiting') return { kind: 'leave', why: 'waiting' };
   if (status === 'unworkable') return { kind: 'leave', why: 'unworkable' };
-  if (lines.length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep' };
+  if (lines.length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep', why: 'nothing' };
   if (!current) return { kind: 'post' };
   return postedSignature(current) === billPaymentSignature(worked) ? { kind: 'keep' } : { kind: 'replace' };
 }

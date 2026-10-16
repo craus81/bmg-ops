@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  centsOf, checkInvoice, checkMonth, costLines, entryDate, invoiceReasons, pickReceivable, problemReason, summarize, withOwnAmounts,
-  type ChartAccount, type CheckContext, type InvoiceMonthData, type LineFacts, type NetSuitePosting, type ReasonNames,
+  booksCounts, centsOf, checkInvoice, checkMonth, costLines, entryDate, invoiceReasons, pickReceivable, problemReason, summarize, withOwnAmounts,
+  type ChartAccount, type CheckContext, type InvoiceBooks, type InvoiceMonthData, type LineFacts, type NetSuitePosting, type ReasonNames,
 } from './invoice-check';
 import type { InvoiceLine, RuleItem } from './invoice-rule';
 
@@ -346,6 +346,22 @@ describe('checkMonth', () => {
   ];
   const TAX = [{ tax_code_id: '900', account_id: '221', lines: 2 }, { tax_code_id: '900', account_id: '220', lines: 40 }];
 
+  it('counts what FleetSuite\'s books hold for the month\'s invoices when the company\'s invoices post', () => {
+    const month = { invoices: [invoice('INV101'), invoice('INV102', { voided: true }), invoice('INV103')], items: ITEMS };
+    const books = (w: { number: string }): InvoiceBooks => (w.number === 'INV101' ? { entryNo: 3, next: null, earlier: [] }
+      : w.number === 'INV102' ? { entryNo: null, next: null, earlier: [], nothingToPost: 'voided' }
+        : { entryNo: null, next: 'post', earlier: [] });
+    const m = checkMonth(month, { company: 'BMG', chart: CHART, taxAccounts: TAX }, books);
+    expect(m.summary).toEqual({
+      invoices: 3, matches: 3, differs: 0, unworkable: 0, waiting: 0, withCost: 0, posted: 1, pending: 1, nothingToPost: { voided: 1, zero: 0 },
+    });
+    expect(m.invoices.map((i) => i.books?.nothingToPost)).toEqual([undefined, 'voided', undefined]);
+    // A company whose invoices don't post yet gets none of them.
+    expect(checkMonth(month, { company: 'BMG', chart: CHART, taxAccounts: TAX }).summary).toEqual({
+      invoices: 3, matches: 3, differs: 0, unworkable: 0, waiting: 0, withCost: 0,
+    });
+  });
+
   it('works out each invoice from NetSuite\'s signed amounts and the tax code\'s most used account', () => {
     const m = checkMonth({ invoices: [invoice('INV101')], items: ITEMS }, { company: 'BMG', chart: CHART, taxAccounts: TAX });
     expect(m.summary).toEqual({ invoices: 1, matches: 1, differs: 0, unworkable: 0, waiting: 0, withCost: 0 });
@@ -612,6 +628,24 @@ describe('checkMonth', () => {
       "1 more credit memo dated this month isn't in the copy of NetSuite's GL for either company: CM104. NetSuite may not have posted it, "
       + "or the copy, which runs every two hours, hasn't reached it yet.",
     ]);
+  });
+});
+
+describe('booksCounts', () => {
+  it('counts the documents with an entry, the ones the next run changes, and the ones with nothing to post, voided or $0', () => {
+    const views: Array<{ books?: InvoiceBooks }> = [
+      { books: { entryNo: 4, next: null, earlier: [] } },
+      { books: { entryNo: 5, next: 'reverse', earlier: [] } },
+      { books: { entryNo: null, next: 'post', earlier: [] } },
+      { books: { entryNo: null, next: null, earlier: [{ entryNo: 2, reversedBy: 3 }], nothingToPost: 'voided' } },
+      { books: { entryNo: null, next: null, earlier: [], nothingToPost: 'zero' } },
+      { books: { entryNo: null, next: null, earlier: [], nothingToPost: 'zero' } },
+      // Can't be worked out yet: none of them.
+      { books: { entryNo: null, next: null, earlier: [] } },
+      {},
+    ];
+    expect(booksCounts(views)).toEqual({ posted: 2, pending: 2, nothingToPost: { voided: 1, zero: 2 } });
+    expect(booksCounts([])).toEqual({ posted: 0, pending: 0, nothingToPost: { voided: 0, zero: 0 } });
   });
 });
 
