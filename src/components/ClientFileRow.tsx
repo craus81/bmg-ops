@@ -81,12 +81,16 @@ interface RowProps {
   /** Hide the client name (the customer page already says whose files these are). */
   hideClient?: boolean;
   compact?: boolean;
+  /** Pick mode for a zip download: shows a checkbox, and a tap on the row ticks it. */
+  checked?: boolean;
+  onCheck?: () => void;
 }
 
-export default function ClientFileRow({ file, selected, onSelect, onClient, hideClient, compact }: RowProps) {
+export default function ClientFileRow({ file, selected, onSelect, onClient, hideClient, compact, checked, onCheck }: RowProps) {
+  const picking = !!onCheck;
   return (
     <div
-      onClick={onSelect}
+      onClick={picking ? onCheck : onSelect}
       style={{
         display: 'flex', alignItems: 'center', gap: compact ? '10px' : '12px',
         padding: compact ? '8px 0' : '10px 12px',
@@ -94,9 +98,15 @@ export default function ClientFileRow({ file, selected, onSelect, onClient, hide
         background: compact ? 'transparent' : 'var(--card)',
         border: compact ? 'none' : `1px solid ${selected ? 'var(--accent, #2563eb)' : 'var(--border)'}`,
         borderTop: compact ? '1px solid var(--border)' : undefined,
-        cursor: onSelect ? 'pointer' : 'default',
+        cursor: onSelect || picking ? 'pointer' : 'default',
       }}
     >
+      {picking && (
+        <input
+          type="checkbox" checked={!!checked} readOnly aria-label={`Pick ${file.name}`}
+          style={{ width: '20px', height: '20px', flexShrink: 0, accentColor: 'var(--accent, #2563eb)', pointerEvents: 'none' }}
+        />
+      )}
       <FileTile file={file} size={compact ? 40 : 56} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: compact ? '12.5px' : '14px', fontWeight: 700, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>
