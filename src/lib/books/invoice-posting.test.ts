@@ -2,17 +2,19 @@ import { describe, it, expect } from 'vitest';
 import { BooksError } from './journal';
 import { workOutMonth, type ChartAccount, type InvoiceMonthData, type LineFactsRead } from './invoice-check';
 import {
-  billBooks, billJournalEntry, billPaymentBooks, billPaymentJournalEntry, billPostingFor, decide, decideBill, decideBillPayment, decideDeposit,
-  decidePayment, decideSpending, depositBooks, depositEntryLines, depositJournalEntry, depositPostingFor, entryLines, failureReason, invoiceBooks,
-  invoiceJournalEntry, parsePostingState, paymentBooks, paymentEntryLines, paymentJournalEntry, postingKey, postingQueue, signature,
-  spendingBooks, spendingJournalEntry, spendingPostingFor, unsaidFacts,
-  type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type PaymentPosting, type SpendingPosting,
+  billBooks, billJournalEntry, billPaymentBooks, billPaymentJournalEntry, billPostingFor, copiedJournalEntry, decide, decideBill, decideBillPayment,
+  decideDeposit, decideJournalEntry, decidePayment, decideSpending, depositBooks, depositEntryLines, depositJournalEntry, depositPostingFor,
+  entryLines, failureReason, invoiceBooks, invoiceJournalEntry, journalEntryBooks, parsePostingState, paymentBooks, paymentEntryLines,
+  paymentJournalEntry, postingKey, postingQueue, signature, spendingBooks, spendingJournalEntry, spendingPostingFor, unsaidFacts,
+  type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type JournalEntryPosting, type PaymentPosting,
+  type SpendingPosting,
 } from './invoice-posting';
 import { workOutPaymentMonth, type PaymentMonthData } from './payment-check';
 import { workOutDepositMonth, type DepositMonthData } from './deposit-check';
 import { workOutBillMonth, type BillMonthData } from './bill-check';
 import { workOutBillPaymentMonth, type BillPaymentMonthData } from './bill-payment-check';
 import { workOutSpendingMonth, type SpendingMonthData } from './spending-check';
+import { workOutJournalMonth, type JournalMonthData } from './journal-entry-check';
 
 // Made-up books: '120' receivable, '400' income, '220' sales tax payable.
 const CHART: ChartAccount[] = [
@@ -1039,6 +1041,165 @@ describe('checks and card charges', () => {
       }));
       const current = { id: 'e31', entry_no: 31, entry_date: entry!.entryDate, lines };
       expect(decideSpending(w, held({ current })), JSON.stringify(d)).toEqual({ kind: 'keep' });
+    }
+  });
+});
+
+describe('journal entries', () => {
+  // Made-up books: '120' receivables, '200' payables, '220' the Chase card, '610' shop supplies, '640' fuel.
+  const JE_CHART: ChartAccount[] = [
+    { netsuite_account_id: '120', number: '1200', name: 'Receivables', account_type: 'accounts_receivable', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '200', number: '2000', name: 'Payables', account_type: 'accounts_payable', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '220', number: '2200', name: 'Chase Card', account_type: 'credit_card', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '610', number: '6100', name: 'Shop Supplies', account_type: 'expense', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '640', number: '6400', name: 'Fuel', account_type: 'expense', company: null, active: true, is_summary: false },
+  ];
+  const ids = new Map(['120', '200', '220', '610', '640'].map((a) => [a, `a-${a}`]));
+
+  type Entry = JournalMonthData['journal_entries'][number];
+  type Line = Entry['lines'][number];
+  const gl = (lineId: string, account: string, debit: string, credit: string, fields: Partial<Line> = {}): Line => ({
+    line_id: lineId, account, debit, credit, memo: null, entity_id: null, name: null, customer_id: null, ...fields,
+  });
+  // The bookkeeper's entry for September's Chase statement: fuel and supplies charged to the card, and a vendor's bill paid with it.
+  const je = (fields: Partial<Entry> = {}): Entry => ({
+    netsuite_id: '9001', number: 'JE1201', date: '2026-09-30', posting_month: '2026-09-01', companies: ['BMG'],
+    lines: [
+      gl('1', '640', '45.12', '0.00', { memo: 'Fuel', entity_id: '77', name: 'Shell Oil' }),
+      gl('2', '610', '120.00', '0.00', { memo: 'Gloves' }),
+      gl('3', '200', '50.00', '0.00', { entity_id: '50', name: 'Sample Supply Co' }),
+      gl('4', '220', '0.00', '215.12', { memo: 'Chase statement 09/2026' }),
+    ],
+    ...fields,
+  });
+  const one = (e: Entry = je()) => workOutJournalMonth({ journal_entries: [e] }, { company: 'BMG', chart: JE_CHART }).journalEntries[0];
+  const zero = () => je({ lines: [gl('1', '640', '0.00', '0.00'), gl('2', '220', '0.00', '0.00')] });
+  // Only some of an intercompany entry's lines are this company's.
+  const unbalanced = () => je({ lines: je().lines.slice(0, 3) });
+  const writeOff = (customer: string | null = CUSTOMER) => je({
+    lines: [gl('1', '120', '0.00', '25.00', { entity_id: '310', name: 'A Customer', customer_id: customer }), gl('2', '610', '25.00', '0.00')],
+  });
+
+  /** What the journal holds when JE1201 posted as it is now, as entry 41. */
+  const held = (fields: Partial<JournalEntryPosting> = {}): JournalEntryPosting => ({
+    source_type: 'journal_entry',
+    source_id: '9001',
+    entries: 1,
+    unreversed: ['e41'],
+    current: {
+      id: 'e41', entry_no: 41, entry_date: '2026-09-30',
+      lines: [
+        { account: '640', debit: '45.12', credit: '0.00', division: null, source_line_ref: '1', customer_id: null, vendor_ref: null },
+        { account: '610', debit: '120.00', credit: '0.00', division: null, source_line_ref: '2', customer_id: null, vendor_ref: null },
+        { account: '200', debit: '50.00', credit: '0.00', division: null, source_line_ref: '3', customer_id: null, vendor_ref: '50' },
+        { account: '220', debit: '0.00', credit: '215.12', division: null, source_line_ref: '4', customer_id: null, vendor_ref: null },
+      ],
+    },
+    history: [{ entry_no: 41, entry_date: '2026-09-30', reversed_by: null }],
+    journal: { number: 'JE1201', deleted: false },
+    ...fields,
+  });
+
+  it('posts its lines as they are under the journal entry rule, in the month NetSuite booked it into, each with its memo', () => {
+    const { entry } = copiedJournalEntry(one(), 'BMG', 2, ids);
+    expect(entry).toMatchObject({
+      company: 'BMG', entryDate: '2026-09-30', sourceType: 'journal_entry', sourceId: '9001', postingRule: 'journal_entry@1',
+      idempotencyKey: 'journal_entry:9001:2', memo: 'JE1201', postedBy: null,
+    });
+    const line = (accountId: string, debit: string | null, credit: string | null, memo: string | null, sourceLineRef: string, vendorRef: string | null = null) => ({
+      accountId, debit, credit, memo, division: null, itemNumber: null, sourceLineRef, customerId: null, vendorRef,
+    });
+    // The vendor goes on the payables line.
+    expect(entry!.lines).toEqual([
+      line('a-640', '45.12', null, 'Shell Oil · Fuel', '1'),
+      line('a-610', '120.00', null, 'Gloves', '2'),
+      line('a-200', '50.00', null, 'Sample Supply Co', '3', '50'),
+      line('a-220', null, '215.12', 'Chase statement 09/2026', '4'),
+    ]);
+    // Dated in August, booked into September: the entry goes on September's first day.
+    expect(copiedJournalEntry(one(je({ date: '2026-08-31' })), 'BMG', 1, ids).entry!.entryDate).toBe('2026-09-01');
+    // No number: the memo goes by NetSuite's id.
+    expect(copiedJournalEntry(one(je({ number: null })), 'BMG', 1, ids).entry!.memo).toBe('NetSuite 9001');
+    // A receivables line carries its customer.
+    expect(copiedJournalEntry(one(writeOff()), 'BMG', 1, ids).entry!.lines.map((l) => [l.accountId, l.customerId, l.memo])).toEqual([
+      ['a-120', CUSTOMER, 'A Customer'], ['a-610', null, null],
+    ]);
+    expect(copiedJournalEntry(one(), 'BMG', 1, new Map([['640', 'a-640']]))).toEqual({ entry: null, missing: ['610', '200', '220'] });
+  });
+
+  it('posts one nothing stands for, keeps one whose entry still fits, and replaces one NetSuite changed', () => {
+    expect(decideJournalEntry(one(), undefined)).toEqual({ kind: 'post' });
+    expect(decideJournalEntry(one(), held())).toEqual({ kind: 'keep' });
+    // A new number, memo or name only describes: only the entry's memos carry them.
+    const described = je({
+      number: 'JE1201-A',
+      lines: je().lines.map((l) => ({ ...l, memo: `${l.memo ?? ''} (edited)`, name: l.name && `${l.name} Inc` })),
+    });
+    expect(decideJournalEntry(one(described), held())).toEqual({ kind: 'keep' });
+    const [fuel, gloves, bill, card] = je().lines;
+    const changed: Array<Partial<Entry>> = [
+      { date: '2026-09-29' },
+      // Booked into October now: the entry moves to October's first day.
+      { posting_month: '2026-10-01' },
+      // More fuel.
+      { lines: [{ ...fuel, debit: '55.12' }, gloves, bill, { ...card, credit: '225.12' }] },
+      // The fuel was supplies after all.
+      { lines: [{ ...fuel, account: '610' }, gloves, bill, card] },
+      // Another vendor's bill.
+      { lines: [fuel, gloves, { ...bill, entity_id: '51' }, card] },
+      // The card's line split in two.
+      { lines: [fuel, gloves, bill, { ...card, credit: '200.00' }, gl('5', '220', '0.00', '15.12')] },
+    ];
+    for (const fields of changed) expect(decideJournalEntry(one(je(fields)), held()), JSON.stringify(fields)).toEqual({ kind: 'replace' });
+
+    // The customer on a receivables line, once FleetSuite matches the name to one.
+    const unmatched = held({
+      current: {
+        id: 'e41', entry_no: 41, entry_date: '2026-09-30',
+        lines: [
+          { account: '120', debit: '0.00', credit: '25.00', division: null, source_line_ref: '1', customer_id: null, vendor_ref: null },
+          { account: '610', debit: '25.00', credit: '0.00', division: null, source_line_ref: '2', customer_id: null, vendor_ref: null },
+        ],
+      },
+    });
+    expect(decideJournalEntry(one(writeOff(null)), unmatched)).toEqual({ kind: 'keep' });
+    expect(decideJournalEntry(one(writeOff()), unmatched)).toEqual({ kind: 'replace' });
+  });
+
+  it('reverses the entry of one that comes to nothing now, and leaves whatever stands for one whose lines don\'t balance', () => {
+    expect(decideJournalEntry(one(zero()), held())).toEqual({ kind: 'reverse', why: 'nothing' });
+    expect(decideJournalEntry(one(zero()), undefined)).toEqual({ kind: 'keep', why: 'nothing' });
+    expect(decideJournalEntry(one(unbalanced()), held())).toEqual({ kind: 'leave', why: 'unworkable' });
+    expect(decideJournalEntry(one(unbalanced()), undefined)).toEqual({ kind: 'leave', why: 'unworkable' });
+  });
+
+  it('says what the journal holds for one and what the next run does', () => {
+    expect(journalEntryBooks(one(), undefined)).toEqual({ entryNo: null, next: 'post', earlier: [] });
+    expect(journalEntryBooks(one(), held())).toEqual({ entryNo: 41, next: null, earlier: [] });
+    expect(journalEntryBooks(one(je({ date: '2026-09-29' })), held()).next).toBe('replace');
+    expect(journalEntryBooks(one(zero()), held()).next).toBe('reverse');
+    expect(journalEntryBooks(one(zero()), undefined)).toEqual({ entryNo: null, next: null, earlier: [], nothingToPost: 'zero' });
+    // Lines that don't balance aren't nothing to post.
+    expect(journalEntryBooks(one(unbalanced()), undefined)).toEqual({ entryNo: null, next: null, earlier: [] });
+    // Its first entry, reversed when NetSuite changed the journal entry.
+    const again = held({
+      entries: 2,
+      history: [{ entry_no: 33, entry_date: '2026-09-30', reversed_by: 40 }, { entry_no: 41, entry_date: '2026-09-30', reversed_by: null }],
+    });
+    expect(journalEntryBooks(one(), again)).toEqual({ entryNo: 41, next: null, earlier: [{ entryNo: 33, reversedBy: 40 }] });
+  });
+
+  it('builds an entry that fits what it is compared against once posted', () => {
+    const back = new Map([...ids].map(([ns, id]) => [id, ns]));
+    for (const e of [je(), je({ date: '2026-08-31' }), je({ date: '2026-10-02' }), writeOff()]) {
+      const w = one(e);
+      const { entry } = copiedJournalEntry(w, 'BMG', 1, ids);
+      const lines = entry!.lines.map((l) => ({
+        account: back.get(l.accountId)!, debit: String(l.debit ?? '0.00'), credit: String(l.credit ?? '0.00'),
+        division: l.division ?? null, source_line_ref: l.sourceLineRef ?? null, customer_id: l.customerId ?? null, vendor_ref: l.vendorRef ?? null,
+      }));
+      const current = { id: 'e41', entry_no: 41, entry_date: entry!.entryDate, lines };
+      expect(decideJournalEntry(w, held({ current })), JSON.stringify(e)).toEqual({ kind: 'keep' });
     }
   });
 });

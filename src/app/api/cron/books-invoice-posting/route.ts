@@ -15,16 +15,17 @@ const BUDGET_MS = 240_000;
  *
  * Posts NetSuite's invoices, credit memos, customer payments, customer
  * deposits with their applications, vendor bills and bill credits, bill
- * payments, and checks and credit card charges and refunds to FleetSuite's
- * own books with their rules, replacing an entry when NetSuite changes the
- * document and reversing it when NetSuite voids or deletes it
- * (src/lib/books/invoice-posting.ts, docs/books.md). Minute 48 is free in
- * vercel.json and .github/workflows/cron-fallback.yml, and odd hours put it
- * after the NetSuite GL copy (:26, done by :30), the deposits copy (:16 on
- * odd hours), the bill payments copy (:21 on odd hours, done by :25), the
- * checks and cards copy (:33 on odd hours, done by :37), the bills copy (:39
- * on odd hours, done by :43) and the ledger mirror's invoices and payments
- * (:35 on even hours) it reads, apart from netsuite-sync (:52 on even hours).
+ * payments, checks and credit card charges and refunds, and journal entries
+ * to FleetSuite's own books with their rules, replacing an entry when
+ * NetSuite changes the document and reversing it when NetSuite voids or
+ * deletes it (src/lib/books/invoice-posting.ts, docs/books.md). Minute 48 is
+ * free in vercel.json and .github/workflows/cron-fallback.yml, and odd hours
+ * put it after the NetSuite GL copy (:26, done by :30), the deposits copy
+ * (:16 on odd hours), the bill payments copy (:21 on odd hours, done by
+ * :25), the checks and cards copy (:33 on odd hours, done by :37), the bills
+ * copy (:39 on odd hours, done by :43) and the ledger mirror's invoices and
+ * payments (:35 on even hours) it reads, apart from netsuite-sync (:52 on
+ * even hours).
  *
  * The books are visible only to the owner, so this response says only how
  * the run went; Invoices vs NetSuite shows the rest. Manual triggering is

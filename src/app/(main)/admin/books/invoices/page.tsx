@@ -8,9 +8,9 @@ import { apiFetch } from '@/lib/api-client';
 
 /**
  * Books → Invoices vs NetSuite (migrations 364, 367, 370, 374, 376, 382, 383,
- * 384, 386, 389, 390 and 391, docs/books.md "Invoices", "Payments",
- * "Customer deposits", "Vendor bills", "Bill payments" and "Checks and card
- * charges").
+ * 384, 386, 389, 390, 391, 392 and 393, docs/books.md "Invoices",
+ * "Payments", "Customer deposits", "Vendor bills", "Bill payments", "Checks
+ * and card charges" and "Journal entries").
  *
  * FleetSuite works out its own entry for every NetSuite invoice with the
  * invoice rule, and for every credit memo with the same rule the other way
@@ -25,14 +25,16 @@ import { apiFetch } from '@/lib/api-client';
  * the same run as well. Bill payments are copied the same way, checked with
  * the bill payment rule, and post in the same run too. Checks and credit
  * card charges and refunds are copied the same way, checked with the
- * spending rule, and post in the same run as well. Super admins only while
- * the books are built, linked from the other books pages.
+ * spending rule, and post in the same run as well. NetSuite's journal
+ * entries come straight from the copy of its GL, line for line, and post in
+ * the same run too. Super admins only while the books are built, linked from
+ * the other books pages.
  */
 
 type Status = 'matches' | 'differs' | 'unworkable' | 'waiting';
 
-type Kind = 'invoice' | 'credit_memo' | 'payment' | 'deposit' | 'bill' | 'bill_payment' | 'spending';
-const KINDS: readonly Kind[] = ['invoice', 'credit_memo', 'payment', 'deposit', 'bill', 'bill_payment', 'spending'];
+type Kind = 'invoice' | 'credit_memo' | 'payment' | 'deposit' | 'bill' | 'bill_payment' | 'spending' | 'journal_entry';
+const KINDS: readonly Kind[] = ['invoice', 'credit_memo', 'payment', 'deposit', 'bill', 'bill_payment', 'spending', 'journal_entry'];
 
 /** What each kind of document is called. */
 const WORDS: Record<Kind, { one: string; many: string; title: string; head: string }> = {
@@ -46,6 +48,7 @@ const WORDS: Record<Kind, { one: string; many: string; title: string; head: stri
   bill_payment: { one: 'bill payment', many: 'bill payments', title: 'Bill payments', head: 'Bill payment' },
   // And the Checks and cards switch lists checks, card charges and card refunds.
   spending: { one: 'check, card charge or refund', many: 'checks, card charges and refunds', title: 'Checks and cards', head: 'Number' },
+  journal_entry: { one: 'journal entry', many: 'journal entries', title: 'Journal entries', head: 'Number' },
 };
 
 /** The kinds of document copied from NetSuite by the books themselves, each with its Copy now. */
@@ -195,8 +198,10 @@ interface Payload {
   month: string;
   months: string[];
   listsCopiedAt: string | null;
-  /** Whether this company's invoices, credit memos, payments, deposits, bills, bill payments, checks and card charges post to FleetSuite's books yet. */
+  /** Whether this company's invoices, credit memos, payments, deposits, bills, bill payments, checks, card charges and journal entries post to FleetSuite's books yet. */
   posts: boolean;
+  /** Journal entries only: when the copy of NetSuite's GL they come from last ran; null before the first. */
+  glCopiedAt?: string | null;
   lastRun: { at: string; result: PostingRun } | null;
   /** Deposits, bills, bill payments and checks and cards only: how the last copy of them from NetSuite went; null before the first. */
   copy?: { at: string; result: CopyRun } | null;
@@ -610,7 +615,18 @@ export default function BooksInvoicesPage() {
         <div style={{ flex: '1 1 280px' }}>
           <div style={{ fontSize: '20px', fontWeight: 800 }}>{words.title} vs NetSuite</div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            {kind === 'spending' ? (
+            {kind === 'journal_entry' ? (
+              <>
+                NetSuite&apos;s journal entries are the entries typed straight into its books, like the ones for the Chase card
+                statements. They come from the copy of NetSuite&apos;s GL, which runs every two hours and already holds every
+                line of them, so there&apos;s nothing to work out: FleetSuite&apos;s entry for each one is its lines for the
+                company, to the same accounts and for the same amounts, each with its memo and name, a receivables line with
+                its customer and a payables line with its vendor. Every two hours each BMG journal entry is posted to its own
+                books, once, in the month NetSuite booked it into, in the same run as invoices. When NetSuite changes one its
+                entry is reversed and the new one posted, and one NetSuite deletes is reversed. One whose lines for the company
+                don&apos;t balance on their own isn&apos;t posted. Until the books go live they can be emptied and posted again.
+              </>
+            ) : kind === 'spending' ? (
               <>
                 NetSuite&apos;s checks, money BMG pays straight from a bank account, and its credit card charges and refunds,
                 purchases on a card and money a vendor puts back on it, are copied from NetSuite every two hours with their
@@ -758,8 +774,8 @@ export default function BooksInvoicesPage() {
           {!data.lastRun && (
             <div style={banner(GREY)}>
               Nothing has been posted to FleetSuite&apos;s books yet. Posting runs every two hours, or press Post now. The first
-              run posts every invoice, credit memo, payment, deposit, bill, bill payment, check and card charge since January 2025 and
-              may take more than one run.
+              run posts every invoice, credit memo, payment, deposit, bill, bill payment, check, card charge and journal entry since
+              January 2025 and may take more than one run.
             </div>
           )}
           {run?.error && <div style={banner(RED)}>The last posting run failed {ago(data.lastRun!.at)}: {run.error}</div>}
@@ -853,10 +869,13 @@ export default function BooksInvoicesPage() {
                 ? 'Bill payments NetSuite booked into this month for this company'
               : kind === 'spending'
                 ? 'Checks and credit card charges and refunds NetSuite booked into this month for this company'
+              : kind === 'journal_entry'
+                ? 'Journal entries NetSuite booked into this month for this company, with their lines for it'
               : kind === 'payment'
                 ? `${words.title} dated this month that NetSuite posted to this company`
                 : `${words.title} NetSuite booked into this month for this company`}, checked with rule {data.rule}.
             {data.listsCopiedAt && ` ${kind === 'bill_payment' ? 'Vendors' : `Items and ${kind === 'bill' || kind === 'spending' ? 'vendors' : 'tax codes'}`} as copied from NetSuite ${ago(data.listsCopiedAt)}.`}
+            {data.glCopiedAt && ` Lines as copied from NetSuite's GL ${ago(data.glCopiedAt)}.`}
             {!data.posts && ` This company's ${words.many} aren't posted to FleetSuite's books yet; they will be once they've been checked.`}
           </div>
 
@@ -890,7 +909,9 @@ export default function BooksInvoicesPage() {
                 <tr style={{ color: 'var(--text-secondary)' }}>
                   <th style={{ ...cell, textAlign: 'left' }}>{words.head}</th>
                   <th style={{ ...cell, textAlign: 'left' }}>Date</th>
-                  <th style={{ ...cell, textAlign: 'left' }}>{kind === 'spending' ? 'Payee' : VENDOR_KINDS.has(kind) ? 'Vendor' : 'Customer'}</th>
+                  <th style={{ ...cell, textAlign: 'left' }}>
+                    {kind === 'journal_entry' ? 'Memo' : kind === 'spending' ? 'Payee' : VENDOR_KINDS.has(kind) ? 'Vendor' : 'Customer'}
+                  </th>
                   <th style={cell}>Total</th>
                   <th style={{ ...cell, textAlign: 'left' }}>Check</th>
                   {data.posts && <th style={{ ...cell, textAlign: 'left' }}>Books</th>}

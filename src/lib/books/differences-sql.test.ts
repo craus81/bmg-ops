@@ -159,7 +159,7 @@ describe("migration 377's functions", () => {
     await mirrorInvoice(db, '1008', '2026-09-16');
     await copyTxn(db, '1009', 'CustInvc', '2026-09-17', SEP, [['0', 'BMG', '120', 1200], ['1', 'BMG', '400', -1200]]);
     await mirrorInvoice(db, '1009', '2026-09-17', { voided: true });
-    // A payment that matches, and an expense report and a journal FleetSuite doesn't post.
+    // A payment that matches, an expense report FleetSuite doesn't post, and a journal entry it hasn't posted.
     await copyTxn(db, '2001', 'CustPymt', '2026-09-18', SEP, [['0', 'BMG', '110', 10700], ['1', 'BMG', '120', -10700]]);
     await copyTxn(db, '3001', 'ExpRept', '2026-09-19', SEP, [['0', 'BMG', '200', -50000], ['1', 'BMG', '600', 50000]]);
     await copyTxn(db, '4001', 'Journal', '2026-09-20', SEP, [['1', 'BMG', '600', 2000], ['2', 'BMG', '110', -2000]]);
@@ -251,7 +251,7 @@ describe("migration 377's functions", () => {
     const chart = ACCOUNTS.map(([ns, name]) => ({ id: accountId(ns), netsuite_account_id: ns, number: `${ns}0`, name }));
     const rows = accountRows(cmp, accountNamer(chart));
     expect(rows.map((r) => [r.number, r.fleetsuite, r.netsuite, r.notPosted, r.differs])).toEqual([
-      ['1100', 10200, 8700, -2000, -500],
+      ['1100', 10200, 8700, 0, 1500],
       ['1200', 28500, 13200, 0, 15300],
       ['1300', 0, -4000, -4000, 0],
       ['2000', 0, -50000, -50000, 0],
@@ -259,26 +259,26 @@ describe("migration 377's functions", () => {
       ['4000', -35500, -20200, 0, -15300],
       ['5000', 0, 4000, 4000, 0],
       ['5100', -3000, -3000, 0, 0],
-      ['6000', 500, 52000, 52000, 500],
+      ['6000', 500, 52000, 50000, -1500],
     ]);
     expect(cmp.status).toBe('differs');
     expect(cmp.differing).toBe(4);
-    expect(cmp.covered).toBeCloseTo((23900 + 10700) / (23900 + 4000 + 10700 + 50000 + 2000));
+    expect(cmp.covered).toBeCloseTo((23900 + 10700 + 2000) / (23900 + 4000 + 10700 + 50000 + 2000));
 
     const docs = await documents(SEP);
     expect(kindRows(cmp, docs.counts).map((k) => [k.name, k.state, k.netsuite?.documents ?? null, k.fleetsuite?.documents ?? null, k.differing])).toEqual([
       ['Invoice', 'posted', 6, 6, 7],
       ['Payment', 'posted', 1, 1, 0],
+      ['Journal', 'posted', 1, null, 1],
       ['Cost of goods on invoices', 'cost', 1, null, null],
       ['Expense Report', 'not_posted', 1, null, null],
-      ['Journal', 'not_posted', 1, null, null],
       ['Typed entry (FleetSuite only)', 'fleetsuite_only', null, 1, null],
     ]);
   });
 
   it('gl_books_difference_documents lists the documents that differ, largest first, and why', async () => {
     const docs = await documents(SEP);
-    expect(docs.counts).toEqual({ invoice: 7 });
+    expect(docs.counts).toEqual({ invoice: 7, journal_entry: 1 });
     const chart = ACCOUNTS.map(([ns, name]) => ({ id: accountId(ns), netsuite_account_id: ns, number: `${ns}0`, name }));
     const ctx = { name: accountNamer(chart), costAccounts: new Set(['130', '500', '510']) };
     const explained = docs.documents.map((d) => explainDocument(d, ctx));
@@ -287,6 +287,7 @@ describe("migration 377's functions", () => {
       ['INV1007', 'gone', 7000, 0],
       ['INV1006', 'gone', 6000, 0],
       ['INV1004', 'not_posted', 0, 2500],
+      ['DOC4001', 'not_posted', 0, 2000],
       ['INV1008', 'reversed', 0, 1500],
       ['INV1009', 'voided', 0, 1200],
       ['INV1002', 'amounts', 4500, 5000],
@@ -328,7 +329,7 @@ describe("migration 377's functions", () => {
 
   it('keeps to the limit but counts them all, and compares only the kinds asked for', async () => {
     const two = await documents(SEP, 2);
-    expect(two.counts).toEqual({ invoice: 7 });
+    expect(two.counts).toEqual({ invoice: 7, journal_entry: 1 });
     expect(two.documents.map((d) => d.netsuite_id)).toEqual(['1003', '1007']);
 
     const payments = await one<{ counts: Record<string, number>; documents: unknown[] }>(

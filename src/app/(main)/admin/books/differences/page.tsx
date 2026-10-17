@@ -60,7 +60,7 @@ const dateText = (iso: string) => `${shortMonth(iso)} ${Number(iso.slice(8, 10))
 const DOC_NAMES: Record<string, string> = {
   invoice: 'Invoice', credit_memo: 'Credit memo', payment: 'Payment', customer_deposit: 'Deposit', deposit_application: 'Deposit application',
   vendor_bill: 'Bill', vendor_credit: 'Bill credit', bill_payment: 'Bill payment',
-  check: 'Check', card_charge: 'Card charge', card_refund: 'Card refund',
+  check: 'Check', card_charge: 'Card charge', card_refund: 'Card refund', journal_entry: 'Journal entry',
 };
 
 function ago(iso: string): string {
