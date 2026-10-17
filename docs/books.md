@@ -1567,6 +1567,23 @@ then on. When the report differs, the page links to Differences vs NetSuite
 at the first month in it that differs (`?company=&month=`), where the
 documents behind it are listed.
 
+Each line that differs also lists the months whose own entries make up its
+difference, with what each adds, so a gap on the balance sheet shows the
+month it started in (asked for 2026-10-17, after the first look at the
+real books). Every amount on a report is a sum of movements, so the report
+of one month's movements alone, with no starting entry, is what that month
+adds to each line; the months add up to the line's difference. On the
+balance sheet and trial balance they run from the first month either side
+has to the report's month, earlier years' income landing on retained
+earnings; on the profit and loss, through the months picked. The page
+shows a line's first month and the three that add the most, each opening
+Differences at that month (a month before 2025, FleetSuite's alone, has no
+link there).
+
+On a phone the trial balance shows each side in one column, its balance
+marked Dr or Cr, so it fits the screen as the other two reports do, and the
+reports' text isn't enlarged by iOS.
+
 ## Posting
 
 ```ts

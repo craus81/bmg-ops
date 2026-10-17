@@ -34,6 +34,13 @@ interface Line {
   grand?: true;
   fleetsuite: number | null;
   netsuite: number | null;
+  /** On an account line that differs: the months whose entries make up the difference, oldest first. */
+  months?: Gap[];
+}
+
+interface Gap {
+  month: string;
+  difference: number;
 }
 
 interface Totals {
@@ -75,6 +82,8 @@ const fmt = (cents: number) => money.format(cents / 100);
 const plain = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const debitOf = (cents: number) => (cents > 0 ? plain.format(cents / 100) : '');
 const creditOf = (cents: number) => (cents < 0 ? plain.format(-cents / 100) : '');
+/** A trial balance amount in one column, as a phone shows it. */
+const drCr = (cents: number) => (cents ? `${plain.format(Math.abs(cents) / 100)} ${cents > 0 ? 'Dr' : 'Cr'}` : '');
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const monthOf = (month: string) => MONTH_NAMES[Number(month.slice(5, 7)) - 1];
@@ -145,20 +154,58 @@ function AccountLabel({ line }: { line: Line }) {
   );
 }
 
+/** The most months a line lists: its first, and the ones that add the most to its difference. */
+const GAPS_SHOWN = 4;
+
+function shownGaps(months: Gap[]): Gap[] {
+  if (months.length <= GAPS_SHOWN) return months;
+  const [first, ...rest] = months;
+  const biggest = new Set([...rest].sort((x, y) => Math.abs(y.difference) - Math.abs(x.difference)).slice(0, GAPS_SHOWN - 1));
+  return [first, ...rest.filter((g) => biggest.has(g))];
+}
+
+/** The months whose entries make a line differ, each opening Differences vs NetSuite at that month. */
+function GapMonths({ line, company }: { line: Line; company: string }) {
+  if (!line.months?.length) return null;
+  const shown = shownGaps(line.months);
+  const more = line.months.length - shown.length;
+  return (
+    <div style={{ fontSize: '11px', fontWeight: 400, fontStyle: 'normal', color: 'var(--text-muted)', marginTop: '2px' }}>
+      Differs in{' '}
+      {shown.map((g, i) => (
+        <span key={g.month} style={{ whiteSpace: 'nowrap' }}>
+          {i > 0 && ' · '}
+          {/* Differences starts in January 2025; FleetSuite entries dated earlier have no month there. */}
+          {g.month < '2025-01-01' ? shortName(g.month) : (
+            <Link
+              href={`/admin/books/differences?${new URLSearchParams({ company, month: g.month.slice(0, 7) })}`}
+              style={{ color: 'var(--text-secondary)' }}
+            >
+              {shortName(g.month)}
+            </Link>
+          )}{' '}
+          <span style={{ color: RED }}>{fmt(g.difference)}</span>
+        </span>
+      ))}
+      {more > 0 && ` and ${more} more ${more === 1 ? 'month' : 'months'}`}
+    </div>
+  );
+}
+
 /**
  * One line of a report: the account, then its amounts. On a phone the account
  * takes a row of its own above them (.rep-label-row in globals.css), so the
- * amounts fit across the screen.
+ * amounts fit across the screen: three columns on every report.
  */
-function ReportRow({ line, style, children }: { line: Line; style: React.CSSProperties; children: React.ReactNode }) {
+function ReportRow({ line, company, style, children }: { line: Line; company: string; style: React.CSSProperties; children: React.ReactNode }) {
   const amounts = line.fleetsuite !== null && line.netsuite !== null;
   return (
     <>
       <tr className="rep-label-row" style={style}>
-        <td colSpan={5} style={labelCell(line)}><AccountLabel line={line} /></td>
+        <td colSpan={3} style={labelCell(line)}><AccountLabel line={line} /><GapMonths line={line} company={company} /></td>
       </tr>
       <tr className={amounts ? 'rep-amounts' : 'rep-amounts rep-amounts-empty'} style={style}>
-        <td className="rep-label" style={labelCell(line)}><AccountLabel line={line} /></td>
+        <td className="rep-label" style={labelCell(line)}><AccountLabel line={line} /><GapMonths line={line} company={company} /></td>
         {children}
       </tr>
     </>
@@ -166,7 +213,7 @@ function ReportRow({ line, style, children }: { line: Line; style: React.CSSProp
 }
 
 /** One line of the profit and loss or balance sheet. */
-function StatementRow({ line }: { line: Line }) {
+function StatementRow({ line, company }: { line: Line; company: string }) {
   const amounts = line.fleetsuite !== null && line.netsuite !== null;
   const diff = amounts ? line.fleetsuite! - line.netsuite! : 0;
   const total = line.kind === 'total';
@@ -175,7 +222,7 @@ function StatementRow({ line }: { line: Line }) {
     fontWeight: line.grand ? 800 : total || line.kind === 'section' ? 700 : line.kind === 'heading' ? 600 : 400,
   };
   return (
-    <ReportRow line={line} style={style}>
+    <ReportRow line={line} company={company} style={style}>
       <td style={cell}>{amounts ? fmt(line.fleetsuite!) : ''}</td>
       <td style={cell}>{amounts ? fmt(line.netsuite!) : ''}</td>
       <td style={{ ...cell, color: diff ? RED : 'var(--text-muted)', fontWeight: diff ? 700 : 400 }}>
@@ -185,15 +232,17 @@ function StatementRow({ line }: { line: Line }) {
   );
 }
 
-/** One account of the trial balance, debits and credits apart. */
-function TrialBalanceRow({ line }: { line: Line }) {
+/** One account of the trial balance, debits and credits apart; on a phone, each side's in one column with Dr or Cr. */
+function TrialBalanceRow({ line, company }: { line: Line; company: string }) {
   const diff = (line.fleetsuite ?? 0) - (line.netsuite ?? 0);
   return (
-    <ReportRow line={line} style={{ borderTop: '1px solid var(--border)' }}>
-      <td style={cell}>{debitOf(line.fleetsuite ?? 0)}</td>
-      <td style={cell}>{creditOf(line.fleetsuite ?? 0)}</td>
-      <td style={cell}>{debitOf(line.netsuite ?? 0)}</td>
-      <td style={cell}>{creditOf(line.netsuite ?? 0)}</td>
+    <ReportRow line={line} company={company} style={{ borderTop: '1px solid var(--border)' }}>
+      <td className="rep-wide" style={cell}>{debitOf(line.fleetsuite ?? 0)}</td>
+      <td className="rep-wide" style={cell}>{creditOf(line.fleetsuite ?? 0)}</td>
+      <td className="rep-wide" style={cell}>{debitOf(line.netsuite ?? 0)}</td>
+      <td className="rep-wide" style={cell}>{creditOf(line.netsuite ?? 0)}</td>
+      <td className="rep-narrow" style={cell}>{drCr(line.fleetsuite ?? 0)}</td>
+      <td className="rep-narrow" style={cell}>{drCr(line.netsuite ?? 0)}</td>
       <td style={{ ...cell, color: diff ? RED : 'var(--text-muted)', fontWeight: diff ? 700 : 400 }}>{diff ? fmt(diff) : '—'}</td>
     </ReportRow>
   );
@@ -426,15 +475,17 @@ export default function BooksReportsPage() {
           </div>
 
           <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: '8px' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', background: 'var(--card)' }}>
+            <table className="rep-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', background: 'var(--card)' }}>
               <thead>
                 {isTrialBalance ? (
                   <tr style={{ color: 'var(--text-secondary)', textAlign: 'right' }}>
                     <th className="rep-label" style={{ ...cell, textAlign: 'left' }}>Account</th>
-                    <th style={cell}>FleetSuite debit</th>
-                    <th style={cell}>FleetSuite credit</th>
-                    <th style={cell}>NetSuite debit</th>
-                    <th style={cell}>NetSuite credit</th>
+                    <th className="rep-wide" style={cell}>FleetSuite debit</th>
+                    <th className="rep-wide" style={cell}>FleetSuite credit</th>
+                    <th className="rep-wide" style={cell}>NetSuite debit</th>
+                    <th className="rep-wide" style={cell}>NetSuite credit</th>
+                    <th className="rep-narrow" style={cell}>FleetSuite</th>
+                    <th className="rep-narrow" style={cell}>NetSuite</th>
                     <th style={cell}>Difference</th>
                   </tr>
                 ) : (
@@ -452,17 +503,29 @@ export default function BooksReportsPage() {
                     {onlyDifferences ? 'Every line matches NetSuite.' : `Nothing on either side for ${data.from === data.to || !isProfitAndLoss ? 'this month' : 'these months'}.`}
                   </td></tr>
                 )}
-                {isTrialBalance && shown.map((l) => <TrialBalanceRow key={l.account ?? l.label} line={l} />)}
+                {isTrialBalance && shown.map((l) => <TrialBalanceRow key={l.account ?? l.label} line={l} company={data.company} />)}
                 {isTrialBalance && data.totals && (
-                  <ReportRow line={{ kind: 'total', depth: 0, label: 'Total', fleetsuite: 0, netsuite: 0 }} style={{ borderTop: '2px solid var(--border)', fontWeight: 800 }}>
-                    <td style={cell}>{plain.format(data.totals.fleetsuite.debit / 100)}</td>
-                    <td style={cell}>{plain.format(data.totals.fleetsuite.credit / 100)}</td>
-                    <td style={cell}>{plain.format(data.totals.netsuite.debit / 100)}</td>
-                    <td style={cell}>{plain.format(data.totals.netsuite.credit / 100)}</td>
+                  <ReportRow
+                    line={{ kind: 'total', depth: 0, label: 'Total', fleetsuite: 0, netsuite: 0 }}
+                    company={data.company}
+                    style={{ borderTop: '2px solid var(--border)', fontWeight: 800 }}
+                  >
+                    <td className="rep-wide" style={cell}>{plain.format(data.totals.fleetsuite.debit / 100)}</td>
+                    <td className="rep-wide" style={cell}>{plain.format(data.totals.fleetsuite.credit / 100)}</td>
+                    <td className="rep-wide" style={cell}>{plain.format(data.totals.netsuite.debit / 100)}</td>
+                    <td className="rep-wide" style={cell}>{plain.format(data.totals.netsuite.credit / 100)}</td>
+                    {(['fleetsuite', 'netsuite'] as const).map((side) => (
+                      <td key={side} className="rep-narrow" style={cell}>
+                        <div>{plain.format(data.totals![side].debit / 100)} Dr</div>
+                        <div>{plain.format(data.totals![side].credit / 100)} Cr</div>
+                      </td>
+                    ))}
                     <td style={cell} />
                   </ReportRow>
                 )}
-                {!isTrialBalance && shown.map((l, i) => <StatementRow key={`${i}-${l.kind}-${l.account ?? l.label}`} line={l} />)}
+                {!isTrialBalance && shown.map((l, i) => (
+                  <StatementRow key={`${i}-${l.kind}-${l.account ?? l.label}`} line={l} company={data.company} />
+                ))}
               </tbody>
             </table>
           </div>

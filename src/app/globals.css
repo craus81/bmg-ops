@@ -500,7 +500,10 @@ button {
    desktop the second shows alone; on phones the account sits on its own row
    above the amounts, so FleetSuite, NetSuite and Difference fit across the
    screen instead of Difference sitting off the right edge. */
+/* A report is as wide as the screen at most, so iOS mustn't enlarge its text to read. */
+.rep-table { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .rep-label-row { display: none; }
+.rep-narrow { display: none; }
 @media (max-width: 640px) {
   .rep-label-row { display: table-row; }
   .rep-label-row td { padding-bottom: 0 !important; }
@@ -508,6 +511,9 @@ button {
   .rep-amounts { border-top: none !important; }
   .rep-amounts td { padding-top: 2px !important; }
   .rep-amounts-empty { display: none; }
+  /* The trial balance: each side in one column, with Dr or Cr. */
+  .rep-wide { display: none; }
+  .rep-narrow { display: table-cell; }
 }
 
 /* Mention → note focus: when a Mentions-inbox deep link lands on a record,
