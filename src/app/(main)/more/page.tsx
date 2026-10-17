@@ -122,7 +122,7 @@ export default function MorePage() {
         { title: 'Customer Notifications', sub: 'Who gets automatic emails — everything else is on-demand', path: '/admin/customer-notifications', show: F('customers') },
         { title: 'Bulk Upload', sub: 'Import templates & proofs from ZIP', path: '/admin/bulk-upload', show: F('bulk_upload') },
         { title: 'Ledger', sub: 'QuickBooks history import, customer matching & NetSuite mirror', path: '/admin/ledger', show: F('ledger'), badge: badgeFor('ledger_unmatched_customers') },
-        { title: 'Books', sub: 'FleetSuite’s own books, being built — accounts, trial balance & NetSuite lists', path: '/admin/books', show: hasRole('super_admin') },
+        { title: 'Books', sub: 'FleetSuite’s own books, being built — reports, accounts, trial balance & NetSuite lists', path: '/admin/books', show: hasRole('super_admin') },
         { title: 'Audit Log', sub: 'Who changed what — money edits, payouts, rates & invoices', path: '/admin/audit', show: F('audit_log') },
         { title: 'System Health', sub: 'Background syncs & crons — with alerts when one dies', path: '/admin/system-health', show: F('system_health') },
         { title: 'AI Instructions', sub: 'Steer FleetSuite AI behavior — global rules, no deploy', path: '/admin/ai-instructions', show: F('ai_instructions') },

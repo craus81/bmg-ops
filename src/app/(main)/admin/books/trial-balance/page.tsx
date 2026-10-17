@@ -172,7 +172,9 @@ export default function BooksTrialBalancePage() {
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             NetSuite&apos;s general ledger from January 2025, copied into FleetSuite&apos;s books every two hours, starting from
             NetSuite&apos;s balances on December 31, 2024. Each month-end balance is checked against NetSuite&apos;s own totals.
-            Visible only to super admins. <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
+            Visible only to super admins. <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
+            {' · '}
+            <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
             {' · '}
             <Link href="/admin/books/lists" style={{ color: 'var(--text-secondary)' }}>NetSuite lists</Link>
             {' · '}

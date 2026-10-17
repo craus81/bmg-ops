@@ -161,7 +161,9 @@ export default function BooksDifferencesPage() {
   useEffect(() => {
     if (authLoading) return;
     if (!hasRole('super_admin')) { router.push('/home'); return; }
-    load('', '');
+    // A link may name the company and month (?company=BMG&month=2026-09), as Reports' does.
+    const q = new URLSearchParams(window.location.search);
+    load(q.get('company') ?? '', q.get('month') ?? '');
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it
   }, [authLoading, router, load]);
 
@@ -184,6 +186,8 @@ export default function BooksDifferencesPage() {
           FleetSuite&apos;s own books next to NetSuite&apos;s, account by account and month by month. What NetSuite moved with kinds
           of documents FleetSuite doesn&apos;t post yet is counted apart; for the kinds it does post, each document FleetSuite posted
           differently from NetSuite is listed with why. Visible only to super admins.{' '}
+          <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
+          {' · '}
           <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
           {' · '}
           <Link href="/admin/books/trial-balance" style={{ color: 'var(--text-secondary)' }}>Trial balance vs NetSuite</Link>

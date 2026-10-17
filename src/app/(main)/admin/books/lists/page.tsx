@@ -565,6 +565,8 @@ export default function BooksListsPage() {
             FleetSuite&apos;s own books, visible only to super admins while they&apos;re built. The posting rules will pick
             accounts from these lists the way NetSuite does. Until the changeover they&apos;re copied from NetSuite every two
             hours, so change them in NetSuite.{' '}
+            <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
+            {' · '}
             <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
             {' · '}
             <Link href="/admin/books/trial-balance" style={{ color: 'var(--text-secondary)' }}>Trial balance vs NetSuite</Link>

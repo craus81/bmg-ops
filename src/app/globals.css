@@ -495,6 +495,21 @@ button {
   }
 }
 
+/* Books → Reports (src/app/(main)/admin/books/reports/page.tsx): each line
+   renders twice, an account-only row and the account with its amounts. On
+   desktop the second shows alone; on phones the account sits on its own row
+   above the amounts, so FleetSuite, NetSuite and Difference fit across the
+   screen instead of Difference sitting off the right edge. */
+.rep-label-row { display: none; }
+@media (max-width: 640px) {
+  .rep-label-row { display: table-row; }
+  .rep-label-row td { padding-bottom: 0 !important; }
+  .rep-label { display: none; }
+  .rep-amounts { border-top: none !important; }
+  .rep-amounts td { padding-top: 2px !important; }
+  .rep-amounts-empty { display: none; }
+}
+
 /* Mention → note focus: when a Mentions-inbox deep link lands on a record,
    the target surface scroll-flashes the exact note it references (see
    src/lib/focus-note.ts). The class is toggled imperatively via classList,

@@ -117,6 +117,17 @@ export function monthStatuses(data: TbData, through: string): TbMonth[] {
 
 const collator = new Intl.Collator('en', { numeric: true });
 
+/**
+ * Where earlier years' net income goes, as on NetSuite's reports: the one
+ * equity account named Retained Earnings the company can use, or null when
+ * there isn't exactly one (it then goes on a line of its own).
+ */
+export function retainedEarningsAccount<T extends TbAccount>(accounts: readonly T[], company?: string): T | null {
+  const found = accounts.filter((a) => a.account_type === 'equity' && a.netsuite_account_id
+    && /retained earnings/i.test(a.name) && (!a.company || !company || a.company === company));
+  return found.length === 1 ? found[0] : null;
+}
+
 /** The trial balance at the end of `month` ('YYYY-MM-01'), or the starting balances for START. */
 export function trialBalance(data: TbData, month: string): TrialBalance {
   const chart = new Map<string, TbAccount>();
@@ -159,11 +170,10 @@ export function trialBalance(data: TbData, month: string): TrialBalance {
 
   // Earlier years' net income sits in retained earnings, as on NetSuite's
   // report: in the one equity account named that, or on a line of its own.
-  const reAccounts = data.accounts.filter((a) => a.account_type === 'equity' && a.netsuite_account_id
-    && /retained earnings/i.test(a.name) && (!a.company || !data.company || a.company === data.company));
+  const reAccount = retainedEarningsAccount(data.accounts, data.company);
   let retainedRow: TbRow | null = null;
-  if (reAccounts.length === 1) {
-    const id = reAccounts[0].netsuite_account_id!;
+  if (reAccount) {
+    const id = reAccount.netsuite_account_id!;
     const v = values.get(id) ?? { copied: 0, netsuite: 0 };
     values.set(id, { copied: v.copied + retained.copied, netsuite: v.netsuite + retained.netsuite });
   } else if (retained.copied || retained.netsuite) {
