@@ -4,7 +4,7 @@
 // migration 314 (with stand-ins for the app tables it points at) and
 // migrations 359–364, 367, 370, 374, 376, 377, 380, 382–387, 389 and 390,
 // with the ones the job reads checks, card charges, journal entries, bank
-// deposits, transfers and stock documents through (391–395), in an
+// deposits, transfers and stock documents through (391–395 and 397), in an
 // in-memory Postgres
 // (PGlite) as the app's server login and holds the functions' rules, then
 // runs the posting job against them with bill payments only.
@@ -72,6 +72,7 @@ async function freshDb(): Promise<PGlite> {
     '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql',
+    '397-books-stock-postings-once.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -576,17 +577,18 @@ describe('the posting job, for bill payments', () => {
     // NetSuite changes CHK1012, so a run that could read everything would replace its entry.
     await edit('812', (p) => { p.total = '41.00'; });
     const before = await journal();
-    const reads: Array<[string, (args: Record<string, unknown>) => boolean]> = [
-      ['gl_bill_payment_month', () => true],
+    // Each error says what it was reading.
+    const reads: Array<[string, (args: Record<string, unknown>) => boolean, string]> = [
+      ['gl_bill_payment_month', () => true, "BMG's bill payments for Jan 2025"],
       // Step 1's read of every entry, then a month's read of its payments' entries.
-      ['gl_bill_payment_postings', (args) => args.p_source_ids === null],
-      ['gl_bill_payment_postings', (args) => args.p_source_ids !== null],
+      ['gl_bill_payment_postings', (args) => args.p_source_ids === null, "the journal's entries for BMG's bill payments"],
+      ['gl_bill_payment_postings', (args) => args.p_source_ids !== null, "the journal's entries for BMG's bill payments in Jan 2025"],
     ];
-    for (const [fn, when] of reads) {
+    for (const [fn, when, what] of reads) {
       failing.set(fn, when);
       const r = await run();
       failing.clear();
-      expect(r.error, fn).toBe(`${fn} failed`);
+      expect(r.error, fn).toBe(`Reading ${what}: ${fn} failed`);
       expect(await journal(), fn).toEqual(before);
     }
 
