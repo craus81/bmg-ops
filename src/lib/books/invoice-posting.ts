@@ -28,6 +28,8 @@ import { workOutBillPaymentMonth, type BillPaymentMonthData, type WorkedBillPaym
 import { REFUND_TYPES, SPENDING_RULE, SPENDING_SOURCE_TYPE, type SpendingSourceType } from './spending-rule';
 import { workOutSpendingMonth, type WorkedSpending } from './spending-check';
 import { readSpendingMonth } from './netsuite-spending';
+import { JOURNAL_ENTRY_RULE, JOURNAL_ENTRY_SOURCE_TYPE } from './journal-entry-rule';
+import { workOutJournalMonth, type JournalMonthData, type WorkedJournalEntry } from './journal-entry-check';
 
 /**
  * NetSuite's invoices posted to FleetSuite's own journal with the invoice
@@ -41,10 +43,12 @@ import { readSpendingMonth } from './netsuite-spending';
  * decision 2026-10-15), for a vendor bill or bill credit, posted with the
  * bill rule (migration 386; owner decision 2026-10-16), for a bill
  * payment, posted with the bill payment rule (migration 390; owner decision
- * 2026-10-16), and for a check, credit card charge or credit card refund,
+ * 2026-10-16), for a check, credit card charge or credit card refund,
  * posted with the spending rule (migration 392; owner decision 2026-10-16),
- * except where the payments', deposits', bills', bill payments' and checks'
- * own sections say otherwise.
+ * and for a NetSuite journal entry, posted as NetSuite's GL copy has it
+ * (migration 393; owner decision 2026-10-17), except where the payments',
+ * deposits', bills', bill payments', checks' and journal entries' own
+ * sections say otherwise.
  *
  * Every BMG invoice NetSuite booked into a month from January 2025 that the
  * rule can work out posts once, as the check on Invoices vs NetSuite shows
@@ -80,7 +84,7 @@ import { readSpendingMonth } from './netsuite-spending';
 
 export const BOOKS_INVOICE_POSTING = 'books_invoice_posting';
 
-/** The companies whose invoices, credit memos, payments, deposits, bills, bill payments, checks and card charges post. 1084's join once they've been checked against NetSuite. */
+/** The companies whose invoices, credit memos, payments, deposits, bills, bill payments, checks, card charges and journal entries post. 1084's join once they've been checked against NetSuite. */
 export const POSTING_COMPANIES: readonly BooksCompany[] = ['BMG'];
 
 /** Seconds a run holds the lock: past the routes' 300 s limit, so a run that dies lets go soon after. */
@@ -115,7 +119,11 @@ export interface PostedLine {
   division: string | null;
   source_line_ref: string | null;
   customer_id: string | null;
-  /** The vendor on a bill's or bill payment's payables line (gl_bill_postings and gl_bill_payment_postings, migrations 386 and 390; gl_spending_postings, migration 392, gives none); the other documents' reads leave it out. */
+  /**
+   * The vendor on a bill's, bill payment's or journal entry's payables line (gl_bill_postings, gl_bill_payment_postings and
+   * gl_journal_postings, migrations 386, 390 and 393; gl_spending_postings, migration 392, gives none); the other documents'
+   * reads leave it out.
+   */
   vendor_ref?: string | null;
 }
 
@@ -809,6 +817,90 @@ export function spendingJournalEntry(
   };
 }
 
+// ── Journal entries ────────────────────────────────────────────────────────
+//
+// A NetSuite journal entry posts as a bill does, in the month NetSuite booked
+// it to (entryDate), but has nothing to work out or wait for: its lines for
+// the company, as the copy of NetSuite's GL (migration 361) has them, are its
+// entry, each with its memo and name, a receivables line carrying its
+// customer and a payables line its vendor. What the journal holds for it
+// comes from gl_journal_postings (migration 393), keyed
+// journal_entry:<NetSuite id>:<n>. It is the company's while the GL copy
+// holds a line of it for the company, so one the copy no longer has for it
+// (deleted in NetSuite, or moved to the other company) has its entry reversed
+// with the deleted documents.
+
+/** What the journal holds for one NetSuite journal entry (gl_journal_postings, migration 393). */
+export interface JournalEntryPosting extends Omit<InvoicePosting, 'source_type' | 'invoice'> {
+  source_type: typeof JOURNAL_ENTRY_SOURCE_TYPE;
+  /** What the copy of NetSuite's GL says of it now: its number, and deleted when the copy holds no line of it for the company. */
+  journal: { number: string | null; deleted: boolean } | null;
+}
+
+const journalEntrySignature = (worked: WorkedJournalEntry) => signature(
+  entryDate(worked.entry),
+  worked.checked.lines.map((l) => ({
+    account: l.account, cents: l.cents, division: null, lineRef: l.lineId, customerId: l.customerId, vendorRef: l.vendorRef,
+  })),
+);
+
+/** What to do about one journal entry of a month, given what the journal holds for it. */
+export function decideJournalEntry(worked: WorkedJournalEntry, posting: JournalEntryPosting | undefined): Decision {
+  const current = posting?.current ?? null;
+  // Its lines for the company don't balance on their own: whatever stands stays, and the run's notes name it.
+  if (worked.checked.status === 'unworkable') return { kind: 'leave', why: 'unworkable' };
+  if (worked.checked.lines.length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep', why: 'nothing' };
+  if (!current) return { kind: 'post' };
+  return postedSignature(current) === journalEntrySignature(worked) ? { kind: 'keep' } : { kind: 'replace' };
+}
+
+/** What the journal holds for a journal entry and what the next run does about it, for the invoices page. */
+export function journalEntryBooks(worked: WorkedJournalEntry, posting: JournalEntryPosting | undefined): InvoiceBooks {
+  return booksOf(decideJournalEntry(worked, posting), posting, true);
+}
+
+/**
+ * FleetSuite's entry for a NetSuite journal entry, its `generation`th: the
+ * company's lines on the chart's accounts, each with its memo and NetSuite
+ * line id, in the month NetSuite booked it to, keyed `journal_entry:…`. Null
+ * with the NetSuite accounts the chart doesn't have when it can't be built.
+ */
+export function copiedJournalEntry(
+  worked: WorkedJournalEntry,
+  company: BooksCompany,
+  generation: number,
+  accountIds: Map<string, string>,
+): { entry: JournalEntryInput; missing: [] } | { entry: null; missing: string[] } {
+  const { lines } = worked.checked;
+  const missing = [...new Set(lines.map((l) => l.account).filter((a) => !accountIds.has(a)))];
+  if (missing.length) return { entry: null, missing };
+  const e = worked.entry;
+  return {
+    entry: {
+      company,
+      entryDate: entryDate(e),
+      sourceType: JOURNAL_ENTRY_SOURCE_TYPE,
+      sourceId: e.netsuite_id,
+      postingRule: JOURNAL_ENTRY_RULE,
+      idempotencyKey: `${JOURNAL_ENTRY_SOURCE_TYPE}:${e.netsuite_id}:${generation}`,
+      memo: worked.number,
+      postedBy: null,
+      lines: lines.map((l) => ({
+        accountId: accountIds.get(l.account)!,
+        debit: l.cents > 0 ? centsToAmount(l.cents) : null,
+        credit: l.cents < 0 ? centsToAmount(-l.cents) : null,
+        memo: l.memo,
+        division: null,
+        itemNumber: null,
+        sourceLineRef: l.lineId,
+        customerId: l.customerId,
+        vendorRef: l.vendorRef,
+      })),
+    },
+    missing: [],
+  };
+}
+
 /** Why a write failed, in words that carry no amount: the run's record is kept where amounts never go. */
 export function failureReason(err: unknown): string {
   const money = /\$|\bdebits?\b|\bcredits?\b|balance/i;
@@ -970,13 +1062,14 @@ export async function postInvoices(
 
     // 1. What NetSuite deleted or voided, and any second entry standing for one document.
     for (const company of POSTING_COMPANIES) {
-      const [all, paid, deposited, billed, paidOut, spent] = await Promise.all([
+      const [all, paid, deposited, billed, paidOut, spent, journaled] = await Promise.all([
         service.rpc('gl_invoice_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_payment_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_deposit_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_bill_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_bill_payment_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_spending_postings', { p_company: company, p_source_ids: null, p_lines: false }),
+        service.rpc('gl_journal_postings', { p_company: company, p_source_ids: null, p_lines: false }),
       ]);
       if (all.error) throw new Error(all.error.message);
       if (paid.error) throw new Error(paid.error.message);
@@ -984,6 +1077,7 @@ export async function postInvoices(
       if (billed.error) throw new Error(billed.error.message);
       if (paidOut.error) throw new Error(paidOut.error.message);
       if (spent.error) throw new Error(spent.error.message);
+      if (journaled.error) throw new Error(journaled.error.message);
       const held = [
         ...(((all.data as any)?.invoices ?? []) as InvoicePosting[]).map((p) => ({ posting: p, copy: p.invoice })),
         ...(((paid.data as any)?.payments ?? []) as PaymentPosting[]).map((p) => ({ posting: p, copy: p.payment })),
@@ -991,6 +1085,9 @@ export async function postInvoices(
         ...(((billed.data as any)?.bills ?? []) as BillPosting[]).map((p) => ({ posting: p, copy: p.bill })),
         ...(((paidOut.data as any)?.payments ?? []) as BillPaymentPosting[]).map((p) => ({ posting: p, copy: p.payment })),
         ...(((spent.data as any)?.documents ?? []) as SpendingPosting[]).map((p) => ({ posting: p, copy: p.document })),
+        // A journal entry is never voided in the GL copy: NetSuite's void reverses it with another, or takes its lines away.
+        ...(((journaled.data as any)?.journal_entries ?? []) as JournalEntryPosting[])
+          .map((p) => ({ posting: p, copy: p.journal && { ...p.journal, voided: false } })),
       ];
       const tasks: Array<() => Promise<void>> = [];
       for (const { posting: p, copy } of held) {
@@ -1012,6 +1109,7 @@ export async function postInvoices(
     const skippedMonths: string[] = [];
     let skippedWhy = '';
     const leftTotal: Array<{ number: string; kind: keyof typeof DOCUMENT_WORDS }> = [];
+    const unbalanced: string[] = [];
     const missingAccounts = new Set<string>();
     const queue = postingQueue(POSTING_COMPANIES, months, state.resume);
 
@@ -1239,6 +1337,32 @@ export async function postInvoices(
         if (result.partial) break;
       }
 
+      // The month's journal entries, those NetSuite booked into it: each one's lines for this company in the GL copy are
+      // its entry, so there's nothing to wait for or ask NetSuite, and one the copy no longer has for this company was
+      // reversed in step 1.
+      const jr = await service.rpc('gl_journal_month', { p_company: company, p_month: month });
+      if (jr.error) throw new Error(jr.error.message);
+      const journalEntries = workOutJournalMonth(
+        { journal_entries: ((jr.data ?? {}) as Partial<JournalMonthData>).journal_entries ?? [] },
+        { company, chart: chartAccounts },
+      ).journalEntries;
+      if (journalEntries.length) {
+        const held = await service.rpc('gl_journal_postings', {
+          p_company: company, p_source_ids: journalEntries.map((w) => w.entry.netsuite_id), p_lines: true,
+        });
+        if (held.error) throw new Error(held.error.message);
+        const postings = new Map((((held.data as any)?.journal_entries ?? []) as JournalEntryPosting[]).map((p) => [p.source_id, p]));
+        const tasks: Array<() => Promise<void>> = [];
+        for (const w of journalEntries) {
+          const posting = postings.get(w.entry.netsuite_id);
+          const d = decideJournalEntry(w, posting);
+          if (d.kind === 'leave' && w.checked.problems.some((x) => x.kind === 'unbalanced')) unbalanced.push(w.number);
+          enqueue(tasks, w.number, d, posting?.current ?? null, () => copiedJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
+        }
+        await runLimited(tasks, WRITERS);
+        if (result.partial) break;
+      }
+
       result.months!.push(month);
       state.resume = queue[i + 1] ?? null;
       await writeSyncStateCursor(service, BOOKS_INVOICE_POSTING, record());
@@ -1254,10 +1378,16 @@ export async function postInvoices(
         + `Either the ${one ? 'copy was' : 'copies were'} caught mid-refresh, and the next run looks again, or the rule leaves out a line `
         + 'NetSuite posts, which Invoices vs NetSuite shows.');
     }
+    if (unbalanced.length) {
+      const one = unbalanced.length === 1;
+      notes.push(`FleetSuite can't post ${plural(unbalanced.length, 'journal entry', 'journal entries')}, as ${one ? 'its' : 'their'} lines for the `
+        + `company don't balance on their own, so whatever FleetSuite holds for ${one ? 'it' : 'them'} stayed as it is: ${listed(unbalanced)}. `
+        + `The Journal entries switch on Invoices vs NetSuite shows ${one ? 'its' : 'their'} lines.`);
+    }
     if (missingAccounts.size) {
       notes.push(`NetSuite account${missingAccounts.size === 1 ? '' : 's'} ${listed([...missingAccounts])} ${missingAccounts.size === 1 ? "isn't" : "aren't"} `
-        + 'in the chart of accounts yet, so invoices, credit memos, payments, deposits, bills, bill payments, checks and card charges posting there '
-        + 'weren\'t posted. Sync now on the chart of accounts page copies them.');
+        + 'in the chart of accounts yet, so invoices, credit memos, payments, deposits, bills, bill payments, checks, card charges and journal entries '
+        + 'posting there weren\'t posted. Sync now on the chart of accounts page copies them.');
     }
   } catch (err) {
     result.error = String((err as any)?.message || err).slice(0, 300);

@@ -53,15 +53,15 @@ describe('kinds', () => {
   it('lists deposits and their applications under the one Deposits switch of Invoices vs NetSuite, bills and bill credits under Bills, and checks and cards under one', () => {
     expect([
       'invoice', 'credit_memo', 'payment', 'customer_deposit', 'deposit_application', 'vendor_bill', 'vendor_credit', 'bill_payment',
-      'check', 'card_charge', 'card_refund',
+      'check', 'card_charge', 'card_refund', 'journal_entry',
     ].map(listKindOf)).toEqual([
-      'invoice', 'credit_memo', 'payment', 'deposit', 'deposit', 'bill', 'bill', 'bill_payment', 'spending', 'spending', 'spending',
+      'invoice', 'credit_memo', 'payment', 'deposit', 'deposit', 'bill', 'bill', 'bill_payment', 'spending', 'spending', 'spending', 'journal_entry',
     ]);
   });
 
   it('takes a company as posting what its rules post, or what it holds entries of', () => {
     expect([...postedKinds(data(), true)].sort()).toEqual([
-      'CardChrg', 'CardRfnd', 'Check', 'CustCred', 'CustDep', 'CustInvc', 'CustPymt', 'DepAppl', 'VendBill', 'VendCred', 'VendPymt',
+      'CardChrg', 'CardRfnd', 'Check', 'CustCred', 'CustDep', 'CustInvc', 'CustPymt', 'DepAppl', 'Journal', 'VendBill', 'VendCred', 'VendPymt',
     ]);
     expect([...postedKinds(data(), false)]).toEqual(['CustInvc']);
     expect([...postedKinds({ ...data(), fleetsuite: [] }, false)]).toEqual([]);
@@ -277,6 +277,24 @@ describe('explainDocument', () => {
       kind: 'card_refund', netsuite: { ...late, type: 'CardRfnd', date: '2024-12-30', month: '2025-01-01' }, fleetsuite: { entries: 0, standing: null },
     }), ctx);
     expect(early).toMatchObject({ reason: 'not_posted', listKind: 'spending', listMonth: '2025-01-01' });
+  });
+
+  it('lists a journal entry under Journal entries in the month NetSuite booked it into, as a bill, and says when its entry goes next run', () => {
+    const late = { type: 'Journal', number: 'JE1201', date: '2025-05-31', month: '2025-06-01' };
+    const je = explainDocument(doc({ kind: 'journal_entry', netsuite: late, copy: null }), ctx);
+    expect(je).toMatchObject({ reason: 'month', number: 'JE1201', listKind: 'journal_entry', listMonth: '2025-06-01', customer: null });
+    // Dated before the books start but booked into January 2025: FleetSuite posts it there, as it does a bill.
+    const early = explainDocument(doc({
+      kind: 'journal_entry', netsuite: { ...late, date: '2024-12-31', month: '2025-01-01' }, fleetsuite: { entries: 0, standing: null }, copy: null,
+    }), ctx);
+    expect(early).toMatchObject({ reason: 'not_posted', listKind: 'journal_entry', listMonth: '2025-01-01' });
+    // The copy of NetSuite's ledger has none of its lines for this company while its entry stands: the next run reverses it.
+    expect(explainDocument(doc({ kind: 'journal_entry', netsuite: null, copy: null }), ctx)).toMatchObject({
+      reason: 'gone', number: 'NetSuite 77', why: "Deleted in NetSuite. The next posting run reverses FleetSuite's entry.",
+    });
+    expect(explainDocument(doc({ kind: 'journal_entry', netsuite: { ...late, month: null }, copy: null }), ctx)).toMatchObject({
+      reason: 'gone', number: 'JE1201', why: "NetSuite posts it to the other company now. The next posting run reverses FleetSuite's entry for this one.",
+    });
   });
 
   it('dates a document FleetSuite never posted by NetSuite\'s date', () => {

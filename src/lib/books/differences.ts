@@ -3,6 +3,7 @@ import { DEPOSIT_SOURCE_TYPE } from './deposit-rule';
 import { BILL_SOURCE_TYPE } from './bill-rule';
 import { BILL_PAYMENT_SOURCE_TYPE } from './bill-payment-rule';
 import { SPENDING_SOURCE_TYPE } from './spending-rule';
+import { JOURNAL_ENTRY_SOURCE_TYPE, JOURNAL_TYPE } from './journal-entry-rule';
 
 /**
  * What still differs between FleetSuite's own books and NetSuite's, and why
@@ -37,6 +38,7 @@ export const NETSUITE_TYPE: Readonly<Record<string, string>> = {
   [SPENDING_SOURCE_TYPE.Check]: 'Check',
   [SPENDING_SOURCE_TYPE.CardChrg]: 'CardChrg',
   [SPENDING_SOURCE_TYPE.CardRfnd]: 'CardRfnd',
+  [JOURNAL_ENTRY_SOURCE_TYPE]: JOURNAL_TYPE,
 };
 
 const DEPOSIT_KINDS: ReadonlySet<string> = new Set(Object.values(DEPOSIT_SOURCE_TYPE));
@@ -371,7 +373,7 @@ export function kindRows(cmp: MonthComparison, counts: Record<string, number> | 
 export interface DiffDocumentData {
   /**
    * FleetSuite's source type: 'invoice', 'credit_memo', 'payment', 'customer_deposit', 'deposit_application', 'vendor_bill',
-   * 'vendor_credit', 'bill_payment', 'check', 'card_charge' or 'card_refund'.
+   * 'vendor_credit', 'bill_payment', 'check', 'card_charge', 'card_refund' or 'journal_entry'.
    */
   kind: string;
   netsuite_id: string;
@@ -386,7 +388,8 @@ export interface DiffDocumentData {
    * bill payments or checks and card charges and refunds (deleted: a deposit,
    * bill, bill payment, check or card charge NetSuite no longer lists); a
    * bill's or bill payment's customer is its vendor, a check's or card
-   * charge's its payee.
+   * charge's its payee. Null for a journal entry, which has no copy but the
+   * GL's.
    */
   copy: { number: string | null; customer: string | null; voided: boolean; deleted: boolean } | null;
 }
@@ -457,10 +460,13 @@ const NAMED_ACCOUNTS = 2;
 /**
  * FleetSuite's kinds of document that post in the month NetSuite booked them
  * to, whatever their own date (entryDate in invoice-check.ts, migrations 380,
- * 386, 390 and 392), and that Invoices vs NetSuite lists under that month.
- * Payments, deposits and applications post and are listed by their own date.
+ * 386, 390, 392 and 393), and that Invoices vs NetSuite lists under that
+ * month. Payments, deposits and applications post and are listed by their
+ * own date.
  */
-const IN_NETSUITE_MONTH: ReadonlySet<string> = new Set(['invoice', 'credit_memo', ...BILL_KINDS, BILL_PAYMENT_SOURCE_TYPE, ...SPENDING_KINDS]);
+const IN_NETSUITE_MONTH: ReadonlySet<string> = new Set([
+  'invoice', 'credit_memo', ...BILL_KINDS, BILL_PAYMENT_SOURCE_TYPE, ...SPENDING_KINDS, JOURNAL_ENTRY_SOURCE_TYPE,
+]);
 
 function reasonFor(doc: DiffDocumentData, lines: DiffDocumentLine[], costAccounts: ReadonlySet<string>): { reason: DiffReason; why: string } {
   const ns = doc.netsuite;
@@ -487,6 +493,15 @@ function reasonFor(doc: DiffDocumentData, lines: DiffDocumentLine[], costAccount
   if (!ns?.month) {
     if (doc.copy?.deleted) return { reason: 'gone', why: "Deleted in NetSuite. The next posting run reverses FleetSuite's entry." };
     if (doc.copy?.voided) return { reason: 'gone', why: "Voided in NetSuite, which posts nothing for it now. The next posting run reverses FleetSuite's entry." };
+    // A journal entry is the company's only while the copy of NetSuite's ledger has lines of it for the company.
+    if (doc.kind === JOURNAL_ENTRY_SOURCE_TYPE) {
+      return {
+        reason: 'gone',
+        why: ns
+          ? "NetSuite posts it to the other company now. The next posting run reverses FleetSuite's entry for this one."
+          : "Deleted in NetSuite. The next posting run reverses FleetSuite's entry.",
+      };
+    }
     return {
       reason: 'gone',
       why: ns
