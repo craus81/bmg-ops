@@ -180,6 +180,8 @@ export default function BooksAccountsPage() {
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             FleetSuite&apos;s own books, visible only to super admins while they&apos;re built. Until the changeover these
             accounts are copied from NetSuite every two hours, so add or change an account in NetSuite.{' '}
+            <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
+            {' · '}
             <Link href="/admin/books/trial-balance" style={{ color: 'var(--text-secondary)' }}>Trial balance vs NetSuite</Link>
             {' · '}
             <Link href="/admin/books/lists" style={{ color: 'var(--text-secondary)' }}>NetSuite lists</Link>

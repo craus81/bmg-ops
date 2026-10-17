@@ -25,13 +25,16 @@ credit card charges and refunds, copied from NetSuite, checked with the
 spending rule and posted in the same run as invoices, part 13,
 NetSuite's journal entries, posted line for line from the copy of its
 general ledger in the same run as invoices, part 14, its bank deposits
-and transfers, posted the same way, and part 15, the documents that move
+and transfers, posted the same way, part 15, the documents that move
 its stock and book their cost, with the cost lines of its invoices and
-credit memos, posted the same way too.
+credit memos, posted the same way too, and part 16, the profit and loss,
+balance sheet and trial balance from FleetSuite's own books, each next to
+NetSuite's.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
-the invoices at `/admin/books/invoices` and the differences at
-`/admin/books/differences`, which only super admins can
+the invoices at `/admin/books/invoices`, the differences at
+`/admin/books/differences` and the reports at `/admin/books/reports`,
+which only super admins can
 open. Only they see the Books entry on the More page (Admin), which opens
 the accounts page; the others are linked from there.
 
@@ -84,6 +87,8 @@ the accounts page; the others are linked from there.
 | Bank deposit and transfer tests | `src/lib/books/bank-check.test.ts`, `src/lib/books/bank-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Fulfillments, item receipts, inventory adjustments and invoices' cost lines, checked and posted like journal entries | `migrations/395-books-stock-cost.sql`, `src/lib/books/stock-rule.ts`, `src/lib/books/stock-check.ts`, `src/lib/books/invoice-posting.ts` |
 | Stock and cost tests | `src/lib/books/stock-check.test.ts`, `src/lib/books/stock-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
+| Reports from FleetSuite's own books | `migrations/396-books-reports.sql`, `src/lib/books/reports.ts`, `src/app/(main)/admin/books/reports/page.tsx`, `src/app/api/admin/books/reports/route.ts` |
+| Report tests | `src/lib/books/reports.test.ts`, `src/lib/books/reports-sql.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -1500,6 +1505,59 @@ copy but the GL's, which gives its number. When
 the copy of NetSuite's ledger doesn't yet hold everything NetSuite's own
 totals say a month moved, the page says so, since NetSuite's side is then
 short.
+
+## Reports
+
+`/admin/books/reports` shows one company's profit and loss, balance sheet
+and trial balance from FleetSuite's own books, each line next to the same
+report worked out from NetSuite's own totals, so the owner and the CPA can
+see they agree (owner decision 2026-10-17). The profit and loss covers the
+months picked with From and To, as NetSuite's reports do (the owner chose
+any range over a fixed twelve months the same day); the balance sheet and
+trial balance are at the To month's end. Months run from January 2025 to
+the latest month either side has, and the page opens on last month.
+
+FleetSuite's side is its journal: migration 396's `gl_books_totals` sums
+one company's `gl_lines` per account and month by each entry's date, keyed
+by the account's NetSuite id, or `fs:<id>` for an account NetSuite doesn't
+have. NetSuite's side is NetSuite's own totals, as `gl_netsuite_totals`
+gives them to the trial balance check. FleetSuite's books post from January
+2025, so both sides start from NetSuite's balances on December 31, 2024
+(the starting entry), and anything FleetSuite's journal holds dated earlier
+adds to its side. When FleetSuite posts its own opening balances (Going
+live, step 3), its side must start from those instead, or they count twice.
+
+`src/lib/books/reports.ts` lays each report out as NetSuite's is:
+
+- Profit and loss: Income, Cost of sales, Gross profit, Expense, Net
+  ordinary income, then Other income, Other expense and Net other income
+  when there are any, and Net income. Income and expenses read positive; a
+  loss reads negative.
+- Balance sheet: Current assets (Bank, Accounts receivable, Other current
+  assets), Fixed assets, Other assets and Total assets, then Current
+  liabilities (Accounts payable, Credit card, Other current liabilities),
+  Long term liabilities, Total liabilities, Equity and Total liabilities
+  and equity. Liabilities and equity read positive. Earlier years' net
+  income is in retained earnings, as the trial balance check puts it, and
+  this year's is a Net income line; the year is the calendar year.
+- Trial balance: as the trial balance check lays it out, debits and credits
+  apart, with each side's totals.
+
+Each account sits under its parent when the parent is in the same section,
+with a total for the parent; one whose parent is in another section, or
+whose parents loop, starts its own branch. Accounts with nothing on either
+side don't show. A NetSuite account the chart doesn't have yet can't be
+placed, so it shows apart at the end, debit positive, and out of net
+income.
+
+A line differs when its two sides aren't the same to the cent; the count
+covers accounts, retained earnings and net income, not totals. The month
+strip marks each month by its own report: its profit and loss alone, or the
+balance sheet or trial balance at its end, so a difference shows on the
+profit and loss in the month it comes from and on the balance sheet from
+then on. When the report differs, the page links to Differences vs NetSuite
+at the first month in it that differs (`?company=&month=`), where the
+documents behind it are listed.
 
 ## Posting
 

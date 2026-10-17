@@ -759,7 +759,9 @@ export default function BooksInvoicesPage() {
                 again.
               </>
             )}
-            {' '}Visible only to super admins. <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
+            {' '}Visible only to super admins. <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
+            {' · '}
+            <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
             {' · '}
             <Link href="/admin/books/trial-balance" style={{ color: 'var(--text-secondary)' }}>Trial balance vs NetSuite</Link>
             {' · '}
