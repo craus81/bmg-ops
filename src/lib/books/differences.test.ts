@@ -238,6 +238,20 @@ describe('explainDocument', () => {
     });
   });
 
+  it('says a voided invoice NetSuite still has lines of was reversed, and that a voided bill payment or check like it posts again', () => {
+    const voided = (kind: string) => explainDocument(doc({
+      kind, fleetsuite: { entries: 2, standing: null }, copy: { number: 'X9', customer: null, voided: true, deleted: false },
+    }), ctx);
+    expect(voided('invoice')).toMatchObject({
+      reason: 'voided', why: "Voided in NetSuite, so FleetSuite reversed its entry, but the copy of NetSuite's ledger still has lines of it.",
+    });
+    for (const kind of ['bill_payment', 'check', 'card_charge', 'card_refund']) {
+      expect(voided(kind), kind).toMatchObject({
+        reason: 'voided', why: 'Voided in NetSuite, which still books it and takes it back with a journal entry, so the next posting run posts it again.',
+      });
+    }
+  });
+
   it('says FleetSuite doesn\'t post a payment dated before its books start, but posts an invoice like it in NetSuite\'s month', () => {
     const early = { type: 'CustPymt', number: 'PYMT9', date: '2024-12-30', month: '2025-01-01' };
     const payment = explainDocument(doc({ kind: 'payment', netsuite: early, fleetsuite: { entries: 0, standing: null } }), ctx);

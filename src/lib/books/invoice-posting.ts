@@ -655,6 +655,24 @@ export async function readBillMonth(service: SupabaseClient, company: string, mo
 // bill_payment:<NetSuite id>:<n>. Its vendor goes on the payables line, as a
 // bill's does. As for payments, one in neither company's GL copy is looked
 // at only while an entry of it stands.
+//
+// One NetSuite voided posts all the same while NetSuite's GL still books it:
+// NetSuite voids a bill payment by keeping its lines and booking a journal
+// entry that takes them back (seen 2026-10-17), which posts with the journal
+// entries, so the two come to nothing together as they do in NetSuite. Only
+// one whose void took its lines away has its entry reversed, by its month's
+// decision rather than in step 1, since only the month's read has its lines.
+
+/**
+ * Whether NetSuite's GL still books a document: its lines come to something
+ * on some account. A void that kept them is taken back by a journal entry of
+ * its own.
+ */
+const stillBooked = (lines: ReadonlyArray<{ account: string; debit: string; credit: string }>) => {
+  const byAccount = new Map<string, number>();
+  for (const l of lines) byAccount.set(l.account, (byAccount.get(l.account) ?? 0) + (centsOf(l.debit) ?? 0) - (centsOf(l.credit) ?? 0));
+  return [...byAccount.values()].some((cents) => cents !== 0);
+};
 
 /** What the journal holds for one bill payment (gl_bill_payment_postings, migration 390). */
 export interface BillPaymentPosting extends Omit<InvoicePosting, 'source_type' | 'invoice'> {
@@ -682,7 +700,9 @@ const billPaymentSignature = (worked: WorkedBillPayment) => signature(
 /** What to do about one bill payment the rule has worked out, given what the journal holds for it. */
 export function decideBillPayment(worked: WorkedBillPayment, posting: BillPaymentPosting | undefined): Decision {
   const current = posting?.current ?? null;
-  if (worked.payment.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep', why: 'voided' };
+  if (worked.payment.voided && !stillBooked(worked.payment.netsuite)) {
+    return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep', why: 'voided' };
+  }
   const { status, lines } = worked.checked;
   if (status === 'waiting') return { kind: 'leave', why: 'waiting' };
   if (status === 'unworkable') return { kind: 'leave', why: 'unworkable' };
@@ -745,7 +765,8 @@ export function billPaymentJournalEntry(
 // (migration 392), keyed check:<NetSuite id>:<n>, card_charge:… or
 // card_refund:…. No line carries a vendor, as nothing is owed on one; its
 // payee is in the entry's memo. As for payments, one in neither company's GL
-// copy is looked at only while an entry of it stands.
+// copy is looked at only while an entry of it stands, and one NetSuite voided
+// posts as a voided bill payment does.
 
 /** What the journal holds for one check, card charge or card refund (gl_spending_postings, migration 392). */
 export interface SpendingPosting extends Omit<InvoicePosting, 'source_type' | 'invoice'> {
@@ -766,7 +787,9 @@ const spendingSignature = (worked: WorkedSpending) => signature(
 /** What to do about one check, card charge or card refund the rule has worked out, given what the journal holds for it. */
 export function decideSpending(worked: WorkedSpending, posting: SpendingPosting | undefined): Decision {
   const current = posting?.current ?? null;
-  if (worked.doc.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep', why: 'voided' };
+  if (worked.doc.voided && !stillBooked(worked.doc.netsuite)) {
+    return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep', why: 'voided' };
+  }
   const { status, lines } = worked.checked;
   if (status === 'waiting') return { kind: 'leave', why: 'waiting' };
   if (status === 'unworkable') return { kind: 'leave', why: 'unworkable' };
@@ -1216,8 +1239,11 @@ export async function postInvoices(
         ...(((paid.data as any)?.payments ?? []) as PaymentPosting[]).map((p) => ({ posting: p, copy: p.payment })),
         ...(((deposited.data as any)?.deposits ?? []) as DepositPosting[]).map((p) => ({ posting: p, copy: p.deposit })),
         ...(((billed.data as any)?.bills ?? []) as BillPosting[]).map((p) => ({ posting: p, copy: p.bill })),
-        ...(((paidOut.data as any)?.payments ?? []) as BillPaymentPosting[]).map((p) => ({ posting: p, copy: p.payment })),
-        ...(((spent.data as any)?.documents ?? []) as SpendingPosting[]).map((p) => ({ posting: p, copy: p.document })),
+        // A voided bill payment, check, card charge or refund is its month's to decide: NetSuite may still book it (stillBooked).
+        ...(((paidOut.data as any)?.payments ?? []) as BillPaymentPosting[])
+          .map((p) => ({ posting: p, copy: p.payment && { ...p.payment, voided: false } })),
+        ...(((spent.data as any)?.documents ?? []) as SpendingPosting[])
+          .map((p) => ({ posting: p, copy: p.document && { ...p.document, voided: false } })),
         // A journal entry is never voided in the GL copy: NetSuite's void reverses it with another, or takes its lines away.
         ...(((journaled.data as any)?.journal_entries ?? []) as JournalEntryPosting[])
           .map((p) => ({ posting: p, copy: p.journal && { ...p.journal, voided: false } })),

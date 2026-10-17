@@ -1038,10 +1038,6 @@ Not yet seen in NetSuite's data, so the check is what will show it:
   payment as the next document, as it does for customer payments;
 - whether BMG pays bills by credit card, and where NetSuite books a
   discount BMG took;
-- how NetSuite's GL holds a voided bill payment: FleetSuite reverses its
-  entry when the copy says it's voided, so should NetSuite keep its lines
-  and reverse them with a journal instead, Differences shows the payment
-  as voided;
 - a payment in another currency, whose total the copy keeps in that
   currency while NetSuite's GL is in BMG's: it would show as differing
   from what NetSuite took out of the account it was paid from, and since
@@ -1064,13 +1060,24 @@ When NetSuite changes what a payment posts (its total, the account it was
 paid from, the discount, the vendor, its date or the month it's booked
 into) its entry is reversed and the new one posted in one transaction; a
 new number, memo, status or vendor name alone changes nothing. One NetSuite
-voids or no longer has (the copy marks it gone) has its entry reversed,
-and so does one that comes to nothing now. The entry is worked out from
+no longer has (the copy marks it gone) has its entry reversed, and so does
+one that comes to nothing now. The entry is worked out from
 the payment's total, so unlike a bill there are no copied lines to wait
 for or to come to the total; one the rule can't work out, or that
 NetSuite's GL copy has nothing of yet, keeps whatever it has, and the next
 run looks again. As for payments, one in neither company's GL copy is
 looked at only while an entry of it stands. 1084's join with its invoices.
+
+NetSuite voids a bill payment by keeping its lines and booking a journal
+entry that takes each of them back (seen 2026-10-17, when the balance
+sheet's bank account came out higher than NetSuite's by the voided
+payments and checks; owner decision the same day). FleetSuite posts that
+journal entry as it does any other, so a voided payment posts all the same
+while NetSuite's GL still books it, and the two come to nothing together,
+as they do in NetSuite; until then FleetSuite posted the journal entry and
+not the payment. Only one whose void took its lines away has its entry
+reversed, by its month's decision rather than the run's first step, which
+doesn't read the lines.
 
 The posting job and the Bill payments switch read a month the same way
 (`gl_bill_payment_month`), so payables are picked from the same payments
@@ -1178,8 +1185,6 @@ Not yet seen in NetSuite's data, so the check is what will show it:
   charge's main line (line 0), as it keeps payables on a bill's;
 - whether BMG's checks or card charges have tax lines, or items NetSuite
   books somewhere other than their expense or asset accounts;
-- how NetSuite holds a voided check: zeroed, or kept and reversed by a
-  journal;
 - a document in another currency, whose total the copy keeps in that
   currency while NetSuite's GL is in BMG's.
 
@@ -1203,8 +1208,12 @@ When NetSuite changes what a document posts (an account, an amount, a
 line, the bank account or card, its date or the month it's booked into,
 or the copies of its lines, items or GL) its entry is reversed and the new
 one posted in one transaction; a new number, memo, status or payee alone
-changes nothing. One NetSuite voids, or no longer has (the copy marks it
-gone), has its entry reversed, and so does one that comes to nothing now.
+changes nothing. One NetSuite no longer has (the copy marks it gone) has
+its entry reversed, and so does one that comes to nothing now. One NetSuite
+voided posts as a voided bill payment does: NetSuite voids a check by
+keeping its lines and booking a journal entry that takes them back (seen
+2026-10-17), so it posts while NetSuite's GL still books it, and only one
+whose void took its lines away has its entry reversed.
 The account the money comes out of must be credited with a check's or a
 charge's total, and debited with a refund's, so one whose copied lines
 come out any other way (caught mid-refresh, or signed the other way round)
@@ -1289,7 +1298,8 @@ GL copy no longer holds a line of for the company (deleted in NetSuite,
 moved to the other company, or voided with its lines taken away) has its
 entry reversed, and so does one that comes to nothing now. NetSuite's
 other way of voiding an entry, a reversing journal entry, is a journal
-entry of its own and posts like any other. One whose lines don't balance
+entry of its own and posts like any other, as does the one that voids a
+bill payment or check. One whose lines don't balance
 keeps whatever it has, and the run's notes name it. 1084's join with its
 invoices.
 
@@ -1482,7 +1492,7 @@ the page says why for each:
 | --- | --- |
 | Dated before the books start | A payment, deposit or application NetSuite dated in 2024 and posted to 2025; FleetSuite only posts those dated from 2025 (an invoice, credit memo, bill, bill credit, bill payment, check, card charge, journal entry, bank deposit, transfer or stock document like it posts in NetSuite's month) |
 | Not posted | FleetSuite has never posted it; Invoices vs NetSuite shows why |
-| Voided | NetSuite voided it and FleetSuite reversed its entry, but the copy of NetSuite's ledger still has lines of it |
+| Voided | NetSuite voided it and FleetSuite reversed its entry, but the copy of NetSuite's ledger still has lines of it (a bill payment, check, card charge or refund like it posts again on the next run) |
 | Reversed | FleetSuite reversed its entry and has none standing |
 | Gone | FleetSuite's entry stands but this company has no line of it in the copy: deleted or voided in NetSuite (the next posting run reverses the entry), or posted to the other company (for a journal entry, bank deposit, transfer or stock document, the next posting run reverses that one too) |
 | Another month | FleetSuite's entry is dated in one month, NetSuite posted it to another; for an invoice, credit memo, bill, bill credit, bill payment, check, card charge, journal entry, bank deposit, transfer or stock document, until the next posting run moves it |
