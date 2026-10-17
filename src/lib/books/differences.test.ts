@@ -38,30 +38,37 @@ describe('kinds', () => {
     expect(kindOf('check')).toBe('Check');
     expect(kindOf('card_charge')).toBe('CardChrg');
     expect(kindOf('card_refund')).toBe('CardRfnd');
+    expect(kindOf('journal_entry')).toBe('Journal');
+    expect(kindOf('bank_deposit')).toBe('Deposit');
+    expect(kindOf('bank_transfer')).toBe('Transfer');
     expect(kindOf('opening_balance')).toBe('fleetsuite:opening_balance');
     expect(kindName('CustDep')).toBe('Customer Deposit');
     expect(kindName('DepAppl')).toBe('Deposit Application');
     expect(kindName('CustCred')).toBe('Credit Memo');
     expect(kindName('VendCred')).toBe('Bill Credit');
     expect(kindName('ItemShip')).toBe('Item Fulfillment');
+    expect(kindName('Deposit')).toBe('Deposit');
+    expect(kindName('Transfer')).toBe('Transfer');
     expect(kindName('SomethingNew')).toBe('SomethingNew');
     expect(kindName(COST)).toBe('Cost of goods on invoices');
     expect(kindName('fleetsuite:opening_balance')).toBe('Opening balance (FleetSuite only)');
     expect(kindName('fleetsuite:payroll_run')).toBe('Payroll run (FleetSuite only)');
   });
 
-  it('lists deposits and their applications under the one Deposits switch of Invoices vs NetSuite, bills and bill credits under Bills, and checks and cards under one', () => {
+  it('lists deposits and their applications under the one Deposits switch of Invoices vs NetSuite, bills and bill credits under Bills, checks and cards under one, and bank deposits and transfers under another', () => {
     expect([
       'invoice', 'credit_memo', 'payment', 'customer_deposit', 'deposit_application', 'vendor_bill', 'vendor_credit', 'bill_payment',
-      'check', 'card_charge', 'card_refund', 'journal_entry',
+      'check', 'card_charge', 'card_refund', 'journal_entry', 'bank_deposit', 'bank_transfer',
     ].map(listKindOf)).toEqual([
       'invoice', 'credit_memo', 'payment', 'deposit', 'deposit', 'bill', 'bill', 'bill_payment', 'spending', 'spending', 'spending', 'journal_entry',
+      'bank', 'bank',
     ]);
   });
 
   it('takes a company as posting what its rules post, or what it holds entries of', () => {
     expect([...postedKinds(data(), true)].sort()).toEqual([
-      'CardChrg', 'CardRfnd', 'Check', 'CustCred', 'CustDep', 'CustInvc', 'CustPymt', 'DepAppl', 'Journal', 'VendBill', 'VendCred', 'VendPymt',
+      'CardChrg', 'CardRfnd', 'Check', 'CustCred', 'CustDep', 'CustInvc', 'CustPymt', 'DepAppl', 'Deposit', 'Journal', 'Transfer', 'VendBill',
+      'VendCred', 'VendPymt',
     ]);
     expect([...postedKinds(data(), false)]).toEqual(['CustInvc']);
     expect([...postedKinds({ ...data(), fleetsuite: [] }, false)]).toEqual([]);
@@ -294,6 +301,25 @@ describe('explainDocument', () => {
     });
     expect(explainDocument(doc({ kind: 'journal_entry', netsuite: { ...late, month: null }, copy: null }), ctx)).toMatchObject({
       reason: 'gone', number: 'JE1201', why: "NetSuite posts it to the other company now. The next posting run reverses FleetSuite's entry for this one.",
+    });
+  });
+
+  it('lists a bank deposit or transfer under Bank deposits and transfers in the month NetSuite booked it into, as a journal entry', () => {
+    const late = { type: 'Deposit', number: 'DEP0412', date: '2025-05-31', month: '2025-06-01' };
+    expect(explainDocument(doc({ kind: 'bank_deposit', netsuite: late, copy: null }), ctx)).toMatchObject({
+      reason: 'month', number: 'DEP0412', listKind: 'bank', listMonth: '2025-06-01', customer: null,
+    });
+    const early = explainDocument(doc({
+      kind: 'bank_transfer', netsuite: { ...late, type: 'Transfer', number: 'TRN0031', date: '2024-12-31', month: '2025-01-01' },
+      fleetsuite: { entries: 0, standing: null }, copy: null,
+    }), ctx);
+    expect(early).toMatchObject({ reason: 'not_posted', listKind: 'bank', listMonth: '2025-01-01' });
+    // Its entry stands while the copy of NetSuite's ledger has none of its lines for this company: the next run reverses it.
+    expect(explainDocument(doc({ kind: 'bank_deposit', netsuite: null, copy: null }), ctx)).toMatchObject({
+      reason: 'gone', number: 'NetSuite 77', why: "Deleted in NetSuite. The next posting run reverses FleetSuite's entry.",
+    });
+    expect(explainDocument(doc({ kind: 'bank_transfer', netsuite: { ...late, type: 'Transfer', month: null }, copy: null }), ctx)).toMatchObject({
+      reason: 'gone', why: "NetSuite posts it to the other company now. The next posting run reverses FleetSuite's entry for this one.",
     });
   });
 

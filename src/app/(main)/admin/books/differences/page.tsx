@@ -61,6 +61,7 @@ const DOC_NAMES: Record<string, string> = {
   invoice: 'Invoice', credit_memo: 'Credit memo', payment: 'Payment', customer_deposit: 'Deposit', deposit_application: 'Deposit application',
   vendor_bill: 'Bill', vendor_credit: 'Bill credit', bill_payment: 'Bill payment',
   check: 'Check', card_charge: 'Card charge', card_refund: 'Card refund', journal_entry: 'Journal entry',
+  bank_deposit: 'Bank deposit', bank_transfer: 'Transfer',
 };
 
 function ago(iso: string): string {
@@ -106,7 +107,7 @@ function kindStatus(k: DiffKindRow): { label: string; color: string; title: stri
   if (k.state === 'posted') {
     if (k.differing === null) return { label: 'Posted by FleetSuite', color: GREY, title: 'FleetSuite posts these' };
     return k.differing
-      ? { label: `${k.differing.toLocaleString('en-US')} differ`, color: RED, title: 'Documents FleetSuite posted differently from NetSuite; they are listed below' }
+      ? { label: count(k.differing, 'differs', 'differ'), color: RED, title: 'Documents FleetSuite posted differently from NetSuite; they are listed below' }
       : { label: 'Matches', color: GREEN, title: 'Every one comes to what NetSuite posted for it, account by account' };
   }
   if (k.state === 'cost') {

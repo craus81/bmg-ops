@@ -14,33 +14,43 @@ import { journalEntryLines, lineMemo, type JournalLine, type JournalProblem, typ
  * With nothing to work out, an entry whose lines balance matches NetSuite
  * line for line; one whose lines don't balance can't be posted. Pure;
  * amounts are whole cents, debit positive.
+ *
+ * Bank deposits and transfers post line for line the same way
+ * (src/lib/books/bank-check.ts), so the month's work here takes any document
+ * posted from the GL copy.
  */
+
+/**
+ * One NetSuite document posted line for line from the copy of its GL, as
+ * gl_journal_month (migration 393) and gl_bank_month (migration 394) give it.
+ */
+export interface LedgerCopyDocument {
+  netsuite_id: string;
+  number: string | null;
+  date: string;
+  /** The month NetSuite booked it into, 'YYYY-MM-01'. */
+  posting_month: string;
+  /** Every company the copy of NetSuite's GL has lines of it for. */
+  companies: string[];
+  /** Its lines for the company, in NetSuite's order. */
+  lines: Array<{
+    line_id: string;
+    account: string;
+    debit: string;
+    credit: string;
+    memo: string | null;
+    /** NetSuite's id for the line's name. */
+    entity_id: string | null;
+    /** The name in words: the vendors copy's, else the ledger mirror's for a customer. */
+    name: string | null;
+    /** The FleetSuite customer the ledger mirror matched the name to. */
+    customer_id: string | null;
+  }>;
+}
 
 /** What gl_journal_month (migration 393) returns: one company's journal entries NetSuite booked into a month. */
 export interface JournalMonthData {
-  journal_entries: Array<{
-    netsuite_id: string;
-    number: string | null;
-    date: string;
-    /** The month NetSuite booked it into, 'YYYY-MM-01'. */
-    posting_month: string;
-    /** Every company the copy of NetSuite's GL has lines of it for. */
-    companies: string[];
-    /** Its lines for the company, in NetSuite's order. */
-    lines: Array<{
-      line_id: string;
-      account: string;
-      debit: string;
-      credit: string;
-      memo: string | null;
-      /** NetSuite's id for the line's name. */
-      entity_id: string | null;
-      /** The name in words: the vendors copy's, else the ledger mirror's for a customer. */
-      name: string | null;
-      /** The FleetSuite customer the ledger mirror matched the name to. */
-      customer_id: string | null;
-    }>;
-  }>;
+  journal_entries: LedgerCopyDocument[];
 }
 
 export interface CheckedJournalEntry {
@@ -53,12 +63,15 @@ export interface CheckedJournalEntry {
   lines: JournalRuleLine[];
 }
 
-/** One journal entry of the month, worked out with the journal entry rule. */
-export interface WorkedJournalEntry {
-  entry: JournalMonthData['journal_entries'][number];
+/** One document of the month posted from the GL copy, worked out line for line with the journal entry rule. */
+export interface WorkedLedgerCopy<D extends LedgerCopyDocument = LedgerCopyDocument> {
+  entry: D;
   number: string;
   checked: CheckedJournalEntry;
 }
+
+/** One journal entry of the month, worked out with the journal entry rule. */
+export type WorkedJournalEntry = WorkedLedgerCopy;
 
 /** One journal entry, checked: FleetSuite's line for each of NetSuite's. */
 export function checkJournalEntry(lines: JournalLine[], accountTypes: Map<string, string>): CheckedJournalEntry {
@@ -93,16 +106,25 @@ export function workOutJournalMonth(
   data: JournalMonthData,
   opts: { company: string; chart: ChartAccount[] },
 ): { journalEntries: WorkedJournalEntry[]; account: (id: string) => string } {
+  const { worked, account } = workOutLedgerCopies(data.journal_entries ?? [], opts.chart);
+  return { journalEntries: worked, account };
+}
+
+/** Documents posted from the GL copy, each worked out line for line with the journal entry rule, and how the chart names an account. */
+export function workOutLedgerCopies<D extends LedgerCopyDocument>(
+  documents: D[],
+  chart: ChartAccount[],
+): { worked: WorkedLedgerCopy<D>[]; account: (id: string) => string } {
   const accountTypes = new Map<string, string>();
   const accountNames = new Map<string, string>();
-  for (const a of opts.chart) {
+  for (const a of chart) {
     if (!a.netsuite_account_id) continue;
     accountTypes.set(a.netsuite_account_id, a.account_type);
     accountNames.set(a.netsuite_account_id, [a.number, a.name].filter(Boolean).join(' '));
   }
   const account = (id: string) => accountNames.get(id) ?? `NetSuite account ${id}`;
 
-  const journalEntries = (data.journal_entries ?? []).map((e): WorkedJournalEntry => {
+  const worked = documents.map((e): WorkedLedgerCopy<D> => {
     const lines = (e.lines ?? []).map((l): JournalLine => {
       const debit = centsOf(l.debit);
       const credit = centsOf(l.credit);
@@ -118,11 +140,15 @@ export function workOutJournalMonth(
     });
     return { entry: e, number: e.number || `NetSuite ${e.netsuite_id}`, checked: checkJournalEntry(lines, accountTypes) };
   });
-  return { journalEntries, account };
+  return { worked, account };
 }
 
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 const listed = (numbers: string[]) => `${numbers.slice(0, 10).join(', ')}${numbers.length > 10 ? ', …' : ''}`;
+
+/** The first memo of a document's lines, or else the first name: what the list shows of a document with no customer. */
+export const firstMemo = (d: LedgerCopyDocument): string | null =>
+  d.lines.find((l) => l.memo?.trim())?.memo?.trim() ?? d.lines.find((l) => l.name?.trim())?.name?.trim() ?? null;
 
 /**
  * One company's journal entries for one month, each with its lines next to
@@ -134,8 +160,23 @@ export function checkJournalMonth(
   opts: { company: string; chart: ChartAccount[] },
   books?: (worked: WorkedJournalEntry) => InvoiceBooks,
 ): MonthCheck {
-  const { journalEntries: worked, account } = workOutJournalMonth(data, opts);
+  const { worked, account } = workOutLedgerCopies(data.journal_entries ?? [], opts.chart);
+  // A journal entry has no customer: the list shows its first memo, or its first name.
+  const words = { one: 'journal entry', many: 'journal entries' };
+  return checkLedgerCopyMonth(worked, account, { company: opts.company, words, describe: firstMemo }, books);
+}
 
+/**
+ * One company's documents posted from the GL copy for one month, each with
+ * its lines next to FleetSuite's: `words` name them in the month's notes and
+ * `describe` gives what the list shows in place of a customer.
+ */
+export function checkLedgerCopyMonth<D extends LedgerCopyDocument>(
+  worked: WorkedLedgerCopy<D>[],
+  account: (id: string) => string,
+  opts: { company: string; words: { one: string; many: string }; describe: (d: D) => string | null },
+  books?: (worked: WorkedLedgerCopy<D>) => InvoiceBooks,
+): MonthCheck {
   const summary: MonthSummary = { invoices: 0, matches: 0, differs: 0, unworkable: 0, waiting: 0, withCost: 0 };
   const reasons = new Map<string, MonthReason>();
   const views: InvoiceView[] = [];
@@ -167,8 +208,7 @@ export function checkJournalMonth(
       number,
       date: e.date,
       ...(bookedInto ? { booked: { month: bookedInto, date: entryDate(e) } } : {}),
-      // A journal entry has no customer: the list shows its first memo, or its first name.
-      customer: e.lines.find((l) => l.memo?.trim())?.memo?.trim() ?? e.lines.find((l) => l.name?.trim())?.name?.trim() ?? null,
+      customer: opts.describe(e),
       total: checked.rows.reduce((n, r) => n + Math.max(0, r.netsuite?.cents ?? 0), 0),
       voided: false,
       status: checked.status,
@@ -180,14 +220,15 @@ export function checkJournalMonth(
 
   if (books) Object.assign(summary, booksCounts(views));
 
+  const { words } = opts;
   if (moved.length) {
     const them = moved.length === 1 ? 'it' : 'them';
-    notes.push(`${plural(moved.length, 'journal entry dated in another month is', 'journal entries dated in other months are')} `
+    notes.push(`${plural(moved.length, `${words.one} dated in another month is`, `${words.many} dated in other months are`)} `
       + `here because NetSuite booked ${them} into this month: ${listed(moved)}.`);
   }
   if (shared.length) {
     const one = shared.length === 1;
-    notes.push(`${plural(shared.length, 'journal entry also has', 'journal entries also have')} lines for the other company. `
+    notes.push(`${plural(shared.length, `${words.one} also has`, `${words.many} also have`)} lines for the other company. `
       + `Only this company's lines are shown here and make up ${one ? 'its' : 'their'} entry: ${listed(shared)}.`);
   }
 

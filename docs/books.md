@@ -22,9 +22,10 @@ the bill rule and posted in the same run as invoices, and the bill
 payments that pay them, copied from NetSuite, checked with the bill
 payment rule and posted in the same run too, part 12, checks and
 credit card charges and refunds, copied from NetSuite, checked with the
-spending rule and posted in the same run as invoices, and part 13,
+spending rule and posted in the same run as invoices, part 13,
 NetSuite's journal entries, posted line for line from the copy of its
-general ledger in the same run as invoices.
+general ledger in the same run as invoices, and part 14, its bank deposits
+and transfers, posted the same way.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices` and the differences at
@@ -77,6 +78,8 @@ the accounts page; the others are linked from there.
 | Journal entry rule and its check, on the invoices page | `src/lib/books/journal-entry-rule.ts`, `src/lib/books/journal-entry-check.ts` |
 | Journal entries posted to the journal, with invoices | `migrations/393-books-journal-entries.sql`, `src/lib/books/invoice-posting.ts` |
 | Journal entry tests | `src/lib/books/journal-entry-rule.test.ts`, `src/lib/books/journal-entry-check.test.ts`, `src/lib/books/journal-entry-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
+| Bank deposits and transfers, checked and posted like journal entries | `migrations/394-books-bank-deposits.sql`, `src/lib/books/bank-rule.ts`, `src/lib/books/bank-check.ts`, `src/lib/books/invoice-posting.ts` |
+| Bank deposit and transfer tests | `src/lib/books/bank-check.test.ts`, `src/lib/books/bank-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -709,7 +712,9 @@ Not yet seen in NetSuite's data, so the check is what will show it:
   the documents' totals (the copy keeps them positive);
 - that refunding a deposit goes through an application.
 
-Refunds themselves (CustRfnd) and bank deposits (Deposit) aren't copied.
+Refunds themselves (CustRfnd) aren't copied. Bank deposits (Deposit) post
+from the copy of NetSuite's general ledger ("Bank deposits and
+transfers").
 
 ### Posting deposits
 
@@ -1291,6 +1296,56 @@ will show it:
   entries (an intercompany journal entry, say), which Differences would
   list as not posted yet under their own type.
 
+## Bank deposits and transfers
+
+A bank deposit (NetSuite's Deposit) puts money into a bank account, most
+often the customer payments waiting in Undeposited Funds, which is where a
+payment posts when NetSuite put it there (the payment rule follows
+NetSuite's account). A transfer (NetSuite's Transfer) moves money from one
+bank account to another. Without them FleetSuite's Undeposited Funds would
+run high and its bank accounts low. Every line of both is already in the
+copy of NetSuite's general ledger, so they post from that copy as journal
+entries do (owner decision 2026-10-17, "Bank deposits", "From the ledger
+copy"), in the same run as invoices.
+
+The bank rule, `bank@1` (`src/lib/books/bank-rule.ts`), is the journal
+entry rule under its own name: a bank deposit's or transfer's lines for a
+company are that company's entry, each to the same account for the same
+amount, in NetSuite's order, with its memo and name, a receivables line's
+customer and a payables line's vendor. A line of $0 posts nothing, and one
+whose lines for the company don't balance on their own can't be worked
+out.
+
+The **Bank deposits and transfers** switch on the invoices page lists each
+one NetSuite booked into the month for the company, from migration 394's
+`gl_bank_month(company, month)`: its number, with Bank deposit or Transfer
+beside it, date, first memo and total (its debits), and, opened, its lines
+next to the lines of FleetSuite's entry, as the Journal entries switch
+shows a journal entry. It has no Copy now either, and says when the GL
+copy last ran.
+
+Every BMG bank deposit and transfer NetSuite booked into a month from
+January 2025 posts as a journal entry does: once, in the month NetSuite
+booked it into, reversed and posted again when NetSuite changes what it
+posts, and reversed when the GL copy no longer holds a line of it for the
+company; 1084's join with its invoices. A bank deposit's entries are filed
+as `bank_deposit` and keyed `bank_deposit:<NetSuite id>:<n>`, a transfer's
+as `bank_transfer` and keyed `bank_transfer:<NetSuite id>:<n>`, each line
+with its NetSuite line id and memo and the entry's memo its number.
+`gl_bank_postings` reads what the journal holds for each, as
+`gl_journal_postings` does for journal entries. The posting job and the
+switch read a month the same way (`gl_bank_month`, worked out by
+`workOutBankMonth` in `src/lib/books/bank-check.ts`), so what the page
+shows is what posts.
+
+Not yet seen in NetSuite's data, so the switch and Differences are what
+will show it:
+
+- whether a bank deposit's cash back or other deposit lines name anyone
+  FleetSuite knows;
+- whether a transfer ever moves money between BMG's and 1084's accounts,
+  which would leave each company's lines unbalanced on their own.
+
 ## Differences
 
 `/admin/books/differences` puts one company's own journal next to the copy
@@ -1308,9 +1363,10 @@ Each month's NetSuite activity is split by the kind of document behind it:
 
 - the kinds FleetSuite posts for the company (invoices, credit memos,
   payments, customer deposits, deposit applications, vendor bills, bill
-  credits, bill payments, checks, credit card charges, credit card refunds
-  and journal entries for BMG) should come to the same as FleetSuite's
-  entries for the same documents, matched by NetSuite's internal id;
+  credits, bill payments, checks, credit card charges, credit card refunds,
+  journal entries, bank deposits and transfers for BMG) should come to the
+  same as FleetSuite's entries for the same documents, matched by
+  NetSuite's internal id;
 - everything else is "not posted yet": the kinds FleetSuite has no rule
   for, and the cost of goods NetSuite books on an invoice or credit memo
   that wasn't fulfilled first, which FleetSuite will post with
@@ -1339,22 +1395,23 @@ the page says why for each:
 
 | Why | When |
 | --- | --- |
-| Dated before the books start | A payment, deposit or application NetSuite dated in 2024 and posted to 2025; FleetSuite only posts those dated from 2025 (an invoice, credit memo, bill, bill credit, bill payment, check, card charge or journal entry like it posts in NetSuite's month) |
+| Dated before the books start | A payment, deposit or application NetSuite dated in 2024 and posted to 2025; FleetSuite only posts those dated from 2025 (an invoice, credit memo, bill, bill credit, bill payment, check, card charge, journal entry, bank deposit or transfer like it posts in NetSuite's month) |
 | Not posted | FleetSuite has never posted it; Invoices vs NetSuite shows why |
 | Voided | NetSuite voided it and FleetSuite reversed its entry, but the copy of NetSuite's ledger still has lines of it |
 | Reversed | FleetSuite reversed its entry and has none standing |
-| Gone | FleetSuite's entry stands but this company has no line of it in the copy: deleted or voided in NetSuite (the next posting run reverses the entry), or posted to the other company (for a journal entry, the next posting run reverses that one too) |
-| Another month | FleetSuite's entry is dated in one month, NetSuite posted it to another; for an invoice, credit memo, bill, bill credit, bill payment, check, card charge or journal entry, until the next posting run moves it |
+| Gone | FleetSuite's entry stands but this company has no line of it in the copy: deleted or voided in NetSuite (the next posting run reverses the entry), or posted to the other company (for a journal entry, bank deposit or transfer, the next posting run reverses that one too) |
+| Another month | FleetSuite's entry is dated in one month, NetSuite posted it to another; for an invoice, credit memo, bill, bill credit, bill payment, check, card charge, journal entry, bank deposit or transfer, until the next posting run moves it |
 | Cost of goods | Same month; only NetSuite's cost of goods lines differ |
 | Posted differently | Same month, different accounts or amounts |
 
 Each document links to Invoices vs NetSuite (`?company=&kind=&month=&doc=`),
 which opens it with its line by line check, under the month that page lists
 it in: NetSuite's month for an invoice, credit memo, bill, bill credit,
-bill payment, check, card charge, card refund or journal entry (bills and
-bill credits under the Bills switch, bill payments under Bill payments,
-checks and card charges and refunds under Checks and cards, journal entries
-under Journal entries), its own date's for a payment, deposit or
+bill payment, check, card charge, card refund, journal entry, bank deposit
+or transfer (bills and bill credits under the Bills switch, bill payments
+under Bill payments, checks and card charges and refunds under Checks and
+cards, journal entries under Journal entries, bank deposits and transfers
+under Bank deposits and transfers), its own date's for a payment, deposit or
 application (deposits and applications under the Deposits switch). What
 the copy of NetSuite's documents says of each (its number, customer,
 vendor or payee, and whether it's voided or deleted) comes from the ledger
@@ -1362,10 +1419,11 @@ mirror for invoices, credit memos and payments, from the deposits copy for
 deposits and applications (migration 383), from the bills copy for bills
 and bill credits (migration 386), from the bill payments copy for bill
 payments (migration 390), and from the checks and cards copy for checks,
-card charges and card refunds (migration 392); a journal entry has no copy
-but the GL's, which gives its number. When the copy of NetSuite's ledger
-doesn't yet hold everything NetSuite's own totals say a month moved, the
-page says so, since NetSuite's side is then short.
+card charges and card refunds (migration 392); a journal entry, bank
+deposit or transfer has no copy but the GL's, which gives its number. When
+the copy of NetSuite's ledger doesn't yet hold everything NetSuite's own
+totals say a month moved, the page says so, since NetSuite's side is then
+short.
 
 ## Posting
 
