@@ -515,6 +515,10 @@ function reasonFor(doc: DiffDocumentData, lines: DiffDocumentLine[]): { reason: 
       return { reason: 'not_posted', why: `FleetSuite hasn't posted it. ${lookWhy}` };
     }
     if (doc.copy?.voided) {
+      // NetSuite voids a bill payment, check, card charge or refund with a journal entry that takes it back, so it posts while NetSuite books it.
+      if (doc.kind === BILL_PAYMENT_SOURCE_TYPE || SPENDING_KINDS.has(doc.kind)) {
+        return { reason: 'voided', why: 'Voided in NetSuite, which still books it and takes it back with a journal entry, so the next posting run posts it again.' };
+      }
       return { reason: 'voided', why: "Voided in NetSuite, so FleetSuite reversed its entry, but the copy of NetSuite's ledger still has lines of it." };
     }
     return { reason: 'reversed', why: `FleetSuite reversed its entry and has none standing. ${lookWhy}` };

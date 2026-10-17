@@ -695,8 +695,10 @@ export default function BooksInvoicesPage() {
                 the document, since the copy of it doesn&apos;t keep that. Each entry is checked account by account against what
                 NetSuite posted for the same document. Every two hours each BMG check, card charge and refund FleetSuite can work
                 out is posted to its own books, once, in the month NetSuite booked it into, in the same run as invoices. When
-                NetSuite changes one its entry is reversed and the new one posted, and one NetSuite voids or no longer has is
-                reversed. Until the books go live they can be emptied and posted again.
+                NetSuite changes one its entry is reversed and the new one posted, and one NetSuite no longer has is reversed.
+                One NetSuite voided still posts while NetSuite books it, since NetSuite takes it back with a journal entry, which
+                posts with the journal entries; one whose void took its lines away is reversed. Until the books go live they can
+                be emptied and posted again.
               </>
             ) : kind === 'bill_payment' ? (
               <>
@@ -708,8 +710,10 @@ export default function BooksInvoicesPage() {
                 and payables are the vendor&apos;s, as for its bills. Each entry is checked account by account against what
                 NetSuite posted for the same payment. Every two hours each BMG bill payment FleetSuite can work out is posted to
                 its own books, once, in the month NetSuite booked it into, in the same run as invoices, with the vendor on the
-                payables line. When NetSuite changes one its entry is reversed and the new one posted, and one NetSuite voids or
-                no longer has is reversed. Until the books go live they can be emptied and posted again.
+                payables line. When NetSuite changes one its entry is reversed and the new one posted, and one NetSuite no
+                longer has is reversed. One NetSuite voided still posts while NetSuite books it, since NetSuite takes it back with
+                a journal entry, which posts with the journal entries; one whose void took its lines away is reversed. Until the
+                books go live they can be emptied and posted again.
               </>
             ) : kind === 'bill' ? (
               <>

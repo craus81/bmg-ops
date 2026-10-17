@@ -7,7 +7,8 @@
 // deposits, transfers and stock documents through (391–395 and 397), in an
 // in-memory Postgres
 // (PGlite) as the app's server login and holds the functions' rules, then
-// runs the posting job against them with bill payments only.
+// runs the posting job against them with bill payments, and one journal
+// entry voiding a bill payment.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -28,6 +29,7 @@ vi.mock('@/lib/system-health', () => ({
 import { BOOKS_INVOICE_POSTING, postInvoices, type BillPaymentPosting } from './invoice-posting';
 import { BOOKS_LISTS_SYNC } from './netsuite-lists';
 import { NETSUITE_TYPE } from './differences';
+import { JOURNAL_ENTRY_SOURCE_TYPE } from './journal-entry-rule';
 
 /**
  * Made-up chart: '200' BMG's payables, '210' 1084's, '100' BMG's checking,
@@ -516,16 +518,19 @@ describe('the posting job, for bill payments', () => {
     expect((await linesOf(10)).map((l: any) => [l.account, l.credit])).toEqual([['200', '0.00'], ['100', '92.00']]);
   });
 
-  it('reverses the entry of a bill payment NetSuite voids, no longer has, or that comes to nothing now, once', async () => {
+  it('reverses the entry of a bill payment NetSuite no longer has, voids with its lines taken away, or that comes to nothing now, once', async () => {
     await edit('801', (p) => { p.gone = true; });
+    // Voided with its lines kept, as NetSuite voids with a journal entry that takes them back: it still books CHK1007.
     await edit('807', (p) => { p.voided = true; });
     // Out of the GL copy with its amount unchanged: the copy hasn't caught up, so its entry stays.
     await edit('802', (p) => { p.company = null; });
-    expect(await run()).toMatchObject({ posted: 0, replaced: 0, reversed: 2, left: 2 });
-    expect((await journal()).slice(-2).map((e) => [e.reverses, e.memo])).toEqual([
-      [2, 'CHK1001-A deleted in NetSuite'],
-      [10, 'CHK1007 voided in NetSuite'],
-    ]);
+    expect(await run()).toMatchObject({ posted: 0, replaced: 0, reversed: 1, unchanged: 2, left: 2 });
+    expect((await journal()).slice(-1).map((e) => [e.reverses, e.memo])).toEqual([[2, 'CHK1001-A deleted in NetSuite']]);
+
+    // Voided with its lines taken away: NetSuite books nothing for CHK1007 now.
+    await edit('807', (p) => { p.company = null; });
+    expect(await run()).toMatchObject({ posted: 0, replaced: 0, reversed: 1, left: 2 });
+    expect((await journal()).slice(-1).map((e) => [e.reverses, e.memo])).toEqual([[10, 'CHK1007 voided in NetSuite']]);
 
     // $0 now, and NetSuite posts no lines for $0: nothing to post, so its entry is reversed.
     await edit('802', (p) => { p.total = '0.00'; p.discount = undefined; });
@@ -597,5 +602,43 @@ describe('the posting job, for bill payments', () => {
     expect(r).toMatchObject({ posted: 0, replaced: 1, failedCount: 0 });
     expect(r.error).toBeUndefined();
     expect((await journal()).slice(-1).map((e) => e.key)).toEqual(['bill_payment:812:2']);
+  });
+
+  it('posts a bill payment NetSuite voided but still books, and the journal entry that takes it back, so the two come to nothing as in NetSuite', async () => {
+    await add({ ref: '813', number: 'CHK1013', date: '2025-03-10', company: 'BMG', total: '120.00', voided: true });
+    // NetSuite's journal entry voiding it: each of its lines the other way round.
+    await pg.query(
+      `INSERT INTO gl_netsuite_transactions (netsuite_id, tran_type, tranid, trandate, posting_month, content_hash, sweep)
+       VALUES ('913', 'Journal', 'JE913', '2025-03-12', $1, 'x', 's')`,
+      [MAR],
+    );
+    for (const [line, account, debit, credit, vendor] of [['0', '100', '120.00', '0.00', null], ['1', '200', '0.00', '120.00', '50']]) {
+      await pg.query(
+        `INSERT INTO gl_netsuite_lines (transaction_id, line_id, company_id, netsuite_account_id, posting_month, trandate, debit, credit, memo, entity_id)
+         SELECT '913', $1, id, $2, $3, '2025-03-12', $4, $5, 'VOID: CHK1013', $6 FROM gl_companies WHERE code = 'BMG'`,
+        [line, account, MAR, debit, credit, vendor],
+      );
+    }
+
+    expect(await run()).toMatchObject({ posted: 2, replaced: 0, reversed: 0, failedCount: 0 });
+    const [paid, back] = (await journal()).slice(-2);
+    expect([paid.key, back.key]).toEqual(['bill_payment:813:1', 'journal_entry:913:1']);
+    const net = await pg.query<{ account: string; net: string }>(
+      `SELECT a.netsuite_account_id AS account, sum(l.debit - l.credit)::text AS net
+       FROM gl_lines l JOIN gl_accounts a ON a.id = l.account_id JOIN gl_entries e ON e.id = l.entry_id
+       WHERE e.entry_no IN ($1, $2) GROUP BY 1 ORDER BY 1`,
+      [paid.no, back.no],
+    );
+    expect(net.rows).toEqual([{ account: '100', net: '0.00' }, { account: '200', net: '0.00' }]);
+    const kinds = { ...PAYMENT_KINDS, [JOURNAL_ENTRY_SOURCE_TYPE]: NETSUITE_TYPE[JOURNAL_ENTRY_SOURCE_TYPE] };
+    const differs = await pg.query<{ r: { counts: Record<string, number> } }>(
+      'SELECT gl_books_difference_documents($1, $2::date, $3::jsonb, $4) AS r', ['BMG', MAR, JSON.stringify(kinds), 10],
+    );
+    expect(differs.rows[0].r.counts).toEqual({});
+
+    // Neither step of the next run takes it back: its entry stands as NetSuite's posting of it does.
+    const before = await journal();
+    expect(await run()).toMatchObject({ posted: 0, replaced: 0, reversed: 0, failedCount: 0 });
+    expect(await journal()).toEqual(before);
   });
 });

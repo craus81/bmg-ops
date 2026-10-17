@@ -785,9 +785,32 @@ describe('bill payments', () => {
     for (const fields of changed) expect(decideBillPayment(one(payment(fields)), held()), JSON.stringify(fields)).toEqual({ kind: 'replace' });
   });
 
-  it('reverses the entry of a voided bill payment or one that comes to nothing, and leaves one it can\'t work out or not in the GL copy yet', () => {
-    expect(decideBillPayment(one(payment({ voided: true })), held())).toEqual({ kind: 'reverse', why: 'voided' });
-    expect(decideBillPayment(one(payment({ voided: true })), undefined)).toEqual({ kind: 'keep', why: 'voided' });
+  it('posts a bill payment NetSuite voided but still books, as its journal entry reversing the payment posts too', () => {
+    const voided = one(payment({ voided: true, status: 'Voided' }));
+    expect(decideBillPayment(voided, undefined)).toEqual({ kind: 'post' });
+    expect(decideBillPayment(voided, held())).toEqual({ kind: 'keep' });
+    expect(decideBillPayment(one(payment({ voided: true, date: '2026-09-09' })), held())).toEqual({ kind: 'replace' });
+    // Its entry, reversed when a run before this rule read it as voided, posts again.
+    const reversed = held({ unreversed: [], current: null, history: [{ entry_no: 21, entry_date: '2026-09-08', reversed_by: 22 }] });
+    expect(decideBillPayment(voided, reversed)).toEqual({ kind: 'post' });
+    expect(billPaymentBooks(voided, undefined)).toEqual({ entryNo: null, next: 'post', earlier: [] });
+  });
+
+  it('reverses the entry of a bill payment voided with its lines taken away or one that comes to nothing, and leaves one it can\'t work out or not in the GL copy yet', () => {
+    const voids: Array<Partial<Doc>> = [
+      // Its lines taken away, with the total kept or zeroed.
+      { companies: [], netsuite: [] },
+      { total: '0.00', companies: [], netsuite: [] },
+      // Its lines kept at nothing, or coming to nothing on every account.
+      { total: '0.00', netsuite: [gl('0', '100', '0.00', '0.00'), gl('1', '200', '0.00', '0.00')] },
+      { netsuite: [gl('0', '100', '0.00', '637.00'), gl('1', '200', '650.00', '0.00'), gl('2', '485', '0.00', '13.00'),
+        gl('3', '100', '637.00', '0.00'), gl('4', '200', '0.00', '650.00'), gl('5', '485', '13.00', '0.00')] },
+    ];
+    for (const fields of voids) {
+      const voided = one(payment({ voided: true, ...fields }));
+      expect(decideBillPayment(voided, held()), JSON.stringify(fields)).toEqual({ kind: 'reverse', why: 'voided' });
+      expect(decideBillPayment(voided, undefined), JSON.stringify(fields)).toEqual({ kind: 'keep', why: 'voided' });
+    }
     // $0: it only applies a bill credit to a bill, and NetSuite posts no lines for it.
     const zero = payment({ total: '0.00', companies: [], netsuite: [] });
     expect(one(zero).checked.lines).toEqual([]);
@@ -807,10 +830,11 @@ describe('bill payments', () => {
   it('says what the journal holds for a bill payment and what the next run does', () => {
     expect(billPaymentBooks(one(), undefined)).toEqual({ entryNo: null, next: 'post', earlier: [] });
     expect(billPaymentBooks(one(), held())).toEqual({ entryNo: 21, next: null, earlier: [] });
-    expect(billPaymentBooks(one(payment({ voided: true })), held()).next).toBe('reverse');
+    expect(billPaymentBooks(one(payment({ voided: true, companies: [], netsuite: [] })), held()).next).toBe('reverse');
     expect(billPaymentBooks(one(payment({ date: '2026-09-09' })), held()).next).toBe('replace');
     expect(billPaymentBooks(one(payment({ companies: [], netsuite: [] })), held()).next).toBeNull();
-    expect(billPaymentBooks(one(payment({ voided: true })), undefined)).toEqual({ entryNo: null, next: null, earlier: [], nothingToPost: 'voided' });
+    expect(billPaymentBooks(one(payment({ voided: true, companies: [], netsuite: [] })), undefined))
+      .toEqual({ entryNo: null, next: null, earlier: [], nothingToPost: 'voided' });
     expect(billPaymentBooks(one(payment({ total: '0.00', companies: [], netsuite: [] })), undefined)).toMatchObject({ nothingToPost: 'zero' });
     // $0 with a discount taken still posts: payables and the discount.
     const discountOnly = payment({ total: '0.00', netsuite: [gl('1', '200', '13.00', '0.00'), gl('2', '485', '0.00', '13.00')] });
@@ -975,9 +999,34 @@ describe('checks and card charges', () => {
     for (const fields of changed) expect(decideSpending(one(check(fields)), held()), JSON.stringify(fields)).toEqual({ kind: 'replace' });
   });
 
-  it('reverses the entry of a voided one or one that comes to nothing, and leaves one it can\'t work out or not copied yet', () => {
-    expect(decideSpending(one(check({ voided: true })), held())).toEqual({ kind: 'reverse', why: 'voided' });
-    expect(decideSpending(one(check({ voided: true })), undefined)).toEqual({ kind: 'keep', why: 'voided' });
+  it('posts one NetSuite voided but still books, as its journal entry reversing the check posts too', () => {
+    const voided = one(check({ voided: true, status: 'Voided' }));
+    expect(decideSpending(voided, undefined)).toEqual({ kind: 'post' });
+    expect(decideSpending(voided, held())).toEqual({ kind: 'keep' });
+    expect(decideSpending(one(check({ voided: true, date: '2026-09-04' })), held())).toEqual({ kind: 'replace' });
+    // Its entry, reversed when a run before this rule read it as voided, posts again.
+    const reversed = held({ unreversed: [], current: null, history: [{ entry_no: 31, entry_date: '2026-09-03', reversed_by: 32 }] });
+    expect(decideSpending(voided, reversed)).toEqual({ kind: 'post' });
+    expect(spendingBooks(voided, undefined)).toEqual({ entryNo: null, next: 'post', earlier: [] });
+    // A voided card charge or refund NetSuite still books posts the same way.
+    expect(decideSpending(one(charge({ voided: true })), undefined)).toEqual({ kind: 'post' });
+    expect(decideSpending(one(refund({ voided: true })), undefined)).toEqual({ kind: 'post' });
+  });
+
+  it('reverses the entry of one voided with its lines taken away or one that comes to nothing, and leaves one it can\'t work out or not copied yet', () => {
+    const voids: Array<Partial<Doc>> = [
+      // Its GL lines taken away, with the total kept or zeroed.
+      { companies: [], netsuite: [] },
+      { total: '0.00', lines: [copied('1', null, '640', '0.00')], companies: [], netsuite: [] },
+      // Its GL lines coming to nothing on every account.
+      { netsuite: [gl('0', '100', '0.00', '165.12'), gl('1', '640', '45.12', '0.00'), gl('2', '610', '120.00', '0.00'),
+        gl('3', '100', '165.12', '0.00'), gl('4', '640', '0.00', '45.12'), gl('5', '610', '0.00', '120.00')] },
+    ];
+    for (const fields of voids) {
+      const voided = one(check({ voided: true, ...fields }));
+      expect(decideSpending(voided, held()), JSON.stringify(fields)).toEqual({ kind: 'reverse', why: 'voided' });
+      expect(decideSpending(voided, undefined), JSON.stringify(fields)).toEqual({ kind: 'keep', why: 'voided' });
+    }
     // $0, and NetSuite posts no lines for it.
     const zero = check({ total: '0.00', lines: [copied('1', null, '640', '0.00')], companies: [], netsuite: [] });
     expect(one(zero).checked.lines).toEqual([]);
@@ -1014,10 +1063,11 @@ describe('checks and card charges', () => {
   it('says what the journal holds for one and what the next run does, found by its kind and NetSuite id', () => {
     expect(spendingBooks(one(), undefined)).toEqual({ entryNo: null, next: 'post', earlier: [] });
     expect(spendingBooks(one(), held())).toEqual({ entryNo: 31, next: null, earlier: [] });
-    expect(spendingBooks(one(check({ voided: true })), held()).next).toBe('reverse');
+    expect(spendingBooks(one(check({ voided: true, companies: [], netsuite: [] })), held()).next).toBe('reverse');
     expect(spendingBooks(one(check({ date: '2026-09-04' })), held()).next).toBe('replace');
     expect(spendingBooks(one(check({ total: '170.00' })), held()).next).toBeNull();
-    expect(spendingBooks(one(check({ voided: true })), undefined)).toEqual({ entryNo: null, next: null, earlier: [], nothingToPost: 'voided' });
+    expect(spendingBooks(one(check({ voided: true, companies: [], netsuite: [] })), undefined))
+      .toEqual({ entryNo: null, next: null, earlier: [], nothingToPost: 'voided' });
     expect(spendingBooks(one(check({ total: '0.00', lines: [], companies: [], netsuite: [] })), undefined)).toMatchObject({ nothingToPost: 'zero' });
     // Lines that don't come to its total yet aren't nothing to post.
     expect(spendingBooks(one(check({ total: '170.00' })), undefined)).not.toHaveProperty('nothingToPost');
