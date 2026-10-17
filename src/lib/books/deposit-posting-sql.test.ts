@@ -5,7 +5,8 @@
 // (with stand-ins for the app tables it points at) and migrations 359–364,
 // 367, 370, 374, 376, 377, 380, 382, 383 and 387, with the ones the job
 // reads bills, bill payments, checks, card charges, journal entries, bank
-// deposits and transfers through (384–386 and 389–394), in an in-memory
+// deposits, transfers and stock documents through (384–386 and 389–395), in
+// an in-memory
 // Postgres (PGlite) as the app's server login and holds the functions'
 // rules, then runs the posting job against them with deposits only.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
@@ -73,7 +74,7 @@ async function freshDb(): Promise<PGlite> {
     '377-books-differences.sql', '380-books-netsuite-month.sql', '382-books-customer-deposits.sql', '383-books-deposit-posting.sql',
     '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
-    '393-books-journal-entries.sql', '394-books-bank-deposits.sql',
+    '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);

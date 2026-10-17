@@ -62,6 +62,9 @@ const DOC_NAMES: Record<string, string> = {
   vendor_bill: 'Bill', vendor_credit: 'Bill credit', bill_payment: 'Bill payment',
   check: 'Check', card_charge: 'Card charge', card_refund: 'Card refund', journal_entry: 'Journal entry',
   bank_deposit: 'Bank deposit', bank_transfer: 'Transfer',
+  item_fulfillment: 'Fulfillment', item_receipt: 'Item receipt', inventory_adjustment: 'Inventory adjustment',
+  inventory_transfer: 'Inventory transfer', assembly_build: 'Assembly build', assembly_unbuild: 'Assembly unbuild',
+  invoice_cost: 'Cost of goods',
 };
 
 function ago(iso: string): string {
@@ -109,12 +112,6 @@ function kindStatus(k: DiffKindRow): { label: string; color: string; title: stri
     return k.differing
       ? { label: count(k.differing, 'differs', 'differ'), color: RED, title: 'Documents FleetSuite posted differently from NetSuite; they are listed below' }
       : { label: 'Matches', color: GREEN, title: 'Every one comes to what NetSuite posted for it, account by account' };
-  }
-  if (k.state === 'cost') {
-    return {
-      label: 'Waits for fulfillments', color: GREY,
-      title: "The cost of the stock NetSuite books on an invoice that wasn't fulfilled first. FleetSuite will post it with fulfillments, which it doesn't post yet.",
-    };
   }
   if (k.state === 'not_posted') return { label: 'Not posted yet', color: GREY, title: 'FleetSuite has no rule for this kind of document yet' };
   return { label: 'FleetSuite only', color: AMBER, title: 'Entries FleetSuite made itself, which NetSuite has no document for' };

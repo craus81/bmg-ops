@@ -2,8 +2,9 @@
 // a month from the copy of NetSuite's GL, and what the journal holds for
 // them; the posting job posts them with the bank rule. This runs migration
 // 314 (with stand-ins for the app tables it points at) and migrations
-// 359–364, 367, 370, 374, 376, 377, 380, 382–387 and 389–394 in an
-// in-memory Postgres (PGlite) as the app's server login and holds the
+// 359–364, 367, 370, 374, 376, 377, 380, 382–387 and 389–394, with the one
+// the job reads stock documents through (395), in an in-memory Postgres
+// (PGlite) as the app's server login and holds the
 // functions' rules, then runs the posting job against them with bank
 // deposits and transfers only.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
@@ -76,7 +77,7 @@ async function freshDb(): Promise<PGlite> {
     '377-books-differences.sql', '380-books-netsuite-month.sql', '382-books-customer-deposits.sql', '383-books-deposit-posting.sql',
     '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
-    '393-books-journal-entries.sql', '394-books-bank-deposits.sql',
+    '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -643,7 +644,7 @@ describe('the posting job, for bank deposits and transfers', () => {
     });
     expect(r.notes).toEqual([
       "NetSuite account 299 isn't in the chart of accounts yet, so invoices, credit memos, payments, deposits, bills, bill payments, checks, "
-        + "card charges, journal entries, bank deposits and transfers posting there weren't posted. Sync now on the chart of accounts page copies them.",
+        + "card charges, journal entries, bank deposits, transfers and stock documents posting there weren't posted. Sync now on the chart of accounts page copies them.",
     ]);
     expect((await journal()).slice(-1).map((e) => e.key)).toEqual(['bank_deposit:8011:1']);
 

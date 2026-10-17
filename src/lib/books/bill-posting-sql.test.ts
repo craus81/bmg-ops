@@ -5,7 +5,8 @@
 // migration 314 (with stand-ins for the app tables it points at) and
 // migrations 359–364, 367, 370, 374, 376, 377, 380 and 382–387, with the
 // ones the job reads bill payments, checks, card charges, journal entries,
-// bank deposits and transfers through (389–394), in an in-memory Postgres
+// bank deposits, transfers and stock documents through (389–395), in an
+// in-memory Postgres
 // (PGlite) as the app's server login and holds the functions' rules, then
 // runs the posting job against them with bills only.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
@@ -75,7 +76,7 @@ async function freshDb(): Promise<PGlite> {
     '377-books-differences.sql', '380-books-netsuite-month.sql', '382-books-customer-deposits.sql', '383-books-deposit-posting.sql',
     '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
-    '393-books-journal-entries.sql', '394-books-bank-deposits.sql',
+    '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -102,14 +103,15 @@ async function freshDb(): Promise<PGlite> {
       [kind, id, name, JSON.stringify(details)],
     );
   }
-  // An item receipt of BMG's, which holds received stock in '205' until it's billed.
+  // An item receipt of BMG's, which holds received stock in '205' until it's billed. It's from before the books start, so
+  // the posting job, which posts item receipts too (stock-posting-sql.test.ts), leaves it be here.
   await pg.query(
     `INSERT INTO gl_netsuite_transactions (netsuite_id, tran_type, tranid, trandate, posting_month, content_hash, sweep)
-     VALUES ('611', 'ItemRcpt', 'IR611', '2025-01-05', '2025-01-01', 'x', 's')`,
+     VALUES ('611', 'ItemRcpt', 'IR611', '2024-12-05', '2024-12-01', 'x', 's')`,
   );
   await pg.query(
     `INSERT INTO gl_netsuite_lines (transaction_id, line_id, company_id, netsuite_account_id, posting_month, trandate, debit, credit)
-     SELECT '611', l.line_id, c.id, l.account, '2025-01-01', '2025-01-05', l.debit, l.credit
+     SELECT '611', l.line_id, c.id, l.account, '2024-12-01', '2024-12-05', l.debit, l.credit
      FROM gl_companies c, (VALUES ('1', '130', 30.00, 0), ('2', '205', 0, 30.00)) AS l(line_id, account, debit, credit)
      WHERE c.code = 'BMG'`,
   );

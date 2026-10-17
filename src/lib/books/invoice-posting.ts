@@ -32,6 +32,8 @@ import { JOURNAL_ENTRY_RULE, JOURNAL_ENTRY_SOURCE_TYPE } from './journal-entry-r
 import { workOutJournalMonth, type JournalMonthData, type WorkedJournalEntry, type WorkedLedgerCopy } from './journal-entry-check';
 import { BANK_RULE, BANK_SOURCE_TYPE, type BankSourceType } from './bank-rule';
 import { workOutBankMonth, type BankMonthData, type WorkedBankDocument } from './bank-check';
+import { STOCK_RULE, STOCK_SOURCE_TYPE, type StockSourceType } from './stock-rule';
+import { workOutStockMonth, type StockMonthData, type WorkedStockDocument } from './stock-check';
 
 /**
  * NetSuite's invoices posted to FleetSuite's own journal with the invoice
@@ -48,10 +50,14 @@ import { workOutBankMonth, type BankMonthData, type WorkedBankDocument } from '.
  * 2026-10-16), for a check, credit card charge or credit card refund,
  * posted with the spending rule (migration 392; owner decision 2026-10-16),
  * for a NetSuite journal entry, posted as NetSuite's GL copy has it
- * (migration 393; owner decision 2026-10-17), and for a NetSuite bank
- * deposit or transfer, posted the same way (migration 394; owner decision
- * 2026-10-17), except where the payments', deposits', bills', bill
- * payments', checks' and journal entries' own sections say otherwise.
+ * (migration 393; owner decision 2026-10-17), for a NetSuite bank deposit
+ * or transfer, posted the same way (migration 394; owner decision
+ * 2026-10-17), and for a NetSuite document that moves stock or books its
+ * cost, an item fulfillment, item receipt, inventory adjustment or
+ * transfer, assembly build or unbuild, or an invoice's or credit memo's cost
+ * lines, posted the same way too (migration 395; owner decision 2026-10-17),
+ * except where the payments', deposits', bills', bill payments', checks' and
+ * journal entries' own sections say otherwise.
  *
  * Every BMG invoice NetSuite booked into a month from January 2025 that the
  * rule can work out posts once, as the check on Invoices vs NetSuite shows
@@ -89,7 +95,7 @@ export const BOOKS_INVOICE_POSTING = 'books_invoice_posting';
 
 /**
  * The companies whose invoices, credit memos, payments, deposits, bills, bill payments, checks, card charges, journal entries,
- * bank deposits and transfers post. 1084's join once they've been checked against NetSuite.
+ * bank deposits, transfers and stock documents post. 1084's join once they've been checked against NetSuite.
  */
 export const POSTING_COMPANIES: readonly BooksCompany[] = ['BMG'];
 
@@ -126,9 +132,9 @@ export interface PostedLine {
   source_line_ref: string | null;
   customer_id: string | null;
   /**
-   * The vendor on a bill's, bill payment's, journal entry's, bank deposit's or transfer's payables line (gl_bill_postings,
-   * gl_bill_payment_postings, gl_journal_postings and gl_bank_postings, migrations 386, 390, 393 and 394; gl_spending_postings,
-   * migration 392, gives none); the other documents' reads leave it out.
+   * The vendor on a bill's, bill payment's, journal entry's, bank deposit's, transfer's or stock document's payables line
+   * (gl_bill_postings, gl_bill_payment_postings, gl_journal_postings, gl_bank_postings and gl_stock_postings, migrations 386,
+   * 390, 393, 394 and 395; gl_spending_postings, migration 392, gives none); the other documents' reads leave it out.
    */
   vendor_ref?: string | null;
 }
@@ -823,7 +829,7 @@ export function spendingJournalEntry(
   };
 }
 
-// ── Journal entries, bank deposits and transfers ───────────────────────────
+// ── Journal entries, bank deposits and transfers, stock ────────────────────
 //
 // A NetSuite journal entry posts as a bill does, in the month NetSuite booked
 // it to (entryDate), but has nothing to work out or wait for: its lines for
@@ -840,6 +846,14 @@ export function spendingJournalEntry(
 // the GL copy (bank@1, migration 394), keyed bank_deposit:<NetSuite id>:<n> or
 // bank_transfer:<NetSuite id>:<n>, with what the journal holds for it from
 // gl_bank_postings.
+//
+// And so does a NetSuite document that moves stock or books its cost (stock@1,
+// migration 395), keyed by its STOCK_SOURCE_TYPE, item_fulfillment:<NetSuite
+// id>:<n> and so on, with what the journal holds for it from
+// gl_stock_postings. An invoice's or credit memo's lines there are only its
+// cost lines, filed as invoice_cost apart from the entry for the sale; one
+// that books no cost now has that entry reversed with the deleted documents,
+// saying so.
 
 /** What the journal holds for one NetSuite journal entry (gl_journal_postings, migration 393). */
 export interface JournalEntryPosting extends Omit<InvoicePosting, 'source_type' | 'invoice'> {
@@ -858,6 +872,20 @@ export interface BankPosting extends Omit<InvoicePosting, 'source_type' | 'invoi
 /** What the journal holds for a bank deposit or transfer, from gl_bank_postings' answer keyed by postingKey. */
 export const bankPostingFor = (postings: Map<string, BankPosting>, worked: WorkedBankDocument) =>
   postings.get(postingKey(BANK_SOURCE_TYPE[worked.entry.type], worked.entry.netsuite_id));
+
+/** What the journal holds for one NetSuite stock document (gl_stock_postings, migration 395). */
+export interface StockPosting extends Omit<InvoicePosting, 'source_type' | 'invoice'> {
+  source_type: StockSourceType;
+  /**
+   * What the copy of NetSuite's GL says of it now: its number, and deleted when the copy holds no line of it for the company
+   * (for an invoice or credit memo, no cost line).
+   */
+  document: { number: string | null; deleted: boolean } | null;
+}
+
+/** What the journal holds for a stock document, from gl_stock_postings' answer keyed by postingKey. */
+export const stockPostingFor = (postings: Map<string, StockPosting>, worked: WorkedStockDocument) =>
+  postings.get(postingKey(STOCK_SOURCE_TYPE[worked.entry.type], worked.entry.netsuite_id));
 
 const ledgerCopySignature = (worked: WorkedLedgerCopy) => signature(
   entryDate(worked.entry),
@@ -922,6 +950,30 @@ export function bankJournalEntry(
   accountIds: Map<string, string>,
 ): { entry: JournalEntryInput; missing: [] } | { entry: null; missing: string[] } {
   return ledgerCopyEntry(worked, company, generation, accountIds, { sourceType: BANK_SOURCE_TYPE[worked.entry.type], rule: BANK_RULE });
+}
+
+/** What to do about one stock document of a month, given what the journal holds for it: as for a journal entry. */
+export function decideStockDocument(worked: WorkedStockDocument, posting: StockPosting | undefined): Decision {
+  return decideLedgerCopy(worked, posting?.current ?? null);
+}
+
+/** What the journal holds for a stock document and what the next run does about it, for the invoices page. */
+export function stockDocumentBooks(worked: WorkedStockDocument, posting: StockPosting | undefined): InvoiceBooks {
+  return booksOf(decideStockDocument(worked, posting), posting, true);
+}
+
+/**
+ * FleetSuite's entry for a NetSuite stock document, its `generation`th, made
+ * as a journal entry's is, keyed by its STOCK_SOURCE_TYPE: `item_fulfillment:…`
+ * and so on, `invoice_cost:…` for an invoice's or credit memo's cost lines.
+ */
+export function stockJournalEntry(
+  worked: WorkedStockDocument,
+  company: BooksCompany,
+  generation: number,
+  accountIds: Map<string, string>,
+): { entry: JournalEntryInput; missing: [] } | { entry: null; missing: string[] } {
+  return ledgerCopyEntry(worked, company, generation, accountIds, { sourceType: STOCK_SOURCE_TYPE[worked.entry.type], rule: STOCK_RULE });
 }
 
 /** The entry for a document posted from the GL copy, filed under `filed`'s source type and rule; its number is its memo. */
@@ -1123,7 +1175,7 @@ export async function postInvoices(
 
     // 1. What NetSuite deleted or voided, and any second entry standing for one document.
     for (const company of POSTING_COMPANIES) {
-      const [all, paid, deposited, billed, paidOut, spent, journaled, banked] = await Promise.all([
+      const [all, paid, deposited, billed, paidOut, spent, journaled, banked, stocked] = await Promise.all([
         service.rpc('gl_invoice_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_payment_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_deposit_postings', { p_company: company, p_source_ids: null, p_lines: false }),
@@ -1132,6 +1184,7 @@ export async function postInvoices(
         service.rpc('gl_spending_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_journal_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_bank_postings', { p_company: company, p_source_ids: null, p_lines: false }),
+        service.rpc('gl_stock_postings', { p_company: company, p_source_ids: null, p_lines: false }),
       ]);
       if (all.error) throw new Error(all.error.message);
       if (paid.error) throw new Error(paid.error.message);
@@ -1141,6 +1194,7 @@ export async function postInvoices(
       if (spent.error) throw new Error(spent.error.message);
       if (journaled.error) throw new Error(journaled.error.message);
       if (banked.error) throw new Error(banked.error.message);
+      if (stocked.error) throw new Error(stocked.error.message);
       const held = [
         ...(((all.data as any)?.invoices ?? []) as InvoicePosting[]).map((p) => ({ posting: p, copy: p.invoice })),
         ...(((paid.data as any)?.payments ?? []) as PaymentPosting[]).map((p) => ({ posting: p, copy: p.payment })),
@@ -1154,6 +1208,9 @@ export async function postInvoices(
         // Nor is a bank deposit or transfer.
         ...(((banked.data as any)?.documents ?? []) as BankPosting[])
           .map((p) => ({ posting: p, copy: p.document && { ...p.document, voided: false } })),
+        // Nor a stock document: an invoice's or credit memo's void is for its own entries, and takes its cost lines away.
+        ...(((stocked.data as any)?.documents ?? []) as StockPosting[])
+          .map((p) => ({ posting: p, copy: p.document && { ...p.document, voided: false } })),
       ];
       const tasks: Array<() => Promise<void>> = [];
       for (const { posting: p, copy } of held) {
@@ -1161,7 +1218,9 @@ export async function postInvoices(
         for (const extra of p.unreversed.slice(1)) {
           tasks.push(() => reverse(number, extra, `${number} had another entry standing`));
         }
-        const gone = copy?.deleted ? 'deleted' : copy?.voided ? 'voided' : null;
+        // An invoice's or credit memo's cost lines go when NetSuite books no cost on it, whether or not it has it still.
+        const deleted = p.source_type === STOCK_SOURCE_TYPE.CustInvc ? 'no longer books a cost' : 'deleted';
+        const gone = copy?.deleted ? deleted : copy?.voided ? 'voided' : null;
         if (p.current && gone) {
           const entryId = p.current.id;
           tasks.push(() => reverse(number, entryId, `${number} ${gone} in NetSuite`));
@@ -1177,6 +1236,7 @@ export async function postInvoices(
     const leftTotal: Array<{ number: string; kind: keyof typeof DOCUMENT_WORDS }> = [];
     const unbalanced: string[] = [];
     const unbalancedBank: string[] = [];
+    const unbalancedStock: string[] = [];
     const missingAccounts = new Set<string>();
     const queue = postingQueue(POSTING_COMPANIES, months, state.resume);
 
@@ -1454,6 +1514,31 @@ export async function postInvoices(
         if (result.partial) break;
       }
 
+      // The month's stock documents, those NetSuite booked into it, as its journal entries: an invoice's or credit memo's
+      // cost lines here, beside the entry for the sale.
+      const st = await service.rpc('gl_stock_month', { p_company: company, p_month: month });
+      if (st.error) throw new Error(st.error.message);
+      const stockDocuments = workOutStockMonth(
+        { documents: ((st.data ?? {}) as Partial<StockMonthData>).documents ?? [] },
+        { company, chart: chartAccounts },
+      ).documents;
+      if (stockDocuments.length) {
+        const held = await service.rpc('gl_stock_postings', {
+          p_company: company, p_source_ids: stockDocuments.map((w) => w.entry.netsuite_id), p_lines: true,
+        });
+        if (held.error) throw new Error(held.error.message);
+        const postings = new Map((((held.data as any)?.documents ?? []) as StockPosting[]).map((p) => [postingKey(p.source_type, p.source_id), p]));
+        const tasks: Array<() => Promise<void>> = [];
+        for (const w of stockDocuments) {
+          const posting = stockPostingFor(postings, w);
+          const d = decideStockDocument(w, posting);
+          if (d.kind === 'leave' && w.checked.problems.some((x) => x.kind === 'unbalanced')) unbalancedStock.push(w.number);
+          enqueue(tasks, w.number, d, posting?.current ?? null, () => stockJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
+        }
+        await runLimited(tasks, WRITERS);
+        if (result.partial) break;
+      }
+
       result.months!.push(month);
       state.resume = queue[i + 1] ?? null;
       await writeSyncStateCursor(service, BOOKS_INVOICE_POSTING, record());
@@ -1481,10 +1566,16 @@ export async function postInvoices(
         + `lines for the company don't balance on their own, so whatever FleetSuite holds for ${one ? 'it' : 'them'} stayed as it is: ${listed(unbalancedBank)}. `
         + `The Bank deposits and transfers switch on Invoices vs NetSuite shows ${one ? 'its' : 'their'} lines.`);
     }
+    if (unbalancedStock.length) {
+      const one = unbalancedStock.length === 1;
+      notes.push(`FleetSuite can't post ${plural(unbalancedStock.length, 'stock document', 'stock documents')}, as ${one ? 'its' : 'their'} `
+        + `lines for the company don't balance on their own, so whatever FleetSuite holds for ${one ? 'it' : 'them'} stayed as it is: ${listed(unbalancedStock)}. `
+        + `The Stock and cost switch on Invoices vs NetSuite shows ${one ? 'its' : 'their'} lines.`);
+    }
     if (missingAccounts.size) {
       notes.push(`NetSuite account${missingAccounts.size === 1 ? '' : 's'} ${listed([...missingAccounts])} ${missingAccounts.size === 1 ? "isn't" : "aren't"} `
         + 'in the chart of accounts yet, so invoices, credit memos, payments, deposits, bills, bill payments, checks, card charges, journal entries, '
-        + 'bank deposits and transfers posting there weren\'t posted. Sync now on the chart of accounts page copies them.');
+        + 'bank deposits, transfers and stock documents posting there weren\'t posted. Sync now on the chart of accounts page copies them.');
     }
   } catch (err) {
     result.error = String((err as any)?.message || err).slice(0, 300);

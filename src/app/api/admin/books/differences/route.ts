@@ -60,7 +60,6 @@ export async function GET(req: NextRequest) {
     fleetsuite: raw.fleetsuite ?? [],
     netsuite_kinds: raw.netsuite_kinds ?? [],
     fleetsuite_kinds: raw.fleetsuite_kinds ?? [],
-    cost_accounts: raw.cost_accounts ?? [],
   };
 
   const posted = postedKinds(data, (POSTING_COMPANIES as readonly string[]).includes(company));
@@ -105,7 +104,7 @@ export async function GET(req: NextRequest) {
     posts: posted.size > 0,
     accounts: accountRows(cmp, name),
     kinds: kindRows(cmp, docs?.counts ?? null),
-    documents: (docs?.documents ?? []).map((d) => explainDocument(d, { name, costAccounts: new Set(data.cost_accounts) })),
+    documents: (docs?.documents ?? []).map((d) => explainDocument(d, { name })),
     documentsTotal: docs ? Object.values(docs.counts).reduce((n, c) => n + c, 0) : 0,
     // Null until a copy has read NetSuite's own totals.
     copyHolds: copyHolds(totals.data as GlTotals | null, month),

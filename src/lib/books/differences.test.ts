@@ -41,12 +41,21 @@ describe('kinds', () => {
     expect(kindOf('journal_entry')).toBe('Journal');
     expect(kindOf('bank_deposit')).toBe('Deposit');
     expect(kindOf('bank_transfer')).toBe('Transfer');
+    expect(kindOf('item_fulfillment')).toBe('ItemShip');
+    expect(kindOf('item_receipt')).toBe('ItemRcpt');
+    expect(kindOf('inventory_adjustment')).toBe('InvAdjst');
+    expect(kindOf('inventory_transfer')).toBe('InvTrnfr');
+    expect(kindOf('assembly_build')).toBe('Build');
+    expect(kindOf('assembly_unbuild')).toBe('Unbuild');
+    // An invoice's and a credit memo's cost lines, which NetSuite's side counts apart from the rest of them.
+    expect(kindOf('invoice_cost')).toBe(COST);
     expect(kindOf('opening_balance')).toBe('fleetsuite:opening_balance');
     expect(kindName('CustDep')).toBe('Customer Deposit');
     expect(kindName('DepAppl')).toBe('Deposit Application');
     expect(kindName('CustCred')).toBe('Credit Memo');
     expect(kindName('VendCred')).toBe('Bill Credit');
     expect(kindName('ItemShip')).toBe('Item Fulfillment');
+    expect(kindName('InvAdjst')).toBe('Inventory Adjustment');
     expect(kindName('Deposit')).toBe('Deposit');
     expect(kindName('Transfer')).toBe('Transfer');
     expect(kindName('SomethingNew')).toBe('SomethingNew');
@@ -55,20 +64,22 @@ describe('kinds', () => {
     expect(kindName('fleetsuite:payroll_run')).toBe('Payroll run (FleetSuite only)');
   });
 
-  it('lists deposits and their applications under the one Deposits switch of Invoices vs NetSuite, bills and bill credits under Bills, checks and cards under one, and bank deposits and transfers under another', () => {
+  it('lists deposits and their applications under the one Deposits switch of Invoices vs NetSuite, bills and bill credits under Bills, checks and cards under one, bank deposits and transfers under another, and stock documents and cost of goods under Stock and cost', () => {
     expect([
       'invoice', 'credit_memo', 'payment', 'customer_deposit', 'deposit_application', 'vendor_bill', 'vendor_credit', 'bill_payment',
       'check', 'card_charge', 'card_refund', 'journal_entry', 'bank_deposit', 'bank_transfer',
+      'item_fulfillment', 'item_receipt', 'inventory_adjustment', 'inventory_transfer', 'assembly_build', 'assembly_unbuild', 'invoice_cost',
     ].map(listKindOf)).toEqual([
       'invoice', 'credit_memo', 'payment', 'deposit', 'deposit', 'bill', 'bill', 'bill_payment', 'spending', 'spending', 'spending', 'journal_entry',
       'bank', 'bank',
+      'stock', 'stock', 'stock', 'stock', 'stock', 'stock', 'stock',
     ]);
   });
 
   it('takes a company as posting what its rules post, or what it holds entries of', () => {
     expect([...postedKinds(data(), true)].sort()).toEqual([
-      'CardChrg', 'CardRfnd', 'Check', 'CustCred', 'CustDep', 'CustInvc', 'CustPymt', 'DepAppl', 'Deposit', 'Journal', 'Transfer', 'VendBill',
-      'VendCred', 'VendPymt',
+      'Build', 'CardChrg', 'CardRfnd', 'Check', 'CustCred', 'CustDep', 'CustInvc', 'CustPymt', 'DepAppl', 'Deposit', 'InvAdjst', 'InvTrnfr',
+      'ItemRcpt', 'ItemShip', 'Journal', 'Transfer', 'Unbuild', 'VendBill', 'VendCred', 'VendPymt', COST,
     ]);
     expect([...postedKinds(data(), false)]).toEqual(['CustInvc']);
     expect([...postedKinds({ ...data(), fleetsuite: [] }, false)]).toEqual([]);
@@ -177,7 +188,6 @@ describe('explainDocument', () => {
       { id: 'a3', netsuite_account_id: '500', number: '5000', name: 'Cost of Goods Sold' },
       { id: 'a4', netsuite_account_id: '130', number: '1300', name: 'Inventory' },
     ]),
-    costAccounts: new Set(['500', '130']),
   };
   const doc = (over: Partial<DiffDocumentData>): DiffDocumentData => ({
     kind: 'invoice',
@@ -189,12 +199,22 @@ describe('explainDocument', () => {
     ...over,
   });
 
-  it('puts a cost of goods difference down to the fulfillments FleetSuite posts it with', () => {
-    const d = explainDocument(doc({
-      lines: [{ account: '500', netsuite: '4.00', fleetsuite: '0' }, { account: '130', netsuite: '-4.00', fleetsuite: '0' }],
-    }), ctx);
-    expect(d).toMatchObject({ reason: 'cost', number: 'INV77', customer: 'A Customer', entryNo: 5, netsuite: 400, fleetsuite: 0 });
+  it('lists an invoice\'s cost of goods under Stock and cost with the invoice, and says when NetSuite books no cost on it now', () => {
+    const cost = (lines: DiffDocumentData['lines']) => explainDocument(doc({ kind: 'invoice_cost', lines }), ctx);
+    // NetSuite's cost lines differ from FleetSuite's entry for them: a difference like any other.
+    const d = cost([{ account: '500', netsuite: '4.00', fleetsuite: '3.00' }, { account: '130', netsuite: '-4.00', fleetsuite: '-3.00' }]);
+    expect(d).toMatchObject({
+      reason: 'amounts', number: 'INV77', customer: 'A Customer', entryNo: 5, netsuite: 400, fleetsuite: 300, listKind: 'stock', listMonth: SEP,
+    });
     expect(d.lines.map((l) => l.number)).toEqual(['1300', '5000']);
+    // NetSuite books no cost on it now, so the next run reverses FleetSuite's entry for it.
+    expect(cost([{ account: '500', netsuite: '0', fleetsuite: '4.00' }, { account: '130', netsuite: '0', fleetsuite: '-4.00' }])).toMatchObject({
+      reason: 'no_cost', netsuite: 0, fleetsuite: 400,
+      why: "NetSuite books no cost of goods on it now. The next posting run reverses FleetSuite's entry.",
+    });
+    // An invoice's own entry that NetSuite has nothing for is posted differently, not that.
+    expect(explainDocument(doc({ lines: [{ account: '120', netsuite: '0', fleetsuite: '10.00' }, { account: '400', netsuite: '0', fleetsuite: '-10.00' }] }), ctx).reason)
+      .toBe('amounts');
   });
 
   it('names the first two accounts that differ and counts the rest', () => {
@@ -319,6 +339,25 @@ describe('explainDocument', () => {
       reason: 'gone', number: 'NetSuite 77', why: "Deleted in NetSuite. The next posting run reverses FleetSuite's entry.",
     });
     expect(explainDocument(doc({ kind: 'bank_transfer', netsuite: { ...late, type: 'Transfer', month: null }, copy: null }), ctx)).toMatchObject({
+      reason: 'gone', why: "NetSuite posts it to the other company now. The next posting run reverses FleetSuite's entry for this one.",
+    });
+  });
+
+  it('lists a stock document under Stock and cost in the month NetSuite booked it into, as a journal entry', () => {
+    const late = { type: 'ItemShip', number: 'IF1201', date: '2025-05-31', month: '2025-06-01' };
+    expect(explainDocument(doc({ kind: 'item_fulfillment', netsuite: late, copy: null }), ctx)).toMatchObject({
+      reason: 'month', number: 'IF1201', listKind: 'stock', listMonth: '2025-06-01', customer: null,
+    });
+    const early = explainDocument(doc({
+      kind: 'inventory_adjustment', netsuite: { ...late, type: 'InvAdjst', number: 'ADJ31', date: '2024-12-31', month: '2025-01-01' },
+      fleetsuite: { entries: 0, standing: null }, copy: null,
+    }), ctx);
+    expect(early).toMatchObject({ reason: 'not_posted', listKind: 'stock', listMonth: '2025-01-01' });
+    // Its entry stands while the copy of NetSuite's ledger has none of its lines for this company: the next run reverses it.
+    expect(explainDocument(doc({ kind: 'item_receipt', netsuite: null, copy: null }), ctx)).toMatchObject({
+      reason: 'gone', number: 'NetSuite 77', why: "Deleted in NetSuite. The next posting run reverses FleetSuite's entry.",
+    });
+    expect(explainDocument(doc({ kind: 'invoice_cost', netsuite: { ...late, type: 'CustInvc', month: null } }), ctx)).toMatchObject({
       reason: 'gone', why: "NetSuite posts it to the other company now. The next posting run reverses FleetSuite's entry for this one.",
     });
   });
