@@ -1,9 +1,10 @@
 // Migration 395 reads one company's NetSuite stock documents for a month
 // from the copy of NetSuite's GL (an invoice's or credit memo's cost lines
-// only), and what the journal holds for them; the posting job posts them
-// with the stock rule. This runs migration 314 (with stand-ins for the app
-// tables it points at) and migrations 359–364, 367, 370, 374, 376, 377, 380,
-// 382–387 and 389–395 in an in-memory Postgres (PGlite) as the app's server
+// only), and what the journal holds for them, which migration 397 reads with
+// one read of the copy's cost lines; the posting job posts them with the
+// stock rule. This runs migration 314 (with stand-ins for the app tables it
+// points at) and migrations 359–364, 367, 370, 374, 376, 377, 380, 382–387,
+// 389–395 and 397 in an in-memory Postgres (PGlite) as the app's server
 // login and holds the functions' rules, then runs the posting job against
 // them with stock documents only.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
@@ -80,6 +81,7 @@ async function freshDb(): Promise<PGlite> {
     '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql',
+    '397-books-stock-postings-once.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -367,6 +369,49 @@ describe('migration 395\'s functions', () => {
     expect((await postings('1084', null, false)).map((p) => [p.source_id, p.current?.id, p.document])).toEqual([
       ['8111', other.id, { number: 'IF0311', deleted: false }],
     ]);
+  });
+
+  it('gl_stock_postings reads the copy\'s cost lines once however many invoices and months there are, and only for a cost entry', async () => {
+    // Cost entries for invoices booked into two more months. Migration 395 looked for each one month by month, and the first
+    // read of every posting run ran past the statement timeout.
+    for (const [ref, number, date] of [['8130', 'INV0130', '2025-01-20'], ['8131', 'INV0231', '2025-02-20']]) {
+      await copy(db, {
+        ref, type: 'CustInvc', number, date,
+        lines: [['0', 'BMG', '120', 1000, null, '310'], ['1', 'BMG', '400', -1000], ['2', 'BMG', '500', 300], ['3', 'BMG', '130', -300]],
+      });
+      await post(entry('BMG', `invoice_cost:${ref}:1`, ref, '3.00', { source_type: 'invoice_cost', entry_date: date, memo: number }));
+    }
+    await db.exec(`RESET ROLE; SET track_functions = 'all'; SET ROLE service_role`);
+    // Postgres counts a function's calls until it next reports them, so a read's are the count's growth inside one transaction.
+    const calls = () => one<number>(
+      `SELECT coalesce(sum(calls), 0)::int AS r FROM pg_stat_xact_user_functions WHERE funcname = 'gl_netsuite_cost_lines'`,
+    );
+    /** What one read says of the documents, and how many times it read the copy's cost lines. */
+    const read = async (company: string, ids: string[] | null) => {
+      await db.exec('BEGIN');
+      try {
+        const before = await calls();
+        const held = await postings(company, ids, false);
+        return { held: held.map((p) => [p.source_type, p.source_id, p.document?.deleted]), reads: (await calls()) - before };
+      } finally {
+        await db.exec('ROLLBACK');
+      }
+    };
+
+    const all = await read('BMG', null);
+    expect(all.reads).toBe(1);
+    // Each invoice's or credit memo's cost entry still has its cost lines in the copy, or doesn't, as before.
+    expect(all.held.filter(([type]) => type === 'invoice_cost')).toEqual([
+      ['invoice_cost', '8107', false], ['invoice_cost', '8108', false], ['invoice_cost', '8109', true], ['invoice_cost', '8110', true],
+      ['invoice_cost', '8130', false], ['invoice_cost', '8131', false], ['invoice_cost', '8198', true],
+    ]);
+    expect(await read('BMG', ['8107', '8131', '8198'])).toEqual({
+      held: [['invoice_cost', '8107', false], ['invoice_cost', '8131', false], ['invoice_cost', '8198', true]],
+      reads: 1,
+    });
+    // None when no cost entry is asked about, or the company has none.
+    expect(await read('BMG', ['8102'])).toEqual({ held: [['item_receipt', '8102', false]], reads: 0 });
+    expect(await read('1084', null)).toEqual({ held: [['item_fulfillment', '8111', false]], reads: 0 });
   });
 
   it('is the service role\'s alone, and neither read writes anything', async () => {
@@ -726,17 +771,30 @@ describe('the posting job, for stock documents', () => {
     // NetSuite changes IF0114, so a run that could read everything would replace its entry.
     await edit('8114', (d) => { d.lines = [['1', 'BMG', '500', 4100], ['2', 'BMG', '130', -4100]]; });
     const before = await journal();
-    const reads: Array<[string, (args: Record<string, unknown>) => boolean]> = [
-      ['gl_stock_month', () => true],
+    // Each error says what it was reading.
+    const reads: Array<[string, (args: Record<string, unknown>) => boolean, string]> = [
+      ['gl_stock_month', () => true, "BMG's stock and cost for Jan 2025"],
       // Step 1's read of every entry, then a month's read of its documents' entries.
-      ['gl_stock_postings', (args) => args.p_source_ids === null],
-      ['gl_stock_postings', (args) => args.p_source_ids !== null],
+      ['gl_stock_postings', (args) => args.p_source_ids === null, "the journal's entries for BMG's stock and cost"],
+      ['gl_stock_postings', (args) => args.p_source_ids !== null, "the journal's entries for BMG's stock and cost in Jan 2025"],
     ];
-    for (const [fn, when] of reads) {
+    // And every other kind's: step 1's read of every entry, and a month's read of the copy.
+    const kinds: Array<[string, string]> = [
+      ['invoice', 'invoices and credit memos'], ['payment', 'payments'], ['deposit', 'deposits'], ['bill', 'bills'],
+      ['bill_payment', 'bill payments'], ['spending', 'checks and cards'], ['journal', 'journal entries'],
+      ['bank', 'bank deposits and transfers'],
+    ];
+    for (const [kind, words] of kinds) {
+      reads.push(
+        [`gl_${kind}_postings`, (args) => args.p_source_ids === null, `the journal's entries for BMG's ${words}`],
+        [`gl_${kind}_month`, () => true, `BMG's ${words} for Jan 2025`],
+      );
+    }
+    for (const [fn, when, what] of reads) {
       failing.set(fn, when);
       const r = await run();
       failing.clear();
-      expect(r.error, fn).toBe(`${fn} failed`);
+      expect(r.error, fn).toBe(`Reading ${what}: ${fn} failed`);
       expect(await journal(), fn).toEqual(before);
     }
 

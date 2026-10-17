@@ -1084,6 +1084,21 @@ const plural = (n: number, one: string, many: string) => `${n.toLocaleString('en
 const listed = (items: string[], max = 10) => `${items.slice(0, max).join(', ')}${items.length > max ? ', …' : ''}`;
 const joined = (words: string[], last: 'and' | 'or') =>
   (words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} ${last} ${words[words.length - 1]}`);
+/** Each kind of document a run reads, in words, as the switches on Invoices vs NetSuite name them. */
+const READ_WORDS = {
+  invoice: 'invoices and credit memos',
+  payment: 'payments',
+  deposit: 'deposits',
+  bill: 'bills',
+  billPayment: 'bill payments',
+  spending: 'checks and cards',
+  journal: 'journal entries',
+  bank: 'bank deposits and transfers',
+  stock: 'stock and cost',
+} as const;
+type ReadKind = keyof typeof READ_WORDS;
+/** A read's error with what it read, so a run that stops says where: "Reading BMG's bills for Mar 2025: …". */
+const readFailed = (what: string, err: { message: string }) => new Error(`Reading ${what}: ${err.message}`);
 /** The kinds of document a run can leave for not coming to their totals, in words. */
 const DOCUMENT_WORDS: Record<SalesDocKind | BillSourceType | SpendingSourceType, [string, string]> = {
   invoice: ['invoice', 'invoices'],
@@ -1148,10 +1163,10 @@ export async function postInvoices(
         .range(from, to)),
       service.from('sync_state').select('last_result').eq('sync_type', BOOKS_LISTS_SYNC).maybeSingle(),
     ]);
-    if (chart.error) throw new Error(chart.error.message);
-    if (lists.error) throw new Error(lists.error.message);
+    if (chart.error) throw readFailed('the chart of accounts', chart.error);
+    if (lists.error) throw readFailed('the NetSuite lists', lists.error);
     const companies = await service.from('gl_companies').select('id, code');
-    if (companies.error) throw new Error(companies.error.message);
+    if (companies.error) throw readFailed('the companies', companies.error);
     const codeOf = new Map(((companies.data ?? []) as Array<{ id: string; code: string }>).map((c) => [c.id, c.code]));
 
     const accountIds = new Map<string, string>();
@@ -1186,15 +1201,16 @@ export async function postInvoices(
         service.rpc('gl_bank_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_stock_postings', { p_company: company, p_source_ids: null, p_lines: false }),
       ]);
-      if (all.error) throw new Error(all.error.message);
-      if (paid.error) throw new Error(paid.error.message);
-      if (deposited.error) throw new Error(deposited.error.message);
-      if (billed.error) throw new Error(billed.error.message);
-      if (paidOut.error) throw new Error(paidOut.error.message);
-      if (spent.error) throw new Error(spent.error.message);
-      if (journaled.error) throw new Error(journaled.error.message);
-      if (banked.error) throw new Error(banked.error.message);
-      if (stocked.error) throw new Error(stocked.error.message);
+      const entriesOf = (kind: ReadKind) => `the journal's entries for ${company}'s ${READ_WORDS[kind]}`;
+      if (all.error) throw readFailed(entriesOf('invoice'), all.error);
+      if (paid.error) throw readFailed(entriesOf('payment'), paid.error);
+      if (deposited.error) throw readFailed(entriesOf('deposit'), deposited.error);
+      if (billed.error) throw readFailed(entriesOf('bill'), billed.error);
+      if (paidOut.error) throw readFailed(entriesOf('billPayment'), paidOut.error);
+      if (spent.error) throw readFailed(entriesOf('spending'), spent.error);
+      if (journaled.error) throw readFailed(entriesOf('journal'), journaled.error);
+      if (banked.error) throw readFailed(entriesOf('bank'), banked.error);
+      if (stocked.error) throw readFailed(entriesOf('stock'), stocked.error);
       const held = [
         ...(((all.data as any)?.invoices ?? []) as InvoicePosting[]).map((p) => ({ posting: p, copy: p.invoice })),
         ...(((paid.data as any)?.payments ?? []) as PaymentPosting[]).map((p) => ({ posting: p, copy: p.payment })),
@@ -1294,9 +1310,12 @@ export async function postInvoices(
         break;
       }
       state.resume = { company, month };
+      /** "BMG's bills for Mar 2025", and the journal's entries for them, for a read's error. */
+      const copyOf = (kind: ReadKind) => `${company}'s ${READ_WORDS[kind]} for ${monthLabel(month)}`;
+      const entriesOf = (kind: ReadKind) => `the journal's entries for ${company}'s ${READ_WORDS[kind]} in ${monthLabel(month)}`;
 
       const res = await service.rpc('gl_invoice_month', { p_company: company, p_month: month });
-      if (res.error) throw new Error(res.error.message);
+      if (res.error) throw readFailed(copyOf('invoice'), res.error);
       const data = (res.data ?? {}) as Partial<InvoiceMonthData>;
       const invoices = data.invoices ?? [];
       const mine = invoices.filter((inv) => inv.companies.includes(company));
@@ -1325,7 +1344,7 @@ export async function postInvoices(
           const held = await service.rpc('gl_invoice_postings', {
             p_company: company, p_source_ids: mine.map((inv) => inv.netsuite_id), p_lines: true,
           });
-          if (held.error) throw new Error(held.error.message);
+          if (held.error) throw readFailed(entriesOf('invoice'), held.error);
           const postings = new Map((((held.data as any)?.invoices ?? []) as InvoicePosting[]).map((p) => [postingKey(p.source_type, p.source_id), p]));
 
           const tasks: Array<() => Promise<void>> = [];
@@ -1344,7 +1363,7 @@ export async function postInvoices(
       // is this company's only while an entry of it stands here: NetSuite posts nothing for it now (a $0 payment
       // posts no lines), or the copy hasn't caught up with it, and the decision tells the two apart.
       const paid = await service.rpc('gl_payment_month', { p_company: company, p_month: month });
-      if (paid.error) throw new Error(paid.error.message);
+      if (paid.error) throw readFailed(copyOf('payment'), paid.error);
       const payments = workOutPaymentMonth(
         { payments: ((paid.data ?? {}) as Partial<PaymentMonthData>).payments ?? [] },
         { company, chart: chartAccounts },
@@ -1353,7 +1372,7 @@ export async function postInvoices(
         const held = await service.rpc('gl_payment_postings', {
           p_company: company, p_source_ids: payments.map((w) => w.payment.netsuite_id), p_lines: true,
         });
-        if (held.error) throw new Error(held.error.message);
+        if (held.error) throw readFailed(entriesOf('payment'), held.error);
         const postings = new Map((((held.data as any)?.payments ?? []) as PaymentPosting[]).map((p) => [p.source_id, p]));
         const tasks: Array<() => Promise<void>> = [];
         for (const w of payments) {
@@ -1369,7 +1388,7 @@ export async function postInvoices(
       // The month's customer deposits and deposit applications, as its payments: one in neither company's GL copy
       // is this company's only while an entry of it stands here.
       const dep = await service.rpc('gl_deposit_month', { p_company: company, p_month: month });
-      if (dep.error) throw new Error(dep.error.message);
+      if (dep.error) throw readFailed(copyOf('deposit'), dep.error);
       const depData = (dep.data ?? {}) as Partial<DepositMonthData>;
       const deposits = workOutDepositMonth(
         { deposits: depData.deposits ?? [], accounts: depData.accounts ?? [], not_copied: [] },
@@ -1379,7 +1398,7 @@ export async function postInvoices(
         const held = await service.rpc('gl_deposit_postings', {
           p_company: company, p_source_ids: deposits.map((w) => w.deposit.netsuite_id), p_lines: true,
         });
-        if (held.error) throw new Error(held.error.message);
+        if (held.error) throw readFailed(entriesOf('deposit'), held.error);
         const postings = new Map((((held.data as any)?.deposits ?? []) as DepositPosting[]).map((p) => [postingKey(p.source_type, p.source_id), p]));
         const tasks: Array<() => Promise<void>> = [];
         for (const w of deposits) {
@@ -1395,13 +1414,14 @@ export async function postInvoices(
       // The month's vendor bills and bill credits, those NetSuite booked into it as for invoices: no lines to ask
       // NetSuite about, as the copy keeps them. One in neither company's GL copy is this company's only while an entry
       // of it stands here, as for payments.
-      const bills = workOutBillMonth(await readBillMonth(service, company, month), { company, chart: chartAccounts })
+      const billMonth = await readBillMonth(service, company, month).catch((err) => { throw readFailed(copyOf('bill'), err); });
+      const bills = workOutBillMonth(billMonth, { company, chart: chartAccounts })
         .bills.filter((w) => w.bill.companies.length === 0 || w.bill.companies.includes(company));
       if (bills.length) {
         const held = await service.rpc('gl_bill_postings', {
           p_company: company, p_source_ids: bills.map((w) => w.bill.netsuite_id), p_lines: true,
         });
-        if (held.error) throw new Error(held.error.message);
+        if (held.error) throw readFailed(entriesOf('bill'), held.error);
         const postings = new Map((((held.data as any)?.bills ?? []) as BillPosting[]).map((p) => [postingKey(p.source_type, p.source_id), p]));
         const tasks: Array<() => Promise<void>> = [];
         for (const w of bills) {
@@ -1419,7 +1439,7 @@ export async function postInvoices(
       // so payables are picked from the same payments. No lines to wait for, as for payments; one in neither company's GL
       // copy is this company's only while an entry of it stands here.
       const out = await service.rpc('gl_bill_payment_month', { p_company: company, p_month: month });
-      if (out.error) throw new Error(out.error.message);
+      if (out.error) throw readFailed(copyOf('billPayment'), out.error);
       const billPayments = workOutBillPaymentMonth(
         { payments: ((out.data ?? {}) as Partial<BillPaymentMonthData>).payments ?? [], not_copied: [] },
         { company, chart: chartAccounts },
@@ -1428,7 +1448,7 @@ export async function postInvoices(
         const held = await service.rpc('gl_bill_payment_postings', {
           p_company: company, p_source_ids: billPayments.map((w) => w.payment.netsuite_id), p_lines: true,
         });
-        if (held.error) throw new Error(held.error.message);
+        if (held.error) throw readFailed(entriesOf('billPayment'), held.error);
         const postings = new Map((((held.data as any)?.payments ?? []) as BillPaymentPosting[]).map((p) => [p.source_id, p]));
         const tasks: Array<() => Promise<void>> = [];
         for (const w of billPayments) {
@@ -1444,13 +1464,14 @@ export async function postInvoices(
       // The month's checks and card charges and refunds, those NetSuite booked into it as for bills, read as the Checks
       // and cards switch reads them, so the account the money comes out of is picked the same way. One in neither
       // company's GL copy is this company's only while an entry of it stands here, as for payments.
-      const spending = workOutSpendingMonth(await readSpendingMonth(service, company, month), { company, chart: chartAccounts })
+      const spendingMonth = await readSpendingMonth(service, company, month).catch((err) => { throw readFailed(copyOf('spending'), err); });
+      const spending = workOutSpendingMonth(spendingMonth, { company, chart: chartAccounts })
         .documents.filter((w) => w.doc.companies.length === 0 || w.doc.companies.includes(company));
       if (spending.length) {
         const held = await service.rpc('gl_spending_postings', {
           p_company: company, p_source_ids: spending.map((w) => w.doc.netsuite_id), p_lines: true,
         });
-        if (held.error) throw new Error(held.error.message);
+        if (held.error) throw readFailed(entriesOf('spending'), held.error);
         const postings = new Map((((held.data as any)?.documents ?? []) as SpendingPosting[]).map((p) => [postingKey(p.source_type, p.source_id), p]));
         const tasks: Array<() => Promise<void>> = [];
         for (const w of spending) {
@@ -1468,7 +1489,7 @@ export async function postInvoices(
       // its entry, so there's nothing to wait for or ask NetSuite, and one the copy no longer has for this company was
       // reversed in step 1.
       const jr = await service.rpc('gl_journal_month', { p_company: company, p_month: month });
-      if (jr.error) throw new Error(jr.error.message);
+      if (jr.error) throw readFailed(copyOf('journal'), jr.error);
       const journalEntries = workOutJournalMonth(
         { journal_entries: ((jr.data ?? {}) as Partial<JournalMonthData>).journal_entries ?? [] },
         { company, chart: chartAccounts },
@@ -1477,7 +1498,7 @@ export async function postInvoices(
         const held = await service.rpc('gl_journal_postings', {
           p_company: company, p_source_ids: journalEntries.map((w) => w.entry.netsuite_id), p_lines: true,
         });
-        if (held.error) throw new Error(held.error.message);
+        if (held.error) throw readFailed(entriesOf('journal'), held.error);
         const postings = new Map((((held.data as any)?.journal_entries ?? []) as JournalEntryPosting[]).map((p) => [p.source_id, p]));
         const tasks: Array<() => Promise<void>> = [];
         for (const w of journalEntries) {
@@ -1492,7 +1513,7 @@ export async function postInvoices(
 
       // The month's bank deposits and transfers, those NetSuite booked into it, as its journal entries.
       const bk = await service.rpc('gl_bank_month', { p_company: company, p_month: month });
-      if (bk.error) throw new Error(bk.error.message);
+      if (bk.error) throw readFailed(copyOf('bank'), bk.error);
       const bankDocuments = workOutBankMonth(
         { documents: ((bk.data ?? {}) as Partial<BankMonthData>).documents ?? [] },
         { company, chart: chartAccounts },
@@ -1501,7 +1522,7 @@ export async function postInvoices(
         const held = await service.rpc('gl_bank_postings', {
           p_company: company, p_source_ids: bankDocuments.map((w) => w.entry.netsuite_id), p_lines: true,
         });
-        if (held.error) throw new Error(held.error.message);
+        if (held.error) throw readFailed(entriesOf('bank'), held.error);
         const postings = new Map((((held.data as any)?.documents ?? []) as BankPosting[]).map((p) => [postingKey(p.source_type, p.source_id), p]));
         const tasks: Array<() => Promise<void>> = [];
         for (const w of bankDocuments) {
@@ -1517,7 +1538,7 @@ export async function postInvoices(
       // The month's stock documents, those NetSuite booked into it, as its journal entries: an invoice's or credit memo's
       // cost lines here, beside the entry for the sale.
       const st = await service.rpc('gl_stock_month', { p_company: company, p_month: month });
-      if (st.error) throw new Error(st.error.message);
+      if (st.error) throw readFailed(copyOf('stock'), st.error);
       const stockDocuments = workOutStockMonth(
         { documents: ((st.data ?? {}) as Partial<StockMonthData>).documents ?? [] },
         { company, chart: chartAccounts },
@@ -1526,7 +1547,7 @@ export async function postInvoices(
         const held = await service.rpc('gl_stock_postings', {
           p_company: company, p_source_ids: stockDocuments.map((w) => w.entry.netsuite_id), p_lines: true,
         });
-        if (held.error) throw new Error(held.error.message);
+        if (held.error) throw readFailed(entriesOf('stock'), held.error);
         const postings = new Map((((held.data as any)?.documents ?? []) as StockPosting[]).map((p) => [postingKey(p.source_type, p.source_id), p]));
         const tasks: Array<() => Promise<void>> = [];
         for (const w of stockDocuments) {

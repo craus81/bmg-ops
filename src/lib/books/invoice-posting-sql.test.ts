@@ -5,8 +5,8 @@
 // for the app tables it points at) and migrations 359–364, 367, 370, 380 and
 // 387, with the ones the job reads payments, deposits, bills, bill
 // payments, checks, card charges, journal entries, bank deposits, transfers
-// and stock documents through (374, 376, 377, 382–386 and 389–395), in an
-// in-memory
+// and stock documents through (374, 376, 377, 382–386, 389–395 and
+// 397), in an in-memory
 // Postgres (PGlite) as the app's server login and holds the functions'
 // rules, then runs the posting job against them with a fake NetSuite that
 // answers the job's own SuiteQL.
@@ -75,6 +75,7 @@ async function freshDb(): Promise<PGlite> {
     '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql',
+    '397-books-stock-postings-once.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -483,6 +484,8 @@ describe('the posting job against the real functions', () => {
   let clock = 0;
   const store = new Map<string, any>();
   const ns = new FakeNetSuite((ms) => { clock += ms; });
+  /** When a function fails, by what it was asked. */
+  const failing = new Map<string, (args: Record<string, unknown>) => boolean>();
 
   // sync_state in memory; gl_accounts, gl_companies and every function the
   // real ones, called the way supabase-js calls them: by name, with named
@@ -520,6 +523,7 @@ describe('the posting job against the real functions', () => {
       throw new Error(`unexpected table ${table}`);
     },
     rpc: async (fn: string, args: Record<string, unknown>) => {
+      if (failing.get(fn)?.(args)) return { data: null, error: { message: `${fn} failed` } };
       const names = Object.keys(args);
       const value = (v: unknown) => (Array.isArray(v) ? textArray(v.map(String)) : v !== null && typeof v === 'object' ? JSON.stringify(v) : v);
       try {
@@ -699,6 +703,19 @@ describe('the posting job against the real functions', () => {
       expect((await run()).skipped).toBeUndefined();
       // Each run lets go when it's done.
       expect((await run()).skipped).toBeUndefined();
+    });
+
+    it('stops, saying what it was reading, when it can\'t read what the journal holds for a month\'s invoices', async () => {
+      const before = await journal();
+      failing.set('gl_invoice_postings', (args) => args.p_source_ids !== null);
+      const r = await run();
+      failing.clear();
+      // February's, the first month with an invoice whose lines are copied.
+      expect(r.error).toBe("Reading the journal's entries for BMG's invoices and credit memos in Feb 2025: gl_invoice_postings failed");
+      expect(await journal()).toEqual(before);
+      // It can read them again: the next run carries on from that month.
+      expect(await run()).toMatchObject({ months: [FEB, MAR, JAN], posted: 0, replaced: 0, reversed: 0, failedCount: 0 });
+      expect((await run()).months).toEqual([JAN, FEB, MAR]);
     });
 
     it('leaves a month as it is when NetSuite can\'t be asked about its invoices\' lines', async () => {

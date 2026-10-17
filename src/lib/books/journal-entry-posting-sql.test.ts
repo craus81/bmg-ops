@@ -3,8 +3,8 @@
 // posting job posts them with the journal entry rule. This runs migration
 // 314 (with stand-ins for the app tables it points at) and migrations
 // 359–364, 367, 370, 374, 376, 377, 380, 382–387 and 389–393, with the ones
-// the job reads bank deposits, transfers and stock documents through (394
-// and 395), in an in-memory
+// the job reads bank deposits, transfers and stock documents through (394,
+// 395 and 397), in an in-memory
 // Postgres (PGlite) as the app's server login and holds the functions'
 // rules, then runs the posting job against them with journal entries only.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
@@ -77,6 +77,7 @@ async function freshDb(): Promise<PGlite> {
     '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql',
+    '397-books-stock-postings-once.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -662,17 +663,18 @@ describe('the posting job, for journal entries', () => {
     // NetSuite changes JE1213, so a run that could read everything would replace its entry.
     await edit('9013', (j) => { j.lines = [['1', 'BMG', '640', 4100], ['2', 'BMG', '220', -4100]]; });
     const before = await journal();
-    const reads: Array<[string, (args: Record<string, unknown>) => boolean]> = [
-      ['gl_journal_month', () => true],
+    // Each error says what it was reading.
+    const reads: Array<[string, (args: Record<string, unknown>) => boolean, string]> = [
+      ['gl_journal_month', () => true, "BMG's journal entries for Jan 2025"],
       // Step 1's read of every entry, then a month's read of its journal entries' entries.
-      ['gl_journal_postings', (args) => args.p_source_ids === null],
-      ['gl_journal_postings', (args) => args.p_source_ids !== null],
+      ['gl_journal_postings', (args) => args.p_source_ids === null, "the journal's entries for BMG's journal entries"],
+      ['gl_journal_postings', (args) => args.p_source_ids !== null, "the journal's entries for BMG's journal entries in Jan 2025"],
     ];
-    for (const [fn, when] of reads) {
+    for (const [fn, when, what] of reads) {
       failing.set(fn, when);
       const r = await run();
       failing.clear();
-      expect(r.error, fn).toBe(`${fn} failed`);
+      expect(r.error, fn).toBe(`Reading ${what}: ${fn} failed`);
       expect(await journal(), fn).toEqual(before);
     }
 

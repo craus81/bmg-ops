@@ -85,7 +85,7 @@ the accounts page; the others are linked from there.
 | Journal entry tests | `src/lib/books/journal-entry-rule.test.ts`, `src/lib/books/journal-entry-check.test.ts`, `src/lib/books/journal-entry-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Bank deposits and transfers, checked and posted like journal entries | `migrations/394-books-bank-deposits.sql`, `src/lib/books/bank-rule.ts`, `src/lib/books/bank-check.ts`, `src/lib/books/invoice-posting.ts` |
 | Bank deposit and transfer tests | `src/lib/books/bank-check.test.ts`, `src/lib/books/bank-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
-| Fulfillments, item receipts, inventory adjustments and invoices' cost lines, checked and posted like journal entries | `migrations/395-books-stock-cost.sql`, `src/lib/books/stock-rule.ts`, `src/lib/books/stock-check.ts`, `src/lib/books/invoice-posting.ts` |
+| Fulfillments, item receipts, inventory adjustments and invoices' cost lines, checked and posted like journal entries | `migrations/395-books-stock-cost.sql`, `migrations/397-books-stock-postings-once.sql`, `src/lib/books/stock-rule.ts`, `src/lib/books/stock-check.ts`, `src/lib/books/invoice-posting.ts` |
 | Stock and cost tests | `src/lib/books/stock-check.test.ts`, `src/lib/books/stock-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Reports from FleetSuite's own books | `migrations/396-books-reports.sql`, `src/lib/books/reports.ts`, `src/app/(main)/admin/books/reports/page.tsx`, `src/app/api/admin/books/reports/route.ts` |
 | Report tests | `src/lib/books/reports.test.ts`, `src/lib/books/reports-sql.test.ts` |
@@ -532,7 +532,10 @@ is reversed.
 The run takes the GL copy's lock (`gl_netsuite_claim_copy`): it reads that
 copy, so it never runs while the copy changes it, and two runs never
 overlap. Whichever comes second does nothing and says "Another books job is
-running." The first run posts every invoice since 2025 and may take more
+running." A read that fails stops the run, and its error, which the
+invoices page shows, says what it was reading: "Reading the journal's
+entries for BMG's stock and cost: canceling statement due to statement
+timeout", say. The first run posts every invoice since 2025 and may take more
 than one run: a run stops within its budget between months, or before a
 write with under five seconds left, and the next carries on from the month
 it stopped at (`sync_state` `books_invoice_posting`). Like the other books
@@ -1405,7 +1408,12 @@ The entries are filed as `item_fulfillment`, `item_receipt`,
 cost lines alike, apart from the entry for the sale), keyed
 `<source type>:<NetSuite id>:<n>`, each line with its NetSuite line id and
 memo and the entry's memo its number. `gl_stock_postings` reads what the
-journal holds for each, as `gl_bank_postings` does for bank deposits. The
+journal holds for each, as `gl_bank_postings` does for bank deposits.
+Migration 397 has it read the GL copy's cost lines once, from every month
+and only when the journal holds a cost entry, then look each invoice and
+credit memo up in them (field bug 2026-10-17): migration 395 looked for
+each one month by month, and once the cost entries had posted, the first
+read of every run ran past the database's statement timeout. The
 posting job and the switch read a month the same way (`gl_stock_month`,
 worked out by `workOutStockMonth` in `src/lib/books/stock-check.ts`), so
 what the page shows is what posts.
