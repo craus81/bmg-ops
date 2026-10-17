@@ -173,18 +173,21 @@ function GapMonths({ line, company }: { line: Line; company: string }) {
     <div style={{ fontSize: '11px', fontWeight: 400, fontStyle: 'normal', color: 'var(--text-muted)', marginTop: '2px' }}>
       Differs in{' '}
       {shown.map((g, i) => (
-        <span key={g.month} style={{ whiteSpace: 'nowrap' }}>
-          {i > 0 && ' · '}
-          {/* Differences starts in January 2025; FleetSuite entries dated earlier have no month there. */}
-          {g.month < '2025-01-01' ? shortName(g.month) : (
-            <Link
-              href={`/admin/books/differences?${new URLSearchParams({ company, month: g.month.slice(0, 7) })}`}
-              style={{ color: 'var(--text-secondary)' }}
-            >
-              {shortName(g.month)}
-            </Link>
-          )}{' '}
-          <span style={{ color: RED }}>{fmt(g.difference)}</span>
+        <span key={g.month}>
+          {/* The line may break after a month's dot, never inside a month, so a long list wraps on a phone. */}
+          {i > 0 && ' · '}
+          <span style={{ whiteSpace: 'nowrap' }}>
+            {/* Differences starts in January 2025; FleetSuite entries dated earlier have no month there. */}
+            {g.month < '2025-01-01' ? shortName(g.month) : (
+              <Link
+                href={`/admin/books/differences?${new URLSearchParams({ company, month: g.month.slice(0, 7) })}`}
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                {shortName(g.month)}
+              </Link>
+            )}{' '}
+            <span style={{ color: RED }}>{fmt(g.difference)}</span>
+          </span>
         </span>
       ))}
       {more > 0 && ` and ${more} more ${more === 1 ? 'month' : 'months'}`}
