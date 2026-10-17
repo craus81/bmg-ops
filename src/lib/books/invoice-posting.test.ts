@@ -6,9 +6,9 @@ import {
   decide, decideBankDocument, decideBill, decideBillPayment, decideDeposit, decideJournalEntry, decidePayment, decideSpending, depositBooks,
   depositEntryLines, depositJournalEntry, depositPostingFor, entryLines, failureReason, invoiceBooks, invoiceJournalEntry, journalEntryBooks,
   parsePostingState, paymentBooks, paymentEntryLines, paymentJournalEntry, postingKey, postingQueue, signature, spendingBooks, spendingJournalEntry,
-  spendingPostingFor, unsaidFacts,
+  spendingPostingFor, decideStockDocument, stockDocumentBooks, stockJournalEntry, stockPostingFor, unsaidFacts,
   type BankPosting, type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type JournalEntryPosting,
-  type PaymentPosting, type SpendingPosting,
+  type PaymentPosting, type SpendingPosting, type StockPosting,
 } from './invoice-posting';
 import { workOutPaymentMonth, type PaymentMonthData } from './payment-check';
 import { workOutDepositMonth, type DepositMonthData } from './deposit-check';
@@ -17,6 +17,7 @@ import { workOutBillPaymentMonth, type BillPaymentMonthData } from './bill-payme
 import { workOutSpendingMonth, type SpendingMonthData } from './spending-check';
 import { workOutJournalMonth, type JournalMonthData } from './journal-entry-check';
 import { workOutBankMonth, type BankMonthData } from './bank-check';
+import { workOutStockMonth, type StockMonthData } from './stock-check';
 
 // Made-up books: '120' receivable, '400' income, '220' sales tax payable.
 const CHART: ChartAccount[] = [
@@ -1366,6 +1367,172 @@ describe('bank deposits and transfers', () => {
       }));
       const current = { id: 'e52', entry_no: 52, entry_date: entry!.entryDate, lines };
       expect(decideBankDocument(w, held({ current })), JSON.stringify(d)).toEqual({ kind: 'keep' });
+    }
+  });
+});
+
+describe('stock documents', () => {
+  // Made-up books: '130' inventory, '205' stock received but not billed, '500' cost of goods sold, '120' receivables.
+  const STOCK_CHART: ChartAccount[] = [
+    { netsuite_account_id: '130', number: '1300', name: 'Inventory', account_type: 'other_current_asset', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '205', number: '2050', name: 'Received Not Billed', account_type: 'other_current_liability', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '500', number: '5000', name: 'Cost of Goods Sold', account_type: 'cost_of_goods_sold', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '120', number: '1200', name: 'Receivables', account_type: 'accounts_receivable', company: null, active: true, is_summary: false },
+  ];
+  const ids = new Map(['130', '205', '500', '120'].map((a) => [a, `a-${a}`]));
+
+  type Doc = StockMonthData['documents'][number];
+  type Line = Doc['lines'][number];
+  const gl = (lineId: string, account: string, debit: string, credit: string, fields: Partial<Line> = {}): Line => ({
+    line_id: lineId, account, debit, credit, memo: null, entity_id: null, name: null, customer_id: null, ...fields,
+  });
+  const named = { entity_id: '310', name: 'A Customer', customer_id: CUSTOMER };
+  // A part shipped to a customer: its cost out of inventory.
+  const fulfillment = (fields: Partial<Doc> = {}): Doc => ({
+    netsuite_id: '8101', type: 'ItemShip', number: 'IF1201', date: '2026-09-15', posting_month: '2026-09-01', companies: ['BMG'],
+    lines: [gl('1', '500', '40.00', '0.00', { memo: 'WIDGET-1', ...named }), gl('2', '130', '0.00', '40.00', { memo: 'WIDGET-1', ...named })],
+    ...fields,
+  });
+  // An invoice that wasn't fulfilled first, its cost lines alone, and a credit memo bringing the part back.
+  const invoiceCost = (fields: Partial<Doc> = {}): Doc => ({
+    netsuite_id: '8102', type: 'CustInvc', number: 'INV2312', date: '2026-09-18', posting_month: '2026-09-01', companies: ['BMG'],
+    lines: [gl('3', '500', '12.50', '0.00', named), gl('4', '130', '0.00', '12.50', named)],
+    ...fields,
+  });
+  const creditCost = (fields: Partial<Doc> = {}): Doc => invoiceCost({
+    netsuite_id: '8103', type: 'CustCred', number: 'CM104', lines: [gl('5', '130', '12.50', '0.00', named), gl('6', '500', '0.00', '12.50', named)],
+    ...fields,
+  });
+  const one = (d: Doc = fulfillment()) => workOutStockMonth({ documents: [d] }, { company: 'BMG', chart: STOCK_CHART }).documents[0];
+
+  /** What the journal holds when IF1201 posted as it is now, as entry 61. */
+  const held = (fields: Partial<StockPosting> = {}): StockPosting => ({
+    source_type: 'item_fulfillment',
+    source_id: '8101',
+    entries: 1,
+    unreversed: ['e61'],
+    current: {
+      id: 'e61', entry_no: 61, entry_date: '2026-09-15',
+      lines: [
+        { account: '500', debit: '40.00', credit: '0.00', division: null, source_line_ref: '1', customer_id: null, vendor_ref: null },
+        { account: '130', debit: '0.00', credit: '40.00', division: null, source_line_ref: '2', customer_id: null, vendor_ref: null },
+      ],
+    },
+    history: [{ entry_no: 61, entry_date: '2026-09-15', reversed_by: null }],
+    document: { number: 'IF1201', deleted: false },
+    ...fields,
+  });
+
+  it('posts its lines as they are under the stock rule, filed by what it is, an invoice\'s and a credit memo\'s cost alike', () => {
+    const { entry } = stockJournalEntry(one(), 'BMG', 2, ids);
+    expect(entry).toMatchObject({
+      company: 'BMG', entryDate: '2026-09-15', sourceType: 'item_fulfillment', sourceId: '8101', postingRule: 'stock@1',
+      idempotencyKey: 'item_fulfillment:8101:2', memo: 'IF1201', postedBy: null,
+    });
+    const line = (accountId: string, debit: string | null, credit: string | null, memo: string | null, sourceLineRef: string) => ({
+      accountId, debit, credit, memo, division: null, itemNumber: null, sourceLineRef, customerId: null, vendorRef: null,
+    });
+    // Neither cost of goods nor inventory is receivables, so the customer is named but not carried.
+    expect(entry!.lines).toEqual([
+      line('a-500', '40.00', null, 'A Customer · WIDGET-1', '1'),
+      line('a-130', null, '40.00', 'A Customer · WIDGET-1', '2'),
+    ]);
+    expect(stockJournalEntry(one(invoiceCost()), 'BMG', 1, ids).entry).toMatchObject({
+      entryDate: '2026-09-18', sourceType: 'invoice_cost', sourceId: '8102', postingRule: 'stock@1', idempotencyKey: 'invoice_cost:8102:1',
+      memo: 'INV2312',
+      lines: [
+        { accountId: 'a-500', debit: '12.50', credit: null, memo: 'A Customer', sourceLineRef: '3' },
+        { accountId: 'a-130', debit: null, credit: '12.50', memo: 'A Customer', sourceLineRef: '4' },
+      ],
+    });
+    expect(stockJournalEntry(one(creditCost()), 'BMG', 1, ids).entry).toMatchObject({
+      sourceType: 'invoice_cost', sourceId: '8103', idempotencyKey: 'invoice_cost:8103:1', memo: 'CM104',
+    });
+    for (const [type, sourceType] of [
+      ['ItemRcpt', 'item_receipt'], ['InvAdjst', 'inventory_adjustment'], ['InvTrnfr', 'inventory_transfer'], ['Build', 'assembly_build'],
+      ['Unbuild', 'assembly_unbuild'],
+    ] as const) {
+      expect(stockJournalEntry(one(fulfillment({ type })), 'BMG', 1, ids).entry, type).toMatchObject({ sourceType, idempotencyKey: `${sourceType}:8101:1` });
+    }
+    // Dated in August, booked into September: the entry goes on September's first day.
+    expect(stockJournalEntry(one(fulfillment({ date: '2026-08-31' })), 'BMG', 1, ids).entry!.entryDate).toBe('2026-09-01');
+    // No number: the memo goes by NetSuite's id.
+    expect(stockJournalEntry(one(fulfillment({ number: null })), 'BMG', 1, ids).entry!.memo).toBe('NetSuite 8101');
+    expect(stockJournalEntry(one(), 'BMG', 1, new Map([['500', 'a-500']]))).toEqual({ entry: null, missing: ['130'] });
+  });
+
+  it('posts one nothing stands for, keeps one whose entry still fits, and replaces one NetSuite changed', () => {
+    expect(decideStockDocument(one(), undefined)).toEqual({ kind: 'post' });
+    expect(decideStockDocument(one(), held())).toEqual({ kind: 'keep' });
+    // A new number, memo or name only describes.
+    const described = fulfillment({
+      number: 'IF1201-A',
+      lines: fulfillment().lines.map((l) => ({ ...l, memo: `${l.memo ?? ''} (edited)`, name: l.name && `${l.name} Inc` })),
+    });
+    expect(decideStockDocument(one(described), held())).toEqual({ kind: 'keep' });
+    const [cost, stock] = fulfillment().lines;
+    const changed: Array<Partial<Doc>> = [
+      { date: '2026-09-16' },
+      // Booked into October now.
+      { posting_month: '2026-10-01' },
+      // NetSuite costed it again.
+      { lines: [{ ...cost, debit: '42.00' }, { ...stock, credit: '42.00' }] },
+      // Out of another account.
+      { lines: [{ ...cost, account: '205' }, stock] },
+    ];
+    for (const fields of changed) expect(decideStockDocument(one(fulfillment(fields)), held()), JSON.stringify(fields)).toEqual({ kind: 'replace' });
+  });
+
+  it('reverses the entry of one that comes to nothing now, and leaves whatever stands for one whose lines don\'t balance', () => {
+    const zero = fulfillment({ lines: [gl('1', '500', '0.00', '0.00'), gl('2', '130', '0.00', '0.00')] });
+    expect(decideStockDocument(one(zero), held())).toEqual({ kind: 'reverse', why: 'nothing' });
+    expect(decideStockDocument(one(zero), undefined)).toEqual({ kind: 'keep', why: 'nothing' });
+    // Stock moved to the other company: only this company's line is its.
+    const across = fulfillment({ type: 'InvTrnfr', companies: ['1084', 'BMG'], lines: fulfillment().lines.slice(1) });
+    expect(decideStockDocument(one(across), held())).toEqual({ kind: 'leave', why: 'unworkable' });
+    expect(decideStockDocument(one(across), undefined)).toEqual({ kind: 'leave', why: 'unworkable' });
+  });
+
+  it('says what the journal holds for one and what the next run does', () => {
+    expect(stockDocumentBooks(one(), undefined)).toEqual({ entryNo: null, next: 'post', earlier: [] });
+    expect(stockDocumentBooks(one(), held())).toEqual({ entryNo: 61, next: null, earlier: [] });
+    expect(stockDocumentBooks(one(fulfillment({ date: '2026-09-16' })), held()).next).toBe('replace');
+    const zero = fulfillment({ lines: [gl('1', '500', '0.00', '0.00'), gl('2', '130', '0.00', '0.00')] });
+    expect(stockDocumentBooks(one(zero), held()).next).toBe('reverse');
+    expect(stockDocumentBooks(one(zero), undefined)).toEqual({ entryNo: null, next: null, earlier: [], nothingToPost: 'zero' });
+    // Its first entry, reversed when NetSuite changed the fulfillment.
+    const again = held({
+      entries: 2,
+      history: [{ entry_no: 55, entry_date: '2026-09-15', reversed_by: 60 }, { entry_no: 61, entry_date: '2026-09-15', reversed_by: null }],
+    });
+    expect(stockDocumentBooks(one(), again)).toEqual({ entryNo: 61, next: null, earlier: [{ entryNo: 55, reversedBy: 60 }] });
+  });
+
+  it('finds what the journal holds for one by its kind and NetSuite id, an invoice\'s cost apart from anything else under its id', () => {
+    const shipped = held();
+    const costed = held({ source_type: 'invoice_cost', source_id: '8102', document: { number: 'INV2312', deleted: false } });
+    // A receipt's entry under the fulfillment's NetSuite id is another document's, and so is an adjustment's under the invoice's.
+    const other = held({ source_type: 'item_receipt', source_id: '8101' });
+    const adjusted = held({ source_type: 'inventory_adjustment', source_id: '8102' });
+    const postings = new Map([shipped, costed, other, adjusted].map((p) => [postingKey(p.source_type, p.source_id), p]));
+    expect(stockPostingFor(postings, one())).toBe(shipped);
+    expect(stockPostingFor(postings, one(invoiceCost()))).toBe(costed);
+    expect(stockPostingFor(postings, one(fulfillment({ type: 'ItemRcpt' })))).toBe(other);
+    expect(stockPostingFor(postings, one(creditCost({ netsuite_id: '8102' })))).toBe(costed);
+    expect(stockPostingFor(postings, one(fulfillment({ netsuite_id: '8102' })))).toBeUndefined();
+  });
+
+  it('builds an entry that fits what it is compared against once posted', () => {
+    const back = new Map([...ids].map(([ns, id]) => [id, ns]));
+    for (const d of [fulfillment(), fulfillment({ date: '2026-08-31' }), fulfillment({ date: '2026-10-02' }), invoiceCost(), creditCost()]) {
+      const w = one(d);
+      const { entry } = stockJournalEntry(w, 'BMG', 1, ids);
+      const lines = entry!.lines.map((l) => ({
+        account: back.get(l.accountId)!, debit: String(l.debit ?? '0.00'), credit: String(l.credit ?? '0.00'),
+        division: l.division ?? null, source_line_ref: l.sourceLineRef ?? null, customer_id: l.customerId ?? null, vendor_ref: l.vendorRef ?? null,
+      }));
+      const current = { id: 'e61', entry_no: 61, entry_date: entry!.entryDate, lines };
+      expect(decideStockDocument(w, held({ current })), JSON.stringify(d)).toEqual({ kind: 'keep' });
     }
   });
 });

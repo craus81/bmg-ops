@@ -63,7 +63,7 @@ export interface CheckRow {
   line: InvoiceLine | null;
   fleetsuite: RuleLine | null;
   netsuite: NetSuitePosting | null;
-  /** NetSuite booked the cost of the stock sold on this line: left to the fulfillment rule, not compared. */
+  /** NetSuite booked the cost of the stock sold on this line: posted with the stock rule (stock-rule.ts), not compared. */
   cost: boolean;
   same: boolean;
   /** NetSuite's own number for the line, when the copy of NetSuite's GL has it under another one (pairRenumbered). */
@@ -83,11 +83,11 @@ export interface CheckedInvoice {
  * The lines NetSuite booked cost of goods on, by the accounts they went to.
  * An invoice that wasn't fulfilled first relieves the stock itself, on lines
  * of its own: one to a cost of goods sold account, one to the item's
- * inventory asset account. FleetSuite posts that cost with the fulfillment
- * rule, so the invoice rule leaves those lines out. A line that posts to the
- * account the rule posts its item to (its income account, or for an item
- * with none the account NetSuite posts it to) is a sale, whatever that
- * account is.
+ * inventory asset account. FleetSuite posts that cost with the stock rule
+ * (stock-rule.ts), so the invoice rule leaves those lines out. A line that
+ * posts to the account the rule posts its item to (its income account, or
+ * for an item with none the account NetSuite posts it to) is a sale,
+ * whatever that account is.
  */
 export function costLines(lines: InvoiceLine[], netsuite: Map<string, NetSuitePosting>, ctx: CheckContext): Set<string> {
   const out = new Set<string>();
@@ -838,9 +838,9 @@ export function checkMonth(
   if (summary.withCost) {
     notes.push(kind === 'credit_memo'
       ? `${plural(summary.withCost, 'credit memo also books', 'credit memos also book')} the cost of stock coming back, as NetSuite does when `
-        + "items are returned on a credit memo. FleetSuite will post the cost of stock with its own rules, so those lines aren't compared here."
+        + "items are returned on a credit memo. Those lines post under Stock and cost, so they aren't compared here."
       : `${plural(summary.withCost, 'invoice also books', 'invoices also book')} the cost of the stock sold, as NetSuite does when an `
-        + "invoice isn't fulfilled first. FleetSuite will post that cost with the fulfillment rule, so those lines aren't compared here.");
+        + "invoice isn't fulfilled first. Those lines post under Stock and cost, so they aren't compared here.");
   }
   if (notInGl.length) {
     const shown = notInGl.slice(0, 10).join(', ');

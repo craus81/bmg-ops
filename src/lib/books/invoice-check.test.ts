@@ -399,7 +399,7 @@ describe('checkMonth', () => {
     expect(m.notes).toEqual([
       "Where sales tax posts hasn't been read yet. Sync now on the NetSuite lists page reads it.",
       "1 invoice also books the cost of the stock sold, as NetSuite does when an invoice isn't fulfilled first. "
-      + "FleetSuite will post that cost with the fulfillment rule, so those lines aren't compared here.",
+      + "Those lines post under Stock and cost, so they aren't compared here.",
     ]);
     expect(m.reasons.map((r) => r.text)).toEqual([
       "FleetSuite doesn't know where sales tax for Some County posts yet. It learns that from NetSuite's sales tax postings since "
@@ -624,7 +624,7 @@ describe('checkMonth', () => {
     ]);
     expect(m.notes).toEqual([
       '1 credit memo also books the cost of stock coming back, as NetSuite does when items are returned on a credit memo. '
-      + "FleetSuite will post the cost of stock with its own rules, so those lines aren't compared here.",
+      + "Those lines post under Stock and cost, so they aren't compared here.",
       "1 more credit memo dated this month isn't in the copy of NetSuite's GL for either company: CM104. NetSuite may not have posted it, "
       + "or the copy, which runs every two hours, hasn't reached it yet.",
     ]);

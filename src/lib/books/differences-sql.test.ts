@@ -1,9 +1,10 @@
 // Migration 377 puts FleetSuite's journal next to the copy of NetSuite's
 // general ledger for the differences page. This runs migration 314 (with
 // stand-ins for the app tables it points at) and migrations 359–364, 367,
-// 370, 374, 376, 377, 380, 382–387 and 389–392 (383, 386, 390 and 392 give
-// gl_books_difference_documents the deposits, the bills, the bill payments
-// and the checks and card charges) in an in-memory Postgres (PGlite) as the
+// 370, 374, 376, 377, 380, 382–387 and 389–395 (383, 386, 390, 392 and 395
+// give gl_books_difference_documents the deposits, the bills, the bill
+// payments, the checks and card charges, and the cost of goods on invoices)
+// in an in-memory Postgres (PGlite) as the
 // app's server login, copies a made-up month of NetSuite documents, posts
 // FleetSuite's entries for some of them, and holds what the three functions
 // return, and what the page's comparison makes of it.
@@ -58,6 +59,7 @@ async function freshDb(): Promise<PGlite> {
     '377-books-differences.sql', '380-books-netsuite-month.sql', '382-books-customer-deposits.sql', '383-books-deposit-posting.sql',
     '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
+    '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -134,7 +136,7 @@ describe("migration 377's functions", () => {
     db = await freshDb();
 
     // NetSuite's September for BMG.
-    // INV1001 matches: its cost of goods lines (3, 4) are NetSuite's, left for fulfillments.
+    // INV1001 matches, and so do its cost of goods lines (3, 4), which FleetSuite posts apart from it.
     await copyTxn(db, '1001', 'CustInvc', '2026-09-10', SEP, [['0', 'BMG', '120', 10700], ['1', 'BMG', '400', -10000], ['2', 'BMG', '220', -700], ['3', 'BMG', '500', 4000], ['4', 'BMG', '130', -4000]]);
     await mirrorInvoice(db, '1001', '2026-09-10', { lines: [['1', '501'], ['3', '501'], ['4', '501']] });
     // INV1002: FleetSuite's entry was replaced and now says 45.00, NetSuite 50.00.
@@ -169,6 +171,7 @@ describe("migration 377's functions", () => {
 
     // FleetSuite's journal.
     await post(db, entry('invoice', '1001', '2026-09-10', 1, [['120', 10700], ['400', -10000], ['220', -700]]));
+    await post(db, entry('invoice_cost', '1001', '2026-09-10', 1, [['500', 4000], ['130', -4000]]));
     const replaced = await post(db, entry('invoice', '1002', '2026-09-11', 1, [['120', 5000], ['400', -5000]]));
     await db.query('SELECT gl_repost_entry($1::uuid, $2, $3::jsonb)', [
       replaced.id, 'INV1002 changed in NetSuite', JSON.stringify(entry('invoice', '1002', '2026-09-11', 2, [['120', 4500], ['400', -4500]])),
@@ -216,8 +219,10 @@ describe("migration 377's functions", () => {
     expect(sep(data.fleetsuite)).toEqual([
       '110 manual -5.00', '110 payment 107.00',
       '120 invoice 392.00', '120 payment -107.00',
+      '130 invoice_cost -40.00',
       '220 invoice -7.00',
       '400 invoice -355.00',
+      '500 invoice_cost 40.00',
       '510 invoice -30.00',
       '600 manual 5.00',
     ]);
@@ -238,10 +243,10 @@ describe("migration 377's functions", () => {
     ]);
     expect(data.fleetsuite_kinds.filter((k) => k.month === SEP).sort(byKind)).toEqual([
       { month: SEP, kind: 'invoice', documents: 6, moved: '392.00' },
+      { month: SEP, kind: 'invoice_cost', documents: 1, moved: '40.00' },
       { month: SEP, kind: 'manual', documents: 1, moved: '5.00' },
       { month: SEP, kind: 'payment', documents: 1, moved: '107.00' },
     ]);
-    expect(data.cost_accounts).toEqual(['130', '500', '510']);
   });
 
   it('the page compares the month: what FleetSuite posts differs on four accounts, the rest is not posted yet', async () => {
@@ -253,24 +258,24 @@ describe("migration 377's functions", () => {
     expect(rows.map((r) => [r.number, r.fleetsuite, r.netsuite, r.notPosted, r.differs])).toEqual([
       ['1100', 10200, 8700, 0, 1500],
       ['1200', 28500, 13200, 0, 15300],
-      ['1300', 0, -4000, -4000, 0],
+      ['1300', -4000, -4000, 0, 0],
       ['2000', 0, -50000, -50000, 0],
       ['2200', -700, -700, 0, 0],
       ['4000', -35500, -20200, 0, -15300],
-      ['5000', 0, 4000, 4000, 0],
+      ['5000', 4000, 4000, 0, 0],
       ['5100', -3000, -3000, 0, 0],
       ['6000', 500, 52000, 50000, -1500],
     ]);
     expect(cmp.status).toBe('differs');
     expect(cmp.differing).toBe(4);
-    expect(cmp.covered).toBeCloseTo((23900 + 10700 + 2000) / (23900 + 4000 + 10700 + 50000 + 2000));
+    expect(cmp.covered).toBeCloseTo((23900 + 4000 + 10700 + 2000) / (23900 + 4000 + 10700 + 50000 + 2000));
 
     const docs = await documents(SEP);
     expect(kindRows(cmp, docs.counts).map((k) => [k.name, k.state, k.netsuite?.documents ?? null, k.fleetsuite?.documents ?? null, k.differing])).toEqual([
       ['Invoice', 'posted', 6, 6, 7],
       ['Payment', 'posted', 1, 1, 0],
       ['Journal', 'posted', 1, null, 1],
-      ['Cost of goods on invoices', 'cost', 1, null, null],
+      ['Cost of goods on invoices', 'posted', 1, 1, 0],
       ['Expense Report', 'not_posted', 1, null, null],
       ['Typed entry (FleetSuite only)', 'fleetsuite_only', null, 1, null],
     ]);
@@ -280,7 +285,7 @@ describe("migration 377's functions", () => {
     const docs = await documents(SEP);
     expect(docs.counts).toEqual({ invoice: 7, journal_entry: 1 });
     const chart = ACCOUNTS.map(([ns, name]) => ({ id: accountId(ns), netsuite_account_id: ns, number: `${ns}0`, name }));
-    const ctx = { name: accountNamer(chart), costAccounts: new Set(['130', '500', '510']) };
+    const ctx = { name: accountNamer(chart) };
     const explained = docs.documents.map((d) => explainDocument(d, ctx));
     expect(explained.map((d) => [d.number, d.reason, d.fleetsuite, d.netsuite])).toEqual([
       ['INV1003', 'month', 8000, 0],
@@ -359,5 +364,27 @@ describe("migration 377's functions", () => {
       await expect(db.query(`SELECT * FROM gl_netsuite_cost_lines('BMG', NULL)`)).rejects.toThrow(/permission denied/);
     }
     await db.exec('RESET ROLE; SET ROLE service_role');
+  });
+
+  it('lists cost of goods FleetSuite posted for an invoice NetSuite books no cost on, with the invoice\'s copy', async () => {
+    // INV1005 sells item 502 to a cost of goods sold account, which is a sale, not cost.
+    await post(db, entry('invoice_cost', '1005', '2026-09-13', 1, [['500', 1200], ['130', -1200]]));
+    const docs = await documents(SEP);
+    expect(docs.counts).toEqual({ invoice: 7, journal_entry: 1, invoice_cost: 1 });
+    const cost = docs.documents.find((d) => d.kind === 'invoice_cost')!;
+    expect(cost).toMatchObject({
+      netsuite_id: '1005',
+      netsuite: { type: 'CustInvc', number: 'INV1005', date: '2026-09-13', month: SEP },
+      fleetsuite: { entries: 1, standing: { date: '2026-09-13' } },
+      copy: { number: 'INV1005', customer: 'A Customer', voided: false, deleted: false },
+    });
+    const chart = ACCOUNTS.map(([ns, name]) => ({ id: accountId(ns), netsuite_account_id: ns, number: `${ns}0`, name }));
+    expect(explainDocument(cost, { name: accountNamer(chart) })).toMatchObject({
+      number: 'INV1005', customer: 'A Customer', reason: 'no_cost', listKind: 'stock', listMonth: SEP, netsuite: 0, fleetsuite: 1200,
+      lines: [
+        { account: '130', number: '1300', netsuite: 0, fleetsuite: -1200 },
+        { account: '500', number: '5000', netsuite: 0, fleetsuite: 1200 },
+      ],
+    });
   });
 });

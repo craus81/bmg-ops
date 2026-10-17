@@ -24,8 +24,10 @@ payment rule and posted in the same run too, part 12, checks and
 credit card charges and refunds, copied from NetSuite, checked with the
 spending rule and posted in the same run as invoices, part 13,
 NetSuite's journal entries, posted line for line from the copy of its
-general ledger in the same run as invoices, and part 14, its bank deposits
-and transfers, posted the same way.
+general ledger in the same run as invoices, part 14, its bank deposits
+and transfers, posted the same way, and part 15, the documents that move
+its stock and book their cost, with the cost lines of its invoices and
+credit memos, posted the same way too.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices` and the differences at
@@ -80,6 +82,8 @@ the accounts page; the others are linked from there.
 | Journal entry tests | `src/lib/books/journal-entry-rule.test.ts`, `src/lib/books/journal-entry-check.test.ts`, `src/lib/books/journal-entry-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Bank deposits and transfers, checked and posted like journal entries | `migrations/394-books-bank-deposits.sql`, `src/lib/books/bank-rule.ts`, `src/lib/books/bank-check.ts`, `src/lib/books/invoice-posting.ts` |
 | Bank deposit and transfer tests | `src/lib/books/bank-check.test.ts`, `src/lib/books/bank-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
+| Fulfillments, item receipts, inventory adjustments and invoices' cost lines, checked and posted like journal entries | `migrations/395-books-stock-cost.sql`, `src/lib/books/stock-rule.ts`, `src/lib/books/stock-check.ts`, `src/lib/books/invoice-posting.ts` |
+| Stock and cost tests | `src/lib/books/stock-check.test.ts`, `src/lib/books/stock-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -200,9 +204,10 @@ sale.
 Items' COGS accounts aren't copied (owner decision 2026-10-11). NetSuite
 answers 500 for `item.cogsaccount` every time in this account, and asking
 for it sent every run into the slow field-by-field read below. Where an
-item's cost posts will come from NetSuite's own fulfillments, with that
-posting rule. Until then `details.cogs_account`, which migration 363 names,
-stays empty.
+item's cost posts comes from NetSuite's own fulfillments and invoices'
+cost lines instead, which post from the copy of its general ledger as they
+are ("Stock and cost"), so `details.cogs_account`, which migration 363
+names, stays empty.
 
 How a copy works:
 
@@ -408,9 +413,10 @@ count for every month from January 2025.
   have. Posting doesn't change: it goes by the copy's lines.
 - An invoice that wasn't fulfilled first relieves the stock itself: NetSuite
   books its cost on lines of their own, one to a cost of goods account and
-  one to an inventory asset account. FleetSuite will post that cost with the
-  fulfillment rule, so the check leaves those lines out of the invoice's
-  entry and doesn't compare them. They're the lines NetSuite flags itself
+  one to an inventory asset account. FleetSuite posts that cost with the
+  stock rule ("Stock and cost"), so the check leaves those lines out of the
+  invoice's entry and doesn't compare them, and the page says they post
+  under Stock and cost. They're the lines NetSuite flags itself
   (`iscogs`), and any NetSuite posts to a cost of goods sold account or to
   the item's inventory asset account (unless the line goes to the account
   the rule posts its item to), which covers them when the flag can't be
@@ -1346,6 +1352,69 @@ will show it:
 - whether a transfer ever moves money between BMG's and 1084's accounts,
   which would leave each company's lines unbalanced on their own.
 
+## Stock and cost
+
+NetSuite moves stock and books its cost on documents of their own: an item
+fulfillment (NetSuite's ItemShip) takes stock out to cost of goods sold
+when an order ships, an item receipt (ItemRcpt) brings it in against a
+purchase order, an inventory adjustment (InvAdjst) or transfer (InvTrnfr)
+changes or moves it, and an assembly build (Build) turns parts into an
+assembly, or an unbuild (Unbuild) turns it back. An invoice that wasn't
+fulfilled first takes the stock out itself, on cost lines of its own, and a
+credit memo can bring it back the same way; the invoice and credit memo
+rules leave those lines out ("Invoices"). Without them FleetSuite's stock
+accounts and cost of goods sold wouldn't match NetSuite's. Every line of
+them is already in the copy of NetSuite's general ledger, so they post
+from that copy as journal entries do (owner decision 2026-10-17, "Stock and
+cost", posted from the "Ledger copy"), in the same run as invoices, and
+FleetSuite takes NetSuite's costs as they are. The GL copy has no items or
+quantities, so those come later.
+
+The stock rule, `stock@1` (`src/lib/books/stock-rule.ts`), is the journal
+entry rule under its own name: a stock document's lines for a company are
+that company's entry, each to the same account for the same amount, in
+NetSuite's order, with its memo and name. An invoice's or credit memo's
+lines there are only its cost lines, as migration 377's
+`gl_netsuite_cost_lines` recognizes them by their accounts and Differences
+counts them; the rest of it is the invoice rule's. A line of $0 posts
+nothing, and one whose lines for the company don't balance on their own
+can't be worked out.
+
+The **Stock and cost** switch on the invoices page lists each one NetSuite
+booked into the month for the company, from migration 395's
+`gl_stock_month(company, month)`: its number, with what it is beside it
+(Fulfillment, Item receipt, Inventory adjustment, Inventory transfer,
+Assembly build, Assembly unbuild, Invoice cost or Credit memo cost), date,
+first memo and total (its debits), and, opened, its lines next to the
+lines of FleetSuite's entry, as the Journal entries switch shows a journal
+entry. It has no Copy now either, and says when the GL copy last ran.
+
+Every BMG stock document NetSuite booked into a month from January 2025
+posts as a journal entry does: once, in the month NetSuite booked it into,
+reversed and posted again when NetSuite changes what it posts, and
+reversed when the GL copy no longer holds a line of it for the company (for
+an invoice or credit memo, a cost line); 1084's join with its invoices.
+The entries are filed as `item_fulfillment`, `item_receipt`,
+`inventory_adjustment`, `inventory_transfer`, `assembly_build`,
+`assembly_unbuild` and `invoice_cost` (an invoice's and a credit memo's
+cost lines alike, apart from the entry for the sale), keyed
+`<source type>:<NetSuite id>:<n>`, each line with its NetSuite line id and
+memo and the entry's memo its number. `gl_stock_postings` reads what the
+journal holds for each, as `gl_bank_postings` does for bank deposits. The
+posting job and the switch read a month the same way (`gl_stock_month`,
+worked out by `workOutStockMonth` in `src/lib/books/stock-check.ts`), so
+what the page shows is what posts.
+
+Not yet seen in NetSuite's data, so the switch and Differences are what
+will show it:
+
+- whether an inventory transfer or an assembly ever moves stock between
+  BMG and 1084, which would leave each company's lines unbalanced on their
+  own;
+- whether NetSuite books stock on other kinds of documents (a cash sale,
+  say), which Differences would list as not posted yet under their own
+  type.
+
 ## Differences
 
 `/admin/books/differences` puts one company's own journal next to the copy
@@ -1364,18 +1433,21 @@ Each month's NetSuite activity is split by the kind of document behind it:
 - the kinds FleetSuite posts for the company (invoices, credit memos,
   payments, customer deposits, deposit applications, vendor bills, bill
   credits, bill payments, checks, credit card charges, credit card refunds,
-  journal entries, bank deposits and transfers for BMG) should come to the
-  same as FleetSuite's entries for the same documents, matched by
-  NetSuite's internal id;
-- everything else is "not posted yet": the kinds FleetSuite has no rule
-  for, and the cost of goods NetSuite books on an invoice or credit memo
-  that wasn't fulfilled first, which FleetSuite will post with
-  fulfillments. Migration 377's `gl_netsuite_cost_lines` recognizes those
-  lines by their accounts, as the invoice check does: a cost of goods sold
+  journal entries, bank deposits, transfers, item fulfillments, item
+  receipts, inventory adjustments and transfers, assembly builds and
+  unbuilds, and the cost of goods on invoices and credit memos for BMG)
+  should come to the same as FleetSuite's entries for the same documents,
+  matched by NetSuite's internal id. The cost of goods NetSuite books on an
+  invoice or credit memo that wasn't fulfilled first is a kind of its own,
+  posted with the stock rule as `invoice_cost`, and every other kind leaves
+  it out. Migration 377's `gl_netsuite_cost_lines` recognizes those lines
+  by their accounts, as the invoice check does: a cost of goods sold
   account or an item's inventory asset account, unless it is the income
   account of the line's own item. NetSuite's own cost of goods flag isn't
   copied, so a line it flags that went to another kind of account shows as
   a difference here, though the invoice check leaves it out;
+- everything else is "not posted yet": the kinds FleetSuite has no rule
+  for;
 - a FleetSuite entry of a kind NetSuite has no counterpart for (a typed
   entry, an opening balance) is a difference of its own.
 
@@ -1395,32 +1467,36 @@ the page says why for each:
 
 | Why | When |
 | --- | --- |
-| Dated before the books start | A payment, deposit or application NetSuite dated in 2024 and posted to 2025; FleetSuite only posts those dated from 2025 (an invoice, credit memo, bill, bill credit, bill payment, check, card charge, journal entry, bank deposit or transfer like it posts in NetSuite's month) |
+| Dated before the books start | A payment, deposit or application NetSuite dated in 2024 and posted to 2025; FleetSuite only posts those dated from 2025 (an invoice, credit memo, bill, bill credit, bill payment, check, card charge, journal entry, bank deposit, transfer or stock document like it posts in NetSuite's month) |
 | Not posted | FleetSuite has never posted it; Invoices vs NetSuite shows why |
 | Voided | NetSuite voided it and FleetSuite reversed its entry, but the copy of NetSuite's ledger still has lines of it |
 | Reversed | FleetSuite reversed its entry and has none standing |
-| Gone | FleetSuite's entry stands but this company has no line of it in the copy: deleted or voided in NetSuite (the next posting run reverses the entry), or posted to the other company (for a journal entry, bank deposit or transfer, the next posting run reverses that one too) |
-| Another month | FleetSuite's entry is dated in one month, NetSuite posted it to another; for an invoice, credit memo, bill, bill credit, bill payment, check, card charge, journal entry, bank deposit or transfer, until the next posting run moves it |
-| Cost of goods | Same month; only NetSuite's cost of goods lines differ |
+| Gone | FleetSuite's entry stands but this company has no line of it in the copy: deleted or voided in NetSuite (the next posting run reverses the entry), or posted to the other company (for a journal entry, bank deposit, transfer or stock document, the next posting run reverses that one too) |
+| Another month | FleetSuite's entry is dated in one month, NetSuite posted it to another; for an invoice, credit memo, bill, bill credit, bill payment, check, card charge, journal entry, bank deposit, transfer or stock document, until the next posting run moves it |
+| No cost now | FleetSuite posted an invoice's or credit memo's cost of goods, and NetSuite books no cost on it now; the next posting run reverses the entry |
 | Posted differently | Same month, different accounts or amounts |
 
 Each document links to Invoices vs NetSuite (`?company=&kind=&month=&doc=`),
 which opens it with its line by line check, under the month that page lists
 it in: NetSuite's month for an invoice, credit memo, bill, bill credit,
-bill payment, check, card charge, card refund, journal entry, bank deposit
-or transfer (bills and bill credits under the Bills switch, bill payments
+bill payment, check, card charge, card refund, journal entry, bank deposit,
+transfer or stock document (bills and bill credits under the Bills switch, bill payments
 under Bill payments, checks and card charges and refunds under Checks and
 cards, journal entries under Journal entries, bank deposits and transfers
-under Bank deposits and transfers), its own date's for a payment, deposit or
-application (deposits and applications under the Deposits switch). What
+under Bank deposits and transfers, stock documents and invoices' and credit
+memos' cost of goods under Stock and cost), its own date's for a payment,
+deposit or application (deposits and applications under the Deposits
+switch). What
 the copy of NetSuite's documents says of each (its number, customer,
 vendor or payee, and whether it's voided or deleted) comes from the ledger
 mirror for invoices, credit memos and payments, from the deposits copy for
 deposits and applications (migration 383), from the bills copy for bills
 and bill credits (migration 386), from the bill payments copy for bill
 payments (migration 390), and from the checks and cards copy for checks,
-card charges and card refunds (migration 392); a journal entry, bank
-deposit or transfer has no copy but the GL's, which gives its number. When
+card charges and card refunds (migration 392); an invoice's or credit
+memo's cost of goods has the invoice's or credit memo's (migration 395),
+and a journal entry, bank deposit, transfer or other stock document has no
+copy but the GL's, which gives its number. When
 the copy of NetSuite's ledger doesn't yet hold everything NetSuite's own
 totals say a month moved, the page says so, since NetSuite's side is then
 short.
