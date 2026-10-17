@@ -82,6 +82,19 @@ export interface ReportLine {
   /** Null on a section or heading. */
   fleetsuite: number | null;
   netsuite: number | null;
+  /**
+   * On an account line whose two sides differ: each month whose own entries
+   * make up the difference, oldest first. They add up to it.
+   */
+  months?: ReportGap[];
+}
+
+/** What one month's entries add to a line's difference. */
+export interface ReportGap {
+  /** 'YYYY-MM-01'. */
+  month: string;
+  /** FleetSuite's less NetSuite's, as the line shows its amounts. */
+  difference: number;
 }
 
 export interface Report {
@@ -384,15 +397,58 @@ function trialBalanceOf(b: Books, month: string): Report {
   return { lines, differing: counted(lines), totals: { fleetsuite: total('fleetsuite'), netsuite: total('netsuite') } };
 }
 
+/** The first month the profit and loss covers: `from`, unless it's missing or after `to`. */
+const firstMonth = (range: ReportRange) => (range.from && range.from <= range.to ? range.from : range.to);
+
 function reportOf(b: Books, kind: ReportKind, range: ReportRange): Report {
   if (kind === 'balance_sheet') return balanceSheetOf(b, range.to);
   if (kind === 'trial_balance') return trialBalanceOf(b, range.to);
-  return profitAndLossOf(b, range.from && range.from <= range.to ? range.from : range.to, range.to);
+  return profitAndLossOf(b, firstMonth(range), range.to);
 }
 
-/** One report: the profit and loss for the months of the range, or the balance sheet or trial balance at its end. */
+/** The same books with one month's movements on each side and no starting entry, which both sides share. */
+function monthOnly(b: Books, month: string): Books {
+  const moves: Books['moves'] = { fleetsuite: new Map(), netsuite: new Map() };
+  for (const side of SIDES) {
+    for (const [key, list] of b.moves[side]) {
+      const kept = list.filter(([m]) => m === month);
+      if (kept.length) moves[side].set(key, kept);
+    }
+  }
+  return { ...b, opening: new Map(), moves };
+}
+
+const differs = (l: ReportLine) => l.kind === 'account' && l.fleetsuite !== l.netsuite;
+const lineKey = (l: ReportLine) => l.account ?? `derived:${l.label}`;
+
+/**
+ * Each account line that differs, with the months whose entries make up its
+ * difference. Every amount on a report is a sum of movements, so the report
+ * of one month's movements alone is what that month adds to each line.
+ */
+function withMonths(b: Books, kind: ReportKind, range: ReportRange, r: Report): Report {
+  if (!r.lines.some(differs)) return r;
+  const from = kind === 'profit_and_loss' ? firstMonth(range) : '';
+  const months = [...new Set(SIDES.flatMap((side) => [...b.moves[side].values()].flatMap((list) => list.map(([m]) => m))))]
+    .filter((m) => m >= from && m <= range.to)
+    .sort();
+  const gaps = new Map<string, ReportGap[]>();
+  for (const month of months) {
+    for (const l of reportOf(monthOnly(b, month), kind, range).lines.filter(differs)) {
+      gaps.set(lineKey(l), [...(gaps.get(lineKey(l)) ?? []), { month, difference: l.fleetsuite! - l.netsuite! }]);
+    }
+  }
+  return { ...r, lines: r.lines.map((l) => (differs(l) ? { ...l, months: gaps.get(lineKey(l)) ?? [] } : l)) };
+}
+
+/**
+ * One report: the profit and loss for the months of the range, or the
+ * balance sheet or trial balance at its end, each line that differs with the
+ * months that make up its difference.
+ */
 export function report(data: ReportData, kind: ReportKind, range: ReportRange): Report {
-  return reportOf(books(data), kind, range);
+  const b = books(data);
+  return withMonths(b, kind, range, reportOf(b, kind, range));
 }
 
 /**

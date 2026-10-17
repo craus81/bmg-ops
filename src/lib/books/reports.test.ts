@@ -425,3 +425,77 @@ describe('the months', () => {
     expect(lastReportMonth(books({ fleetsuite: [fs('10', '2026-12-01', 100), fs('40', '2026-12-01', -100)] }), '2026-10-01')).toBe('2026-12-01');
   });
 });
+
+describe('the months a line differs in', () => {
+  // On top of February 2026's: 5.00 of owner capital into the bank FleetSuite dated December 2024, 10.00 more rent in FleetSuite in
+  // March 2025, paid from the bank, and a 3.00 bank fee only NetSuite has in January 2026.
+  const data = () => books({
+    fleetsuite: [fs('10', '2024-12-01', 500), fs('30', '2024-12-01', -500), fs('65', '2025-03-01', 1000), fs('10', '2025-03-01', -1000)],
+    netsuite: [ns('90', '2026-01-01', 300), ns('10', '2026-01-01', -300)],
+  });
+  const monthsOf = (lines: ReportLine[], label: string) => lines.find((l) => l.label === label)?.months;
+
+  it('gives each account line that differs the months whose own entries make it differ, as the line shows amounts', () => {
+    const bs = report(data(), 'balance_sheet', { to: '2026-02-01' }).lines;
+    expect(monthsOf(bs, 'Checking')).toEqual([
+      { month: '2024-12-01', difference: 500 },
+      { month: '2025-03-01', difference: -1000 },
+      { month: '2026-01-01', difference: 300 },
+      { month: '2026-02-01', difference: 2500 },
+    ]);
+    expect(monthsOf(bs, 'Owner capital')).toEqual([{ month: '2024-12-01', difference: 500 }]);
+    // An earlier year's net income in retained earnings, this year's in net income.
+    expect(monthsOf(bs, 'Retained Earnings')).toEqual([{ month: '2025-03-01', difference: -1000 }]);
+    expect(monthsOf(bs, 'Net income')).toEqual([{ month: '2026-01-01', difference: 300 }, { month: '2026-02-01', difference: 2500 }]);
+    // Nothing on a line that matches, or on a total.
+    expect(bs.find((l) => l.label === 'Receivables')).not.toHaveProperty('months');
+    expect(bs.filter((l) => l.kind !== 'account' && 'months' in l)).toEqual([]);
+
+    // The profit and loss's, from its own months only.
+    const pl = report(data(), 'profit_and_loss', { from: '2025-01-01', to: '2026-02-01' }).lines;
+    expect(monthsOf(pl, 'Rent')).toEqual([{ month: '2025-03-01', difference: 1000 }, { month: '2026-02-01', difference: -5000 }]);
+    expect(monthsOf(pl, 'Bank fees')).toEqual([{ month: '2026-01-01', difference: -300 }]);
+    expect(monthsOf(report(data(), 'profit_and_loss', { from: '2026-02-01', to: '2026-02-01' }).lines, 'Rent'))
+      .toEqual([{ month: '2026-02-01', difference: -5000 }]);
+
+    // The trial balance's, debit positive, income and expenses for the year to date.
+    const tb = report(data(), 'trial_balance', { to: '2026-02-01' }).lines;
+    expect(monthsOf(tb, 'Rent')).toEqual([{ month: '2026-02-01', difference: -5000 }]);
+    expect(monthsOf(tb, 'Retained Earnings')).toEqual([{ month: '2025-03-01', difference: 1000 }]);
+    expect(monthsOf(tb, 'Owner capital')).toEqual([{ month: '2024-12-01', difference: -500 }]);
+  });
+
+  it('adds up to each line\'s difference, on every report, with a month of nothing left out', () => {
+    const cases: Array<[Parameters<typeof report>[1], Parameters<typeof report>[2]]> = [
+      ['profit_and_loss', { from: '2025-01-01', to: '2026-02-01' }], ['profit_and_loss', { to: '2026-01-01' }],
+      ['balance_sheet', { to: '2025-12-01' }], ['balance_sheet', { to: '2026-02-01' }],
+      ['trial_balance', { to: '2025-12-01' }], ['trial_balance', { to: '2026-02-01' }],
+    ];
+    for (const [kind, range] of cases) {
+      const lines = report(data(), kind, range).lines;
+      const differing = lines.filter((l) => l.kind === 'account' && l.fleetsuite !== l.netsuite);
+      expect(differing.length, `${kind} ${range.to}`).toBeGreaterThan(0);
+      for (const l of differing) {
+        expect(l.months!.reduce((sum, m) => sum + m.difference, 0), `${kind} ${range.to} ${l.label}`).toBe(l.fleetsuite! - l.netsuite!);
+        expect(l.months!.every((m) => m.difference !== 0), `${kind} ${range.to} ${l.label}`).toBe(true);
+      }
+    }
+    // A report that matches has none.
+    expect(report(books(), 'balance_sheet', { to: '2025-12-01' }).lines.filter((l) => 'months' in l)).toEqual([]);
+  });
+
+  it('keeps each line\'s months its own: a month only NetSuite has, two accounts of one name, two lines that are no account', () => {
+    // A second Rent, and no Retained Earnings account, so the balance sheet shows earlier years' net income on a line of its own.
+    const accounts = [...ACCOUNTS.filter((a) => a.id !== 'a39'), account('a66', '66', '6600', 'Rent', 'expense')];
+    // 2.00 of the second Rent, paid from the bank in June 2025, a month only NetSuite has.
+    const data = books({ accounts, netsuite: [ns('66', '2025-06-01', 200), ns('10', '2025-06-01', -200)] });
+
+    const pl = report(data, 'profit_and_loss', { from: '2025-01-01', to: '2026-02-01' }).lines;
+    expect(pl.find((l) => l.account === '65')?.months).toEqual([{ month: '2026-02-01', difference: -5000 }]);
+    expect(pl.find((l) => l.account === '66')?.months).toEqual([{ month: '2025-06-01', difference: -200 }]);
+
+    const bs = report(data, 'balance_sheet', { to: '2026-02-01' }).lines;
+    expect(monthsOf(bs, 'Retained earnings (net income of earlier years)')).toEqual([{ month: '2025-06-01', difference: 200 }]);
+    expect(monthsOf(bs, 'Net income')).toEqual([{ month: '2026-02-01', difference: 2500 }]);
+  });
+});
