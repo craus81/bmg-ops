@@ -23,11 +23,14 @@ import { checkSpendingMonth } from '@/lib/books/spending-check';
 import { BOOKS_SPENDING_SYNC, readSpendingMonth } from '@/lib/books/netsuite-spending';
 import { JOURNAL_ENTRY_RULE } from '@/lib/books/journal-entry-rule';
 import { checkJournalMonth, type JournalMonthData } from '@/lib/books/journal-entry-check';
+import { BANK_RULE } from '@/lib/books/bank-rule';
+import { checkBankMonth, type BankMonthData } from '@/lib/books/bank-check';
 import {
-  BOOKS_INVOICE_POSTING, POSTING_COMPANIES, billBooks, billPaymentBooks, billPostingFor, depositBooks, depositPostingFor, invoiceBooks,
-  journalEntryBooks, paymentBooks, postInvoices, postingFor, postingKey, readBillMonth, spendingBooks, spendingPostingFor, unsaidFacts,
-  type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type JournalEntryPosting, type PaymentPosting,
-  type SpendingPosting,
+  BOOKS_INVOICE_POSTING, POSTING_COMPANIES, bankDocumentBooks, bankPostingFor, billBooks, billPaymentBooks, billPostingFor, depositBooks,
+  depositPostingFor, invoiceBooks, journalEntryBooks, paymentBooks, postInvoices, postingFor, postingKey, readBillMonth, spendingBooks,
+  spendingPostingFor, unsaidFacts,
+  type BankPosting, type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type JournalEntryPosting,
+  type PaymentPosting, type SpendingPosting,
 } from '@/lib/books/invoice-posting';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { compactSuiteqlError } from '@/lib/sales-order-sync';
@@ -55,8 +58,9 @@ const POSTING_BUDGET_MS = 240_000;
  * copy of them from NetSuite went. With `kind=journal_entry` it lists the
  * journal entries NetSuite booked into the month, each one's lines from the
  * copy of NetSuite's GL next to FleetSuite's entry for it (migration 393),
- * with when that copy last ran. With `summary=1` only the counts come back,
- * for checking every month in turn.
+ * and with `kind=bank` its bank deposits and transfers the same way
+ * (migration 394), with when that copy last ran. With `summary=1` only the
+ * counts come back, for checking every month in turn.
  *
  * What the copy of the invoices' lines doesn't keep (which lines are cost of
  * goods, a discount or markup set at the top, each line's own amount,
@@ -66,10 +70,11 @@ const POSTING_BUDGET_MS = 240_000;
  *
  * For a company whose documents post (src/lib/books/invoice-posting.ts),
  * each invoice, credit memo, payment, deposit, application, bill, bill
- * credit, bill payment, check, card charge, card refund or journal entry
- * also says what FleetSuite's books hold for it (migrations 367, 376, 383,
- * 386, 390, 392 and 393) and what the next posting run does about it, or
- * that it has nothing to post, and `lastRun` is how the last one went.
+ * credit, bill payment, check, card charge, card refund, journal entry, bank
+ * deposit or transfer also says what FleetSuite's books hold for it
+ * (migrations 367, 376, 383, 386, 390, 392, 393 and 394) and what the next
+ * posting run does about it, or that it has nothing to post, and `lastRun`
+ * is how the last one went.
  *
  * Super admin only: the books are being built hidden, for the owner, until
  * they're ready (docs/books.md). It only reads.
@@ -112,9 +117,9 @@ export async function GET(req: NextRequest) {
     : months.includes(previous) ? previous : months[0];
 
   const askedKind = params.get('kind');
-  const kind: SalesDocKind | 'payment' | 'deposit' | 'bill' | 'bill_payment' | 'spending' | 'journal_entry' =
+  const kind: SalesDocKind | 'payment' | 'deposit' | 'bill' | 'bill_payment' | 'spending' | 'journal_entry' | 'bank' =
     askedKind === 'credit_memo' || askedKind === 'payment' || askedKind === 'deposit' || askedKind === 'bill' || askedKind === 'bill_payment'
-      || askedKind === 'spending' || askedKind === 'journal_entry'
+      || askedKind === 'spending' || askedKind === 'journal_entry' || askedKind === 'bank'
       ? askedKind
       : 'invoice';
   const chart = accounts.data.map(({ company_id, ...a }) => ({ ...a, company: company_id ? codeOf.get(company_id) ?? null : null }));
@@ -170,6 +175,31 @@ export async function GET(req: NextRequest) {
     if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });
     return NextResponse.json({
       rule: JOURNAL_ENTRY_RULE, kind, ...page, listsCopiedAt: null, glCopiedAt: gl.data?.updated_at ?? null, posts, ...check,
+    });
+  }
+
+  if (kind === 'bank') {
+    // Straight from the copy of NetSuite's GL, as journal entries are.
+    const [res, gl] = await Promise.all([
+      service.rpc('gl_bank_month', { p_company: company, p_month: month }),
+      service.from('sync_state').select('updated_at').eq('sync_type', BOOKS_GL_SYNC).maybeSingle(),
+    ]);
+    const failed = res.error || gl.error;
+    if (failed) return NextResponse.json({ error: failed.message }, { status: 500 });
+    const documents = ((res.data ?? {}) as Partial<BankMonthData>).documents ?? [];
+    let held: Map<string, BankPosting> | null = null;
+    if (posts) {
+      held = new Map();
+      if (documents.length) {
+        const books = await service.rpc('gl_bank_postings', { p_company: company, p_source_ids: documents.map((d) => d.netsuite_id), p_lines: true });
+        if (books.error) return NextResponse.json({ error: books.error.message }, { status: 500 });
+        for (const p of ((books.data as any)?.documents ?? []) as BankPosting[]) held.set(postingKey(p.source_type, p.source_id), p);
+      }
+    }
+    const check = checkBankMonth({ documents }, { company, chart }, held ? (w) => bankDocumentBooks(w, bankPostingFor(held!, w)) : undefined);
+    if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });
+    return NextResponse.json({
+      rule: BANK_RULE, kind, ...page, listsCopiedAt: null, glCopiedAt: gl.data?.updated_at ?? null, posts, ...check,
     });
   }
 
@@ -348,10 +378,10 @@ export async function GET(req: NextRequest) {
 
 /**
  * POST /api/admin/books/invoices — post invoices, credit memos, payments,
- * deposits, bills, bill payments, checks, card charges and journal entries to
- * FleetSuite's books now rather than wait for the two-hourly run. Same job,
- * same record of how it went; the response says only how the run went, the
- * page reloads the rest.
+ * deposits, bills, bill payments, checks, card charges, journal entries, bank
+ * deposits and transfers to FleetSuite's books now rather than wait for the
+ * two-hourly run. Same job, same record of how it went; the response says
+ * only how the run went, the page reloads the rest.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireSuperAdmin(req);

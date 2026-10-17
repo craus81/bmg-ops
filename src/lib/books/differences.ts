@@ -4,6 +4,7 @@ import { BILL_SOURCE_TYPE } from './bill-rule';
 import { BILL_PAYMENT_SOURCE_TYPE } from './bill-payment-rule';
 import { SPENDING_SOURCE_TYPE } from './spending-rule';
 import { JOURNAL_ENTRY_SOURCE_TYPE, JOURNAL_TYPE } from './journal-entry-rule';
+import { BANK_SOURCE_TYPE } from './bank-rule';
 
 /**
  * What still differs between FleetSuite's own books and NetSuite's, and why
@@ -39,19 +40,24 @@ export const NETSUITE_TYPE: Readonly<Record<string, string>> = {
   [SPENDING_SOURCE_TYPE.CardChrg]: 'CardChrg',
   [SPENDING_SOURCE_TYPE.CardRfnd]: 'CardRfnd',
   [JOURNAL_ENTRY_SOURCE_TYPE]: JOURNAL_TYPE,
+  [BANK_SOURCE_TYPE.Deposit]: 'Deposit',
+  [BANK_SOURCE_TYPE.Transfer]: 'Transfer',
 };
 
 const DEPOSIT_KINDS: ReadonlySet<string> = new Set(Object.values(DEPOSIT_SOURCE_TYPE));
 const BILL_KINDS: ReadonlySet<string> = new Set(Object.values(BILL_SOURCE_TYPE));
 const SPENDING_KINDS: ReadonlySet<string> = new Set(Object.values(SPENDING_SOURCE_TYPE));
+const BANK_KINDS: ReadonlySet<string> = new Set(Object.values(BANK_SOURCE_TYPE));
 
 /**
  * The switch of Invoices vs NetSuite that lists a kind of FleetSuite
  * document: deposits and their applications share one, bills and bill
- * credits another, and checks, card charges and card refunds a third.
+ * credits another, checks, card charges and card refunds a third, and bank
+ * deposits and transfers a fourth.
  */
 export const listKindOf = (sourceType: string): string =>
-  (DEPOSIT_KINDS.has(sourceType) ? 'deposit' : BILL_KINDS.has(sourceType) ? 'bill' : SPENDING_KINDS.has(sourceType) ? 'spending' : sourceType);
+  (DEPOSIT_KINDS.has(sourceType) ? 'deposit' : BILL_KINDS.has(sourceType) ? 'bill' : SPENDING_KINDS.has(sourceType) ? 'spending'
+    : BANK_KINDS.has(sourceType) ? 'bank' : sourceType);
 
 /** NetSuite's lines booking the cost of stock on invoices and credit memos (gl_netsuite_cost_lines): FleetSuite posts that with fulfillments. */
 export const COST = 'cost';
@@ -373,7 +379,7 @@ export function kindRows(cmp: MonthComparison, counts: Record<string, number> | 
 export interface DiffDocumentData {
   /**
    * FleetSuite's source type: 'invoice', 'credit_memo', 'payment', 'customer_deposit', 'deposit_application', 'vendor_bill',
-   * 'vendor_credit', 'bill_payment', 'check', 'card_charge', 'card_refund' or 'journal_entry'.
+   * 'vendor_credit', 'bill_payment', 'check', 'card_charge', 'card_refund', 'journal_entry', 'bank_deposit' or 'bank_transfer'.
    */
   kind: string;
   netsuite_id: string;
@@ -388,8 +394,8 @@ export interface DiffDocumentData {
    * bill payments or checks and card charges and refunds (deleted: a deposit,
    * bill, bill payment, check or card charge NetSuite no longer lists); a
    * bill's or bill payment's customer is its vendor, a check's or card
-   * charge's its payee. Null for a journal entry, which has no copy but the
-   * GL's.
+   * charge's its payee. Null for a journal entry, bank deposit or transfer,
+   * which has no copy but the GL's.
    */
   copy: { number: string | null; customer: string | null; voided: boolean; deleted: boolean } | null;
 }
@@ -460,13 +466,16 @@ const NAMED_ACCOUNTS = 2;
 /**
  * FleetSuite's kinds of document that post in the month NetSuite booked them
  * to, whatever their own date (entryDate in invoice-check.ts, migrations 380,
- * 386, 390, 392 and 393), and that Invoices vs NetSuite lists under that
+ * 386, 390, 392, 393 and 394), and that Invoices vs NetSuite lists under that
  * month. Payments, deposits and applications post and are listed by their
  * own date.
  */
 const IN_NETSUITE_MONTH: ReadonlySet<string> = new Set([
-  'invoice', 'credit_memo', ...BILL_KINDS, BILL_PAYMENT_SOURCE_TYPE, ...SPENDING_KINDS, JOURNAL_ENTRY_SOURCE_TYPE,
+  'invoice', 'credit_memo', ...BILL_KINDS, BILL_PAYMENT_SOURCE_TYPE, ...SPENDING_KINDS, JOURNAL_ENTRY_SOURCE_TYPE, ...BANK_KINDS,
 ]);
+
+/** FleetSuite's kinds of document posted line for line from the copy of NetSuite's GL, which have no copy of their own. */
+const FROM_GL_COPY: ReadonlySet<string> = new Set([JOURNAL_ENTRY_SOURCE_TYPE, ...BANK_KINDS]);
 
 function reasonFor(doc: DiffDocumentData, lines: DiffDocumentLine[], costAccounts: ReadonlySet<string>): { reason: DiffReason; why: string } {
   const ns = doc.netsuite;
@@ -493,8 +502,9 @@ function reasonFor(doc: DiffDocumentData, lines: DiffDocumentLine[], costAccount
   if (!ns?.month) {
     if (doc.copy?.deleted) return { reason: 'gone', why: "Deleted in NetSuite. The next posting run reverses FleetSuite's entry." };
     if (doc.copy?.voided) return { reason: 'gone', why: "Voided in NetSuite, which posts nothing for it now. The next posting run reverses FleetSuite's entry." };
-    // A journal entry is the company's only while the copy of NetSuite's ledger has lines of it for the company.
-    if (doc.kind === JOURNAL_ENTRY_SOURCE_TYPE) {
+    // A journal entry, bank deposit or transfer is the company's only while the copy of NetSuite's ledger has lines of it
+    // for the company.
+    if (FROM_GL_COPY.has(doc.kind)) {
       return {
         reason: 'gone',
         why: ns

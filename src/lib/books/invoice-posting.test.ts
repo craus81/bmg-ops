@@ -2,12 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { BooksError } from './journal';
 import { workOutMonth, type ChartAccount, type InvoiceMonthData, type LineFactsRead } from './invoice-check';
 import {
-  billBooks, billJournalEntry, billPaymentBooks, billPaymentJournalEntry, billPostingFor, copiedJournalEntry, decide, decideBill, decideBillPayment,
-  decideDeposit, decideJournalEntry, decidePayment, decideSpending, depositBooks, depositEntryLines, depositJournalEntry, depositPostingFor,
-  entryLines, failureReason, invoiceBooks, invoiceJournalEntry, journalEntryBooks, parsePostingState, paymentBooks, paymentEntryLines,
-  paymentJournalEntry, postingKey, postingQueue, signature, spendingBooks, spendingJournalEntry, spendingPostingFor, unsaidFacts,
-  type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type JournalEntryPosting, type PaymentPosting,
-  type SpendingPosting,
+  bankDocumentBooks, bankJournalEntry, bankPostingFor, billBooks, billJournalEntry, billPaymentBooks, billPaymentJournalEntry, billPostingFor, copiedJournalEntry,
+  decide, decideBankDocument, decideBill, decideBillPayment, decideDeposit, decideJournalEntry, decidePayment, decideSpending, depositBooks,
+  depositEntryLines, depositJournalEntry, depositPostingFor, entryLines, failureReason, invoiceBooks, invoiceJournalEntry, journalEntryBooks,
+  parsePostingState, paymentBooks, paymentEntryLines, paymentJournalEntry, postingKey, postingQueue, signature, spendingBooks, spendingJournalEntry,
+  spendingPostingFor, unsaidFacts,
+  type BankPosting, type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type JournalEntryPosting,
+  type PaymentPosting, type SpendingPosting,
 } from './invoice-posting';
 import { workOutPaymentMonth, type PaymentMonthData } from './payment-check';
 import { workOutDepositMonth, type DepositMonthData } from './deposit-check';
@@ -15,6 +16,7 @@ import { workOutBillMonth, type BillMonthData } from './bill-check';
 import { workOutBillPaymentMonth, type BillPaymentMonthData } from './bill-payment-check';
 import { workOutSpendingMonth, type SpendingMonthData } from './spending-check';
 import { workOutJournalMonth, type JournalMonthData } from './journal-entry-check';
+import { workOutBankMonth, type BankMonthData } from './bank-check';
 
 // Made-up books: '120' receivable, '400' income, '220' sales tax payable.
 const CHART: ChartAccount[] = [
@@ -1200,6 +1202,170 @@ describe('journal entries', () => {
       }));
       const current = { id: 'e41', entry_no: 41, entry_date: entry!.entryDate, lines };
       expect(decideJournalEntry(w, held({ current })), JSON.stringify(e)).toEqual({ kind: 'keep' });
+    }
+  });
+});
+
+describe('bank deposits and transfers', () => {
+  // Made-up books: '100' checking, '105' Undeposited Funds, '110' savings, '120' receivables, '200' payables.
+  const BANK_CHART: ChartAccount[] = [
+    { netsuite_account_id: '100', number: '1000', name: 'Checking', account_type: 'bank', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '105', number: '1050', name: 'Undeposited Funds', account_type: 'other_current_asset', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '110', number: '1100', name: 'Savings', account_type: 'bank', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '120', number: '1200', name: 'Receivables', account_type: 'accounts_receivable', company: null, active: true, is_summary: false },
+    { netsuite_account_id: '200', number: '2000', name: 'Payables', account_type: 'accounts_payable', company: null, active: true, is_summary: false },
+  ];
+  const ids = new Map(['100', '105', '110', '120', '200'].map((a) => [a, `a-${a}`]));
+
+  type Doc = BankMonthData['documents'][number];
+  type Line = Doc['lines'][number];
+  const gl = (lineId: string, account: string, debit: string, credit: string, fields: Partial<Line> = {}): Line => ({
+    line_id: lineId, account, debit, credit, memo: null, entity_id: null, name: null, customer_id: null, ...fields,
+  });
+  // Two customer payments taken out of Undeposited Funds and put in the bank, and a vendor's refund with them.
+  const deposit = (fields: Partial<Doc> = {}): Doc => ({
+    netsuite_id: '8001', type: 'Deposit', number: 'DEP0412', date: '2026-09-15', posting_month: '2026-09-01', companies: ['BMG'],
+    lines: [
+      gl('0', '100', '1525.00', '0.00', { memo: 'Deposit 9/15' }),
+      gl('1', '105', '0.00', '1000.00', { entity_id: '310', name: 'A Customer', customer_id: CUSTOMER }),
+      gl('2', '105', '0.00', '500.00', { entity_id: '311', name: 'Another Customer', memo: 'PMT1977' }),
+      gl('3', '200', '0.00', '25.00', { entity_id: '50', name: 'Sample Supply Co', memo: 'Refund' }),
+    ],
+    ...fields,
+  });
+  // Money moved to savings.
+  const transfer = (fields: Partial<Doc> = {}): Doc => ({
+    netsuite_id: '8002', type: 'Transfer', number: 'TRN0031', date: '2026-09-20', posting_month: '2026-09-01', companies: ['BMG'],
+    lines: [gl('1', '110', '5000.00', '0.00', { memo: 'To savings' }), gl('2', '100', '0.00', '5000.00', { memo: 'To savings' })],
+    ...fields,
+  });
+  const one = (d: Doc = deposit()) => workOutBankMonth({ documents: [d] }, { company: 'BMG', chart: BANK_CHART }).documents[0];
+
+  /** What the journal holds when DEP0412 posted as it is now, as entry 52. */
+  const held = (fields: Partial<BankPosting> = {}): BankPosting => ({
+    source_type: 'bank_deposit',
+    source_id: '8001',
+    entries: 1,
+    unreversed: ['e52'],
+    current: {
+      id: 'e52', entry_no: 52, entry_date: '2026-09-15',
+      lines: [
+        { account: '100', debit: '1525.00', credit: '0.00', division: null, source_line_ref: '0', customer_id: null, vendor_ref: null },
+        { account: '105', debit: '0.00', credit: '1000.00', division: null, source_line_ref: '1', customer_id: null, vendor_ref: null },
+        { account: '105', debit: '0.00', credit: '500.00', division: null, source_line_ref: '2', customer_id: null, vendor_ref: null },
+        { account: '200', debit: '0.00', credit: '25.00', division: null, source_line_ref: '3', customer_id: null, vendor_ref: '50' },
+      ],
+    },
+    history: [{ entry_no: 52, entry_date: '2026-09-15', reversed_by: null }],
+    document: { number: 'DEP0412', deleted: false },
+    ...fields,
+  });
+
+  it('posts its lines as they are under the bank rule, filed as a bank deposit or a transfer, in the month NetSuite booked it into', () => {
+    const { entry } = bankJournalEntry(one(), 'BMG', 2, ids);
+    expect(entry).toMatchObject({
+      company: 'BMG', entryDate: '2026-09-15', sourceType: 'bank_deposit', sourceId: '8001', postingRule: 'bank@1',
+      idempotencyKey: 'bank_deposit:8001:2', memo: 'DEP0412', postedBy: null,
+    });
+    const line = (accountId: string, debit: string | null, credit: string | null, memo: string | null, sourceLineRef: string, vendorRef: string | null = null) => ({
+      accountId, debit, credit, memo, division: null, itemNumber: null, sourceLineRef, customerId: null, vendorRef,
+    });
+    // Undeposited Funds isn't receivables, so no customer goes on it; the vendor goes on the payables line.
+    expect(entry!.lines).toEqual([
+      line('a-100', '1525.00', null, 'Deposit 9/15', '0'),
+      line('a-105', null, '1000.00', 'A Customer', '1'),
+      line('a-105', null, '500.00', 'Another Customer · PMT1977', '2'),
+      line('a-200', null, '25.00', 'Sample Supply Co · Refund', '3', '50'),
+    ]);
+    expect(bankJournalEntry(one(transfer()), 'BMG', 1, ids).entry).toMatchObject({
+      entryDate: '2026-09-20', sourceType: 'bank_transfer', sourceId: '8002', postingRule: 'bank@1', idempotencyKey: 'bank_transfer:8002:1',
+      memo: 'TRN0031',
+      lines: [
+        { accountId: 'a-110', debit: '5000.00', credit: null, memo: 'To savings', sourceLineRef: '1' },
+        { accountId: 'a-100', debit: null, credit: '5000.00', memo: 'To savings', sourceLineRef: '2' },
+      ],
+    });
+    // Dated in August, booked into September: the entry goes on September's first day.
+    expect(bankJournalEntry(one(deposit({ date: '2026-08-31' })), 'BMG', 1, ids).entry!.entryDate).toBe('2026-09-01');
+    // No number: the memo goes by NetSuite's id.
+    expect(bankJournalEntry(one(transfer({ number: null })), 'BMG', 1, ids).entry!.memo).toBe('NetSuite 8002');
+    // A receivables line carries its customer.
+    const counter = deposit({ lines: [gl('0', '100', '25.00', '0.00'), gl('1', '120', '0.00', '25.00', { entity_id: '310', name: 'A Customer', customer_id: CUSTOMER })] });
+    expect(bankJournalEntry(one(counter), 'BMG', 1, ids).entry!.lines.map((l) => [l.accountId, l.customerId])).toEqual([['a-100', null], ['a-120', CUSTOMER]]);
+    expect(bankJournalEntry(one(), 'BMG', 1, new Map([['100', 'a-100']]))).toEqual({ entry: null, missing: ['105', '200'] });
+  });
+
+  it('posts one nothing stands for, keeps one whose entry still fits, and replaces one NetSuite changed', () => {
+    expect(decideBankDocument(one(), undefined)).toEqual({ kind: 'post' });
+    expect(decideBankDocument(one(), held())).toEqual({ kind: 'keep' });
+    // A new number, memo or name only describes.
+    const described = deposit({
+      number: 'DEP0412-A',
+      lines: deposit().lines.map((l) => ({ ...l, memo: `${l.memo ?? ''} (edited)`, name: l.name && `${l.name} Inc` })),
+    });
+    expect(decideBankDocument(one(described), held())).toEqual({ kind: 'keep' });
+    const [bank, first, second, refund] = deposit().lines;
+    const changed: Array<Partial<Doc>> = [
+      { date: '2026-09-16' },
+      // Booked into October now.
+      { posting_month: '2026-10-01' },
+      // A third payment put in with them.
+      { lines: [{ ...bank, debit: '1625.00' }, first, second, refund, gl('4', '105', '0.00', '100.00')] },
+      // Put in savings instead.
+      { lines: [{ ...bank, account: '110' }, first, second, refund] },
+      // Another vendor's refund.
+      { lines: [bank, first, second, { ...refund, entity_id: '51' }] },
+    ];
+    for (const fields of changed) expect(decideBankDocument(one(deposit(fields)), held()), JSON.stringify(fields)).toEqual({ kind: 'replace' });
+  });
+
+  it('reverses the entry of one that comes to nothing now, and leaves whatever stands for one whose lines don\'t balance', () => {
+    const zero = deposit({ lines: [gl('0', '100', '0.00', '0.00'), gl('1', '105', '0.00', '0.00')] });
+    expect(decideBankDocument(one(zero), held())).toEqual({ kind: 'reverse', why: 'nothing' });
+    expect(decideBankDocument(one(zero), undefined)).toEqual({ kind: 'keep', why: 'nothing' });
+    // Money moved to the other company's account: only this company's line is its.
+    const across = transfer({ companies: ['1084', 'BMG'], lines: transfer().lines.slice(1) });
+    expect(decideBankDocument(one(across), held())).toEqual({ kind: 'leave', why: 'unworkable' });
+    expect(decideBankDocument(one(across), undefined)).toEqual({ kind: 'leave', why: 'unworkable' });
+  });
+
+  it('says what the journal holds for one and what the next run does', () => {
+    expect(bankDocumentBooks(one(), undefined)).toEqual({ entryNo: null, next: 'post', earlier: [] });
+    expect(bankDocumentBooks(one(), held())).toEqual({ entryNo: 52, next: null, earlier: [] });
+    expect(bankDocumentBooks(one(deposit({ date: '2026-09-16' })), held()).next).toBe('replace');
+    const zero = deposit({ lines: [gl('0', '100', '0.00', '0.00'), gl('1', '105', '0.00', '0.00')] });
+    expect(bankDocumentBooks(one(zero), held()).next).toBe('reverse');
+    expect(bankDocumentBooks(one(zero), undefined)).toEqual({ entryNo: null, next: null, earlier: [], nothingToPost: 'zero' });
+    // Its first entry, reversed when NetSuite changed the deposit.
+    const again = held({
+      entries: 2,
+      history: [{ entry_no: 44, entry_date: '2026-09-15', reversed_by: 51 }, { entry_no: 52, entry_date: '2026-09-15', reversed_by: null }],
+    });
+    expect(bankDocumentBooks(one(), again)).toEqual({ entryNo: 52, next: null, earlier: [{ entryNo: 44, reversedBy: 51 }] });
+  });
+
+  it('finds what the journal holds for one by its kind and NetSuite id', () => {
+    const deposited = held();
+    const transferred = held({ source_type: 'bank_transfer', source_id: '8002', document: { number: 'TRN0031', deleted: false } });
+    // A transfer's entry under the bank deposit's NetSuite id is another document's.
+    const other = held({ source_type: 'bank_transfer', source_id: '8001' });
+    const postings = new Map([deposited, transferred, other].map((p) => [postingKey(p.source_type, p.source_id), p]));
+    expect(bankPostingFor(postings, one())).toBe(deposited);
+    expect(bankPostingFor(postings, one(transfer()))).toBe(transferred);
+    expect(bankPostingFor(postings, one(deposit({ netsuite_id: '8002' })))).toBeUndefined();
+  });
+
+  it('builds an entry that fits what it is compared against once posted', () => {
+    const back = new Map([...ids].map(([ns, id]) => [id, ns]));
+    for (const d of [deposit(), deposit({ date: '2026-08-31' }), deposit({ date: '2026-10-02' }), transfer()]) {
+      const w = one(d);
+      const { entry } = bankJournalEntry(w, 'BMG', 1, ids);
+      const lines = entry!.lines.map((l) => ({
+        account: back.get(l.accountId)!, debit: String(l.debit ?? '0.00'), credit: String(l.credit ?? '0.00'),
+        division: l.division ?? null, source_line_ref: l.sourceLineRef ?? null, customer_id: l.customerId ?? null, vendor_ref: l.vendorRef ?? null,
+      }));
+      const current = { id: 'e52', entry_no: 52, entry_date: entry!.entryDate, lines };
+      expect(decideBankDocument(w, held({ current })), JSON.stringify(d)).toEqual({ kind: 'keep' });
     }
   });
 });
