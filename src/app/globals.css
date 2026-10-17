@@ -500,8 +500,15 @@ button {
    desktop the second shows alone; on phones the account sits on its own row
    above the amounts, so FleetSuite, NetSuite and Difference fit across the
    screen instead of Difference sitting off the right edge. */
-/* A report is as wide as the screen at most, so iOS mustn't enlarge its text to read. */
-.rep-table { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+/* A report is as wide as the screen at most, so iOS mustn't enlarge its text
+   to read. iOS honors only the -webkit- form, and autoprefixer drops it as
+   outdated for Next's default browsers, which leave iOS out, so it's kept by
+   hand (globals-css.test.ts). */
+.rep-table {
+  /* autoprefixer: ignore next */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 .rep-label-row { display: none; }
 .rep-narrow { display: none; }
 @media (max-width: 640px) {
