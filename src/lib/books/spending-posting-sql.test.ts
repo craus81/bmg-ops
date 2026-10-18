@@ -346,7 +346,7 @@ const DOCS = (): NsSpending[] => [
     ref: '804', type: 'Check', number: '10236', date: '2025-02-24', company: 'BMG', lines: [['1', null, '640', '50.00']],
     gl: [['1', '640', 5000], ['2', '100', -3000], ['3', '220', -2000]],
   },
-  // 1084's don't post yet.
+  // 1084's, which a run for BMG leaves alone.
   { ref: '805', type: 'Check', number: '10250', date: '2025-03-03', company: '1084', from: '106', lines: [['1', null, '615', '80.00']] },
   // Not in the GL copy.
   { ref: '806', type: 'Check', number: '10240', date: '2025-03-04', company: null, lines: [['1', null, '640', '75.00']] },
@@ -426,7 +426,8 @@ describe('the posting job, for checks and card charges and refunds', () => {
 
   // A check's or a card's entry comes from its copied lines and NetSuite's GL, so there's nothing to ask NetSuite.
   const query = async () => { throw new Error('NetSuite was asked about lines'); };
-  const run = (budgetMs = 240_000) => postInvoices(service(), { deadline: clock + budgetMs, deps: { query, now: () => clock } });
+  // A run for BMG's books alone (deps.companies): 1084's documents here are another company's, which it leaves alone.
+  const run = (budgetMs = 240_000) => postInvoices(service(), { deadline: clock + budgetMs, deps: { query, now: () => clock, companies: ['BMG'] } });
 
   /** The journal, entry by entry: a document's entry by its key, a reversal by the entry it reverses. */
   const journal = async () => (await pg.query<{ no: number; date: string; key: string | null; reverses: number | null; memo: string | null }>(

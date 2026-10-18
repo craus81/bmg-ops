@@ -192,6 +192,8 @@ describe('invoiceJournalEntry', () => {
       company: 'BMG', entryDate: '2026-09-15', sourceType: 'invoice', sourceId: '101', postingRule: 'invoice@1',
       idempotencyKey: 'invoice:101:2', memo: 'INV101, A Customer', postedBy: null,
     });
+    // 1084's puts the company in front of its key: the journal takes each key once, whatever the company.
+    expect(invoiceJournalEntry(worked(), '1084', 2, ids).entry).toMatchObject({ company: '1084', idempotencyKey: '1084:invoice:101:2' });
     expect(entry!.lines).toEqual([
       { accountId: 'a-120', debit: '162.00', credit: null, division: null, itemNumber: null, sourceLineRef: '0', customerId: CUSTOMER },
       { accountId: 'a-400', debit: null, credit: '100.00', division: 'upfit', itemNumber: 'PART-A', sourceLineRef: '1', customerId: null },
@@ -314,6 +316,8 @@ describe('payments', () => {
       company: 'BMG', entryDate: '2026-09-10', sourceType: 'payment', sourceId: '201', postingRule: 'payment@1',
       idempotencyKey: 'payment:201:2', memo: 'PMT201, A Customer', postedBy: null,
     });
+    // 1084's puts the company in front of its key.
+    expect(paymentJournalEntry(w, '1084', 2, ids).entry).toMatchObject({ company: '1084', idempotencyKey: '1084:payment:201:2' });
     expect(entry!.lines).toEqual([
       { accountId: 'a-110', debit: '158.76', credit: null, division: null, itemNumber: null, sourceLineRef: 'deposit', customerId: null },
       { accountId: 'a-480', debit: '3.24', credit: null, division: null, itemNumber: null, sourceLineRef: 'discount', customerId: null },
@@ -436,6 +440,8 @@ describe('deposits', () => {
       company: 'BMG', entryDate: '2026-09-10', sourceType: 'customer_deposit', sourceId: '301', postingRule: 'deposit@1',
       idempotencyKey: 'customer_deposit:301:2', memo: 'DEP301, A Customer', postedBy: null,
     });
+    // 1084's puts the company in front of its key.
+    expect(depositJournalEntry(w, '1084', 2, ids).entry).toMatchObject({ company: '1084', idempotencyKey: '1084:customer_deposit:301:2' });
     expect(entry!.lines).toEqual([
       { accountId: 'a-110', debit: '500.00', credit: null, division: null, itemNumber: null, sourceLineRef: 'money', customerId: null },
       { accountId: 'a-230', debit: null, credit: '500.00', division: null, itemNumber: null, sourceLineRef: 'deposits', customerId: CUSTOMER },
@@ -597,6 +603,8 @@ describe('bills', () => {
       company: 'BMG', entryDate: '2026-09-08', sourceType: 'vendor_bill', sourceId: '701', postingRule: 'bill@1',
       idempotencyKey: 'vendor_bill:701:2', memo: 'B-701, Sample Supply Co', postedBy: null,
     });
+    // 1084's puts the company in front of its key.
+    expect(billJournalEntry(one(), '1084', 2, ids).entry).toMatchObject({ company: '1084', idempotencyKey: '1084:vendor_bill:701:2' });
     expect(entry!.lines).toEqual([
       { accountId: 'a-200', debit: null, credit: '650.00', division: null, itemNumber: null, sourceLineRef: 'payables', vendorRef: '50' },
       { accountId: 'a-530', debit: '500.00', credit: null, division: null, itemNumber: null, sourceLineRef: '1', vendorRef: null },
@@ -748,6 +756,8 @@ describe('bill payments', () => {
       company: 'BMG', entryDate: '2026-09-08', sourceType: 'bill_payment', sourceId: '801', postingRule: 'bill_payment@1',
       idempotencyKey: 'bill_payment:801:2', memo: 'CHK1001, Sample Supply Co', postedBy: null,
     });
+    // 1084's puts the company in front of its key.
+    expect(billPaymentJournalEntry(one(), '1084', 2, ids).entry).toMatchObject({ company: '1084', idempotencyKey: '1084:bill_payment:801:2' });
     expect(entry!.lines).toEqual([
       { accountId: 'a-200', debit: '650.00', credit: null, division: null, itemNumber: null, sourceLineRef: 'payables', vendorRef: '50' },
       { accountId: 'a-100', debit: null, credit: '637.00', division: null, itemNumber: null, sourceLineRef: 'paid_from', vendorRef: null },
@@ -941,6 +951,8 @@ describe('checks and card charges', () => {
       company: 'BMG', entryDate: '2026-09-03', sourceType: 'check', sourceId: '801', postingRule: 'spending@1',
       idempotencyKey: 'check:801:2', memo: '10234, Sample Supply Co', postedBy: null,
     });
+    // 1084's puts the company in front of its key.
+    expect(spendingJournalEntry(one(), '1084', 2, ids).entry).toMatchObject({ company: '1084', idempotencyKey: '1084:check:801:2' });
     expect(entry!.lines).toEqual([
       { accountId: 'a-100', debit: null, credit: '165.12', division: null, itemNumber: null, sourceLineRef: 'paid_from' },
       { accountId: 'a-640', debit: '45.12', credit: null, division: null, itemNumber: null, sourceLineRef: '1' },
@@ -1159,6 +1171,8 @@ describe('journal entries', () => {
       company: 'BMG', entryDate: '2026-09-30', sourceType: 'journal_entry', sourceId: '9001', postingRule: 'journal_entry@1',
       idempotencyKey: 'journal_entry:9001:2', memo: 'JE1201', postedBy: null,
     });
+    // 1084's puts the company in front of its key, so a journal entry with lines for both companies posts once for each.
+    expect(copiedJournalEntry(one(), '1084', 2, ids).entry).toMatchObject({ company: '1084', idempotencyKey: '1084:journal_entry:9001:2' });
     const line = (accountId: string, debit: string | null, credit: string | null, memo: string | null, sourceLineRef: string, vendorRef: string | null = null) => ({
       accountId, debit, credit, memo, division: null, itemNumber: null, sourceLineRef, customerId: null, vendorRef,
     });
@@ -1327,6 +1341,8 @@ describe('bank deposits, transfers and customer refunds', () => {
       company: 'BMG', entryDate: '2026-09-15', sourceType: 'bank_deposit', sourceId: '8001', postingRule: 'bank@1',
       idempotencyKey: 'bank_deposit:8001:2', memo: 'DEP0412', postedBy: null,
     });
+    // 1084's puts the company in front of its key.
+    expect(bankJournalEntry(one(), '1084', 2, ids).entry).toMatchObject({ company: '1084', idempotencyKey: '1084:bank_deposit:8001:2' });
     const line = (accountId: string, debit: string | null, credit: string | null, memo: string | null, sourceLineRef: string, vendorRef: string | null = null) => ({
       accountId, debit, credit, memo, division: null, itemNumber: null, sourceLineRef, customerId: null, vendorRef,
     });
@@ -1500,6 +1516,8 @@ describe('stock documents', () => {
       company: 'BMG', entryDate: '2026-09-15', sourceType: 'item_fulfillment', sourceId: '8101', postingRule: 'stock@1',
       idempotencyKey: 'item_fulfillment:8101:2', memo: 'IF1201', postedBy: null,
     });
+    // 1084's puts the company in front of its key.
+    expect(stockJournalEntry(one(), '1084', 2, ids).entry).toMatchObject({ company: '1084', idempotencyKey: '1084:item_fulfillment:8101:2' });
     const line = (accountId: string, debit: string | null, credit: string | null, memo: string | null, sourceLineRef: string) => ({
       accountId, debit, credit, memo, division: null, itemNumber: null, sourceLineRef, customerId: null, vendorRef: null,
     });
@@ -1620,7 +1638,8 @@ describe('failureReason', () => {
 describe('where a run carries on', () => {
   it('reads the stopping point back only when it\'s a posting company and a month', () => {
     expect(parsePostingState({ resume: { company: 'BMG', month: '2025-06-01' } })).toEqual({ resume: { company: 'BMG', month: '2025-06-01' } });
-    for (const bad of [null, {}, { resume: { company: '1084', month: '2025-06-01' } }, { resume: { company: 'BMG', month: "2025-06-01'; --" } }]) {
+    expect(parsePostingState({ resume: { company: '1084', month: '2025-06-01' } })).toEqual({ resume: { company: '1084', month: '2025-06-01' } });
+    for (const bad of [null, {}, { resume: { company: 'ACME', month: '2025-06-01' } }, { resume: { company: 'BMG', month: "2025-06-01'; --" } }]) {
       expect(parsePostingState(bad)).toEqual({ resume: null });
     }
   });
@@ -1631,5 +1650,13 @@ describe('where a run carries on', () => {
     expect(postingQueue(['BMG'], months, { company: 'BMG', month: '2025-02-01' }).map((q) => q.month))
       .toEqual(['2025-02-01', '2025-03-01', '2025-01-01']);
     expect(postingQueue(['BMG'], months, { company: 'BMG', month: '2024-12-01' }).map((q) => q.month)).toEqual(months);
+  });
+
+  it('goes through BMG\'s months, then 1084\'s, and carries on in 1084\'s', () => {
+    const months = ['2025-01-01', '2025-02-01'];
+    const at = (q: { company: string; month: string }) => `${q.company} ${q.month}`;
+    expect(postingQueue(['BMG', '1084'], months, null).map(at)).toEqual(['BMG 2025-01-01', 'BMG 2025-02-01', '1084 2025-01-01', '1084 2025-02-01']);
+    expect(postingQueue(['BMG', '1084'], months, { company: '1084', month: '2025-02-01' }).map(at))
+      .toEqual(['1084 2025-02-01', 'BMG 2025-01-01', 'BMG 2025-02-01', '1084 2025-01-01']);
   });
 });

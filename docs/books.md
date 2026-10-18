@@ -29,8 +29,9 @@ and transfers, posted the same way, part 15, the documents that move
 its stock and book their cost, with the cost lines of its invoices and
 credit memos, posted the same way too, part 16, the profit and loss,
 balance sheet and trial balance from FleetSuite's own books, each next to
-NetSuite's, and part 17, its customer refunds, posted with its bank
-deposits.
+NetSuite's, part 17, its customer refunds, posted with its bank
+deposits, and part 18, 1084 Cool Springs' books, posted in the same run as
+BMG's.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -478,9 +479,8 @@ in NetSuite. The entry keeps the invoice's date when that falls in
 NetSuite's month. Otherwise it takes the month's first day, or its last
 when NetSuite booked it into an earlier month (`entryDate` in
 `src/lib/books/invoice-check.ts`). Invoices vs NetSuite lists such an
-invoice under NetSuite's month, marked with it. 1084's invoices join once
-they've been checked against NetSuite (`POSTING_COMPANIES` in
-`src/lib/books/invoice-posting.ts`). Nothing is written to NetSuite.
+invoice under NetSuite's month, marked with it. 1084's post the same way,
+in the same run (Both companies, below). Nothing is written to NetSuite.
 
 Credit memos post in the same run, the same way (owner decision
 2026-10-14), with the rule `credit_memo@1` and keys of their own
@@ -555,6 +555,42 @@ aren't posted as they should be leaves them out. Until a company's books go
 live the journal can be emptied (`resetJournal`), and the next run posts
 every invoice again.
 
+## Both companies
+
+1084 Cool Springs' books post in the same run as BMG's (owner decision
+2026-10-18, thread "Replacing NetSuite with FleetSuite", "1084's books"),
+once its journal entries, the only kind of document Differences vs
+NetSuite showed for it, matched NetSuite: Check every month on the Journal
+entries switch, with 1084 Cool Springs picked, was green in every month. `POSTING_COMPANIES` in
+`src/lib/books/invoice-posting.ts` names the companies that post. A run
+goes through BMG's months, then 1084's, and carries on from the company and
+month it stopped at. Everything this file says of BMG's documents holds for
+1084's: each posts as 1084's, to 1084's accounts and the ones both
+companies may use, and the journal refuses one on an account limited to
+BMG, which the run names with why.
+
+The journal takes each idempotency key once, whatever the company, so
+1084's entries carry the company in front of their keys
+(`1084:journal_entry:<NetSuite id>:<n>`, and so on for every kind) while
+BMG's keep the form this file gives them (`entryKey`). A document with
+lines for both companies, such as an entry between the two, posts once for
+each: each company's lines are that company's entry, under its own key, and
+a company whose lines don't balance on their own keeps whatever it has.
+Keyed without the company, the second company's entry would have been taken
+for the first's, already posted, and never written.
+
+One run's record covers both companies, so its notes and the documents it
+couldn't post name 1084's with the company in front ("1084's JE1207"); the
+entries' memos keep the number alone. A run cut short for time says how many
+months it went through, counting each company's. With 1084 posting,
+Invoices vs NetSuite shows its Books column and Post now, Differences vs
+NetSuite counts what it posts, and Reports says how many of its months
+match NetSuite rather than that its side holds only the starting balances.
+
+The posting tests run BMG's books alone where they show another company's
+documents left out (`deps.companies`); "once 1084 posts too" in
+`src/lib/books/journal-entry-posting-sql.test.ts` runs both.
+
 ## Payments
 
 The payment rule, `payment@1` (`src/lib/books/payment-rule.ts`), is the
@@ -618,7 +654,7 @@ $0 payment, so a payment in neither company's GL copy is still looked at
 while an entry of it stands: at $0 its entry is reversed, otherwise the copy
 hasn't caught up and it keeps its entry. A payment the rule can't work out
 keeps whatever it has too, and the next run looks again. 1084's payments
-join with its invoices.
+post the same way (Both companies).
 
 Migration 376's `gl_payment_postings` reads what the journal holds for each
 payment, as `gl_invoice_postings` does for invoices: the entry that stands
@@ -753,8 +789,8 @@ its entry reversed, and so does one that comes to nothing now. As for
 payments, one in neither company's GL copy is still looked at while an
 entry of it stands: at $0 its entry is reversed, otherwise the GL copy
 hasn't caught up and it keeps its entry. One the rule can't work out keeps
-whatever it has, and the next run looks again. 1084's join with its
-invoices.
+whatever it has, and the next run looks again. 1084's post the same way
+(Both companies).
 
 Migration 383's `gl_deposit_postings` reads what the journal holds for each
 deposit and application, as `gl_payment_postings` does for payments, and
@@ -932,7 +968,7 @@ name it, as for invoices. One the rule can't work out, or whose lines or GL
 lines aren't copied yet, keeps whatever it has too, and the next run looks
 again. As for payments, one in neither company's GL copy (a bill waiting
 for approval posts nothing) is looked at only while an entry of it stands.
-1084's join with its invoices.
+1084's post the same way (Both companies).
 
 The posting job and the Bills switch read a month the same way
 (`readBillMonth` in `src/lib/books/invoice-posting.ts`: `gl_bill_month`,
@@ -1067,7 +1103,8 @@ the payment's total, so unlike a bill there are no copied lines to wait
 for or to come to the total; one the rule can't work out, or that
 NetSuite's GL copy has nothing of yet, keeps whatever it has, and the next
 run looks again. As for payments, one in neither company's GL copy is
-looked at only while an entry of it stands. 1084's join with its invoices.
+looked at only while an entry of it stands. 1084's post the same way (Both
+companies).
 
 NetSuite voids a bill payment by keeping its lines and booking a journal
 entry that takes each of them back (seen 2026-10-17, when the balance
@@ -1222,7 +1259,7 @@ keeps whatever it has, and the run's notes name it, as for bills. One the
 rule can't work out, or whose lines or GL lines aren't copied yet, keeps
 whatever it has too, and the next run looks again. As for payments, one in
 neither company's GL copy is looked at only while an entry of it stands.
-1084's join with its invoices.
+1084's post the same way (Both companies).
 
 The posting job and the Checks and cards switch read a month the same way
 (`readSpendingMonth` in `src/lib/books/netsuite-spending.ts`:
@@ -1301,8 +1338,8 @@ entry reversed, and so does one that comes to nothing now. NetSuite's
 other way of voiding an entry, a reversing journal entry, is a journal
 entry of its own and posts like any other, as does the one that voids a
 bill payment or check. One whose lines don't balance
-keeps whatever it has, and the run's notes name it. 1084's join with its
-invoices.
+keeps whatever it has, and the run's notes name it. 1084's post the same
+way (Both companies).
 
 The posting job and the Journal entries switch read a month the same way
 (`gl_journal_month`, worked out by `workOutJournalMonth` in
@@ -1315,8 +1352,10 @@ Books column and Post now, as the other switches do.
 Not yet seen in NetSuite's data, so the switch and Differences are what
 will show it:
 
-- whether an entry between BMG and 1084 balances for each company on its
-  own;
+- whether an entry between BMG and 1084 ever doesn't balance for each
+  company on its own: through October 2026 every journal entry balanced
+  for its company (each company's Journal entries switch, Check every
+  month, green in every month by 2026-10-18);
 - whether NetSuite keeps entries of other types that work like journal
   entries (an intercompany journal entry, say), which Differences would
   list as not posted yet under their own type.
@@ -1360,7 +1399,8 @@ Every BMG bank deposit, transfer and refund NetSuite booked into a month
 from January 2025 posts as a journal entry does: once, in the month
 NetSuite booked it into, reversed and posted again when NetSuite changes
 what it posts, and reversed when the GL copy no longer holds a line of it
-for the company; 1084's join with its invoices. A bank deposit's entries
+for the company; 1084's post the same way (Both companies). A bank
+deposit's entries
 are filed as `bank_deposit` and keyed `bank_deposit:<NetSuite id>:<n>`, a
 transfer's as `bank_transfer` and keyed `bank_transfer:<NetSuite id>:<n>`,
 a refund's as `customer_refund` and keyed `customer_refund:<NetSuite
@@ -1426,7 +1466,8 @@ Every BMG stock document NetSuite booked into a month from January 2025
 posts as a journal entry does: once, in the month NetSuite booked it into,
 reversed and posted again when NetSuite changes what it posts, and
 reversed when the GL copy no longer holds a line of it for the company (for
-an invoice or credit memo, a cost line); 1084's join with its invoices.
+an invoice or credit memo, a cost line); 1084's post the same way (Both
+companies).
 The entries are filed as `item_fulfillment`, `item_receipt`,
 `inventory_adjustment`, `inventory_transfer`, `assembly_build`,
 `assembly_unbuild` and `invoice_cost` (an invoice's and a credit memo's

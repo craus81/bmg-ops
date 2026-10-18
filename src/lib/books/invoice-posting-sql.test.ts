@@ -469,7 +469,7 @@ const INVOICES = (): NsInvoice[] => [
   // An item the copy of NetSuite's items doesn't have, so the rule can't work it out.
   { ref: '203', number: 'INV203', date: '2025-02-20', company: 'BMG', lines: [{ id: '1', kind: 'item', item: '77', number: 'NOT-COPIED', amount: '30.00', account: '400' }] },
   { ref: '204', number: 'INV204', date: '2025-03-03', company: 'BMG', customerId: CUSTOMER, lines: [part('40.00')] },
-  // 1084's invoices don't post yet.
+  // 1084's invoices, which a run for BMG leaves alone.
   { ref: '205', number: 'INV205', date: '2025-03-04', company: '1084', lines: [{ id: '1', kind: 'item', item: '12', number: 'RENT', amount: '100.00', account: '401' }] },
   // Its lines aren't copied yet.
   { ref: '206', number: 'INV206', date: '2025-03-05', company: 'BMG', lines: [labor('20.00')] },
@@ -538,7 +538,8 @@ describe('the posting job against the real functions', () => {
     },
   }) as any;
 
-  const run = (budgetMs = 240_000) => postInvoices(service(), { deadline: clock + budgetMs, deps: { query: ns.query, now: () => clock } });
+  // A run for BMG's books alone (deps.companies): 1084's documents here are another company's, which it leaves alone.
+  const run = (budgetMs = 240_000) => postInvoices(service(), { deadline: clock + budgetMs, deps: { query: ns.query, now: () => clock, companies: ['BMG'] } });
   const record = () => store.get(BOOKS_INVOICE_POSTING);
 
   /** The journal, entry by entry: an invoice's entry by its key, a reversal by the entry it reverses. */

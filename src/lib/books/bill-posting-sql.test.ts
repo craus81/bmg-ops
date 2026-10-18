@@ -363,7 +363,7 @@ const BILLS = (): NsBill[] => [
   { ref: '802', type: 'VendCred', number: 'VC-802', date: '2025-02-05', company: 'BMG', total: '120.00', lines: [{ id: '1', item: '902', gl: '610', cents: -12000 }] },
   // An item the copy of NetSuite's items doesn't have yet, so the rule can't work it out.
   { ref: '803', type: 'VendBill', number: 'B-803', date: '2025-02-20', company: 'BMG', total: '50.00', lines: [{ id: '1', item: '999', gl: '530', cents: 5000 }] },
-  // 1084's don't post yet.
+  // 1084's, which a run for BMG leaves alone.
   { ref: '804', type: 'VendBill', number: 'B-804', date: '2025-03-03', company: '1084', total: '80.00', lines: [{ id: '1', account: '615', cents: 8000 }] },
   // Not in the GL copy: waiting for approval.
   { ref: '805', type: 'VendBill', number: 'B-805', date: '2025-03-04', company: null, total: '75.00', lines: [{ id: '1', account: '530', cents: 7500 }] },
@@ -441,7 +441,8 @@ describe('the posting job, for bills', () => {
 
   // The copy keeps bills' lines, so there's nothing to ask NetSuite.
   const query = async () => { throw new Error('NetSuite was asked about lines'); };
-  const run = (budgetMs = 240_000) => postInvoices(service(), { deadline: clock + budgetMs, deps: { query, now: () => clock } });
+  // A run for BMG's books alone (deps.companies): 1084's documents here are another company's, which it leaves alone.
+  const run = (budgetMs = 240_000) => postInvoices(service(), { deadline: clock + budgetMs, deps: { query, now: () => clock, companies: ['BMG'] } });
 
   /** The journal, entry by entry: a document's entry by its key, a reversal by the entry it reverses. */
   const journal = async () => (await pg.query<{ no: number; date: string; key: string | null; reverses: number | null; memo: string | null }>(
