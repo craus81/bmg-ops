@@ -16,9 +16,9 @@ const BUDGET_MS = 240_000;
  * Posts NetSuite's invoices, credit memos, customer payments, customer
  * deposits with their applications, vendor bills and bill credits, bill
  * payments, checks and credit card charges and refunds, journal entries,
- * bank deposits and transfers, and the documents that move stock and book
- * its cost, with invoices' and credit memos' cost lines, to FleetSuite's own
- * books with their rules, replacing an entry when NetSuite changes the
+ * bank deposits, transfers and customer refunds, and the documents that
+ * move stock and book its cost, with invoices' and credit memos' cost lines,
+ * to FleetSuite's own books with their rules, replacing an entry when NetSuite changes the
  * document and reversing it when NetSuite voids or deletes it
  * (src/lib/books/invoice-posting.ts, docs/books.md). Minute 48 is free in
  * vercel.json and .github/workflows/cron-fallback.yml, and odd hours put it

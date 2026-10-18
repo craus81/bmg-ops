@@ -105,8 +105,9 @@ describe('checkBankMonth', () => {
       100: '1000 Checking', 105: '1050 Undeposited Funds', 110: '1100 Savings', 120: '1200 Receivables', 480: '4800 Other Income',
     });
     expect(m.notes).toEqual([
-      '1 bank deposit or transfer dated in another month is here because NetSuite booked it into this month: DEP0398.',
-      "1 bank deposit or transfer also has lines for the other company. Only this company's lines are shown here and make up its entry: DEP0398.",
+      '1 bank deposit, transfer or refund dated in another month is here because NetSuite booked it into this month: DEP0398.',
+      "1 bank deposit, transfer or refund also has lines for the other company. Only this company's lines are shown here and make up its "
+        + 'entry: DEP0398.',
     ]);
   });
 
@@ -137,6 +138,26 @@ describe('checkBankMonth', () => {
     ]);
   });
 
+  it('checks a customer refund as it does a bank deposit, saying it\'s a refund, its receivables line carrying the customer', () => {
+    // A customer paid back a credit they held, out of checking.
+    const refund: BankMonthData = {
+      documents: [monthDocument({
+        netsuite_id: '8008', type: 'CustRfnd', number: 'RFND31', date: '2026-09-18',
+        lines: [
+          gl('0', '100', -25000, { memo: 'Check 4410' }),
+          gl('1', '120', 25000, { entity_id: '310', name: 'A Customer', customer_id: CUSTOMER, memo: 'Overpaid INV1977' }),
+        ],
+      })],
+    };
+    const m = checkBankMonth(refund, { company: 'BMG', chart: CHART });
+    expect(m.summary).toEqual({ invoices: 1, matches: 1, differs: 0, unworkable: 0, waiting: 0, withCost: 0 });
+    expect(m.invoices.map((d) => [d.netsuiteId, d.type, d.number, d.date, d.customer, d.total, d.status])).toEqual([
+      ['8008', 'CustRfnd', 'RFND31', '2026-09-18', 'Check 4410', 25000, 'matches'],
+    ]);
+    expect(workOutBankMonth(refund, { company: 'BMG', chart: CHART }).documents[0].checked.lines.map((l) => [l.account, l.cents, l.memo, l.customerId]))
+      .toEqual([['100', -25000, 'Check 4410', null], ['120', 25000, 'A Customer · Overpaid INV1977', CUSTOMER]]);
+  });
+
   it('names several in one note each, and checks a month with none', () => {
     const m = checkBankMonth({
       documents: [
@@ -145,9 +166,9 @@ describe('checkBankMonth', () => {
       ],
     }, { company: 'BMG', chart: CHART });
     expect(m.notes).toEqual([
-      '2 bank deposits and transfers dated in other months are here because NetSuite booked them into this month: DEP0390, TRN0040.',
-      "2 bank deposits and transfers also have lines for the other company. Only this company's lines are shown here and make up their entry: "
-        + 'DEP0390, TRN0040.',
+      '2 bank deposits, transfers and refunds dated in other months are here because NetSuite booked them into this month: DEP0390, TRN0040.',
+      "2 bank deposits, transfers and refunds also have lines for the other company. Only this company's lines are shown here and make up "
+        + 'their entry: DEP0390, TRN0040.',
     ]);
     expect(checkBankMonth({ documents: [] }, { company: 'BMG', chart: CHART })).toEqual({
       summary: { invoices: 0, matches: 0, differs: 0, unworkable: 0, waiting: 0, withCost: 0 }, reasons: [], notes: [], invoices: [], accounts: {},

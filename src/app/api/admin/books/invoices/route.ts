@@ -60,11 +60,11 @@ const POSTING_BUDGET_MS = 240_000;
  * copy of them from NetSuite went. With `kind=journal_entry` it lists the
  * journal entries NetSuite booked into the month, each one's lines from the
  * copy of NetSuite's GL next to FleetSuite's entry for it (migration 393),
- * with `kind=bank` its bank deposits and transfers the same way (migration
- * 394), and with `kind=stock` its stock documents, the item fulfillments,
- * item receipts, inventory adjustments and transfers, assembly builds and
- * unbuilds and the cost lines of its invoices and credit memos (migration
- * 395), with when that copy last ran. With `summary=1` only the counts come
+ * with `kind=bank` its bank deposits, transfers and customer refunds the
+ * same way (migrations 394 and 399), and with `kind=stock` its stock
+ * documents, the item fulfillments, item receipts, inventory adjustments and
+ * transfers, assembly builds and unbuilds and the cost lines of its invoices
+ * and credit memos (migration 395), with when that copy last ran. With `summary=1` only the counts come
  * back, for checking every month in turn.
  *
  * What the copy of the invoices' lines doesn't keep (which lines are cost of
@@ -76,10 +76,10 @@ const POSTING_BUDGET_MS = 240_000;
  * For a company whose documents post (src/lib/books/invoice-posting.ts),
  * each invoice, credit memo, payment, deposit, application, bill, bill
  * credit, bill payment, check, card charge, card refund, journal entry, bank
- * deposit, transfer or stock document also says what FleetSuite's books hold
- * for it (migrations 367, 376, 383, 386, 390, 392, 393, 394 and 395) and what
- * the next posting run does about it, or that it has nothing to post, and
- * `lastRun` is how the last one went.
+ * deposit, transfer, customer refund or stock document also says what
+ * FleetSuite's books hold for it (migrations 367, 376, 383, 386, 390, 392,
+ * 393, 394, 395 and 399) and what the next posting run does about it, or
+ * that it has nothing to post, and `lastRun` is how the last one went.
  *
  * Super admin only: the books are being built hidden, for the owner, until
  * they're ready (docs/books.md). It only reads.
@@ -409,9 +409,10 @@ export async function GET(req: NextRequest) {
 /**
  * POST /api/admin/books/invoices — post invoices, credit memos, payments,
  * deposits, bills, bill payments, checks, card charges, journal entries, bank
- * deposits, transfers and stock documents to FleetSuite's books now rather
- * than wait for the two-hourly run. Same job, same record of how it went; the
- * response says only how the run went, the page reloads the rest.
+ * deposits, transfers, customer refunds and stock documents to FleetSuite's
+ * books now rather than wait for the two-hourly run. Same job, same record
+ * of how it went; the response says only how the run went, the page reloads
+ * the rest.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireSuperAdmin(req);
