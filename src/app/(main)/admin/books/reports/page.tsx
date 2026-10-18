@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
+import { detailMonths } from '@/lib/books/report-links';
 
 /**
  * Books → Reports (src/lib/books/reports.ts, migration 396, docs/books.md).
@@ -317,8 +318,8 @@ export default function BooksReportsPage() {
   const isTrialBalance = data?.report === 'trial_balance';
   const detailOf = (l: Line): string | null => {
     if (!data || l.kind !== 'account' || !l.account || l.derived) return null;
-    const from = isProfitAndLoss ? data.from : l.yearToDate ? `${data.to.slice(0, 4)}-01-01` : data.to;
-    return deepLinks.booksAccountDetail(data.company, l.account, data.report, from, data.to, data.checked && l.fleetsuite !== l.netsuite);
+    const { from, to } = detailMonths(data.report, l, { from: data.from, to: data.to, first: data.months[0]?.month ?? data.to });
+    return deepLinks.booksAccountDetail(data.company, l.account, data.report, from, to, data.checked && l.fleetsuite !== l.netsuite);
   };
 
   return (
