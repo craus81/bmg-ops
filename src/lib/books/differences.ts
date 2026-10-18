@@ -49,6 +49,7 @@ export const NETSUITE_TYPE: Readonly<Record<string, string>> = {
   [JOURNAL_ENTRY_SOURCE_TYPE]: JOURNAL_TYPE,
   [BANK_SOURCE_TYPE.Deposit]: 'Deposit',
   [BANK_SOURCE_TYPE.Transfer]: 'Transfer',
+  [BANK_SOURCE_TYPE.CustRfnd]: 'CustRfnd',
   [STOCK_SOURCE_TYPE.ItemShip]: 'ItemShip',
   [STOCK_SOURCE_TYPE.ItemRcpt]: 'ItemRcpt',
   [STOCK_SOURCE_TYPE.InvAdjst]: 'InvAdjst',
@@ -69,9 +70,9 @@ const STOCK_KINDS: ReadonlySet<string> = new Set(Object.values(STOCK_SOURCE_TYPE
  * The switch of Invoices vs NetSuite that lists a kind of FleetSuite
  * document: deposits and their applications share one, bills and bill
  * credits another, checks, card charges and card refunds a third, bank
- * deposits and transfers a fourth, and fulfillments, receipts, adjustments
- * and the rest of the stock documents, with invoices' and credit memos' cost
- * lines, a fifth.
+ * deposits, transfers and customer refunds a fourth, and fulfillments,
+ * receipts, adjustments and the rest of the stock documents, with invoices'
+ * and credit memos' cost lines, a fifth.
  */
 export const listKindOf = (sourceType: string): string =>
   (DEPOSIT_KINDS.has(sourceType) ? 'deposit' : BILL_KINDS.has(sourceType) ? 'bill' : SPENDING_KINDS.has(sourceType) ? 'spending'
@@ -393,8 +394,8 @@ export interface DiffDocumentData {
   /**
    * FleetSuite's source type: 'invoice', 'credit_memo', 'payment', 'customer_deposit', 'deposit_application', 'vendor_bill',
    * 'vendor_credit', 'bill_payment', 'check', 'card_charge', 'card_refund', 'journal_entry', 'bank_deposit', 'bank_transfer',
-   * 'item_fulfillment', 'item_receipt', 'inventory_adjustment', 'inventory_transfer', 'assembly_build', 'assembly_unbuild' or
-   * 'invoice_cost' (an invoice's or credit memo's cost lines).
+   * 'customer_refund', 'item_fulfillment', 'item_receipt', 'inventory_adjustment', 'inventory_transfer', 'assembly_build',
+   * 'assembly_unbuild' or 'invoice_cost' (an invoice's or credit memo's cost lines).
    */
   kind: string;
   netsuite_id: string;
@@ -482,7 +483,7 @@ const NAMED_ACCOUNTS = 2;
 /**
  * FleetSuite's kinds of document that post in the month NetSuite booked them
  * to, whatever their own date (entryDate in invoice-check.ts, migrations 380,
- * 386, 390, 392, 393, 394 and 395), and that Invoices vs NetSuite lists under
+ * 386, 390, 392, 393, 394, 395 and 399), and that Invoices vs NetSuite lists under
  * that month. Payments, deposits and applications post and are listed by
  * their own date.
  */

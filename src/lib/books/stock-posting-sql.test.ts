@@ -4,7 +4,7 @@
 // one read of the copy's cost lines; the posting job posts them with the
 // stock rule. This runs migration 314 (with stand-ins for the app tables it
 // points at) and migrations 359–364, 367, 370, 374, 376, 377, 380, 382–387,
-// 389–395 and 397 in an in-memory Postgres (PGlite) as the app's server
+// 389–395, 397 and 399 in an in-memory Postgres (PGlite) as the app's server
 // login and holds the functions' rules, then runs the posting job against
 // them with stock documents only.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
@@ -81,7 +81,7 @@ async function freshDb(): Promise<PGlite> {
     '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql',
-    '397-books-stock-postings-once.sql',
+    '397-books-stock-postings-once.sql', '399-books-customer-refunds.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -735,7 +735,7 @@ describe('the posting job, for stock documents', () => {
     });
     expect(r.notes).toEqual([
       "NetSuite account 299 isn't in the chart of accounts yet, so invoices, credit memos, payments, deposits, bills, bill payments, checks, "
-        + "card charges, journal entries, bank deposits, transfers and stock documents posting there weren't posted. Sync now on the chart of "
+        + "card charges, journal entries, bank deposits, transfers, customer refunds and stock documents posting there weren't posted. Sync now on the chart of "
         + 'accounts page copies them.',
     ]);
     expect((await journal()).slice(-1).map((e) => e.key)).toEqual(['item_fulfillment:8112:1']);
@@ -782,7 +782,7 @@ describe('the posting job, for stock documents', () => {
     const kinds: Array<[string, string]> = [
       ['invoice', 'invoices and credit memos'], ['payment', 'payments'], ['deposit', 'deposits'], ['bill', 'bills'],
       ['bill_payment', 'bill payments'], ['spending', 'checks and cards'], ['journal', 'journal entries'],
-      ['bank', 'bank deposits and transfers'],
+      ['bank', 'bank deposits, transfers and refunds'],
     ];
     for (const [kind, words] of kinds) {
       reads.push(

@@ -1257,7 +1257,7 @@ describe('journal entries', () => {
   });
 });
 
-describe('bank deposits and transfers', () => {
+describe('bank deposits, transfers and customer refunds', () => {
   // Made-up books: '100' checking, '105' Undeposited Funds, '110' savings, '120' receivables, '200' payables.
   const BANK_CHART: ChartAccount[] = [
     { netsuite_account_id: '100', number: '1000', name: 'Checking', account_type: 'bank', company: null, active: true, is_summary: false },
@@ -1288,6 +1288,15 @@ describe('bank deposits and transfers', () => {
   const transfer = (fields: Partial<Doc> = {}): Doc => ({
     netsuite_id: '8002', type: 'Transfer', number: 'TRN0031', date: '2026-09-20', posting_month: '2026-09-01', companies: ['BMG'],
     lines: [gl('1', '110', '5000.00', '0.00', { memo: 'To savings' }), gl('2', '100', '0.00', '5000.00', { memo: 'To savings' })],
+    ...fields,
+  });
+  // A customer paid back a credit they held, out of checking.
+  const refund = (fields: Partial<Doc> = {}): Doc => ({
+    netsuite_id: '8003', type: 'CustRfnd', number: 'RFND31', date: '2026-09-18', posting_month: '2026-09-01', companies: ['BMG'],
+    lines: [
+      gl('0', '100', '0.00', '250.00', { memo: 'Check 4410' }),
+      gl('1', '120', '250.00', '0.00', { entity_id: '310', name: 'A Customer', customer_id: CUSTOMER, memo: 'Overpaid INV1977' }),
+    ],
     ...fields,
   });
   const one = (d: Doc = deposit()) => workOutBankMonth({ documents: [d] }, { company: 'BMG', chart: BANK_CHART }).documents[0];
@@ -1334,6 +1343,15 @@ describe('bank deposits and transfers', () => {
       lines: [
         { accountId: 'a-110', debit: '5000.00', credit: null, memo: 'To savings', sourceLineRef: '1' },
         { accountId: 'a-100', debit: null, credit: '5000.00', memo: 'To savings', sourceLineRef: '2' },
+      ],
+    });
+    // A customer refund is filed as one, its receivables line carrying the customer.
+    expect(bankJournalEntry(one(refund()), 'BMG', 1, ids).entry).toMatchObject({
+      entryDate: '2026-09-18', sourceType: 'customer_refund', sourceId: '8003', postingRule: 'bank@1', idempotencyKey: 'customer_refund:8003:1',
+      memo: 'RFND31',
+      lines: [
+        { accountId: 'a-100', debit: null, credit: '250.00', memo: 'Check 4410', sourceLineRef: '0', customerId: null },
+        { accountId: 'a-120', debit: '250.00', credit: null, memo: 'A Customer · Overpaid INV1977', sourceLineRef: '1', customerId: CUSTOMER },
       ],
     });
     // Dated in August, booked into September: the entry goes on September's first day.
@@ -1398,17 +1416,20 @@ describe('bank deposits and transfers', () => {
   it('finds what the journal holds for one by its kind and NetSuite id', () => {
     const deposited = held();
     const transferred = held({ source_type: 'bank_transfer', source_id: '8002', document: { number: 'TRN0031', deleted: false } });
-    // A transfer's entry under the bank deposit's NetSuite id is another document's.
-    const other = held({ source_type: 'bank_transfer', source_id: '8001' });
-    const postings = new Map([deposited, transferred, other].map((p) => [postingKey(p.source_type, p.source_id), p]));
+    const refunded = held({ source_type: 'customer_refund', source_id: '8003', document: { number: 'RFND31', deleted: false } });
+    // A transfer's or refund's entry under the bank deposit's NetSuite id is another document's.
+    const others = [held({ source_type: 'bank_transfer', source_id: '8001' }), held({ source_type: 'customer_refund', source_id: '8001' })];
+    const postings = new Map([deposited, transferred, refunded, ...others].map((p) => [postingKey(p.source_type, p.source_id), p]));
     expect(bankPostingFor(postings, one())).toBe(deposited);
     expect(bankPostingFor(postings, one(transfer()))).toBe(transferred);
+    expect(bankPostingFor(postings, one(refund()))).toBe(refunded);
     expect(bankPostingFor(postings, one(deposit({ netsuite_id: '8002' })))).toBeUndefined();
+    expect(bankPostingFor(postings, one(deposit({ netsuite_id: '8003' })))).toBeUndefined();
   });
 
   it('builds an entry that fits what it is compared against once posted', () => {
     const back = new Map([...ids].map(([ns, id]) => [id, ns]));
-    for (const d of [deposit(), deposit({ date: '2026-08-31' }), deposit({ date: '2026-10-02' }), transfer()]) {
+    for (const d of [deposit(), deposit({ date: '2026-08-31' }), deposit({ date: '2026-10-02' }), transfer(), refund()]) {
       const w = one(d);
       const { entry } = bankJournalEntry(w, 'BMG', 1, ids);
       const lines = entry!.lines.map((l) => ({

@@ -1,12 +1,12 @@
 // Migration 394 reads one company's NetSuite bank deposits and transfers for
 // a month from the copy of NetSuite's GL, and what the journal holds for
-// them; the posting job posts them with the bank rule. This runs migration
-// 314 (with stand-ins for the app tables it points at) and migrations
-// 359–364, 367, 370, 374, 376, 377, 380, 382–387 and 389–394, with the one
-// the job reads stock documents through (395 and 397), in an in-memory Postgres
-// (PGlite) as the app's server login and holds the
-// functions' rules, then runs the posting job against them with bank
-// deposits and transfers only.
+// them, and migration 399 its customer refunds with them; the posting job
+// posts them with the bank rule. This runs migration 314 (with stand-ins for
+// the app tables it points at) and migrations 359–364, 367, 370, 374, 376,
+// 377, 380, 382–387, 389–394 and 399, with the ones the job reads stock
+// documents through (395 and 397), in an in-memory Postgres (PGlite) as the
+// app's server login and holds the functions' rules, then runs the posting
+// job against them with bank deposits, transfers and refunds only.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -53,7 +53,9 @@ const OTHER_CUSTOMER = '7a2b8c63-9b5c-4c9f-8b1e-3e0d2a1c8d22';
 const JAN = '2025-01-01';
 const FEB = '2025-02-01';
 const MAR = '2025-03-01';
-const BANK_KINDS = { bank_deposit: NETSUITE_TYPE.bank_deposit, bank_transfer: NETSUITE_TYPE.bank_transfer };
+const BANK_KINDS = {
+  bank_deposit: NETSUITE_TYPE.bank_deposit, bank_transfer: NETSUITE_TYPE.bank_transfer, customer_refund: NETSUITE_TYPE.customer_refund,
+};
 
 async function freshDb(): Promise<PGlite> {
   const pg = new PGlite();
@@ -78,7 +80,7 @@ async function freshDb(): Promise<PGlite> {
     '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql',
-    '397-books-stock-postings-once.sql',
+    '397-books-stock-postings-once.sql', '399-books-customer-refunds.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -121,7 +123,7 @@ type NsLine = [string, Company, string, number, (string | null)?, (string | null
 
 interface NsDocument {
   ref: string;
-  /** NetSuite's transaction type: 'Deposit' or 'Transfer', or another to show it isn't read. */
+  /** NetSuite's transaction type: 'Deposit', 'Transfer' or 'CustRfnd', or another to show it isn't read. */
   type: string;
   number: string | null;
   date: string;
@@ -156,7 +158,7 @@ async function copy(pg: PGlite, d: NsDocument) {
 
 // ── The functions ──────────────────────────────────────────────────────────
 
-describe('migration 394\'s functions', () => {
+describe('migration 394\'s functions, as migration 399 leaves them', () => {
   let db: PGlite;
   beforeAll(async () => {
     db = await freshDb();
@@ -176,6 +178,11 @@ describe('migration 394\'s functions', () => {
       ref: '8002', type: 'Transfer', number: 'TRN0031', date: '2025-03-20',
       lines: [['1', 'BMG', '110', 500000, 'To savings'], ['2', 'BMG', '100', -500000, 'To savings']],
     });
+    // A customer paid back a credit they held, out of checking.
+    await copy(db, {
+      ref: '8009', type: 'CustRfnd', number: 'RFND31', date: '2025-03-18',
+      lines: [['0', 'BMG', '100', -25000, 'Check 4410'], ['1', 'BMG', '120', 25000, 'Overpaid INV1977', '310']],
+    });
     // One with lines for both companies.
     await copy(db, {
       ref: '8004', type: 'Transfer', number: 'TRN0032', date: '2025-03-20',
@@ -194,17 +201,18 @@ describe('migration 394\'s functions', () => {
   const one = async <T>(sql: string, params: unknown[] = []) => (await db.query<{ r: T }>(sql, params)).rows[0].r;
   const month = (company: string, m: string) => one<BankMonthData>('SELECT gl_bank_month($1, $2::date) AS r', [company, m]);
 
-  it('gl_bank_month gives the company\'s bank deposits and transfers NetSuite booked into the month, each with its lines for the company', async () => {
+  it('gl_bank_month gives the company\'s bank deposits, transfers and customer refunds NetSuite booked into the month, each with its lines for the company', async () => {
     const mar = await month('BMG', MAR);
     // By date, then number; not 1084's, April's, the journal entry or the customer deposit.
     expect(mar.documents.map((d) => [d.netsuite_id, d.type, d.number, d.date, d.posting_month, d.companies])).toEqual([
       ['8006', 'Deposit', null, '2025-02-28', MAR, ['BMG']],
       ['8001', 'Deposit', 'DEP0412', '2025-03-15', MAR, ['BMG']],
       ['8003', 'Deposit', 'DEP0413', '2025-03-15', MAR, ['BMG']],
+      ['8009', 'CustRfnd', 'RFND31', '2025-03-18', MAR, ['BMG']],
       ['8002', 'Transfer', 'TRN0031', '2025-03-20', MAR, ['BMG']],
       ['8004', 'Transfer', 'TRN0032', '2025-03-20', MAR, ['1084', 'BMG']],
     ]);
-    const [, deposited, refunded, , shared] = mar.documents;
+    const [, deposited, refunded, paidBack, , shared] = mar.documents;
     // In NetSuite's order, 2 before 10, with a customer's name from the ledger mirror, and the FleetSuite customer only when
     // the mirror matched it by its NetSuite id.
     expect(deposited.lines).toEqual([
@@ -217,6 +225,14 @@ describe('migration 394\'s functions', () => {
     ]);
     // A vendor's name from the vendors copy, never an item's.
     expect(refunded.lines.map((l) => [l.entity_id, l.name, l.customer_id])).toEqual([[null, null, null], ['50', 'Sample Supply Co', null], ['59', null, null]]);
+    // A customer refund's receivables line names its customer.
+    expect(paidBack.lines).toEqual([
+      { line_id: '0', account: '100', debit: '0.00', credit: '250.00', memo: 'Check 4410', entity_id: null, name: null, customer_id: null },
+      {
+        line_id: '1', account: '120', debit: '250.00', credit: '0.00', memo: 'Overpaid INV1977', entity_id: '310', name: 'A Customer',
+        customer_id: CUSTOMER,
+      },
+    ]);
     // Only this company's lines of one with lines for both.
     expect(shared.lines.map((l) => [l.line_id, l.account])).toEqual([['1', '110'], ['2', '100']]);
 
@@ -274,6 +290,16 @@ describe('migration 394\'s functions', () => {
     await post(entry('BMG', 'bank_deposit:8008:1', '8008', '12.00', { memo: 'DEP0418' }));
     await post(entry('BMG', 'bank_deposit:8002:1', '8002', '1.00', { memo: 'TRN0031' }));
     await post(entry('BMG', 'bank_transfer:9001:1', '9001', '20.00', { source_type: 'bank_transfer', memo: 'JE1201' }));
+    // A customer refund's, its receivables line carrying the customer, and one filed as a customer refund under a bank
+    // deposit's NetSuite id, which is another document's.
+    await post(entry('BMG', 'customer_refund:8009:1', '8009', '250.00', {
+      source_type: 'customer_refund', entry_date: '2025-03-18', memo: 'RFND31',
+      lines: [
+        { account_id: accountId('100'), credit: '250.00', source_line_ref: '0', memo: 'Check 4410' },
+        { account_id: accountId('120'), debit: '250.00', source_line_ref: '1', customer_id: CUSTOMER, memo: 'A Customer · Overpaid INV1977' },
+      ],
+    }));
+    await post(entry('BMG', 'customer_refund:8001:1', '8001', '3.00', { source_type: 'customer_refund', memo: 'DEP0412' }));
     // 1084's.
     const other = await post(entry('1084', 'bank_deposit:8005:1-1084', '8005', '80.00', { memo: 'DEP0414' }));
     // A journal entry's entry under a bank deposit's NetSuite id is another document's, and one filed as a bank deposit
@@ -288,15 +314,17 @@ describe('migration 394\'s functions', () => {
     // Once the copy no longer has one, the newest entry's memo gives its number.
     expect(held.map((p) => [p.source_type, p.source_id, p.entries, p.document])).toEqual([
       ['bank_deposit', '8001', 2, { number: 'DEP0412', deleted: false }],
+      ['customer_refund', '8001', 1, { number: 'DEP0412', deleted: true }],
       ['bank_deposit', '8002', 1, { number: 'TRN0031', deleted: true }],
       ['bank_transfer', '8002', 1, { number: 'TRN0031', deleted: false }],
       ['bank_deposit', '8003', 1, { number: 'DEP0413', deleted: false }],
       ['bank_deposit', '8005', 1, { number: 'DEP0414', deleted: true }],
       ['bank_deposit', '8008', 1, { number: 'DEP0418', deleted: true }],
+      ['customer_refund', '8009', 1, { number: 'RFND31', deleted: false }],
       ['bank_transfer', '8010', 2, { number: 'TRN0040-A', deleted: true }],
       ['bank_transfer', '9001', 1, { number: 'JE1201', deleted: true }],
     ]);
-    expect(held[6]).toMatchObject({
+    expect(held.find((p) => p.source_id === '8010')).toMatchObject({
       unreversed: [newer.id, older.id],
       current: { id: newer.id, entry_no: newer.entry_no, entry_date: '2025-04-11', lines: null },
     });
@@ -314,7 +342,7 @@ describe('migration 394\'s functions', () => {
     });
 
     // Only the ones asked about, with the lines of the entry that stands: the customer on receivables, the vendor on payables.
-    const asked = await postings('BMG', ['8003', '8002', '9999'], true);
+    const asked = await postings('BMG', ['8003', '8002', '8009', '9999'], true);
     expect(asked.map((p) => [p.source_type, p.source_id, p.current?.lines])).toEqual([
       ['bank_deposit', '8002', [
         { account: '100', debit: '1.00', credit: '0.00', division: null, source_line_ref: '1', customer_id: null, vendor_ref: null },
@@ -328,6 +356,10 @@ describe('migration 394\'s functions', () => {
         { account: '100', debit: '32.00', credit: '0.00', division: null, source_line_ref: '0', customer_id: null, vendor_ref: null },
         { account: '200', debit: '0.00', credit: '25.00', division: null, source_line_ref: '1', customer_id: null, vendor_ref: '50' },
         { account: '120', debit: '0.00', credit: '7.00', division: null, source_line_ref: '2', customer_id: CUSTOMER, vendor_ref: null },
+      ]],
+      ['customer_refund', '8009', [
+        { account: '100', debit: '0.00', credit: '250.00', division: null, source_line_ref: '0', customer_id: null, vendor_ref: null },
+        { account: '120', debit: '250.00', credit: '0.00', division: null, source_line_ref: '1', customer_id: CUSTOMER, vendor_ref: null },
       ]],
     ]);
     expect((await postings('1084', null, false)).map((p) => [p.source_id, p.current?.id, p.document])).toEqual([
@@ -492,8 +524,9 @@ describe('the posting job, for bank deposits and transfers', () => {
     expect(r).toMatchObject({ months: [JAN, FEB, MAR], posted: 6, replaced: 0, reversed: 0, unchanged: 0, left: 1, failedCount: 0 });
     expect(r.error).toBeUndefined();
     expect(r.notes).toEqual([
-      "FleetSuite can't post 1 bank deposit or transfer, as its lines for the company don't balance on their own, so whatever FleetSuite "
-        + 'holds for it stayed as it is: TRN0017. The Bank deposits and transfers switch on Invoices vs NetSuite shows its lines.',
+      "FleetSuite can't post 1 bank deposit, transfer or refund, as its lines for the company don't balance on their own, so whatever "
+        + 'FleetSuite holds for it stayed as it is: TRN0017. The Bank deposits, transfers and refunds switch on Invoices vs NetSuite shows '
+        + 'its lines.',
     ]);
 
     // Not TRN0012 (1084's), TRN0017 (doesn't balance for BMG) or DEP0109 ($0).
@@ -645,7 +678,7 @@ describe('the posting job, for bank deposits and transfers', () => {
     });
     expect(r.notes).toEqual([
       "NetSuite account 299 isn't in the chart of accounts yet, so invoices, credit memos, payments, deposits, bills, bill payments, checks, "
-        + "card charges, journal entries, bank deposits, transfers and stock documents posting there weren't posted. Sync now on the chart of accounts page copies them.",
+        + "card charges, journal entries, bank deposits, transfers, customer refunds and stock documents posting there weren't posted. Sync now on the chart of accounts page copies them.",
     ]);
     expect((await journal()).slice(-1).map((e) => e.key)).toEqual(['bank_deposit:8011:1']);
 
@@ -682,10 +715,10 @@ describe('the posting job, for bank deposits and transfers', () => {
     const before = await journal();
     // Each error says what it was reading.
     const reads: Array<[string, (args: Record<string, unknown>) => boolean, string]> = [
-      ['gl_bank_month', () => true, "BMG's bank deposits and transfers for Jan 2025"],
+      ['gl_bank_month', () => true, "BMG's bank deposits, transfers and refunds for Jan 2025"],
       // Step 1's read of every entry, then a month's read of its documents' entries.
-      ['gl_bank_postings', (args) => args.p_source_ids === null, "the journal's entries for BMG's bank deposits and transfers"],
-      ['gl_bank_postings', (args) => args.p_source_ids !== null, "the journal's entries for BMG's bank deposits and transfers in Jan 2025"],
+      ['gl_bank_postings', (args) => args.p_source_ids === null, "the journal's entries for BMG's bank deposits, transfers and refunds"],
+      ['gl_bank_postings', (args) => args.p_source_ids !== null, "the journal's entries for BMG's bank deposits, transfers and refunds in Jan 2025"],
     ];
     for (const [fn, when, what] of reads) {
       failing.set(fn, when);
@@ -711,10 +744,46 @@ describe('the posting job, for bank deposits and transfers', () => {
     const r = await run();
     expect(r).toMatchObject({ posted: 0, replaced: 0, reversed: 0, left: 2, failedCount: 0 });
     expect(r.notes).toEqual([
-      "FleetSuite can't post 2 bank deposits and transfers, as their lines for the company don't balance on their own, so whatever FleetSuite "
-        + 'holds for them stayed as it is: TRN0017, DEP0114. The Bank deposits and transfers switch on Invoices vs NetSuite shows their lines.',
+      "FleetSuite can't post 2 bank deposits, transfers and refunds, as their lines for the company don't balance on their own, so "
+        + 'whatever FleetSuite holds for them stayed as it is: TRN0017, DEP0114. The Bank deposits, transfers and refunds switch on '
+        + 'Invoices vs NetSuite shows their lines.',
     ]);
     expect(await journal()).toEqual(before);
     expect((await differing(MAR)).counts).toEqual({ bank_deposit: 1, bank_transfer: 1 });
+  });
+
+  it('posts a customer refund the same way, filed as one, its receivables line carrying the customer, and reverses it once NetSuite deletes it', async () => {
+    // A customer paid back a credit they held, out of checking, and another, matched to a FleetSuite customer only by hand, out
+    // of Undeposited Funds.
+    await add({
+      ref: '8015', type: 'CustRfnd', number: 'RFND101', date: '2025-02-10',
+      lines: [['0', 'BMG', '100', -25000, 'Check 4410'], ['1', 'BMG', '120', 25000, 'Overpaid INV1977', '310']],
+    });
+    await add({ ref: '8016', type: 'CustRfnd', number: 'RFND102', date: '2025-03-12', lines: [['0', 'BMG', '105', -5000], ['1', 'BMG', '120', 5000, null, '311']] });
+
+    expect(await run()).toMatchObject({ posted: 2, replaced: 0, reversed: 0, failedCount: 0 });
+    const posted = (await journal()).slice(-2);
+    expect(posted.map((e) => [e.date, e.key, e.memo])).toEqual([
+      ['2025-02-10', 'customer_refund:8015:1', 'RFND101'], ['2025-03-12', 'customer_refund:8016:1', 'RFND102'],
+    ]);
+    expect(await ruleOf(posted[0].no)).toEqual({ rule: 'bank@1', type: 'customer_refund', source: '8015' });
+    expect(await linesOf(posted[0].no)).toEqual([
+      { account: '100', debit: '0.00', credit: '250.00', memo: 'Check 4410', customer: null, vendor_ref: null, source_line_ref: '0' },
+      { account: '120', debit: '250.00', credit: '0.00', memo: 'A Customer · Overpaid INV1977', customer: CUSTOMER, vendor_ref: null, source_line_ref: '1' },
+    ]);
+    // A customer matched only by hand goes on no line, as on a bank deposit.
+    expect((await linesOf(posted[1].no)).map((l: any) => [l.account, l.debit, l.credit, l.memo, l.customer])).toEqual([
+      ['105', '0.00', '50.00', null, null], ['120', '50.00', '0.00', 'Hand-matched Customer', null],
+    ]);
+    // What's posted comes to NetSuite's, and the next run changes nothing.
+    expect((await differing(FEB)).counts).toEqual({});
+    expect(await run()).toMatchObject({ posted: 0, replaced: 0, reversed: 0 });
+
+    // NetSuite deletes one: its entry is reversed, once.
+    await edit('8015', (d) => { d.gone = true; });
+    expect(await run()).toMatchObject({ posted: 0, replaced: 0, reversed: 1 });
+    expect((await journal()).slice(-1).map((e) => [e.reverses, e.memo])).toEqual([[posted[0].no, 'RFND101 deleted in NetSuite']]);
+    expect(await run()).toMatchObject({ posted: 0, replaced: 0, reversed: 0 });
+    expect((await differing(FEB)).counts).toEqual({});
   });
 });

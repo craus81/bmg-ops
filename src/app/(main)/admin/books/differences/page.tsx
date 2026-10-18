@@ -61,7 +61,7 @@ const DOC_NAMES: Record<string, string> = {
   invoice: 'Invoice', credit_memo: 'Credit memo', payment: 'Payment', customer_deposit: 'Deposit', deposit_application: 'Deposit application',
   vendor_bill: 'Bill', vendor_credit: 'Bill credit', bill_payment: 'Bill payment',
   check: 'Check', card_charge: 'Card charge', card_refund: 'Card refund', journal_entry: 'Journal entry',
-  bank_deposit: 'Bank deposit', bank_transfer: 'Transfer',
+  bank_deposit: 'Bank deposit', bank_transfer: 'Transfer', customer_refund: 'Customer refund',
   item_fulfillment: 'Fulfillment', item_receipt: 'Item receipt', inventory_adjustment: 'Inventory adjustment',
   inventory_transfer: 'Inventory transfer', assembly_build: 'Assembly build', assembly_unbuild: 'Assembly unbuild',
   invoice_cost: 'Cost of goods',

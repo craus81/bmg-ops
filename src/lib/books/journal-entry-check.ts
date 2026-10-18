@@ -15,9 +15,9 @@ import { journalEntryLines, lineMemo, type JournalLine, type JournalProblem, typ
  * line for line; one whose lines don't balance can't be posted. Pure;
  * amounts are whole cents, debit positive.
  *
- * Bank deposits and transfers post line for line the same way
- * (src/lib/books/bank-check.ts), so the month's work here takes any document
- * posted from the GL copy.
+ * Bank deposits, transfers and customer refunds post line for line the same
+ * way (src/lib/books/bank-check.ts), so the month's work here takes any
+ * document posted from the GL copy.
  */
 
 /**

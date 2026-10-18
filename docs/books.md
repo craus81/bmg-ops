@@ -27,9 +27,10 @@ NetSuite's journal entries, posted line for line from the copy of its
 general ledger in the same run as invoices, part 14, its bank deposits
 and transfers, posted the same way, part 15, the documents that move
 its stock and book their cost, with the cost lines of its invoices and
-credit memos, posted the same way too, and part 16, the profit and loss,
+credit memos, posted the same way too, part 16, the profit and loss,
 balance sheet and trial balance from FleetSuite's own books, each next to
-NetSuite's.
+NetSuite's, and part 17, its customer refunds, posted with its bank
+deposits.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -83,8 +84,8 @@ the accounts page; the others are linked from there.
 | Journal entry rule and its check, on the invoices page | `src/lib/books/journal-entry-rule.ts`, `src/lib/books/journal-entry-check.ts` |
 | Journal entries posted to the journal, with invoices | `migrations/393-books-journal-entries.sql`, `src/lib/books/invoice-posting.ts` |
 | Journal entry tests | `src/lib/books/journal-entry-rule.test.ts`, `src/lib/books/journal-entry-check.test.ts`, `src/lib/books/journal-entry-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
-| Bank deposits and transfers, checked and posted like journal entries | `migrations/394-books-bank-deposits.sql`, `src/lib/books/bank-rule.ts`, `src/lib/books/bank-check.ts`, `src/lib/books/invoice-posting.ts` |
-| Bank deposit and transfer tests | `src/lib/books/bank-check.test.ts`, `src/lib/books/bank-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
+| Bank deposits, transfers and customer refunds, checked and posted like journal entries | `migrations/394-books-bank-deposits.sql`, `migrations/399-books-customer-refunds.sql`, `src/lib/books/bank-rule.ts`, `src/lib/books/bank-check.ts`, `src/lib/books/invoice-posting.ts` |
+| Bank deposit, transfer and refund tests | `src/lib/books/bank-check.test.ts`, `src/lib/books/bank-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Fulfillments, item receipts, inventory adjustments and invoices' cost lines, checked and posted like journal entries | `migrations/395-books-stock-cost.sql`, `migrations/397-books-stock-postings-once.sql`, `src/lib/books/stock-rule.ts`, `src/lib/books/stock-check.ts`, `src/lib/books/invoice-posting.ts` |
 | Stock and cost tests | `src/lib/books/stock-check.test.ts`, `src/lib/books/stock-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Reports from FleetSuite's own books | `migrations/396-books-reports.sql`, `src/lib/books/reports.ts`, `src/app/(main)/admin/books/reports/page.tsx`, `src/app/api/admin/books/reports/route.ts` |
@@ -726,9 +727,9 @@ Not yet seen in NetSuite's data, so the check is what will show it:
   the documents' totals (the copy keeps them positive);
 - that refunding a deposit goes through an application.
 
-Refunds themselves (CustRfnd) aren't copied. Bank deposits (Deposit) post
-from the copy of NetSuite's general ledger ("Bank deposits and
-transfers").
+Refunds themselves (CustRfnd) aren't copied: they post with bank deposits
+(Deposit) from the copy of NetSuite's general ledger ("Bank deposits,
+transfers and refunds").
 
 ### Posting deposits
 
@@ -1320,7 +1321,7 @@ will show it:
   entries (an intercompany journal entry, say), which Differences would
   list as not posted yet under their own type.
 
-## Bank deposits and transfers
+## Bank deposits, transfers and refunds
 
 A bank deposit (NetSuite's Deposit) puts money into a bank account, most
 often the customer payments waiting in Undeposited Funds, which is where a
@@ -1332,31 +1333,39 @@ copy of NetSuite's general ledger, so they post from that copy as journal
 entries do (owner decision 2026-10-17, "Bank deposits", "From the ledger
 copy"), in the same run as invoices.
 
+A customer refund (NetSuite's CustRfnd) pays a customer back a credit they
+hold, such as an overpayment, out of Undeposited Funds or a bank account,
+debiting receivables. Refunds post the same way, with bank deposits and
+transfers (owner decision 2026-10-18, "Build it", migration 399): the
+balance sheet check had shown receivables low and Undeposited Funds or the
+bank high by exactly two refunds, whose payments had posted.
+
 The bank rule, `bank@1` (`src/lib/books/bank-rule.ts`), is the journal
-entry rule under its own name: a bank deposit's or transfer's lines for a
-company are that company's entry, each to the same account for the same
-amount, in NetSuite's order, with its memo and name, a receivables line's
-customer and a payables line's vendor. A line of $0 posts nothing, and one
-whose lines for the company don't balance on their own can't be worked
-out.
+entry rule under its own name: a bank deposit's, transfer's or refund's
+lines for a company are that company's entry, each to the same account for
+the same amount, in NetSuite's order, with its memo and name, a receivables
+line's customer and a payables line's vendor. A line of $0 posts nothing,
+and one whose lines for the company don't balance on their own can't be
+worked out.
 
-The **Bank deposits and transfers** switch on the invoices page lists each
-one NetSuite booked into the month for the company, from migration 394's
-`gl_bank_month(company, month)`: its number, with Bank deposit or Transfer
-beside it, date, first memo and total (its debits), and, opened, its lines
-next to the lines of FleetSuite's entry, as the Journal entries switch
-shows a journal entry. It has no Copy now either, and says when the GL
-copy last ran.
+The **Bank deposits, transfers and refunds** switch on the invoices page
+lists each one NetSuite booked into the month for the company, from
+`gl_bank_month(company, month)` (migrations 394 and 399): its number, with
+Bank deposit, Transfer or Customer refund beside it, date, first memo and
+total (its debits), and, opened, its lines next to the lines of
+FleetSuite's entry, as the Journal entries switch shows a journal entry. It
+has no Copy now either, and says when the GL copy last ran.
 
-Every BMG bank deposit and transfer NetSuite booked into a month from
-January 2025 posts as a journal entry does: once, in the month NetSuite
-booked it into, reversed and posted again when NetSuite changes what it
-posts, and reversed when the GL copy no longer holds a line of it for the
-company; 1084's join with its invoices. A bank deposit's entries are filed
-as `bank_deposit` and keyed `bank_deposit:<NetSuite id>:<n>`, a transfer's
-as `bank_transfer` and keyed `bank_transfer:<NetSuite id>:<n>`, each line
-with its NetSuite line id and memo and the entry's memo its number.
-`gl_bank_postings` reads what the journal holds for each, as
+Every BMG bank deposit, transfer and refund NetSuite booked into a month
+from January 2025 posts as a journal entry does: once, in the month
+NetSuite booked it into, reversed and posted again when NetSuite changes
+what it posts, and reversed when the GL copy no longer holds a line of it
+for the company; 1084's join with its invoices. A bank deposit's entries
+are filed as `bank_deposit` and keyed `bank_deposit:<NetSuite id>:<n>`, a
+transfer's as `bank_transfer` and keyed `bank_transfer:<NetSuite id>:<n>`,
+a refund's as `customer_refund` and keyed `customer_refund:<NetSuite
+id>:<n>`, each line with its NetSuite line id and memo and the entry's memo
+its number. `gl_bank_postings` reads what the journal holds for each, as
 `gl_journal_postings` does for journal entries. The posting job and the
 switch read a month the same way (`gl_bank_month`, worked out by
 `workOutBankMonth` in `src/lib/books/bank-check.ts`), so what the page
@@ -1368,7 +1377,13 @@ will show it:
 - whether a bank deposit's cash back or other deposit lines name anyone
   FleetSuite knows;
 - whether a transfer ever moves money between BMG's and 1084's accounts,
-  which would leave each company's lines unbalanced on their own.
+  which would leave each company's lines unbalanced on their own;
+- that a refund's lines are a receivables line naming its customer and the
+  account the money left, as the two refunds behind the balance sheet
+  differences moved receivables against Undeposited Funds and a bank
+  account; and how NetSuite voids one. Either way FleetSuite posts what the
+  GL copy holds of it, so a void that keeps its lines and books a journal
+  entry taking them back posts both halves, as NetSuite does.
 
 ## Stock and cost
 
@@ -1456,8 +1471,8 @@ Each month's NetSuite activity is split by the kind of document behind it:
 - the kinds FleetSuite posts for the company (invoices, credit memos,
   payments, customer deposits, deposit applications, vendor bills, bill
   credits, bill payments, checks, credit card charges, credit card refunds,
-  journal entries, bank deposits, transfers, item fulfillments, item
-  receipts, inventory adjustments and transfers, assembly builds and
+  journal entries, bank deposits, transfers, customer refunds, item
+  fulfillments, item receipts, inventory adjustments and transfers, assembly builds and
   unbuilds, and the cost of goods on invoices and credit memos for BMG)
   should come to the same as FleetSuite's entries for the same documents,
   matched by NetSuite's internal id. The cost of goods NetSuite books on an
@@ -1490,12 +1505,12 @@ the page says why for each:
 
 | Why | When |
 | --- | --- |
-| Dated before the books start | A payment, deposit or application NetSuite dated in 2024 and posted to 2025; FleetSuite only posts those dated from 2025 (an invoice, credit memo, bill, bill credit, bill payment, check, card charge, journal entry, bank deposit, transfer or stock document like it posts in NetSuite's month) |
+| Dated before the books start | A payment, deposit or application NetSuite dated in 2024 and posted to 2025; FleetSuite only posts those dated from 2025 (an invoice, credit memo, bill, bill credit, bill payment, check, card charge, journal entry, bank deposit, transfer, customer refund or stock document like it posts in NetSuite's month) |
 | Not posted | FleetSuite has never posted it; Invoices vs NetSuite shows why |
 | Voided | NetSuite voided it and FleetSuite reversed its entry, but the copy of NetSuite's ledger still has lines of it (a bill payment, check, card charge or refund like it posts again on the next run) |
 | Reversed | FleetSuite reversed its entry and has none standing |
-| Gone | FleetSuite's entry stands but this company has no line of it in the copy: deleted or voided in NetSuite (the next posting run reverses the entry), or posted to the other company (for a journal entry, bank deposit, transfer or stock document, the next posting run reverses that one too) |
-| Another month | FleetSuite's entry is dated in one month, NetSuite posted it to another; for an invoice, credit memo, bill, bill credit, bill payment, check, card charge, journal entry, bank deposit, transfer or stock document, until the next posting run moves it |
+| Gone | FleetSuite's entry stands but this company has no line of it in the copy: deleted or voided in NetSuite (the next posting run reverses the entry), or posted to the other company (for a journal entry, bank deposit, transfer, customer refund or stock document, the next posting run reverses that one too) |
+| Another month | FleetSuite's entry is dated in one month, NetSuite posted it to another; for an invoice, credit memo, bill, bill credit, bill payment, check, card charge, journal entry, bank deposit, transfer, customer refund or stock document, until the next posting run moves it |
 | No cost now | FleetSuite posted an invoice's or credit memo's cost of goods, and NetSuite books no cost on it now; the next posting run reverses the entry |
 | Posted differently | Same month, different accounts or amounts |
 
@@ -1503,10 +1518,10 @@ Each document links to Invoices vs NetSuite (`?company=&kind=&month=&doc=`),
 which opens it with its line by line check, under the month that page lists
 it in: NetSuite's month for an invoice, credit memo, bill, bill credit,
 bill payment, check, card charge, card refund, journal entry, bank deposit,
-transfer or stock document (bills and bill credits under the Bills switch, bill payments
+transfer, customer refund or stock document (bills and bill credits under the Bills switch, bill payments
 under Bill payments, checks and card charges and refunds under Checks and
-cards, journal entries under Journal entries, bank deposits and transfers
-under Bank deposits and transfers, stock documents and invoices' and credit
+cards, journal entries under Journal entries, bank deposits, transfers and
+customer refunds under Bank deposits, transfers and refunds, stock documents and invoices' and credit
 memos' cost of goods under Stock and cost), its own date's for a payment,
 deposit or application (deposits and applications under the Deposits
 switch). What
@@ -1518,8 +1533,8 @@ and bill credits (migration 386), from the bill payments copy for bill
 payments (migration 390), and from the checks and cards copy for checks,
 card charges and card refunds (migration 392); an invoice's or credit
 memo's cost of goods has the invoice's or credit memo's (migration 395),
-and a journal entry, bank deposit, transfer or other stock document has no
-copy but the GL's, which gives its number. When
+and a journal entry, bank deposit, transfer, customer refund or other stock
+document has no copy but the GL's, which gives its number. When
 the copy of NetSuite's ledger doesn't yet hold everything NetSuite's own
 totals say a month moved, the page says so, since NetSuite's side is then
 short.

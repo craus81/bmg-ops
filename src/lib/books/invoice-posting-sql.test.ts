@@ -4,9 +4,9 @@
 // NetSuite has made inactive since. This runs migration 314 (with stand-ins
 // for the app tables it points at) and migrations 359–364, 367, 370, 380 and
 // 387, with the ones the job reads payments, deposits, bills, bill
-// payments, checks, card charges, journal entries, bank deposits, transfers
-// and stock documents through (374, 376, 377, 382–386, 389–395 and
-// 397), in an in-memory
+// payments, checks, card charges, journal entries, bank deposits, transfers,
+// refunds and stock documents through (374, 376, 377, 382–386, 389–395, 397
+// and 399), in an in-memory
 // Postgres (PGlite) as the app's server login and holds the functions'
 // rules, then runs the posting job against them with a fake NetSuite that
 // answers the job's own SuiteQL.
@@ -75,7 +75,7 @@ async function freshDb(): Promise<PGlite> {
     '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql',
-    '397-books-stock-postings-once.sql',
+    '397-books-stock-postings-once.sql', '399-books-customer-refunds.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -767,7 +767,7 @@ describe('the posting job against the real functions', () => {
         ],
       });
       expect(r.notes).toEqual([
-        "NetSuite account 420 isn't in the chart of accounts yet, so invoices, credit memos, payments, deposits, bills, bill payments, checks, card charges, journal entries, bank deposits, transfers and stock documents posting there weren't posted. Sync now on the chart of accounts page copies them.",
+        "NetSuite account 420 isn't in the chart of accounts yet, so invoices, credit memos, payments, deposits, bills, bill payments, checks, card charges, journal entries, bank deposits, transfers, customer refunds and stock documents posting there weren't posted. Sync now on the chart of accounts page copies them.",
       ]);
       // The inactive account takes the invoice NetSuite posted to it; nothing else changed.
       const after = await journal();

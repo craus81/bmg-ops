@@ -8,10 +8,10 @@ import { apiFetch } from '@/lib/api-client';
 
 /**
  * Books → Invoices vs NetSuite (migrations 364, 367, 370, 374, 376, 382, 383,
- * 384, 386, 389, 390, 391, 392, 393, 394 and 395, docs/books.md "Invoices",
- * "Payments", "Customer deposits", "Vendor bills", "Bill payments", "Checks
- * and card charges", "Journal entries", "Bank deposits and transfers" and
- * "Stock and cost").
+ * 384, 386, 389, 390, 391, 392, 393, 394, 395 and 399, docs/books.md
+ * "Invoices", "Payments", "Customer deposits", "Vendor bills", "Bill
+ * payments", "Checks and card charges", "Journal entries", "Bank deposits,
+ * transfers and refunds" and "Stock and cost").
  *
  * FleetSuite works out its own entry for every NetSuite invoice with the
  * invoice rule, and for every credit memo with the same rule the other way
@@ -28,7 +28,8 @@ import { apiFetch } from '@/lib/api-client';
  * card charges and refunds are copied the same way, checked with the
  * spending rule, and post in the same run as well. NetSuite's journal
  * entries come straight from the copy of its GL, line for line, and post in
- * the same run too, and so do its bank deposits and transfers, and the
+ * the same run too, and so do its bank deposits, transfers and customer
+ * refunds, and the
  * documents that move its stock and book their cost, with the cost lines of
  * its invoices and credit memos. Super admins only while the books are
  * built, linked from the other books pages.
@@ -54,8 +55,11 @@ const WORDS: Record<Kind, { one: string; many: string; title: string; head: stri
   // And the Checks and cards switch lists checks, card charges and card refunds.
   spending: { one: 'check, card charge or refund', many: 'checks, card charges and refunds', title: 'Checks and cards', head: 'Number' },
   journal_entry: { one: 'journal entry', many: 'journal entries', title: 'Journal entries', head: 'Number' },
-  // And the Bank deposits and transfers switch lists both.
-  bank: { one: 'bank deposit or transfer', many: 'bank deposits and transfers', title: 'Bank deposits and transfers', head: 'Number' },
+  // And the Bank deposits, transfers and refunds switch lists all three, the refunds being customers'.
+  bank: {
+    one: 'bank deposit, transfer or refund', many: 'bank deposits, transfers and refunds', title: 'Bank deposits, transfers and refunds',
+    head: 'Number',
+  },
   // And the Stock and cost switch lists fulfillments, receipts, adjustments and the rest, and invoices' and credit memos' cost lines.
   stock: { one: 'stock document', many: 'stock documents', title: 'Stock and cost', head: 'Number' },
 };
@@ -72,8 +76,11 @@ const VENDOR_KINDS: ReadonlySet<Kind> = new Set(['bill', 'bill_payment']);
 /** What each check and card document is called, and its chip in the list. */
 const SPENDING_WORDS: Record<'Check' | 'CardChrg' | 'CardRfnd', string> = { Check: 'check', CardChrg: 'card charge', CardRfnd: 'card refund' };
 
-/** And each bank deposit and transfer: "deposit" alone would be taken for a customer deposit. */
-const BANK_WORDS: Record<'Deposit' | 'Transfer', string> = { Deposit: 'bank deposit', Transfer: 'transfer' };
+type BankType = 'Deposit' | 'Transfer' | 'CustRfnd';
+
+/** And each bank deposit, transfer and refund: "deposit" alone would be taken for a customer deposit, "refund" for a card's. */
+const BANK_WORDS: Record<BankType, string> = { Deposit: 'bank deposit', Transfer: 'transfer', CustRfnd: 'customer refund' };
+const isBank = (type: Invoice['type']): type is BankType => !!type && type in BANK_WORDS;
 
 type StockType = 'ItemShip' | 'ItemRcpt' | 'InvAdjst' | 'InvTrnfr' | 'Build' | 'Unbuild' | 'CustInvc' | 'CustCred';
 
@@ -192,9 +199,9 @@ interface Invoice {
   applied?: Array<{ number: string; cents: number | null; date?: string }>;
   /**
    * A deposit's or deposit application's, a bill's or bill credit's, a bill payment's, a check's or card charge's or refund's, a
-   * bank deposit's or transfer's, a stock document's.
+   * bank deposit's, transfer's or customer refund's, a stock document's.
    */
-  type?: 'CustDep' | 'DepAppl' | 'VendBill' | 'VendCred' | 'VendPymt' | 'Check' | 'CardChrg' | 'CardRfnd' | 'Deposit' | 'Transfer' | StockType;
+  type?: 'CustDep' | 'DepAppl' | 'VendBill' | 'VendCred' | 'VendPymt' | 'Check' | 'CardChrg' | 'CardRfnd' | BankType | StockType;
   /** NetSuite's status for a deposit, application, bill, bill credit, bill payment, check or card charge, in its words. */
   netsuiteStatus?: string;
   /** An application's: the deposit it applies. */
@@ -224,11 +231,11 @@ interface Payload {
   listsCopiedAt: string | null;
   /**
    * Whether this company's invoices, credit memos, payments, deposits, bills, bill payments, checks, card charges, journal entries,
-   * bank deposits, transfers and stock documents post to FleetSuite's books yet.
+   * bank deposits, transfers, customer refunds and stock documents post to FleetSuite's books yet.
    */
   posts: boolean;
   /**
-   * Journal entries, bank deposits and transfers, and stock documents only: when the copy of NetSuite's GL they come from last ran;
+   * Journal entries, bank deposits, transfers and refunds, and stock documents only: when the copy of NetSuite's GL they come from last ran;
    * null before the first.
    */
   glCopiedAt?: string | null;
@@ -664,14 +671,15 @@ export default function BooksInvoicesPage() {
             ) : kind === 'bank' ? (
               <>
                 NetSuite&apos;s bank deposits put money into a bank account, most often the customer payments waiting in
-                Undeposited Funds, and its transfers move money from one bank account to another. They come from the copy of
+                Undeposited Funds, its transfers move money from one bank account to another, and its customer refunds pay a
+                customer back a credit they hold, out of Undeposited Funds or a bank account. They come from the copy of
                 NetSuite&apos;s GL, which runs every two hours and already holds every line of them, so there&apos;s nothing to
                 work out: FleetSuite&apos;s entry for each one is its lines for the company, to the same accounts and for the same
-                amounts, each with its memo and name, as for a journal entry. Every two hours each BMG bank deposit and transfer
-                is posted to its own books, once, in the month NetSuite booked it into, in the same run as invoices. When
-                NetSuite changes one its entry is reversed and the new one posted, and one NetSuite deletes is reversed. One whose
-                lines for the company don&apos;t balance on their own isn&apos;t posted. Until the books go live they can be emptied
-                and posted again.
+                amounts, each with its memo and name, as for a journal entry, a receivables line with its customer. Every two hours
+                each BMG bank deposit, transfer and refund is posted to its own books, once, in the month NetSuite booked it into,
+                in the same run as invoices. When NetSuite changes one its entry is reversed and the new one posted, and one
+                NetSuite deletes is reversed. One whose lines for the company don&apos;t balance on their own isn&apos;t posted.
+                Until the books go live they can be emptied and posted again.
               </>
             ) : kind === 'journal_entry' ? (
               <>
@@ -839,7 +847,7 @@ export default function BooksInvoicesPage() {
             <div style={banner(GREY)}>
               Nothing has been posted to FleetSuite&apos;s books yet. Posting runs every two hours, or press Post now. The first
               run posts every invoice, credit memo, payment, deposit, bill, bill payment, check, card charge, journal entry, bank
-              deposit, transfer and stock document since January 2025 and may take more than one run.
+              deposit, transfer, customer refund and stock document since January 2025 and may take more than one run.
             </div>
           )}
           {run?.error && <div style={banner(RED)}>The last posting run failed {ago(data.lastRun!.at)}: {run.error}</div>}
@@ -936,7 +944,7 @@ export default function BooksInvoicesPage() {
               : kind === 'journal_entry'
                 ? 'Journal entries NetSuite booked into this month for this company, with their lines for it'
               : kind === 'bank'
-                ? 'Bank deposits and transfers NetSuite booked into this month for this company, with their lines for it'
+                ? 'Bank deposits, transfers and customer refunds NetSuite booked into this month for this company, with their lines for it'
               : kind === 'stock'
                 ? "Stock documents NetSuite booked into this month for this company, with their lines for it (an invoice's or credit memo's cost lines only)"
               : kind === 'payment'
@@ -1009,7 +1017,7 @@ export default function BooksInvoicesPage() {
                         {(inv.type === 'Check' || inv.type === 'CardChrg' || inv.type === 'CardRfnd') && (
                           <span style={{ ...chip(GREY), marginLeft: '6px' }}>{SPENDING_WORDS[inv.type].replace(/^./, (c) => c.toUpperCase())}</span>
                         )}
-                        {(inv.type === 'Deposit' || inv.type === 'Transfer') && (
+                        {isBank(inv.type) && (
                           <span style={{ ...chip(GREY), marginLeft: '6px' }}>{BANK_WORDS[inv.type].replace(/^./, (c) => c.toUpperCase())}</span>
                         )}
                         {isStock(inv.type) && (
@@ -1041,7 +1049,7 @@ export default function BooksInvoicesPage() {
                             one={inv.type === 'DepAppl' ? 'deposit application' : inv.type === 'CustDep' ? 'deposit'
                               : inv.type === 'VendCred' ? 'bill credit' : inv.type === 'VendBill' ? 'bill'
                                 : inv.type === 'Check' || inv.type === 'CardChrg' || inv.type === 'CardRfnd' ? SPENDING_WORDS[inv.type]
-                                  : inv.type === 'Deposit' || inv.type === 'Transfer' ? BANK_WORDS[inv.type]
+                                  : isBank(inv.type) ? BANK_WORDS[inv.type]
                                     : isStock(inv.type) ? STOCK_WORDS[inv.type] : words.one}
                           />
                         </td>

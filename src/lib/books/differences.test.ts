@@ -58,28 +58,29 @@ describe('kinds', () => {
     expect(kindName('InvAdjst')).toBe('Inventory Adjustment');
     expect(kindName('Deposit')).toBe('Deposit');
     expect(kindName('Transfer')).toBe('Transfer');
+    expect(kindName('CustRfnd')).toBe('Customer Refund');
     expect(kindName('SomethingNew')).toBe('SomethingNew');
     expect(kindName(COST)).toBe('Cost of goods on invoices');
     expect(kindName('fleetsuite:opening_balance')).toBe('Opening balance (FleetSuite only)');
     expect(kindName('fleetsuite:payroll_run')).toBe('Payroll run (FleetSuite only)');
   });
 
-  it('lists deposits and their applications under the one Deposits switch of Invoices vs NetSuite, bills and bill credits under Bills, checks and cards under one, bank deposits and transfers under another, and stock documents and cost of goods under Stock and cost', () => {
+  it('lists deposits and their applications under the one Deposits switch of Invoices vs NetSuite, bills and bill credits under Bills, checks and cards under one, bank deposits, transfers and customer refunds under another, and stock documents and cost of goods under Stock and cost', () => {
     expect([
       'invoice', 'credit_memo', 'payment', 'customer_deposit', 'deposit_application', 'vendor_bill', 'vendor_credit', 'bill_payment',
-      'check', 'card_charge', 'card_refund', 'journal_entry', 'bank_deposit', 'bank_transfer',
+      'check', 'card_charge', 'card_refund', 'journal_entry', 'bank_deposit', 'bank_transfer', 'customer_refund',
       'item_fulfillment', 'item_receipt', 'inventory_adjustment', 'inventory_transfer', 'assembly_build', 'assembly_unbuild', 'invoice_cost',
     ].map(listKindOf)).toEqual([
       'invoice', 'credit_memo', 'payment', 'deposit', 'deposit', 'bill', 'bill', 'bill_payment', 'spending', 'spending', 'spending', 'journal_entry',
-      'bank', 'bank',
+      'bank', 'bank', 'bank',
       'stock', 'stock', 'stock', 'stock', 'stock', 'stock', 'stock',
     ]);
   });
 
   it('takes a company as posting what its rules post, or what it holds entries of', () => {
     expect([...postedKinds(data(), true)].sort()).toEqual([
-      'Build', 'CardChrg', 'CardRfnd', 'Check', 'CustCred', 'CustDep', 'CustInvc', 'CustPymt', 'DepAppl', 'Deposit', 'InvAdjst', 'InvTrnfr',
-      'ItemRcpt', 'ItemShip', 'Journal', 'Transfer', 'Unbuild', 'VendBill', 'VendCred', 'VendPymt', COST,
+      'Build', 'CardChrg', 'CardRfnd', 'Check', 'CustCred', 'CustDep', 'CustInvc', 'CustPymt', 'CustRfnd', 'DepAppl', 'Deposit', 'InvAdjst',
+      'InvTrnfr', 'ItemRcpt', 'ItemShip', 'Journal', 'Transfer', 'Unbuild', 'VendBill', 'VendCred', 'VendPymt', COST,
     ]);
     expect([...postedKinds(data(), false)]).toEqual(['CustInvc']);
     expect([...postedKinds({ ...data(), fleetsuite: [] }, false)]).toEqual([]);
@@ -354,6 +355,14 @@ describe('explainDocument', () => {
     });
     expect(explainDocument(doc({ kind: 'bank_transfer', netsuite: { ...late, type: 'Transfer', month: null }, copy: null }), ctx)).toMatchObject({
       reason: 'gone', why: "NetSuite posts it to the other company now. The next posting run reverses FleetSuite's entry for this one.",
+    });
+    // A customer refund the same way.
+    const refunded = { type: 'CustRfnd', number: 'RFND31', date: '2025-05-31', month: '2025-06-01' };
+    expect(explainDocument(doc({ kind: 'customer_refund', netsuite: refunded, copy: null }), ctx)).toMatchObject({
+      reason: 'month', number: 'RFND31', listKind: 'bank', listMonth: '2025-06-01', customer: null,
+    });
+    expect(explainDocument(doc({ kind: 'customer_refund', netsuite: null, copy: null }), ctx)).toMatchObject({
+      reason: 'gone', why: "Deleted in NetSuite. The next posting run reverses FleetSuite's entry.",
     });
   });
 
