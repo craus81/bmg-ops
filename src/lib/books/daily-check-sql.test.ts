@@ -1,9 +1,11 @@
 // The daily books check (src/lib/books/daily-check.ts) looks at both
 // companies' books the way Differences vs NetSuite does, through migration
-// 377's functions. This runs the same migrations as differences-sql.test.ts
-// in an in-memory Postgres (PGlite) as the app's server login, copies a
-// made-up handful of NetSuite documents for BMG and 1084, posts FleetSuite's
-// entries for some of them, and runs the check's looks against it the way
+// 377's functions, and at each item's count the way Stock by item does,
+// through migration 401's. This runs the same migrations as
+// differences-sql.test.ts, with 401, in an in-memory Postgres (PGlite) as the
+// app's server login, copies a made-up handful of NetSuite documents for BMG
+// and 1084, posts FleetSuite's entries for some of them, copies a few stock
+// moves and NetSuite's counts, and runs the check's looks against it the way
 // the cron does, holding what it tells the super admins and what it records.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -11,6 +13,7 @@ import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { BOOKS_DAILY_CHECK, runDailyCheck, type CheckAlert, type Look } from './daily-check';
 import { BOOKS_INVOICE_POSTING } from './invoice-posting';
+import { BOOKS_STOCK_SYNC } from './netsuite-stock';
 
 /** Made-up chart: '120' receivables, '400' sales, '220' sales tax, '110' undeposited funds, '600' rent. */
 const ACCOUNTS: Array<[string, string, string]> = [
@@ -47,7 +50,7 @@ async function freshDb(): Promise<PGlite> {
     '377-books-differences.sql', '380-books-netsuite-month.sql', '382-books-customer-deposits.sql', '383-books-deposit-posting.sql',
     '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
-    '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql',
+    '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql', '401-books-stock-by-item.sql',
   ]) {
     await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8'));
   }
@@ -137,7 +140,7 @@ describe('the daily books check', () => {
       if (table === 'cron_runs') return { insert: async () => ({ error: null }) };
       throw new Error(`unexpected table ${table}`);
     },
-    rpc: async (fn: string, args: Record<string, unknown>) => {
+    rpc: async (fn: string, args: Record<string, unknown> = {}) => {
       if (failing?.(fn, args)) return { data: null, error: { message: `${fn} failed` } };
       const names = Object.keys(args);
       try {
@@ -312,5 +315,130 @@ describe('the daily books check', () => {
         + 'Differences vs NetSuite shows why. The last posting run failed, so FleetSuite may be behind.',
       url: '/admin/books/differences?company=BMG&month=2026-08',
     }]);
+  });
+
+  // ── Stock by item ──────────────────────────────────────────────────────
+
+  const LADDER = '9001';
+  const BINS = '9002';
+  const WENTZVILLE = '11';
+  const KANSAS_CITY = '12';
+  const heldStock = () => (store.get(BOOKS_DAILY_CHECK)?.last_result as any)?.stock;
+  const fn = (name: string, p: unknown) => pg.query(`SELECT ${name}($1::jsonb)`, [JSON.stringify(p)]);
+  /** A stock document as the copy hands it over; lines are [line, item, location, quantity], each moving stock. */
+  const moved = (id: string, type: string, date: string, lines: Array<[string, string, string, string]>) => fn('gl_netsuite_stock_apply', {
+    documents: [{
+      netsuite_id: id, tran_type: type, tranid: `${type === 'ItemRcpt' ? 'IR' : 'IA'}${id}`, trandate: date,
+      lines: lines.map(([line_id, item_id, location_id, quantity]) => ({ line_id, company: 'BMG', item_id, location_id, quantity, moves_stock: true })),
+    }],
+  });
+  /** NetSuite's counts as the copy reads them as it ends, and that copy's record. */
+  const counted = async (rows: Array<{ item_id: string; location_id?: string | null; quantity: string }>, by: 'location' | 'item' = 'location') => {
+    await fn('gl_netsuite_stock_store_counts', { rows });
+    store.set(BOOKS_STOCK_SYNC, {
+      last_result: { read: 1, added: 1, changed: 0, unchanged: 0, lines: 1, gone: 0, opening: 0, counts: rows.length, countsBy: by },
+      updated_at: new Date().toISOString(),
+    });
+  };
+
+  it("doesn't look at stock until a copy of NetSuite's stock moves has read NetSuite's counts as it ended", async () => {
+    await pg.exec(`
+      RESET ROLE;
+      INSERT INTO gl_netsuite_lists (kind, netsuite_id, name, active, details) VALUES
+        ('item', '${LADDER}', 'LDR-24', true, '{"display_name": "Ladder rack 24 in", "item_type": "InvtPart"}'),
+        ('item', '${BINS}', 'BIN-10', true, '{"item_type": "InvtPart"}'),
+        ('location', '${WENTZVILLE}', 'Wentzville', true, '{"subsidiary_id": "2"}'),
+        ('location', '${KANSAS_CITY}', 'Kansas City', true, '{"subsidiary_id": "2"}');
+      SET ROLE service_role;
+    `);
+    await moved('6001', 'ItemRcpt', '2026-09-02', [['1', LADDER, WENTZVILLE, '10']]);
+    await moved('6002', 'ItemRcpt', '2026-09-03', [['1', BINS, WENTZVILLE, '40']]);
+    await fn('gl_netsuite_stock_store_counts', { rows: [{ item_id: LADDER, location_id: WENTZVILLE, quantity: '10' }, { item_id: BINS, location_id: WENTZVILLE, quantity: '38' }] });
+
+    // No copy yet, then one cut short for time: nothing to compare.
+    await look('first');
+    expect(heldStock()).toBeUndefined();
+    store.set(BOOKS_STOCK_SYNC, { last_result: { read: 200, added: 200, changed: 0, unchanged: 0, lines: 400, partial: true }, updated_at: new Date().toISOString() });
+    await look('first');
+    expect(heldStock()).toBeUndefined();
+
+    // The first look at stock learns where things stand: the bins differ by two, which nobody is told of.
+    await counted([{ item_id: LADDER, location_id: WENTZVILLE, quantity: '10' }, { item_id: BINS, location_id: WENTZVILLE, quantity: '38' }]);
+    expect(await look('second')).toMatchObject({ told: 0 });
+    expect(told).toEqual([]);
+    expect(heldStock()).toEqual({ by: 'location', known: { [`${BINS}|${WENTZVILLE}`]: 2 }, noted: {} });
+  });
+
+  it('notes an item whose count stopped matching at the first look and tells about it at the second', async () => {
+    // FleetSuite's copy has an adjustment NetSuite's count doesn't show.
+    await moved('6003', 'InvAdjst', '2026-10-16', [['1', LADDER, WENTZVILLE, '-1']]);
+    await look('first');
+    expect(told).toEqual([]);
+    expect(heldStock().noted).toEqual({ [`${LADDER}|${WENTZVILLE}`]: 1 });
+
+    expect(await look('second')).toMatchObject({ told: 1 });
+    expect(told).toEqual([{
+      title: 'Stock: LDR-24 at Wentzville no longer matches NetSuite',
+      body: 'Ladder rack 24 in. FleetSuite counts 9 and NetSuite 10. Stock by item shows why.',
+      url: '/admin/books/stock/item?item=9001&location=11',
+      about: 'stock',
+    }]);
+    expect(heldStock()).toEqual({ by: 'location', known: { [`${LADDER}|${WENTZVILLE}`]: 1, [`${BINS}|${WENTZVILLE}`]: 2 }, noted: {} });
+
+    // The next morning, nothing more.
+    await look('first');
+    await look('second');
+    expect(told).toEqual([]);
+  });
+
+  it("tells when an item's counts draw further apart, and nothing of one NetSuite's count caught up with by the second look", async () => {
+    await moved('6004', 'ItemRcpt', '2026-10-17', [['1', BINS, WENTZVILLE, '3']]);
+    await look('first');
+    await look('second');
+    expect(told).toEqual([{
+      title: "Stock: BIN-10 at Wentzville is further off NetSuite's count",
+      body: 'FleetSuite counts 43 and NetSuite 38, further apart than before. Stock by item shows why.',
+      url: '/admin/books/stock/item?item=9002&location=11',
+      about: 'stock',
+    }]);
+    expect(heldStock().known[`${BINS}|${WENTZVILLE}`]).toBe(5);
+
+    // Two racks into Kansas City while the copy ran, so NetSuite's count missed them at the first look, not the second.
+    await moved('6005', 'ItemRcpt', '2026-10-18', [['1', LADDER, KANSAS_CITY, '2']]);
+    await look('first');
+    expect(heldStock().noted).toEqual({ [`${LADDER}|${KANSAS_CITY}`]: 2 });
+    await counted([
+      { item_id: LADDER, location_id: WENTZVILLE, quantity: '10' }, { item_id: LADDER, location_id: KANSAS_CITY, quantity: '2' },
+      { item_id: BINS, location_id: WENTZVILLE, quantity: '38' },
+    ]);
+    expect(await look('second')).toMatchObject({ told: 0 });
+    expect(told).toEqual([]);
+    expect(heldStock()).toEqual({ by: 'location', known: { [`${LADDER}|${WENTZVILLE}`]: 1, [`${BINS}|${WENTZVILLE}`]: 5 }, noted: {} });
+  });
+
+  it("keeps what it held for stock when it couldn't look, and says why", async () => {
+    const before = heldStock();
+    failing = (name) => name === 'gl_stock_items';
+    try {
+      const result = await look('first');
+      expect(result.error).toBe("Stock: couldn't compare the counts (gl_stock_items failed)");
+      expect(heldStock()).toEqual(before);
+    } finally {
+      failing = null;
+    }
+  });
+
+  it("starts afresh when NetSuite's counts come company-wide, telling nothing that morning", async () => {
+    await counted([{ item_id: LADDER, quantity: '12' }, { item_id: BINS, quantity: '38' }], 'item');
+    await look('first');
+    await look('second');
+    expect(told).toEqual([]);
+    expect(heldStock()).toEqual({ by: 'item', known: { [LADDER]: 1, [BINS]: 5 }, noted: {} });
+  });
+
+  it('records items and how far apart their counts are, never an amount', () => {
+    const record = store.get(BOOKS_DAILY_CHECK)!.last_result as Record<string, unknown>;
+    expect(Object.keys(record).sort()).toEqual(['companies', 'look', 'stock', 'told']);
+    expect(record.stock).toEqual({ by: 'item', known: { [LADDER]: 1, [BINS]: 5 }, noted: {} });
   });
 });

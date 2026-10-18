@@ -40,6 +40,8 @@ async function freshDb(): Promise<PGlite> {
   for (const file of [
     '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql',
+    // The stock copy's functions, for the WHERE check below.
+    '401-books-stock-by-item.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -287,7 +289,9 @@ describe('the copy\'s functions', () => {
       `SELECT p.proname AS name, p.prosrc AS body FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public' AND p.proname LIKE 'gl\\_%' ORDER BY p.proname`,
     )).rows;
-    expect(functions.map((f) => f.name)).toEqual(expect.arrayContaining(['gl_netsuite_store_totals', 'gl_netsuite_lists_finish']));
+    expect(functions.map((f) => f.name)).toEqual(expect.arrayContaining([
+      'gl_netsuite_store_totals', 'gl_netsuite_lists_finish', 'gl_netsuite_stock_apply', 'gl_netsuite_stock_store_counts',
+    ]));
     expect(functions.flatMap((f) => unguardedWrites(f.body).map((w) => `${f.name}: ${w}`))).toEqual([]);
   });
 

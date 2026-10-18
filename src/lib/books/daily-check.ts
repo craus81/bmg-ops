@@ -4,6 +4,8 @@ import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 import type { BooksCompany } from './journal';
 import { BOOKS_GL_SYNC, COPY_FROM } from './netsuite-gl';
 import { BOOKS_INVOICE_POSTING, POSTING_COMPANIES, runLimited } from './invoice-posting';
+import { BOOKS_STOCK_SYNC } from './netsuite-stock';
+import { compareStock, quantityText, type CountsBy, type StockItemsData, type StockLine } from './stock-items';
 import {
   documentNumber, indexMonths, lastMonth, monthStatuses, monthText, NETSUITE_TYPE, postedKinds,
   type DiffData, type DiffDocumentData,
@@ -32,9 +34,19 @@ import {
  * that still differs. What first differs at the second look waits for the
  * next morning.
  *
- * In-app and push only (books_month_differs). The record in sync_state,
- * 'books_daily_check', holds which months differ and how many of their
- * documents, never an amount, and is left out of HEALTH_MONITORS like the
+ * Stock by item (owner decision 2026-10-18, "Stock by item") is looked at
+ * the same way: an item whose count at a location stops matching NetSuite's
+ * own count is noted at the first look and told about at the second if it
+ * still differs, as is one whose counts have drawn further apart. Each look
+ * comes just after a copy of NetSuite's stock moves (:43 on odd hours), which
+ * reads NetSuite's counts as it ends, so the two counts are of the same
+ * moment; after a copy that didn't get that far, stock waits for the next
+ * look. Values aren't told about: the page shows them.
+ *
+ * In-app and push only (books_month_differs, books_stock_differs). The
+ * record in sync_state, 'books_daily_check', holds which months differ and
+ * how many of their documents, and which items' counts differ and by about
+ * how many, never an amount, and is left out of HEALTH_MONITORS like the
  * other books jobs; Differences vs NetSuite says when the check last looked.
  * Nothing is written to NetSuite or to the books.
  */
@@ -61,35 +73,57 @@ export interface CompanyCheck {
   noted: DifferingMonths;
 }
 
+/**
+ * What the check holds for stock by item, as for a company's months: the items whose count differs from NetSuite's,
+ * by StockLine.key (`<item>|<location>`, or `<item>` when NetSuite counts company-wide, which `by` says), each with how
+ * far apart the two counts are, rounded up to a whole one.
+ */
+export interface StockCheck extends CompanyCheck {
+  by: CountsBy;
+}
+
 export interface DailyCheckState {
   companies: Partial<Record<BooksCompany, CompanyCheck>>;
+  /** Absent until the check has looked at stock. */
+  stock?: StockCheck;
 }
 
 const MONTH_RE = /^\d{4}-\d{2}-01$/;
+/** An item at a location, or an item company-wide: StockLine.key. */
+const STOCK_KEY_RE = /^\d+(\|\d*)?$/;
 const has = (months: DifferingMonths, month: string) => Object.prototype.hasOwnProperty.call(months, month);
 
-function parseMonths(raw: unknown): DifferingMonths | null {
+function parseCounts(raw: unknown, key: RegExp): DifferingMonths | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const out: DifferingMonths = {};
   for (const [month, n] of Object.entries(raw as Record<string, unknown>)) {
-    if (!MONTH_RE.test(month) || typeof n !== 'number' || !Number.isInteger(n) || n < 0) return null;
+    if (!key.test(month) || typeof n !== 'number' || !Number.isInteger(n) || n < 0) return null;
     out[month] = n;
   }
   return out;
 }
 
-/** sync_state.last_result is data, so it's checked before it's used: a company whose part doesn't read is looked at afresh. */
+function parseStock(raw: any): StockCheck | null {
+  if (raw?.by !== 'location' && raw?.by !== 'item') return null;
+  const known = parseCounts(raw.known, STOCK_KEY_RE);
+  const noted = parseCounts(raw.noted, STOCK_KEY_RE);
+  return known && noted ? { by: raw.by, known, noted } : null;
+}
+
+/** sync_state.last_result is data, so it's checked before it's used: a company, or stock, whose part doesn't read is looked at afresh. */
 export function parseCheckState(lastResult: unknown): DailyCheckState {
-  const raw = ((lastResult ?? {}) as Record<string, any>).companies;
+  const last = (lastResult ?? {}) as Record<string, any>;
+  const raw = last.companies;
   const companies: DailyCheckState['companies'] = {};
   if (raw && typeof raw === 'object') {
     for (const company of POSTING_COMPANIES) {
-      const known = parseMonths(raw[company]?.known);
-      const noted = parseMonths(raw[company]?.noted);
+      const known = parseCounts(raw[company]?.known, MONTH_RE);
+      const noted = parseCounts(raw[company]?.noted, MONTH_RE);
       if (known && noted) companies[company] = { known, noted };
     }
   }
-  return { companies };
+  const stock = parseStock(last.stock);
+  return { companies, ...(stock ? { stock } : {}) };
 }
 
 /** A month to tell the super admins about. */
@@ -103,7 +137,8 @@ export interface MonthNews {
 
 /**
  * One company's check after a look at the months that differ now, and what to tell about. With nothing held for the
- * company yet (the check's first look, or a company new to the books) what differs now is taken as known.
+ * company yet (the check's first look, or a company new to the books) what differs now is taken as known. Stock by
+ * item goes through it too, its items for months and how far apart their counts are for documents.
  */
 export function nextCheck(prev: CompanyCheck | undefined, now: DifferingMonths, look: Look): { check: CompanyCheck; news: MonthNews[] } {
   if (!prev) return { check: { known: { ...now }, noted: {} }, news: [] };
@@ -130,6 +165,8 @@ export interface CheckAlert {
   title: string;
   body: string;
   url: string;
+  /** Set on a notification about stock by item (books_stock_differs); one about months has none (books_month_differs). */
+  about?: 'stock';
 }
 
 /** What a notification about a month names: its documents that differ, the largest differences first, and how many of its accounts differ. */
@@ -186,6 +223,42 @@ export function alertsFor(company: BooksCompany, news: MonthNews[], facts: Map<s
   }));
 }
 
+/** An item to tell the super admins about. */
+export interface StockNews {
+  line: StockLine;
+  /** Its counts already differed when they last heard of it, and are further apart now. */
+  further: boolean;
+}
+
+const placeOf = (line: StockLine) => (line.location ? `${line.item} at ${line.location}` : line.item);
+
+/**
+ * What the super admins are told about stock by item: a notification for each item, linking to its moves, or one for
+ * them all, linking to the items that differ, when there are more than ONE_BY_ONE.
+ */
+export function stockAlertsFor(news: StockNews[]): CheckAlert[] {
+  if (!news.length) return [];
+  const why = 'Stock by item shows why.';
+  if (news.length > ONE_BY_ONE) {
+    const places = news.slice(0, ONE_BY_ONE).map((n) => placeOf(n.line));
+    return [{
+      title: `Stock: ${news.length} counts differ from NetSuite now`,
+      body: `${listed([...places, `${news.length - ONE_BY_ONE} more`])}. ${why}`,
+      url: deepLinks.booksStock(true),
+      about: 'stock',
+    }];
+  }
+  return news.map(({ line, further }) => ({
+    title: further
+      ? `Stock: ${placeOf(line)} is further off NetSuite's count`
+      : `Stock: ${placeOf(line)} no longer matches NetSuite`,
+    body: `${line.description ? `${line.description}. ` : ''}FleetSuite counts ${quantityText(line.fleetsuite.quantity)} `
+      + `and NetSuite ${quantityText(line.netsuite.quantity)}${further ? ', further apart than before' : ''}. ${why}`,
+    url: deepLinks.booksStockItem(line.itemId, line.locationId),
+    about: 'stock',
+  }));
+}
+
 // ── Looking ────────────────────────────────────────────────────────────────
 
 /** Months whose documents are looked up at once. */
@@ -220,9 +293,28 @@ async function lookAt(service: SupabaseClient, company: BooksCompany): Promise<{
   return { now, facts };
 }
 
+/** How far apart an item's two counts are, rounded up to a whole one, so that counts drawing further apart are told about. */
+const apart = (line: StockLine) => Math.max(1, Math.ceil(Math.abs(line.fleetsuite.quantity - line.netsuite.quantity) - 1e-6));
+
+/** The items whose count differs from NetSuite's now, as Stock by item compares them; null before NetSuite's counts are read. */
+async function lookAtStock(service: SupabaseClient): Promise<{ by: CountsBy; now: DifferingMonths; lines: Map<string, StockLine> } | null> {
+  const res = await service.rpc('gl_stock_items');
+  if (res.error) throw new Error(`couldn't compare the counts (${res.error.message})`);
+  const compared = compareStock((res.data ?? {}) as StockItemsData);
+  if (!compared.by) return null;
+  const now: DifferingMonths = {};
+  const lines = new Map<string, StockLine>();
+  for (const line of compared.lines) {
+    if (!line.countDiffers) continue;
+    now[line.key] = apart(line);
+    lines.set(line.key, line);
+  }
+  return { by: compared.by, now, lines };
+}
+
 export interface DailyCheckResult {
   look: Look;
-  /** Months told about. */
+  /** Months and items told about. */
   told: number;
   /** What the look couldn't do; a company it couldn't look at keeps what the check held for it. */
   error?: string;
@@ -241,7 +333,9 @@ const reason = (err: unknown) => String((err as any)?.message || err).slice(0, 3
 export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOptions): Promise<DailyCheckResult> {
   const startedAt = Date.now();
   const read = (syncType: string) => service.from('sync_state').select('last_result').eq('sync_type', syncType).maybeSingle();
-  const [prev, posting, copy] = await Promise.all([read(BOOKS_DAILY_CHECK), read(BOOKS_INVOICE_POSTING), read(BOOKS_GL_SYNC)]);
+  const [prev, posting, copy, stockCopy] = await Promise.all([
+    read(BOOKS_DAILY_CHECK), read(BOOKS_INVOICE_POSTING), read(BOOKS_GL_SYNC), read(BOOKS_STOCK_SYNC),
+  ]);
   // Without the last record, what differs now would pass for what the super admins have heard of.
   if (prev.error) return { look: opts.look, told: 0, error: `Couldn't read the last check: ${prev.error.message}` };
 
@@ -268,10 +362,27 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
     }
   }
 
+  // Stock, when the last copy of NetSuite's stock moves read NetSuite's counts as it ended, so both counts are of then.
+  let stock = held.stock;
+  if (typeof (stockCopy.data?.last_result as { counts?: unknown } | null)?.counts === 'number') {
+    try {
+      const looked = await lookAtStock(service);
+      if (looked) {
+        // Counts read another way are keyed another way, so they start afresh.
+        const { check, news } = nextCheck(held.stock?.by === looked.by ? held.stock : undefined, looked.now, opts.look);
+        stock = { by: looked.by, ...check };
+        alerts.push(...stockAlertsFor(news.map((n) => ({ line: looked.lines.get(n.month)!, further: n.before !== null }))));
+        told += news.length;
+      }
+    } catch (err) {
+      errors.push(`Stock: ${reason(err)}`);
+    }
+  }
+
   // Told before it's recorded: a send that fails leaves the record as it was, and the next morning tells again.
   if (alerts.length) await opts.tell(alerts);
   const result: DailyCheckResult = { look: opts.look, told, ...(errors.length ? { error: errors.join(' ') } : {}) };
-  const heartbeat = await recordHeartbeat(service, BOOKS_DAILY_CHECK, { ...result, companies }, {
+  const heartbeat = await recordHeartbeat(service, BOOKS_DAILY_CHECK, { ...result, companies, ...(stock ? { stock } : {}) }, {
     startedAt,
     records: told,
     touchLastSyncedAt: !errors.length,

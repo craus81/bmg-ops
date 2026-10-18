@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
-  alertsFor, lookOf, nextCheck, parseCheckState,
-  type CompanyCheck, type DifferingMonths, type MonthFacts, type MonthNews,
+  alertsFor, lookOf, nextCheck, parseCheckState, stockAlertsFor,
+  type CompanyCheck, type DifferingMonths, type MonthFacts, type MonthNews, type StockNews,
 } from './daily-check';
 import type { DiffDocumentData } from './differences';
+import type { StockLine } from './stock-items';
 import { deepLinks } from '@/lib/deep-links';
 
 const AUG = '2026-08-01';
@@ -35,6 +36,23 @@ describe('parseCheckState', () => {
       companies: { BMG: { known: { [DEC]: 1, [SEP]: 2 }, noted: {} }, 1084: { known: {}, noted: { [OCT]: 0 } } },
     });
     expect(state).toEqual({ companies: { BMG: { known: { [DEC]: 1, [SEP]: 2 }, noted: {} }, 1084: { known: {}, noted: { [OCT]: 0 } } } });
+  });
+
+  it('reads what it holds for stock by item, keyed by item and location, or by item when NetSuite counts company-wide', () => {
+    const stock = { by: 'location', known: { '9001|11': 2, '9002|': 1 }, noted: { '9003|12': 1 } };
+    expect(parseCheckState({ companies: {}, stock })).toEqual({ companies: {}, stock });
+    expect(parseCheckState({ companies: {}, stock: { by: 'item', known: { 9001: 1 }, noted: {} } }).stock)
+      .toEqual({ by: 'item', known: { 9001: 1 }, noted: {} });
+  });
+
+  it("looks at stock afresh when its part doesn't read", () => {
+    for (const stock of [
+      null, 'x', { known: {}, noted: {} }, { by: 'shelf', known: {}, noted: {} },
+      { by: 'location', known: { 'LDR-24|11': 1 }, noted: {} }, { by: 'location', known: { '9001|11': 0.5 }, noted: {} },
+      { by: 'location', known: {}, noted: [] },
+    ]) {
+      expect(parseCheckState({ companies: {}, stock })).toEqual({ companies: {} });
+    }
   });
 
   it("drops a company whose part doesn't read, so it's looked at afresh, and a company that doesn't post", () => {
@@ -204,6 +222,74 @@ describe('alertsFor', () => {
 
   it('tells nothing when nothing changed', () => {
     expect(alertsFor('BMG', [], new Map())).toEqual([]);
+  });
+});
+
+/** An item at a location as Stock by item compares it. */
+const line = (over: Partial<StockLine> = {}): StockLine => ({
+  key: '9001|11', itemId: '9001', item: 'LDR-24', description: 'Ladder rack 24 in', locationId: '11', location: 'Wentzville',
+  companies: ['BMG'], start: { quantity: 10, value: 150000 }, fleetsuite: { quantity: 12, value: 180000 },
+  netsuite: { quantity: 10, value: 150000 }, countDiffers: true, valueDiffers: true, documents: 3, lastDate: '2026-10-16',
+  ...over,
+});
+const fresh = (l: StockLine): StockNews => ({ line: l, further: false });
+
+describe('stockAlertsFor', () => {
+  it("names the item, its location and both counts, and links to the item's moves at that location", () => {
+    expect(stockAlertsFor([fresh(line())])).toEqual([{
+      title: 'Stock: LDR-24 at Wentzville no longer matches NetSuite',
+      body: 'Ladder rack 24 in. FleetSuite counts 12 and NetSuite 10. Stock by item shows why.',
+      url: '/admin/books/stock/item?item=9001&location=11',
+      about: 'stock',
+    }]);
+  });
+
+  it('says when the counts are further apart than when the super admins last heard', () => {
+    const [alert] = stockAlertsFor([{ line: line({ fleetsuite: { quantity: 12, value: 0 }, netsuite: { quantity: 5, value: null } }), further: true }]);
+    expect(alert.title).toBe("Stock: LDR-24 at Wentzville is further off NetSuite's count");
+    expect(alert.body).toBe('Ladder rack 24 in. FleetSuite counts 12 and NetSuite 5, further apart than before. Stock by item shows why.');
+  });
+
+  it('names an item counted company-wide without a location, and one with no description by its name alone', () => {
+    const [alert] = stockAlertsFor([fresh(line({
+      key: '9003', itemId: '9003', item: 'VINYL-3M', description: null, locationId: null, location: null,
+      fleetsuite: { quantity: 1250.5, value: 0 }, netsuite: { quantity: 1200.25, value: null },
+    }))]);
+    expect(alert).toEqual({
+      title: 'Stock: VINYL-3M no longer matches NetSuite',
+      body: 'FleetSuite counts 1,250.5 and NetSuite 1,200.25. Stock by item shows why.',
+      url: '/admin/books/stock/item?item=9003',
+      about: 'stock',
+    });
+  });
+
+  it('tells about up to three items one by one, and more in one notification linking to the items that differ', () => {
+    const items = ['LDR-24', 'BIN-10', 'VINYL-3M', 'CAM-2', 'LBR-8'].map((item, i) => fresh(line({ key: `${9001 + i}|11`, itemId: String(9001 + i), item })));
+    expect(stockAlertsFor(items.slice(0, 3)).map((a) => a.url)).toEqual([
+      '/admin/books/stock/item?item=9001&location=11',
+      '/admin/books/stock/item?item=9002&location=11',
+      '/admin/books/stock/item?item=9003&location=11',
+    ]);
+    expect(stockAlertsFor(items)).toEqual([{
+      title: 'Stock: 5 counts differ from NetSuite now',
+      body: 'LDR-24 at Wentzville, BIN-10 at Wentzville, VINYL-3M at Wentzville and 2 more. Stock by item shows why.',
+      url: '/admin/books/stock?only=differs',
+      about: 'stock',
+    }]);
+  });
+
+  it('tells nothing when nothing changed', () => {
+    expect(stockAlertsFor([])).toEqual([]);
+  });
+});
+
+describe('deepLinks.booksStock and booksStockItem', () => {
+  it('open Stock by item, on the items that differ when asked, and one item with a location picked out', () => {
+    expect(deepLinks.booksStock()).toBe('/admin/books/stock');
+    expect(deepLinks.booksStock(true)).toBe('/admin/books/stock?only=differs');
+    expect(deepLinks.booksStockItem('9001')).toBe('/admin/books/stock/item?item=9001');
+    expect(deepLinks.booksStockItem('9001', '11')).toBe('/admin/books/stock/item?item=9001&location=11');
+    expect(deepLinks.booksStockItem('9001', null)).toBe('/admin/books/stock/item?item=9001');
   });
 });
 
