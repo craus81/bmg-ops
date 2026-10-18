@@ -495,7 +495,8 @@ button {
   }
 }
 
-/* Books → Reports (src/app/(main)/admin/books/reports/page.tsx): each line
+/* Books → Reports (src/app/(main)/admin/books/reports/page.tsx), and an
+   account line's detail (reports/detail/page.tsx): each line
    renders twice, an account-only row and the account with its amounts. On
    desktop the second shows alone; on phones the account sits on its own row
    above the amounts, so FleetSuite, NetSuite and Difference fit across the
@@ -521,6 +522,19 @@ button {
   /* The trial balance: each side in one column, with Dr or Cr. */
   .rep-wide { display: none; }
   .rep-narrow { display: table-cell; }
+}
+/* An account line's name, opening the documents behind it, and a document's
+   number, opening its check: a dotted underline keeps a long report calm and
+   still shows a phone, which has no hover, what opens. */
+.rep-link {
+  color: inherit;
+  text-decoration: underline dotted;
+  text-decoration-color: var(--text-muted);
+  text-underline-offset: 3px;
+}
+.rep-link:hover {
+  text-decoration-style: solid;
+  text-decoration-color: currentColor;
 }
 
 /* Mention → note focus: when a Mentions-inbox deep link lands on a record,

@@ -4,7 +4,7 @@ vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
 
 import {
-  lastReportMonth, report, reportMonths, type ReportAccount, type ReportAmount, type ReportData, type ReportLine,
+  lastReportMonth, lineSpan, report, reportMonths, type ReportAccount, type ReportAmount, type ReportData, type ReportKind, type ReportLine,
 } from './reports';
 import { trialBalance, type TbAmount } from './trial-balance';
 
@@ -497,5 +497,95 @@ describe('the months a line differs in', () => {
     const bs = report(data, 'balance_sheet', { to: '2026-02-01' }).lines;
     expect(monthsOf(bs, 'Retained earnings (net income of earlier years)')).toEqual([{ month: '2025-06-01', difference: 200 }]);
     expect(monthsOf(bs, 'Net income')).toEqual([{ month: '2026-02-01', difference: 2500 }]);
+  });
+});
+
+describe("what an account's line is made of (its detail)", () => {
+  // As 'the months a line differs in' has them: FleetSuite's capital from 2024, 10.00 more rent in March 2025, a fee only NetSuite has.
+  const data = () => books({
+    fleetsuite: [fs('10', '2024-12-01', 500), fs('30', '2024-12-01', -500), fs('65', '2025-03-01', 1000), fs('10', '2025-03-01', -1000)],
+    netsuite: [ns('90', '2026-01-01', 300), ns('10', '2026-01-01', -300), ns('77', '2025-02-01', 700), ns('10', '2025-02-01', -700)],
+  });
+  const pair = (span: { fleetsuite: number; netsuite: number } | null) => (span ? [span.fleetsuite, span.netsuite] : null);
+  /** The months the detail of a line covers, as Reports links it: the profit and loss's, a balance at `to`, the trial balance's year for income. */
+  const covers = (kind: ReportKind, l: ReportLine, range: { from?: string; to: string }) =>
+    ({ from: kind === 'profit_and_loss' ? range.from ?? range.to : l.yearToDate ? `${range.to.slice(0, 4)}-01-01` : range.to, to: range.to });
+
+  it('ends at every account line of every report, from its balance before through what moved', () => {
+    const cases: Array<[ReportKind, { from?: string; to: string }]> = [
+      ['profit_and_loss', { from: '2025-01-01', to: '2026-02-01' }], ['profit_and_loss', { from: '2026-01-01', to: '2026-02-01' }],
+      ['profit_and_loss', { to: '2025-02-01' }], ['balance_sheet', { to: '2025-01-01' }], ['balance_sheet', { to: '2025-12-01' }],
+      ['balance_sheet', { to: '2026-02-01' }], ['trial_balance', { to: '2025-03-01' }], ['trial_balance', { to: '2026-02-01' }],
+    ];
+    let checked = 0;
+    for (const [kind, range] of cases) {
+      for (const l of report(data(), kind, range).lines.filter((x) => x.kind === 'account' && x.account && !x.derived)) {
+        const span = lineSpan(data(), kind, l.account!, covers(kind, l, range));
+        const at = `${kind} ${range.to} ${l.label}`;
+        expect(pair(span.ending), at).toEqual([l.fleetsuite, l.netsuite]);
+        for (const side of ['fleetsuite', 'netsuite'] as const) {
+          expect((span.starting?.[side] ?? 0) + span.moved[side] + (span.closed?.[side] ?? 0), `${at} ${side}`).toBe(span.ending[side]);
+        }
+        checked += 1;
+      }
+    }
+    expect(checked).toBeGreaterThan(60);
+  });
+
+  it('starts a balance sheet account at its balance before the first month, as the line shows it', () => {
+    // Receivables at the end of February 2025: January's sale, paid in February.
+    expect(lineSpan(books(), 'balance_sheet', '12', { from: '2025-02-01', to: '2025-02-01' })).toEqual({
+      sign: 1, starting: { fleetsuite: 107000, netsuite: 107000 }, moved: { fleetsuite: -107000, netsuite: -107000 }, closed: null,
+      ending: { fleetsuite: 0, netsuite: 0 },
+    });
+    // What's owed reads positive: the card's rent in March 2025, from nothing.
+    expect(lineSpan(books(), 'balance_sheet', '21', { from: '2025-03-01', to: '2025-03-01' })).toMatchObject({
+      sign: -1, starting: { fleetsuite: 0, netsuite: 0 }, moved: { fleetsuite: 50000, netsuite: 50000 },
+    });
+    // From January 2025, the balance before is NetSuite's starting one, with what FleetSuite dated earlier on its side.
+    expect(pair(lineSpan(data(), 'balance_sheet', '10', { from: '2025-01-01', to: '2025-03-01' }).starting)).toEqual([1000500, 1000000]);
+  });
+
+  it("takes earlier years' net income into retained earnings at a year's start", () => {
+    // 2025 lost 230.00: 1,000.00 of sales less 400.00 of cost, 330.00 of payroll and 500.00 of rent.
+    const span = lineSpan(books(), 'balance_sheet', '39', { from: '2025-12-01', to: '2026-01-01' });
+    expect(span).toEqual({
+      sign: -1,
+      // The 4,000.00 earned before 2025.
+      starting: { fleetsuite: 400000, netsuite: 400000 },
+      moved: { fleetsuite: 0, netsuite: 0 },
+      closed: { fleetsuite: -23000, netsuite: -23000 },
+      ending: { fleetsuite: 377000, netsuite: 377000 },
+    });
+    // A range from January has December's balance before it, so the year's start falls in it; one within a year takes in nothing.
+    expect(lineSpan(books(), 'balance_sheet', '39', { from: '2026-01-01', to: '2026-02-01' }).closed).toEqual({ fleetsuite: -23000, netsuite: -23000 });
+    expect(lineSpan(books(), 'balance_sheet', '39', { from: '2026-02-01', to: '2026-02-01' }).closed).toEqual({ fleetsuite: 0, netsuite: 0 });
+    // On the trial balance it reads debit positive.
+    expect(pair(lineSpan(books(), 'trial_balance', '39', { from: '2026-01-01', to: '2026-01-01' }).ending)).toEqual([-377000, -377000]);
+    // Any other account takes in nothing.
+    expect(lineSpan(books(), 'balance_sheet', '30', { from: '2025-12-01', to: '2026-01-01' }).closed).toBeNull();
+  });
+
+  it('has income and expenses cover only the months picked, with no balance before', () => {
+    expect(lineSpan(books(), 'profit_and_loss', '40', { from: '2025-01-01', to: '2026-01-01' })).toEqual({
+      sign: -1, starting: null, moved: { fleetsuite: 300000, netsuite: 300000 }, closed: null, ending: { fleetsuite: 300000, netsuite: 300000 },
+    });
+    // The trial balance reads them debit positive.
+    expect(pair(lineSpan(books(), 'trial_balance', '40', { from: '2026-01-01', to: '2026-02-01' }).ending)).toEqual([-200000, -200000]);
+  });
+
+  it("counts a NetSuite account the chart doesn't have yet as the report lists it", () => {
+    expect(lineSpan(data(), 'profit_and_loss', '77', { from: '2025-02-01', to: '2025-02-01' })).toMatchObject({
+      sign: 1, starting: null, ending: { fleetsuite: 0, netsuite: 700 },
+    });
+    expect(lineSpan(data(), 'balance_sheet', '77', { from: '2025-03-01', to: '2025-03-01' })).toMatchObject({
+      sign: 1, starting: { fleetsuite: 0, netsuite: 700 }, moved: { fleetsuite: 0, netsuite: 0 }, ending: { fleetsuite: 0, netsuite: 700 },
+    });
+  });
+
+  it("marks the trial balance's income and expense lines as covering the year to date, and no others", () => {
+    const tb = report(books(), 'trial_balance', { to: '2026-02-01' }).lines;
+    expect(tb.filter((l) => l.yearToDate).map((l) => l.label)).toEqual(['Sales', 'Rent', 'Shop supplies', 'Interest income', 'Bank fees']);
+    expect(report(books(), 'profit_and_loss', { to: '2026-02-01' }).lines.some((l) => l.yearToDate)).toBe(false);
   });
 });

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
+import { deepLinks } from '@/lib/deep-links';
 import type { DiffAccountRow, DiffDocument, DiffKindRow, DiffMonth, MonthStatus } from '@/lib/books/differences';
 
 /**
@@ -371,7 +372,7 @@ export default function BooksDifferencesPage() {
                               {d.entryNo !== null && d.fleetsuiteDate && <span>FleetSuite&apos;s entry {d.entryNo}, dated {dateText(d.fleetsuiteDate)}.</span>}
                               {d.listMonth && (
                                 <Link
-                                  href={`/admin/books/invoices?${new URLSearchParams({ company, kind: d.listKind, month: d.listMonth.slice(0, 7), doc: d.netsuiteId })}`}
+                                  href={deepLinks.booksDocument(company, d.listKind, d.listMonth, d.netsuiteId)}
                                   style={{ color: 'var(--text-secondary)', fontWeight: 700 }}
                                 >
                                   Open in Invoices vs NetSuite →

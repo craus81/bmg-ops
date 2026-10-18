@@ -340,6 +340,26 @@ export const deepLinks = {
    *  admins only, as the books are. */
   booksDifferences: (company: string, month: string) =>
     `/admin/books/differences?${new URLSearchParams({ company, month: month.slice(0, 7) })}`,
+  /** Books → Reports on one company's report for the months from `from`
+   *  through `to` ('YYYY-MM' or 'YYYY-MM-01'), which the page opens from its
+   *  params: the way back from an account's detail. Super admins only. */
+  booksReport: (company: string, report: string, from: string, to: string) =>
+    `/admin/books/reports?${new URLSearchParams({ company, report, from: from.slice(0, 7), to: to.slice(0, 7) })}`,
+  /** Books → Reports → one account line's detail: the documents behind
+   *  the line on `report` for the months from `from` through `to`, only
+   *  those that differ from NetSuite with `differs` (docs/books.md "Report
+   *  detail"). `account` is the line's key, NetSuite's id or 'fs:<id>'.
+   *  Super admins only. */
+  booksAccountDetail: (company: string, account: string, report: string, from: string, to: string, differs = false) =>
+    `/admin/books/reports/detail?${new URLSearchParams({
+      company, account, report, from: from.slice(0, 7), to: to.slice(0, 7), ...(differs ? { only: 'differs' } : {}),
+    })}`,
+  /** Books → Invoices vs NetSuite opened on one NetSuite document's line by
+   *  line check: `kind` is the page's switch for it (listKindOf in
+   *  src/lib/books/differences.ts) and `month` the month it lists it
+   *  under. Super admins only. */
+  booksDocument: (company: string, kind: string, month: string, netsuiteId: string) =>
+    `/admin/books/invoices?${new URLSearchParams({ company, kind, month: month.slice(0, 7), doc: netsuiteId })}`,
   /** Bytes of one imported ledger document (QuickBooks/NetSuite PDF or
    *  attachment, migration 314). Same-origin and role-gated
    *  (finance/executive) — `allowedPdfSrc` therefore accepts it, so feed it
