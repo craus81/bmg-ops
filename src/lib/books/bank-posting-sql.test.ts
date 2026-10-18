@@ -399,7 +399,7 @@ const DOCS = (): NsDocument[] => [
   },
   // NetSuite gave it no number.
   { ref: '8004', type: 'Deposit', number: null, date: '2025-03-03', lines: [['0', 'BMG', '100', 1000], ['1', 'BMG', '105', -1000]] },
-  // 1084's don't post yet.
+  // 1084's, which a run for BMG leaves alone.
   { ref: '8005', type: 'Transfer', number: 'TRN0012', date: '2025-03-04', lines: [['1', '1084', '107', 8000], ['2', '1084', '106', -8000]] },
   // One with lines for both companies: BMG's lines are BMG's entry.
   {
@@ -477,7 +477,8 @@ describe('the posting job, for bank deposits and transfers', () => {
 
   // A bank deposit's or transfer's entry is its lines in NetSuite's GL copy, so there's nothing to ask NetSuite.
   const query = async () => { throw new Error('NetSuite was asked about lines'); };
-  const run = (budgetMs = 240_000) => postInvoices(service(), { deadline: clock + budgetMs, deps: { query, now: () => clock } });
+  // A run for BMG's books alone (deps.companies): 1084's documents here are another company's, which it leaves alone.
+  const run = (budgetMs = 240_000) => postInvoices(service(), { deadline: clock + budgetMs, deps: { query, now: () => clock, companies: ['BMG'] } });
 
   /** The journal, entry by entry: a document's entry by its key, a reversal by the entry it reverses. */
   const journal = async () => (await pg.query<{ no: number; date: string; key: string | null; reverses: number | null; memo: string | null }>(

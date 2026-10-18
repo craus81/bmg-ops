@@ -333,7 +333,7 @@ const PAYMENTS = (): NsPayment[] => [
     ref: '803', number: 'CHK1003', date: '2025-02-20', company: 'BMG', total: '50.00',
     gl: [['1', '200', 5000], ['2', '100', -3000], ['3', '220', -2000]],
   },
-  // 1084's don't post yet.
+  // 1084's, which a run for BMG leaves alone.
   { ref: '804', number: 'CHK1004', date: '2025-03-03', company: '1084', total: '80.00', from: '106' },
   // Not in the GL copy.
   { ref: '805', number: 'CHK1005', date: '2025-03-04', company: null, total: '75.00' },
@@ -408,7 +408,8 @@ describe('the posting job, for bill payments', () => {
 
   // A bill payment's entry comes from its total and NetSuite's GL, so there's nothing to ask NetSuite.
   const query = async () => { throw new Error('NetSuite was asked about lines'); };
-  const run = (budgetMs = 240_000) => postInvoices(service(), { deadline: clock + budgetMs, deps: { query, now: () => clock } });
+  // A run for BMG's books alone (deps.companies): 1084's documents here are another company's, which it leaves alone.
+  const run = (budgetMs = 240_000) => postInvoices(service(), { deadline: clock + budgetMs, deps: { query, now: () => clock, companies: ['BMG'] } });
 
   /** The journal, entry by entry: a document's entry by its key, a reversal by the entry it reverses. */
   const journal = async () => (await pg.query<{ no: number; date: string; key: string | null; reverses: number | null; memo: string | null }>(

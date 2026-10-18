@@ -257,7 +257,7 @@ const PAYMENTS = (): NsPayment[] => [
   { ref: '502', number: 'PMT502', date: '2025-02-05', company: 'BMG', total: '158.76', discount: '3.24' },
   // NetSuite's posting doesn't say where the money went, so the rule can't work it out.
   { ref: '503', number: 'PMT503', date: '2025-02-20', company: 'BMG', total: '50.00', deposit: null },
-  // 1084's payments don't post yet.
+  // 1084's payments, which a run for BMG leaves alone.
   { ref: '504', number: 'PMT504', date: '2025-03-03', company: '1084', total: '40.00' },
   // Not in the GL copy.
   { ref: '505', number: 'PMT505', date: '2025-03-04', company: null, total: '30.00' },
@@ -324,7 +324,8 @@ describe('the posting job, for payments', () => {
 
   // Payments have no lines to ask NetSuite about.
   const query = async () => { throw new Error('NetSuite was asked about lines'); };
-  const run = (budgetMs = 240_000) => postInvoices(service(), { deadline: clock + budgetMs, deps: { query, now: () => clock } });
+  // A run for BMG's books alone (deps.companies): 1084's documents here are another company's, which it leaves alone.
+  const run = (budgetMs = 240_000) => postInvoices(service(), { deadline: clock + budgetMs, deps: { query, now: () => clock, companies: ['BMG'] } });
 
   /** The journal, entry by entry: a payment's entry by its key, a reversal by the entry it reverses. */
   const journal = async () => (await pg.query<{ no: number; date: string; key: string | null; reverses: number | null; memo: string | null }>(

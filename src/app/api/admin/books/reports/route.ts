@@ -90,7 +90,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     companies: (companies.data || []).map((c) => ({ code: c.code, name: c.name, netsuite_subsidiary_id: c.netsuite_subsidiary_id })),
     company,
-    // 1084 doesn't post yet, so its side holds only the starting balances.
+    // A company that doesn't post has only the starting balances on its side.
     posts: (POSTING_COMPANIES as readonly string[]).includes(company),
     report: kind,
     from,

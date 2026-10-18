@@ -355,7 +355,7 @@ const DOCS = (): NsJournal[] => [
   { ref: '9003', number: 'JE1203', date: '2025-02-20', lines: [['1', 'BMG', '200', 5000, null, '50'], ['2', 'BMG', '220', -5000, 'Paid on the card', '50']] },
   // NetSuite gave it no number.
   { ref: '9004', number: null, date: '2025-03-03', lines: [['1', 'BMG', '640', 1000], ['2', 'BMG', '100', -1000]] },
-  // 1084's don't post yet.
+  // 1084's, which a run for BMG leaves alone.
   { ref: '9005', number: 'JE1205', date: '2025-03-04', lines: [['1', '1084', '615', 8000], ['2', '1084', '106', -8000]] },
   // An intercompany entry: BMG's lines are BMG's entry.
   {
@@ -433,7 +433,8 @@ describe('the posting job, for journal entries', () => {
 
   // A journal entry's entry is its lines in NetSuite's GL copy, so there's nothing to ask NetSuite.
   const query = async () => { throw new Error('NetSuite was asked about lines'); };
-  const run = (budgetMs = 240_000) => postInvoices(service(), { deadline: clock + budgetMs, deps: { query, now: () => clock } });
+  // A run for BMG's books alone (deps.companies): 1084's documents here are another company's, which it leaves alone.
+  const run = (budgetMs = 240_000) => postInvoices(service(), { deadline: clock + budgetMs, deps: { query, now: () => clock, companies: ['BMG'] } });
 
   /** The journal, entry by entry: a journal entry's entry by its key, a reversal by the entry it reverses. */
   const journal = async () => (await pg.query<{ no: number; date: string; key: string | null; reverses: number | null; memo: string | null }>(
@@ -452,8 +453,8 @@ describe('the posting job, for journal entries', () => {
   const ruleOf = async (no: number) => (await pg.query<{ rule: string; type: string; source: string }>(
     'SELECT posting_rule AS rule, source_type AS type, source_id AS source FROM gl_entries WHERE entry_no = $1', [no],
   )).rows[0];
-  const differing = async (month: string) => pg.query<{ r: { counts: Record<string, number>; documents: any[] } }>(
-    'SELECT gl_books_difference_documents($1, $2::date, $3::jsonb, $4) AS r', ['BMG', month, JSON.stringify(JOURNAL_KINDS), 10],
+  const differing = async (month: string, company = 'BMG') => pg.query<{ r: { counts: Record<string, number>; documents: any[] } }>(
+    'SELECT gl_books_difference_documents($1, $2::date, $3::jsonb, $4) AS r', [company, month, JSON.stringify(JOURNAL_KINDS), 10],
   ).then((res) => res.rows[0].r);
 
   /** NetSuite changes a journal entry, and the GL copy catches up. */
@@ -699,5 +700,92 @@ describe('the posting job, for journal entries', () => {
     ]);
     expect(await journal()).toEqual(before);
     expect((await differing(MAR)).counts).toEqual({ journal_entry: 2 });
+  });
+
+  describe('once 1084 posts too', () => {
+    // A run for the companies that post, BMG's books and 1084's (POSTING_COMPANIES).
+    const runBoth = (budgetMs = 240_000) => postInvoices(service(), { deadline: clock + budgetMs, deps: { query, now: () => clock } });
+    /** Each entry that stands, in the order posted: its company, key and memo. */
+    const standing = async () => (await pg.query<{ company: string; key: string; memo: string | null }>(
+      `SELECT c.code AS company, e.idempotency_key AS key, e.memo
+       FROM gl_entries e JOIN gl_companies c ON c.id = e.company_id
+       WHERE e.reverses_entry_id IS NULL AND NOT EXISTS (SELECT 1 FROM gl_entries r WHERE r.reverses_entry_id = e.id)
+       ORDER BY e.entry_no`,
+    )).rows;
+
+    beforeAll(async () => {
+      // Starting over: an empty journal, and the copy of NetSuite's GL holding the made-up journal entries as they were.
+      await pg.query('SELECT gl_reset_journal()');
+      await pg.exec('DELETE FROM gl_netsuite_lines WHERE true; DELETE FROM gl_netsuite_transactions WHERE true;');
+      store.delete(BOOKS_INVOICE_POSTING);
+      takes.clear();
+      failing.clear();
+      docs.clear();
+      for (const j of DOCS()) await add(j);
+    });
+
+    it('keeps the entries BMG posted alone and posts 1084\'s beside them, each company\'s lines of an intercompany entry under its own key', async () => {
+      // BMG's books alone first, as they posted before 1084's joined.
+      expect(await run()).toMatchObject({ posted: 6, left: 1, failedCount: 0 });
+      const bmg = await standing();
+      expect(bmg.map((e) => [e.company, e.key])).toEqual([
+        ['BMG', 'journal_entry:9008:1'], ['BMG', 'journal_entry:9001:1'], ['BMG', 'journal_entry:9002:1'],
+        ['BMG', 'journal_entry:9003:1'], ['BMG', 'journal_entry:9004:1'], ['BMG', 'journal_entry:9006:1'],
+      ]);
+
+      // BMG's months, then 1084's.
+      const r = await runBoth();
+      expect(r).toMatchObject({ months: [JAN, FEB, MAR, JAN, FEB, MAR], posted: 2, replaced: 0, reversed: 0, unchanged: 6, left: 2, failedCount: 0 });
+      expect(r.error).toBeUndefined();
+      // JE1207's lines balance for neither company, and the note names each company's.
+      expect(r.notes).toEqual([
+        "FleetSuite can't post 2 journal entries, as their lines for the company don't balance on their own, so whatever FleetSuite holds for "
+          + "them stayed as it is: JE1207, 1084's JE1207. The Journal entries switch on Invoices vs NetSuite shows their lines.",
+      ]);
+      // BMG's stand as they were; 1084's JE1205, and 1084's lines of the intercompany JE1206, post as 1084's.
+      expect(await standing()).toEqual([
+        ...bmg,
+        { company: '1084', key: '1084:journal_entry:9005:1', memo: 'JE1205' },
+        { company: '1084', key: '1084:journal_entry:9006:1', memo: 'JE1206' },
+      ]);
+      expect((await linesOf(7)).map((l: any) => [l.account, l.debit, l.credit, l.source_line_ref])).toEqual([
+        ['615', '80.00', '0.00', '1'], ['106', '0.00', '80.00', '2'],
+      ]);
+      expect((await linesOf(6)).map((l: any) => [l.account, l.debit, l.credit, l.source_line_ref])).toEqual([
+        ['640', '30.00', '0.00', '1'], ['220', '0.00', '30.00', '2'],
+      ]);
+      expect((await linesOf(8)).map((l: any) => [l.account, l.debit, l.credit, l.source_line_ref])).toEqual([
+        ['615', '20.00', '0.00', '3'], ['106', '0.00', '20.00', '4'],
+      ]);
+
+      // Differences: each company's posted entries come to NetSuite's; JE1207 differs for both.
+      for (const company of ['BMG', '1084']) {
+        expect((await differing(JAN, company)).counts, company).toEqual({});
+        expect((await differing(FEB, company)).counts, company).toEqual({});
+        expect((await differing(MAR, company)).counts, company).toEqual({ journal_entry: 1 });
+      }
+    });
+
+    it('changes nothing on the next run', async () => {
+      const before = await journal();
+      expect(await runBoth()).toMatchObject({ posted: 0, replaced: 0, reversed: 0, unchanged: 8, left: 2, failedCount: 0 });
+      expect(await journal()).toEqual(before);
+    });
+
+    it('reverses 1084\'s entry alone when NetSuite takes 1084\'s lines off an intercompany entry, and names a 1084 entry the journal refuses as 1084\'s', async () => {
+      await edit('9006', (j) => { j.lines = [['1', 'BMG', '640', 3000], ['2', 'BMG', '220', -3000]]; });
+      // Paid from BMG's checking, which 1084 may not use.
+      await add({ ref: '9015', number: 'JE1215', date: '2025-03-12', lines: [['1', '1084', '615', 600], ['2', '1084', '100', -600]] });
+
+      const r = await runBoth();
+      expect(r).toMatchObject({
+        posted: 0, replaced: 0, reversed: 1, unchanged: 7, left: 2, failedCount: 1,
+        failed: [{ number: "1084's JE1215", reason: 'Account 1000 (Checking) belongs to another company' }],
+      });
+      expect((await journal()).slice(-1).map((e) => [e.reverses, e.memo])).toEqual([[8, 'JE1206 deleted in NetSuite']]);
+      // BMG's JE1206 stands as it was.
+      expect((await standing()).filter((e) => e.memo === 'JE1206')).toEqual([{ company: 'BMG', key: 'journal_entry:9006:1', memo: 'JE1206' }]);
+      expect(JSON.stringify(store.get(BOOKS_INVOICE_POSTING).last_result)).not.toMatch(/\d\.\d|\$/);
+    });
   });
 });

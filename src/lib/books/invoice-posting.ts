@@ -60,14 +60,16 @@ import { workOutStockMonth, type StockMonthData, type WorkedStockDocument } from
  * except where the payments', deposits', bills', bill payments', checks' and
  * journal entries' own sections say otherwise.
  *
- * Every BMG invoice NetSuite booked into a month from January 2025 that the
- * rule can work out posts once, as the check on Invoices vs NetSuite shows
- * it, whether it matches NetSuite or not: during 2027 the differences are
- * what the side-by-side run is for. It posts in the month NetSuite booked it
- * to, whatever its own date (entryDate; migration 380), so an invoice dated
- * before the books start that NetSuite carried into January 2025 posts on
- * January 1. Each run (/api/cron/books-invoice-posting at :48 on odd hours, and
- * "Post now" on that page) goes through every month again:
+ * Every invoice of BMG's and 1084's (POSTING_COMPANIES) NetSuite booked into
+ * a month from January 2025 that the rule can work out posts once, for its
+ * company and under a key of that company's (entryKey), as the check on
+ * Invoices vs NetSuite shows it, whether it matches NetSuite or not: during
+ * 2027 the differences are what the side-by-side run is for. It posts in the
+ * month NetSuite booked it to, whatever its own date (entryDate; migration
+ * 380), so an invoice dated before the books start that NetSuite carried into
+ * January 2025 posts on January 1. Each run (/api/cron/books-invoice-posting
+ * at :48 on odd hours, and "Post now" on that page) goes through every
+ * company's months again, BMG's then 1084's:
  *
  *   - an invoice with no entry gets one;
  *   - one whose entry no longer fits what the rule works out now (NetSuite
@@ -96,9 +98,10 @@ export const BOOKS_INVOICE_POSTING = 'books_invoice_posting';
 
 /**
  * The companies whose invoices, credit memos, payments, deposits, bills, bill payments, checks, card charges, journal entries,
- * bank deposits, transfers, customer refunds and stock documents post. 1084's join once they've been checked against NetSuite.
+ * bank deposits, transfers, customer refunds and stock documents post. 1084's joined once its journal entries, the only kind
+ * of document Differences vs NetSuite showed for it, matched NetSuite (owner decision 2026-10-18, "1084's books").
  */
-export const POSTING_COMPANIES: readonly BooksCompany[] = ['BMG'];
+export const POSTING_COMPANIES: readonly BooksCompany[] = ['BMG', '1084'];
 
 /** Seconds a run holds the lock: past the routes' 300 s limit, so a run that dies lets go soon after. */
 const LEASE_SECONDS = 330;
@@ -162,6 +165,15 @@ const kindOf = (worked: WorkedInvoice): SalesDocKind => (worked.invoice.doc_type
 
 /** What the journal holds for a document is looked up by its kind (its entries' source type) and NetSuite id, as its entries name it. */
 export const postingKey = (kind: string, netsuiteId: string) => `${kind}:${netsuiteId}`;
+
+/**
+ * The idempotency key of a document's `generation`th entry: its kind (the entry's source type), NetSuite id and
+ * generation, `invoice:<NetSuite id>:<n>`. The journal takes each key once whatever the company, so a company other
+ * than BMG puts its code in front, `1084:journal_entry:<NetSuite id>:<n>`, and a document with lines for both companies
+ * posts once for each. BMG's keep the form they had, so nothing it has posted changes.
+ */
+const entryKey = (company: BooksCompany, kind: string, netsuiteId: string, generation: number) =>
+  `${company === 'BMG' ? '' : `${company}:`}${kind}:${netsuiteId}:${generation}`;
 
 /** What the journal holds for a worked out document, from gl_invoice_postings' answer keyed by postingKey. */
 export const postingFor = (postings: Map<string, InvoicePosting>, worked: WorkedInvoice) =>
@@ -308,7 +320,7 @@ export function invoiceJournalEntry(
       sourceType: kind,
       sourceId: inv.netsuite_id,
       postingRule: RULES[kind],
-      idempotencyKey: `${kind}:${inv.netsuite_id}:${generation}`,
+      idempotencyKey: entryKey(company, kind, inv.netsuite_id, generation),
       memo: inv.customer ? `${worked.number}, ${inv.customer}` : worked.number,
       postedBy: null,
       lines: lines.map((l) => ({
@@ -397,7 +409,7 @@ export function paymentJournalEntry(
       sourceType: 'payment',
       sourceId: p.netsuite_id,
       postingRule: PAYMENT_RULE,
-      idempotencyKey: `payment:${p.netsuite_id}:${generation}`,
+      idempotencyKey: entryKey(company, 'payment', p.netsuite_id, generation),
       memo: p.customer ? `${worked.number}, ${p.customer}` : worked.number,
       postedBy: null,
       lines: lines.map((l) => ({
@@ -499,7 +511,7 @@ export function depositJournalEntry(
       sourceType,
       sourceId: d.netsuite_id,
       postingRule: DEPOSIT_RULE,
-      idempotencyKey: `${sourceType}:${d.netsuite_id}:${generation}`,
+      idempotencyKey: entryKey(company, sourceType, d.netsuite_id, generation),
       memo: d.customer ? `${worked.number}, ${d.customer}` : worked.number,
       postedBy: null,
       lines: lines.map((l) => ({
@@ -605,7 +617,7 @@ export function billJournalEntry(
       sourceType,
       sourceId: b.netsuite_id,
       postingRule: BILL_RULE,
-      idempotencyKey: `${sourceType}:${b.netsuite_id}:${generation}`,
+      idempotencyKey: entryKey(company, sourceType, b.netsuite_id, generation),
       memo: b.vendor ? `${worked.number}, ${b.vendor}` : worked.number,
       postedBy: null,
       lines: lines.map((l) => ({
@@ -741,7 +753,7 @@ export function billPaymentJournalEntry(
       sourceType: BILL_PAYMENT_SOURCE_TYPE,
       sourceId: p.netsuite_id,
       postingRule: BILL_PAYMENT_RULE,
-      idempotencyKey: `${BILL_PAYMENT_SOURCE_TYPE}:${p.netsuite_id}:${generation}`,
+      idempotencyKey: entryKey(company, BILL_PAYMENT_SOURCE_TYPE, p.netsuite_id, generation),
       memo: p.vendor ? `${worked.number}, ${p.vendor}` : worked.number,
       postedBy: null,
       lines: lines.map((l) => ({
@@ -838,7 +850,7 @@ export function spendingJournalEntry(
       sourceType,
       sourceId: d.netsuite_id,
       postingRule: SPENDING_RULE,
-      idempotencyKey: `${sourceType}:${d.netsuite_id}:${generation}`,
+      idempotencyKey: entryKey(company, sourceType, d.netsuite_id, generation),
       memo: d.payee ? `${worked.number}, ${d.payee}` : worked.number,
       postedBy: null,
       lines: lines.map((l) => ({
@@ -1021,7 +1033,7 @@ function ledgerCopyEntry(
       sourceType: filed.sourceType,
       sourceId: e.netsuite_id,
       postingRule: filed.rule,
-      idempotencyKey: `${filed.sourceType}:${e.netsuite_id}:${generation}`,
+      idempotencyKey: entryKey(company, filed.sourceType, e.netsuite_id, generation),
       memo: worked.number,
       postedBy: null,
       lines: lines.map((l) => ({
@@ -1102,12 +1114,20 @@ type SuiteqlAll = (query: string) => Promise<Array<Record<string, unknown>>>;
 export interface PostingDeps {
   query?: SuiteqlAll;
   now?: () => number;
+  /** The companies the run posts; POSTING_COMPANIES unless a test runs one alone. */
+  companies?: readonly BooksCompany[];
 }
 
 const monthLabel = (month: string) =>
   new Date(`${month}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 const listed = (items: string[], max = 10) => `${items.slice(0, max).join(', ')}${items.length > max ? ', …' : ''}`;
+/**
+ * A document as a run's notes and failures name it: its number, with the company in front for a company other than BMG,
+ * "1084's JE1207", as one run posts both companies and a document can have lines for each. Entry memos keep the number
+ * alone, the entry being the company's already.
+ */
+const named = (company: BooksCompany, number: string) => (company === 'BMG' ? number : `${company}'s ${number}`);
 const joined = (words: string[], last: 'and' | 'or') =>
   (words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} ${last} ${words[words.length - 1]}`);
 /** Each kind of document a run reads, in words, as the switches on Invoices vs NetSuite name them. */
@@ -1158,6 +1178,7 @@ export async function postInvoices(
 ): Promise<InvoicePostingResult & { heartbeat?: HeartbeatResult }> {
   const now = opts.deps?.now ?? Date.now;
   const query: SuiteqlAll = opts.deps?.query ?? ((q) => suiteqlQueryAll(q, 1000, SUITEQL_OPTS));
+  const postingCompanies = opts.deps?.companies ?? POSTING_COMPANIES;
   const timeLeft = () => opts.deadline - now();
   const startedAt = now();
 
@@ -1205,17 +1226,18 @@ export async function postInvoices(
     const itemAccounts = Array.isArray(lastLists?.itemAccounts) ? lastLists.itemAccounts : null;
     if (!taxAccounts) notes.push("Where sales tax posts hasn't been read yet, so invoices and credit memos with sales tax weren't posted. Sync now on the NetSuite lists page reads it.");
 
-    const reverse = async (number: string, entryId: string, memo: string) => {
+    /** Reverses an entry; should that fail, `shown` is how the run's record names its document. */
+    const reverse = async (shown: string, entryId: string, memo: string) => {
       try {
         await reverseEntry(service, { entryId, memo });
         result.reversed! += 1;
       } catch (err) {
-        failed(number, err);
+        failed(shown, err);
       }
     };
 
     // 1. What NetSuite deleted or voided, and any second entry standing for one document.
-    for (const company of POSTING_COMPANIES) {
+    for (const company of postingCompanies) {
       const [all, paid, deposited, billed, paidOut, spent, journaled, banked, stocked] = await Promise.all([
         service.rpc('gl_invoice_postings', { p_company: company, p_source_ids: null, p_lines: false }),
         service.rpc('gl_payment_postings', { p_company: company, p_source_ids: null, p_lines: false }),
@@ -1260,15 +1282,16 @@ export async function postInvoices(
       const tasks: Array<() => Promise<void>> = [];
       for (const { posting: p, copy } of held) {
         const number = copy?.number || `NetSuite ${p.source_id}`;
+        const shown = named(company, number);
         for (const extra of p.unreversed.slice(1)) {
-          tasks.push(() => reverse(number, extra, `${number} had another entry standing`));
+          tasks.push(() => reverse(shown, extra, `${number} had another entry standing`));
         }
         // An invoice's or credit memo's cost lines go when NetSuite books no cost on it, whether or not it has it still.
         const deleted = p.source_type === STOCK_SOURCE_TYPE.CustInvc ? 'no longer books a cost' : 'deleted';
         const gone = copy?.deleted ? deleted : copy?.voided ? 'voided' : null;
         if (p.current && gone) {
           const entryId = p.current.id;
-          tasks.push(() => reverse(number, entryId, `${number} ${gone} in NetSuite`));
+          tasks.push(() => reverse(shown, entryId, `${number} ${gone} in NetSuite`));
         }
       }
       await runLimited(tasks, WRITERS);
@@ -1283,16 +1306,18 @@ export async function postInvoices(
     const unbalancedBank: string[] = [];
     const unbalancedStock: string[] = [];
     const missingAccounts = new Set<string>();
-    const queue = postingQueue(POSTING_COMPANIES, months, state.resume);
+    const queue = postingQueue(postingCompanies, months, state.resume);
 
-    /** Queues the writes a decision about one document calls for, or counts it when it calls for none. */
+    /** Queues the writes a decision about one of a company's documents calls for, or counts it when it calls for none. */
     const enqueue = (
       tasks: Array<() => Promise<void>>,
+      company: BooksCompany,
       number: string,
       d: Decision,
       current: { id: string } | null,
       build: () => { entry: JournalEntryInput; missing: [] } | { entry: null; missing: string[] },
     ) => {
+      const shown = named(company, number);
       if (d.kind === 'keep') {
         if (current) result.unchanged! += 1;
         return;
@@ -1303,13 +1328,13 @@ export async function postInvoices(
       }
       if (d.kind === 'reverse') {
         const memo = `${number} ${d.why === 'voided' ? 'voided' : 'comes to nothing'} in NetSuite`;
-        tasks.push(() => reverse(number, current!.id, memo));
+        tasks.push(() => reverse(shown, current!.id, memo));
         return;
       }
       const built = build();
       if (!built.entry) {
         for (const a of built.missing) missingAccounts.add(a);
-        failed(number, new Error(`It posts to NetSuite account ${built.missing.join(', ')}, which the chart of accounts doesn't have`));
+        failed(shown, new Error(`It posts to NetSuite account ${built.missing.join(', ')}, which the chart of accounts doesn't have`));
         return;
       }
       const entry = built.entry;
@@ -1328,7 +1353,7 @@ export async function postInvoices(
             result.replaced! += 1;
           }
         } catch (err) {
-          failed(number, err);
+          failed(shown, err);
         }
       });
     };
@@ -1380,8 +1405,8 @@ export async function postInvoices(
           for (const w of worked) {
             const posting = postingFor(postings, w);
             const d = decide(w, posting);
-            if (d.kind === 'leave' && d.why === 'total') leftTotal.push({ number: w.number, kind: kindOf(w) });
-            enqueue(tasks, w.number, d, posting?.current ?? null, () => invoiceJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
+            if (d.kind === 'leave' && d.why === 'total') leftTotal.push({ number: named(company, w.number), kind: kindOf(w) });
+            enqueue(tasks, company, w.number, d, posting?.current ?? null, () => invoiceJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
           }
           await runLimited(tasks, WRITERS);
           if (result.partial) break;
@@ -1407,7 +1432,7 @@ export async function postInvoices(
         for (const w of payments) {
           const posting = postings.get(w.payment.netsuite_id);
           if (!w.payment.companies.length && !posting?.current) continue;
-          enqueue(tasks, w.number, decidePayment(w, posting), posting?.current ?? null,
+          enqueue(tasks, company, w.number, decidePayment(w, posting), posting?.current ?? null,
             () => paymentJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
         }
         await runLimited(tasks, WRITERS);
@@ -1433,7 +1458,7 @@ export async function postInvoices(
         for (const w of deposits) {
           const posting = depositPostingFor(postings, w);
           if (!w.deposit.companies.length && !posting?.current) continue;
-          enqueue(tasks, w.number, decideDeposit(w, posting), posting?.current ?? null,
+          enqueue(tasks, company, w.number, decideDeposit(w, posting), posting?.current ?? null,
             () => depositJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
         }
         await runLimited(tasks, WRITERS);
@@ -1457,8 +1482,8 @@ export async function postInvoices(
           const posting = billPostingFor(postings, w);
           if (!w.bill.companies.length && !posting?.current) continue;
           const d = decideBill(w, posting);
-          if (d.kind === 'leave' && d.why === 'total') leftTotal.push({ number: w.number, kind: BILL_SOURCE_TYPE[w.bill.type] });
-          enqueue(tasks, w.number, d, posting?.current ?? null, () => billJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
+          if (d.kind === 'leave' && d.why === 'total') leftTotal.push({ number: named(company, w.number), kind: BILL_SOURCE_TYPE[w.bill.type] });
+          enqueue(tasks, company, w.number, d, posting?.current ?? null, () => billJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
         }
         await runLimited(tasks, WRITERS);
         if (result.partial) break;
@@ -1483,7 +1508,7 @@ export async function postInvoices(
         for (const w of billPayments) {
           const posting = postings.get(w.payment.netsuite_id);
           if (!w.payment.companies.length && !posting?.current) continue;
-          enqueue(tasks, w.number, decideBillPayment(w, posting), posting?.current ?? null,
+          enqueue(tasks, company, w.number, decideBillPayment(w, posting), posting?.current ?? null,
             () => billPaymentJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
         }
         await runLimited(tasks, WRITERS);
@@ -1507,8 +1532,8 @@ export async function postInvoices(
           const posting = spendingPostingFor(postings, w);
           if (!w.doc.companies.length && !posting?.current) continue;
           const d = decideSpending(w, posting);
-          if (d.kind === 'leave' && d.why === 'total') leftTotal.push({ number: w.number, kind: SPENDING_SOURCE_TYPE[w.doc.type] });
-          enqueue(tasks, w.number, d, posting?.current ?? null, () => spendingJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
+          if (d.kind === 'leave' && d.why === 'total') leftTotal.push({ number: named(company, w.number), kind: SPENDING_SOURCE_TYPE[w.doc.type] });
+          enqueue(tasks, company, w.number, d, posting?.current ?? null, () => spendingJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
         }
         await runLimited(tasks, WRITERS);
         if (result.partial) break;
@@ -1533,8 +1558,8 @@ export async function postInvoices(
         for (const w of journalEntries) {
           const posting = postings.get(w.entry.netsuite_id);
           const d = decideJournalEntry(w, posting);
-          if (d.kind === 'leave' && w.checked.problems.some((x) => x.kind === 'unbalanced')) unbalanced.push(w.number);
-          enqueue(tasks, w.number, d, posting?.current ?? null, () => copiedJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
+          if (d.kind === 'leave' && w.checked.problems.some((x) => x.kind === 'unbalanced')) unbalanced.push(named(company, w.number));
+          enqueue(tasks, company, w.number, d, posting?.current ?? null, () => copiedJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
         }
         await runLimited(tasks, WRITERS);
         if (result.partial) break;
@@ -1557,8 +1582,8 @@ export async function postInvoices(
         for (const w of bankDocuments) {
           const posting = bankPostingFor(postings, w);
           const d = decideBankDocument(w, posting);
-          if (d.kind === 'leave' && w.checked.problems.some((x) => x.kind === 'unbalanced')) unbalancedBank.push(w.number);
-          enqueue(tasks, w.number, d, posting?.current ?? null, () => bankJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
+          if (d.kind === 'leave' && w.checked.problems.some((x) => x.kind === 'unbalanced')) unbalancedBank.push(named(company, w.number));
+          enqueue(tasks, company, w.number, d, posting?.current ?? null, () => bankJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
         }
         await runLimited(tasks, WRITERS);
         if (result.partial) break;
@@ -1582,8 +1607,8 @@ export async function postInvoices(
         for (const w of stockDocuments) {
           const posting = stockPostingFor(postings, w);
           const d = decideStockDocument(w, posting);
-          if (d.kind === 'leave' && w.checked.problems.some((x) => x.kind === 'unbalanced')) unbalancedStock.push(w.number);
-          enqueue(tasks, w.number, d, posting?.current ?? null, () => stockJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
+          if (d.kind === 'leave' && w.checked.problems.some((x) => x.kind === 'unbalanced')) unbalancedStock.push(named(company, w.number));
+          enqueue(tasks, company, w.number, d, posting?.current ?? null, () => stockJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
         }
         await runLimited(tasks, WRITERS);
         if (result.partial) break;
@@ -1595,7 +1620,7 @@ export async function postInvoices(
     }
 
     if (skippedMonths.length) {
-      notes.push(`${skippedWhy}, so no invoice or credit memo in ${joined(skippedMonths.map(monthLabel), 'or')} was posted or changed this time.`);
+      notes.push(`${skippedWhy}, so no invoice or credit memo in ${joined([...new Set(skippedMonths)].map(monthLabel), 'or')} was posted or changed this time.`);
     }
     if (leftTotal.length) {
       const one = leftTotal.length === 1;
